@@ -64,11 +64,11 @@ logger = logging.getLogger("nija.core_loop")
 # Entry-to-Order Trace — mandatory cycle observability
 # ---------------------------------------------------------------------------
 try:
-    from entry_trace import CycleOutcome, emit_cycle_trace
+    from entry_trace import CycleOutcome, emit_cycle_trace, emit_cycle_trace_summary
     _ENTRY_TRACE_AVAILABLE = True
 except ImportError:
     try:
-        from bot.entry_trace import CycleOutcome, emit_cycle_trace
+        from bot.entry_trace import CycleOutcome, emit_cycle_trace, emit_cycle_trace_summary
         _ENTRY_TRACE_AVAILABLE = True
     except ImportError:
         _ENTRY_TRACE_AVAILABLE = False
@@ -82,9 +82,17 @@ except ImportError:
         def emit_cycle_trace(outcome, **kwargs):  # type: ignore[misc]
             pass
 
+        def emit_cycle_trace_summary(cycle_number, veto_counts, reject_counts):  # type: ignore[misc]
+            pass
+
 # Max positions the core loop may open in a single cycle
 # (hard cap — position-level cap is enforced upstream by TradingStrategy)
 MAX_ENTRIES_PER_CYCLE = 3
+
+# How often (in completed run_scan_phase calls) to emit a [CYCLE_TRACE_SUMMARY]
+# histogram of accumulated veto/rejection reason counts.
+# Override at runtime with NIJA_VETO_SUMMARY_INTERVAL env var.
+VETO_SUMMARY_INTERVAL: int = int(os.environ.get("NIJA_VETO_SUMMARY_INTERVAL", "50"))
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
@@ -300,11 +308,66 @@ class NijaCoreLoop:
         # the progressive relaxation mechanism — see FORCED_ENTRY_STREAK_THRESHOLD).
         self._zero_signal_streak: int = 0
 
+        # Veto / rejection reason histograms.
+        # veto_reason_counts   — portfolio-level pre-scan blocks (position cap,
+        #                        safety gate, user_mode, …)
+        # reject_reason_counts — per-signal in-scan rejections (Trade Permission
+        #                        Engine blocks, …)
+        # A [CYCLE_TRACE_SUMMARY] is emitted every VETO_SUMMARY_INTERVAL cycles.
+        self.veto_reason_counts: Dict[str, int] = {}
+        self.reject_reason_counts: Dict[str, int] = {}
+        self._summary_cycle_count: int = 0
+
         logger.info(
             "✅ NijaCoreLoop initialized (max_positions=%d, max_entries_per_cycle=%d)",
             max_positions,
             MAX_ENTRIES_PER_CYCLE,
         )
+
+    # ------------------------------------------------------------------
+    # Veto / rejection histogram helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_reason(reason: str) -> str:
+        """Return a short, stable key from a raw veto/reject reason string.
+
+        Examples
+        --------
+        ``"position_cap_reached(3/5)"``   → ``"position_cap"``
+        ``"latency_drift: …"``            → ``"latency_drift"``
+        ``"trade_permission_engine"``     → ``"trade_permission_engine"``
+        ``"min_notional"``                → ``"min_notional"``
+        """
+        if not reason:
+            return "unknown"
+        # Strip parenthetical detail: "position_cap_reached(3/5)" → "position_cap_reached"
+        base = reason.split("(")[0].strip()
+        # Drop trailing "_reached" suffix so "position_cap_reached" → "position_cap"
+        base = base.replace("_reached", "")
+        # Take only the first token before a colon or space (handles
+        # "latency_drift: some message" and similar safety-gate strings)
+        base = base.split(":")[0].split(" ")[0].strip()
+        return base or "unknown"
+
+    def _record_veto(self, reason: str) -> None:
+        """Increment the veto histogram counter for *reason*."""
+        key = self._normalize_reason(reason)
+        self.veto_reason_counts[key] = self.veto_reason_counts.get(key, 0) + 1
+
+    def _record_reject(self, reason: str) -> None:
+        """Increment the per-signal rejection histogram counter for *reason*."""
+        key = self._normalize_reason(reason)
+        self.reject_reason_counts[key] = self.reject_reason_counts.get(key, 0) + 1
+
+    def _maybe_emit_veto_summary(self) -> None:
+        """Emit [CYCLE_TRACE_SUMMARY] every VETO_SUMMARY_INTERVAL completed cycles."""
+        if self._summary_cycle_count >= VETO_SUMMARY_INTERVAL and self._summary_cycle_count % VETO_SUMMARY_INTERVAL == 0:
+            emit_cycle_trace_summary(
+                cycle_number=self._summary_cycle_count,
+                veto_counts=self.veto_reason_counts,
+                reject_counts=self.reject_reason_counts,
+            )
 
     # ------------------------------------------------------------------
     # Lazy component loaders
@@ -460,10 +523,12 @@ class NijaCoreLoop:
                     self.max_positions,
                 )
                 # ── Entry-to-Order Trace: position cap veto ───────────────
+                _cap_reason = f"position_cap_reached({effective_open}/{self.max_positions})"
                 emit_cycle_trace(
                     CycleOutcome.ENTRY_VETOED,
-                    reason=f"position_cap_reached({effective_open}/{self.max_positions})",
+                    reason=_cap_reason,
                 )
+                self._record_veto(_cap_reason)
         else:
             logger.info("🔒 Core loop: entries blocked (user_mode)")
             # ── Entry-to-Order Trace: pre-scan veto ──────────────────────
@@ -472,12 +537,16 @@ class NijaCoreLoop:
             #   2. Caller explicitly passed user_mode=True (can_enter still True) → report "user_mode".
             # These are mutually exclusive: the safety gate sets user_mode=True only when
             # can_enter is False, so the inner check is not redundant.
+            _prescan_reason = safety_reason if not can_enter else "user_mode"
             emit_cycle_trace(
                 CycleOutcome.ENTRY_VETOED,
-                reason=safety_reason if not can_enter else "user_mode",
+                reason=_prescan_reason,
             )
+            self._record_veto(_prescan_reason)
 
-        # Recommend next interval from AI engine speed controller
+        # ── Increment summary cycle counter and maybe emit histogram ─────
+        self._summary_cycle_count += 1
+        self._maybe_emit_veto_summary()
         ai = self._get_ai_engine()
         if ai is not None:
             result.next_interval = ai.speed_ctrl.interval
@@ -992,6 +1061,7 @@ class NijaCoreLoop:
                                 CycleOutcome.ENTRY_VETOED,
                                 reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
                             )
+                            self._record_reject(_tpe_reason)
                             continue
                     except Exception as _tpe_err:
                         logger.debug(
