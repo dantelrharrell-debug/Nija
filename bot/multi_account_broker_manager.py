@@ -4568,33 +4568,45 @@ class MultiAccountBrokerManager:
 
 
 # Global singleton guard + accessor (hard containment for registry integrity)
-_GLOBAL_BROKER_MANAGER: Optional[MultiAccountBrokerManager] = None
-_GLOBAL_BROKER_MANAGER_LOCK: threading.Lock = threading.Lock()
+_manager: Optional[MultiAccountBrokerManager] = None
+_manager_lock: threading.RLock = threading.RLock()
+_manager_init_in_progress: bool = False
 
 
 def get_broker_manager() -> MultiAccountBrokerManager:
     """Return the process-wide MultiAccountBrokerManager singleton.
 
-    Uses double-checked locking (DCL) — the same pattern as
-    ``get_capital_authority()`` — so concurrent callers during startup can
-    never create two independent instances.  A second instance would register
-    brokers separately from the instance that CapitalAuthority knows about,
-    making ``valid_brokers`` appear as 0 in every refresh.
+    Uses an RLock with a re-entrancy sentinel so that any recursive call
+    originating from inside the MultiAccountBrokerManager constructor raises
+    an explicit RuntimeError instead of deadlocking or silently creating a
+    second instance.
     """
-    global _GLOBAL_BROKER_MANAGER
-    if _GLOBAL_BROKER_MANAGER is None:
-        with _GLOBAL_BROKER_MANAGER_LOCK:
-            if _GLOBAL_BROKER_MANAGER is None:
-                _GLOBAL_BROKER_MANAGER = MultiAccountBrokerManager()
-                logger.debug("[MABM] singleton created (id=%d)", id(_GLOBAL_BROKER_MANAGER))
-    return _GLOBAL_BROKER_MANAGER
+    global _manager, _manager_init_in_progress
+
+    with _manager_lock:
+        if _manager is not None:
+            return _manager
+
+        if _manager_init_in_progress:
+            raise RuntimeError(
+                "Recursive/re-entrant broker manager initialization detected"
+            )
+
+        _manager_init_in_progress = True
+
+        try:
+            _manager = MultiAccountBrokerManager()
+            logger.debug("[MABM] singleton created (id=%d)", id(_manager))
+            return _manager
+        finally:
+            _manager_init_in_progress = False
 
 
 def reset_broker_manager_singleton() -> None:
     """Clear the cached MultiAccountBrokerManager singleton (cold-start helper)."""
-    global _GLOBAL_BROKER_MANAGER
-    with _GLOBAL_BROKER_MANAGER_LOCK:
-        _GLOBAL_BROKER_MANAGER = None
+    global _manager
+    with _manager_lock:
+        _manager = None
     logger.warning("MultiAccountBrokerManager singleton cache cleared")
 
 
