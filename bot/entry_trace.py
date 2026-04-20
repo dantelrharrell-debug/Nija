@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from typing import Any
+from typing import Any, Dict
 
 # Dedicated logger – operators can route this to a separate file or
 # monitoring system by configuring the ``nija.cycle_trace`` logger.
@@ -104,3 +104,50 @@ def emit_cycle_trace(outcome: CycleOutcome, **kwargs: Any) -> None:
     for key, value in kwargs.items():
         parts.append(f"{key}={value!r}")
     _trace_log.info("[CYCLE_TRACE] %s", " ".join(parts))
+
+
+def emit_cycle_trace_summary(
+    cycle_number: int,
+    veto_counts: Dict[str, int],
+    reject_counts: Dict[str, int],
+) -> None:
+    """Emit a ``[CYCLE_TRACE_SUMMARY]`` histogram of accumulated veto/reject counts.
+
+    Merges *veto_counts* (pre-scan, portfolio-level blocks) and
+    *reject_counts* (per-signal, in-scan rejections) into a single
+    frequency-sorted histogram so operators can see at a glance which
+    reason is suppressing the most trade entries.
+
+    Emitted at INFO level to the ``nija.cycle_trace`` logger — filter with::
+
+        grep "CYCLE_TRACE_SUMMARY" /path/to/nija.log
+
+    Parameters
+    ----------
+    cycle_number:
+        The total number of completed ``run_scan_phase`` calls so far.
+        Included in the log line for time-series correlation.
+    veto_counts:
+        Mapping of normalized reason key → count for pre-scan vetoes
+        (position cap, safety gate, user_mode, etc.).
+    reject_counts:
+        Mapping of normalized reason key → count for per-signal rejections
+        (Trade Permission Engine blocks, etc.).
+
+    Example output
+    --------------
+    [CYCLE_TRACE_SUMMARY] cycle=50 trade_permission_engine=44 position_cap=31
+    latency_drift=12 min_notional=9 insufficient_funds=6
+    """
+    combined: Dict[str, int] = {}
+    for reason, count in veto_counts.items():
+        combined[reason] = combined.get(reason, 0) + count
+    for reason, count in reject_counts.items():
+        combined[reason] = combined.get(reason, 0) + count
+    if not combined:
+        return
+    histogram_parts = " ".join(
+        f"{reason}={count}"
+        for reason, count in sorted(combined.items(), key=lambda kv: -kv[1])
+    )
+    _trace_log.info("[CYCLE_TRACE_SUMMARY] cycle=%d %s", cycle_number, histogram_parts)
