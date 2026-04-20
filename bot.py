@@ -1937,6 +1937,7 @@ def _run_bot_startup_and_trading():
 
             logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
             logger.critical("🔥 SENTINEL A: entered INIT section")
+            print("INIT_A1 RAW STDERR", flush=True)
             if _startup_buffer:
                 _startup_buffer.flush_phase("PREFLIGHT")
 
@@ -1952,8 +1953,9 @@ def _run_bot_startup_and_trading():
             logger.info("   Main thread health server remains responsive during this")
             logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
 
-            logger.critical("🔥 INIT_A1: before Bootstrap FSM block")
+            print("RAW1 after SENTINEL A", flush=True)
             # ── Bootstrap FSM invariant guards + MODE_GATED + PLATFORM_CONNECTING ─
+            print("RAW2 before bootstrap fsm", flush=True)
             if _BOOTSTRAP_FSM_AVAILABLE:
                 _boot_fsm = _get_bootstrap_fsm()
                 # I1: process lock must be held
@@ -1987,6 +1989,7 @@ def _run_bot_startup_and_trading():
             # TradingStrategy holds broker connections but does not retain
             # partially-executed trades or corrupt state on init failure, so
             # reusing it is safe — thread setup simply picks up where it left off.
+            print("RAW3 before init lock", flush=True)
             with _initialized_state_lock:
                 _existing_strategy = _initialized_state.get("strategy")
             logger.critical("🔥 INIT_A3: after _initialized_state_lock, before phase gate")
