@@ -2901,13 +2901,12 @@ def _run_bot_startup_and_trading():
             # populated) had not yet completed at that point.  Any race condition
             # or concurrent reset between that call and here would leave the state
             # machine in OFF / EMERGENCY_STOP with no recovery path.  Calling
-            # _step_state_machine() now (via the SelfHealingStartup helper) ensures
-            # the trading state machine is checked — and re-activated if needed —
-            # once the bootstrap sequence is truly complete.
+            # force_post_init_state_machine_step() ensures the trading state machine
+            # is checked — and re-activated if needed — once the bootstrap sequence
+            # is truly complete.
             try:
-                from bot.self_healing_startup import SelfHealingStartup as _SHS
-                _shs_post_init = _SHS()
-                _shs_post_init._step_state_machine()
+                from bot.self_healing_startup import force_post_init_state_machine_step
+                force_post_init_state_machine_step()
                 logger.critical(
                     "✅ POST-INIT: state machine step complete after bootstrap"
                 )

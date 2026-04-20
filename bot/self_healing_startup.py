@@ -1392,6 +1392,21 @@ class SelfHealingStartup:
 
         self._step_state_machine()
 
+    def step_state_machine(self) -> None:
+        """Public entry point for an unconditional state machine step.
+
+        Unlike :meth:`start_state_machine`, this method does **not** enforce
+        the once-only guard — it is intended for callers that need to force a
+        re-evaluation of the trading state machine *after* the initial boot
+        sequence has already completed (e.g. after ``INIT_LOCK_ACQUIRED →
+        bootstrap complete``).
+
+        Thread-safe via the internal ``_sm_lock``.
+        """
+        logger.critical("BOOT: forced post-init state machine step")
+        with self._sm_lock:
+            self._step_state_machine()
+
     def _step_state_machine(self) -> None:
         """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
         logger.critical("B2 ENTERING_NEXT_PREFLIGHT_STAGE")
@@ -1558,6 +1573,26 @@ def get_self_healing_startup(config: Optional[StartupConfig] = None) -> SelfHeal
     return SelfHealingStartup(config)
 
 
+def force_post_init_state_machine_step() -> None:
+    """Module-level helper: force an unconditional trading-state-machine step.
+
+    Intended to be called from ``bot.py`` (and similar entry points) immediately
+    after ``INIT_LOCK_ACQUIRED → bootstrap complete`` so the activation check
+    runs once the full bootstrap sequence is truly finished — not only during the
+    early init loop inside :meth:`SelfHealingStartup.run`.
+
+    Errors are logged as warnings and never re-raised so that a failed state
+    machine step never aborts an otherwise healthy supervisor loop.
+    """
+    try:
+        SelfHealingStartup().step_state_machine()
+    except Exception as exc:
+        logger.warning(
+            "force_post_init_state_machine_step: state machine step failed (%s: %s)",
+            type(exc).__name__, exc,
+        )
+
+
 __all__ = [
     "StartupConfig",
     "StartupResult",
@@ -1571,4 +1606,5 @@ __all__ = [
     "PreHaltAlertEngine",
     "SelfHealingStartup",
     "get_self_healing_startup",
+    "force_post_init_state_machine_step",
 ]
