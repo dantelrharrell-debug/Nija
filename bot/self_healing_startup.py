@@ -1464,11 +1464,17 @@ class SelfHealingStartup:
                         "Set LIVE_CAPITAL_VERIFIED=true and run scripts/reset_state_machine.py"
                     )
             elif current == TradingState.OFF:
-                # FIX 4: hard diagnostic log so a CA-blocked startup is never silent.
+                # Option B: single authoritative activation path — only call
+                # maybe_auto_activate() when CapitalAuthority confirms it is ready.
+                # This is deterministic, idempotent-safe, and fixes the
+                # "ready but not activating" condition by guaranteeing the call is
+                # made exactly when the CA gate will pass (not before, not never).
                 if _CA_AVAILABLE and _get_capital_authority is not None:
                     try:
                         _ca = _get_capital_authority()
-                        if not _ca.is_ready():
+                        if _ca.is_ready():
+                            sm.maybe_auto_activate()
+                        else:
                             _broker_keys: list[str] = []
                             if _MABM_AVAILABLE and _mabm is not None:
                                 try:
@@ -1487,7 +1493,10 @@ class SelfHealingStartup:
                             )
                     except Exception:
                         pass
-                sm.maybe_auto_activate()
+                else:
+                    # CA module unavailable — attempt activation without the guard
+                    # (graceful degradation for deployments without CapitalAuthority)
+                    sm.maybe_auto_activate()
             else:
                 logger.info(
                     "SelfHealingStartup: state machine is %s — no reset needed",
