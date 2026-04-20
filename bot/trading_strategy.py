@@ -9472,11 +9472,10 @@ class TradingStrategy:
             # ─────────────────────────────────────────────────────────────────
 
             stop_entries_file = _STOP_ALL_ENTRIES_CONF
-            entries_blocked = os.path.exists(stop_entries_file)
-            if entries_blocked:
+            if os.path.exists(stop_entries_file):
                 _startup_capital = self._get_total_capital_snapshot(fallback=0.0)
                 self._attempt_stop_entries_recovery(stop_entries_file, _startup_capital)
-                entries_blocked = os.path.exists(stop_entries_file)
+            entries_blocked = os.path.exists(stop_entries_file)
 
             # Determine if we're in management-only mode
             managing_only = user_mode or entries_blocked or len(current_positions) >= MAX_POSITIONS_ALLOWED
@@ -9540,20 +9539,54 @@ class TradingStrategy:
             _balance_grace_mode = False
             _bs_key = _broker_key(active_broker)
 
-            def _orchestrator_fetch():
-                if hasattr(active_broker, "get_account_balance_detailed"):
-                    d = active_broker.get_account_balance_detailed(verbose=True)
-                    if d and not d.get("error"):
-                        return d
-                    if d and d.get("error"):
-                        logger.warning(
-                            "⚠️  get_account_balance_detailed returned error (%s) — "
-                            "falling back to get_account_balance()",
-                            d.get("error"),
-                        )
-                return active_broker.get_account_balance(verbose=True)
+            # ── Hydration pre-check ───────────────────────────────────────────
+            # Block the live balance fetch (and any new entries) until all four
+            # CapitalAuthority hydration invariants are met:
+            #   connected, payload_hydrated, capital_ready, nonce_lock_acquired
+            # If not yet hydrated, fall back to the strategy cache and skip new
+            # entries so exits can still run without a live balance call.
+            _mabm_for_hydration = getattr(self, 'multi_account_manager', None)
+            _hydration_ok = True
+            _hydration_reason = ""
+            if _mabm_for_hydration is not None and hasattr(_mabm_for_hydration, 'is_fully_hydrated_for_trading'):
+                try:
+                    _hydration_ok, _hydration_reason = _mabm_for_hydration.is_fully_hydrated_for_trading()
+                except Exception as _hyd_err:
+                    logger.debug("Hydration gate check error: %s", _hyd_err)
 
-            account_balance = BalanceService.refresh(_bs_key, _orchestrator_fetch)
+            if not _hydration_ok:
+                logger.warning(
+                    "⏳ HYDRATION GATE BLOCKED (reason=%s) — skipping live balance fetch; "
+                    "using cached balance if available. "
+                    "New entries will be suppressed until all four invariants are satisfied: "
+                    "connected, payload_hydrated, capital_ready, nonce_lock_acquired.",
+                    _hydration_reason,
+                )
+                # Use cached balance for position management; suppress new entries.
+                account_balance = self._last_known_balance or 0.0
+                _balance_grace_mode = bool(account_balance > 0)
+                if account_balance <= 0:
+                    logger.error(
+                        "❌ Hydration incomplete (%s) and no cached balance — "
+                        "cannot size positions; skipping cycle.",
+                        _hydration_reason,
+                    )
+                    return
+            else:
+                def _orchestrator_fetch():
+                    if hasattr(active_broker, "get_account_balance_detailed"):
+                        d = active_broker.get_account_balance_detailed(verbose=True)
+                        if d and not d.get("error"):
+                            return d
+                        if d and d.get("error"):
+                            logger.warning(
+                                "⚠️  get_account_balance_detailed returned error (%s) — "
+                                "falling back to get_account_balance()",
+                                d.get("error"),
+                            )
+                    return active_broker.get_account_balance(verbose=True)
+
+                account_balance = BalanceService.refresh(_bs_key, _orchestrator_fetch)
             # Priority 2 — hard diagnostic: if this prints 0.00 the balance fetch is the blocker
             logger.info(f"EXECUTION BALANCE CHECK: {account_balance}")
 
@@ -9681,7 +9714,13 @@ class TradingStrategy:
             self._apply_capital_drift_hysteresis(_current_total_capital, stop_entries_file)
             if os.path.exists(stop_entries_file):
                 self._attempt_stop_entries_recovery(stop_entries_file, _current_total_capital)
-            entries_blocked = os.path.exists(stop_entries_file)
+            entries_blocked = os.path.exists(stop_entries_file) or not _hydration_ok
+            if not _hydration_ok:
+                logger.warning(
+                    "🚫 ENTRIES BLOCKED by hydration gate (reason=%s) — "
+                    "position management continues but no new entries will be made.",
+                    _hydration_reason,
+                )
 
             # ── PortfolioStateManager → AdvancedTradingManager sync ───────────
             # Every cycle: push the freshly-fetched balance into portfolio_manager

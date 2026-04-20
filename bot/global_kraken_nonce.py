@@ -31,6 +31,7 @@ import glob as _glob
 import json
 import logging
 import os
+import signal
 import socket
 import threading
 import time
@@ -1099,19 +1100,31 @@ class KrakenNonceManager:
                     )
                 if remaining <= 0:
                     break  # timeout exhausted — fall through to degraded mode
-                # Exponential backoff: 2 s → 4 s → 8 s … capped at 10 s,
-                # never overshooting the remaining deadline.
-                sleep_duration = min(10.0, 2.0 ** (attempt + 1), remaining)
-                _logger.warning(
-                    "KrakenNonceManager: PID lock not yet acquired for key=%s "
-                    "(attempt %d, %.0fs remaining) — waiting %.0fs for duplicate "
-                    "process to exit before retrying.",
-                    self._key_id or "platform",
-                    attempt + 1,
-                    remaining,
-                    sleep_duration,
-                )
-                time.sleep(sleep_duration)
+                # On the first attempt, try to kill the duplicate process that
+                # holds the lock so this instance can take over cleanly.
+                if attempt == 0:
+                    _logger.warning(
+                        "KrakenNonceManager: PID lock held by another process "
+                        "(key=%s) — attempting to terminate duplicate instance before retrying.",
+                        self._key_id or "platform",
+                    )
+                    self.kill_duplicate_process(sigterm_timeout_s=min(5.0, remaining - 1.0))
+                    # Allow OS to fully release the lock fd after the duplicate exits.
+                    time.sleep(0.5)
+                else:
+                    # Exponential backoff: 2 s → 4 s → 8 s … capped at 10 s,
+                    # never overshooting the remaining deadline.
+                    sleep_duration = min(10.0, 2.0 ** (attempt + 1), remaining)
+                    _logger.warning(
+                        "KrakenNonceManager: PID lock not yet acquired for key=%s "
+                        "(attempt %d, %.0fs remaining) — waiting %.0fs for duplicate "
+                        "process to exit before retrying.",
+                        self._key_id or "platform",
+                        attempt + 1,
+                        remaining,
+                        sleep_duration,
+                    )
+                    time.sleep(sleep_duration)
                 attempt += 1
 
             if self._pid_lock_fh is None:
@@ -2209,6 +2222,109 @@ class KrakenNonceManager:
         except Exception:
             # If we cannot lock it, another process may still be active.
             return
+
+    def kill_duplicate_process(self, sigterm_timeout_s: float = 5.0) -> bool:
+        """Attempt to terminate a duplicate NIJA process that holds the PID lock.
+
+        Reads the PID recorded in ``self._pid_lock_file``, sends SIGTERM, waits
+        up to *sigterm_timeout_s* seconds, and then sends SIGKILL if the process
+        is still alive.
+
+        Returns ``True`` when the duplicate was successfully terminated (or was
+        already dead), ``False`` when no valid PID could be read, the caller
+        lacks permission to signal the process, or the platform does not support
+        ``signal``.
+
+        Safety rules
+        ------------
+        * Never signals ``os.getpid()`` (this process).
+        * Only signals a process whose PID was read from the lock file — never
+          pattern-matches on process name.
+        * On non-Unix platforms (no ``signal.SIGTERM``) returns ``False`` safely.
+        """
+        dup_pid = self._read_pid_from_pid_lock()
+        if dup_pid <= 0:
+            _logger.warning(
+                "KrakenNonceManager.kill_duplicate_process: no valid PID in lock file %s — cannot kill",
+                self._pid_lock_file,
+            )
+            return False
+
+        if dup_pid == os.getpid():
+            _logger.debug(
+                "KrakenNonceManager.kill_duplicate_process: PID %d matches this process — skipping",
+                dup_pid,
+            )
+            return False
+
+        if not self._is_process_alive(dup_pid):
+            _logger.info(
+                "KrakenNonceManager.kill_duplicate_process: PID %d is not alive — nothing to kill",
+                dup_pid,
+            )
+            return True
+
+        try:
+            _logger.critical(
+                "🚨 KrakenNonceManager: sending SIGTERM to duplicate NIJA process PID=%d "
+                "(duplicate holds nonce writer lock %s)",
+                dup_pid,
+                self._pid_lock_file,
+            )
+            os.kill(dup_pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError) as exc:
+            _logger.warning(
+                "KrakenNonceManager.kill_duplicate_process: cannot SIGTERM PID=%d: %s",
+                dup_pid,
+                exc,
+            )
+            return False
+
+        # Wait for graceful exit
+        deadline = time.monotonic() + sigterm_timeout_s
+        while time.monotonic() < deadline:
+            if not self._is_process_alive(dup_pid):
+                _logger.info(
+                    "KrakenNonceManager.kill_duplicate_process: duplicate PID=%d exited after SIGTERM",
+                    dup_pid,
+                )
+                return True
+            time.sleep(0.25)
+
+        # Graceful exit timed out — escalate to SIGKILL
+        if self._is_process_alive(dup_pid):
+            try:
+                _logger.critical(
+                    "🚨 KrakenNonceManager: duplicate PID=%d did not exit after %.0fs — sending SIGKILL",
+                    dup_pid,
+                    sigterm_timeout_s,
+                )
+                os.kill(dup_pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError) as exc:
+                _logger.warning(
+                    "KrakenNonceManager.kill_duplicate_process: cannot SIGKILL PID=%d: %s",
+                    dup_pid,
+                    exc,
+                )
+                return False
+
+            # Brief wait for SIGKILL to take effect
+            for _ in range(20):
+                time.sleep(0.1)
+                if not self._is_process_alive(dup_pid):
+                    _logger.info(
+                        "KrakenNonceManager.kill_duplicate_process: duplicate PID=%d killed via SIGKILL",
+                        dup_pid,
+                    )
+                    return True
+
+            _logger.error(
+                "KrakenNonceManager.kill_duplicate_process: PID=%d still alive after SIGKILL",
+                dup_pid,
+            )
+            return False
+
+        return True
 
     def _try_acquire_pid_lock(self, log_failure: bool = True, allow_stale_cleanup: bool = True) -> object:
         """

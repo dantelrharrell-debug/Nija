@@ -2076,6 +2076,81 @@ class MultiAccountBrokerManager:
         with self._capital_state_lock:
             return bool(self._capital_ready)
 
+    def is_fully_hydrated_for_trading(self) -> Tuple[bool, str]:
+        """Return (True, "") only when all four hydration invariants are met.
+
+        The four required conditions, checked in order:
+
+        1. **connected** — at least one platform broker has ``broker.connected == True``.
+        2. **payload_hydrated** — at least one connected broker has produced a
+           balance payload (``has_balance_payload_for_capital()`` or
+           ``has_balance_payload()`` or ``_last_known_balance is not None``).
+        3. **capital_ready** — :meth:`is_capital_authority_ready` returns ``True``.
+        4. **nonce_lock_acquired** — the ``KrakenNonceManager`` singleton holds
+           the process-lifetime PID lock (``_pid_lock_acquired == True``).
+
+        Returns
+        -------
+        Tuple[bool, str]
+            ``(True, "")`` when all invariants are satisfied.
+            ``(False, reason)`` with a human-readable *reason* code when any
+            invariant is not yet met.  Reason codes (one per failing condition):
+
+            * ``"not_connected"``        — no platform broker is connected yet.
+            * ``"payload_not_hydrated"`` — no connected broker has a balance payload.
+            * ``"capital_not_ready"``    — capital authority bootstrap not complete.
+            * ``"nonce_lock_not_held"``  — nonce manager lacks the PID writer lock.
+        """
+        # ── Condition 1: connected ────────────────────────────────────────────
+        connected = any(
+            getattr(b, "connected", False)
+            for b in self._platform_brokers.values()
+        )
+        if not connected:
+            return False, "not_connected"
+
+        # ── Condition 2: payload_hydrated ─────────────────────────────────────
+        payload_ok = False
+        for broker in self._platform_brokers.values():
+            if not getattr(broker, "connected", False):
+                continue
+            has_payload = (
+                (callable(getattr(broker, "has_balance_payload_for_capital", None))
+                 and broker.has_balance_payload_for_capital())
+                or (callable(getattr(broker, "has_balance_payload", None))
+                    and broker.has_balance_payload())
+                or getattr(broker, "_last_known_balance", None) is not None
+            )
+            if has_payload:
+                payload_ok = True
+                break
+        if not payload_ok:
+            return False, "payload_not_hydrated"
+
+        # ── Condition 3: capital_ready ────────────────────────────────────────
+        if not self.is_capital_authority_ready():
+            return False, "capital_not_ready"
+
+        # ── Condition 4: nonce_lock_acquired ──────────────────────────────────
+        try:
+            _nonce_mod = None
+            for _mod_name in ("bot.global_kraken_nonce", "global_kraken_nonce"):
+                try:
+                    _nonce_mod = __import__(_mod_name, fromlist=["get_global_nonce_manager"])
+                    break
+                except ImportError:
+                    continue
+            if _nonce_mod is not None:
+                _nmgr = _nonce_mod.get_global_nonce_manager()
+                if _nmgr is not None and not getattr(_nmgr, "_pid_lock_acquired", True):
+                    return False, "nonce_lock_not_held"
+        except Exception:
+            # Nonce module unavailable — skip this gate to avoid blocking on
+            # platforms that do not use file-based nonce locking.
+            pass
+
+        return True, ""
+
     def is_trading_halted_due_to_capital(self) -> bool:
         """Return True when capital is halted.
 
