@@ -37,10 +37,10 @@ Normalization contract
 
 Thread-safety
 -------------
-All public methods are protected by a single ``threading.Lock``.
-``refresh()`` captures the lock for the duration of the API calls so a
-concurrent ``get_usable_capital()`` call always returns a consistent
-snapshot rather than a partially-written intermediate state.
+All public methods are protected by a single ``threading.RLock``.
+``refresh()`` captures the lock for the duration of state updates; because
+``get_real_capital()`` (and similar read helpers) also acquire the same lock
+we use an ``RLock`` so the same thread can re-enter without deadlocking.
 
 Author: NIJA Trading Systems
 Version: 1.0
@@ -289,7 +289,9 @@ class CapitalAuthority:
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        # RLock allows the same thread to re-acquire (e.g. refresh() holds the
+        # lock and calls get_real_capital() which also acquires it).
+        self._lock = threading.RLock()
         self.broker_manager: Optional[Any] = None
         self._reserve_pct: float = float(
             os.environ.get("NIJA_CAPITAL_RESERVE_PCT", str(_DEFAULT_RESERVE_PCT))

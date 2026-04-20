@@ -1750,6 +1750,7 @@ def _run_bot_startup_and_trading():
 
                     # ── Sentinel A0.3: nonce reset complete ─────────────────────
                     logger.critical("A0.3 after nonce reset")
+                    logger.critical("B5 after nonce lock / nonce-jump complete")
 
                     logger.info(
                         "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
@@ -1944,6 +1945,8 @@ def _run_bot_startup_and_trading():
         # BOT INITIALIZATION - This is where Kraken connection happens
         # ═══════════════════════════════════════════════════════════════════════
         
+        logger.critical("B2 entered preflight_continue (BOT INIT SECTION)")
+
         try:
             logger.info("🧵 STARTUP THREAD: Initializing trading strategy...")
             logger.info("   This is where Kraken connection will be established")
@@ -2012,6 +2015,7 @@ def _run_bot_startup_and_trading():
                     _initialized_state["strategy"] = strategy
                 logger.critical("🔥 A2: after get_state_machine")
                 logger.critical("🧠 STATE STORED — entering supervisor mode")
+                logger.critical("B3 after connect_brokers (TradingStrategy created)")
 
             # Bootstrap FSM: broker(s) connected → PLATFORM_READY
             _bfsm_transition(
@@ -2285,6 +2289,7 @@ def _run_bot_startup_and_trading():
                     logger.critical("🔥 A4: before nonce-related call")
                     _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
                     logger.info("[Bootstrap] BOOTSTRAP_START capital refresh triggered")
+                    logger.critical("B4 after authority.refresh (refresh_capital_authority returned)")
                     _bms_refresh_ok = True
                 except Exception as _bms_err:
                     logger.warning("[Bootstrap] BOOTSTRAP_START refresh error: %s", _bms_err)
@@ -2494,6 +2499,7 @@ def _run_bot_startup_and_trading():
                 logger.critical(
                     "✅ INIT PHASE: state machine transitioned to LIVE_ACTIVE"
                 )
+                logger.critical("B6 after activate_trading (maybe_auto_activate succeeded)")
             else:
                 raise RuntimeError(
                     "INIT FAILED: maybe_auto_activate() blocked after CA_READY"
