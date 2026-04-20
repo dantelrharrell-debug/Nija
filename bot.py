@@ -2003,7 +2003,9 @@ def _run_bot_startup_and_trading():
                     )
                 logger.critical("🔥 A1: before get_state_machine")
                 logger.critical("🚀 CREATING TradingStrategy INSTANCE")
+                logger.critical("B2 before TradingStrategy()")
                 strategy = TradingStrategy()
+                logger.critical("B3 after TradingStrategy()")
                 if strategy is None:
                     raise RuntimeError(
                         "FATAL: TradingStrategy() returned None — "

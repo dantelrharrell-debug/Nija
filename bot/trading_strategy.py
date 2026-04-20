@@ -3244,6 +3244,7 @@ class TradingStrategy:
 
     def __init__(self):
         """Initialize production strategy with multi-broker support."""
+        logger.critical("TS1 entering TradingStrategy.__init__")
         logger.critical("🔥 ENTERING TradingStrategy __init__")
         with TradingStrategy._startup_lock:
             if TradingStrategy._startup_completed:
@@ -3497,6 +3498,7 @@ class TradingStrategy:
         else:
             self.regime_engine = None
 
+        logger.critical("TS2 indicators initialized")
         logger.critical("STEP 2: Setting up broker references (market gates, regime controllers)")
 
         # Initialize Risk Budget Engine — risk-first position sizing with performance scaling
@@ -5744,6 +5746,7 @@ class TradingStrategy:
 
                 logger.info("✅ TradingStrategy initialized (APEX v7.1 + Multi-Broker + 8-Position Cap)")
                 logger.critical("STEP 8: Broker manager initialized, attaching Nija Core Loop")
+                logger.critical("TS3 broker references attached")
 
                 # ── Nija Core Loop — attach to TradingStrategy ────────────────
                 if NIJA_CORE_LOOP_AVAILABLE and get_nija_core_loop is not None and self.apex is not None:
@@ -5800,6 +5803,7 @@ class TradingStrategy:
         logger.info("✅ TradingStrategy startup latch set — re-initialisation blocked")
         logger.critical("STEP 9: Finished init")
         logger.critical("🚀 TRADING STRATEGY INITIALIZED SUCCESSFULLY")
+        logger.critical("TS4 strategy init complete")
 
     def adopt_existing_positions(self, broker, broker_name: str = "UNKNOWN", account_id: str = "PLATFORM") -> dict:
         """
