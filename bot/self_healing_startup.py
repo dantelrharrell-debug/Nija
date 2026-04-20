@@ -1228,6 +1228,9 @@ class SelfHealingStartup:
         # the silent stall where the broker is connected but the state machine
         # never observes a fresh CA snapshot and sits idle forever.
         if startup_result.ok:
+            # ensure first activation tick occurs immediately post-init
+            self._step_state_machine()
+
             import time as _time
 
             _ca_timeout_s = 60
