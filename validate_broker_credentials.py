@@ -2,37 +2,18 @@
 """
 NIJA Trading Bot — Broker Credential Validator
 
-Pre-deployment check that validates all broker API credentials are present,
-non-empty, and structurally correct before the bot attempts live connections.
+Diagnoses why the trading bot is stuck in monitor mode by validating all
+broker API credentials, testing live API connections, and inspecting nonce
+file state.
 
 Checks performed:
-  • Kraken PLATFORM  — key/secret present, Classic API key format
-  • Coinbase         — key/secret present, JWT/CDP key format
-  • Alpaca           — key/secret present
-  • Binance          — key/secret present
-  • OKX              — key/secret/passphrase present
+  1. Credential presence & format — Kraken PLATFORM, Coinbase, Alpaca, Binance, OKX
+  2. Kraken PLATFORM live connection — public time + authenticated balance fetch
+  3. Coinbase live connection — public time + JWT-authenticated account fetch
+  4. Nonce file inspection — detect stale / future nonces
 
 Usage:
-    python validate_broker_credentials.py
-
-Exit codes:
-    0 — all configured brokers passed validation
-    1 — one or more critical credential errors found
-NIJA Broker Credential Validator
-
-Diagnoses why the trading bot is stuck in monitor mode by validating all
-broker credentials and testing live API connections.
-
-Checks:
-  1. Kraken PLATFORM credentials + nonce state
-  2. Coinbase credentials + live auth test
-  3. Kraken USER (daivon_frazier) credentials
-  4. Alpaca credentials
-  5. Binance / OKX credentials (optional)
-  6. Nonce file state for Kraken
-
-Usage:
-    python3 validate_broker_credentials.py
+    python3 validate_broker_credentials.py [--test-connections]
 
 Exit codes:
     0 — At least one broker is fully operational
@@ -42,9 +23,6 @@ Exit codes:
 import os
 import sys
 import re
-import time
-
-# ── Load .env if present ──────────────────────────────────────────────────────
 import time
 import json
 import socket
@@ -64,9 +42,6 @@ try:
     load_dotenv()
 except ImportError:
     pass  # dotenv not installed; rely on platform-injected env vars
-
-# ── Colour helpers (graceful fallback when terminal has no colour support) ────
-    pass  # dotenv not installed; env vars must be set externally
 
 # ── Colour helpers (graceful fallback on Windows / no-tty) ───────────────────
 _USE_COLOUR = sys.stdout.isatty()
@@ -543,7 +518,8 @@ def _render_broker_result(r: dict) -> None:
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main() -> int:
+def _quick_validate() -> int:
+    """Quick credential format/presence check (called by the comprehensive main)."""
     test_connections = "--test-connections" in sys.argv
 
     print()
@@ -640,8 +616,6 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    sys.exit(main())
 def green(t):  return _c("32", t)
 def red(t):    return _c("31", t)
 def yellow(t): return _c("33", t)
@@ -1271,7 +1245,10 @@ def main() -> int:
           f"{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
     print(bold("=" * 72))
 
-    # Step 1 — credential presence
+    # Step 0 — quick credential format/presence check
+    _quick_validate()
+
+    # Step 1 — credential presence (detailed step-by-step)
     cred_results = validate_credentials()
 
     # Step 2 — Kraken live test
