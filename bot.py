@@ -37,7 +37,7 @@ except Exception:
 # These are populated after first successful initialisation and reused by the
 # supervisor-loop-only restart path so TradingStrategy is never created twice.
 _initialized_state: dict = {}
-_initialized_state_lock = threading.Lock()
+_initialized_state_lock = threading.RLock()
 
 # Single-owner bootstrap kernel lock.
 # Only one bootstrap execution sequence may run at a time.  The BotStartup
@@ -1321,11 +1321,18 @@ def _run_bot_startup_and_trading_with_retry():
                 # attempt can enter PLATFORM_CONNECTING cleanly.  Skip reset when
                 # full init already completed (fast-path supervisor restart scenario).
                 if _BOOTSTRAP_FSM_AVAILABLE:
-                    with _initialized_state_lock:
+                    print("INIT_LOCK_ATTEMPT", flush=True)
+                    _acquired = _initialized_state_lock.acquire(timeout=5)
+                    if not _acquired:
+                        raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+                    try:
+                        print("INIT_LOCK_ACQUIRED", flush=True)
                         _init_done = (
                             _initialized_state.get("strategy") is not None
                             and "active_threads" in _initialized_state
                         )
+                    finally:
+                        _initialized_state_lock.release()
                     if not _init_done:
                         _get_bootstrap_fsm().reset_for_retry(
                             f"attempt #{attempt} failed: {e}"
@@ -1368,8 +1375,15 @@ def _run_bot_startup_and_trading():
     # Requires full state (strategy + active_threads) to be present so that a
     # retry after a partial-init failure falls through and finishes setup instead
     # of calling _rerun_supervisor_loop with an incomplete state dict.
-    with _initialized_state_lock:
+    print("INIT_LOCK_ATTEMPT", flush=True)
+    _acquired = _initialized_state_lock.acquire(timeout=5)
+    if not _acquired:
+        raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+    try:
+        print("INIT_LOCK_ACQUIRED", flush=True)
         _state_copy = dict(_initialized_state)
+    finally:
+        _initialized_state_lock.release()
     if _state_copy.get("strategy") is not None and "active_threads" in _state_copy:
         logger.critical("⚠️ BYPASSING INIT — FORCING RUN LOOP")
         logger.info(
@@ -1402,8 +1416,15 @@ def _run_bot_startup_and_trading():
     # ── FIX 3: CONNECTION PHASE GUARD — can only run once ───────────────────
     # If a previous attempt completed the connection/credential-check phase,
     # skip it entirely on retry so we never loop back through broker init.
-    with _initialized_state_lock:
+    print("INIT_LOCK_ATTEMPT", flush=True)
+    _acquired = _initialized_state_lock.acquire(timeout=5)
+    if not _acquired:
+        raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+    try:
+        print("INIT_LOCK_ACQUIRED", flush=True)
         _connection_already_complete = _initialized_state.get("connection_complete", False)
+    finally:
+        _initialized_state_lock.release()
     _resolved_kraken_key, _resolved_kraken_secret = _resolve_kraken_startup_credentials()
     _kraken_credentials_valid = bool(_resolved_kraken_key and _resolved_kraken_secret)
     _coinbase_sdk_available = _coinbase_sdk_is_available()
@@ -1418,8 +1439,15 @@ def _run_bot_startup_and_trading():
             logger.info("♻️  Connection phase already complete — skipping credential checks")
             # Restore the credential flags stored during the first run so that
             # later sections (broker connection diagnostics at ~line 1226) still work.
-            with _initialized_state_lock:
+            print("INIT_LOCK_ATTEMPT", flush=True)
+            _acquired = _initialized_state_lock.acquire(timeout=5)
+            if not _acquired:
+                raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+            try:
+                print("INIT_LOCK_ACQUIRED", flush=True)
                 _cred_snap = dict(_initialized_state)
+            finally:
+                _initialized_state_lock.release()
             kraken_platform_configured = _cred_snap.get("kraken_platform_configured", False)
             coinbase_configured = _cred_snap.get("coinbase_configured", False)
             exchanges_configured = _cred_snap.get("exchanges_configured", 0)
@@ -1927,13 +1955,20 @@ def _run_bot_startup_and_trading():
                 logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
             # Save credential flags so retries can restore them without re-running checks
-            with _initialized_state_lock:
+            print("INIT_LOCK_ATTEMPT", flush=True)
+            _acquired = _initialized_state_lock.acquire(timeout=5)
+            if not _acquired:
+                raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+            try:
+                print("INIT_LOCK_ACQUIRED", flush=True)
                 _initialized_state["connection_complete"] = True
                 _initialized_state["kraken_platform_configured"] = kraken_platform_configured
                 _initialized_state["coinbase_configured"] = coinbase_configured
                 _initialized_state["exchanges_configured"] = exchanges_configured
                 _initialized_state["kraken_credentials_valid"] = _kraken_credentials_valid
                 _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
+            finally:
+                _initialized_state_lock.release()
 
             logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
             logger.critical("🔥 SENTINEL A: entered INIT section")
@@ -1990,8 +2025,15 @@ def _run_bot_startup_and_trading():
             # partially-executed trades or corrupt state on init failure, so
             # reusing it is safe — thread setup simply picks up where it left off.
             print("RAW3 before init lock", flush=True)
-            with _initialized_state_lock:
+            print("INIT_LOCK_ATTEMPT", flush=True)
+            _acquired = _initialized_state_lock.acquire(timeout=5)
+            if not _acquired:
+                raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+            try:
+                print("INIT_LOCK_ACQUIRED", flush=True)
                 _existing_strategy = _initialized_state.get("strategy")
+            finally:
+                _initialized_state_lock.release()
             logger.critical("🔥 INIT_A3: after _initialized_state_lock, before phase gate")
             if _existing_strategy is not None:
                 logger.info("♻️  Reusing existing TradingStrategy instance from previous attempt")
@@ -2026,8 +2068,15 @@ def _run_bot_startup_and_trading():
                         "strategy failed to initialize.  Check broker credentials "
                         "and apex strategy import."
                     )
-                with _initialized_state_lock:
+                print("INIT_LOCK_ATTEMPT", flush=True)
+                _acquired = _initialized_state_lock.acquire(timeout=5)
+                if not _acquired:
+                    raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+                try:
+                    print("INIT_LOCK_ACQUIRED", flush=True)
                     _initialized_state["strategy"] = strategy
+                finally:
+                    _initialized_state_lock.release()
                 logger.critical("🔥 INIT_A5: after TradingStrategy()")
                 logger.critical("🧠 STATE STORED — entering supervisor mode")
                 logger.critical("B3 after connect_brokers (TradingStrategy created)")
@@ -2773,13 +2822,20 @@ def _run_bot_startup_and_trading():
 
             # Persist initialised state (thread-safe) so a supervisor-loop crash
             # can be retried WITHOUT recreating TradingStrategy or reconnecting brokers.
-            with _initialized_state_lock:
+            print("INIT_LOCK_ATTEMPT", flush=True)
+            _acquired = _initialized_state_lock.acquire(timeout=5)
+            if not _acquired:
+                raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+            try:
+                print("INIT_LOCK_ACQUIRED", flush=True)
                 _initialized_state = {
                     "strategy": strategy,
                     "active_threads": _active_threads,
                     "use_independent_trading": use_independent_trading,
                     "health_manager": health_manager,
                 }
+            finally:
+                _initialized_state_lock.release()
             logger.critical(f"STATE CHECK: {_initialized_state}")
             logger.critical("🧠 STATE STORED — entering supervisor mode")
 
@@ -2797,8 +2853,15 @@ def _run_bot_startup_and_trading():
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
             # Delegates to _rerun_supervisor_loop so the supervisor logic lives
             # in exactly one place and retries (fast-path) use the same code.
-            with _initialized_state_lock:
+            print("INIT_LOCK_ATTEMPT", flush=True)
+            _acquired = _initialized_state_lock.acquire(timeout=5)
+            if not _acquired:
+                raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+            try:
+                print("INIT_LOCK_ACQUIRED", flush=True)
                 _state_for_supervisor = dict(_initialized_state)
+            finally:
+                _initialized_state_lock.release()
             # Bootstrap FSM: all threads live → RUNNING_SUPERVISED
             _bfsm_transition(
                 _BootstrapState.RUNNING_SUPERVISED,
