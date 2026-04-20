@@ -1227,7 +1227,24 @@ class SelfHealingStartup:
         # CA is confirmed ready (or the bot is already LIVE_ACTIVE), preventing
         # the silent stall where the broker is connected but the state machine
         # never observes a fresh CA snapshot and sits idle forever.
-        if startup_result.ok:
+        broker_map = (
+            dict(_mabm.platform_brokers)
+            if (_MABM_AVAILABLE and _mabm is not None)
+            else (
+                {startup_result.broker_name: startup_result.broker}
+                if startup_result.broker is not None
+                else {}
+            )
+        )
+        # Obtain the CapitalAuthority instance; fall back to a pass-through stub
+        # when the module is unavailable so the condition still evaluates cleanly.
+        ca: Any = type("_NullCA", (), {"is_ready": lambda self: True})()
+        if _CA_AVAILABLE and _get_capital_authority is not None:
+            try:
+                ca = _get_capital_authority()
+            except Exception:
+                pass  # leave ca as the pass-through stub
+        if startup_result.ok and broker_map and ca.is_ready():
             # ensure first activation tick occurs immediately post-init
             self._step_state_machine()
 
