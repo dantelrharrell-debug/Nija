@@ -54,6 +54,7 @@ import os
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -373,6 +374,28 @@ class CapitalAuthority:
         logger.info("[CapitalAuthority] instance_id=%d", id(self))
 
     # ------------------------------------------------------------------
+    # Lock helper
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def _timed_lock(self, timeout: float = 5.0):
+        """Acquire ``self._lock`` with a deadline.
+
+        Raises :class:`RuntimeError` if the lock cannot be obtained within
+        *timeout* seconds, which surfaces potential deadlock conditions rather
+        than blocking indefinitely.
+        """
+        acquired = self._lock.acquire(timeout=timeout)
+        if not acquired:
+            raise RuntimeError(
+                f"CapitalAuthority lock acquisition timed out after {timeout}s — possible deadlock"
+            )
+        try:
+            yield
+        finally:
+            self._lock.release()
+
+    # ------------------------------------------------------------------
     # Singleton identity guard
     # ------------------------------------------------------------------
 
@@ -609,7 +632,7 @@ class CapitalAuthority:
             if broker is None:
                 continue
             broker_key = normalize_broker_identifier(broker_id)
-            with self._lock:
+            with self._timed_lock():
                 previous = float(self._broker_balances.get(broker_key, 0.0))
                 if self.last_updated is not None:
                     previous_age_s = (
@@ -709,7 +732,7 @@ class CapitalAuthority:
             )
             return
 
-        with self._lock:
+        with self._timed_lock():
             self._broker_balances = new_balances
             self._open_exposure_usd = max(0.0, float(open_exposure_usd))
             self.last_updated = datetime.now(timezone.utc)
