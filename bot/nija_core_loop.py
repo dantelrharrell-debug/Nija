@@ -61,6 +61,63 @@ import pandas as pd
 logger = logging.getLogger("nija.core_loop")
 
 # ---------------------------------------------------------------------------
+# Trading state machine + CapitalAuthority — optional; graceful fallback
+# ---------------------------------------------------------------------------
+try:
+    from trading_state_machine import get_state_machine as _get_state_machine, TradingState as _TradingState
+    _SM_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.trading_state_machine import get_state_machine as _get_state_machine, TradingState as _TradingState  # type: ignore[import]
+        _SM_AVAILABLE = True
+    except ImportError:
+        _get_state_machine = None  # type: ignore[assignment]
+        _TradingState = None  # type: ignore[assignment]
+        _SM_AVAILABLE = False
+
+try:
+    from capital_authority import get_capital_authority as _get_ca
+    _CA_LOOP_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+        _CA_LOOP_AVAILABLE = True
+    except ImportError:
+        _get_ca = None  # type: ignore[assignment]
+        _CA_LOOP_AVAILABLE = False
+
+
+def _supervisor_step_state_machine() -> None:
+    """Lightweight state machine health check for the supervisor loop.
+
+    Mirrors the core contract from ``SelfHealingStartup._step_state_machine``:
+        while True:
+            _step_state_machine()
+                → if ca.is_ready(): maybe_auto_activate()
+
+    Called once per trading cycle so a CA-ready transition is never missed
+    between restarts.  All failures are swallowed — the supervisor loop must
+    not stall due to a state machine error.
+    """
+    if not _SM_AVAILABLE or _get_state_machine is None:
+        return
+    try:
+        sm = _get_state_machine()
+        if sm.get_current_state() != _TradingState.OFF:
+            return
+        # Only attempt activation when CapitalAuthority reports ready
+        ca_ready = not _CA_LOOP_AVAILABLE  # proceed when CA module absent
+        if _CA_LOOP_AVAILABLE and _get_ca is not None:
+            try:
+                ca_ready = _get_ca().is_ready()
+            except Exception:
+                pass
+        if ca_ready:
+            sm.maybe_auto_activate()
+    except Exception as _sm_err:
+        logger.debug("supervisor state machine step failed: %s", _sm_err)
+
+# ---------------------------------------------------------------------------
 # Entry-to-Order Trace — mandatory cycle observability
 # ---------------------------------------------------------------------------
 try:
@@ -1365,6 +1422,12 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     while True:
         try:
             cycle += 1
+
+            # ── State machine health check ────────────────────────────────────
+            # Ensure OFF → LIVE_ACTIVE transition is never silently missed
+            # between restart cycles: if CA becomes ready after startup the
+            # state machine must observe it on the very next iteration.
+            _supervisor_step_state_machine()
 
             # ── Proactive broker liveness check before entering run_cycle ─────
             # If the strategy's broker is disconnected, attempt reconnect here

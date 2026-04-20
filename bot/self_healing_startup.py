@@ -1346,33 +1346,6 @@ class SelfHealingStartup:
             )
             return False
 
-    def _ca_watchdog_fn(self) -> bool:
-        """Watchdog function for CapitalAuthority / LIVE state health.
-
-        CRITICAL: LIVE_ACTIVE **never** bypasses CA checks.  CA readiness is
-        evaluated unconditionally — a degraded CA while in LIVE_ACTIVE still
-        triggers re-evaluation via :meth:`_step_state_machine`.
-
-        Separating health from readiness:
-
-        * **Readiness** (CA_READY) — the system has fresh broker data and the
-          execution pipeline is healthy.  This is checked unconditionally.
-        * **Health** (LIVE_ACTIVE) — the state machine is in the live-trading
-          state.  This is a *downstream* outcome, not a gate that can skip the
-          CA check in the reverse direction.
-
-        Returns:
-            True  when CA is ready (system is healthy).
-            False when CA is degraded; :meth:`_step_state_machine` is invoked
-            to force re-evaluation before returning.
-        """
-        if self._is_ca_ready():
-            return True
-
-        logger.warning("⚠️ CA or LIVE state degraded — forcing re-evaluation")
-        self.start_state_machine()
-        return False
-
     def start_state_machine(self) -> None:
         """Single-authority entry point for the state machine.
 
@@ -1465,10 +1438,16 @@ class SelfHealingStartup:
                     )
             elif current == TradingState.OFF:
                 # FIX 4: hard diagnostic log so a CA-blocked startup is never silent.
+                # Only call maybe_auto_activate() when CA is ready — avoids log
+                # spam and matches the supervisor-loop contract:
+                #   while True: _step_state_machine()
+                #     → if ca.is_ready(): maybe_auto_activate()
+                _ca_is_ready = not _CA_AVAILABLE  # proceed when CA module absent
                 if _CA_AVAILABLE and _get_capital_authority is not None:
                     try:
                         _ca = _get_capital_authority()
-                        if not _ca.is_ready():
+                        _ca_is_ready = _ca.is_ready()
+                        if not _ca_is_ready:
                             _broker_keys: list[str] = []
                             if _MABM_AVAILABLE and _mabm is not None:
                                 try:
@@ -1487,7 +1466,8 @@ class SelfHealingStartup:
                             )
                     except Exception:
                         pass
-                sm.maybe_auto_activate()
+                if _ca_is_ready:
+                    sm.maybe_auto_activate()
             else:
                 logger.info(
                     "SelfHealingStartup: state machine is %s — no reset needed",
@@ -1527,7 +1507,7 @@ class SelfHealingStartup:
                 "SelfHealingStartup: CA watchdog detected stale/unready CA "
                 "— re-running state machine for self-heal"
             )
-            self.start_state_machine()
+            self._step_state_machine()
         return ready
 
     def _log_nonce_report(self, report: NoncePoisonReport) -> None:
