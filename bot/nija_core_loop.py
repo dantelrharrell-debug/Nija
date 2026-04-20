@@ -467,16 +467,15 @@ class NijaCoreLoop:
         else:
             logger.info("🔒 Core loop: entries blocked (user_mode)")
             # ── Entry-to-Order Trace: pre-scan veto ──────────────────────
-            if not can_enter:
-                emit_cycle_trace(
-                    CycleOutcome.ENTRY_VETOED,
-                    reason=safety_reason,
-                )
-            else:
-                emit_cycle_trace(
-                    CycleOutcome.ENTRY_VETOED,
-                    reason="user_mode",
-                )
+            # user_mode can be True for two distinct reasons:
+            #   1. Safety gate fired (can_enter=False) → report the specific safety reason.
+            #   2. Caller explicitly passed user_mode=True (can_enter still True) → report "user_mode".
+            # These are mutually exclusive: the safety gate sets user_mode=True only when
+            # can_enter is False, so the inner check is not redundant.
+            emit_cycle_trace(
+                CycleOutcome.ENTRY_VETOED,
+                reason=safety_reason if not can_enter else "user_mode",
+            )
 
         # Recommend next interval from AI engine speed controller
         ai = self._get_ai_engine()
