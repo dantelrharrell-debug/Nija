@@ -1472,22 +1472,11 @@ class SelfHealingStartup:
                         "Set LIVE_CAPITAL_VERIFIED=true and run scripts/reset_state_machine.py"
                     )
             elif current == TradingState.OFF:
-                # Option B: single authoritative activation path — only call
-                # maybe_auto_activate() when CapitalAuthority confirms it is ready.
+                # Only call maybe_auto_activate() when CapitalAuthority confirms it is ready.
                 # This is deterministic, idempotent-safe, and fixes the
                 # "ready but not activating" condition by guaranteeing the call is
                 # made exactly when the CA gate will pass (not before, not never).
-                if _CA_AVAILABLE and _get_capital_authority is not None:
-                    try:
-                        _ca = _get_capital_authority()
-                        if _ca.is_ready():
-                            sm.maybe_auto_activate()
-                        else:
-                # FIX 4: hard diagnostic log so a CA-blocked startup is never silent.
-                # Only call maybe_auto_activate() when CA is ready — avoids log
-                # spam and matches the supervisor-loop contract:
-                #   while True: _step_state_machine()
-                #     → if ca.is_ready(): maybe_auto_activate()
+                # Logs a hard diagnostic when CA is not ready so this condition is never silent.
                 _ca_is_ready = not _CA_AVAILABLE  # proceed when CA module absent
                 if _CA_AVAILABLE and _get_capital_authority is not None:
                     try:
@@ -1511,10 +1500,9 @@ class SelfHealingStartup:
                                 _broker_keys,
                             )
                     except Exception:
-                        pass
-                else:
-                    # CA module unavailable — attempt activation without the guard
-                    # (graceful degradation for deployments without CapitalAuthority)
+                        _ca_is_ready = False  # CA check failed — block activation
+                # CA module unavailable — attempt activation without the guard
+                # (graceful degradation for deployments without CapitalAuthority)
                 if _ca_is_ready:
                     sm.maybe_auto_activate()
             else:
