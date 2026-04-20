@@ -2169,7 +2169,7 @@ class KrakenNonceManager:
 
     # Keywords that identify a NIJA bot process in /proc/<pid>/cmdline.
     # Matches the list in bot.py so both lock layers use the same heuristic.
-    _NIJA_CMDLINE_MARKERS: tuple = (
+    _NIJA_CMDLINE_MARKERS: "tuple[str, ...]" = (
         "bot.py", "trading_strategy.py", "nija_core_loop.py",
         "tradingview_webhook.py",
     )
