@@ -1952,6 +1952,7 @@ def _run_bot_startup_and_trading():
             logger.info("   Main thread health server remains responsive during this")
             logger.info("PORT env: %s", os.getenv("PORT") or "<unset>")
 
+            logger.critical("🔥 INIT_A1: before Bootstrap FSM block")
             # ── Bootstrap FSM invariant guards + MODE_GATED + PLATFORM_CONNECTING ─
             if _BOOTSTRAP_FSM_AVAILABLE:
                 _boot_fsm = _get_bootstrap_fsm()
@@ -1978,6 +1979,7 @@ def _run_bot_startup_and_trading():
                     "TradingStrategy broker connection starting",
                 )
 
+            logger.critical("🔥 INIT_A2: after Bootstrap FSM, before _initialized_state_lock")
             # STEP 2 — initialize strategy ONCE.
             # If a previous attempt created TradingStrategy but crashed before
             # the full state (including active_threads) was stored, reuse the
@@ -1987,6 +1989,7 @@ def _run_bot_startup_and_trading():
             # reusing it is safe — thread setup simply picks up where it left off.
             with _initialized_state_lock:
                 _existing_strategy = _initialized_state.get("strategy")
+            logger.critical("🔥 INIT_A3: after _initialized_state_lock, before phase gate")
             if _existing_strategy is not None:
                 logger.info("♻️  Reusing existing TradingStrategy instance from previous attempt")
                 strategy = _existing_strategy
@@ -2001,7 +2004,7 @@ def _run_bot_startup_and_trading():
                         "init_once_guard: TradingStrategy creation attempted more than once — "
                         "likely a retry-loop bug."
                     )
-                logger.critical("🔥 A1: before get_state_machine")
+                logger.critical("🔥 INIT_A4: before TradingStrategy()")
                 logger.critical("🚀 CREATING TradingStrategy INSTANCE")
                 logger.critical("B2 before TradingStrategy()")
                 strategy = TradingStrategy()
@@ -2014,7 +2017,7 @@ def _run_bot_startup_and_trading():
                     )
                 with _initialized_state_lock:
                     _initialized_state["strategy"] = strategy
-                logger.critical("🔥 A2: after get_state_machine")
+                logger.critical("🔥 INIT_A5: after TradingStrategy()")
                 logger.critical("🧠 STATE STORED — entering supervisor mode")
                 logger.critical("B3 after connect_brokers (TradingStrategy created)")
 
