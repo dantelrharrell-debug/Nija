@@ -60,6 +60,28 @@ import pandas as pd
 
 logger = logging.getLogger("nija.core_loop")
 
+# ---------------------------------------------------------------------------
+# Entry-to-Order Trace — mandatory cycle observability
+# ---------------------------------------------------------------------------
+try:
+    from entry_trace import CycleOutcome, emit_cycle_trace
+    _ENTRY_TRACE_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.entry_trace import CycleOutcome, emit_cycle_trace
+        _ENTRY_TRACE_AVAILABLE = True
+    except ImportError:
+        _ENTRY_TRACE_AVAILABLE = False
+        # Fallback no-ops so call sites never need a guard
+        class CycleOutcome:  # type: ignore[no-redef]
+            SCAN_STARTED = "SCAN_STARTED"
+            ENTRY_VETOED = "ENTRY_VETOED"
+            ORDER_PLACED = "ORDER_PLACED"
+            SCAN_COMPLETE_NO_SIGNAL = "SCAN_COMPLETE_NO_SIGNAL"
+
+        def emit_cycle_trace(outcome, **kwargs):  # type: ignore[misc]
+            pass
+
 # Max positions the core loop may open in a single cycle
 # (hard cap — position-level cap is enforced upstream by TradingStrategy)
 MAX_ENTRIES_PER_CYCLE = 3
@@ -362,6 +384,14 @@ class NijaCoreLoop:
             len(symbols), balance, open_positions_count,
         )
 
+        # ── Entry-to-Order Trace: opening event ──────────────────────────
+        emit_cycle_trace(
+            CycleOutcome.SCAN_STARTED,
+            balance=round(balance, 2),
+            open_positions=open_positions_count,
+            symbols=len(symbols),
+        )
+
         # ── Phase 1: Safety gate ──────────────────────────────────────────
         can_enter, safety_reason = self._phase1_safety(broker, balance)
         if not can_enter:
@@ -414,14 +444,38 @@ class NijaCoreLoop:
                             self._zero_signal_streak,
                             FORCED_ENTRY_STREAK_THRESHOLD,
                         )
+
+                # ── Entry-to-Order Trace: terminal outcome ────────────────
+                if entries == 0:
+                    emit_cycle_trace(
+                        CycleOutcome.SCAN_COMPLETE_NO_SIGNAL,
+                        symbols_scored=scored,
+                    )
+                # ORDER_PLACED traces are emitted per entry inside _phase3_scan_and_enter
+
             else:
                 logger.info(
                     "🔒 Core loop: position cap reached (%d/%d) — skipping entries",
                     effective_open,
                     self.max_positions,
                 )
+                # ── Entry-to-Order Trace: position cap veto ───────────────
+                emit_cycle_trace(
+                    CycleOutcome.ENTRY_VETOED,
+                    reason=f"position_cap_reached({effective_open}/{self.max_positions})",
+                )
         else:
             logger.info("🔒 Core loop: entries blocked (user_mode)")
+            # ── Entry-to-Order Trace: pre-scan veto ──────────────────────
+            # user_mode can be True for two distinct reasons:
+            #   1. Safety gate fired (can_enter=False) → report the specific safety reason.
+            #   2. Caller explicitly passed user_mode=True (can_enter still True) → report "user_mode".
+            # These are mutually exclusive: the safety gate sets user_mode=True only when
+            # can_enter is False, so the inner check is not redundant.
+            emit_cycle_trace(
+                CycleOutcome.ENTRY_VETOED,
+                reason=safety_reason if not can_enter else "user_mode",
+            )
 
         # Recommend next interval from AI engine speed controller
         ai = self._get_ai_engine()
@@ -932,6 +986,12 @@ class NijaCoreLoop:
                         )
                         if _perm.final_decision != "EXECUTE":
                             blocked += 1
+                            # ── Entry-to-Order Trace: per-signal veto (TPE) ──
+                            _tpe_reason = getattr(_perm, "reason", "trade_permission_engine")
+                            emit_cycle_trace(
+                                CycleOutcome.ENTRY_VETOED,
+                                reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
+                            )
                             continue
                     except Exception as _tpe_err:
                         logger.debug(
@@ -983,6 +1043,13 @@ class NijaCoreLoop:
                         sig.symbol, sig.side.upper(),
                         sig.composite_score, sig.position_multiplier,
                         f" [RELAX×{sig.metadata.get('relaxation_step', 0)}]" if fallback_active else "",
+                    )
+                    # ── Entry-to-Order Trace: ORDER_PLACED ───────────────
+                    emit_cycle_trace(
+                        CycleOutcome.ORDER_PLACED,
+                        symbol=sig.symbol,
+                        side=sig.side,
+                        score=round(sig.composite_score, 1),
                     )
                 else:
                     blocked += 1
