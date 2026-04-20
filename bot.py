@@ -362,13 +362,12 @@ def _acquire_process_lock() -> None:
             _saved_container = _meta.get("container_id", "")
             _saved_hostname   = _meta.get("hostname", "")
             _current_hostname = socket.gethostname()
-            _current_container = (
-                os.environ.get("HOSTNAME", "").strip()
-                or _saved_container  # no env var → can't distinguish, keep blocking
-            )
+            # Use empty string when HOSTNAME is missing so the comparison is
+            # explicit — an unknown current container never falsely matches.
+            _current_container = os.environ.get("HOSTNAME", "").strip()
             if (
                 _saved_container
-                and _current_container
+                and _current_container  # skip check when current container is unknown
                 and _saved_container != _current_container
             ):
                 print(
@@ -390,7 +389,7 @@ def _acquire_process_lock() -> None:
             print("\n" + "┏" + "━" * 78 + "┓")
             print(f"┃ 🚫 DUPLICATE INSTANCE BLOCKED                                             ┃")
             print(f"┃ Another NIJA bot is already running (PID {_old_pid:<33}) ┃")
-            print(f"┃ Only ONE process may hold the Kraken API key at a time.                 ┃")
+            print(f"┃ Only ONE process may hold the API key at a time.                         ┃")
             print(f"┃ Stop the running bot first:  kill {_old_pid:<44} ┃")
             print(f"┃ Then remove the lock:        rm {_PID_FILE[-40:]:<42} ┃")
             print("┗" + "━" * 78 + "┛\n")
