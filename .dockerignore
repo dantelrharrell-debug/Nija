@@ -106,6 +106,7 @@ scripts/
 check_*.py
 verify_*.py
 validate_*.py
+!validate_broker_credentials.py
 diagnose_*.py
 deploy_*.py
 generate_*.py
