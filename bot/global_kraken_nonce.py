@@ -2167,6 +2167,34 @@ class KrakenNonceManager:
         except Exception:
             return False
 
+    # Keywords that identify a NIJA bot process in /proc/<pid>/cmdline.
+    # Matches the list in bot.py so both lock layers use the same heuristic.
+    _NIJA_CMDLINE_MARKERS: tuple = (
+        "bot.py", "trading_strategy.py", "nija_core_loop.py",
+        "tradingview_webhook.py",
+    )
+
+    @classmethod
+    def _is_nija_process(cls, pid: int) -> bool:
+        """Return True only when *pid* belongs to a NIJA bot process.
+
+        Reads ``/proc/<pid>/cmdline`` (Linux) and checks for known NIJA
+        entry-point names.  Falls back to ``True`` (conservative) when the
+        proc filesystem is unavailable so an unverifiable process is never
+        silently treated as non-NIJA — the existing duplicate-process safety
+        guarantee is preserved on non-Linux platforms.
+        """
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as _cf:
+                cmdline = _cf.read().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+            return any(marker in cmdline for marker in cls._NIJA_CMDLINE_MARKERS)
+        except (FileNotFoundError, ProcessLookupError):
+            # PID disappeared between os.kill check and /proc read — treat as gone.
+            return False
+        except (PermissionError, OSError):
+            # /proc unavailable or not accessible — conservative: assume NIJA.
+            return True
+
     def _delete_stale_pid_lock(self, stale_pid: int) -> bool:
         """Delete stale PID lock metadata file when the recorded pid is dead."""
         try:
@@ -2203,8 +2231,14 @@ class KrakenNonceManager:
         if not _FCNTL_AVAILABLE:
             return
         stale_pid = self._read_pid_from_pid_lock()
-        # If we got a valid PID and that process is still alive, nothing to clean.
-        if stale_pid > 0 and self._is_process_alive(stale_pid):
+        # If we got a valid PID, the process is still alive, AND it is genuinely
+        # a NIJA bot process, then nothing to clean — the lock is legitimately held.
+        # The extra _is_nija_process() check guards against PID reuse in containers:
+        # after a container restart the same PID number may be assigned to a completely
+        # different process.  Without this check _is_process_alive() would return True
+        # for the recycled PID, preventing stale-lock cleanup and permanently blocking
+        # this process from acquiring the nonce writer lock.
+        if stale_pid > 0 and self._is_process_alive(stale_pid) and self._is_nija_process(stale_pid):
             return
         # For stale_pid == 0 (corrupt/empty file) or a dead PID, attempt to
         # acquire the lock non-blockingly.  If we get it, the file is safe to
@@ -2260,6 +2294,24 @@ class KrakenNonceManager:
         if not self._is_process_alive(dup_pid):
             _logger.info(
                 "KrakenNonceManager.kill_duplicate_process: PID %d is not alive — nothing to kill",
+                dup_pid,
+            )
+            return True
+
+        # Guard against PID reuse: only signal the process if it is actually a
+        # NIJA bot.  In containerised deployments the same PID number can be
+        # reassigned to a completely different process (e.g. the container's init
+        # or a health-check script).  Sending SIGTERM to such a process would
+        # terminate it incorrectly and leave the nonce lock still held (or
+        # unresolvable).  When the process is alive but not a NIJA bot we treat
+        # the PID file as stale — the lock was already released by the OS when
+        # the original NIJA process exited — and return True so the caller
+        # proceeds with a fresh lock acquisition attempt.
+        if not self._is_nija_process(dup_pid):
+            _logger.warning(
+                "KrakenNonceManager.kill_duplicate_process: PID %d is alive but "
+                "does not appear to be a NIJA process (PID reuse suspected) — "
+                "treating lock file as stale, skipping signal",
                 dup_pid,
             )
             return True
