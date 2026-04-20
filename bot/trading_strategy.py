@@ -16771,6 +16771,10 @@ class TradingStrategy:
                                                     "   ⏩ LATENCY DRIFT: %s skipped — %s",
                                                     _ps_symbol, _drift_reason,
                                                 )
+                                                logger.info(
+                                                    "[CYCLE_TRACE] ENTRY_VETOED(reason=latency_drift, symbol=%s)",
+                                                    _ps_symbol,
+                                                )
                                                 filter_stats['market_filter'] = (
                                                     filter_stats.get('market_filter', 0) + 1
                                                 )
@@ -16802,6 +16806,10 @@ class TradingStrategy:
 
                             _ps_success = self.apex.execute_action(_ps_analysis, _ps_symbol)
                             if _ps_success:
+                                logger.info(
+                                    "[CYCLE_TRACE] ORDER_PLACED(symbol=%s, side=%s, score=%.1f)",
+                                    _ps_symbol, _ps_action, _sig_data.get('entry_score', 0.0),
+                                )
                                 logger.info(
                                     "🟢 EXECUTION ENGINE LIVE: order dispatched for %s "
                                     "(execution_engine.execute_entry reached)",
@@ -17061,6 +17069,10 @@ class TradingStrategy:
                                     )
                             else:
                                 logger.warning(
+                                    "[CYCLE_TRACE] ORDER_REJECTED(reason=execute_action_returned_false, symbol=%s)",
+                                    _ps_symbol,
+                                )
+                                logger.warning(
                                     f"   ⚠️  EXECUTION TELEMETRY | {_ps_symbol} — "
                                     f"execute_action returned False "
                                     f"(broker rejection, nonce pause, or filter block) "
@@ -17234,6 +17246,7 @@ class TradingStrategy:
                             except Exception:
                                 pass
                         logger.info("")
+                        logger.info("[CYCLE_TRACE] SCAN_COMPLETE_NO_SIGNAL")
                         logger.info("   ⏳ WAITING FOR PLATFORM ENTRY")
                         logger.info("   → No valid setups this cycle (market conditions not favorable)")
                         logger.info(
