@@ -1227,7 +1227,27 @@ class SelfHealingStartup:
         # CA is confirmed ready (or the bot is already LIVE_ACTIVE), preventing
         # the silent stall where the broker is connected but the state machine
         # never observes a fresh CA snapshot and sits idle forever.
-        if startup_result.ok:
+        broker_map = (
+            dict(_mabm.platform_brokers)
+            if (_MABM_AVAILABLE and _mabm is not None)
+            else (
+                {startup_result.broker_name: startup_result.broker}
+                if startup_result.broker is not None
+                else {}
+            )
+        )
+        # Obtain the CapitalAuthority instance; fall back to a pass-through stub
+        # when the module is unavailable so the condition still evaluates cleanly.
+        ca: Any = type("_NullCA", (), {"is_ready": lambda self: True})()
+        if _CA_AVAILABLE and _get_capital_authority is not None:
+            try:
+                ca = _get_capital_authority()
+            except Exception:
+                pass  # leave ca as the pass-through stub
+        if startup_result.ok and broker_map and ca.is_ready():
+            # ensure first activation tick occurs immediately post-init
+            self._step_state_machine()
+
             import time as _time
 
             _ca_timeout_s = 60
@@ -1346,33 +1366,6 @@ class SelfHealingStartup:
             )
             return False
 
-    def _ca_watchdog_fn(self) -> bool:
-        """Watchdog function for CapitalAuthority / LIVE state health.
-
-        CRITICAL: LIVE_ACTIVE **never** bypasses CA checks.  CA readiness is
-        evaluated unconditionally — a degraded CA while in LIVE_ACTIVE still
-        triggers re-evaluation via :meth:`_step_state_machine`.
-
-        Separating health from readiness:
-
-        * **Readiness** (CA_READY) — the system has fresh broker data and the
-          execution pipeline is healthy.  This is checked unconditionally.
-        * **Health** (LIVE_ACTIVE) — the state machine is in the live-trading
-          state.  This is a *downstream* outcome, not a gate that can skip the
-          CA check in the reverse direction.
-
-        Returns:
-            True  when CA is ready (system is healthy).
-            False when CA is degraded; :meth:`_step_state_machine` is invoked
-            to force re-evaluation before returning.
-        """
-        if self._is_ca_ready():
-            return True
-
-        logger.warning("⚠️ CA or LIVE state degraded — forcing re-evaluation")
-        self.start_state_machine()
-        return False
-
     def start_state_machine(self) -> None:
         """Single-authority entry point for the state machine.
 
@@ -1391,6 +1384,21 @@ class SelfHealingStartup:
             self._sm_started = True
 
         self._step_state_machine()
+
+    def step_state_machine(self) -> None:
+        """Public entry point for an unconditional state machine step.
+
+        Unlike :meth:`start_state_machine`, this method does **not** enforce
+        the once-only guard — it is intended for callers that need to force a
+        re-evaluation of the trading state machine *after* the initial boot
+        sequence has already completed (e.g. after ``INIT_LOCK_ACQUIRED →
+        bootstrap complete``).
+
+        Thread-safe via the internal ``_sm_lock``.
+        """
+        logger.critical("BOOT: forced post-init state machine step")
+        with self._sm_lock:
+            self._step_state_machine()
 
     def _step_state_machine(self) -> None:
         """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
@@ -1475,6 +1483,17 @@ class SelfHealingStartup:
                         if _ca.is_ready():
                             sm.maybe_auto_activate()
                         else:
+                # FIX 4: hard diagnostic log so a CA-blocked startup is never silent.
+                # Only call maybe_auto_activate() when CA is ready — avoids log
+                # spam and matches the supervisor-loop contract:
+                #   while True: _step_state_machine()
+                #     → if ca.is_ready(): maybe_auto_activate()
+                _ca_is_ready = not _CA_AVAILABLE  # proceed when CA module absent
+                if _CA_AVAILABLE and _get_capital_authority is not None:
+                    try:
+                        _ca = _get_capital_authority()
+                        _ca_is_ready = _ca.is_ready()
+                        if not _ca_is_ready:
                             _broker_keys: list[str] = []
                             if _MABM_AVAILABLE and _mabm is not None:
                                 try:
@@ -1496,6 +1515,7 @@ class SelfHealingStartup:
                 else:
                     # CA module unavailable — attempt activation without the guard
                     # (graceful degradation for deployments without CapitalAuthority)
+                if _ca_is_ready:
                     sm.maybe_auto_activate()
             else:
                 logger.info(
@@ -1536,7 +1556,7 @@ class SelfHealingStartup:
                 "SelfHealingStartup: CA watchdog detected stale/unready CA "
                 "— re-running state machine for self-heal"
             )
-            self.start_state_machine()
+            self._step_state_machine()
         return ready
 
     def _log_nonce_report(self, report: NoncePoisonReport) -> None:
@@ -1567,6 +1587,26 @@ def get_self_healing_startup(config: Optional[StartupConfig] = None) -> SelfHeal
     return SelfHealingStartup(config)
 
 
+def force_post_init_state_machine_step() -> None:
+    """Module-level helper: force an unconditional trading-state-machine step.
+
+    Intended to be called from ``bot.py`` (and similar entry points) immediately
+    after ``INIT_LOCK_ACQUIRED → bootstrap complete`` so the activation check
+    runs once the full bootstrap sequence is truly finished — not only during the
+    early init loop inside :meth:`SelfHealingStartup.run`.
+
+    Errors are logged as warnings and never re-raised so that a failed state
+    machine step never aborts an otherwise healthy supervisor loop.
+    """
+    try:
+        SelfHealingStartup().step_state_machine()
+    except Exception as exc:
+        logger.warning(
+            "force_post_init_state_machine_step: state machine step failed (%s: %s)",
+            type(exc).__name__, exc,
+        )
+
+
 __all__ = [
     "StartupConfig",
     "StartupResult",
@@ -1580,4 +1620,5 @@ __all__ = [
     "PreHaltAlertEngine",
     "SelfHealingStartup",
     "get_self_healing_startup",
+    "force_post_init_state_machine_step",
 ]
