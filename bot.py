@@ -2452,6 +2452,18 @@ def _run_bot_startup_and_trading():
                         ca.is_ready(),
                     )
 
+                # ── Blocker-2 self-heal: retry capital refresh if CA is not yet
+                # hydrated.  The initial BOOTSTRAP_START call may have returned
+                # "pending" when broker_map was still empty (brokers registered
+                # but no balance payload yet).  Without retrying here the CA
+                # never hydrates and the gate always times out after 60 s.
+                if ca is not None and not ca.is_hydrated and _bms_mabm is not None:
+                    try:
+                        _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
+                        logger.info("[CapGate] Retried BOOTSTRAP_START capital refresh")
+                    except Exception as _retry_err:
+                        logger.debug("[CapGate] BOOTSTRAP_START retry error (non-fatal): %s", _retry_err)
+
                 if ca and ca.is_ready():
                     logger.critical(
                         "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
@@ -2573,8 +2585,22 @@ def _run_bot_startup_and_trading():
                 )
                 logger.critical("B6 after activate_trading (maybe_auto_activate succeeded)")
             else:
+                # Diagnose which gate blocked the transition so the root cause is
+                # surfaced immediately rather than buried in a generic retry loop.
+                _lcv_val = os.environ.get("LIVE_CAPITAL_VERIFIED", "").lower().strip()
+                _tsm_state = _tsm_init.get_current_state().value
+                if _lcv_val not in ("true", "1", "yes", "enabled"):
+                    raise RuntimeError(
+                        "INIT FAILED: LIVE_CAPITAL_VERIFIED is not set to 'true'. "
+                        f"Current value: {_lcv_val!r}. "
+                        "Set LIVE_CAPITAL_VERIFIED=true in your environment to enable live trading. "
+                        f"(TradingStateMachine state: {_tsm_state})"
+                    )
                 raise RuntimeError(
-                    "INIT FAILED: maybe_auto_activate() blocked after CA_READY"
+                    f"INIT FAILED: maybe_auto_activate() blocked after CA_READY "
+                    f"(TradingStateMachine state: {_tsm_state}, "
+                    f"LIVE_CAPITAL_VERIFIED={_lcv_val!r}). "
+                    "Check logs for _capital_readiness_gate details."
                 )
             # ── END CONNECTION → INIT HANDOFF ────────────────────────────────────
 
