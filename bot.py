@@ -5,6 +5,7 @@ Runs the complete APEX v7.1 strategy with Coinbase Advanced Trade API
 Railway deployment: Force redeploy with position size fix ($5 minimum)
 """
 
+import json
 import os
 import sys
 import time
@@ -143,6 +144,45 @@ if os.path.exists('EMERGENCY_STOP'):
 # would generate its own nonce sequence, immediately desyncing from the first
 # and producing continuous "EAPI:Invalid nonce" errors on both.
 _PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nija.pid")
+
+# Keywords that identify a NIJA bot process in /proc/<pid>/cmdline.
+# Used to distinguish a genuinely-running duplicate from PID reuse in a new container.
+_NIJA_CMDLINE_MARKERS = (
+    "bot.py", "trading_strategy.py", "nija_core_loop.py",
+    "tradingview_webhook.py",
+)
+
+
+def _is_nija_process(pid: int) -> bool:
+    """Return True only when *pid* belongs to a NIJA bot process.
+
+    Reads ``/proc/<pid>/cmdline`` (Linux) and checks for known NIJA entry-point
+    names.  Falls back to ``True`` (conservative / block startup) when the proc
+    filesystem is unavailable so the existing safety guarantee is preserved on
+    non-Linux platforms.
+    """
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as _cf:
+            cmdline = _cf.read().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        return any(marker in cmdline for marker in _NIJA_CMDLINE_MARKERS)
+    except (FileNotFoundError, ProcessLookupError):
+        # PID disappeared between os.kill check and /proc read — treat as gone.
+        return False
+    except (PermissionError, OSError):
+        # /proc unavailable or not accessible — fall back to conservative assumption.
+        return True
+
+
+def _read_pid_file_meta(path: str) -> dict:
+    """Read JSON metadata written on line 2+ of *path* (empty dict on any error)."""
+    try:
+        with open(path, "r", encoding="utf-8") as _mf:
+            lines = [ln.strip() for ln in _mf.readlines() if ln.strip()]
+        if len(lines) >= 2:
+            return json.loads(lines[1])
+    except Exception:
+        pass
+    return {}
 _distributed_writer_lock_client = None
 _distributed_writer_lock_key = ""
 _distributed_writer_lock_token = ""
@@ -283,22 +323,74 @@ def _acquire_process_lock() -> None:
     """
     Write PID file and abort if another bot instance is already running.
 
-    Stale PID files (process no longer exists) are silently overwritten so a
-    clean restart after a crash always succeeds.
+    Stale PID files (process no longer exists or belongs to a non-NIJA process)
+    are silently overwritten so a clean restart after a crash or a container
+    redeploy always succeeds.
+
+    In containerised deployments (Docker / Railway) the same PID number can be
+    re-assigned to a completely different process in the new container.  To
+    prevent a false-positive "DUPLICATE INSTANCE BLOCKED" we cross-check:
+
+    1. Is the PID alive?           (os.kill signal-0)
+    2. Is it actually a NIJA bot?  (_is_nija_process — reads /proc/<pid>/cmdline)
+    3. Does the saved fingerprint  (_read_pid_file_meta — hostname/container)
+       match the current host?
+
+    If any check fails the stored PID is treated as stale and overwritten.
     """
     os.makedirs(os.path.dirname(_PID_FILE), exist_ok=True)
 
     if os.path.exists(_PID_FILE):
         try:
             with open(_PID_FILE) as _pf:
-                _old_pid = int(_pf.read().strip())
+                _first_line = _pf.readline().strip()
+            _old_pid = int(_first_line)
             os.kill(_old_pid, 0)   # signal 0 = "does this PID exist?"
-            # Process is alive — refuse to start
+
+            # PID exists — but verify it's genuinely a NIJA process, not a
+            # recycled PID from a different container / system process.
+            if not _is_nija_process(_old_pid):
+                print(
+                    f"⚠️  PID {_old_pid} in lock file is not a NIJA process "
+                    "(likely PID reuse after container restart) — overwriting stale lock."
+                )
+                raise ProcessLookupError  # treat as stale
+
+            # Cross-check the saved container fingerprint so we don't block a
+            # restart caused by a previous deployment on a different host.
+            _meta = _read_pid_file_meta(_PID_FILE)
+            _saved_container = _meta.get("container_id", "")
+            _saved_hostname   = _meta.get("hostname", "")
+            _current_hostname = socket.gethostname()
+            # Use empty string when HOSTNAME is missing so the comparison is
+            # explicit — an unknown current container never falsely matches.
+            _current_container = os.environ.get("HOSTNAME", "").strip()
+            if (
+                _saved_container
+                and _current_container  # skip check when current container is unknown
+                and _saved_container != _current_container
+            ):
+                print(
+                    f"⚠️  Lock file container ({_saved_container}) ≠ current container "
+                    f"({_current_container}) — overwriting stale cross-container lock."
+                )
+                raise ProcessLookupError  # treat as stale
+            if (
+                _saved_hostname
+                and _saved_hostname != _current_hostname
+            ):
+                print(
+                    f"⚠️  Lock file hostname ({_saved_hostname}) ≠ current hostname "
+                    f"({_current_hostname}) — overwriting stale cross-host lock."
+                )
+                raise ProcessLookupError  # treat as stale
+
+            # Process is alive, is a NIJA bot, and belongs to this host — block.
             print("\n" + "┏" + "━" * 78 + "┓")
             print(f"┃ 🚫 DUPLICATE INSTANCE BLOCKED                                             ┃")
             print(f"┃ Another NIJA bot is already running (PID {_old_pid:<33}) ┃")
-            print(f"┃ Only ONE process may hold the Kraken API key at a time.                 ┃")
-            print(f"┃ Stop the running bot first:  pkill -f bot.py                            ┃")
+            print(f"┃ Only ONE process may hold the API key at a time.                         ┃")
+            print(f"┃ Stop the running bot first:  kill {_old_pid:<44} ┃")
             print(f"┃ Then remove the lock:        rm {_PID_FILE[-40:]:<42} ┃")
             print("┗" + "━" * 78 + "┛\n")
             sys.exit(1)
@@ -306,8 +398,16 @@ def _acquire_process_lock() -> None:
             # Stale PID file — the previous process is gone; safe to overwrite.
             pass
 
+    # Write PID + fingerprint metadata so future instances can cross-check.
+    _pid_meta = {
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "container_id": os.environ.get("HOSTNAME", "").strip() or "unknown",
+        "started_at": time.time(),
+    }
     with open(_PID_FILE, "w") as _pf:
-        _pf.write(str(os.getpid()))
+        _pf.write(f"{os.getpid()}\n")
+        _pf.write(json.dumps(_pid_meta, sort_keys=True) + "\n")
 
     import atexit
     atexit.register(_release_process_lock)
@@ -322,7 +422,7 @@ def _release_process_lock() -> None:
     try:
         if os.path.exists(_PID_FILE):
             with open(_PID_FILE) as _pf:
-                _stored = int(_pf.read().strip())
+                _stored = int(_pf.readline().strip())
             if _stored == os.getpid():
                 os.remove(_PID_FILE)
     except Exception:
