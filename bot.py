@@ -1748,8 +1748,7 @@ def _run_bot_startup_and_trading():
                     _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
                     _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
 
-                    # ── Sentinel A0.3: nonce reset complete ─────────────────────
-                    logger.critical("A0.3 after nonce reset")
+                    # ── Sentinel A0.3 / B5: nonce reset complete ────────────────
                     logger.critical("B5 after nonce lock / nonce-jump complete")
 
                     logger.info(
