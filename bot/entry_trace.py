@@ -24,6 +24,11 @@ Terminal Outcomes
       for each order placed, so a cycle that opens two positions emits
       this outcome twice.
 
+  ORDER_REJECTED(symbol=<str>, reason=<str>)
+      An order attempt reached the broker but was rejected (execute_action
+      returned False).  Causes include broker-side rejection, nonce pause,
+      or a downstream filter block.  Emitted once per failed submission.
+
   SCAN_COMPLETE_NO_SIGNAL(symbols_scored=<int>)
       The full market scan finished but produced no qualifying entry
       signal.  Emitted once at the end of a cycle when entries_taken == 0
@@ -57,11 +62,12 @@ _trace_log = logging.getLogger("nija.cycle_trace")
 
 
 class CycleOutcome(str, Enum):
-    """The four possible terminal outcomes of a trading cycle."""
+    """Five possible outcomes of a trading cycle (one opening + four terminal)."""
 
     SCAN_STARTED = "SCAN_STARTED"
     ENTRY_VETOED = "ENTRY_VETOED"
     ORDER_PLACED = "ORDER_PLACED"
+    ORDER_REJECTED = "ORDER_REJECTED"
     SCAN_COMPLETE_NO_SIGNAL = "SCAN_COMPLETE_NO_SIGNAL"
 
 
@@ -90,6 +96,7 @@ def emit_cycle_trace(outcome: CycleOutcome, **kwargs: Any) -> None:
     --------
     >>> emit_cycle_trace(CycleOutcome.SCAN_STARTED, balance=150.0, open_positions=1, symbols=732)
     >>> emit_cycle_trace(CycleOutcome.ORDER_PLACED, symbol="BTC-USD", side="long", score=87.3)
+    >>> emit_cycle_trace(CycleOutcome.ORDER_REJECTED, symbol="ETH-USD", reason="broker_rejection")
     >>> emit_cycle_trace(CycleOutcome.ENTRY_VETOED, reason="safety_gate")
     >>> emit_cycle_trace(CycleOutcome.SCAN_COMPLETE_NO_SIGNAL, symbols_scored=445)
     """
