@@ -1114,7 +1114,7 @@ class KrakenNonceManager:
                 else:
                     # Exponential backoff: 2 s → 4 s → 8 s … capped at 10 s,
                     # never overshooting the remaining deadline.
-                    sleep_duration = min(10.0, 2.0 ** attempt, remaining)
+                    sleep_duration = min(10.0, 2.0 ** (attempt + 1), remaining)
                     _logger.warning(
                         "KrakenNonceManager: PID lock not yet acquired for key=%s "
                         "(attempt %d, %.0fs remaining) — waiting %.0fs for duplicate "
