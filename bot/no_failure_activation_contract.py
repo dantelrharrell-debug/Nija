@@ -216,7 +216,7 @@ class CAHydrationLoop:
                         logger.info(
                             "[CAHydrationLoop] execute_refresh returned snapshot "
                             "(real=$%.2f) on attempt %d",
-                            float(getattr(snapshot, "real_capital", 0.0)),
+                            float(getattr(snapshot, "real_capital", None) or 0.0),
                             attempt,
                         )
                 except Exception as exc:

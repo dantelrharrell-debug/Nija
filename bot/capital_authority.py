@@ -1619,6 +1619,9 @@ class CapitalAuthority:
             # publish), that newer timestamp is preserved rather than rolled back.
             for _broker_key in new_balances:
                 _existing_feed_ts = self._broker_feed_timestamps.get(_broker_key)
+                # Only stamp absent or stale entries; a newer T2 feed timestamp
+                # (T2 > computed_at) that arrived between the coordinator's T1
+                # fetch and this T3 publish is preserved rather than rolled back.
                 if _existing_feed_ts is None or _existing_feed_ts < computed_at:
                     self._broker_feed_timestamps[_broker_key] = computed_at
 

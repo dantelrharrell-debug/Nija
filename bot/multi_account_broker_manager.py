@@ -869,12 +869,15 @@ class MultiAccountBrokerManager:
         #   2. Guaranteed CA hydration loop   (retries execute_refresh until hydrated)
         #   3. Forced activation fallback timer (forces all gates open if CA stalls)
         try:
-            for _mod in ("bot.no_failure_activation_contract", "no_failure_activation_contract"):
+            _install = None
+            for _mod_name in ("bot.no_failure_activation_contract", "no_failure_activation_contract"):
                 try:
-                    _install = importlib.import_module(_mod).install_no_failure_activation_contract
-                    break
-                except (ImportError, AttributeError):
-                    _install = None
+                    _mod_obj = importlib.import_module(_mod_name)
+                    _install = getattr(_mod_obj, "install_no_failure_activation_contract", None)
+                    if _install is not None:
+                        break
+                except ImportError:
+                    continue
             if _install is not None:
                 _broker_map = {
                     str(bt.value) if hasattr(bt, "value") else str(bt): br
