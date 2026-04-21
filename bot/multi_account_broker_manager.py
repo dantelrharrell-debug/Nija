@@ -207,6 +207,37 @@ _root_logger = logging.getLogger('nija')
 MIN_CONNECTION_DELAY = 5.0  # seconds
 
 
+def is_broker_fully_ready(broker: Any) -> bool:
+    """Return ``True`` only when *broker* is connected **and** has a hydrated balance payload.
+
+    A broker is considered fully ready when both of the following hold:
+
+    * ``broker.connected`` is ``True`` — the transport-layer session is live.
+    * A balance payload is available — at least one of the following is true:
+
+      - ``broker.has_balance_payload_for_capital()`` returns ``True``
+      - ``broker.has_balance_payload()`` returns ``True``
+      - ``broker._last_known_balance`` is not ``None``
+
+    Uses :func:`getattr` with safe defaults so the function is safe to call on
+    any object, including stubs and partially-initialised broker adapters.
+
+    Note: the ``payload_hydrated`` attribute is **not** a standard attribute on
+    broker objects in this codebase.  Payload readiness must be detected via the
+    methods and attributes listed above.
+    """
+    if not getattr(broker, "connected", False):
+        return False
+    has_payload = (
+        (callable(getattr(broker, "has_balance_payload_for_capital", None))
+         and broker.has_balance_payload_for_capital())
+        or (callable(getattr(broker, "has_balance_payload", None))
+            and broker.has_balance_payload())
+        or getattr(broker, "_last_known_balance", None) is not None
+    )
+    return has_payload
+
+
 class MultiAccountBrokerManager:
     """
     Manages brokers for multiple accounts (master + users).
@@ -1193,6 +1224,54 @@ class MultiAccountBrokerManager:
             )
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
 
+        # ── MABM Broker-Readiness Gate (bootstrap-phase only) ─────────────────
+        # During initial bootstrap — before _capital_ready has ever been set
+        # True — block any refresh attempt when no platform broker is fully
+        # ready (connected + balance payload available).  This prevents
+        # spurious $0 snapshots from being published before any real balance
+        # data exists, which would seed CapitalAllocationBrain with invalid
+        # capital figures and freeze allocation logic.
+        #
+        # CRITICAL: the gate is intentionally restricted to the pre-capital-ready
+        # window (``not _cap_ready``).  Once bootstrap has succeeded and
+        # ``_capital_ready`` has been set ``True`` by the coordinator pipeline,
+        # this check is skipped unconditionally so that watchdog, per-cycle,
+        # and recovery refreshes are never blocked by it.  If the gate were
+        # applied permanently it would re-block entry execution whenever a
+        # reconnect cycle leaves ``_last_known_balance`` temporarily None —
+        # causing the exact "entries blocked after bootstrap handoff" failure
+        # this gate is designed to prevent during *startup only*.
+        with self._capital_state_lock:
+            _cap_ready = self._capital_ready
+        if not _cap_ready:
+            _not_ready_brokers = [
+                (name, b)
+                for name, b in self._platform_brokers.items()
+                if not is_broker_fully_ready(b)
+            ]
+            if _not_ready_brokers:
+                for _broker_name, _broker in _not_ready_brokers:
+                    logger.warning(
+                        "[MABM-GATE] BLOCKED refresh_capital_authority — "
+                        "%s: connected=%s payload_hydrated=%s",
+                        _broker_name,
+                        getattr(_broker, "connected", False),
+                        (
+                            (callable(getattr(_broker, "has_balance_payload_for_capital", None))
+                             and _broker.has_balance_payload_for_capital())
+                            or (callable(getattr(_broker, "has_balance_payload", None))
+                                and _broker.has_balance_payload())
+                            or getattr(_broker, "_last_known_balance", None) is not None
+                        ),
+                    )
+                return {
+                    "ready": 0.0,
+                    "total_capital": 0.0,
+                    "valid_brokers": 0.0,
+                    "reason": "BROKERS_NOT_READY_GATE",
+                    "pending": 1.0,
+                }
+
         # ── Forced bootstrap seed (one-shot deadlock breaker) ─────────────────
         # If STARTUP_LOCK has never been set and the normal coordinator pipeline
         # is blocked behind _broker_registration_complete (Guard 0 below), a
@@ -2154,6 +2233,25 @@ class MultiAccountBrokerManager:
             pass
 
         return True, ""
+
+    def all_brokers_fully_ready(self) -> bool:
+        """Return ``True`` only when **every** registered platform broker is fully ready.
+
+        A broker is fully ready when :func:`is_broker_fully_ready` returns ``True``
+        for it — i.e. it is connected *and* has a hydrated balance payload.
+
+        Returns ``False`` immediately (short-circuit) if no platform brokers are
+        registered, or if any registered broker is not yet connected/hydrated.
+
+        This helper is the class-level counterpart to the module-level
+        :func:`is_broker_fully_ready` function.  Use it to gate
+        :class:`~bot.capital_allocation_brain.CapitalAllocationBrain` bootstrap
+        and any other component that must not run until all brokers are healthy.
+        """
+        brokers = list(self._platform_brokers.values())
+        if not brokers:
+            return False
+        return all(is_broker_fully_ready(b) for b in brokers)
 
     def is_trading_halted_due_to_capital(self) -> bool:
         """Return True when capital is halted.

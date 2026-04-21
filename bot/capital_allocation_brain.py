@@ -400,7 +400,18 @@ class CapitalAllocationBrain:
                 except ImportError:
                     from multi_account_broker_manager import multi_account_broker_manager as _mabm_bs  # type: ignore[import]
                 if _mabm_bs is not None and hasattr(_mabm_bs, "refresh_capital_authority"):
-                    _mabm_bs.refresh_capital_authority(trigger="bootstrap_force")
+                    # SECOND GATE: block bootstrap snapshot until MABM confirms all
+                    # registered platform brokers are fully ready (connected + payload).
+                    # Without this gate, refresh_capital_authority() could be called when
+                    # brokers are not yet connected, producing a $0 capital snapshot that
+                    # permanently blocks entry execution after the bootstrap handoff.
+                    if hasattr(_mabm_bs, "all_brokers_fully_ready") and not _mabm_bs.all_brokers_fully_ready():
+                        logger.warning(
+                            "[CAPITAL_BRAIN] MABM not ready — blocking CA bootstrap "
+                            "(not all_brokers_fully_ready)"
+                        )
+                    else:
+                        _mabm_bs.refresh_capital_authority(trigger="bootstrap_force")
             except Exception as _bs_exc:
                 logger.warning("[BOOTSTRAP] forced snapshot attempt failed: %s", _bs_exc)
             if self.capital_authority.is_hydrated:
