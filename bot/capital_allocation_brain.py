@@ -465,9 +465,43 @@ class CapitalAllocationBrain:
         """
         Fail-safe auto-refresh of unified CapitalAuthority.
 
+        When called during an active NijaCoreLoop cycle the method first checks
+        whether ``nija_core_loop.get_current_cycle_snapshot()`` has already
+        captured a frozen capital snapshot for this cycle.  If it has, and
+        CapitalAuthority is confirmed hydrated, the method returns the
+        cycle-snapshot capital figure immediately — avoiding a duplicate MABM
+        refresh that could produce a different number than the one
+        TradingStateMachine and MABM readiness checks are using.
+
+        Falls back to the full MABM refresh when:
+          • No cycle snapshot is available (called outside run_trading_loop)
+          • CA is not yet hydrated (bootstrap phase — must run the full path)
+
         Returns:
             Latest observed total capital (>= 0).
         """
+        # ── Fast path: use frozen cycle snapshot when available ───────────
+        # Only valid AFTER bootstrap (ca_is_hydrated must be True in the snap).
+        if getattr(self, "_bootstrap_phase", True) is False:
+            try:
+                try:
+                    from nija_core_loop import get_current_cycle_snapshot as _get_snap  # type: ignore[import]
+                except ImportError:
+                    from bot.nija_core_loop import get_current_cycle_snapshot as _get_snap  # type: ignore[import]
+                _snap = _get_snap()
+                if _snap is not None and _snap.ca_is_hydrated:
+                    logger.debug(
+                        "[CapitalAllocationBrain] refresh_authority fast-path: "
+                        "using frozen cycle snapshot cycle_id=%s total=$%.2f",
+                        _snap.cycle_id,
+                        _snap.ca_total_capital,
+                    )
+                    return max(0.0, _snap.ca_total_capital)
+            except Exception as _sp_err:
+                logger.debug(
+                    "[CapitalAllocationBrain] cycle snapshot fast-path failed: %s", _sp_err
+                )
+
         # --- BOOTSTRAP ESCAPE HATCH (CRITICAL) ---
         # If CA is not yet hydrated and we are still in bootstrap phase, force
         # MABM to build and publish the initial snapshot regardless of startup
