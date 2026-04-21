@@ -875,6 +875,28 @@ def _log_memory_usage():
         logger.debug(f"Error logging memory usage: {e}")
 
 
+def _try_recover_state_machine() -> None:
+    """Attempt to drive the trading state machine from OFF → LIVE_ACTIVE.
+
+    Called when the LIVE_ACTIVE assertion fails so the missing trigger
+    (maybe_auto_activate) is fired from inside the execution loop instead
+    of waiting for an external supervisor to notice the stuck state.
+    All errors are swallowed — this is a best-effort recovery call.
+    """
+    try:
+        from bot.trading_state_machine import get_state_machine as _gsm_r
+    except ImportError as _ie:
+        logger.debug("_try_recover_state_machine: bot.trading_state_machine unavailable (%s), trying fallback", _ie)
+        try:
+            from trading_state_machine import get_state_machine as _gsm_r  # type: ignore[import]
+        except ImportError:
+            return
+    try:
+        _gsm_r().maybe_auto_activate()
+    except Exception as _act_err:
+        logger.debug("_try_recover_state_machine: maybe_auto_activate failed (%s)", _act_err)
+
+
 def _start_trader_thread(independent_trader, broker_type, broker):
     """
     Wrap a single broker's trading loop in a self-healing daemon thread.
@@ -958,10 +980,15 @@ def _start_single_broker_thread(strategy, cycle_secs):
                 if stop_flag.is_set():
                     break
                 logger.error(
-                    "❌ [Orchestrator] Single-broker cycle #%d LIVE_ACTIVE assertion failed: %s — retrying in 10s",
+                    "❌ [Orchestrator] Single-broker cycle #%d LIVE_ACTIVE assertion failed: %s"
+                    " — attempting state machine recovery then retrying in 10s",
                     cycle,
                     _assert_err,
                 )
+                # Missing trigger fix: fire maybe_auto_activate() so the state
+                # machine can advance from OFF → LIVE_ACTIVE without waiting for
+                # an external supervisor call.
+                _try_recover_state_machine()
                 stop_flag.wait(10)
             except Exception as _cycle_err:
                 if stop_flag.is_set():
@@ -1127,11 +1154,39 @@ def _rerun_supervisor_loop(state: dict) -> None:
         len(_active_threads),
     )
 
+    # Cache the state machine once at loop entry so the per-cycle health check
+    # does not repeat the import on every iteration.
+    _supervisor_state_machine = None
+    _supervisor_off_state = None
+    try:
+        from bot.trading_state_machine import get_state_machine as _gsm_sl, TradingState as _TS_sl
+        _supervisor_state_machine = _gsm_sl()
+        _supervisor_off_state = _TS_sl.OFF
+    except Exception as _sl_import_err:
+        logger.debug("_rerun_supervisor_loop: trading_state_machine unavailable (%s)", _sl_import_err)
+
     _orch_cycle = 0
     while True:
         try:
             _orch_cycle += 1
             health_manager.heartbeat()
+
+            # ── State machine health step ─────────────────────────────────────
+            # Ensure OFF → LIVE_ACTIVE is never silently missed during the
+            # supervisor loop lifetime.  If the state machine somehow falls back
+            # to OFF (e.g. a concurrent reset between bootstrap and here), firing
+            # maybe_auto_activate() here recovers it on the next supervision
+            # cycle without waiting for an external trigger.  All errors are
+            # swallowed so a failed step never stalls the supervisor loop.
+            if _supervisor_state_machine is not None and _supervisor_off_state is not None:
+                try:
+                    if _supervisor_state_machine.get_current_state() == _supervisor_off_state:
+                        logger.info(
+                            "[Supervisor] State machine is OFF — calling maybe_auto_activate() to recover"
+                        )
+                        _supervisor_state_machine.maybe_auto_activate()
+                except Exception as _sl_step_err:
+                    logger.debug("_rerun_supervisor_loop: state machine step failed (%s)", _sl_step_err)
 
             # ── Adopt threads started by the connection monitor ───────────────
             # The connection monitor in IndependentBrokerTrader can start new
