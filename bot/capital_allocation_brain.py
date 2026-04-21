@@ -59,16 +59,76 @@ def _wait_for_capital_hydrated(timeout: float = 30.0) -> bool:
     return wait_for_capital_hydrated(timeout=timeout)
 
 
-def _notify_state_machine_first_snap_accepted() -> None:
+def _notify_state_machine_first_snap_accepted(snapshot: dict) -> None:
     """Propagate first-snap acceptance to the TradingStateMachine singleton.
 
-    Called once the bootstrap layer confirms that the first capital snapshot
-    satisfies the hard activation gate requirements (valid_brokers > 0 and
-    snapshot_source == "live_exchange", or legacy path without those checks).
+    Validates that *snapshot* satisfies **all** live-data requirements before
+    calling ``set_first_snap_accepted(True)``.  This function is the single
+    enforcement point — callers must not bypass it by calling the setter
+    directly.
+
+    Conditions checked (all must hold):
+        1. ``snapshot["valid_brokers"] > 0``     — at least one broker contributed
+        2. ``snapshot["snapshot_source"] == "live_exchange"`` — real exchange data,
+           not a placeholder produced when no brokers are connected
+        3. ``CapitalAuthority.is_hydrated`` is True — coordinator has run and
+           the CA is not in a fallback/stale state
+
     Errors are logged as warnings but never raised so the caller's flow is
-    not disrupted — the hard gate in maybe_auto_activate() will surface any
-    remaining issue as a RuntimeError at activation time.
+    not disrupted — the hard gate in ``maybe_auto_activate()`` will surface any
+    remaining issue as a ``RuntimeError`` at activation time.
     """
+    # ── Condition 1: valid_brokers > 0 ────────────────────────────────────
+    _vb = _safe_int(snapshot.get("valid_brokers", 0), 0)
+    if _vb <= 0:
+        logger.warning(
+            "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "
+            "rejected — valid_brokers=%d (must be > 0). "
+            "Broker data is not flowing; snapshot is not live.",
+            _vb,
+        )
+        return
+
+    # ── Condition 2: snapshot_source == "live_exchange" ───────────────────
+    _src = str(snapshot.get("snapshot_source", ""))
+    if _src != "live_exchange":
+        logger.warning(
+            "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "
+            "rejected — snapshot_source=%r (must be 'live_exchange'). "
+            "Placeholder snapshots cannot activate live trading.",
+            _src,
+        )
+        return
+
+    # ── Condition 3: CapitalAuthority is hydrated ─────────────────────────
+    try:
+        try:
+            from bot.capital_authority import get_capital_authority as _get_ca
+        except ImportError:
+            from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+        _ca = _get_ca()
+        if not _ca.is_hydrated:
+            logger.warning(
+                "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "
+                "rejected — CapitalAuthority.is_hydrated=False. "
+                "Hydration is not real (fallback state); cannot activate.",
+            )
+            return
+    except ImportError:
+        # CA module absent — skip hydration check (graceful degradation for
+        # deployments without the full capital stack).
+        logger.debug(
+            "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "
+            "CapitalAuthority module unavailable — skipping hydration check"
+        )
+
+    # ── All conditions met — propagate to TradingStateMachine ─────────────
+    logger.critical(
+        "[CAPITAL_BRAIN] FIRST_SNAP_ACCEPTED_PROPAGATING: "
+        "valid_brokers=%d snapshot_source=%s",
+        _vb,
+        _src,
+    )
     try:
         try:
             from bot.trading_state_machine import get_state_machine as _get_sm
@@ -83,7 +143,7 @@ def _notify_state_machine_first_snap_accepted() -> None:
         )
 
 
-
+def _safe_int(value: Any, default: int) -> int:
     """Parse int config values safely with fallback."""
     try:
         return int(value)
@@ -464,7 +524,9 @@ class CapitalAllocationBrain:
                                 )
                                 # Propagate to the trading state machine so the hard
                                 # activation gate in maybe_auto_activate() passes.
-                                _notify_state_machine_first_snap_accepted()
+                                # Pass the snapshot so the function validates all
+                                # live-data requirements itself.
+                                _notify_state_machine_first_snap_accepted(_first_snap)
                             else:
                                 logger.critical(
                                     "[CAPITAL_BRAIN] FIRST_VALID_CAPITAL_SNAPSHOT_REJECTED — "
@@ -476,11 +538,20 @@ class CapitalAllocationBrain:
                                 )
                         else:
                             # all_brokers_fully_ready not supported or snapshot is not a
-                            # dict: accept without snapshot-source validation so that
-                            # older MABM versions continue to work.
+                            # dict: legacy MABM path — pass snapshot if available so the
+                            # validated propagator can still enforce live-data checks.
+                            # If snapshot is not a dict, skip propagation entirely
+                            # (the hard gate in maybe_auto_activate will block if needed).
                             _first_snap_accepted = True
-                            # Propagate to the trading state machine for the hard gate.
-                            _notify_state_machine_first_snap_accepted()
+                            if isinstance(_first_snap, dict):
+                                _notify_state_machine_first_snap_accepted(_first_snap)
+                            else:
+                                logger.warning(
+                                    "[CAPITAL_BRAIN] legacy MABM snapshot is not a dict "
+                                    "(%r) — skipping first_snap propagation; "
+                                    "hard gate in maybe_auto_activate will enforce.",
+                                    type(_first_snap).__name__,
+                                )
             except Exception as _bs_exc:
                 logger.warning("[BOOTSTRAP] forced snapshot attempt failed: %s", _bs_exc)
             if self.capital_authority.is_hydrated and _first_snap_accepted:
