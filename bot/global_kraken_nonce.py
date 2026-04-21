@@ -2205,6 +2205,14 @@ class KrakenNonceManager:
                 stale_pid,
             )
             _logger.critical("B0 AFTER_NONCE_CLEANUP_REACHED")
+            _logger.critical("B0_TO_B1_GUARD_CHECK",
+                extra={
+                    "init_lock": getattr(self, "_init_lock_released", None),
+                    "ca_hydrated": getattr(getattr(self, "capital_authority", None), "is_hydrated", None),
+                    "brokers_ready": self.mabm.all_brokers_fully_ready() if getattr(self, "mabm", None) else None,
+                    "first_snap": getattr(self, "_first_snap_accepted", None)
+                }
+            )
             _logger.critical("B1 BEFORE_PREFLIGHT_CONTINUE")
             return True
         except FileNotFoundError:
