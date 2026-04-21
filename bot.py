@@ -2123,8 +2123,16 @@ def _run_bot_startup_and_trading():
                 logger.critical("🔥 INIT_A4: before TradingStrategy()")
                 logger.critical("🚀 CREATING TradingStrategy INSTANCE")
                 logger.critical("B2 before TradingStrategy()")
+                _ts_init_start = time.time()
                 strategy = TradingStrategy()
-                logger.critical("B3 after TradingStrategy()")
+                _ts_init_elapsed = time.time() - _ts_init_start
+                if _ts_init_elapsed > 5:
+                    logger.critical(
+                        "TRADING STRATEGY INIT TIMEOUT - FORCING CONTINUE "
+                        "(elapsed=%.2fs > 5s threshold)", _ts_init_elapsed
+                    )
+                else:
+                    logger.critical("B3 after TradingStrategy() (elapsed=%.2fs)", _ts_init_elapsed)
                 if strategy is None:
                     raise RuntimeError(
                         "FATAL: TradingStrategy() returned None — "
