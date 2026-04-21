@@ -110,6 +110,12 @@ class TradingStateMachine:
         self._current_state = TradingState.OFF
         self._state_history = []
 
+        # Activation gate: must be set to True by the capital bootstrap layer
+        # (via set_first_snap_accepted) after a live-exchange snapshot with
+        # valid_brokers > 0 has been accepted.  Resets to False on every new
+        # TradingStateMachine instance so a fresh restart always re-validates.
+        self._first_snap_accepted: bool = False
+
         # Try to load persisted state, but NEVER start in LIVE_ACTIVE
         self._load_state()
 
@@ -384,6 +390,45 @@ class TradingStateMachine:
         except Exception as _ks_err:
             logger.debug("maybe_auto_activate: could not check kill switch: %s", _ks_err)
 
+        # ── Hard activation gate ───────────────────────────────────────────
+        # All three conditions below must be True before LIVE_ACTIVE is set.
+        # Any False raises RuntimeError immediately so the exact blocker
+        # appears in logs rather than the bot hanging in silent ambiguity.
+
+        _mabm_gate = _get_mabm_instance()
+        _ca_gate = _get_capital_authority_instance()
+
+        _brokers_ready = (
+            _mabm_gate is None  # module absent — degrade gracefully
+            or not hasattr(_mabm_gate, "all_brokers_fully_ready")  # old MABM — skip
+            or _mabm_gate.all_brokers_fully_ready()
+        )
+        _ca_hydrated = (
+            _ca_gate is None  # module absent — degrade gracefully
+            or _ca_gate.is_hydrated
+        )
+        _snap_ok = self._first_snap_accepted
+
+        # Emit the mandatory proof log so every path through activation is visible.
+        logger.critical(
+            "TRADE_READINESS_PROOF "
+            "brokers_ready=%s "
+            "ca_hydrated=%s "
+            "first_snap=%s",
+            _brokers_ready,
+            _ca_hydrated,
+            _snap_ok,
+        )
+
+        if not _brokers_ready:
+            raise RuntimeError("BLOCK LIVE_ACTIVE: brokers not fully ready")
+        if not _ca_hydrated:
+            raise RuntimeError("BLOCK LIVE_ACTIVE: CapitalAuthority not hydrated")
+        if not _snap_ok:
+            raise RuntimeError(
+                "BLOCK LIVE_ACTIVE: no valid live-exchange capital snapshot accepted"
+            )
+
         # All gates passed — transition
         try:
             self.transition_to(
@@ -407,6 +452,21 @@ class TradingStateMachine:
         with self._lock:
             return self._state_history[-limit:] if self._state_history else []
 
+    def set_first_snap_accepted(self, value: bool = True) -> None:
+        """Signal that the first live-exchange capital snapshot has been accepted.
+
+        Must be called by the capital bootstrap layer after confirming that the
+        first broker snapshot has ``valid_brokers > 0`` and
+        ``snapshot_source == "live_exchange"``.  The activation gate in
+        :meth:`maybe_auto_activate` checks this flag and raises
+        ``RuntimeError`` if it is still False when activation is attempted.
+        """
+        self._first_snap_accepted = bool(value)
+        logger.info(
+            "[TradingStateMachine] _first_snap_accepted set to %s",
+            self._first_snap_accepted,
+        )
+
     def get_state_summary(self) -> Dict[str, Any]:
         """Get comprehensive state summary for debugging/monitoring"""
         with self._lock:
@@ -419,6 +479,38 @@ class TradingStateMachine:
                 'can_make_broker_calls': self.can_make_broker_calls(),
                 'recent_history': self.get_state_history(5)
             }
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers shared by maybe_auto_activate and _capital_readiness_gate
+# ---------------------------------------------------------------------------
+
+def _get_mabm_instance():
+    """Return the multi_account_broker_manager singleton or None if unavailable."""
+    try:
+        from bot.multi_account_broker_manager import multi_account_broker_manager as _m
+        return _m
+    except ImportError:
+        pass
+    try:
+        from multi_account_broker_manager import multi_account_broker_manager as _m  # type: ignore[import]
+        return _m
+    except ImportError:
+        return None
+
+
+def _get_capital_authority_instance():
+    """Return the CapitalAuthority singleton or None if unavailable."""
+    try:
+        from bot.capital_authority import get_capital_authority as _f
+        return _f()
+    except ImportError:
+        pass
+    try:
+        from capital_authority import get_capital_authority as _f  # type: ignore[import]
+        return _f()
+    except ImportError:
+        return None
 
 
 # ---------------------------------------------------------------------------

@@ -59,7 +59,31 @@ def _wait_for_capital_hydrated(timeout: float = 30.0) -> bool:
     return wait_for_capital_hydrated(timeout=timeout)
 
 
-def _safe_int(value: Any, default: int) -> int:
+def _notify_state_machine_first_snap_accepted() -> None:
+    """Propagate first-snap acceptance to the TradingStateMachine singleton.
+
+    Called once the bootstrap layer confirms that the first capital snapshot
+    satisfies the hard activation gate requirements (valid_brokers > 0 and
+    snapshot_source == "live_exchange", or legacy path without those checks).
+    Errors are logged as warnings but never raised so the caller's flow is
+    not disrupted — the hard gate in maybe_auto_activate() will surface any
+    remaining issue as a RuntimeError at activation time.
+    """
+    try:
+        try:
+            from bot.trading_state_machine import get_state_machine as _get_sm
+        except ImportError:
+            from trading_state_machine import get_state_machine as _get_sm  # type: ignore[import]
+        _get_sm().set_first_snap_accepted(True)
+    except Exception as _sm_err:
+        logger.warning(
+            "[CAPITAL_BRAIN] could not propagate first_snap_accepted "
+            "to TradingStateMachine: %s",
+            _sm_err,
+        )
+
+
+
     """Parse int config values safely with fallback."""
     try:
         return int(value)
@@ -438,6 +462,9 @@ class CapitalAllocationBrain:
                                     _src,
                                     float(_first_snap.get("total_capital", 0.0)),
                                 )
+                                # Propagate to the trading state machine so the hard
+                                # activation gate in maybe_auto_activate() passes.
+                                _notify_state_machine_first_snap_accepted()
                             else:
                                 logger.critical(
                                     "[CAPITAL_BRAIN] FIRST_VALID_CAPITAL_SNAPSHOT_REJECTED — "
@@ -452,6 +479,8 @@ class CapitalAllocationBrain:
                             # dict: accept without snapshot-source validation so that
                             # older MABM versions continue to work.
                             _first_snap_accepted = True
+                            # Propagate to the trading state machine for the hard gate.
+                            _notify_state_machine_first_snap_accepted()
             except Exception as _bs_exc:
                 logger.warning("[BOOTSTRAP] forced snapshot attempt failed: %s", _bs_exc)
             if self.capital_authority.is_hydrated and _first_snap_accepted:

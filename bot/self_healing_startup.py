@@ -1547,6 +1547,9 @@ class SelfHealingStartup:
                     "SelfHealingStartup: state machine is %s — no reset needed",
                     current.value,
                 )
+        except RuntimeError:
+            # Hard activation gate failures must propagate — do not swallow.
+            raise
         except Exception as exc:
             logger.warning("SelfHealingStartup: state machine step failed (%s)", exc)
 
