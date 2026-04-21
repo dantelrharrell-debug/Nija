@@ -60,6 +60,32 @@ import pandas as pd
 
 logger = logging.getLogger("nija.core_loop")
 
+
+# ---------------------------------------------------------------------------
+# CycleSnapshot — immutable state captured once per activation tick
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CycleSnapshot:
+    """Immutable snapshot of volatile apex state captured once per cycle.
+
+    All gates receive a reference to the *same* snapshot instance, so every
+    check sees an identical, consistent view of the world regardless of how
+    long the cycle takes or whether background threads mutate the underlying
+    apex attributes mid-scan.
+
+    Fields
+    ------
+    balance         : Account equity (USD) as of cycle start.
+    current_regime  : Market regime string (e.g. "bull", "bear", "ranging").
+    daily_pnl_usd   : Running daily P&L in USD at cycle start.
+    open_positions  : Number of open positions at cycle start (pre-exits).
+    """
+    balance: float
+    current_regime: Optional[str]
+    daily_pnl_usd: float
+    open_positions: int
+
 # ---------------------------------------------------------------------------
 # Trading state machine + CapitalAuthority — optional; graceful fallback
 # ---------------------------------------------------------------------------
@@ -543,31 +569,42 @@ class NijaCoreLoop:
         result = CoreLoopResult()
         cycle_start = time.time()
 
+        # ── Snapshot: capture volatile apex state ONCE for the entire cycle ──
+        # All phases and gates receive this frozen reference so every check
+        # sees a consistent view of the world even if background threads mutate
+        # the underlying apex attributes while the scan is running.
+        snapshot = CycleSnapshot(
+            balance=balance,
+            current_regime=getattr(self.apex, "current_regime", None),
+            daily_pnl_usd=getattr(self.apex, "_daily_pnl_usd", 0.0),
+            open_positions=open_positions_count,
+        )
+
         logger.info(
             "🟢 Trading loop alive — scanning %d symbols (balance=$%.2f open=%d)",
-            len(symbols), balance, open_positions_count,
+            len(symbols), snapshot.balance, snapshot.open_positions,
         )
 
         # ── Entry-to-Order Trace: opening event ──────────────────────────
         emit_cycle_trace(
             CycleOutcome.SCAN_STARTED,
-            balance=round(balance, 2),
-            open_positions=open_positions_count,
+            balance=round(snapshot.balance, 2),
+            open_positions=snapshot.open_positions,
             symbols=len(symbols),
         )
         self._total_cycles += 1
 
         # ── Phase 1: Safety gate ──────────────────────────────────────────
-        can_enter, safety_reason = self._phase1_safety(broker, balance)
+        can_enter, safety_reason = self._phase1_safety(broker, snapshot)
         if not can_enter:
             logger.info("🛡️  Core loop safety gate blocked entries: %s", safety_reason)
             user_mode = True
 
         # ── Phase 2: Position management ─────────────────────────────────
-        exits = self._phase2_manage_positions(broker, balance)
+        exits = self._phase2_manage_positions(broker, snapshot)
         result.exits_taken = exits
         # Update available slots after exits
-        effective_open = max(0, open_positions_count - exits)
+        effective_open = max(0, snapshot.open_positions - exits)
 
         # ── Phase 3: Scan & ranked entry ──────────────────────────────────
         if not user_mode:
@@ -579,7 +616,7 @@ class NijaCoreLoop:
                 )
                 entries, blocked, scored = self._phase3_scan_and_enter(
                     broker=broker,
-                    balance=balance,
+                    snapshot=snapshot,
                     symbols=symbols,
                     available_slots=available_slots,
                     zero_signal_streak=self._zero_signal_streak,
@@ -681,7 +718,7 @@ class NijaCoreLoop:
     # Phase 1: Safety gate
     # ------------------------------------------------------------------
 
-    def _phase1_safety(self, broker: Any, balance: float) -> Tuple[bool, str]:
+    def _phase1_safety(self, broker: Any, snapshot: CycleSnapshot) -> Tuple[bool, str]:
         """
         Portfolio-level safety gate — checks only Layers 1 (global drawdown
         circuit breaker) and 2 (daily loss limit).
@@ -692,6 +729,10 @@ class NijaCoreLoop:
         would always return a score of 2/5 (below the threshold of 3) and
         incorrectly block all entries at the portfolio level before any
         symbols have been scanned.
+
+        Receives the cycle-level ``snapshot`` so all state is read from a
+        single, consistent, frozen reference rather than re-reading live
+        apex attributes mid-cycle.
 
         Returns (can_enter, reason_string).
         """
@@ -704,13 +745,12 @@ class NijaCoreLoop:
             # Pass an empty DataFrame so the controller's Layer 4 market-
             # condition check is bypassed (len(df) < 5 → skip Layer 4).
             # Only Layers 1 + 2 run at this portfolio-wide gate.
-            current_regime = getattr(apex, "current_regime", None)
             result = drc.pre_entry_check(
-                account_balance=balance,
+                account_balance=snapshot.balance,
                 df=pd.DataFrame(),      # empty → Layer 4 skipped (portfolio gate)
                 indicators={},
-                daily_pnl_usd=getattr(apex, "_daily_pnl_usd", 0.0),
-                regime=current_regime,
+                daily_pnl_usd=snapshot.daily_pnl_usd,
+                regime=snapshot.current_regime,
             )
             if not result.can_trade:
                 return False, result.reason
@@ -723,9 +763,12 @@ class NijaCoreLoop:
     # Phase 2: Position management
     # ------------------------------------------------------------------
 
-    def _phase2_manage_positions(self, broker: Any, balance: float) -> int:
+    def _phase2_manage_positions(self, broker: Any, snapshot: CycleSnapshot) -> int:
         """
         Iterate open positions and process exits.
+
+        Receives the cycle-level ``snapshot`` so balance is read from the
+        frozen reference captured at cycle start.
 
         Returns number of positions closed this phase.
         """
@@ -748,7 +791,7 @@ class NijaCoreLoop:
                     if df is None or len(df) < 10:
                         continue
 
-                    analysis = apex.analyze_market(df, symbol, balance)
+                    analysis = apex.analyze_market(df, symbol, snapshot.balance)
                     action = analysis.get("action", "hold")
                     if action in ("exit", "partial_exit", "take_profit_tp1",
                                   "take_profit_tp2", "take_profit_tp3"):
@@ -771,13 +814,17 @@ class NijaCoreLoop:
     def _phase3_scan_and_enter(
         self,
         broker: Any,
-        balance: float,
+        snapshot: CycleSnapshot,
         symbols: List[str],
         available_slots: int,
         zero_signal_streak: int = 0,
     ) -> Tuple[int, int, int]:
         """
         Score all candidate symbols, rank them, execute top-N.
+
+        Receives the cycle-level ``snapshot`` (captured once in
+        ``run_scan_phase``) so all gates see a consistent, frozen view of
+        balance, regime, and P&L regardless of how long the scan takes.
 
         When ``zero_signal_streak`` has reached ``FORCED_ENTRY_STREAK_THRESHOLD``,
         progressive score relaxation activates: each 5-cycle step reduces the
@@ -891,9 +938,8 @@ class NijaCoreLoop:
                     trend = "uptrend"
 
                 side = "long" if trend == "uptrend" else "short"
-                regime = getattr(self.apex, "current_regime", None)
                 entry_type = (
-                    self.apex._get_entry_type_for_regime(regime)
+                    self.apex._get_entry_type_for_regime(snapshot.current_regime)
                     if hasattr(self.apex, "_get_entry_type_for_regime")
                     else "swing"
                 )
@@ -915,7 +961,7 @@ class NijaCoreLoop:
                         df=df,
                         indicators=indicators,
                         side=side,
-                        regime=regime,
+                        regime=snapshot.current_regime,
                         broker=broker_name,
                         entry_type=entry_type,
                         symbol=symbol,
@@ -928,7 +974,7 @@ class NijaCoreLoop:
                         candidates.append(sig)
                 elif _AISignal is not None:
                     # Fallback: use apex.analyze_market directly and wrap result
-                    analysis = self.apex.analyze_market(df, symbol, balance)
+                    analysis = self.apex.analyze_market(df, symbol, snapshot.balance)
                     if analysis.get("action") in ("enter_long", "enter_short"):
                         sig = _AISignal(
                             symbol=symbol,
@@ -1044,9 +1090,8 @@ class NijaCoreLoop:
                 ai.speed_ctrl.record_cycle(0)
             return 0, blocked, scored
 
-        regime = getattr(self.apex, "current_regime", None)
         selected = (
-            ai.rank_and_select(candidates, available_slots, regime)
+            ai.rank_and_select(candidates, available_slots, snapshot.current_regime)
             if ai is not None
             else candidates[:available_slots]
         )
@@ -1148,8 +1193,8 @@ class NijaCoreLoop:
                             side=sig.side,
                             ai_score=sig.composite_score,
                             ai_threshold=sig.threshold_used,
-                            balance=balance,
-                            regime=getattr(self.apex, "current_regime", None),
+                            balance=snapshot.balance,
+                            regime=snapshot.current_regime,
                             zero_signal_streak=zero_signal_streak,
                             df=df,
                             entry_type=getattr(sig, "entry_type", "swing"),
@@ -1186,7 +1231,7 @@ class NijaCoreLoop:
                         )
 
                 # Re-run full apex.analyze_market (handles SL/TP/sizing etc.)
-                analysis = self.apex.analyze_market(df, sig.symbol, balance)
+                analysis = self.apex.analyze_market(df, sig.symbol, snapshot.balance)
                 action = analysis.get("action", "hold")
 
                 # When fallback is active, force the action to enter if the
