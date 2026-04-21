@@ -408,8 +408,9 @@ class TradingStateMachine:
 
         # ── Hard activation gate ───────────────────────────────────────────
         # All three conditions below must be True before LIVE_ACTIVE is set.
-        # Any False raises RuntimeError immediately so the exact blocker
-        # appears in logs rather than the bot hanging in silent ambiguity.
+        # Each failed condition returns False (not raises) so the supervisor
+        # cycle can retry on the next pass without propagating exceptions.
+        # This makes the gate retryable, idempotent, and cycle-driven.
 
         _mabm_gate = _get_mabm_instance()
         _ca_gate = _get_capital_authority_instance()
@@ -441,6 +442,41 @@ class TradingStateMachine:
             )
         _snap_ok = self._first_snap_accepted
 
+        # Inline cycle-driven snap acceptance: if _first_snap_accepted has not
+        # been set yet (e.g. bootstrap escape hatch was missed because CA
+        # hydrated before brokers were fully ready), attempt it here directly.
+        # This is idempotent — already-accepted snaps skip the block — and
+        # cycle-driven — it is retried on every maybe_auto_activate call until
+        # a valid live-exchange snapshot is available.
+        if not _snap_ok and _mabm_gate is not None and hasattr(_mabm_gate, "refresh_capital_authority"):
+            try:
+                _inline_snap = _mabm_gate.refresh_capital_authority(trigger="inline_activation_check")
+                if isinstance(_inline_snap, dict):
+                    _inline_vb = int(float(_inline_snap.get("valid_brokers", 0)))
+                    _inline_src = str(_inline_snap.get("snapshot_source", ""))
+                    if _inline_vb > 0 and _inline_src == "live_exchange":
+                        self._first_snap_accepted = True
+                        _snap_ok = True
+                        logger.critical(
+                            "[TradingStateMachine] INLINE_SNAP_ACCEPTED "
+                            "valid_brokers=%d snapshot_source=%s — proceeding to activate",
+                            _inline_vb,
+                            _inline_src,
+                        )
+                    else:
+                        logger.debug(
+                            "[TradingStateMachine] inline snap check: "
+                            "valid_brokers=%d snapshot_source=%r — not live, will retry next cycle",
+                            _inline_vb,
+                            _inline_src,
+                        )
+            except Exception as _inline_err:
+                logger.warning(
+                    "[TradingStateMachine] inline snap acceptance attempt failed: %s"
+                    " — will retry next cycle",
+                    _inline_err,
+                )
+
         # Emit the mandatory proof log so every path through activation is visible.
         logger.critical(
             "TRADE_READINESS_PROOF "
@@ -466,13 +502,21 @@ class TradingStateMachine:
         )
 
         if not _brokers_ready:
-            raise RuntimeError("BLOCK LIVE_ACTIVE: brokers not fully ready")
-        if not _ca_hydrated:
-            raise RuntimeError("BLOCK LIVE_ACTIVE: CapitalAuthority not hydrated")
-        if not _snap_ok:
-            raise RuntimeError(
-                "BLOCK LIVE_ACTIVE: no valid live-exchange capital snapshot accepted"
+            logger.warning(
+                "🔒 BLOCK LIVE_ACTIVE: brokers not fully ready — will retry next cycle"
             )
+            return False
+        if not _ca_hydrated:
+            logger.warning(
+                "🔒 BLOCK LIVE_ACTIVE: CapitalAuthority not hydrated — will retry next cycle"
+            )
+            return False
+        if not _snap_ok:
+            logger.warning(
+                "🔒 BLOCK LIVE_ACTIVE: no valid live-exchange capital snapshot accepted"
+                " — will retry next cycle"
+            )
+            return False
 
         # All gates passed — transition
         try:
