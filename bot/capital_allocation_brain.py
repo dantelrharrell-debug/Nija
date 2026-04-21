@@ -394,6 +394,12 @@ class CapitalAllocationBrain:
             logger.warning(
                 "[BOOTSTRAP] CA not hydrated — forcing initial snapshot (lock bypass enabled)"
             )
+            # _first_snap_accepted tracks whether the first snapshot passed the
+            # live-exchange guard.  It is only set to True after validating that
+            # the snapshot (a) has at least one valid broker and (b) came from a
+            # live exchange source — not a placeholder produced when all brokers
+            # report balance=0.0 due to exchange placeholder data.
+            _first_snap_accepted = False
             try:
                 try:
                     from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_bs
@@ -411,10 +417,44 @@ class CapitalAllocationBrain:
                             "(not all_brokers_fully_ready)"
                         )
                     else:
-                        _mabm_bs.refresh_capital_authority(trigger="bootstrap_force")
+                        _first_snap = _mabm_bs.refresh_capital_authority(trigger="bootstrap_force")
+                        # THIRD GATE: validate first snapshot when all brokers are confirmed
+                        # ready.  A broker marked "fully ready" can still return balance=0.0
+                        # if the exchange API responded with placeholder data.  Require the
+                        # first accepted snapshot to have (a) valid_brokers > 0 and (b)
+                        # snapshot_source == "live_exchange".
+                        # Use all_brokers_fully_ready presence as a version gate:
+                        # older MABM instances that don't expose this method skip the
+                        # snapshot-source validation so backward compatibility is preserved.
+                        if hasattr(_mabm_bs, "all_brokers_fully_ready") and isinstance(_first_snap, dict):
+                            _vb = int(float(_first_snap.get("valid_brokers", 0)))
+                            _src = str(_first_snap.get("snapshot_source", ""))
+                            if _vb > 0 and _src == "live_exchange":
+                                _first_snap_accepted = True
+                                logger.critical(
+                                    "FIRST_VALID_CAPITAL_SNAPSHOT_ACCEPTED "
+                                    "valid_brokers=%d snapshot_source=%s total=$%.2f",
+                                    _vb,
+                                    _src,
+                                    float(_first_snap.get("total_capital", 0.0)),
+                                )
+                            else:
+                                logger.critical(
+                                    "[CAPITAL_BRAIN] FIRST_VALID_CAPITAL_SNAPSHOT_REJECTED — "
+                                    "valid_brokers=%d snapshot_source=%r. "
+                                    "Blocking bootstrap acceptance (expected valid_brokers>0 "
+                                    "and snapshot_source='live_exchange').",
+                                    _vb,
+                                    _src,
+                                )
+                        else:
+                            # all_brokers_fully_ready not supported or snapshot is not a
+                            # dict: accept without snapshot-source validation so that
+                            # older MABM versions continue to work.
+                            _first_snap_accepted = True
             except Exception as _bs_exc:
                 logger.warning("[BOOTSTRAP] forced snapshot attempt failed: %s", _bs_exc)
-            if self.capital_authority.is_hydrated:
+            if self.capital_authority.is_hydrated and _first_snap_accepted:
                 self._bootstrap_phase = False
                 logger.info("[BOOTSTRAP] initial snapshot published → hydration unlocked")
                 return float(self.capital_authority.total_capital)
