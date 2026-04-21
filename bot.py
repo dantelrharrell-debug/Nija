@@ -2637,6 +2637,29 @@ def _run_bot_startup_and_trading():
             if _startup_buffer:
                 _startup_buffer.flush_phase("CAPITAL_BRAIN")
 
+            logger.critical("B1 BEFORE_PREFLIGHT_CONTINUE")
+            # --- FIX START ---
+            # 1. Advance bootstrap FSM explicitly (non-blocking: _bfsm_transition never raises)
+            _bfsm_transition(
+                _BootstrapState.CAPITAL_READY,
+                "explicit bootstrap advance before preflight_continue",
+            )
+            logger.critical("B2 AFTER_BFSM_ADVANCE")
+            # 2. Hard-gate activation (don't assume it happened)
+            _try_recover_state_machine()
+            from bot.trading_state_machine import (  # noqa: E402
+                get_state_machine as _b1_get_tsm,
+                TradingState as _B1TradingState,
+            )
+            _b1_current_state = _b1_get_tsm().get_current_state()
+            if _b1_current_state != _B1TradingState.LIVE_ACTIVE:
+                raise RuntimeError(
+                    f"LIVE_ACTIVE not reached after B1 continuation. "
+                    f"Current state: {_b1_current_state.value!r}"
+                )
+            logger.critical("B3 LIVE_ACTIVE_CONFIRMED")
+            # --- FIX END ---
+
             # ── CONNECTION → INIT HANDOFF: activate trading state machine ──────────
             # maybe_auto_activate() was attempted at module-load time (inside
             # _verify_env) but CapitalAuthority was not yet hydrated, so Gate 2
@@ -2876,6 +2899,8 @@ def _run_bot_startup_and_trading():
                     "mode": "single",
                 }
                 logger.info("   ✅ Self-healing single-broker thread started")
+
+            logger.critical("B4 EXECUTION_LOOP_STARTED")
 
             # ── FIX 2: RUNTIME START CONFIRMATION ──────────────────────────────────
             # Emit the definitive "RUNTIME MODE ACTIVE" log ONLY when all three
