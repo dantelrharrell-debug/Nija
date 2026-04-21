@@ -2102,14 +2102,7 @@ def _run_bot_startup_and_trading():
                 _existing_strategy = _initialized_state.get("strategy")
             finally:
                 _initialized_state_lock.release()
-            print("EMERGENCY INIT BYPASS EXECUTING", flush=True)
-            from bot.self_healing_startup import StartupResult
-            return StartupResult(
-                ok=True,
-                broker=None,
-                broker_name="kraken",
-            )
-            logger.critical("🔥 INIT_A3: after _initialized_state_lock, before phase gate")  # noqa: unreachable
+            logger.critical("🔥 INIT_A3: after _initialized_state_lock, before phase gate")
             if _existing_strategy is not None:
                 logger.info("♻️  Reusing existing TradingStrategy instance from previous attempt")
                 strategy = _existing_strategy
@@ -2135,8 +2128,49 @@ def _run_bot_startup_and_trading():
                 logger.critical("🔥 INIT_A4: before TradingStrategy()")
                 logger.critical("🚀 CREATING TradingStrategy INSTANCE")
                 logger.critical("B2 before TradingStrategy()")
+
+                # ── Option C: bootstrap connects brokers BEFORE strategy is created ──
+                # Broker connectivity is the bootstrap layer's responsibility.
+                # TradingStrategy receives already-connected brokers and performs
+                # strategy-level wiring only (no blocking network I/O in __init__).
+                _boot_broker_results: dict = {}
+                _boot_connected_users: dict = {}
+                try:
+                    from bot.multi_account_broker_manager import multi_account_broker_manager as _boot_mabm
+                    logger.info("🔌 [bootstrap] Connecting platform brokers...")
+                    # Pre-connection startup delay (bootstrap-owned)
+                    _boot_raw_delay = os.environ.get("NIJA_STARTUP_DELAY_S", "")
+                    _boot_startup_delay = float(_boot_raw_delay) if _boot_raw_delay else 2.0
+                    if _boot_startup_delay > 0:
+                        logger.info(
+                            "⏱️  [bootstrap] Startup delay: %.1fs before broker connections...",
+                            _boot_startup_delay,
+                        )
+                        time.sleep(_boot_startup_delay)
+                    _boot_broker_results = _boot_mabm.initialize_platform_brokers()
+                    # Inter-account delay before user connections (bootstrap-owned)
+                    _boot_raw_user_delay = os.environ.get("NIJA_USER_CONNECT_DELAY_S", "")
+                    _boot_user_delay = float(_boot_raw_user_delay) if _boot_raw_user_delay else 0.5
+                    if _boot_user_delay > 0:
+                        time.sleep(_boot_user_delay)
+                    _boot_connected_users = _boot_mabm.connect_users_from_config()
+                    logger.info(
+                        "✅ [bootstrap] Broker connections complete — handing off to TradingStrategy"
+                    )
+                except Exception as _boot_conn_err:
+                    logger.error(
+                        "❌ [bootstrap] Broker connection phase raised: %s — "
+                        "TradingStrategy will attempt legacy connection path",
+                        _boot_conn_err,
+                    )
+                    _boot_broker_results = {}
+                    _boot_connected_users = {}
+
                 _ts_init_start = time.time()
-                strategy = TradingStrategy()
+                strategy = TradingStrategy(
+                    broker_results=_boot_broker_results if _boot_broker_results else None,
+                    connected_user_brokers=_boot_connected_users if _boot_connected_users else None,
+                )
                 _ts_init_elapsed = time.time() - _ts_init_start
                 if _ts_init_elapsed > 5:
                     logger.critical(
