@@ -102,6 +102,10 @@ class CycleSnapshot:
     ca_total_capital: float = 0.0
     ca_valid_brokers: int = 0
     mabm_brokers_ready: bool = False
+    # True when the capital snapshot was captured after CAPITAL_HYDRATED_EVENT
+    # fired AND ca_is_hydrated is confirmed — prevents stale pre-hydration
+    # data from satisfying the activation gate.
+    is_post_hydration: bool = False
 
 # ---------------------------------------------------------------------------
 # Trading state machine + CapitalAuthority — optional; graceful fallback
@@ -119,14 +123,21 @@ except ImportError:
         _SM_AVAILABLE = False
 
 try:
-    from capital_authority import get_capital_authority as _get_ca
+    from capital_authority import (  # type: ignore[import]
+        get_capital_authority as _get_ca,
+        CAPITAL_HYDRATED_EVENT as _CAPITAL_HYDRATED_EVENT,
+    )
     _CA_LOOP_AVAILABLE = True
 except ImportError:
     try:
-        from bot.capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+        from bot.capital_authority import (  # type: ignore[import]
+            get_capital_authority as _get_ca,
+            CAPITAL_HYDRATED_EVENT as _CAPITAL_HYDRATED_EVENT,
+        )
         _CA_LOOP_AVAILABLE = True
     except ImportError:
         _get_ca = None  # type: ignore[assignment]
+        _CAPITAL_HYDRATED_EVENT = None  # type: ignore[assignment]
         _CA_LOOP_AVAILABLE = False
 
 
@@ -184,12 +195,15 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
         ca_total_capital   (float)
         ca_valid_brokers   (int)
         mabm_brokers_ready (bool)
+        is_post_hydration  (bool)  — True when CAPITAL_HYDRATED_EVENT has fired
+                                     AND ca_is_hydrated is confirmed for this cycle
     """
     result: Dict[str, Any] = {
         "ca_is_hydrated": False,
         "ca_total_capital": 0.0,
         "ca_valid_brokers": 0,
         "mabm_brokers_ready": False,
+        "is_post_hydration": False,
     }
 
     # ── CapitalAuthority state ────────────────────────────────────────────
@@ -200,6 +214,12 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
             result["ca_total_capital"] = float(getattr(_ca, "total_capital", 0.0) or 0.0)
         except Exception as _ce:
             logger.debug("_capture_cycle_capital_state: CA read failed: %s", _ce)
+
+    # ── is_post_hydration: CAPITAL_HYDRATED_EVENT fired + CA currently hydrated ──
+    _hydrated_event_set = (
+        _CAPITAL_HYDRATED_EVENT is not None and _CAPITAL_HYDRATED_EVENT.is_set()
+    )
+    result["is_post_hydration"] = _hydrated_event_set and bool(result["ca_is_hydrated"])
 
     # ── MABM broker readiness ─────────────────────────────────────────────
     try:
@@ -241,6 +261,19 @@ def _supervisor_step_state_machine() -> None:
     run_trading_loop at cycle start) so that the state machine activation
     check sees the SAME frozen capital snapshot that will be used by
     run_scan_phase, CapitalAllocationBrain, and MABM within this cycle.
+
+    Enforced invariants (all four must be satisfied before maybe_auto_activate
+    is called — any failed condition silently returns so the supervisor retries
+    on the next cycle without propagating exceptions):
+
+      1. CAPITAL_HYDRATED_EVENT must be set — hard-blocks activation until the
+         CapitalAuthority has received at least one broker snapshot.
+      2. _first_snap_accepted must be True — waits until a live-exchange
+         snapshot with valid_brokers > 0 has been validated.
+      3. all_brokers_fully_ready() must be True — waits for broker FSM
+         completion before activating the trading engine.
+      4. is_post_hydration must be True — prevents stale pre-hydration cycle
+         data from satisfying the activation gate.
     """
     if not _SM_AVAILABLE or _get_state_machine is None:
         return
@@ -248,22 +281,59 @@ def _supervisor_step_state_machine() -> None:
         sm = _get_state_machine()
         if sm.get_current_state() != _TradingState.OFF:
             return
-        # Only attempt activation when CapitalAuthority reports ready.
-        # Prefer the pre-captured cycle snapshot when available; fall back to
-        # a live read so the first cycle (before _current_cycle_capital is set)
-        # still works correctly.
+
         _cap = _current_cycle_capital
-        if _cap:
-            ca_ready = _cap.get("ca_is_hydrated", False)
-        else:
-            ca_ready = not _CA_LOOP_AVAILABLE  # proceed when CA module absent
-            if _CA_LOOP_AVAILABLE and _get_ca is not None:
-                try:
-                    ca_ready = _get_ca().is_ready()
-                except Exception:
-                    pass
-        if ca_ready:
-            sm.maybe_auto_activate(cycle_capital=_cap or None)
+
+        # ── Invariant 1: CAPITAL_HYDRATED_EVENT ──────────────────────────
+        # Hard-block: do not attempt activation until the global hydration
+        # event has been set by CapitalAuthority for the first time.
+        if _CAPITAL_HYDRATED_EVENT is not None and not _CAPITAL_HYDRATED_EVENT.is_set():
+            logger.debug(
+                "supervisor SM: CAPITAL_HYDRATED_EVENT not set — "
+                "blocking activation attempt"
+            )
+            return
+
+        # ── Invariant 2: _first_snap_accepted ────────────────────────────
+        # Wait until the capital bootstrap layer has confirmed a valid
+        # live-exchange snapshot (valid_brokers > 0, snapshot_source ==
+        # "live_exchange") before proceeding.
+        if not sm.get_first_snap_accepted():
+            logger.debug(
+                "supervisor SM: _first_snap_accepted is False — "
+                "waiting for live snapshot validation"
+            )
+            return
+
+        # ── Invariant 3: all_brokers_fully_ready ─────────────────────────
+        # Do not activate until every registered platform broker has
+        # completed its FSM and is confirmed ready.
+        _brokers_ready = bool(_cap.get("mabm_brokers_ready", True)) if _cap else True
+        if not _brokers_ready:
+            logger.debug(
+                "supervisor SM: mabm_brokers_ready is False — "
+                "waiting for broker FSM completion"
+            )
+            return
+
+        # ── Invariant 4: is_post_hydration ───────────────────────────────
+        # Prevent stale pre-hydration cycle data from satisfying the
+        # activation gate: the current cycle's capital snapshot must have
+        # been captured after CAPITAL_HYDRATED_EVENT fired.
+        _post_hydration = bool(_cap.get("is_post_hydration", False)) if _cap else False
+        if not _post_hydration:
+            logger.debug(
+                "supervisor SM: is_post_hydration is False — "
+                "preventing stale-cycle activation"
+            )
+            return
+
+        # ── All invariants passed — delegate to maybe_auto_activate ──────
+        # maybe_auto_activate performs its own full gate sequence (kill switch,
+        # LIVE_CAPITAL_VERIFIED, _capital_readiness_gate, hard activation gate).
+        # The cycle_capital dict is forwarded so the state machine uses the
+        # same frozen world-view captured at cycle start.
+        sm.maybe_auto_activate(cycle_capital=_cap or None)
     except Exception as _sm_err:
         logger.debug("supervisor state machine step failed: %s", _sm_err)
 
@@ -699,11 +769,12 @@ class NijaCoreLoop:
         # the underlying apex attributes while the scan is running.
         #
         # Capital fields (cycle_id, ca_is_hydrated, ca_total_capital,
-        # ca_valid_brokers, mabm_brokers_ready) are populated from the
-        # module-level _current_cycle_capital dict that run_trading_loop
-        # captured once at cycle start — BEFORE _supervisor_step_state_machine
-        # ran — so TradingStateMachine, CapitalAllocationBrain, and MABM all
-        # operate on the same frozen capital view.
+        # ca_valid_brokers, mabm_brokers_ready, is_post_hydration) are
+        # populated from the module-level _current_cycle_capital dict that
+        # run_trading_loop captured once at cycle start — BEFORE
+        # _supervisor_step_state_machine ran — so TradingStateMachine,
+        # CapitalAllocationBrain, and MABM all operate on the same frozen
+        # capital view.
         _cap = _current_cycle_capital  # may be {} when called outside run_trading_loop
         _cid = _current_cycle_id or (
             f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-scan"
@@ -718,6 +789,7 @@ class NijaCoreLoop:
             ca_total_capital=float(_cap.get("ca_total_capital", 0.0)),
             ca_valid_brokers=int(_cap.get("ca_valid_brokers", 0)),
             mabm_brokers_ready=bool(_cap.get("mabm_brokers_ready", False)),
+            is_post_hydration=bool(_cap.get("is_post_hydration", False)),
         )
 
         # Publish the fully-constructed snapshot so that CapitalAllocationBrain
