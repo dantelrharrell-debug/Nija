@@ -52,6 +52,12 @@ _BOOTSTRAP_SINGLE_OWNER_LOCK = threading.Lock()
 # threads are live" thread exit from a genuine bootstrap failure — only the
 # latter should terminate the process.
 _bootstrap_complete_flag = threading.Event()
+# Bootstrap completion flag — separates a successful bootstrap from a failed one.
+# Set when bootstrap reaches RUNNING_SUPERVISED state (trader threads are live).
+# Thread lifecycle is intentionally independent of system lifecycle: the outer
+# supervisor loop must continue keeping the process alive after the bootstrap
+# thread hands off, so trader threads can keep running without interruption.
+_bootstrap_completed_event = threading.Event()
 
 
 @dataclass
@@ -1452,6 +1458,11 @@ def _run_bot_startup_and_trading():
             "♻️  Startup already completed — skipping re-init, "
             "re-entering supervisor loop"
         )
+        # When bootstrap was previously completed and the system is re-entering
+        # the supervisor loop after a transient failure, bootstrap is already done.
+        # Ensure the completion flag is set so the outer supervisor correctly
+        # treats any future thread exit as a hand-off, not a crash.
+        _bootstrap_completed_event.set()
         _rerun_supervisor_loop(_state_copy)
         return
 
@@ -3066,6 +3077,11 @@ def _run_bot_startup_and_trading():
             # after handing off to trader threads" from a genuine boot failure.
             _bootstrap_complete_flag.set()
             logger.info("✅ [Bootstrap] Bootstrap complete — control handed to supervisor")
+            # Signal bootstrap completion so the supervisor loop knows trader
+            # threads are running independently.  From this point forward a
+            # thread exit means "hand off to supervisor" not "crash".
+            _bootstrap_completed_event.set()
+            logger.info("✅ BOOTSTRAP COMPLETE — system handed to supervisor loop")
 
             # FIX OPTION A: Force activation check AFTER INIT completes.
             # maybe_auto_activate() was called earlier (during the capital gate
@@ -3307,6 +3323,7 @@ def main():
     )
     
     supervisor_cycle = 0
+    _bootstrap_handoff_logged = False  # Log the bootstrap hand-off message only once
     while True:
         try:
             supervisor_cycle += 1
@@ -3354,6 +3371,36 @@ def main():
                     logger.critical(
                         "💥 [Supervisor] Bootstrap kernel (BotStartup) thread has exited "
                         "WITHOUT completing bootstrap — "
+            # Distinguish between successful bootstrap completion and bootstrap failure.
+            # Thread lifecycle is independent of system lifecycle: trader threads
+            # continue running after the bootstrap thread hands off control.
+            #
+            #   Bootstrap completed (_bootstrap_completed_event set):
+            #     Trader threads are live and running independently.  Keep the
+            #     process alive so the health server and trader threads can operate.
+            #
+            #   Bootstrap failed (_bootstrap_completed_event not set):
+            #     The kernel exited before any trader threads were started.
+            #     Exit so an external watchdog (Railway, systemd, Docker) can
+            #     restart the process with a clean slate.
+            if not startup_thread.is_alive():
+                if _bootstrap_completed_event.is_set():
+                    # Bootstrap completed — the thread handed off to the supervisor.
+                    # Log this transition only once to avoid filling logs each cycle.
+                    if not _bootstrap_handoff_logged:
+                        logger.critical(
+                            "✅ [Supervisor] Bootstrap kernel (BotStartup) thread exited after "
+                            "successful bootstrap (RUNNING_SUPERVISED reached). "
+                            "Handing control to supervisor loop — system continues operating. "
+                            "Trader threads remain active."
+                        )
+                        _bootstrap_handoff_logged = True
+                    continue  # DO NOT SHUTDOWN — keep the process alive
+                else:
+                    # Bootstrap failed: kernel exited before completing.
+                    logger.critical(
+                        "💥 [Supervisor] Bootstrap kernel (BotStartup) thread exited before "
+                        "bootstrap completed (RUNNING_SUPERVISED never reached) — "
                         "terminating process so an external process manager (Railway, systemd, "
                         "Docker restart policy) can restart with a clean state. "
                         "If no external watchdog is configured the process will stay stopped."
@@ -3362,6 +3409,7 @@ def main():
                         _bfsm_transition(
                             _BootstrapState.SHUTDOWN,
                             "bootstrap kernel thread exited without completing bootstrap",
+                            "bootstrap kernel thread exited before completing",
                         )
                     _release_process_lock()
                     sys.exit(1)
