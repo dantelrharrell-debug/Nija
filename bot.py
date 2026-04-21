@@ -875,6 +875,28 @@ def _log_memory_usage():
         logger.debug(f"Error logging memory usage: {e}")
 
 
+def _try_recover_state_machine() -> None:
+    """Attempt to drive the trading state machine from OFF → LIVE_ACTIVE.
+
+    Called when the LIVE_ACTIVE assertion fails so the missing trigger
+    (maybe_auto_activate) is fired from inside the execution loop instead
+    of waiting for an external supervisor to notice the stuck state.
+    All errors are swallowed — this is a best-effort recovery call.
+    """
+    try:
+        from bot.trading_state_machine import get_state_machine as _gsm_r
+    except ImportError as _ie:
+        logger.debug("_try_recover_state_machine: bot.trading_state_machine unavailable (%s), trying fallback", _ie)
+        try:
+            from trading_state_machine import get_state_machine as _gsm_r  # type: ignore[import]
+        except ImportError:
+            return
+    try:
+        _gsm_r().maybe_auto_activate()
+    except Exception as _act_err:
+        logger.debug("_try_recover_state_machine: maybe_auto_activate failed (%s)", _act_err)
+
+
 def _start_trader_thread(independent_trader, broker_type, broker):
     """
     Wrap a single broker's trading loop in a self-healing daemon thread.
@@ -937,27 +959,6 @@ def _start_single_broker_thread(strategy, cycle_secs):
                 return _gsm().get_current_state() == _TS.LIVE_ACTIVE
             except Exception:
                 return False  # fail-closed: block execution if state machine is unavailable
-
-    def _try_recover_state_machine() -> None:
-        """Attempt to drive the trading state machine from OFF → LIVE_ACTIVE.
-
-        Called when the LIVE_ACTIVE assertion fails so the missing trigger
-        (maybe_auto_activate) is fired from inside the execution loop instead
-        of waiting for an external supervisor to notice the stuck state.
-        All errors are swallowed — this is a best-effort recovery call.
-        """
-        try:
-            from bot.trading_state_machine import get_state_machine as _gsm_r
-        except ImportError as _ie:
-            logger.debug("_try_recover_state_machine: bot.trading_state_machine unavailable (%s), trying fallback", _ie)
-            try:
-                from trading_state_machine import get_state_machine as _gsm_r  # type: ignore[import]
-            except ImportError:
-                return
-        try:
-            _gsm_r().maybe_auto_activate()
-        except Exception as _act_err:
-            logger.debug("_try_recover_state_machine: maybe_auto_activate failed (%s)", _act_err)
 
     def _runner():
         logger.info(
@@ -1155,12 +1156,12 @@ def _rerun_supervisor_loop(state: dict) -> None:
 
     # Cache the state machine once at loop entry so the per-cycle health check
     # does not repeat the import on every iteration.
-    _sl_sm = None
-    _sl_off = None
+    _supervisor_state_machine = None
+    _supervisor_off_state = None
     try:
         from bot.trading_state_machine import get_state_machine as _gsm_sl, TradingState as _TS_sl
-        _sl_sm = _gsm_sl()
-        _sl_off = _TS_sl.OFF
+        _supervisor_state_machine = _gsm_sl()
+        _supervisor_off_state = _TS_sl.OFF
     except Exception as _sl_import_err:
         logger.debug("_rerun_supervisor_loop: trading_state_machine unavailable (%s)", _sl_import_err)
 
@@ -1177,13 +1178,13 @@ def _rerun_supervisor_loop(state: dict) -> None:
             # maybe_auto_activate() here recovers it on the next supervision
             # cycle without waiting for an external trigger.  All errors are
             # swallowed so a failed step never stalls the supervisor loop.
-            if _sl_sm is not None and _sl_off is not None:
+            if _supervisor_state_machine is not None and _supervisor_off_state is not None:
                 try:
-                    if _sl_sm.get_current_state() == _sl_off:
+                    if _supervisor_state_machine.get_current_state() == _supervisor_off_state:
                         logger.info(
                             "[Supervisor] State machine is OFF — calling maybe_auto_activate() to recover"
                         )
-                        _sl_sm.maybe_auto_activate()
+                        _supervisor_state_machine.maybe_auto_activate()
                 except Exception as _sl_step_err:
                     logger.debug("_rerun_supervisor_loop: state machine step failed (%s)", _sl_step_err)
 
