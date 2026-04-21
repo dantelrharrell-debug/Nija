@@ -1834,12 +1834,19 @@ class MultiAccountBrokerManager:
                 "total_capital": total_capital,
                 "valid_brokers": float(valid_brokers),
                 "kraken_capital": kraken_capital,
+                # snapshot_source distinguishes data obtained from a live exchange
+                # API call ("live_exchange") from placeholder/fallback snapshots
+                # ("placeholder").  Downstream bootstrap guards use this field to
+                # reject snapshots that were produced without real exchange data.
+                # An empty broker_map means no connected brokers contributed; the
+                # dict is intentionally falsy when empty.
+                "snapshot_source": "live_exchange" if broker_map else "placeholder",
             }
         except Exception as exc:
             logger.error("❌ CapitalAuthority refresh failed (%s): %s", trigger, exc)
             with self._capital_state_lock:
                 self._capital_ready = False
-            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "snapshot_source": "placeholder"}
 
     def enforce_trading_bootstrap_contract(
         self,
