@@ -47,6 +47,11 @@ _initialized_state_lock = threading.RLock()
 # it is rejected immediately instead of racing through shared init state.
 _BOOTSTRAP_SINGLE_OWNER_LOCK = threading.Lock()
 
+# Set once bootstrap completes successfully (FSM reaches RUNNING_SUPERVISED).
+# The outer supervisor uses this to distinguish a normal "bootstrap done, trading
+# threads are live" thread exit from a genuine bootstrap failure — only the
+# latter should terminate the process.
+_bootstrap_complete_flag = threading.Event()
 # Bootstrap completion flag — separates a successful bootstrap from a failed one.
 # Set when bootstrap reaches RUNNING_SUPERVISED state (trader threads are live).
 # Thread lifecycle is intentionally independent of system lifecycle: the outer
@@ -3067,6 +3072,11 @@ def _run_bot_startup_and_trading():
                 f"{len(_active_threads)} trader thread(s) started; supervisor loop active",
             )
             logger.info("🚀 FSM STATE: RUNNING_SUPERVISED")
+            # Signal that bootstrap completed successfully.  The outer supervisor
+            # loop uses this flag so it can distinguish a normal "thread exited
+            # after handing off to trader threads" from a genuine boot failure.
+            _bootstrap_complete_flag.set()
+            logger.info("✅ [Bootstrap] Bootstrap complete — control handed to supervisor")
             # Signal bootstrap completion so the supervisor loop knows trader
             # threads are running independently.  From this point forward a
             # thread exit means "hand off to supervisor" not "crash".
@@ -3337,6 +3347,30 @@ def main():
                 )
                 raise RuntimeError(f"External watchdog restart requested: {restart_reason}")
 
+            # Observer-only: BotStartup owns its own retry loop via the single-
+            # owner kernel.  If the thread exits it means the kernel itself
+            # terminated.  We distinguish two cases:
+            #
+            #   BOOTSTRAP_COMPLETE  – _bootstrap_complete_flag is set, meaning
+            #     the bot reached RUNNING_SUPERVISED and handed control to the
+            #     trader threads.  The thread exiting here is expected; the outer
+            #     supervisor keeps the process alive so those threads continue.
+            #
+            #   BOOTSTRAP_FAILED    – _bootstrap_complete_flag is NOT set,
+            #     meaning startup never succeeded.  Exit so an external watchdog
+            #     (Railway / Docker / systemd) can restart with a clean slate.
+            if not startup_thread.is_alive():
+                if _bootstrap_complete_flag.is_set():
+                    logger.info(
+                        "✅ [Supervisor] Bootstrap complete — BotStartup thread has exited "
+                        "after handing control to trader threads. "
+                        "Process remains alive; supervisor continues."
+                    )
+                    # Thread exit = state update only.  Continue supervising.
+                else:
+                    logger.critical(
+                        "💥 [Supervisor] Bootstrap kernel (BotStartup) thread has exited "
+                        "WITHOUT completing bootstrap — "
             # Distinguish between successful bootstrap completion and bootstrap failure.
             # Thread lifecycle is independent of system lifecycle: trader threads
             # continue running after the bootstrap thread hands off control.
@@ -3374,6 +3408,7 @@ def main():
                     if _BOOTSTRAP_FSM_AVAILABLE:
                         _bfsm_transition(
                             _BootstrapState.SHUTDOWN,
+                            "bootstrap kernel thread exited without completing bootstrap",
                             "bootstrap kernel thread exited before completing",
                         )
                     _release_process_lock()
