@@ -1159,16 +1159,40 @@ def _run_state_machine_loop() -> None:
     """
     _sm = None
     _off_state = None
-    try:
-        # Deferred import: trading_state_machine may not be on sys.path until
-        # the bot/  package directory is added (happens during broker init).
-        # Importing here rather than at module level avoids an ImportError at
-        # process startup before the path is configured.
-        from bot.trading_state_machine import get_state_machine as _gsm, TradingState as _TS
-        _sm = _gsm()
-        _off_state = _TS.OFF
-    except Exception as _import_err:
-        logger.debug("[SMLoop] trading_state_machine unavailable: %s", _import_err)
+    # Retry the deferred import up to 5 times with exponential back-off.
+    # This handles the common case where trading_state_machine is not yet on
+    # sys.path when the thread is started early (before broker init adds the
+    # bot/ package directory).  Without retries the thread exits immediately,
+    # leaving _sm_loop_thread pointing at a dead object and blocking the
+    # next _ensure_state_machine_loop_started() call until the supervisor
+    # notices and recreates it.
+    _MAX_IMPORT_ATTEMPTS = 5
+    for _attempt in range(_MAX_IMPORT_ATTEMPTS):
+        try:
+            # Deferred import: trading_state_machine may not be on sys.path
+            # until the bot/ package directory is added (happens during broker
+            # init).  Importing here rather than at module level avoids an
+            # ImportError at process startup before the path is configured.
+            from bot.trading_state_machine import get_state_machine as _gsm, TradingState as _TS
+            _sm = _gsm()
+            _off_state = _TS.OFF
+            break
+        except Exception as _import_err:
+            _wait = 2 ** _attempt  # 1, 2, 4, 8, 16 s
+            logger.debug(
+                "[SMLoop] trading_state_machine unavailable (attempt %d/%d): %s — retrying in %ds",
+                _attempt + 1,
+                _MAX_IMPORT_ATTEMPTS,
+                _import_err,
+                _wait,
+            )
+            if _attempt < _MAX_IMPORT_ATTEMPTS - 1:
+                time.sleep(_wait)
+    if _sm is None:
+        logger.warning(
+            "[SMLoop] Could not import trading_state_machine after %d attempts — thread exiting",
+            _MAX_IMPORT_ATTEMPTS,
+        )
         return
 
     while True:
@@ -1182,12 +1206,15 @@ def _run_state_machine_loop() -> None:
 
 
 def _ensure_state_machine_loop_started() -> None:
-    """Start the state machine loop daemon thread exactly once after INIT.
+    """Start (or restart) the state machine loop daemon thread.
 
-    Idempotent: safe to call on every supervisor entry (both initial boot and
-    fast-path retries).  The state machine loop thread is started before the
-    supervisor ``while True`` loop so the supervisor can never early-return
-    before the thread is alive.
+    Idempotent: safe to call on every supervisor entry and on every supervisor
+    cycle.  A new thread is spawned whenever the existing one is None, was
+    never started, or has already exited — so a dead or unstarted thread can
+    never permanently block state-machine activation.
+
+    Thread-start failures are logged and swallowed so a transient OS-level
+    error (e.g. thread-limit exhaustion) never propagates to the caller.
     """
     global _sm_loop_thread
     with _sm_loop_lock:
@@ -1199,7 +1226,14 @@ def _ensure_state_machine_loop_started() -> None:
             daemon=True,
             name="StateMachineLoop",
         )
-        _sm_loop_thread.start()
+        try:
+            _sm_loop_thread.start()
+        except Exception as _start_err:
+            logger.warning(
+                "[SMLoop] Thread start failed: %s — state machine activation will rely on supervisor",
+                _start_err,
+            )
+            _sm_loop_thread = None
 
 
 def _rerun_supervisor_loop(state: dict) -> None:
@@ -1250,6 +1284,15 @@ def _rerun_supervisor_loop(state: dict) -> None:
         try:
             _orch_cycle += 1
             health_manager.heartbeat()
+
+            # ── State machine loop thread watchdog ───────────────────────────
+            # Restart the SM loop thread if it has exited (e.g. due to an early
+            # ImportError before bot/ was on sys.path, or any other uncaught
+            # error).  This is idempotent: _ensure_state_machine_loop_started()
+            # is a no-op while the thread is alive.  Without this guard a dead
+            # or never-started SM loop thread would permanently block activation
+            # because no other periodic mechanism recreates it mid-run.
+            _ensure_state_machine_loop_started()
 
             # ── State machine health step ─────────────────────────────────────
             # Ensure OFF → LIVE_ACTIVE is never silently missed during the
