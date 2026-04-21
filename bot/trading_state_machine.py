@@ -558,6 +558,14 @@ class TradingStateMachine:
         with self._lock:
             return self._state_history[-limit:] if self._state_history else []
 
+    def get_first_snap_accepted(self) -> bool:
+        """Return whether the first live-exchange capital snapshot has been accepted.
+
+        External callers (e.g. the supervisor loop) can read this flag without
+        accessing the private attribute directly.
+        """
+        return self._first_snap_accepted
+
     def set_first_snap_accepted(self, value: bool = True) -> None:
         """Signal that the first live-exchange capital snapshot has been accepted.
 
