@@ -910,7 +910,7 @@ class NijaCoreLoop:
 
                 # ── Standard AI scoring ───────────────────────────────────
                 if ai is not None:
-                    logger.debug("🔎 Evaluating signal — %s (%s)", symbol, side)
+                    logger.info("🔎 Evaluating market — %s (%s)", symbol, side)
                     sig = ai.evaluate_symbol(
                         df=df,
                         indicators=indicators,
@@ -921,6 +921,10 @@ class NijaCoreLoop:
                         symbol=symbol,
                     )
                     if sig is not None:
+                        logger.info(
+                            "✅ Signal passed — %s score=%.1f threshold=%.1f",
+                            symbol, sig.composite_score, sig.threshold_used,
+                        )
                         candidates.append(sig)
                 elif _AISignal is not None:
                     # Fallback: use apex.analyze_market directly and wrap result
