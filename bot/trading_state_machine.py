@@ -378,9 +378,11 @@ class TradingStateMachine:
             return False
 
         # Gate 1: kill switch must be inactive (checked first — fast fail)
+        kill_state = False
         try:
             from kill_switch import get_kill_switch
-            if get_kill_switch().is_active():
+            kill_state = get_kill_switch().is_active()
+            if kill_state:
                 logger.warning(
                     "🔒 Auto-activate blocked: kill switch is active"
                 )
@@ -448,6 +450,19 @@ class TradingStateMachine:
             _brokers_ready,
             _ca_hydrated,
             _snap_ok,
+        )
+
+        # Single activation truth log: all four gate values in one line.
+        logger.critical(
+            "ACTIVATION_CHECK "
+            "ca_hydrated=%s "
+            "first_snap=%s "
+            "brokers_ready=%s "
+            "kill_switch=%s",
+            _ca_hydrated,
+            _snap_ok,
+            _brokers_ready,
+            kill_state,
         )
 
         if not _brokers_ready:
