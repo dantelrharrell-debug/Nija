@@ -1523,7 +1523,7 @@ def _run_bot_startup_and_trading():
     # Force state machine loop alive immediately after INIT lock is released —
     # before any potentially blocking broker I/O.  This guarantees the loop is
     # running in both the fast-path (retry) and the slow-path (first boot) so a
-    # stall in broker initialisation can never prevent state machine activation.
+    # stall in broker initialization can never prevent state machine activation.
     # _ensure_state_machine_loop_started() is idempotent; a second call on the
     # fast-path (which also calls it at line ~1536) is a safe no-op.
     _ensure_state_machine_loop_started()
