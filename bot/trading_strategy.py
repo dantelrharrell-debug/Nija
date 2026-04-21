@@ -3242,8 +3242,21 @@ class TradingStrategy:
     _startup_completed: bool = False
     _startup_lock = threading.Lock()
 
-    def __init__(self):
-        """Initialize production strategy with multi-broker support."""
+    def __init__(self, broker_results=None, connected_user_brokers=None):
+        """Initialize production strategy with multi-broker support.
+
+        Parameters
+        ----------
+        broker_results:
+            Pre-connected broker results dict from the bootstrap layer.
+            When provided, TradingStrategy skips the blocking connection
+            phase and uses the already-connected brokers (Option C
+            architecture: bootstrap connects brokers, strategy assumes
+            ready state).
+        connected_user_brokers:
+            Pre-connected user broker map from the bootstrap layer.
+            When provided, the user connection phase is also skipped.
+        """
         logger.critical("TS1 entering TradingStrategy.__init__")
         logger.critical("🔥 ENTERING TradingStrategy __init__")
         with TradingStrategy._startup_lock:
@@ -4494,20 +4507,28 @@ class TradingStrategy:
                     )
                     return default
 
-            startup_delay: float = _ts_float_env("NIJA_STARTUP_DELAY_S", 2.0)
-            if startup_delay > 0:
+            if broker_results is None:
+                # Legacy path: bootstrap did not pre-connect brokers.
+                # Own the connection here.  The preferred path is to pass
+                # broker_results from the bootstrap layer (Option C).
+                startup_delay: float = _ts_float_env("NIJA_STARTUP_DELAY_S", 2.0)
+                if startup_delay > 0:
+                    logger.info(
+                        "⏱️  Startup delay: %.1fs (NIJA_STARTUP_DELAY_S) before broker connections...",
+                        startup_delay,
+                    )
+                    time.sleep(startup_delay)
+                logger.info("✅ Startup delay complete, beginning broker connections...")
+                # ── Platform broker initialisation ───────────────────────────────
+                # multi_account_manager is the SOLE initializer: it owns create +
+                # connect + register for every platform broker.  TradingStrategy
+                # is a consumer that does strategy-level post-processing only.
+                broker_results = self.multi_account_manager.initialize_platform_brokers()
+            else:
                 logger.info(
-                    "⏱️  Startup delay: %.1fs (NIJA_STARTUP_DELAY_S) before broker connections...",
-                    startup_delay,
+                    "✅ [bootstrap] Using pre-connected broker results — "
+                    "connection phase owned by bootstrap layer (Option C)"
                 )
-                time.sleep(startup_delay)
-            logger.info("✅ Startup delay complete, beginning broker connections...")
-
-            # ── Platform broker initialisation ───────────────────────────────
-            # multi_account_manager is the SOLE initializer: it owns create +
-            # connect + register for every platform broker.  TradingStrategy
-            # is a consumer that does strategy-level post-processing only.
-            broker_results = self.multi_account_manager.initialize_platform_brokers()
 
             # ── Post-processing: strategy-level wiring ────────────────────────
             # For each broker returned by initialize_platform_brokers() we:
@@ -4624,26 +4645,32 @@ class TradingStrategy:
             logger.info("=" * 70)
             logger.info("✅ Broker connection phase complete (platform init delegated to multi_account_manager)")
 
-            # Inter-account nonce-separation delay before user connections.
-            #
-            # History: 5 s was added (Jan 2026) to ensure platform Kraken
-            # nonces were "settled" before user accounts started.  With the
-            # server-anchored next_nonce() formula each manager independently
-            # anchors to server_time + offset, so cross-account nonce overlap
-            # is impossible regardless of timing.
-            # Default: 0.5 s (still serialises the init log stream neatly).
-            # Override via NIJA_USER_CONNECT_DELAY_S.
-            _user_connect_delay: float = _ts_float_env("NIJA_USER_CONNECT_DELAY_S", 0.5)
-            if _user_connect_delay > 0:
-                time.sleep(_user_connect_delay)
+            if connected_user_brokers is None:
+                # Inter-account nonce-separation delay before user connections.
+                #
+                # History: 5 s was added (Jan 2026) to ensure platform Kraken
+                # nonces were "settled" before user accounts started.  With the
+                # server-anchored next_nonce() formula each manager independently
+                # anchors to server_time + offset, so cross-account nonce overlap
+                # is impossible regardless of timing.
+                # Default: 0.5 s (still serialises the init log stream neatly).
+                # Override via NIJA_USER_CONNECT_DELAY_S.
+                _user_connect_delay: float = _ts_float_env("NIJA_USER_CONNECT_DELAY_S", 0.5)
+                if _user_connect_delay > 0:
+                    time.sleep(_user_connect_delay)
 
-            # Connect User Accounts - Load from config files
-            logger.info("=" * 70)
-            logger.info("👤 CONNECTING USER ACCOUNTS FROM CONFIG FILES")
-            logger.info("=" * 70)
+                # Connect User Accounts - Load from config files
+                logger.info("=" * 70)
+                logger.info("👤 CONNECTING USER ACCOUNTS FROM CONFIG FILES")
+                logger.info("=" * 70)
 
-            # Use the new config-based user loading system
-            connected_user_brokers = self.multi_account_manager.connect_users_from_config()
+                # Use the new config-based user loading system
+                connected_user_brokers = self.multi_account_manager.connect_users_from_config()
+            else:
+                logger.info("✅ [bootstrap] Using pre-connected user brokers from bootstrap layer")
+                logger.info("=" * 70)
+                logger.info("👤 USER ACCOUNTS PRE-CONNECTED BY BOOTSTRAP LAYER")
+                logger.info("=" * 70)
 
             # Mark each platform broker type whose users were just connected so
             # the background reconnect loop knows not to re-run connect_users_from_config
