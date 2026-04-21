@@ -59,6 +59,12 @@ _bootstrap_complete_flag = threading.Event()
 # thread hands off, so trader threads can keep running without interruption.
 _bootstrap_completed_event = threading.Event()
 
+# State machine loop thread — started once after INIT completes.
+# Runs a periodic health check that fires maybe_auto_activate() if the
+# state machine is stuck in OFF while CapitalAuthority is ready.
+_sm_loop_thread = None  # type: threading.Thread | None
+_sm_loop_lock = threading.Lock()
+
 
 @dataclass
 class _ExternalWatchdogRestartState:
@@ -1141,6 +1147,61 @@ def _verify_startup_truth_conditions(
         )
 
 
+def _run_state_machine_loop() -> None:
+    """Daemon thread: periodic trading state machine health check.
+
+    Fires ``maybe_auto_activate()`` whenever the trading state machine is in
+    the OFF state and CapitalAuthority reports ready.  Runs every 10 s
+    independently of the supervisor loop so a supervisor stall can never mask
+    a stuck state machine.
+
+    Errors are swallowed; the thread must never die due to a transient SM error.
+    """
+    _sm = None
+    _off_state = None
+    try:
+        # Deferred import: trading_state_machine may not be on sys.path until
+        # the bot/  package directory is added (happens during broker init).
+        # Importing here rather than at module level avoids an ImportError at
+        # process startup before the path is configured.
+        from bot.trading_state_machine import get_state_machine as _gsm, TradingState as _TS
+        _sm = _gsm()
+        _off_state = _TS.OFF
+    except Exception as _import_err:
+        logger.debug("[SMLoop] trading_state_machine unavailable: %s", _import_err)
+        return
+
+    while True:
+        try:
+            if _sm.get_current_state() == _off_state:
+                logger.info("[SMLoop] State machine is OFF — calling maybe_auto_activate()")
+                _sm.maybe_auto_activate()
+        except Exception as _step_err:
+            logger.debug("[SMLoop] step failed: %s", _step_err)
+        time.sleep(10)
+
+
+def _ensure_state_machine_loop_started() -> None:
+    """Start the state machine loop daemon thread exactly once after INIT.
+
+    Idempotent: safe to call on every supervisor entry (both initial boot and
+    fast-path retries).  The state machine loop thread is started before the
+    supervisor ``while True`` loop so the supervisor can never early-return
+    before the thread is alive.
+    """
+    global _sm_loop_thread
+    with _sm_loop_lock:
+        if _sm_loop_thread is not None and _sm_loop_thread.is_alive():
+            return
+        logger.info("STATE_MACHINE_LOOP_STARTING")
+        _sm_loop_thread = threading.Thread(
+            target=_run_state_machine_loop,
+            daemon=True,
+            name="StateMachineLoop",
+        )
+        _sm_loop_thread.start()
+
+
 def _rerun_supervisor_loop(state: dict) -> None:
     """
     Re-enter the supervisor loop using a previously initialised bot state.
@@ -1166,6 +1227,12 @@ def _rerun_supervisor_loop(state: dict) -> None:
         "(%d active thread(s))",
         len(_active_threads),
     )
+
+    # Ensure the state machine loop thread is live before entering the
+    # supervisor ``while True`` loop.  This guarantees the thread is started
+    # after INIT and that the supervisor loop cannot early-return before the
+    # state machine loop thread is alive.
+    _ensure_state_machine_loop_started()
 
     # Cache the state machine once at loop entry so the per-cycle health check
     # does not repeat the import on every iteration.
