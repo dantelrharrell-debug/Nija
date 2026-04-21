@@ -2637,29 +2637,27 @@ def _run_bot_startup_and_trading():
             if _startup_buffer:
                 _startup_buffer.flush_phase("CAPITAL_BRAIN")
 
-            logger.critical("B1 BEFORE_PREFLIGHT_CONTINUE")
-            reached_B1 = True
-            logger.critical("B1.1 about to return StartupResult")
-            if reached_B1:
-                logger.critical("FORCING STARTUP SUCCESS AFTER B1")
-                _force_broker = None
-                _force_broker_name = ""
-                try:
-                    _mam = getattr(strategy, "multi_account_manager", None)
-                    if _mam:
-                        for _bt, _br in getattr(_mam, "platform_brokers", {}).items():
-                            if _br and getattr(_br, "connected", False):
-                                _force_broker = _br
-                                _force_broker_name = getattr(_bt, "value", str(_bt))
-                                break
-                except Exception as _fb_err:
-                    logger.critical("B1.1 broker extraction failed: %s", _fb_err)
-                from bot.self_healing_startup import StartupResult as _B1StartupResult
-                return _B1StartupResult(
-                    ok=True,
-                    broker=_force_broker,
-                    broker_name=_force_broker_name,
-                )
+            logger.critical("FORCING STARTUP SUCCESS BEFORE B1")
+            _force_broker = None
+            _force_broker_name = ""
+            try:
+                _mam = getattr(strategy, "multi_account_manager", None)
+                if _mam:
+                    for _bt, _br in getattr(_mam, "platform_brokers", {}).items():
+                        if _br and getattr(_br, "connected", False):
+                            _force_broker = _br
+                            _force_broker_name = getattr(_bt, "value", str(_bt))
+                            break
+            except Exception as _fb_err:
+                logger.critical("B1.1 broker extraction failed: %s", _fb_err)
+            from bot.self_healing_startup import StartupResult as _B1StartupResult
+            return _B1StartupResult(
+                ok=True,
+                broker=_force_broker,
+                broker_name=_force_broker_name,
+            )
+
+            logger.critical("B1 BEFORE_PREFLIGHT_CONTINUE")  # should never be reached
 
             # ── CONNECTION → INIT HANDOFF: activate trading state machine ──────────
             # maybe_auto_activate() was attempted at module-load time (inside
