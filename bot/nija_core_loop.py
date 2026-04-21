@@ -76,15 +76,32 @@ class CycleSnapshot:
 
     Fields
     ------
-    balance         : Account equity (USD) as of cycle start.
-    current_regime  : Market regime string (e.g. "bull", "bear", "ranging").
-    daily_pnl_usd   : Running daily P&L in USD at cycle start.
-    open_positions  : Number of open positions at cycle start (pre-exits).
+    balance           : Account equity (USD) as of cycle start.
+    current_regime    : Market regime string (e.g. "bull", "bear", "ranging").
+    daily_pnl_usd     : Running daily P&L in USD at cycle start.
+    open_positions    : Number of open positions at cycle start (pre-exits).
+    cycle_id          : Unique identifier for this cycle (ISO-format timestamp +
+                        counter).  Shared across TradingStateMachine,
+                        CapitalAllocationBrain, and MABM so every sub-system
+                        decision within a single cycle is traceable to the same
+                        frozen world-view.
+    ca_is_hydrated    : CapitalAuthority.is_hydrated at cycle-start capture time.
+    ca_total_capital  : CapitalAuthority.total_capital at cycle-start capture time.
+    ca_valid_brokers  : Number of valid brokers reported by CA at capture time.
+    mabm_brokers_ready: True when all registered platform brokers were fully ready
+                        (connected + balance payload hydrated) at capture time.
     """
     balance: float
     current_regime: Optional[str]
     daily_pnl_usd: float
     open_positions: int
+    # --- shared-snapshot hardening fields (default to safe/falsy values so
+    # existing call-sites that build CycleSnapshot without them still work) ---
+    cycle_id: str = ""
+    ca_is_hydrated: bool = False
+    ca_total_capital: float = 0.0
+    ca_valid_brokers: int = 0
+    mabm_brokers_ready: bool = False
 
 # ---------------------------------------------------------------------------
 # Trading state machine + CapitalAuthority — optional; graceful fallback
@@ -113,6 +130,101 @@ except ImportError:
         _CA_LOOP_AVAILABLE = False
 
 
+# ---------------------------------------------------------------------------
+# Shared-cycle context — frozen capital snapshot captured ONCE per cycle
+# ---------------------------------------------------------------------------
+# These module-level variables are written once at the START of each trading
+# cycle (in run_trading_loop) — BEFORE _supervisor_step_state_machine() or
+# strategy.run_cycle() run — and read by TradingStateMachine,
+# CapitalAllocationBrain, and MABM so they all see an identical world-view.
+#
+# Lifecycle
+# ---------
+# 1. ``run_trading_loop()``  — clears ``_current_cycle_snapshot`` to ``None``,
+#    generates ``_current_cycle_id``, calls ``_capture_cycle_capital_state()``
+#    which fills ``_current_cycle_capital``.
+# 2. ``_supervisor_step_state_machine()`` — reads ``_current_cycle_capital``
+#    (snapshot not yet built; CycleSnapshot is constructed later).
+# 3. ``run_scan_phase()`` — builds the immutable ``CycleSnapshot`` incorporating
+#    capital fields from ``_current_cycle_capital`` and publishes it to
+#    ``_current_cycle_snapshot`` so downstream callers can access it.
+# 4. ``get_current_cycle_snapshot()`` — returns ``_current_cycle_snapshot``
+#    (``None`` during phases 1-2 above; a valid snapshot from phase 3 onward).
+#
+# ``cycle_id`` uses an empty string default (not ``None``) so it can be safely
+# logged with ``%s`` without a ``None`` guard, and compared with ``if not cid``.
+
+_current_cycle_id: str = ""
+_current_cycle_capital: Dict[str, Any] = {}
+_current_cycle_snapshot: Optional["CycleSnapshot"] = None
+
+
+def get_current_cycle_snapshot() -> Optional["CycleSnapshot"]:
+    """Return the frozen CycleSnapshot for the currently-executing cycle.
+
+    Returns ``None`` when called outside of an active run_scan_phase call or
+    when the snapshot has not yet been constructed (e.g. during
+    _supervisor_step_state_machine which runs before run_scan_phase).
+
+    External callers (CapitalAllocationBrain, MABM helpers) use this to avoid
+    duplicate CA / broker reads within a single cycle.
+    """
+    return _current_cycle_snapshot
+
+
+def _capture_cycle_capital_state() -> Dict[str, Any]:
+    """Read CapitalAuthority + MABM broker state exactly ONCE.
+
+    Called at the top of each cycle in run_trading_loop() BEFORE
+    _supervisor_step_state_machine() so both the state-machine activation
+    check and the subsequent strategy cycle see the same frozen capital view.
+
+    Returns a plain dict with keys:
+        ca_is_hydrated     (bool)
+        ca_total_capital   (float)
+        ca_valid_brokers   (int)
+        mabm_brokers_ready (bool)
+    """
+    result: Dict[str, Any] = {
+        "ca_is_hydrated": False,
+        "ca_total_capital": 0.0,
+        "ca_valid_brokers": 0,
+        "mabm_brokers_ready": False,
+    }
+
+    # ── CapitalAuthority state ────────────────────────────────────────────
+    if _CA_LOOP_AVAILABLE and _get_ca is not None:
+        try:
+            _ca = _get_ca()
+            result["ca_is_hydrated"] = bool(_ca.is_hydrated)
+            result["ca_total_capital"] = float(getattr(_ca, "total_capital", 0.0) or 0.0)
+        except Exception as _ce:
+            logger.debug("_capture_cycle_capital_state: CA read failed: %s", _ce)
+
+    # ── MABM broker readiness ─────────────────────────────────────────────
+    try:
+        try:
+            from multi_account_broker_manager import (  # type: ignore[import]
+                multi_account_broker_manager as _mabm_inst,
+            )
+        except ImportError:
+            from bot.multi_account_broker_manager import (  # type: ignore[import]
+                multi_account_broker_manager as _mabm_inst,
+            )
+        if _mabm_inst is not None and hasattr(_mabm_inst, "all_brokers_fully_ready"):
+            result["mabm_brokers_ready"] = bool(_mabm_inst.all_brokers_fully_ready())
+        # Approximate valid_brokers from platform_brokers if available
+        _pb = getattr(_mabm_inst, "_platform_brokers", None) if _mabm_inst is not None else None
+        if isinstance(_pb, dict):
+            result["ca_valid_brokers"] = max(
+                result["ca_valid_brokers"], len(_pb)
+            )
+    except Exception as _me:
+        logger.debug("_capture_cycle_capital_state: MABM read failed: %s", _me)
+
+    return result
+
+
 def _supervisor_step_state_machine() -> None:
     """Lightweight state machine health check for the supervisor loop.
 
@@ -124,6 +236,11 @@ def _supervisor_step_state_machine() -> None:
     Called once per trading cycle so a CA-ready transition is never missed
     between restarts.  All failures are swallowed — the supervisor loop must
     not stall due to a state machine error.
+
+    Uses the module-level ``_current_cycle_capital`` dict (populated by
+    run_trading_loop at cycle start) so that the state machine activation
+    check sees the SAME frozen capital snapshot that will be used by
+    run_scan_phase, CapitalAllocationBrain, and MABM within this cycle.
     """
     if not _SM_AVAILABLE or _get_state_machine is None:
         return
@@ -131,15 +248,22 @@ def _supervisor_step_state_machine() -> None:
         sm = _get_state_machine()
         if sm.get_current_state() != _TradingState.OFF:
             return
-        # Only attempt activation when CapitalAuthority reports ready
-        ca_ready = not _CA_LOOP_AVAILABLE  # proceed when CA module absent
-        if _CA_LOOP_AVAILABLE and _get_ca is not None:
-            try:
-                ca_ready = _get_ca().is_ready()
-            except Exception:
-                pass
+        # Only attempt activation when CapitalAuthority reports ready.
+        # Prefer the pre-captured cycle snapshot when available; fall back to
+        # a live read so the first cycle (before _current_cycle_capital is set)
+        # still works correctly.
+        _cap = _current_cycle_capital
+        if _cap:
+            ca_ready = _cap.get("ca_is_hydrated", False)
+        else:
+            ca_ready = not _CA_LOOP_AVAILABLE  # proceed when CA module absent
+            if _CA_LOOP_AVAILABLE and _get_ca is not None:
+                try:
+                    ca_ready = _get_ca().is_ready()
+                except Exception:
+                    pass
         if ca_ready:
-            sm.maybe_auto_activate()
+            sm.maybe_auto_activate(cycle_capital=_cap or None)
     except Exception as _sm_err:
         logger.debug("supervisor state machine step failed: %s", _sm_err)
 
@@ -573,12 +697,34 @@ class NijaCoreLoop:
         # All phases and gates receive this frozen reference so every check
         # sees a consistent view of the world even if background threads mutate
         # the underlying apex attributes while the scan is running.
+        #
+        # Capital fields (cycle_id, ca_is_hydrated, ca_total_capital,
+        # ca_valid_brokers, mabm_brokers_ready) are populated from the
+        # module-level _current_cycle_capital dict that run_trading_loop
+        # captured once at cycle start — BEFORE _supervisor_step_state_machine
+        # ran — so TradingStateMachine, CapitalAllocationBrain, and MABM all
+        # operate on the same frozen capital view.
+        _cap = _current_cycle_capital  # may be {} when called outside run_trading_loop
+        _cid = _current_cycle_id or (
+            f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-scan"
+        )
         snapshot = CycleSnapshot(
             balance=balance,
             current_regime=getattr(self.apex, "current_regime", None),
             daily_pnl_usd=getattr(self.apex, "_daily_pnl_usd", 0.0),
             open_positions=open_positions_count,
+            cycle_id=_cid,
+            ca_is_hydrated=bool(_cap.get("ca_is_hydrated", False)),
+            ca_total_capital=float(_cap.get("ca_total_capital", 0.0)),
+            ca_valid_brokers=int(_cap.get("ca_valid_brokers", 0)),
+            mabm_brokers_ready=bool(_cap.get("mabm_brokers_ready", False)),
         )
+
+        # Publish the fully-constructed snapshot so that CapitalAllocationBrain
+        # and MABM helpers can call get_current_cycle_snapshot() and get
+        # consistent data for the remainder of this cycle.
+        global _current_cycle_snapshot
+        _current_cycle_snapshot = snapshot
 
         logger.info(
             "🟢 Trading loop alive — scanning %d symbols (balance=$%.2f open=%d)",
@@ -1472,10 +1618,34 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         try:
             cycle += 1
 
+            # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
+            # Must happen BEFORE _supervisor_step_state_machine() so the state
+            # machine activation check and the subsequent strategy cycle see the
+            # same frozen capital view (ca_is_hydrated, total_capital,
+            # mabm_brokers_ready).  Writing to module-level globals is safe
+            # because run_trading_loop runs on a single thread.
+            global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
+            _current_cycle_snapshot = None  # clear previous cycle's snapshot
+            _current_cycle_id = (
+                f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{cycle:06d}"
+            )
+            _current_cycle_capital = _capture_cycle_capital_state()
+            logger.debug(
+                "🔒 [%s] capital snapshot: hydrated=%s total=$%.2f "
+                "valid_brokers=%d brokers_ready=%s",
+                _current_cycle_id,
+                _current_cycle_capital.get("ca_is_hydrated"),
+                _current_cycle_capital.get("ca_total_capital", 0.0),
+                _current_cycle_capital.get("ca_valid_brokers", 0),
+                _current_cycle_capital.get("mabm_brokers_ready"),
+            )
+
             # ── State machine health check ────────────────────────────────────
             # Ensure OFF → LIVE_ACTIVE transition is never silently missed
             # between restart cycles: if CA becomes ready after startup the
             # state machine must observe it on the very next iteration.
+            # _supervisor_step_state_machine reads _current_cycle_capital so
+            # the activation check uses the same frozen snapshot.
             _supervisor_step_state_machine()
 
             # ── Proactive broker liveness check before entering run_cycle ─────

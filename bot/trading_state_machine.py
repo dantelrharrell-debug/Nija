@@ -329,7 +329,10 @@ class TradingStateMachine:
             except Exception as e:
                 logger.error(f"❌ Error executing state callback: {e}")
 
-    def maybe_auto_activate(self) -> bool:
+    def maybe_auto_activate(
+        self,
+        cycle_capital: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
         Auto-transition from OFF → LIVE_ACTIVE when all safety gates pass.
 
@@ -346,6 +349,15 @@ class TradingStateMachine:
                   NOTE: CAPITAL_ELIGIBLE (total_capital >= MINIMUM_TRADING_BALANCE)
                   is intentionally NOT checked here — it belongs in the
                   execution / position-sizing layer only.
+
+        Parameters
+        ----------
+        cycle_capital : optional pre-captured capital snapshot dict produced by
+            ``nija_core_loop._capture_cycle_capital_state()`` at cycle start.
+            When supplied, the hard activation gate uses ``ca_is_hydrated`` and
+            ``mabm_brokers_ready`` from this dict instead of re-reading live
+            state, ensuring every sub-system in a single cycle operates on the
+            same frozen world-view.
 
         Returns:
             True  if the transition was performed (or already LIVE_ACTIVE)
@@ -400,15 +412,31 @@ class TradingStateMachine:
         _mabm_gate = _get_mabm_instance()
         _ca_gate = _get_capital_authority_instance()
 
-        _brokers_ready = (
-            _mabm_gate is None  # module absent — degrade gracefully
-            or not hasattr(_mabm_gate, "all_brokers_fully_ready")  # old MABM — skip
-            or _mabm_gate.all_brokers_fully_ready()
-        )
-        _ca_hydrated = (
-            _ca_gate is None  # module absent — degrade gracefully
-            or _ca_gate.is_hydrated
-        )
+        # When a pre-captured cycle_capital dict is available, use its frozen
+        # values instead of re-reading live MABM/CA state.  This guarantees
+        # that the state machine activation check sees the same capital
+        # snapshot that was used to build the NijaCoreLoop CycleSnapshot for
+        # this cycle, preventing inconsistency caused by background threads
+        # updating broker/CA state between the two reads.
+        if cycle_capital:
+            _brokers_ready = bool(cycle_capital.get("mabm_brokers_ready", True))
+            _ca_hydrated = bool(cycle_capital.get("ca_is_hydrated", True))
+            logger.debug(
+                "[TradingStateMachine] maybe_auto_activate using frozen cycle "
+                "snapshot: brokers_ready=%s ca_hydrated=%s",
+                _brokers_ready,
+                _ca_hydrated,
+            )
+        else:
+            _brokers_ready = (
+                _mabm_gate is None  # module absent — degrade gracefully
+                or not hasattr(_mabm_gate, "all_brokers_fully_ready")  # old MABM — skip
+                or _mabm_gate.all_brokers_fully_ready()
+            )
+            _ca_hydrated = (
+                _ca_gate is None  # module absent — degrade gracefully
+                or _ca_gate.is_hydrated
+            )
         _snap_ok = self._first_snap_accepted
 
         # Emit the mandatory proof log so every path through activation is visible.

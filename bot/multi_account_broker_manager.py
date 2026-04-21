@@ -2254,7 +2254,28 @@ class MultiAccountBrokerManager:
         :func:`is_broker_fully_ready` function.  Use it to gate
         :class:`~bot.capital_allocation_brain.CapitalAllocationBrain` bootstrap
         and any other component that must not run until all brokers are healthy.
+
+        When called during an active NijaCoreLoop cycle the method checks
+        ``nija_core_loop.get_current_cycle_snapshot()`` first.  If a frozen
+        snapshot is available its ``mabm_brokers_ready`` field is returned
+        immediately, ensuring every MABM readiness check within a single cycle
+        uses the same world-view captured at cycle start.
+
+        Falls back to the live per-broker check when no cycle snapshot is set.
         """
+        # ── Fast path: use frozen cycle snapshot when available ───────────
+        try:
+            try:
+                from nija_core_loop import get_current_cycle_snapshot as _get_snap  # type: ignore[import]
+            except ImportError:
+                from bot.nija_core_loop import get_current_cycle_snapshot as _get_snap  # type: ignore[import]
+            _snap = _get_snap()
+            if _snap is not None:
+                return bool(_snap.mabm_brokers_ready)
+        except Exception:
+            pass
+
+        # ── Live check (bootstrap or outside run_trading_loop) ────────────
         brokers = list(self._platform_brokers.values())
         if not brokers:
             return False
