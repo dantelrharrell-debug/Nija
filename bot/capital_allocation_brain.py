@@ -438,6 +438,20 @@ class CapitalAllocationBrain:
                                     _src,
                                     float(_first_snap.get("total_capital", 0.0)),
                                 )
+                                # Propagate to the trading state machine so the hard
+                                # activation gate in maybe_auto_activate() passes.
+                                try:
+                                    try:
+                                        from bot.trading_state_machine import get_state_machine as _get_sm
+                                    except ImportError:
+                                        from trading_state_machine import get_state_machine as _get_sm  # type: ignore[import]
+                                    _get_sm().set_first_snap_accepted(True)
+                                except Exception as _sm_err:
+                                    logger.warning(
+                                        "[CAPITAL_BRAIN] could not propagate first_snap_accepted "
+                                        "to TradingStateMachine: %s",
+                                        _sm_err,
+                                    )
                             else:
                                 logger.critical(
                                     "[CAPITAL_BRAIN] FIRST_VALID_CAPITAL_SNAPSHOT_REJECTED — "
@@ -452,6 +466,19 @@ class CapitalAllocationBrain:
                             # dict: accept without snapshot-source validation so that
                             # older MABM versions continue to work.
                             _first_snap_accepted = True
+                            # Propagate to the trading state machine for the hard gate.
+                            try:
+                                try:
+                                    from bot.trading_state_machine import get_state_machine as _get_sm
+                                except ImportError:
+                                    from trading_state_machine import get_state_machine as _get_sm  # type: ignore[import]
+                                _get_sm().set_first_snap_accepted(True)
+                            except Exception as _sm_err:
+                                logger.warning(
+                                    "[CAPITAL_BRAIN] could not propagate first_snap_accepted "
+                                    "to TradingStateMachine: %s",
+                                    _sm_err,
+                                )
             except Exception as _bs_exc:
                 logger.warning("[BOOTSTRAP] forced snapshot attempt failed: %s", _bs_exc)
             if self.capital_authority.is_hydrated and _first_snap_accepted:
