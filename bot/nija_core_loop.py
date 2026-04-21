@@ -184,12 +184,14 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
         ca_total_capital   (float)
         ca_valid_brokers   (int)
         mabm_brokers_ready (bool)
+        snapshot_source    (str)  "live_exchange" | "placeholder"
     """
     result: Dict[str, Any] = {
         "ca_is_hydrated": False,
         "ca_total_capital": 0.0,
         "ca_valid_brokers": 0,
         "mabm_brokers_ready": False,
+        "snapshot_source": "placeholder",
     }
 
     # ── CapitalAuthority state ────────────────────────────────────────────
@@ -219,6 +221,12 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
             result["ca_valid_brokers"] = max(
                 result["ca_valid_brokers"], len(_pb)
             )
+        # Derive snapshot_source from the MABM's last cached refresh result.
+        # "_capital_last_valid_brokers" is updated whenever refresh_capital_authority
+        # returns data from a real exchange call.  "live_exchange" mirrors the value
+        # MABM sets when at least one connected broker contributed a balance payload.
+        _last_vb = int(getattr(_mabm_inst, "_capital_last_valid_brokers", 0) or 0) if _mabm_inst is not None else 0
+        result["snapshot_source"] = "live_exchange" if _last_vb > 0 else "placeholder"
     except Exception as _me:
         logger.debug("_capture_cycle_capital_state: MABM read failed: %s", _me)
 
