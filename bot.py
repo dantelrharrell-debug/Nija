@@ -3370,7 +3370,8 @@ def main():
                 else:
                     logger.critical(
                         "💥 [Supervisor] Bootstrap kernel (BotStartup) thread has exited "
-                        "WITHOUT completing bootstrap — "
+                        "WITHOUT completing bootstrap."
+                    )
             # Distinguish between successful bootstrap completion and bootstrap failure.
             # Thread lifecycle is independent of system lifecycle: trader threads
             # continue running after the bootstrap thread hands off control.
