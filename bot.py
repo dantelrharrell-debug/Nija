@@ -47,6 +47,12 @@ _initialized_state_lock = threading.RLock()
 # it is rejected immediately instead of racing through shared init state.
 _BOOTSTRAP_SINGLE_OWNER_LOCK = threading.Lock()
 
+# Set once bootstrap completes successfully (FSM reaches RUNNING_SUPERVISED).
+# The outer supervisor uses this to distinguish a normal "bootstrap done, trading
+# threads are live" thread exit from a genuine bootstrap failure — only the
+# latter should terminate the process.
+_bootstrap_complete_flag = threading.Event()
+
 
 @dataclass
 class _ExternalWatchdogRestartState:
@@ -3055,6 +3061,11 @@ def _run_bot_startup_and_trading():
                 f"{len(_active_threads)} trader thread(s) started; supervisor loop active",
             )
             logger.info("🚀 FSM STATE: RUNNING_SUPERVISED")
+            # Signal that bootstrap completed successfully.  The outer supervisor
+            # loop uses this flag so it can distinguish a normal "thread exited
+            # after handing off to trader threads" from a genuine boot failure.
+            _bootstrap_complete_flag.set()
+            logger.info("✅ [Bootstrap] Bootstrap complete — control handed to supervisor")
 
             # FIX OPTION A: Force activation check AFTER INIT completes.
             # maybe_auto_activate() was called earlier (during the capital gate
@@ -3321,25 +3332,39 @@ def main():
 
             # Observer-only: BotStartup owns its own retry loop via the single-
             # owner kernel.  If the thread exits it means the kernel itself
-            # terminated (clean shutdown, fatal nonce, or connection-loop
-            # kill-switch).  Spawning a second BotStartup here would create a
-            # concurrent bootstrap sequence — exactly the race we eliminated.
-            # Instead, exit and let the external watchdog restart the process
-            # with a clean slate.
+            # terminated.  We distinguish two cases:
+            #
+            #   BOOTSTRAP_COMPLETE  – _bootstrap_complete_flag is set, meaning
+            #     the bot reached RUNNING_SUPERVISED and handed control to the
+            #     trader threads.  The thread exiting here is expected; the outer
+            #     supervisor keeps the process alive so those threads continue.
+            #
+            #   BOOTSTRAP_FAILED    – _bootstrap_complete_flag is NOT set,
+            #     meaning startup never succeeded.  Exit so an external watchdog
+            #     (Railway / Docker / systemd) can restart with a clean slate.
             if not startup_thread.is_alive():
-                logger.critical(
-                    "💥 [Supervisor] Bootstrap kernel (BotStartup) thread has exited — "
-                    "terminating process so an external process manager (Railway, systemd, "
-                    "Docker restart policy) can restart with a clean state. "
-                    "If no external watchdog is configured the process will stay stopped."
-                )
-                if _BOOTSTRAP_FSM_AVAILABLE:
-                    _bfsm_transition(
-                        _BootstrapState.SHUTDOWN,
-                        "bootstrap kernel thread exited",
+                if _bootstrap_complete_flag.is_set():
+                    logger.info(
+                        "✅ [Supervisor] Bootstrap complete — BotStartup thread has exited "
+                        "after handing control to trader threads. "
+                        "Process remains alive; supervisor continues."
                     )
-                _release_process_lock()
-                sys.exit(1)
+                    # Thread exit = state update only.  Continue supervising.
+                else:
+                    logger.critical(
+                        "💥 [Supervisor] Bootstrap kernel (BotStartup) thread has exited "
+                        "WITHOUT completing bootstrap — "
+                        "terminating process so an external process manager (Railway, systemd, "
+                        "Docker restart policy) can restart with a clean state. "
+                        "If no external watchdog is configured the process will stay stopped."
+                    )
+                    if _BOOTSTRAP_FSM_AVAILABLE:
+                        _bfsm_transition(
+                            _BootstrapState.SHUTDOWN,
+                            "bootstrap kernel thread exited without completing bootstrap",
+                        )
+                    _release_process_lock()
+                    sys.exit(1)
             
             # Log periodic status
             if supervisor_cycle % 12 == 0:  # Every hour at 300s intervals
