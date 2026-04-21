@@ -333,11 +333,12 @@ class TradingStateMachine:
         """
         Auto-transition from OFF → LIVE_ACTIVE when all safety gates pass.
 
-        Gates (all must be true):
+        Gates (evaluated in this exact order — all must be true):
           Gate 0. Current state is OFF
-          Gate 1. Environment variable LIVE_CAPITAL_VERIFIED is truthy
+          Gate 1. No active kill switch (fast-fail before any env-var reads)
+          Gate 2. Environment variable LIVE_CAPITAL_VERIFIED is truthy
                   (operator master switch — TRADING_ENABLED concept)
-          Gate 2. ``_capital_readiness_gate()`` passes:
+          Gate 3. ``_capital_readiness_gate()`` passes:
                   a. CA_READY — CapitalAuthority not stale AND is_hydrated=True
                                 (system has data; balance magnitude is not checked here)
                   b. EXECUTION_PIPELINE_HEALTHY — ExecutionRouter has no
@@ -345,7 +346,6 @@ class TradingStateMachine:
                   NOTE: CAPITAL_ELIGIBLE (total_capital >= MINIMUM_TRADING_BALANCE)
                   is intentionally NOT checked here — it belongs in the
                   execution / position-sizing layer only.
-          Gate 3. No active kill switch
 
         Returns:
             True  if the transition was performed (or already LIVE_ACTIVE)
@@ -365,23 +365,7 @@ class TradingStateMachine:
             )
             return False
 
-        # Gate 1: LIVE_CAPITAL_VERIFIED (operator master switch)
-        lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
-        if lcv not in ("true", "1", "yes", "enabled"):
-            logger.info(
-                "🔒 Auto-activate blocked: LIVE_CAPITAL_VERIFIED is not set to true "
-                "(current value: %r).  Set it in your .env to enable live trading.",
-                lcv,
-            )
-            return False
-
-        # Gate 2: CA_READY + EXECUTION_PIPELINE_HEALTHY
-        ready, reason = _capital_readiness_gate()
-        if not ready:
-            logger.info("🔒 Auto-activate blocked by capital readiness gate: %s", reason)
-            return False
-
-        # Gate 3: kill switch must be inactive
+        # Gate 1: kill switch must be inactive (checked first — fast fail)
         try:
             from kill_switch import get_kill_switch
             if get_kill_switch().is_active():
@@ -391,6 +375,22 @@ class TradingStateMachine:
                 return False
         except Exception as _ks_err:
             logger.debug("maybe_auto_activate: could not check kill switch: %s", _ks_err)
+
+        # Gate 2: LIVE_CAPITAL_VERIFIED (operator master switch)
+        lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+        if lcv not in ("true", "1", "yes", "enabled"):
+            logger.info(
+                "🔒 Auto-activate blocked: LIVE_CAPITAL_VERIFIED is not set to true "
+                "(current value: %r).  Set it in your .env to enable live trading.",
+                lcv,
+            )
+            return False
+
+        # Gate 3: CA_READY + EXECUTION_PIPELINE_HEALTHY
+        ready, reason = _capital_readiness_gate()
+        if not ready:
+            logger.info("🔒 Auto-activate blocked by capital readiness gate: %s", reason)
+            return False
 
         # ── Hard activation gate ───────────────────────────────────────────
         # All three conditions below must be True before LIVE_ACTIVE is set.
