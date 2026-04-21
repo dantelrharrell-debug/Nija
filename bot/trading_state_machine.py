@@ -471,8 +471,9 @@ class TradingStateMachine:
                             _inline_src,
                         )
             except Exception as _inline_err:
-                logger.debug(
-                    "[TradingStateMachine] inline snap acceptance attempt failed: %s",
+                logger.warning(
+                    "[TradingStateMachine] inline snap acceptance attempt failed: %s"
+                    " — will retry next cycle",
                     _inline_err,
                 )
 
