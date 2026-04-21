@@ -156,6 +156,7 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
     ],
     BootstrapState.PLATFORM_READY: [
         BootstrapState.CAPITAL_REFRESHING,
+        BootstrapState.BOOT_FAILED_RETRY,
     ],
     BootstrapState.CAPITAL_REFRESHING: [
         BootstrapState.CAPITAL_READY,
@@ -163,6 +164,7 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
     ],
     BootstrapState.CAPITAL_READY: [
         BootstrapState.THREADS_STARTING,
+        BootstrapState.BOOT_FAILED_RETRY,
     ],
     BootstrapState.THREADS_STARTING: [
         BootstrapState.RUNNING_SUPERVISED,

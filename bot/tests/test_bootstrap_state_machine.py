@@ -198,6 +198,70 @@ class TestResetForRetry(unittest.TestCase):
         fsm.reset_for_retry("supervisor crashed")
         self.assertEqual(fsm.state, BootstrapState.BOOT_FAILED_RETRY)
 
+    def test_reset_from_capital_ready(self):
+        """reset_for_retry from CAPITAL_READY must succeed (PREFLIGHT→SUPERVISOR stuck fix)."""
+        fsm = _fresh()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+            BootstrapState.CAPITAL_REFRESHING,
+            BootstrapState.CAPITAL_READY,
+        )
+        fsm.reset_for_retry("maybe_auto_activate failed at CAPITAL_READY")
+        self.assertEqual(fsm.state, BootstrapState.BOOT_FAILED_RETRY)
+
+    def test_reset_from_platform_ready(self):
+        """reset_for_retry from PLATFORM_READY must succeed."""
+        fsm = _fresh()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+        )
+        fsm.reset_for_retry("failure at PLATFORM_READY")
+        self.assertEqual(fsm.state, BootstrapState.BOOT_FAILED_RETRY)
+
+    def test_capital_ready_retry_then_full_happy_path(self):
+        """CAPITAL_READY → BOOT_FAILED_RETRY → PLATFORM_CONNECTING → ... → RUNNING_SUPERVISED."""
+        fsm = _fresh()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+            BootstrapState.CAPITAL_REFRESHING,
+            BootstrapState.CAPITAL_READY,
+        )
+        # Simulate a failure at the PREFLIGHT→SUPERVISOR boundary
+        fsm.reset_for_retry("maybe_auto_activate blocked")
+        self.assertEqual(fsm.state, BootstrapState.BOOT_FAILED_RETRY)
+        # Full retry path from BOOT_FAILED_RETRY
+        _fast_forward(
+            fsm,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+            BootstrapState.CAPITAL_REFRESHING,
+            BootstrapState.CAPITAL_READY,
+            BootstrapState.THREADS_STARTING,
+            BootstrapState.RUNNING_SUPERVISED,
+        )
+        self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
+
     def test_reset_noop_from_shutdown(self):
         fsm = _fresh()
         _fast_forward(
