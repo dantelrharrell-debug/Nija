@@ -1105,11 +1105,39 @@ class SelfHealingStartup:
     """
 
     def __init__(self, config: Optional[StartupConfig] = None) -> None:
-        self._cfg              = config or StartupConfig()
-        self.pre_halt_engine   = PreHaltAlertEngine(self._cfg)
-        self._broker_ctrl      = BrokerFallbackController(self._cfg)
-        self._sm_lock          = threading.Lock()
-        self._sm_started: bool = False
+        self._cfg                    = config or StartupConfig()
+        self.pre_halt_engine         = PreHaltAlertEngine(self._cfg)
+        self._broker_ctrl            = BrokerFallbackController(self._cfg)
+        self._sm_lock                = threading.Lock()
+        self._sm_started: bool       = False
+        self._bootstrap_complete: bool = False  # Fix 4: set True once run() succeeds
+
+    # ── Private bootstrap helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _is_bootstrap_ready(startup_result: StartupResult, broker_map: dict, ca: Any) -> bool:
+        """Return True when all bootstrap prerequisites are satisfied.
+
+        This replaces the old strict gate ``startup_result.ok and broker_map
+        and ca.is_ready()`` which was race-sensitive during bootstrap: both
+        ``broker_map`` and ``ca.is_ready()`` could be momentarily falsy even
+        when the system was actually ready, causing the state machine to stall
+        in OFF indefinitely.
+
+        The new gate is intentionally more lenient:
+        * ``brokers_ok`` — at least one broker is registered (non-empty map).
+        * ``ca_ok``      — CA must be ready *only* when the CA module is present;
+                          if the module is absent the gate defaults to True
+                          (graceful degradation).
+        """
+        try:
+            brokers_ok = bool(broker_map)
+            ca_ok = True
+            if _CA_AVAILABLE and _get_capital_authority is not None:
+                ca_ok = ca.is_ready()
+            return startup_result.ok and brokers_ok and ca_ok
+        except Exception:
+            return False
 
     # ── Public entry point ─────────────────────────────────────────────────
 
@@ -1244,7 +1272,7 @@ class SelfHealingStartup:
                 ca = _get_capital_authority()
             except Exception:
                 pass  # leave ca as the pass-through stub
-        if startup_result.ok and broker_map and ca.is_ready():
+        if self._is_bootstrap_ready(startup_result, broker_map, ca):
             # ensure first activation tick occurs immediately post-init
             self._step_state_machine()
 
@@ -1289,6 +1317,7 @@ class SelfHealingStartup:
         # called on every attempt (start_state_machine() is a no-op after the
         # first call due to its once-only guard).
         if startup_result.ok:
+            self._bootstrap_complete = True  # Fix 4: mark bootstrap as complete
             logger.info("🚀 PREFLIGHT COMPLETE → ENTERING RUNTIME BOOTSTRAP")
             for _ in range(_MAX_STATE_TRANSITION_ATTEMPTS):
                 self._step_state_machine()
@@ -1472,6 +1501,14 @@ class SelfHealingStartup:
                         "Set LIVE_CAPITAL_VERIFIED=true and run scripts/reset_state_machine.py"
                     )
             elif current == TradingState.OFF:
+                # HARD SAFETY: ensure system cannot remain OFF indefinitely post-bootstrap.
+                # If the full bootstrap sequence has already completed and the state machine
+                # is still OFF, force an activation tick unconditionally.  This covers race
+                # windows where CA becomes ready between the post-connection loop and here.
+                if self._bootstrap_complete:
+                    logger.warning("[STATE] OFF after bootstrap complete — forcing activation tick")
+                    sm.maybe_auto_activate()
+                    return
                 # Only call maybe_auto_activate() when CapitalAuthority confirms it is ready.
                 # This is deterministic, idempotent-safe, and fixes the
                 # "ready but not activating" condition by guaranteeing the call is

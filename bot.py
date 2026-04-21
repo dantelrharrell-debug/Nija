@@ -2911,8 +2911,8 @@ def _run_bot_startup_and_trading():
                     "✅ POST-INIT: state machine step complete after bootstrap"
                 )
             except Exception as _post_init_sm_err:
-                logger.warning(
-                    "POST-INIT: state machine step failed after bootstrap: %s",
+                logger.critical(
+                    "[BOOT] post-init state machine step failed: %s",
                     _post_init_sm_err,
                 )
 
