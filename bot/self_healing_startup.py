@@ -1115,7 +1115,7 @@ class SelfHealingStartup:
     # ── Private bootstrap helpers ──────────────────────────────────────────
 
     @staticmethod
-    def _is_bootstrap_ready(startup_result: "StartupResult", broker_map: dict, ca: Any) -> bool:
+    def _is_bootstrap_ready(startup_result: StartupResult, broker_map: dict, ca: Any) -> bool:
         """Return True when all bootstrap prerequisites are satisfied.
 
         This replaces the old strict gate ``startup_result.ok and broker_map
@@ -1505,7 +1505,7 @@ class SelfHealingStartup:
                 # If the full bootstrap sequence has already completed and the state machine
                 # is still OFF, force an activation tick unconditionally.  This covers race
                 # windows where CA becomes ready between the post-connection loop and here.
-                if getattr(self, "_bootstrap_complete", False):
+                if self._bootstrap_complete:
                     logger.warning("[STATE] OFF after bootstrap complete — forcing activation tick")
                     sm.maybe_auto_activate()
                     return
