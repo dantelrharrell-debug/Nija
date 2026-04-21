@@ -871,16 +871,16 @@ def activation_invariant(
         or not hasattr(mabm, "all_brokers_fully_ready")
         or bool(mabm.all_brokers_fully_ready())
     )
-    valid_brokers = int(float(cycle_capital.get("ca_valid_brokers", 0)))
+    valid_brokers = int(cycle_capital.get("ca_valid_brokers", 0))
     snap_source = str(cycle_capital.get("snapshot_source", ""))
-    return all([
+    return all((
         sm._first_snap_accepted,
         ca_hydrated,
         ca_not_stale,
         brokers_ready,
         valid_brokers > 0,
         snap_source == "live_exchange",
-    ])
+    ))
 
 
 # Global singleton instance
