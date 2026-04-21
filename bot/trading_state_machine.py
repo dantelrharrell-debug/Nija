@@ -395,26 +395,8 @@ class TradingStateMachine:
         # Any False raises RuntimeError immediately so the exact blocker
         # appears in logs rather than the bot hanging in silent ambiguity.
 
-        # Resolve MABM for broker-readiness check (graceful when unavailable)
-        _mabm_gate = None
-        try:
-            try:
-                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm_gate
-            except ImportError:
-                from multi_account_broker_manager import multi_account_broker_manager as _mabm_gate  # type: ignore[import]
-        except ImportError:
-            _mabm_gate = None
-
-        # Resolve CapitalAuthority for hydration check (graceful when unavailable)
-        _ca_gate = None
-        try:
-            try:
-                from bot.capital_authority import get_capital_authority as _get_ca_gate
-            except ImportError:
-                from capital_authority import get_capital_authority as _get_ca_gate  # type: ignore[import]
-            _ca_gate = _get_ca_gate()
-        except ImportError:
-            _ca_gate = None
+        _mabm_gate = _get_mabm_instance()
+        _ca_gate = _get_capital_authority_instance()
 
         _brokers_ready = (
             _mabm_gate is None  # module absent — degrade gracefully
@@ -497,6 +479,38 @@ class TradingStateMachine:
                 'can_make_broker_calls': self.can_make_broker_calls(),
                 'recent_history': self.get_state_history(5)
             }
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers shared by maybe_auto_activate and _capital_readiness_gate
+# ---------------------------------------------------------------------------
+
+def _get_mabm_instance():
+    """Return the multi_account_broker_manager singleton or None if unavailable."""
+    try:
+        from bot.multi_account_broker_manager import multi_account_broker_manager as _m
+        return _m
+    except ImportError:
+        pass
+    try:
+        from multi_account_broker_manager import multi_account_broker_manager as _m  # type: ignore[import]
+        return _m
+    except ImportError:
+        return None
+
+
+def _get_capital_authority_instance():
+    """Return the CapitalAuthority singleton or None if unavailable."""
+    try:
+        from bot.capital_authority import get_capital_authority as _f
+        return _f()
+    except ImportError:
+        pass
+    try:
+        from capital_authority import get_capital_authority as _f  # type: ignore[import]
+        return _f()
+    except ImportError:
+        return None
 
 
 # ---------------------------------------------------------------------------
