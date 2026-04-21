@@ -375,6 +375,10 @@ class TradePermissionEngine:
                 f"capital below threshold "
                 f"(${balance:.2f} < ${self._capital_threshold:.2f})"
             )
+            logger.critical(
+                "🚫 CAPITAL GATE BLOCKING TRADE: %s — balance=$%.2f threshold=$%.2f",
+                symbol, balance, self._capital_threshold,
+            )
         elif not liquidity_ok:
             final = "BLOCKED"
             block_reason = f"liquidity filter ({liquidity_detail})"

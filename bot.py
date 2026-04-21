@@ -2704,7 +2704,7 @@ def _run_bot_startup_and_trading():
             if _startup_buffer:
                 _startup_buffer.flush_phase("CAPITAL_BRAIN")
 
-            logger.critical("B1 BEFORE_PREFLIGHT_CONTINUE")
+            logger.critical("B1 REACHED - CHECKING AUTO ACTIVATE")
 
             # ── CONNECTION → INIT HANDOFF: activate trading state machine ──────────
             # maybe_auto_activate() was attempted at module-load time (inside
@@ -2716,7 +2716,15 @@ def _run_bot_startup_and_trading():
             # are ever placed — the state machine handoff failure described in FIX #1.
             from bot.trading_state_machine import get_state_machine as _get_tsm_init
             _tsm_init = _get_tsm_init()
+            logger.critical(
+                "AUTO ACTIVATE PRE-STATE: %s (LIVE_CAPITAL_VERIFIED=%r)",
+                _tsm_init.get_current_state().value,
+                os.environ.get("LIVE_CAPITAL_VERIFIED", ""),
+            )
             if _tsm_init.maybe_auto_activate():
+                logger.critical(
+                    "AUTO ACTIVATE RESULT: %s", _tsm_init.get_current_state().value
+                )
                 logger.critical(
                     "✅ INIT PHASE: state machine transitioned to LIVE_ACTIVE"
                 )

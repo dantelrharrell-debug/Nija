@@ -392,6 +392,11 @@ class TradingStateMachine:
                 "no kill switch active",
             )
             logger.info("✅ Auto-activated: state transitioned OFF → LIVE_ACTIVE")
+            logger.critical(
+                "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
+                self._current_state.value,
+                self.is_live_trading_active(),
+            )
             return True
         except Exception as exc:
             logger.error("❌ Auto-activate transition failed: %s", exc)
