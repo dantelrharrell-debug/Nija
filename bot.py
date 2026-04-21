@@ -1516,6 +1516,7 @@ def _run_bot_startup_and_trading():
         raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
     try:
         print("INIT_LOCK_ACQUIRED", flush=True)
+        logger.critical("INIT_LOCK_ACQUIRED_CONTINUING_TO_PREFLIGHT")
         _state_copy = dict(_initialized_state)
     finally:
         _initialized_state_lock.release()
@@ -1530,6 +1531,9 @@ def _run_bot_startup_and_trading():
         # Ensure the completion flag is set so the outer supervisor correctly
         # treats any future thread exit as a hand-off, not a crash.
         _bootstrap_completed_event.set()
+        # Guarantee the state machine loop is alive before entering the supervisor
+        # so a late-start or missed activation cannot silently skip runtime execution.
+        _ensure_state_machine_loop_started()
         _rerun_supervisor_loop(_state_copy)
         return
 
