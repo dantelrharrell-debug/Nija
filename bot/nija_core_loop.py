@@ -137,6 +137,22 @@ except ImportError:
 # cycle (in run_trading_loop) — BEFORE _supervisor_step_state_machine() or
 # strategy.run_cycle() run — and read by TradingStateMachine,
 # CapitalAllocationBrain, and MABM so they all see an identical world-view.
+#
+# Lifecycle
+# ---------
+# 1. ``run_trading_loop()``  — clears ``_current_cycle_snapshot`` to ``None``,
+#    generates ``_current_cycle_id``, calls ``_capture_cycle_capital_state()``
+#    which fills ``_current_cycle_capital``.
+# 2. ``_supervisor_step_state_machine()`` — reads ``_current_cycle_capital``
+#    (snapshot not yet built; CycleSnapshot is constructed later).
+# 3. ``run_scan_phase()`` — builds the immutable ``CycleSnapshot`` incorporating
+#    capital fields from ``_current_cycle_capital`` and publishes it to
+#    ``_current_cycle_snapshot`` so downstream callers can access it.
+# 4. ``get_current_cycle_snapshot()`` — returns ``_current_cycle_snapshot``
+#    (``None`` during phases 1-2 above; a valid snapshot from phase 3 onward).
+#
+# ``cycle_id`` uses an empty string default (not ``None``) so it can be safely
+# logged with ``%s`` without a ``None`` guard, and compared with ``if not cid``.
 
 _current_cycle_id: str = ""
 _current_cycle_capital: Dict[str, Any] = {}
@@ -189,16 +205,16 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
     try:
         try:
             from multi_account_broker_manager import (  # type: ignore[import]
-                multi_account_broker_manager as _mabm_mod,
+                multi_account_broker_manager as _mabm_inst,
             )
         except ImportError:
             from bot.multi_account_broker_manager import (  # type: ignore[import]
-                multi_account_broker_manager as _mabm_mod,
+                multi_account_broker_manager as _mabm_inst,
             )
-        if _mabm_mod is not None and hasattr(_mabm_mod, "all_brokers_fully_ready"):
-            result["mabm_brokers_ready"] = bool(_mabm_mod.all_brokers_fully_ready())
+        if _mabm_inst is not None and hasattr(_mabm_inst, "all_brokers_fully_ready"):
+            result["mabm_brokers_ready"] = bool(_mabm_inst.all_brokers_fully_ready())
         # Approximate valid_brokers from platform_brokers if available
-        _pb = getattr(_mabm_mod, "_platform_brokers", None) if _mabm_mod is not None else None
+        _pb = getattr(_mabm_inst, "_platform_brokers", None) if _mabm_inst is not None else None
         if isinstance(_pb, dict):
             result["ca_valid_brokers"] = max(
                 result["ca_valid_brokers"], len(_pb)

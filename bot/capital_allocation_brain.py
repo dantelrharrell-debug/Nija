@@ -482,7 +482,7 @@ class CapitalAllocationBrain:
         """
         # ── Fast path: use frozen cycle snapshot when available ───────────
         # Only valid AFTER bootstrap (ca_is_hydrated must be True in the snap).
-        if getattr(self, "_bootstrap_phase", True) is False:
+        if not getattr(self, "_bootstrap_phase", True):
             try:
                 try:
                     from nija_core_loop import get_current_cycle_snapshot as _get_snap  # type: ignore[import]
