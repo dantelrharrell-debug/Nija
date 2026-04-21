@@ -1430,128 +1430,17 @@ class SelfHealingStartup:
             self._step_state_machine()
 
     def _step_state_machine(self) -> None:
-        """Auto-reset EMERGENCY_STOP → OFF → LIVE_ACTIVE when safe to do so."""
-        logger.critical("B2 ENTERING_NEXT_PREFLIGHT_STAGE")
-        if not _STATE_MACHINE_AVAILABLE:
-            return
+        """Drive the state machine forward every scheduler tick."""
+        logger.critical("STEP_STATE_MACHINE_ENTERED")
 
-        # Pre-warm: if brokers are already registered, refresh CapitalAuthority
-        # so the CA_READY gate sees a fresh snapshot rather than a stale one.
-        # This is a no-op when called before any broker has been registered
-        # (refresh_capital_authority gates on has_registered_brokers()), and a
-        # genuine refresh when called after broker connection — the intended use.
-        if _MABM_AVAILABLE and _mabm is not None:
-            try:
-                if hasattr(_mabm, "has_registered_brokers") and _mabm.has_registered_brokers():
-                    logger.info(
-                        "SelfHealingStartup: refreshing CapitalAuthority before state machine step"
-                    )
-                    _mabm.refresh_capital_authority(trigger="state_machine_gate")
-            except Exception as exc:
-                logger.warning(
-                    "SelfHealingStartup: CA pre-warm before state machine step failed (%s: %s)"
-                    " — state machine will evaluate CA_READY against potentially stale data",
-                    type(exc).__name__, exc,
-                )
+        sm = get_state_machine()
+        if sm is None:
+            raise RuntimeError("No TradingStateMachine available")
 
-        try:
-            sm      = get_state_machine()
-            current = sm.get_current_state()
+        logger.critical("CALLING_MAYBE_AUTO_ACTIVATE")
+        sm.maybe_auto_activate()   # force this every scheduler tick
 
-            if current == TradingState.EMERGENCY_STOP:
-                lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower()
-                if lcv in ("true", "1", "yes", "enabled"):
-                    # Check three-condition capital readiness before resetting
-                    try:
-                        from trading_state_machine import _capital_readiness_gate
-                    except ImportError:
-                        try:
-                            from bot.trading_state_machine import _capital_readiness_gate  # type: ignore[import]
-                        except ImportError:
-                            _capital_readiness_gate = None  # type: ignore[assignment]
-
-                    cap_ready, cap_reason = (
-                        _capital_readiness_gate()
-                        if _capital_readiness_gate is not None
-                        else (True, "gate unavailable — skipping")
-                    )
-                    if not cap_ready:
-                        logger.warning(
-                            "SelfHealingStartup: EMERGENCY_STOP + LIVE_CAPITAL_VERIFIED=true "
-                            "but capital readiness gate not satisfied: %s — "
-                            "leaving in EMERGENCY_STOP until capital is ready",
-                            cap_reason,
-                        )
-                        return
-                    logger.warning(
-                        "SelfHealingStartup: state machine is EMERGENCY_STOP + "
-                        "LIVE_CAPITAL_VERIFIED=true + capital ready — auto-resetting to OFF"
-                    )
-                    sm.transition_to(
-                        TradingState.OFF,
-                        "Auto-reset by SelfHealingStartup: LIVE_CAPITAL_VERIFIED=true, "
-                        "capital readiness confirmed, "
-                        "EMERGENCY_STOP was set by a prior test trigger",
-                    )
-                    sm.maybe_auto_activate()
-                else:
-                    logger.warning(
-                        "SelfHealingStartup: state machine is EMERGENCY_STOP but "
-                        "LIVE_CAPITAL_VERIFIED is not true — leaving in EMERGENCY_STOP. "
-                        "Set LIVE_CAPITAL_VERIFIED=true and run scripts/reset_state_machine.py"
-                    )
-            elif current == TradingState.OFF:
-                # HARD SAFETY: ensure system cannot remain OFF indefinitely post-bootstrap.
-                # If the full bootstrap sequence has already completed and the state machine
-                # is still OFF, force an activation tick unconditionally.  This covers race
-                # windows where CA becomes ready between the post-connection loop and here.
-                if self._bootstrap_complete:
-                    logger.warning("[STATE] OFF after bootstrap complete — forcing activation tick")
-                    sm.maybe_auto_activate()
-                    return
-                # Only call maybe_auto_activate() when CapitalAuthority confirms it is ready.
-                # This is deterministic, idempotent-safe, and fixes the
-                # "ready but not activating" condition by guaranteeing the call is
-                # made exactly when the CA gate will pass (not before, not never).
-                # Logs a hard diagnostic when CA is not ready so this condition is never silent.
-                _ca_is_ready = not _CA_AVAILABLE  # proceed when CA module absent
-                if _CA_AVAILABLE and _get_capital_authority is not None:
-                    try:
-                        _ca = _get_capital_authority()
-                        _ca_is_ready = _ca.is_ready()
-                        if not _ca_is_ready:
-                            _broker_keys: list[str] = []
-                            if _MABM_AVAILABLE and _mabm is not None:
-                                try:
-                                    _broker_keys = list(
-                                        getattr(_mabm, "platform_brokers", {}).keys()
-                                    )
-                                except Exception:
-                                    pass
-                            logger.critical(
-                                "EXECUTION BLOCKED: CA_READY=%s, is_hydrated=%s, brokers=%s — "
-                                "ensure brokers are registered and CA is refreshed before "
-                                "maybe_auto_activate()",
-                                _ca.is_ready(),
-                                _ca.is_hydrated,
-                                _broker_keys,
-                            )
-                    except Exception:
-                        _ca_is_ready = False  # CA check failed — block activation
-                # CA module unavailable — attempt activation without the guard
-                # (graceful degradation for deployments without CapitalAuthority)
-                if _ca_is_ready:
-                    sm.maybe_auto_activate()
-            else:
-                logger.info(
-                    "SelfHealingStartup: state machine is %s — no reset needed",
-                    current.value,
-                )
-        except RuntimeError:
-            # Hard activation gate failures must propagate — do not swallow.
-            raise
-        except Exception as exc:
-            logger.warning("SelfHealingStartup: state machine step failed (%s)", exc)
+        logger.critical("MAYBE_AUTO_ACTIVATE_RETURNED")
 
     def _is_live_active(self) -> bool:
         """Return True if the trading state machine has reached LIVE_ACTIVE."""

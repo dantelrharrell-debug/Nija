@@ -351,6 +351,8 @@ class TradingStateMachine:
             True  if the transition was performed (or already LIVE_ACTIVE)
             False if any gate blocked it
         """
+        logger.critical("MAYBE_AUTO_ACTIVATE_ENTERED")
+
         with self._lock:
             current = self._current_state
 
