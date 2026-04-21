@@ -2709,15 +2709,15 @@ def _run_bot_startup_and_trading():
             # THREADS_STARTING so that a failure here leaves the FSM at
             # CAPITAL_READY (which now allows BOOT_FAILED_RETRY) rather than
             # at THREADS_STARTING after an already-committed FSM advance.
-            from bot.trading_state_machine import get_state_machine as _get_tsm_assert, TradingState as _TradingState
-            _tsm_pre_launch = _get_tsm_assert()
-            if _tsm_pre_launch.get_current_state() != _TradingState.LIVE_ACTIVE:
+            from bot.trading_state_machine import get_state_machine as _get_tsm, TradingState as _TradingState
+            _tsm = _get_tsm()
+            if _tsm.get_current_state() != _TradingState.LIVE_ACTIVE:
                 # Best-effort recovery: fire maybe_auto_activate() one last time
                 # in case a race left the state machine in OFF after the earlier
                 # successful activation at maybe_auto_activate() line above.
                 _try_recover_state_machine()
-            if _tsm_pre_launch.get_current_state() != _TradingState.LIVE_ACTIVE:
-                _tsm_state_val = _tsm_pre_launch.get_current_state().value
+            if _tsm.get_current_state() != _TradingState.LIVE_ACTIVE:
+                _tsm_state_val = _tsm.get_current_state().value
                 raise RuntimeError(
                     f"INIT FAILED: state machine is {_tsm_state_val!r} (expected LIVE_ACTIVE) "
                     "before thread launch — recovery attempt did not help; "
