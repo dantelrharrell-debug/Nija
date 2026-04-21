@@ -98,11 +98,13 @@ class TestPlatformHierarchyFix(unittest.TestCase):
 
     def test_validate_new_position_non_platform_blocked_by_starter_cap(self):
         """Non-platform with $75 balance hits STARTER max_positions cap."""
-        # STARTER: max_positions=2, so 2 existing positions blocks entry
+        from capital_tier_hierarchy import TIER_POSITION_RULES, CapitalTier
+        starter_max = TIER_POSITION_RULES[CapitalTier.STARTER].max_positions
+        # Use current_position_count == starter_max so we are exactly at the cap
         result = self.hierarchy.validate_new_position(
             balance=75.0,
-            current_position_count=2,
-            proposed_size_usd=30.0,
+            current_position_count=starter_max,
+            proposed_size_usd=15.0,
             is_platform=False,
         )
         is_valid, code, message = result

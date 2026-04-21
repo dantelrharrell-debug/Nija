@@ -2519,7 +2519,15 @@ def _run_bot_startup_and_trading():
                     except Exception as _retry_err:
                         logger.debug("[CapGate] BOOTSTRAP_START retry error (non-fatal): %s", _retry_err)
 
-                if ca and ca.is_ready():
+                # Gate exit requires BOTH is_ready() (broker balances registered)
+                # AND is_hydrated (publish_snapshot/refresh committed data) so that
+                # maybe_auto_activate() — which checks is_hydrated via
+                # _capital_readiness_gate() — never fails immediately after this
+                # loop exits.  Exiting on is_ready() alone when is_hydrated=False
+                # is the root cause of the PREFLIGHT→SUPERVISOR stuck loop.
+                _ca_gate_ready = ca and ca.is_ready()
+                _ca_gate_hydrated = ca and ca.is_hydrated
+                if _ca_gate_ready and _ca_gate_hydrated:
                     logger.critical(
                         "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
                     )
@@ -2531,6 +2539,11 @@ def _run_bot_startup_and_trading():
                         f"startup capital confirmed: ${_total_capital:.2f}",
                     )
                     break
+                elif _ca_gate_ready and not _ca_gate_hydrated:
+                    logger.warning(
+                        "[CapGate] CA is_ready=True but is_hydrated=False — "
+                        "waiting for publish_snapshot/refresh to commit hydration"
+                    )
 
                 if time.time() > _capital_gate_deadline:
                     raise RuntimeError(
@@ -2690,16 +2703,35 @@ def _run_bot_startup_and_trading():
                     _boot_fsm.assert_invariant_i7_emergency_safety()
                 except Exception as _inv_err:
                     logger.warning("⚠️  Bootstrap invariant I7 violation: %s", _inv_err)
+
+            # ── LIVE_ACTIVE guard: no state machine → no threads ──────────────────
+            # Verify LIVE_ACTIVE *before* advancing the bootstrap FSM to
+            # THREADS_STARTING so that a failure here leaves the FSM at
+            # CAPITAL_READY (which now allows BOOT_FAILED_RETRY) rather than
+            # at THREADS_STARTING after an already-committed FSM advance.
+            from bot.trading_state_machine import get_state_machine as _get_tsm, TradingState as _TradingState
+            _tsm = _get_tsm()
+            if _tsm.get_current_state() != _TradingState.LIVE_ACTIVE:
+                # Best-effort recovery: fire maybe_auto_activate() one last time
+                # in case a race left the state machine in OFF after the earlier
+                # successful activation at maybe_auto_activate() line above.
+                _try_recover_state_machine()
+            if _tsm.get_current_state() != _TradingState.LIVE_ACTIVE:
+                _tsm_state_val = _tsm.get_current_state().value
+                raise RuntimeError(
+                    f"INIT FAILED: state machine is {_tsm_state_val!r} (expected LIVE_ACTIVE) "
+                    "before thread launch — recovery attempt did not help; "
+                    "check CapitalAuthority hydration and LIVE_CAPITAL_VERIFIED env var"
+                )
+
+            # Advance bootstrap FSM to THREADS_STARTING only after LIVE_ACTIVE is
+            # confirmed so that any failure above leaves the FSM at CAPITAL_READY
+            # (from which reset_for_retry can now reach BOOT_FAILED_RETRY).
+            if _BOOTSTRAP_FSM_AVAILABLE:
                 _bfsm_transition(
                     _BootstrapState.THREADS_STARTING,
                     "spawning trading worker threads",
                 )
-
-            # ── LIVE_ACTIVE guard: no state machine → no threads ──────────────────
-            from bot.trading_state_machine import get_state_machine as _get_tsm_assert, TradingState as _TradingState
-            assert _get_tsm_assert().get_current_state() == _TradingState.LIVE_ACTIVE, (
-                "INIT FAILED: state machine is not LIVE_ACTIVE before thread launch"
-            )
 
             use_independent_trading = (
                 os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
