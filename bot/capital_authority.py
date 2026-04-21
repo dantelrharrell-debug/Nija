@@ -1600,14 +1600,30 @@ class CapitalAuthority:
                         self._expected_brokers,
                     )
                 CAPITAL_SYSTEM_READY.set()
-            # Feed timestamps for the push path (_broker_feed_timestamps) are
-            # intentionally left untouched here.  The coordinator's monotonic
-            # guard operates on authority-level last_updated; the per-broker
-            # feed guard operates on _broker_feed_timestamps independently.
-            # Resetting feed timestamps to computed_at would incorrectly reject
-            # a legitimate feed that arrived between the coordinator's balance
-            # fetch (T1) and its publish step (T3), even though that T2 feed
-            # carries newer data than the coordinator's T1 fetch.
+            # MONOTONIC SNAPSHOT PROGRESSION (no-failure activation contract).
+            # Stamp _broker_feed_timestamps with computed_at for every broker
+            # present in the accepted snapshot.  This closes the race where the
+            # push path (feed_broker_balance) had no prior timestamp entry for a
+            # broker (e.g. on first boot or after a coordinator-only cycle), so
+            # any stale feed arriving after publish would be silently accepted
+            # and would overwrite the coordinator's freshly-published balances.
+            #
+            # By setting a floor of computed_at in _broker_feed_timestamps the
+            # per-broker monotonic guard in feed_broker_balance will reject any
+            # feed whose timestamp is not strictly newer than the coordinator's
+            # publish time.
+            #
+            # Only ABSENT or STALE entries are stamped; if a broker already has
+            # a feed timestamp that is strictly newer than computed_at (a T2 feed
+            # that arrived after the coordinator fetched at T1 but before the T3
+            # publish), that newer timestamp is preserved rather than rolled back.
+            for _broker_key in new_balances:
+                _existing_feed_ts = self._broker_feed_timestamps.get(_broker_key)
+                # Only stamp absent or stale entries; a newer T2 feed timestamp
+                # (T2 > computed_at) that arrived between the coordinator's T1
+                # fetch and this T3 publish is preserved rather than rolled back.
+                if _existing_feed_ts is None or _existing_feed_ts < computed_at:
+                    self._broker_feed_timestamps[_broker_key] = computed_at
 
             # Invariant: _last_typed_snapshot.real_capital must equal the value
             # that total_capital will now return.  Checked while the lock is still
