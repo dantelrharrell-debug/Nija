@@ -79,7 +79,7 @@ def _notify_state_machine_first_snap_accepted(snapshot: dict) -> None:
     remaining issue as a ``RuntimeError`` at activation time.
     """
     # ── Condition 1: valid_brokers > 0 ────────────────────────────────────
-    _vb = int(float(snapshot.get("valid_brokers", 0)))
+    _vb = _safe_int(snapshot.get("valid_brokers", 0), 0)
     if _vb <= 0:
         logger.warning(
             "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "
