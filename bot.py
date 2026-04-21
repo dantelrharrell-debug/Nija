@@ -1150,34 +1150,29 @@ def _verify_startup_truth_conditions(
 def _run_state_machine_loop() -> None:
     """Daemon thread: periodic trading state machine health check.
 
-    Fires ``maybe_auto_activate()`` whenever the trading state machine is in
-    the OFF state and CapitalAuthority reports ready.  Runs every 10 s
-    independently of the supervisor loop so a supervisor stall can never mask
-    a stuck state machine.
+    Fires ``maybe_auto_activate()`` whenever the trading state machine reports
+    it should activate.  Runs every 10 s independently of the supervisor loop
+    so a supervisor stall can never mask a stuck state machine.
 
     Errors are swallowed; the thread must never die due to a transient SM error.
     """
-    _sm = None
-    _off_state = None
-    try:
-        # Deferred import: trading_state_machine may not be on sys.path until
-        # the bot/  package directory is added (happens during broker init).
-        # Importing here rather than at module level avoids an ImportError at
-        # process startup before the path is configured.
-        from bot.trading_state_machine import get_state_machine as _gsm, TradingState as _TS
-        _sm = _gsm()
-        _off_state = _TS.OFF
-    except Exception as _import_err:
-        logger.debug("[SMLoop] trading_state_machine unavailable: %s", _import_err)
-        return
+    logger.critical("STATE_MACHINE_LOOP_THREAD_RUNNING")
 
     while True:
         try:
-            if _sm.get_current_state() == _off_state:
-                logger.info("[SMLoop] State machine is OFF — calling maybe_auto_activate()")
-                _sm.maybe_auto_activate()
-        except Exception as _step_err:
-            logger.debug("[SMLoop] step failed: %s", _step_err)
+            logger.critical("LOOP_CALLING_MAYBE_AUTO_ACTIVATE")
+
+            from bot.trading_state_machine import get_state_machine as _gsm
+            sm = _gsm()
+
+            if sm is not None:
+                sm.maybe_auto_activate()
+
+            logger.critical("LOOP_MAYBE_AUTO_ACTIVATE_RETURNED")
+
+        except Exception:
+            logger.exception("STATE_MACHINE_LOOP_ERROR")
+
         time.sleep(10)
 
 
@@ -1190,16 +1185,33 @@ def _ensure_state_machine_loop_started() -> None:
     before the thread is alive.
     """
     global _sm_loop_thread
+
     with _sm_loop_lock:
+
+        # Only skip if a thread exists AND is actually alive
         if _sm_loop_thread is not None and _sm_loop_thread.is_alive():
+            logger.critical("STATE_MACHINE_LOOP_ALREADY_RUNNING")
             return
-        logger.info("STATE_MACHINE_LOOP_STARTING")
+
+        logger.critical("STATE_MACHINE_LOOP_STARTING")
+
         _sm_loop_thread = threading.Thread(
             target=_run_state_machine_loop,
-            daemon=True,
             name="StateMachineLoop",
+            daemon=True,
         )
+
         _sm_loop_thread.start()
+
+        logger.critical(
+            "STATE_MACHINE_LOOP_STARTED alive=%s ident=%s",
+            _sm_loop_thread.is_alive(),
+            _sm_loop_thread.ident,
+        )
+
+        # Hard fail if thread did not actually come alive
+        if not _sm_loop_thread.is_alive():
+            raise RuntimeError("State machine loop failed to start")
 
 
 def _rerun_supervisor_loop(state: dict) -> None:
