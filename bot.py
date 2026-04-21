@@ -5,7 +5,6 @@ Runs the complete APEX v7.1 strategy with Coinbase Advanced Trade API
 Railway deployment: Force redeploy with position size fix ($5 minimum)
 """
 
-raise RuntimeError("BOT.PY PATCH 0421 LOADED")
 
 import json
 import os
