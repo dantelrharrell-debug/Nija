@@ -3625,8 +3625,13 @@ def main():
     # Wait for initialization to complete, then start the execution loop.
     _bootstrap_completed_event.wait()
     from bot.nija_core_loop import run_trading_loop
-    logger.critical("🚨 STARTING CORE TRADING LOOP (MAIN THREAD)")
-    run_trading_loop(_initialized_state.get("strategy"))
+    logger.critical("🚨 STARTING CORE TRADING LOOP THREAD — HANDING CONTROL TO ENGINE")
+    threading.Thread(
+        target=run_trading_loop,
+        args=(_initialized_state.get("strategy"),),
+        daemon=True,
+        name="TradingCoreLoop",
+    ).start()
 
     supervisor_cycle = 0
     _bootstrap_handoff_logged = False  # Log the bootstrap hand-off message only once
