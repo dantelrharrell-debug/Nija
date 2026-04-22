@@ -1697,156 +1697,161 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
     logger.critical("🔥 ENTERED run_trading_loop()")
 
-    logger.critical(f"LOOP START CHECK — _loop_running={_loop_running}")
-    with _loop_guard:
-        if _loop_running:
-            logger.critical("🚧 LOOP BLOCKED PATH REACHED — duplicate start guard triggered")
-            logger.info("🟡 Core trading loop already active — skipping duplicate start")
-            return
-        _loop_running = True
+    try:
+        logger.critical(f"LOOP START CHECK — _loop_running={_loop_running}")
+        with _loop_guard:
+            if _loop_running:
+                logger.critical("🚧 LOOP BLOCKED PATH REACHED — duplicate start guard triggered")
+                logger.info("🟡 Core trading loop already active — skipping duplicate start")
+                return
+            _loop_running = True
 
-    logger.info("🟢 Trading loop alive (INITIAL START)")
+        logger.info("🟢 Trading loop alive (INITIAL START)")
 
-    cycle = 0
-    _skipped_cycles = 0          # consecutive cycles skipped due to no broker
-    _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
+        cycle = 0
+        _skipped_cycles = 0          # consecutive cycles skipped due to no broker
+        _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
 
-    while True:
-        try:
-            cycle += 1
+        while True:
+            try:
+                cycle += 1
 
-            # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
-            # Must happen BEFORE activation so the state machine uses the same
-            # frozen capital view (ca_is_hydrated, total_capital,
-            # mabm_brokers_ready) as the subsequent strategy cycle.  Writing to
-            # module-level globals is safe because run_trading_loop runs on a
-            # single thread.
-            global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
-            _current_cycle_snapshot = None  # clear previous cycle's snapshot
-            _current_cycle_id = (
-                f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{cycle:06d}"
-            )
-            _current_cycle_capital = _capture_cycle_capital_state()
-            logger.debug(
-                "🔒 [%s] capital snapshot: hydrated=%s total=$%.2f "
-                "valid_brokers=%d brokers_ready=%s",
-                _current_cycle_id,
-                _current_cycle_capital.get("ca_is_hydrated"),
-                _current_cycle_capital.get("ca_total_capital", 0.0),
-                _current_cycle_capital.get("ca_valid_brokers", 0),
-                _current_cycle_capital.get("mabm_brokers_ready"),
-            )
+                # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
+                # Must happen BEFORE activation so the state machine uses the same
+                # frozen capital view (ca_is_hydrated, total_capital,
+                # mabm_brokers_ready) as the subsequent strategy cycle.  Writing to
+                # module-level globals is safe because run_trading_loop runs on a
+                # single thread.
+                global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
+                _current_cycle_snapshot = None  # clear previous cycle's snapshot
+                _current_cycle_id = (
+                    f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{cycle:06d}"
+                )
+                _current_cycle_capital = _capture_cycle_capital_state()
+                logger.debug(
+                    "🔒 [%s] capital snapshot: hydrated=%s total=$%.2f "
+                    "valid_brokers=%d brokers_ready=%s",
+                    _current_cycle_id,
+                    _current_cycle_capital.get("ca_is_hydrated"),
+                    _current_cycle_capital.get("ca_total_capital", 0.0),
+                    _current_cycle_capital.get("ca_valid_brokers", 0),
+                    _current_cycle_capital.get("mabm_brokers_ready"),
+                )
 
-            # ── Activation: core loop is the SOLE owner of activation ─────────
-            # Call maybe_auto_activate() here — and ONLY here.  All external
-            # callers (supervisor, bootstrap, startup thread) have been removed.
-            # The loop retries every second until the state machine transitions
-            # to LIVE_ACTIVE; no trade cycle runs until that happens.
-            _act_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
-            if _act_sm is not None:
-                activated = _act_sm.maybe_auto_activate(cycle_capital=_current_cycle_capital or None)
-            else:
-                activated = False
-            logger.critical("🔄 LOOP HEARTBEAT — activation=%s", activated)
+                # ── Activation: core loop is the SOLE owner of activation ─────────
+                # Call maybe_auto_activate() here — and ONLY here.  All external
+                # callers (supervisor, bootstrap, startup thread) have been removed.
+                # The loop retries every second until the state machine transitions
+                # to LIVE_ACTIVE; no trade cycle runs until that happens.
+                _act_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
+                if _act_sm is not None:
+                    activated = _act_sm.maybe_auto_activate(cycle_capital=_current_cycle_capital or None)
+                else:
+                    activated = False
+                logger.critical("🔄 LOOP HEARTBEAT — activation=%s", activated)
 
-            if not activated:
-                logger.critical("🚧 ACTIVATION NOT READY — skipping cycle")
-                time.sleep(1)
-                continue
-
-            # ── Proactive broker liveness check before entering run_cycle ─────
-            # If the strategy's broker is disconnected, attempt reconnect here
-            # so run_cycle doesn't immediately skip and sleep for cycle_secs.
-            # This keeps the bot trading 24/7 even after extended outages.
-            _broker = getattr(strategy, 'broker', None)
-            _broker_ok = _broker is not None and getattr(_broker, 'connected', False)
-            if not _broker_ok:
-                _bm = getattr(strategy, 'broker_manager', None)
-                if _bm is not None:
-                    # Try to find any already-connected broker first
-                    _candidate = _bm.get_primary_broker()
-                    if _candidate is not None and getattr(_candidate, 'connected', False):
-                        strategy.broker = _candidate
-                        _broker_ok = True
-                    else:
-                        # No connected broker — attempt reconnect via MABM state machine
-                        # (routes through try_reconnect_platform_broker to keep _platform_state
-                        # consistent and avoid bypassing the broker graph model).
-                        _mabm = getattr(strategy, 'multi_account_manager', None)
-                        for _bt, _b in list(getattr(_bm, 'brokers', {}).items()):
-                            if _b is None:
-                                continue
-                            try:
-                                # Prefer MABM reconnect path for platform brokers
-                                if _mabm is not None and hasattr(_mabm, 'try_reconnect_platform_broker'):
-                                    _ok = _mabm.try_reconnect_platform_broker(_bt)
-                                else:
-                                    _b.connect()
-                                    _ok = getattr(_b, 'connected', False)
-                                if _ok:
-                                    strategy.broker = _b
-                                    _bm.active_broker = _b
-                                    if (hasattr(strategy, 'apex') and strategy.apex
-                                            and hasattr(strategy.apex, 'update_broker_client')):
-                                        strategy.apex.update_broker_client(_b)
-                                    logger.info(
-                                        "✅ Loop reconnected broker: %s",
-                                        getattr(_bt, 'value', str(_bt)).upper(),
-                                    )
-                                    _broker_ok = True
-                                    break
-                            except Exception as _lrc_err:
-                                logger.warning(
-                                    "⚠️ Loop reconnect failed for %s: %s",
-                                    getattr(_bt, 'value', str(_bt)).upper(), _lrc_err,
-                                )
-
-            if not _broker_ok:
-                _skipped_cycles += 1
-                if _skipped_cycles == 1 or _skipped_cycles % _MAX_SKIP_LOG_INTERVAL == 0:
-                    logger.warning(
-                        "⏸️  Trading paused — no broker connected "
-                        "(skipped_cycles=%d, downtime≈%ds). "
-                        "Retrying in %ds …",
-                        _skipped_cycles,
-                        _skipped_cycles * cycle_secs,
-                        cycle_secs,
-                    )
-                time.sleep(cycle_secs)
-                logger.critical("🚧 LOOP BLOCKED PATH REACHED — no broker connected, skipping cycle")
-                continue
-
-            # Broker is alive — run the full trading cycle
-            _skipped_cycles = 0
-
-            # ── EXEC TEST MODE ────────────────────────────────────────────────
-            # If NIJA_EXEC_TEST_MODE is enabled, fire a single probe order to
-            # validate the complete execution stack, then disable itself so the
-            # bot continues normal operation on the next cycle.
-            # Uses a module-level flag (_exec_test_fired) so the probe only
-            # runs once per process lifetime regardless of whether the env var
-            # is still set to "true" after the first probe.
-            global _exec_test_fired
-            if (not _exec_test_fired
-                    and os.getenv("NIJA_EXEC_TEST_MODE", "false").lower() == "true"):
-                _on_startup_only = os.getenv("NIJA_EXEC_TEST_ON_STARTUP", "true").lower() == "true"
-                if not _on_startup_only or cycle == 1:
-                    logger.info("🧪 EXEC TEST MODE ACTIVE — forcing single execution probe")
-                    _probe_result = _exec_test_probe(strategy)
-                    logger.info("🧪 EXEC TEST RESULT → %s", _probe_result)
-                    _exec_test_fired = True
-                    logger.critical("🚧 LOOP BLOCKED PATH REACHED — exec test mode fired, skipping normal cycle")
+                if not activated:
+                    logger.critical("🚧 ACTIVATION NOT READY — skipping cycle")
+                    time.sleep(1)
                     continue
 
-            logger.critical("🚀 RUNNING TRADE CYCLE")
-            strategy.run_cycle()
-            time.sleep(cycle_secs)
+                # ── Proactive broker liveness check before entering run_cycle ─────
+                # If the strategy's broker is disconnected, attempt reconnect here
+                # so run_cycle doesn't immediately skip and sleep for cycle_secs.
+                # This keeps the bot trading 24/7 even after extended outages.
+                _broker = getattr(strategy, 'broker', None)
+                _broker_ok = _broker is not None and getattr(_broker, 'connected', False)
+                if not _broker_ok:
+                    _bm = getattr(strategy, 'broker_manager', None)
+                    if _bm is not None:
+                        # Try to find any already-connected broker first
+                        _candidate = _bm.get_primary_broker()
+                        if _candidate is not None and getattr(_candidate, 'connected', False):
+                            strategy.broker = _candidate
+                            _broker_ok = True
+                        else:
+                            # No connected broker — attempt reconnect via MABM state machine
+                            # (routes through try_reconnect_platform_broker to keep _platform_state
+                            # consistent and avoid bypassing the broker graph model).
+                            _mabm = getattr(strategy, 'multi_account_manager', None)
+                            for _bt, _b in list(getattr(_bm, 'brokers', {}).items()):
+                                if _b is None:
+                                    continue
+                                try:
+                                    # Prefer MABM reconnect path for platform brokers
+                                    if _mabm is not None and hasattr(_mabm, 'try_reconnect_platform_broker'):
+                                        _ok = _mabm.try_reconnect_platform_broker(_bt)
+                                    else:
+                                        _b.connect()
+                                        _ok = getattr(_b, 'connected', False)
+                                    if _ok:
+                                        strategy.broker = _b
+                                        _bm.active_broker = _b
+                                        if (hasattr(strategy, 'apex') and strategy.apex
+                                                and hasattr(strategy.apex, 'update_broker_client')):
+                                            strategy.apex.update_broker_client(_b)
+                                        logger.info(
+                                            "✅ Loop reconnected broker: %s",
+                                            getattr(_bt, 'value', str(_bt)).upper(),
+                                        )
+                                        _broker_ok = True
+                                        break
+                                except Exception as _lrc_err:
+                                    logger.warning(
+                                        "⚠️ Loop reconnect failed for %s: %s",
+                                        getattr(_bt, 'value', str(_bt)).upper(), _lrc_err,
+                                    )
 
-        except Exception as _err:
-            logger.error(
-                "❌ Trading loop cycle #%d error: %s — retrying in 15s",
-                cycle,
-                _err,
-                exc_info=True,
-            )
-            time.sleep(15)
+                if not _broker_ok:
+                    _skipped_cycles += 1
+                    if _skipped_cycles == 1 or _skipped_cycles % _MAX_SKIP_LOG_INTERVAL == 0:
+                        logger.warning(
+                            "⏸️  Trading paused — no broker connected "
+                            "(skipped_cycles=%d, downtime≈%ds). "
+                            "Retrying in %ds …",
+                            _skipped_cycles,
+                            _skipped_cycles * cycle_secs,
+                            cycle_secs,
+                        )
+                    time.sleep(cycle_secs)
+                    logger.critical("🚧 LOOP BLOCKED PATH REACHED — no broker connected, skipping cycle")
+                    continue
+
+                # Broker is alive — run the full trading cycle
+                _skipped_cycles = 0
+
+                # ── EXEC TEST MODE ────────────────────────────────────────────────
+                # If NIJA_EXEC_TEST_MODE is enabled, fire a single probe order to
+                # validate the complete execution stack, then disable itself so the
+                # bot continues normal operation on the next cycle.
+                # Uses a module-level flag (_exec_test_fired) so the probe only
+                # runs once per process lifetime regardless of whether the env var
+                # is still set to "true" after the first probe.
+                global _exec_test_fired
+                if (not _exec_test_fired
+                        and os.getenv("NIJA_EXEC_TEST_MODE", "false").lower() == "true"):
+                    _on_startup_only = os.getenv("NIJA_EXEC_TEST_ON_STARTUP", "true").lower() == "true"
+                    if not _on_startup_only or cycle == 1:
+                        logger.info("🧪 EXEC TEST MODE ACTIVE — forcing single execution probe")
+                        _probe_result = _exec_test_probe(strategy)
+                        logger.info("🧪 EXEC TEST RESULT → %s", _probe_result)
+                        _exec_test_fired = True
+                        logger.critical("🚧 LOOP BLOCKED PATH REACHED — exec test mode fired, skipping normal cycle")
+                        continue
+
+                logger.critical("🚀 RUNNING TRADE CYCLE")
+                strategy.run_cycle()
+                time.sleep(cycle_secs)
+
+            except Exception as _err:
+                logger.error(
+                    "❌ Trading loop cycle #%d error: %s — retrying in 15s",
+                    cycle,
+                    _err,
+                    exc_info=True,
+                )
+                time.sleep(15)
+
+    except Exception as e:
+        logger.exception("💥 FATAL ERROR IN TRADING LOOP: %s", e)
+        raise
