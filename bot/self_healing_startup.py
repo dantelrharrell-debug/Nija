@@ -1437,10 +1437,16 @@ class SelfHealingStartup:
         if sm is None:
             raise RuntimeError("No TradingStateMachine available")
 
-        logger.critical("CALLING_MAYBE_AUTO_ACTIVATE")
-        sm.maybe_auto_activate()   # force this every scheduler tick
+        # Hard block: if activation is already committed there is nothing more
+        # to do — skip evaluation to avoid redundant gate checks.
+        if sm.get_activation_committed():
+            logger.critical("STEP_STATE_MACHINE: activation already committed — skipping")
+            return
 
-        logger.critical("MAYBE_AUTO_ACTIVATE_RETURNED")
+        logger.critical("CALLING_COMMIT_ACTIVATION")
+        sm.commit_activation()   # single source of truth for OFF → LIVE_ACTIVE
+
+        logger.critical("COMMIT_ACTIVATION_RETURNED")
 
     def _is_live_active(self) -> bool:
         """Return True if the trading state machine has reached LIVE_ACTIVE."""
