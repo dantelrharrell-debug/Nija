@@ -1697,6 +1697,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
     with _loop_guard:
         if _loop_running:
+            logger.critical("🚧 LOOP BLOCKED PATH REACHED — duplicate start guard triggered")
             logger.info("🟡 Core trading loop already active — skipping duplicate start")
             return
         _loop_running = True
@@ -1710,6 +1711,14 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     while True:
         try:
             cycle += 1
+
+            # ── Heartbeat: confirm loop is alive and show activation state ────
+            try:
+                _hb_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
+                _hb_activation = _hb_sm.get_activation_committed() if _hb_sm is not None else None
+            except Exception:
+                _hb_activation = None
+            logger.critical("🔄 LOOP HEARTBEAT — activation=%s", _hb_activation)
 
             # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
             # Must happen BEFORE _supervisor_step_state_machine() so the state
@@ -1800,6 +1809,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         cycle_secs,
                     )
                 time.sleep(cycle_secs)
+                logger.critical("🚧 LOOP BLOCKED PATH REACHED — no broker connected, skipping cycle")
                 continue
 
             # Broker is alive — run the full trading cycle
@@ -1821,6 +1831,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _probe_result = _exec_test_probe(strategy)
                     logger.info("🧪 EXEC TEST RESULT → %s", _probe_result)
                     _exec_test_fired = True
+                    logger.critical("🚧 LOOP BLOCKED PATH REACHED — exec test mode fired, skipping normal cycle")
                     continue
 
             strategy.run_cycle()
