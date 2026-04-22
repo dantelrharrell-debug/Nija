@@ -1716,6 +1716,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             try:
                 cycle += 1
 
+                if cycle == 1:
+                    logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
+
                 # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
                 # Must happen BEFORE activation so the state machine uses the same
                 # frozen capital view (ca_is_hydrated, total_capital,
