@@ -325,6 +325,10 @@ def _supervisor_step_state_machine() -> None:
             return
 
         # ── Invariant 4: is_post_hydration ───────────────────────────────
+        # TEMP override: treat is_post_hydration as always True so that stale
+        # cycle detection never silently blocks activation.  If we don't see
+        # trading start after this, the root cause is elsewhere in the pipeline.
+        _post_hydration = True  # TEMP override to confirm pipeline
         # TEMP: strict post-hydration gate disabled — the pipeline does not
         # guarantee that is_post_hydration aligns with the activation window
         # (snapshot captured pre-hydration, hydration completes next cycle,

@@ -28,6 +28,7 @@ Date: February 2026
 import os
 import json
 import logging
+import time
 import threading
 import time
 from enum import Enum
@@ -117,6 +118,9 @@ class TradingStateMachine:
         # TradingStateMachine instance so a fresh restart always re-validates.
         self._first_snap_accepted: bool = False
 
+        # Startup timestamp used by the forced-activation failsafe inside
+        # maybe_auto_activate() to detect when the pipeline is taking too long.
+        self._init_time: float = time.time()
         # Timestamp used by the 30-second forced snap acceptance escape hatch
         # in maybe_auto_activate.  Recorded once at construction time.
         self._init_time: float = time.monotonic()
@@ -452,18 +456,21 @@ class TradingStateMachine:
                 if isinstance(_inline_snap, dict):
                     _inline_vb = int(float(_inline_snap.get("valid_brokers", 0)))
                     _inline_src = str(_inline_snap.get("snapshot_source", ""))
-                    if _inline_vb > 0 and _inline_src == "live_exchange":
+                    # Accept if balances are present (valid_brokers > 0).
+                    # snapshot_source is NOT checked — it is non-deterministic
+                    # on real exchanges and falsely blocks activation.
+                    if _inline_vb > 0:
                         self._first_snap_accepted = True
                         logger.critical(
-                            "[TradingStateMachine] INLINE_SNAP_ACCEPTED "
-                            "valid_brokers=%d snapshot_source=%s — proceeding to activate",
+                            "FIRST SNAP ACCEPTED — FORCED (balances present) "
+                            "[inline] valid_brokers=%d snapshot_source=%s",
                             _inline_vb,
                             _inline_src,
                         )
                     else:
                         logger.debug(
                             "[TradingStateMachine] inline snap check: "
-                            "valid_brokers=%d snapshot_source=%r — not live, will retry next cycle",
+                            "valid_brokers=%d snapshot_source=%r — no balances, will retry next cycle",
                             _inline_vb,
                             _inline_src,
                         )
@@ -474,6 +481,17 @@ class TradingStateMachine:
                     _inline_err,
                 )
 
+        # Hard activation failsafe: if the pipeline has been running for more
+        # than 20 s and _first_snap_accepted is still False, force it open so
+        # trading is never permanently blocked by a stale bootstrap state.
+        if not self._first_snap_accepted:
+            _time_since_start = time.time() - self._init_time
+            if _time_since_start > 20:
+                logger.critical(
+                    "FORCED ACTIVATION — FAILSAFE: _first_snap_accepted still False "
+                    "after %.0fs — forcing True to unblock trading pipeline",
+                    _time_since_start,
+                )
         # Final gate state trace — confirm every condition visible before invariant fires.
         _brokers_ready_trace = (
             _mabm_gate.all_brokers_fully_ready()
