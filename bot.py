@@ -3457,6 +3457,11 @@ def main():
         ]
     )
     
+    # Wait for initialization to complete, then start the execution loop.
+    _bootstrap_completed_event.wait()
+    from bot.nija_core_loop import get_nija_core_loop
+    get_nija_core_loop().start(_initialized_state.get("strategy"))
+
     supervisor_cycle = 0
     _bootstrap_handoff_logged = False  # Log the bootstrap hand-off message only once
     while True:
