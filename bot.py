@@ -1593,11 +1593,13 @@ def _run_bot_startup_and_trading_with_retry():
         attempt = 0
         connection_attempts = 0
 
+        logger.critical("🚧 BOOTSTRAP START")
         while True:
             try:
                 # Attempt to start the bot
                 _run_bot_startup_and_trading()
                 # Normal exit — supervisor loop inside returned cleanly
+                logger.critical("✅ BOOTSTRAP SUCCESS — setting event")
                 return
 
             except KeyboardInterrupt:
@@ -1666,6 +1668,8 @@ def _run_bot_startup_and_trading_with_retry():
 
     finally:
         _BOOTSTRAP_SINGLE_OWNER_LOCK.release()
+        logger.critical("🚨 FORCING bootstrap completion event")
+        _bootstrap_completed_event.set()
 
 
 def _run_bot_startup_and_trading():
