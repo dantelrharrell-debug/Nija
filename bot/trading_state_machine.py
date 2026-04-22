@@ -474,6 +474,23 @@ class TradingStateMachine:
                     _inline_err,
                 )
 
+        # Final gate state trace — confirm every condition visible before invariant fires.
+        _brokers_ready_trace = (
+            _mabm_gate.all_brokers_fully_ready()
+            if _mabm_gate is not None and hasattr(_mabm_gate, "all_brokers_fully_ready")
+            else None
+        )
+        logger.critical(
+            "FINAL GATE STATE | "
+            "hydrated=%s | "
+            "snap=%s | "
+            "brokers=%s | "
+            "post_hydration=%s",
+            _ca_gate.is_hydrated if _ca_gate is not None else None,
+            self._first_snap_accepted,
+            _brokers_ready_trace,
+            bool(_snap.get("is_post_hydration", False)),
+        )
         # 30-second forced snap acceptance escape hatch: if no valid live-exchange
         # snapshot has been accepted within 30 seconds of startup, force the flag so
         # the activation invariant can proceed rather than blocking indefinitely.
