@@ -2114,6 +2114,7 @@ def _run_bot_startup_and_trading():
 
                     # ── Sentinel A0.3 / B5: nonce reset complete ────────────────
                     logger.critical("B5 after nonce lock / nonce-jump complete")
+                    logger.critical("🔥 PREFLIGHT: POST-NONCE ENTRY REACHED")
 
                     logger.info(
                         "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
@@ -2416,6 +2417,7 @@ def _run_bot_startup_and_trading():
                             _boot_startup_delay,
                         )
                         time.sleep(_boot_startup_delay)
+                    logger.critical("PREFLIGHT: KRAKEN SESSION INIT START")
                     _boot_broker_results = _boot_mabm.initialize_platform_brokers()
                     # Inter-account delay before user connections (bootstrap-owned)
                     _boot_raw_user_delay = os.environ.get("NIJA_USER_CONNECT_DELAY_S", "")
@@ -2423,6 +2425,7 @@ def _run_bot_startup_and_trading():
                     if _boot_user_delay > 0:
                         time.sleep(_boot_user_delay)
                     _boot_connected_users = _boot_mabm.connect_users_from_config()
+                    logger.critical("PREFLIGHT: KRAKEN SESSION INIT END")
                     logger.info(
                         "✅ [bootstrap] Broker connections complete — handing off to TradingStrategy"
                     )
@@ -2436,10 +2439,12 @@ def _run_bot_startup_and_trading():
                     _boot_connected_users = {}
 
                 _ts_init_start = time.time()
+                logger.critical("PREFLIGHT: FSM BUILD START")
                 strategy = TradingStrategy(
                     broker_results=_boot_broker_results if _boot_broker_results else None,
                     connected_user_brokers=_boot_connected_users if _boot_connected_users else None,
                 )
+                logger.critical("PREFLIGHT: FSM BUILD END")
                 _ts_init_elapsed = time.time() - _ts_init_start
                 if _ts_init_elapsed > 5:
                     logger.critical(
@@ -2501,7 +2506,9 @@ def _run_bot_startup_and_trading():
             logger.info("🔍 AUDITING USER ACCOUNT BALANCES")
             logger.info("=" * 70)
             if hasattr(strategy, 'multi_account_manager') and strategy.multi_account_manager:
+                logger.critical("PREFLIGHT: ACCOUNT SYNC START")
                 strategy.multi_account_manager.audit_user_accounts()
+                logger.critical("PREFLIGHT: ACCOUNT SYNC END")
             else:
                 logger.warning("   ⚠️  Multi-account manager not available - skipping balance audit")
 
