@@ -395,13 +395,6 @@ class TradingStateMachine:
         True  — activation committed (transition performed or was already live)
         False — one or more gates blocked; will be retried on the next cycle
         """
-        # ── TEMPORARY TEST OVERRIDE — remove before production ───────────
-        logger.critical("FORCING ACTIVATION FOR TEST")
-        with self._lock:
-            self._activation_committed = True
-            self._current_state = TradingState.LIVE_ACTIVE
-        return True
-
         # ── Gate 0: idempotency — read under lock for thread-safety ──────
         with self._lock:
             if self._activation_committed:
@@ -415,8 +408,9 @@ class TradingStateMachine:
             return True
 
         if current != TradingState.OFF:
-            logger.debug(
-                "commit_activation: state is %s (not OFF) — skipping", current.value
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=STATE_NOT_OFF current_state=%s",
+                current.value,
             )
             return False
 
@@ -426,7 +420,7 @@ class TradingStateMachine:
             from kill_switch import get_kill_switch
             kill_state = get_kill_switch().is_active()
             if kill_state:
-                logger.warning("🔒 Activation blocked: kill switch is active")
+                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=KILL_SWITCH_ACTIVE")
                 return False
         except Exception as _ks_err:
             logger.debug("commit_activation: could not check kill switch: %s", _ks_err)
@@ -434,9 +428,8 @@ class TradingStateMachine:
         # ── Gate 3: LIVE_CAPITAL_VERIFIED (operator master switch) ────────
         lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
         if lcv not in ("true", "1", "yes", "enabled"):
-            logger.info(
-                "🔒 Activation blocked: LIVE_CAPITAL_VERIFIED is not set to true "
-                "(current value: %r). Set it in your .env to enable live trading.",
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_NOT_SET value=%r",
                 lcv,
             )
             return False
@@ -444,7 +437,9 @@ class TradingStateMachine:
         # ── Gate 4: CA_READY + EXECUTION_PIPELINE_HEALTHY ────────────────
         ready, reason = _capital_readiness_gate()
         if not ready:
-            logger.info("🔒 Activation blocked by capital readiness gate: %s", reason)
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=CAPITAL_NOT_READY detail=%s", reason
+            )
             return False
 
         # ── Gate 5: activation_invariant — all subsystems simultaneously valid
@@ -501,6 +496,10 @@ class TradingStateMachine:
                     TradingState.LIVE_ACTIVE,
                     "CONVERGENCE_EDGE: all subsystems simultaneously valid in same snapshot cycle",
                 )
+                with self._lock:
+                    self._current_state = TradingState.LIVE_ACTIVE
+                    self._activation_committed = True
+                logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
                 logger.critical("LIVE_ACTIVE_CONFIRMED_CONVERGENCE_EDGE")
                 logger.critical(
                     "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
@@ -509,34 +508,39 @@ class TradingStateMachine:
                 )
                 return True
             except Exception as exc:
-                logger.error("❌ Auto-activate transition failed: %s", exc)
+                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=TRANSITION_EXCEPTION error=%s", exc)
                 return False
 
         if not _inv_ready:
-            # Log which sub-condition is blocking activation (for observability).
-            if not _inv_ready:
-                # Log which sub-condition is still blocking.
-                if not self._first_snap_accepted:
-                    logger.warning(
-                        "🔒 BLOCK LIVE_ACTIVE: no valid live-exchange capital snapshot accepted"
-                        " — will retry next cycle"
-                    )
-                elif _ca_gate is not None and not _ca_gate.is_hydrated:
-                    logger.warning(
-                        "🔒 BLOCK LIVE_ACTIVE: CapitalAuthority not hydrated — will retry next cycle"
-                    )
-                elif _ca_gate is not None and _ca_gate.is_stale():
-                    logger.warning(
-                        "🔒 BLOCK LIVE_ACTIVE: CapitalAuthority data is stale — will retry next cycle"
-                    )
-                elif (
-                    _mabm_gate is not None
-                    and hasattr(_mabm_gate, "all_brokers_fully_ready")
-                    and not _mabm_gate.all_brokers_fully_ready()
-                ):
-                    logger.warning(
-                        "🔒 BLOCK LIVE_ACTIVE: brokers not fully ready — will retry next cycle"
-                    )
+            # Log which sub-condition is blocking activation.
+            if not self._first_snap_accepted:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=SNAPSHOT_MISSING"
+                    " — no valid live-exchange capital snapshot accepted"
+                )
+            elif _ca_gate is not None and not _ca_gate.is_hydrated:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=CA_NOT_HYDRATED"
+                )
+            elif _ca_gate is not None and _ca_gate.is_stale():
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=CA_STALE"
+                )
+            elif (
+                _mabm_gate is not None
+                and hasattr(_mabm_gate, "all_brokers_fully_ready")
+                and not _mabm_gate.all_brokers_fully_ready()
+            ):
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=BROKERS_NOT_READY"
+                )
+            else:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=INVARIANT_FAILED"
+                    " snap_source=%s valid_brokers=%s",
+                    _snap.get("snapshot_source", ""),
+                    _snap.get("ca_valid_brokers", 0),
+                )
             return False
 
         # ── All gates passed — commit the activation atomically ───────────
@@ -546,17 +550,18 @@ class TradingStateMachine:
                 "COMMIT_ACTIVATION: all gates passed — single-source activation commit",
             )
             with self._lock:
+                self._current_state = TradingState.LIVE_ACTIVE
                 self._activation_committed = True
+            logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
             logger.critical("ACTIVATION_COMMITTED — LIVE_ACTIVE confirmed")
             logger.critical(
                 "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
                 self._current_state.value,
                 self.is_live_trading_active(),
             )
-            logger.critical("FORCING ACTIVATION FOR TEST")
             return True
         except Exception as exc:
-            logger.error("❌ commit_activation transition failed: %s", exc)
+            logger.critical("[AUTO_ACTIVATE BLOCKED] reason=COMMIT_TRANSITION_FAILED error=%s", exc)
             return False
 
     def get_activation_committed(self) -> bool:
@@ -579,7 +584,62 @@ class TradingStateMachine:
         This method is retained only to avoid breaking existing call sites
         that have not yet been updated.
         """
-        logger.critical("MAYBE_AUTO_ACTIVATE_ENTERED")
+        # ── Entry diagnostic — snapshot every gate variable before delegating ──
+        kill_switch = False
+        try:
+            from kill_switch import get_kill_switch
+            kill_switch = get_kill_switch().is_active()
+        except Exception:
+            pass
+
+        live_verified = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip() in (
+            "true", "1", "yes", "enabled"
+        )
+
+        CA_READY = None
+        EXECUTION_PIPELINE_HEALTHY = None
+        try:
+            _ca_diag = _get_capital_authority_instance()
+            CA_READY = bool(_ca_diag.is_hydrated) if _ca_diag is not None else None
+        except Exception:
+            pass
+        try:
+            try:
+                from bot.execution_router import get_execution_router as _get_er
+            except ImportError:
+                from execution_router import get_execution_router as _get_er  # type: ignore[import]
+            _er = _get_er()
+            _st = _er.get_status()
+            _reg = _st.get("registered_venues", 1)
+            _failed = len(_st.get("session_failed_venues", []))
+            EXECUTION_PIPELINE_HEALTHY = not (_reg > 0 and _failed >= _reg)
+        except Exception:
+            pass
+
+        brokers_ready = None
+        try:
+            _mabm_diag = _get_mabm_instance()
+            if _mabm_diag is not None and hasattr(_mabm_diag, "all_brokers_fully_ready"):
+                brokers_ready = bool(_mabm_diag.all_brokers_fully_ready())
+        except Exception:
+            pass
+
+        _first_snap_accepted = self._first_snap_accepted
+
+        logger.critical(
+            "[AUTO_ACTIVATE ENTRY] kill_switch=%s "
+            "LIVE_CAPITAL_VERIFIED=%s "
+            "capital_ready=%s "
+            "execution_healthy=%s "
+            "first_snap=%s "
+            "brokers_ready=%s",
+            kill_switch,
+            live_verified,
+            CA_READY,
+            EXECUTION_PIPELINE_HEALTHY,
+            _first_snap_accepted,
+            brokers_ready,
+        )
         return self.commit_activation(cycle_capital=cycle_capital)
 
 
