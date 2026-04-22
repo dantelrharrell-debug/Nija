@@ -322,7 +322,7 @@ def _supervisor_step_state_machine() -> None:
             "state=%s",
             _CAPITAL_HYDRATED_EVENT.is_set() if _CAPITAL_HYDRATED_EVENT is not None else None,
             sm.get_first_snap_accepted(),
-            _brokers_ready,
+            _cap.get("mabm_brokers_ready", False),
             sm.get_current_state().value,
         )
         result = sm.maybe_auto_activate(cycle_capital=_cap or None)
