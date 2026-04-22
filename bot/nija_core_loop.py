@@ -1750,6 +1750,16 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             # the activation check uses the same frozen snapshot.
             _supervisor_step_state_machine()
 
+            # ── Activation guard — MUST be committed before running any cycle ──
+            # Check that activation was committed (i.e. state machine transitioned
+            # to LIVE_ACTIVE) after the supervisor step above.  If not, skip this
+            # cycle entirely — never allow run_cycle to execute while inactive.
+            _act_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
+            if _act_sm is not None and not _act_sm.get_activation_committed():
+                logger.critical("🚧 ACTIVATION NOT READY — skipping cycle")
+                time.sleep(1)
+                continue
+
             # ── Proactive broker liveness check before entering run_cycle ─────
             # If the strategy's broker is disconnected, attempt reconnect here
             # so run_cycle doesn't immediately skip and sleep for cycle_secs.
