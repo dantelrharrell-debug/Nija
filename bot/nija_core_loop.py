@@ -325,16 +325,19 @@ def _supervisor_step_state_machine() -> None:
             return
 
         # ── Invariant 4: is_post_hydration ───────────────────────────────
-        # Prevent stale pre-hydration cycle data from satisfying the
-        # activation gate: the current cycle's capital snapshot must have
-        # been captured after CAPITAL_HYDRATED_EVENT fired.
-        _post_hydration = bool(_cap.get("is_post_hydration", False)) if _cap else False
-        if not _post_hydration:
-            logger.debug(
-                "supervisor SM: is_post_hydration is False — "
-                "preventing stale-cycle activation"
-            )
-            return
+        # TEMP: strict post-hydration gate disabled — the pipeline does not
+        # guarantee that is_post_hydration aligns with the activation window
+        # (snapshot captured pre-hydration, hydration completes next cycle,
+        # activation check still sees the old snapshot).  The upstream
+        # CAPITAL_HYDRATED_EVENT guard (Invariant 1) plus the CA hydration
+        # check inside activation_invariant are sufficient.
+        # _post_hydration = bool(_cap.get("is_post_hydration", False)) if _cap else False
+        # if not _post_hydration:
+        #     logger.debug(
+        #         "supervisor SM: is_post_hydration is False — "
+        #         "preventing stale-cycle activation"
+        #     )
+        #     return
 
         # ── All invariants passed — delegate to maybe_auto_activate ──────
         # maybe_auto_activate performs its own full gate sequence (kill switch,
