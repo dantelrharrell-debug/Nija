@@ -5,6 +5,72 @@ echo "=============================="
 echo "    STARTING NIJA TRADING BOT"
 echo "=============================="
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SINGLE-INSTANCE GUARD (shell level)
+#
+# Ensures only one bot.py process runs inside this container at any time.
+# This fires before Python initialises, so it catches scenarios where
+# start.sh is invoked a second time while a previous instance is still live.
+#
+# Cross-container / cross-deployment protection is handled separately by the
+# distributed Redis lock inside bot.py (set NIJA_REDIS_URL / REDIS_URL to
+# enable it).
+# ─────────────────────────────────────────────────────────────────────────────
+_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+_PID_FILE="${_SCRIPT_DIR}/data/nija.pid"
+
+# Seconds to wait for a graceful shutdown before escalating to SIGKILL.
+_GRACE_PERIOD_SECONDS=10
+
+# Patterns that identify a running NIJA bot process in /proc/<pid>/cmdline.
+# These match the main entry-points of the bot so we never kill unrelated PIDs
+# that happen to share the same numeric PID after a container restart.
+_NIJA_PROCESS_PATTERN="bot\.py|trading_strategy|nija_core_loop|tradingview_webhook"
+
+_terminate_duplicate_bot() {
+    local _pid="$1"
+    echo "⚠️  Duplicate NIJA bot detected (PID $_pid) — sending SIGTERM for graceful shutdown..."
+    kill -TERM "$_pid" 2>/dev/null || true
+    # Wait up to _GRACE_PERIOD_SECONDS for graceful exit
+    local _waited=0
+    while [ "$_waited" -lt "$_GRACE_PERIOD_SECONDS" ]; do
+        sleep 1
+        _waited=$((_waited + 1))
+        kill -0 "$_pid" 2>/dev/null || { echo "   ✅ Process $_pid exited cleanly."; return; }
+    done
+    # Force-kill if still alive after grace period
+    echo "   ⚠️  Process $_pid still running after ${_GRACE_PERIOD_SECONDS}s — sending SIGKILL..."
+    kill -9 "$_pid" 2>/dev/null || true
+    sleep 1
+    echo "   ✅ Process $_pid killed."
+}
+
+if [ -f "$_PID_FILE" ]; then
+    _OLD_PID=$(head -1 "$_PID_FILE" 2>/dev/null | tr -d '[:space:]' || echo "")
+    if [ -n "$_OLD_PID" ] && echo "$_OLD_PID" | grep -qE '^[0-9]+$'; then
+        if kill -0 "$_OLD_PID" 2>/dev/null; then
+            # PID is alive — verify it belongs to a NIJA bot process
+            _CMDLINE=""
+            if [ -r "/proc/$_OLD_PID/cmdline" ]; then
+                _CMDLINE=$(tr '\0' ' ' < "/proc/$_OLD_PID/cmdline" 2>/dev/null || echo "")
+            fi
+            if echo "$_CMDLINE" | grep -qE "$_NIJA_PROCESS_PATTERN"; then
+                _terminate_duplicate_bot "$_OLD_PID"
+                rm -f "$_PID_FILE"
+            else
+                echo "⚠️  PID $_OLD_PID in lock file is not a NIJA process (PID reused) — removing stale lock."
+                rm -f "$_PID_FILE"
+            fi
+        else
+            echo "⚠️  Stale lock file found (PID $_OLD_PID not running) — removing."
+            rm -f "$_PID_FILE"
+        fi
+    else
+        echo "⚠️  Lock file contains invalid PID — removing."
+        rm -f "$_PID_FILE"
+    fi
+fi
+# ─────────────────────────────────────────────────────────────────────────────
 # ── Single-instance guard ────────────────────────────────────────────────────
 # Find and kill any pre-existing NIJA bot.py processes so that only ONE
 # instance ever runs.  This mirrors the manual steps:
