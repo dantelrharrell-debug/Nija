@@ -30,6 +30,7 @@ import json
 import logging
 import time
 import threading
+import time
 from enum import Enum
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable
@@ -120,6 +121,9 @@ class TradingStateMachine:
         # Startup timestamp used by the forced-activation failsafe inside
         # maybe_auto_activate() to detect when the pipeline is taking too long.
         self._init_time: float = time.time()
+        # Timestamp used by the 30-second forced snap acceptance escape hatch
+        # in maybe_auto_activate.  Recorded once at construction time.
+        self._init_time: float = time.monotonic()
 
         # Edge-trigger tracking: stores whether activation_invariant returned
         # True on the previous cycle.  Resets to False on init so the
@@ -488,6 +492,13 @@ class TradingStateMachine:
                     "after %.0fs — forcing True to unblock trading pipeline",
                     _time_since_start,
                 )
+        # 30-second forced snap acceptance escape hatch: if no valid live-exchange
+        # snapshot has been accepted within 30 seconds of startup, force the flag so
+        # the activation invariant can proceed rather than blocking indefinitely.
+        if not self._first_snap_accepted:
+            time_since_start = time.monotonic() - self._init_time
+            if time_since_start > 30:
+                logger.critical("FORCED SNAP ACCEPTANCE")
                 self._first_snap_accepted = True
 
         # Evaluate the single activation invariant: all subsystems simultaneously valid.
