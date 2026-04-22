@@ -81,6 +81,10 @@ _PERSISTED_PERMISSIONS = 0o600
 
 # ── Module-level lock (shared by all callers) ─────────────────────────────────
 _LOCK = threading.Lock()
+# Hard cap on how long _init() will poll for _LOCK before raising RuntimeError.
+_NONCE_LOCK_TIMEOUT_SECONDS: float = 10.0
+# Poll interval used within the _init() lock-acquisition loop.
+_NONCE_LOCK_POLL_INTERVAL_SECONDS: float = 0.5
 
 # ── Probe window gate ──────────────────────────────────────────────────────────
 # While probe_and_resync is actively calibrating the nonce floor, block any
@@ -1286,56 +1290,58 @@ class KrakenNonceManager:
         # cross-process lock for the entire read → compute → write sequence so a
         # second process starting at the same time cannot claim the same nonce.
         # Hard rule: no blocking lock in bootstrap may be unbounded.
-        # Every lock gets a timeout; if _LOCK cannot be acquired within 2 s we
-        # bypass via force_rebuild_nonce_state() so startup never hangs forever.
-        if not _LOCK.acquire(timeout=2):
-            _logger.critical("NONCE_LOCK_TIMEOUT_BYPASS")
-            self.force_rebuild_nonce_state()
-        else:
-            _logger.critical("NONCE_LOCK_ACQUIRED")
-            try:
-                with _CrossProcessLock(self._lock_file):
-                    self._last_nonce = self._load_last_nonce()
+        # Poll with 0.5 s intervals up to 10 s; raise RuntimeError on timeout
+        # so the caller gets deterministic forward progress or an explicit error.
+        _lock_start = time.time()
+        _lock_acquired = False
+        while not _lock_acquired:
+            if time.time() - _lock_start > _NONCE_LOCK_TIMEOUT_SECONDS:
+                raise RuntimeError("NONCE LOCK TIMEOUT — forcing recovery")
+            _lock_acquired = _LOCK.acquire(timeout=_NONCE_LOCK_POLL_INTERVAL_SECONDS)
+        _logger.critical("NONCE_LOCK_ACQUIRED — EXCLUSIVE ACCESS GRANTED")
+        try:
+            with _CrossProcessLock(self._lock_file):
+                self._last_nonce = self._load_last_nonce()
 
-                    # Deep-reset mode: advance nonce to a 60-min NTP-corrected floor
-                    # so probe_and_resync() starts well above Kraken's high-water mark
-                    # even after many consecutive nuclear resets.
-                    if _deep_reset:
-                        ntp_corr_ms = _get_ntp_backward_drift_ms()
-                        deep_floor = int(time.time() * 1000) + _DEEP_STARTUP_FLOOR_MS + ntp_corr_ms
-                        if deep_floor > self._last_nonce:
-                            _logger.warning(
-                                "KrakenNonceManager: DEEP RESET — startup floor "
-                                "now+%d ms + NTP correction +%d ms → %d  (was %d)",
-                                _DEEP_STARTUP_FLOOR_MS, ntp_corr_ms,
-                                deep_floor, self._last_nonce,
-                            )
-                            self._last_nonce = deep_floor
+                # Deep-reset mode: advance nonce to a 60-min NTP-corrected floor
+                # so probe_and_resync() starts well above Kraken's high-water mark
+                # even after many consecutive nuclear resets.
+                if _deep_reset:
+                    ntp_corr_ms = _get_ntp_backward_drift_ms()
+                    deep_floor = int(time.time() * 1000) + _DEEP_STARTUP_FLOOR_MS + ntp_corr_ms
+                    if deep_floor > self._last_nonce:
+                        _logger.warning(
+                            "KrakenNonceManager: DEEP RESET — startup floor "
+                            "now+%d ms + NTP correction +%d ms → %d  (was %d)",
+                            _DEEP_STARTUP_FLOOR_MS, ntp_corr_ms,
+                            deep_floor, self._last_nonce,
+                        )
+                        self._last_nonce = deep_floor
 
-                    # Ceiling-jump mode: advance nonce to now + _CEILING_JUMP_MS
-                    # (default 24 h) so it lands well above Kraken's stored value.
-                    # Applied AFTER deep-reset so the ceiling always wins.
-                    if os.environ.get("NIJA_NONCE_CEILING_JUMP", "").strip() == "1":
-                        ceiling_floor = int(time.time() * 1000) + _CEILING_JUMP_MS
-                        if ceiling_floor > self._last_nonce:
-                            _logger.warning(
-                                "🚀 KrakenNonceManager: CEILING JUMP (NIJA_NONCE_CEILING_JUMP=1) — "
-                                "nonce → now+%d ms (%.1f h)  %d → %d",
-                                _CEILING_JUMP_MS, _CEILING_JUMP_MS / 3_600_000,
-                                self._last_nonce, ceiling_floor,
-                            )
-                            self._last_nonce = ceiling_floor
-                        else:
-                            _logger.warning(
-                                "🚀 KrakenNonceManager: CEILING JUMP requested but nonce already "
-                                "ahead (nonce=%d  ceiling=%d  lead=%+d ms) — skipped",
-                                self._last_nonce, ceiling_floor,
-                                self._last_nonce - ceiling_floor,
-                            )
+                # Ceiling-jump mode: advance nonce to now + _CEILING_JUMP_MS
+                # (default 24 h) so it lands well above Kraken's stored value.
+                # Applied AFTER deep-reset so the ceiling always wins.
+                if os.environ.get("NIJA_NONCE_CEILING_JUMP", "").strip() == "1":
+                    ceiling_floor = int(time.time() * 1000) + _CEILING_JUMP_MS
+                    if ceiling_floor > self._last_nonce:
+                        _logger.warning(
+                            "🚀 KrakenNonceManager: CEILING JUMP (NIJA_NONCE_CEILING_JUMP=1) — "
+                            "nonce → now+%d ms (%.1f h)  %d → %d",
+                            _CEILING_JUMP_MS, _CEILING_JUMP_MS / 3_600_000,
+                            self._last_nonce, ceiling_floor,
+                        )
+                        self._last_nonce = ceiling_floor
+                    else:
+                        _logger.warning(
+                            "🚀 KrakenNonceManager: CEILING JUMP requested but nonce already "
+                            "ahead (nonce=%d  ceiling=%d  lead=%+d ms) — skipped",
+                            self._last_nonce, ceiling_floor,
+                            self._last_nonce - ceiling_floor,
+                        )
 
-                    self._persist()
-            finally:
-                _LOCK.release()
+                self._persist()
+        finally:
+            _LOCK.release()
         lead_ms = self._last_nonce - int(time.time() * 1000)
         _logger.info(
             "KrakenNonceManager: ready — nonce=%d  lead=%+d ms",
@@ -2434,6 +2440,24 @@ class KrakenNonceManager:
             return None
         try:
             os.makedirs(os.path.dirname(os.path.abspath(self._pid_lock_file)), exist_ok=True)
+            # FIX 2: Authoritative stale lock pre-cleanup — remove if PID is not alive.
+            # This runs before the heavier _cleanup_stale_pid_lock_if_safe() so that
+            # a clearly-dead lock never blocks the flock attempt below.
+            if os.path.exists(self._pid_lock_file):
+                try:
+                    with open(self._pid_lock_file, "r", encoding="utf-8") as _pre_fh:
+                        _pre_pid = int(_pre_fh.readline().strip())
+                    os.kill(_pre_pid, 0)  # raises OSError if process is not alive
+                except (ValueError, OSError):
+                    try:
+                        os.remove(self._pid_lock_file)
+                        _logger.warning(
+                            "KrakenNonceManager: removed stale nonce lock pre-acquire "
+                            "(file=%s)",
+                            self._pid_lock_file,
+                        )
+                    except OSError:
+                        pass
             if allow_stale_cleanup:
                 try:
                     self._cleanup_stale_pid_lock_if_safe()
@@ -2448,15 +2472,30 @@ class KrakenNonceManager:
                 # Another process holds the lock.
                 fh.close()
                 _holder_meta = "unknown"
+                _existing_pid = 0
                 try:
                     with open(self._pid_lock_file, "r", encoding="utf-8") as _hf:
                         _lines = [ln.strip() for ln in _hf.readlines() if ln.strip()]
+                    if _lines:
+                        try:
+                            _existing_pid = int(_lines[0])
+                        except (ValueError, TypeError):
+                            pass
                     if len(_lines) >= 2:
                         _holder_meta = _lines[1]
                     elif _lines:
                         _holder_meta = _lines[0]
                 except Exception:
                     pass
+                # FIX 4: if this process already owns the lock, skip the retry loop.
+                if _existing_pid and _existing_pid == os.getpid():
+                    _logger.critical(
+                        "KrakenNonceManager: nonce lock already owned by this process "
+                        "(pid=%d, file=%s) — returning existing ownership",
+                        os.getpid(),
+                        self._pid_lock_file,
+                    )
+                    return True
                 if log_failure:
                     _logger.critical(
                         "🚨🚨 DUPLICATE BOT PROCESS DETECTED — another NIJA instance "
