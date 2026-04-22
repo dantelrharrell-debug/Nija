@@ -455,6 +455,25 @@ except ImportError:
         TRUE_PROFIT_TRACKER_AVAILABLE = False
         logger.warning("⚠️ TrueProfitTracker not available — true P&L logging disabled")
 
+# ── Cycle Barrier Scheduler — atomic 4-signal capture per tick ───────────────
+# Ensures RSI_9, RSI_14, MACD histogram, and market regime are all read from
+# the same DataFrame snapshot before any entry gate runs, eliminating the
+# one-cycle lag that previously made activation non-deterministic.
+try:
+    from cycle_barrier_scheduler import get_cycle_barrier_scheduler, CycleBarrierScheduler
+    CYCLE_BARRIER_AVAILABLE = True
+    logger.info("✅ Cycle Barrier Scheduler loaded — atomic 4-signal capture active")
+except ImportError:
+    try:
+        from bot.cycle_barrier_scheduler import get_cycle_barrier_scheduler, CycleBarrierScheduler
+        CYCLE_BARRIER_AVAILABLE = True
+        logger.info("✅ Cycle Barrier Scheduler loaded — atomic 4-signal capture active")
+    except ImportError:
+        get_cycle_barrier_scheduler = None  # type: ignore
+        CycleBarrierScheduler = None  # type: ignore
+        CYCLE_BARRIER_AVAILABLE = False
+        logger.warning("⚠️ Cycle Barrier Scheduler not available — regime may lag by one cycle")
+
 
 class NIJAApexStrategyV71:
     """
@@ -778,6 +797,19 @@ class NIJAApexStrategyV71:
                 self.drawdown_risk_ctrl = None
         else:
             self.drawdown_risk_ctrl = None
+
+        # ── Cycle Barrier Scheduler — atomic 4-signal capture ────────────────
+        # One scheduler instance per strategy so barrier captures are scoped
+        # to this symbol's analysis and do not interfere with concurrent instances.
+        if CYCLE_BARRIER_AVAILABLE and get_cycle_barrier_scheduler is not None:
+            try:
+                self._cycle_barrier = get_cycle_barrier_scheduler()
+                logger.info("✅ Cycle Barrier Scheduler: ENABLED (atomic 4-signal capture)")
+            except (TypeError, AttributeError, RuntimeError) as _cb_err:
+                logger.warning("⚠️  Cycle Barrier Scheduler init failed: %s", _cb_err)
+                self._cycle_barrier = None
+        else:
+            self._cycle_barrier = None
 
         # Per-call state: risk envelope multiplier from drawdown controller
         # Updated at start of each analyze_market call and used in position sizing
@@ -1792,6 +1824,24 @@ class NIJAApexStrategyV71:
         Returns:
             (should_enter, score, reason, metadata)
         """
+        # ── Cycle Barrier: atomically capture all 4 signals from the same df tick ──
+        # This guarantees that regime is freshly detected from the *current* df before
+        # check_long/short_entry runs, eliminating the one-cycle regime lag where RSI
+        # range boundaries could differ from the regime present in the market data.
+        if self._cycle_barrier is not None:
+            try:
+                _snap = self._cycle_barrier.capture(
+                    df=df,
+                    indicators=indicators,
+                    side=side,
+                    regime_detector=self.regime_detector if self.use_enhanced_scoring else None,
+                )
+                # Publish fresh regime so legacy entry checks use THIS cycle's value
+                if _snap.regime is not None:
+                    self.current_regime = _snap.regime
+            except Exception as _barrier_err:
+                logger.debug("[CycleBarrier] capture failed, continuing with cached regime: %s", _barrier_err)
+
         # ── Always run legacy check (needed for metadata + fallback) ──────
         if side == "long":
             legacy_signal, legacy_score, legacy_reason = self.check_long_entry(df, indicators)
