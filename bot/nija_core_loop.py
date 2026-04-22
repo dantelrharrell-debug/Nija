@@ -1695,6 +1695,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     """
     global _loop_running
 
+    logger.critical("🔥 ENTERED run_trading_loop()")
+
+    logger.critical(f"LOOP START CHECK — _loop_running={_loop_running}")
     with _loop_guard:
         if _loop_running:
             logger.critical("🚧 LOOP BLOCKED PATH REACHED — duplicate start guard triggered")
