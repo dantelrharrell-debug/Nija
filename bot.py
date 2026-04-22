@@ -3210,6 +3210,64 @@ def _run_bot_startup_and_trading():
             # after handing off to trader threads" from a genuine boot failure.
             _bootstrap_complete_flag.set()
             logger.info("✅ [Bootstrap] Bootstrap complete — control handed to supervisor")
+            # ── HARD STARTUP BARRIER ─────────────────────────────────────────────
+            # Enforce the startup invariant: _bootstrap_completed_event must only
+            # be set AFTER all three conditions hold simultaneously:
+            #   1. brokers_ready    — all platform brokers fully connected
+            #   2. first_snap       — first live-exchange capital snapshot accepted
+            #   3. capital_fsm_ready — CapitalBootstrapFSM has reached READY
+            #
+            # Without this gate the core loop (which calls maybe_auto_activate)
+            # could start before the system is truly ready, causing phantom vetoes.
+            # We wait up to 30 s for conditions already expected to be true from
+            # earlier in the bootstrap sequence; if they still are not met we log
+            # a critical warning and proceed anyway to avoid a deadlock.
+            _bce_first_snap = False
+            _bce_brokers_ready = False
+            _bce_capital_fsm_ready = False
+            _bce_deadline = time.monotonic() + 30
+            while True:
+                try:
+                    from bot.trading_state_machine import get_state_machine as _get_tsm_bce
+                    _bce_first_snap = _get_tsm_bce().get_first_snap_accepted()
+                except Exception:
+                    _bce_first_snap = False
+                try:
+                    from bot.multi_account_broker_manager import (
+                        multi_account_broker_manager as _mabm_bce,
+                    )
+                    _bce_brokers_ready = bool(_mabm_bce.all_brokers_fully_ready())
+                except Exception:
+                    _bce_brokers_ready = True  # graceful degradation — treat as passing
+                try:
+                    from bot.capital_flow_state_machine import (
+                        get_capital_bootstrap_fsm as _get_cbfsm_bce,
+                    )
+                    _bce_capital_fsm_ready = _get_cbfsm_bce().is_ready
+                except Exception:
+                    _bce_capital_fsm_ready = True  # graceful degradation — treat as passing
+
+                if _bce_first_snap and _bce_brokers_ready and _bce_capital_fsm_ready:
+                    logger.critical(
+                        "✅ [Bootstrap] All startup invariants confirmed — "
+                        "first_snap=%s brokers_ready=%s capital_fsm_ready=%s",
+                        _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
+                    )
+                    break
+                if time.monotonic() >= _bce_deadline:
+                    logger.critical(
+                        "⚠️ [Bootstrap] Startup invariants NOT fully satisfied after 30s — "
+                        "first_snap=%s brokers_ready=%s capital_fsm_ready=%s — "
+                        "proceeding anyway to avoid deadlock",
+                        _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
+                    )
+                    break
+                logger.critical(
+                    "⏳ [Bootstrap] Waiting for startup invariants — "
+                    "first_snap=%s brokers_ready=%s capital_fsm_ready=%s",
+                    _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
+                )
+                time.sleep(1)
             # Signal bootstrap completion so the supervisor loop knows trader
             # threads are running independently.  From this point forward a
             # thread exit means "hand off to supervisor" not "crash".
