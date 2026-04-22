@@ -2125,187 +2125,195 @@ def _run_bot_startup_and_trading():
                 except Exception as _nonce_err:
                     logger.warning("   ⚠️  Nonce pre-reset failed (non-fatal): %s", _nonce_err)
 
-            # Portfolio override visibility at startup
-            portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
-            if portfolio_id:
-                logger.info("🔧 Portfolio override in use: %s", portfolio_id)
-            else:
-                logger.info("🔧 Portfolio override in use: <none>")
-
-            # Pre-flight check: Verify at least one exchange is configured
-            logger.info("=" * 70)
-            logger.info("🔍 PRE-FLIGHT: Checking Exchange Credentials")
-            logger.info("=" * 70)
-
-            exchanges_configured = 0
-            exchange_status = []
-
-            # Check Coinbase
-            coinbase_configured = bool(
-                os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET")
-            )
-            if coinbase_configured:
-                exchanges_configured += 1
-                exchange_status.append("✅ Coinbase")
-            else:
-                exchange_status.append("❌ Coinbase")
-
-            # Check Kraken Platform
-            # Prefer platform keys; legacy KRAKEN_API_* pair remains supported for backward compatibility.
-            kraken_platform_configured = bool(
-                (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
-                and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
-            )
-            if kraken_platform_configured:
-                exchanges_configured += 1
-                exchange_status.append("✅ Kraken (Platform)")
-            else:
-                exchange_status.append("❌ Kraken (Platform)")
-
-            # Check OKX
-            if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
-                exchanges_configured += 1
-                exchange_status.append("✅ OKX")
-            else:
-                exchange_status.append("❌ OKX")
-
-            # Check Binance
-            if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
-                exchanges_configured += 1
-                exchange_status.append("✅ Binance")
-            else:
-                exchange_status.append("❌ Binance")
-
-            # Check Alpaca Platform
-            if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
-                exchanges_configured += 1
-                exchange_status.append("✅ Alpaca (Platform)")
-            else:
-                exchange_status.append("❌ Alpaca (Platform)")
-
-            # D: single structured snapshot instead of N per-exchange log lines
+            logger.critical("🔥 PREFLIGHT ANCHOR: entered post-nonce execution path")
             try:
-                from bot.startup_event_buffer import StartupSnapshot as _ExSnap
-                _ex_snap = _ExSnap("Exchange Credentials")
-                _ex_snap.record("coinbase", coinbase_configured)
-                _ex_snap.record("kraken_platform", kraken_platform_configured)
-                _ex_snap.record("okx", bool(os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET")))
-                _ex_snap.record("binance", bool(os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET")))
-                _ex_snap.record("alpaca", bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET")))
-                _ex_snap.emit(logger)
-            except ImportError:
-                for status in exchange_status:
-                    logger.info(f"   {status}")
-            if exchanges_configured == 0:
-                logger.warning("⚠️  No exchange credentials configured")
-            logger.info("Total exchanges configured: %d", exchanges_configured)
-            logger.info("=" * 70)
+                logger.critical("🔥 PREFLIGHT: entering next stage after nonce")
 
-            if exchanges_configured == 0:
-                logger.error("=" * 70)
-                logger.error("❌ FATAL: NO EXCHANGE CREDENTIALS CONFIGURED")
-                logger.error("=" * 70)
-                logger.error("")
-                logger.error("At least one exchange must be configured to run the bot.")
-                logger.error("Configure credentials for at least ONE of:")
-                logger.error("  • Coinbase")
-                logger.error("  • Kraken")
-                logger.error("  • OKX")
-                logger.error("  • Binance")
-                logger.error("  • Alpaca")
-                logger.error("")
-                logger.error("How to configure:")
-                logger.error("1. Edit .env file and add your credentials")
-                logger.error("2. Or set environment variables in your deployment platform:")
-                logger.error("")
-                logger.error("Railway: Settings → Variables → Add")
-                logger.error("Render:  Dashboard → Service → 'Manual Deploy' → 'Deploy latest commit'")
-                logger.error("")
-                logger.error("For detailed help, see:")
-                logger.error("  • SOLUTION_ENABLE_EXCHANGES.md")
-                logger.error("  • RESTART_DEPLOYMENT.md")
-                logger.error("  • Run: python3 diagnose_env_vars.py")
-                logger.error("=" * 70)
-                logger.error("Exiting - No trading possible without credentials")
-                
-                # Mark as configuration error for health checks
-                health_manager.mark_configuration_error("No exchange credentials configured")
+                # Portfolio override visibility at startup
+                portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
+                if portfolio_id:
+                    logger.info("🔧 Portfolio override in use: %s", portfolio_id)
+                else:
+                    logger.info("🔧 Portfolio override in use: <none>")
 
-                # Bootstrap FSM: no credentials → CONFIG_ERROR_KEEPALIVE terminal state
-                _bfsm_transition(
-                    _BootstrapState.CONFIG_ERROR_KEEPALIVE,
-                    "no exchange credentials configured",
+                # Pre-flight check: Verify at least one exchange is configured
+                logger.info("=" * 70)
+                logger.info("🔍 PRE-FLIGHT: Checking Exchange Credentials")
+                logger.info("=" * 70)
+
+                exchanges_configured = 0
+                exchange_status = []
+
+                # Check Coinbase
+                coinbase_configured = bool(
+                    os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET")
                 )
+                if coinbase_configured:
+                    exchanges_configured += 1
+                    exchange_status.append("✅ Coinbase")
+                else:
+                    exchange_status.append("❌ Coinbase")
 
-                # Health server already started at beginning of main()
-                logger.info("Health server already running - will report configuration error status")
-                
-                _log_lifecycle_banner(
-                    "⚠️  ENTERING CONFIG ERROR KEEP-ALIVE MODE",
-                    [
-                        "No exchange credentials configured - cannot trade",
-                        "Process will stay alive for health monitoring",
-                        "Container will NOT restart automatically",
-                        f"Heartbeat interval: {CONFIG_ERROR_HEARTBEAT_INTERVAL}s",
-                        "Configure credentials and manually restart deployment",
-                        *_get_thread_status()
-                    ]
+                # Check Kraken Platform
+                # Prefer platform keys; legacy KRAKEN_API_* pair remains supported for backward compatibility.
+                kraken_platform_configured = bool(
+                    (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+                    and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
                 )
-                
+                if kraken_platform_configured:
+                    exchanges_configured += 1
+                    exchange_status.append("✅ Kraken (Platform)")
+                else:
+                    exchange_status.append("❌ Kraken (Platform)")
+
+                # Check OKX
+                if os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET") and os.getenv("OKX_PASSPHRASE"):
+                    exchanges_configured += 1
+                    exchange_status.append("✅ OKX")
+                else:
+                    exchange_status.append("❌ OKX")
+
+                # Check Binance
+                if os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET"):
+                    exchanges_configured += 1
+                    exchange_status.append("✅ Binance")
+                else:
+                    exchange_status.append("❌ Binance")
+
+                # Check Alpaca Platform
+                if os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET"):
+                    exchanges_configured += 1
+                    exchange_status.append("✅ Alpaca (Platform)")
+                else:
+                    exchange_status.append("❌ Alpaca (Platform)")
+
+                # D: single structured snapshot instead of N per-exchange log lines
                 try:
-                    loop_count = 0
-                    while True:
-                        time.sleep(CONFIG_ERROR_HEARTBEAT_INTERVAL)
-                        health_manager.heartbeat()
-                        loop_count += 1
-                        
-                        # Log status every 10 iterations (10 minutes at 60s interval)
-                        if loop_count % 10 == 0:
-                            logger.info(f"⏱️  Config error keep-alive: {loop_count * CONFIG_ERROR_HEARTBEAT_INTERVAL}s elapsed")
-                except KeyboardInterrupt:
-                    _log_exit_point(
-                        "Configuration error keep-alive interrupted",
-                        exit_code=0,
-                        details=[
-                            "KeyboardInterrupt in config error keep-alive loop",
-                            "No exchange credentials were configured",
+                    from bot.startup_event_buffer import StartupSnapshot as _ExSnap
+                    _ex_snap = _ExSnap("Exchange Credentials")
+                    _ex_snap.record("coinbase", coinbase_configured)
+                    _ex_snap.record("kraken_platform", kraken_platform_configured)
+                    _ex_snap.record("okx", bool(os.getenv("OKX_API_KEY") and os.getenv("OKX_API_SECRET")))
+                    _ex_snap.record("binance", bool(os.getenv("BINANCE_API_KEY") and os.getenv("BINANCE_API_SECRET")))
+                    _ex_snap.record("alpaca", bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_API_SECRET")))
+                    _ex_snap.emit(logger)
+                except ImportError:
+                    for status in exchange_status:
+                        logger.info(f"   {status}")
+                if exchanges_configured == 0:
+                    logger.warning("⚠️  No exchange credentials configured")
+                logger.info("Total exchanges configured: %d", exchanges_configured)
+                logger.info("=" * 70)
+
+                if exchanges_configured == 0:
+                    logger.error("=" * 70)
+                    logger.error("❌ FATAL: NO EXCHANGE CREDENTIALS CONFIGURED")
+                    logger.error("=" * 70)
+                    logger.error("")
+                    logger.error("At least one exchange must be configured to run the bot.")
+                    logger.error("Configure credentials for at least ONE of:")
+                    logger.error("  • Coinbase")
+                    logger.error("  • Kraken")
+                    logger.error("  • OKX")
+                    logger.error("  • Binance")
+                    logger.error("  • Alpaca")
+                    logger.error("")
+                    logger.error("How to configure:")
+                    logger.error("1. Edit .env file and add your credentials")
+                    logger.error("2. Or set environment variables in your deployment platform:")
+                    logger.error("")
+                    logger.error("Railway: Settings → Variables → Add")
+                    logger.error("Render:  Dashboard → Service → 'Manual Deploy' → 'Deploy latest commit'")
+                    logger.error("")
+                    logger.error("For detailed help, see:")
+                    logger.error("  • SOLUTION_ENABLE_EXCHANGES.md")
+                    logger.error("  • RESTART_DEPLOYMENT.md")
+                    logger.error("  • Run: python3 diagnose_env_vars.py")
+                    logger.error("=" * 70)
+                    logger.error("Exiting - No trading possible without credentials")
+                
+                    # Mark as configuration error for health checks
+                    health_manager.mark_configuration_error("No exchange credentials configured")
+
+                    # Bootstrap FSM: no credentials → CONFIG_ERROR_KEEPALIVE terminal state
+                    _bfsm_transition(
+                        _BootstrapState.CONFIG_ERROR_KEEPALIVE,
+                        "no exchange credentials configured",
+                    )
+
+                    # Health server already started at beginning of main()
+                    logger.info("Health server already running - will report configuration error status")
+                
+                    _log_lifecycle_banner(
+                        "⚠️  ENTERING CONFIG ERROR KEEP-ALIVE MODE",
+                        [
+                            "No exchange credentials configured - cannot trade",
+                            "Process will stay alive for health monitoring",
+                            "Container will NOT restart automatically",
+                            f"Heartbeat interval: {CONFIG_ERROR_HEARTBEAT_INTERVAL}s",
+                            "Configure credentials and manually restart deployment",
                             *_get_thread_status()
                         ]
                     )
-                    sys.exit(0)
-            elif exchanges_configured < 2:
-                # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
-                suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
-                if not suppress_warning:
-                    logger.warning("=" * 70)
-                    logger.warning("⚠️  SINGLE EXCHANGE TRADING")
-                    logger.warning("=" * 70)
-                    logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
-                    logger.warning("  • Better diversification")
-                    logger.warning("  • Reduced API rate limiting")
-                    logger.warning("  • More resilient trading")
-                    logger.warning("")
-                    logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
-                    logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
-                    logger.warning("=" * 70)
-                logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
-                logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
+                
+                    try:
+                        loop_count = 0
+                        while True:
+                            time.sleep(CONFIG_ERROR_HEARTBEAT_INTERVAL)
+                            health_manager.heartbeat()
+                            loop_count += 1
+                        
+                            # Log status every 10 iterations (10 minutes at 60s interval)
+                            if loop_count % 10 == 0:
+                                logger.info(f"⏱️  Config error keep-alive: {loop_count * CONFIG_ERROR_HEARTBEAT_INTERVAL}s elapsed")
+                    except KeyboardInterrupt:
+                        _log_exit_point(
+                            "Configuration error keep-alive interrupted",
+                            exit_code=0,
+                            details=[
+                                "KeyboardInterrupt in config error keep-alive loop",
+                                "No exchange credentials were configured",
+                                *_get_thread_status()
+                            ]
+                        )
+                        sys.exit(0)
+                elif exchanges_configured < 2:
+                    # Can be suppressed by setting SUPPRESS_SINGLE_EXCHANGE_WARNING=true
+                    suppress_warning = os.getenv("SUPPRESS_SINGLE_EXCHANGE_WARNING", "false").lower() in ("true", "1", "yes")
+                    if not suppress_warning:
+                        logger.warning("=" * 70)
+                        logger.warning("⚠️  SINGLE EXCHANGE TRADING")
+                        logger.warning("=" * 70)
+                        logger.warning(f"Only {exchanges_configured} exchange configured. Consider enabling more for:")
+                        logger.warning("  • Better diversification")
+                        logger.warning("  • Reduced API rate limiting")
+                        logger.warning("  • More resilient trading")
+                        logger.warning("")
+                        logger.warning("See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
+                        logger.warning("To suppress this warning, set SUPPRESS_SINGLE_EXCHANGE_WARNING=true")
+                        logger.warning("=" * 70)
+                    logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
+                    logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
-            # Save credential flags so retries can restore them without re-running checks
-            print("INIT_LOCK_ATTEMPT", flush=True)
-            _acquired = _initialized_state_lock.acquire(timeout=5)
-            if not _acquired:
-                raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
-            try:
-                print("INIT_LOCK_ACQUIRED", flush=True)
-                _initialized_state["connection_complete"] = True
-                _initialized_state["kraken_platform_configured"] = kraken_platform_configured
-                _initialized_state["coinbase_configured"] = coinbase_configured
-                _initialized_state["exchanges_configured"] = exchanges_configured
-                _initialized_state["kraken_credentials_valid"] = _kraken_credentials_valid
-                _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
-            finally:
-                _initialized_state_lock.release()
+                # Save credential flags so retries can restore them without re-running checks
+                print("INIT_LOCK_ATTEMPT", flush=True)
+                _acquired = _initialized_state_lock.acquire(timeout=5)
+                if not _acquired:
+                    raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
+                try:
+                    print("INIT_LOCK_ACQUIRED", flush=True)
+                    _initialized_state["connection_complete"] = True
+                    _initialized_state["kraken_platform_configured"] = kraken_platform_configured
+                    _initialized_state["coinbase_configured"] = coinbase_configured
+                    _initialized_state["exchanges_configured"] = exchanges_configured
+                    _initialized_state["kraken_credentials_valid"] = _kraken_credentials_valid
+                    _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
+                finally:
+                    _initialized_state_lock.release()
+
+            except Exception as _preflight_crash:
+                logger.critical("❌ PREFLIGHT CRASH: %s", _preflight_crash, exc_info=True)
+                raise
 
             logger.critical("✅ CONNECTION PHASE COMPLETE — MOVING TO INIT")
             logger.critical("🔥 SENTINEL A: entered INIT section")
