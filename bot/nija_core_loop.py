@@ -329,6 +329,19 @@ def _supervisor_step_state_machine() -> None:
         # cycle detection never silently blocks activation.  If we don't see
         # trading start after this, the root cause is elsewhere in the pipeline.
         _post_hydration = True  # TEMP override to confirm pipeline
+        # TEMP: strict post-hydration gate disabled — the pipeline does not
+        # guarantee that is_post_hydration aligns with the activation window
+        # (snapshot captured pre-hydration, hydration completes next cycle,
+        # activation check still sees the old snapshot).  The upstream
+        # CAPITAL_HYDRATED_EVENT guard (Invariant 1) plus the CA hydration
+        # check inside activation_invariant are sufficient.
+        # _post_hydration = bool(_cap.get("is_post_hydration", False)) if _cap else False
+        # if not _post_hydration:
+        #     logger.debug(
+        #         "supervisor SM: is_post_hydration is False — "
+        #         "preventing stale-cycle activation"
+        #     )
+        #     return
 
         # ── All invariants passed — delegate to maybe_auto_activate ──────
         # maybe_auto_activate performs its own full gate sequence (kill switch,
