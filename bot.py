@@ -665,15 +665,9 @@ def _verify_env() -> None:
         _ev.info("✅ Kraken platform credentials detected")
     _lcv = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
     if _lcv in ("true", "1", "yes", "enabled"):
-        try:
-            from trading_state_machine import get_state_machine
-            _sm = get_state_machine()
-            if _sm.maybe_auto_activate():
-                _ev.info("✅ Trading state machine: auto-transitioned to LIVE_ACTIVE")
-            else:
-                _ev.info("ℹ️  Trading state machine: auto-activate skipped (already active or gate blocked)")
-        except Exception as _sm_err:
-            _ev.warning("⚠️  Could not auto-activate state machine: %s", _sm_err)
+        # Activation is now owned exclusively by the core trading loop.
+        # maybe_auto_activate() is NOT called here — the loop drives it.
+        _ev.info("ℹ️  LIVE_CAPITAL_VERIFIED=true detected — activation will be handled by the core loop")
     else:
         _ev.info(
             "🔒 LIVE_CAPITAL_VERIFIED is not 'true' — live trading remains OFF. "
@@ -895,25 +889,15 @@ def _log_memory_usage():
 
 
 def _try_recover_state_machine() -> None:
-    """Attempt to drive the trading state machine from OFF → LIVE_ACTIVE.
+    """No-op: activation is now owned exclusively by the core trading loop.
 
-    Called when the LIVE_ACTIVE assertion fails so the missing trigger
-    (maybe_auto_activate) is fired from inside the execution loop instead
-    of waiting for an external supervisor to notice the stuck state.
-    All errors are swallowed — this is a best-effort recovery call.
+    Formerly attempted to drive the trading state machine from OFF →
+    LIVE_ACTIVE as a best-effort recovery call, but calling
+    maybe_auto_activate() outside the core loop caused races.  The core
+    loop (nija_core_loop.run_trading_loop) calls maybe_auto_activate()
+    on every cycle and is the single authority for activation.
     """
-    try:
-        from bot.trading_state_machine import get_state_machine as _gsm_r
-    except ImportError as _ie:
-        logger.debug("_try_recover_state_machine: bot.trading_state_machine unavailable (%s), trying fallback", _ie)
-        try:
-            from trading_state_machine import get_state_machine as _gsm_r  # type: ignore[import]
-        except ImportError:
-            return
-    try:
-        _gsm_r().maybe_auto_activate()
-    except Exception as _act_err:
-        logger.debug("_try_recover_state_machine: maybe_auto_activate failed (%s)", _act_err)
+    logger.debug("_try_recover_state_machine: no-op — activation owned by core loop")
 
 
 def _start_trader_thread(independent_trader, broker_type, broker):
@@ -1197,15 +1181,10 @@ def _run_state_machine_loop() -> None:
 
     while True:
         try:
-            logger.critical("LOOP_CALLING_MAYBE_AUTO_ACTIVATE")
-
-            from bot.trading_state_machine import get_state_machine as _gsm
-            sm = _gsm()
-
-            if sm is not None:
-                sm.maybe_auto_activate()
-
-            logger.critical("LOOP_MAYBE_AUTO_ACTIVATE_RETURNED")
+            # Activation is now owned exclusively by the core trading loop
+            # (nija_core_loop.run_trading_loop).  This thread no longer calls
+            # maybe_auto_activate() — doing so outside the loop caused races.
+            logger.critical("STATE_MACHINE_LOOP_HEARTBEAT — activation owned by core loop")
 
         except Exception:
             logger.exception("STATE_MACHINE_LOOP_ERROR")
@@ -1328,10 +1307,13 @@ def _rerun_supervisor_loop(state: dict) -> None:
             if _supervisor_state_machine is not None and _supervisor_off_state is not None:
                 try:
                     if _supervisor_state_machine.get_current_state() == _supervisor_off_state:
+                        # Activation is owned by the core trading loop — do NOT
+                        # call maybe_auto_activate() from the supervisor.  Log
+                        # the OFF state so operators can diagnose stalls, but
+                        # let the core loop drive the transition.
                         logger.info(
-                            "[Supervisor] State machine is OFF — calling maybe_auto_activate() to recover"
+                            "[Supervisor] State machine is OFF — waiting for core loop to activate"
                         )
-                        _supervisor_state_machine.maybe_auto_activate()
                 except Exception as _sl_step_err:
                     logger.debug("_rerun_supervisor_loop: state machine step failed (%s)", _sl_step_err)
 
@@ -2849,49 +2831,22 @@ def _run_bot_startup_and_trading():
             if _startup_buffer:
                 _startup_buffer.flush_phase("CAPITAL_BRAIN")
 
-            logger.critical("B1 REACHED - CHECKING AUTO ACTIVATE")
+            logger.critical("B1 REACHED - BOOTSTRAP COMPLETE — activation delegated to core loop")
 
-            # ── CONNECTION → INIT HANDOFF: activate trading state machine ──────────
-            # maybe_auto_activate() was attempted at module-load time (inside
-            # _verify_env) but CapitalAuthority was not yet hydrated, so Gate 2
-            # (CA_READY) blocked the OFF → LIVE_ACTIVE transition.  Now that the
-            # capital gate has confirmed CapitalAuthority is_ready() and IS
-            # hydrated, retry the transition so trading threads are allowed to execute.
-            # Without this call the state machine stays in OFF forever and no trades
-            # are ever placed — the state machine handoff failure described in FIX #1.
+            # ── CONNECTION → INIT HANDOFF ──────────────────────────────────────────
+            # Activation is now owned exclusively by the core trading loop
+            # (nija_core_loop.run_trading_loop).  maybe_auto_activate() is NOT
+            # called here — the core loop calls it on every cycle until the
+            # state machine transitions to LIVE_ACTIVE.  Calling it here caused
+            # race conditions when CA hydration happened after bootstrap but
+            # before the loop first ran.
             from bot.trading_state_machine import get_state_machine as _get_tsm_init
             _tsm_init = _get_tsm_init()
             logger.critical(
-                "AUTO ACTIVATE PRE-STATE: %s (LIVE_CAPITAL_VERIFIED=%r)",
+                "BOOTSTRAP SM STATE: %s (LIVE_CAPITAL_VERIFIED=%r) — core loop will activate",
                 _tsm_init.get_current_state().value,
                 os.environ.get("LIVE_CAPITAL_VERIFIED", ""),
             )
-            if _tsm_init.maybe_auto_activate():
-                logger.critical(
-                    "AUTO ACTIVATE RESULT: %s", _tsm_init.get_current_state().value
-                )
-                logger.critical(
-                    "✅ INIT PHASE: state machine transitioned to LIVE_ACTIVE"
-                )
-                logger.critical("B6 after activate_trading (maybe_auto_activate succeeded)")
-            else:
-                # Diagnose which gate blocked the transition so the root cause is
-                # surfaced immediately rather than buried in a generic retry loop.
-                _lcv_val = os.environ.get("LIVE_CAPITAL_VERIFIED", "").lower().strip()
-                _tsm_state = _tsm_init.get_current_state().value
-                if _lcv_val not in ("true", "1", "yes", "enabled"):
-                    raise RuntimeError(
-                        "INIT FAILED: LIVE_CAPITAL_VERIFIED is not set to 'true'. "
-                        f"Current value: {_lcv_val!r}. "
-                        "Set LIVE_CAPITAL_VERIFIED=true in your environment to enable live trading. "
-                        f"(TradingStateMachine state: {_tsm_state})"
-                    )
-                raise RuntimeError(
-                    f"INIT FAILED: maybe_auto_activate() blocked after CA_READY "
-                    f"(TradingStateMachine state: {_tsm_state}, "
-                    f"LIVE_CAPITAL_VERIFIED={_lcv_val!r}). "
-                    "Check logs for _capital_readiness_gate details."
-                )
             # ── END CONNECTION → INIT HANDOFF ────────────────────────────────────
 
             # ═══════════════════════════════════════════════════════════════════════
@@ -2926,25 +2881,17 @@ def _run_bot_startup_and_trading():
                 except Exception as _inv_err:
                     logger.warning("⚠️  Bootstrap invariant I7 violation: %s", _inv_err)
 
-            # ── LIVE_ACTIVE guard: no state machine → no threads ──────────────────
-            # Verify LIVE_ACTIVE *before* advancing the bootstrap FSM to
-            # THREADS_STARTING so that a failure here leaves the FSM at
-            # CAPITAL_READY (which now allows BOOT_FAILED_RETRY) rather than
-            # at THREADS_STARTING after an already-committed FSM advance.
+            # ── Bootstrap FSM advance to THREADS_STARTING ────────────────────────
+            # Activation is now owned by the core trading loop, so we no longer
+            # block thread launch on LIVE_ACTIVE state here.  The core loop will
+            # only run trade cycles once activation is committed.  Log current
+            # state for diagnostics and advance the bootstrap FSM.
             from bot.trading_state_machine import get_state_machine as _get_tsm, TradingState as _TradingState
             _tsm = _get_tsm()
-            if _tsm.get_current_state() != _TradingState.LIVE_ACTIVE:
-                # Best-effort recovery: fire maybe_auto_activate() one last time
-                # in case a race left the state machine in OFF after the earlier
-                # successful activation at maybe_auto_activate() line above.
-                _try_recover_state_machine()
-            if _tsm.get_current_state() != _TradingState.LIVE_ACTIVE:
-                _tsm_state_val = _tsm.get_current_state().value
-                raise RuntimeError(
-                    f"INIT FAILED: state machine is {_tsm_state_val!r} (expected LIVE_ACTIVE) "
-                    "before thread launch — recovery attempt did not help; "
-                    "check CapitalAuthority hydration and LIVE_CAPITAL_VERIFIED env var"
-                )
+            logger.critical(
+                "[Bootstrap] SM state before thread launch: %s — core loop owns activation",
+                _tsm.get_current_state().value,
+            )
 
             # Advance bootstrap FSM to THREADS_STARTING only after LIVE_ACTIVE is
             # confirmed so that any failure above leaves the FSM at CAPITAL_READY

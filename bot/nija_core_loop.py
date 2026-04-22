@@ -1715,20 +1715,12 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         try:
             cycle += 1
 
-            # ── Heartbeat: confirm loop is alive and show activation state ────
-            try:
-                _hb_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
-                _hb_activation = _hb_sm.get_activation_committed() if _hb_sm is not None else None
-            except Exception:
-                _hb_activation = None
-            logger.critical("🔄 LOOP HEARTBEAT — activation=%s", _hb_activation)
-
             # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
-            # Must happen BEFORE _supervisor_step_state_machine() so the state
-            # machine activation check and the subsequent strategy cycle see the
-            # same frozen capital view (ca_is_hydrated, total_capital,
-            # mabm_brokers_ready).  Writing to module-level globals is safe
-            # because run_trading_loop runs on a single thread.
+            # Must happen BEFORE activation so the state machine uses the same
+            # frozen capital view (ca_is_hydrated, total_capital,
+            # mabm_brokers_ready) as the subsequent strategy cycle.  Writing to
+            # module-level globals is safe because run_trading_loop runs on a
+            # single thread.
             global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
             _current_cycle_snapshot = None  # clear previous cycle's snapshot
             _current_cycle_id = (
@@ -1745,20 +1737,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _current_cycle_capital.get("mabm_brokers_ready"),
             )
 
-            # ── State machine health check ────────────────────────────────────
-            # Ensure OFF → LIVE_ACTIVE transition is never silently missed
-            # between restart cycles: if CA becomes ready after startup the
-            # state machine must observe it on the very next iteration.
-            # _supervisor_step_state_machine reads _current_cycle_capital so
-            # the activation check uses the same frozen snapshot.
-            _supervisor_step_state_machine()
-
-            # ── Activation guard — MUST be committed before running any cycle ──
-            # Check that activation was committed (i.e. state machine transitioned
-            # to LIVE_ACTIVE) after the supervisor step above.  If not, skip this
-            # cycle entirely — never allow run_cycle to execute while inactive.
+            # ── Activation: core loop is the SOLE owner of activation ─────────
+            # Call maybe_auto_activate() here — and ONLY here.  All external
+            # callers (supervisor, bootstrap, startup thread) have been removed.
+            # The loop retries every second until the state machine transitions
+            # to LIVE_ACTIVE; no trade cycle runs until that happens.
             _act_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
-            if _act_sm is not None and not _act_sm.get_activation_committed():
+            if _act_sm is not None:
+                activated = _act_sm.maybe_auto_activate(cycle_capital=_current_cycle_capital or None)
+            else:
+                activated = False
+            logger.critical("🔄 LOOP HEARTBEAT — activation=%s", activated)
+
+            if not activated:
                 logger.critical("🚧 ACTIVATION NOT READY — skipping cycle")
                 time.sleep(1)
                 continue
@@ -1847,6 +1838,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     logger.critical("🚧 LOOP BLOCKED PATH REACHED — exec test mode fired, skipping normal cycle")
                     continue
 
+            logger.critical("🚀 RUNNING TRADE CYCLE")
             strategy.run_cycle()
             time.sleep(cycle_secs)
 
