@@ -256,99 +256,40 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
 def _supervisor_step_state_machine() -> None:
     """Lightweight state machine health check for the supervisor loop.
 
-    Mirrors the core contract from ``SelfHealingStartup._step_state_machine``:
-        while True:
-            _step_state_machine()
-                → if ca.is_ready(): maybe_auto_activate()
+    Routes exclusively through :meth:`TradingStateMachine.commit_activation` —
+    the single source of truth for the OFF → LIVE_ACTIVE transition.
 
-    Called once per trading cycle so a CA-ready transition is never missed
-    between restarts.  All failures are swallowed — the supervisor loop must
-    not stall due to a state machine error.
+    Hard-blocks immediately if activation has already been committed so the
+    supervisor never wastes a cycle re-evaluating gates that have already
+    passed.  All failures are swallowed — the supervisor loop must not stall
+    due to a state machine error.
 
     Uses the module-level ``_current_cycle_capital`` dict (populated by
-    run_trading_loop at cycle start) so that the state machine activation
-    check sees the SAME frozen capital snapshot that will be used by
-    run_scan_phase, CapitalAllocationBrain, and MABM within this cycle.
-
-    Enforced invariants (all four must be satisfied before maybe_auto_activate
-    is called — any failed condition silently returns so the supervisor retries
-    on the next cycle without propagating exceptions):
-
-      1. CAPITAL_HYDRATED_EVENT must be set — hard-blocks activation until the
-         CapitalAuthority has received at least one broker snapshot.
-      2. _first_snap_accepted must be True — waits until a live-exchange
-         snapshot with valid_brokers > 0 has been validated.
-      3. all_brokers_fully_ready() must be True — waits for broker FSM
-         completion before activating the trading engine.
-      4. is_post_hydration must be True — prevents stale pre-hydration cycle
-         data from satisfying the activation gate.
+    run_trading_loop at cycle start) so that the activation check sees the
+    SAME frozen capital snapshot that will be used by run_scan_phase,
+    CapitalAllocationBrain, and MABM within this cycle.
     """
     if not _SM_AVAILABLE or _get_state_machine is None:
         return
     try:
         sm = _get_state_machine()
+
+        # ── HARD BLOCK: nothing runs until activation is committed ────────
+        # Once _activation_committed is True the bot is LIVE_ACTIVE and there
+        # is no further work for the supervisor to do here.
+        if sm.get_activation_committed():
+            return
+
         if sm.get_current_state() != _TradingState.OFF:
             return
 
         _cap = _current_cycle_capital
 
-        # ── Invariant 1: CAPITAL_HYDRATED_EVENT ──────────────────────────
-        # Hard-block: do not attempt activation until the global hydration
-        # event has been set by CapitalAuthority for the first time.
-        if _CAPITAL_HYDRATED_EVENT is not None and not _CAPITAL_HYDRATED_EVENT.is_set():
-            logger.debug(
-                "supervisor SM: CAPITAL_HYDRATED_EVENT not set — "
-                "blocking activation attempt"
-            )
-            return
-
-        # ── Invariant 2: _first_snap_accepted ────────────────────────────
-        # Wait until the capital bootstrap layer has confirmed a valid
-        # live-exchange snapshot (valid_brokers > 0, snapshot_source ==
-        # "live_exchange") before proceeding.
-        if not sm.get_first_snap_accepted():
-            logger.debug(
-                "supervisor SM: _first_snap_accepted is False — "
-                "waiting for live snapshot validation"
-            )
-            return
-
-        # ── Invariant 3: all_brokers_fully_ready ─────────────────────────
-        # Do not activate until every registered platform broker has
-        # completed its FSM and is confirmed ready.
-        _brokers_ready = bool(_cap.get("mabm_brokers_ready", True)) if _cap else True
-        if not _brokers_ready:
-            logger.debug(
-                "supervisor SM: mabm_brokers_ready is False — "
-                "waiting for broker FSM completion"
-            )
-            return
-
-        # ── Invariant 4: is_post_hydration ───────────────────────────────
-        # TEMP override: treat is_post_hydration as always True so that stale
-        # cycle detection never silently blocks activation.  If we don't see
-        # trading start after this, the root cause is elsewhere in the pipeline.
-        _post_hydration = True  # TEMP override to confirm pipeline
-        # TEMP: strict post-hydration gate disabled — the pipeline does not
-        # guarantee that is_post_hydration aligns with the activation window
-        # (snapshot captured pre-hydration, hydration completes next cycle,
-        # activation check still sees the old snapshot).  The upstream
-        # CAPITAL_HYDRATED_EVENT guard (Invariant 1) plus the CA hydration
-        # check inside activation_invariant are sufficient.
-        # _post_hydration = bool(_cap.get("is_post_hydration", False)) if _cap else False
-        # if not _post_hydration:
-        #     logger.debug(
-        #         "supervisor SM: is_post_hydration is False — "
-        #         "preventing stale-cycle activation"
-        #     )
-        #     return
-
-        # ── All invariants passed — delegate to maybe_auto_activate ──────
-        # maybe_auto_activate performs its own full gate sequence (kill switch,
-        # LIVE_CAPITAL_VERIFIED, _capital_readiness_gate, hard activation gate).
-        # The cycle_capital dict is forwarded so the state machine uses the
-        # same frozen world-view captured at cycle start.
-        sm.maybe_auto_activate(cycle_capital=_cap or None)
+        # ── Delegate entirely to commit_activation — single authority ─────
+        # commit_activation() evaluates all required gates (kill switch,
+        # LIVE_CAPITAL_VERIFIED, capital readiness, activation_invariant) and
+        # performs the OFF → LIVE_ACTIVE transition atomically.
+        sm.commit_activation(cycle_capital=_cap or None)
     except Exception as _sm_err:
         logger.debug("supervisor state machine step failed: %s", _sm_err)
 
