@@ -1249,8 +1249,6 @@ def _ensure_state_machine_loop_started() -> None:
             )
             _sm_loop_thread = None
 
-        _sm_loop_thread.start()
-
         logger.critical(
             "STATE_MACHINE_LOOP_STARTED alive=%s ident=%s",
             _sm_loop_thread.is_alive(),
