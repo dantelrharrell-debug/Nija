@@ -3626,7 +3626,16 @@ def main():
     
     # Wait for initialization to complete, then start the execution loop.
     _bootstrap_completed_event.wait()
+
+    with _initialized_state_lock:
+        strategy = _initialized_state.get("strategy")
+
+    if strategy is None:
+        raise RuntimeError("❌ Strategy not initialized — cannot start trading loop")
+
     from bot.nija_core_loop import run_trading_loop
+    logger.critical("🚨 DEBUG: ABOUT TO START TRADING LOOP THREAD")
+    logger.critical("🚨 STARTING TradingCoreLoop thread — strategy=%s", strategy)
     _acquired = _initialized_state_lock.acquire(timeout=5)
     if not _acquired:
         raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
@@ -3644,6 +3653,7 @@ def main():
         name="TradingCoreLoop",
     ).start()
 
+    logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0
     _bootstrap_handoff_logged = False  # Log the bootstrap hand-off message only once
     while True:
