@@ -973,26 +973,22 @@ def _start_single_broker_thread(strategy, cycle_secs):
             try:
                 cycle += 1
                 logger.info("🔁 [Orchestrator] Single-broker cycle #%d", cycle)
-                # FIX 3: EXECUTION LOOP ASSERTION — prevent silent startup stalls.
-                # If LIVE_ACTIVE is not confirmed the cycle is skipped and retried
-                # after the normal back-off so the thread never silently stalls.
-                assert _is_live_active(), "Execution loop started without LIVE_ACTIVE"
+                # Guard: skip cycle if state machine is not yet LIVE_ACTIVE.
+                # Uses a conditional check instead of assert to avoid raising
+                # an exception on every startup cycle before activation.
+                # The outer `while not stop_flag.is_set()` re-checks the flag
+                # after stop_flag.wait() returns, so no inner break is needed.
+                if not _is_live_active():
+                    logger.warning(
+                        "⏳ [Orchestrator] Single-broker cycle #%d waiting for LIVE_ACTIVE"
+                        " — retrying in 10s",
+                        cycle,
+                    )
+                    _try_recover_state_machine()
+                    stop_flag.wait(10)
+                    continue
                 strategy.run_cycle()
                 stop_flag.wait(cycle_secs)
-            except AssertionError as _assert_err:
-                if stop_flag.is_set():
-                    break
-                logger.error(
-                    "❌ [Orchestrator] Single-broker cycle #%d LIVE_ACTIVE assertion failed: %s"
-                    " — attempting state machine recovery then retrying in 10s",
-                    cycle,
-                    _assert_err,
-                )
-                # Missing trigger fix: fire maybe_auto_activate() so the state
-                # machine can advance from OFF → LIVE_ACTIVE without waiting for
-                # an external supervisor call.
-                _try_recover_state_machine()
-                stop_flag.wait(10)
             except Exception as _cycle_err:
                 if stop_flag.is_set():
                     break
@@ -1357,6 +1353,12 @@ def _ensure_state_machine_loop_started() -> None:
                 _start_err,
             )
             _sm_loop_thread = None
+
+        # Guard: if start() raised and cleared the reference, log and return
+        # rather than crashing with AttributeError on .is_alive() / .ident.
+        if _sm_loop_thread is None:
+            logger.warning("[SMLoop] Thread reference is None after start attempt — skipping liveness check")
+            return
 
         logger.critical(
             "STATE_MACHINE_LOOP_STARTED alive=%s ident=%s",
