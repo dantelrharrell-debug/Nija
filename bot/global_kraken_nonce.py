@@ -33,6 +33,7 @@ import logging
 import os
 import signal
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -2237,6 +2238,10 @@ class KrakenNonceManager:
                 stale_pid,
             )
             _logger.critical("B0 AFTER_NONCE_CLEANUP_REACHED")
+            _logger.critical("🚨 BOOTSTRAP FINALIZATION: TRIGGERING TRADING HANDOFF")
+            _boot_evt = getattr(sys.modules.get("__main__"), "_bootstrap_completed_event", None)
+            if _boot_evt is not None and not _boot_evt.is_set():
+                _boot_evt.set()
             _logger.critical("B0_TO_B1_GUARD_CHECK",
                 extra={
                     "init_lock": getattr(self, "_init_lock_released", None),
