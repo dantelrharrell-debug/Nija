@@ -553,6 +553,7 @@ class TradingStateMachine:
                 self._current_state.value,
                 self.is_live_trading_active(),
             )
+            logger.critical("FORCING ACTIVATION FOR TEST")
             return True
         except Exception as exc:
             logger.error("❌ commit_activation transition failed: %s", exc)
