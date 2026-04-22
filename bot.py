@@ -3226,29 +3226,45 @@ def _run_bot_startup_and_trading():
             _bce_brokers_ready = False
             _bce_capital_fsm_ready = False
             _bce_deadline = time.monotonic() + 30
+            # Resolve module references once, outside the polling loop.
+            try:
+                from bot.trading_state_machine import get_state_machine as _get_tsm_bce
+            except Exception as _bce_import_err:
+                logger.warning("[Bootstrap-Barrier] could not import trading_state_machine: %s", _bce_import_err)
+                _get_tsm_bce = None  # type: ignore[assignment]
+            try:
+                from bot.multi_account_broker_manager import (
+                    multi_account_broker_manager as _mabm_bce,
+                )
+            except Exception as _bce_import_err:
+                logger.warning("[Bootstrap-Barrier] could not import multi_account_broker_manager: %s", _bce_import_err)
+                _mabm_bce = None  # type: ignore[assignment]
+            try:
+                from bot.capital_flow_state_machine import (
+                    get_capital_bootstrap_fsm as _get_cbfsm_bce,
+                )
+            except Exception as _bce_import_err:
+                logger.warning("[Bootstrap-Barrier] could not import capital_flow_state_machine: %s", _bce_import_err)
+                _get_cbfsm_bce = None  # type: ignore[assignment]
             while True:
                 try:
-                    from bot.trading_state_machine import get_state_machine as _get_tsm_bce
-                    _bce_first_snap = _get_tsm_bce().get_first_snap_accepted()
-                except Exception:
+                    _bce_first_snap = _get_tsm_bce().get_first_snap_accepted() if _get_tsm_bce is not None else False
+                except Exception as _bce_err:
+                    logger.debug("[Bootstrap-Barrier] first_snap probe failed: %s", _bce_err)
                     _bce_first_snap = False
                 try:
-                    from bot.multi_account_broker_manager import (
-                        multi_account_broker_manager as _mabm_bce,
-                    )
-                    _bce_brokers_ready = bool(_mabm_bce.all_brokers_fully_ready())
-                except Exception:
+                    _bce_brokers_ready = bool(_mabm_bce.all_brokers_fully_ready()) if _mabm_bce is not None else True
+                except Exception as _bce_err:
+                    logger.debug("[Bootstrap-Barrier] brokers_ready probe failed (treating as passing): %s", _bce_err)
                     _bce_brokers_ready = True  # graceful degradation — treat as passing
                 try:
-                    from bot.capital_flow_state_machine import (
-                        get_capital_bootstrap_fsm as _get_cbfsm_bce,
-                    )
-                    _bce_capital_fsm_ready = _get_cbfsm_bce().is_ready
-                except Exception:
+                    _bce_capital_fsm_ready = _get_cbfsm_bce().is_ready if _get_cbfsm_bce is not None else True
+                except Exception as _bce_err:
+                    logger.debug("[Bootstrap-Barrier] capital_fsm probe failed (treating as passing): %s", _bce_err)
                     _bce_capital_fsm_ready = True  # graceful degradation — treat as passing
 
                 if _bce_first_snap and _bce_brokers_ready and _bce_capital_fsm_ready:
-                    logger.critical(
+                    logger.info(
                         "✅ [Bootstrap] All startup invariants confirmed — "
                         "first_snap=%s brokers_ready=%s capital_fsm_ready=%s",
                         _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
@@ -3262,7 +3278,7 @@ def _run_bot_startup_and_trading():
                         _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
                     )
                     break
-                logger.critical(
+                logger.warning(
                     "⏳ [Bootstrap] Waiting for startup invariants — "
                     "first_snap=%s brokers_ready=%s capital_fsm_ready=%s",
                     _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
