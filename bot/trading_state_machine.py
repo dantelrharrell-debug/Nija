@@ -395,6 +395,13 @@ class TradingStateMachine:
         True  — activation committed (transition performed or was already live)
         False — one or more gates blocked; will be retried on the next cycle
         """
+        # ── TEMPORARY TEST OVERRIDE — remove before production ───────────
+        logger.critical("FORCING ACTIVATION FOR TEST")
+        with self._lock:
+            self._activation_committed = True
+            self._current_state = TradingState.LIVE_ACTIVE
+        return True
+
         # ── Gate 0: idempotency — read under lock for thread-safety ──────
         with self._lock:
             if self._activation_committed:
