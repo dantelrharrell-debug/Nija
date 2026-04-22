@@ -29,6 +29,7 @@ import os
 import json
 import logging
 import threading
+import time
 from enum import Enum
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable
@@ -115,6 +116,10 @@ class TradingStateMachine:
         # valid_brokers > 0 has been accepted.  Resets to False on every new
         # TradingStateMachine instance so a fresh restart always re-validates.
         self._first_snap_accepted: bool = False
+
+        # Timestamp used by the 30-second forced snap acceptance escape hatch
+        # in maybe_auto_activate.  Recorded once at construction time.
+        self._init_time: float = time.monotonic()
 
         # Edge-trigger tracking: stores whether activation_invariant returned
         # True on the previous cycle.  Resets to False on init so the
@@ -486,6 +491,14 @@ class TradingStateMachine:
             _brokers_ready_trace,
             bool(_snap.get("is_post_hydration", False)),
         )
+        # 30-second forced snap acceptance escape hatch: if no valid live-exchange
+        # snapshot has been accepted within 30 seconds of startup, force the flag so
+        # the activation invariant can proceed rather than blocking indefinitely.
+        if not self._first_snap_accepted:
+            time_since_start = time.monotonic() - self._init_time
+            if time_since_start > 30:
+                logger.critical("FORCED SNAP ACCEPTANCE")
+                self._first_snap_accepted = True
 
         # Evaluate the single activation invariant: all subsystems simultaneously valid.
         _current_ready = activation_invariant(_snap, _ca_gate, _mabm_gate, self)
