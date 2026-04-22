@@ -471,6 +471,42 @@ class TradingStateMachine:
             kill_state,
         )
 
+        # Final consolidated gate diagnostic — single source of truth for activation state.
+        _live_verified_bool = lcv in ("true", "1", "yes", "enabled")
+        commit_activation(
+            kill=kill_state,
+            capital_ready=ready,
+            live_verified=_live_verified_bool,
+            invariant=_current_ready,
+            snapshot_ready=self._first_snap_accepted,
+        )
+
+        # EDGE: only trigger on transition False → True.
+        # This prevents spurious repeated activation attempts every loop cycle.
+        _prev_ready = self._activation_ready_last_cycle
+        self._activation_ready_last_cycle = _current_ready
+
+        if _current_ready and not _prev_ready:
+            # All subsystems simultaneously valid — confirm snap and activate.
+            self._first_snap_accepted = True
+            try:
+                self.transition_to(
+                    TradingState.LIVE_ACTIVE,
+                    "CONVERGENCE_EDGE: all subsystems simultaneously valid in same snapshot cycle",
+                )
+                logger.critical("LIVE_ACTIVE_CONFIRMED_CONVERGENCE_EDGE")
+                logger.critical(
+                    "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
+                    self._current_state.value,
+                    self.is_live_trading_active(),
+                )
+                return True
+            except Exception as exc:
+                logger.error("❌ Auto-activate transition failed: %s", exc)
+                return False
+
+        if not _current_ready:
+            # Log which sub-condition is blocking activation (for observability).
         if not _inv_ready:
             # Log which sub-condition is still blocking.
             if not self._first_snap_accepted:
@@ -875,6 +911,73 @@ def activation_invariant(
         valid_brokers > 0,
         snap_source == "live_exchange",
     ))
+
+
+# ---------------------------------------------------------------------------
+# Commit activation — final diagnostic gate with structured critical logging
+# ---------------------------------------------------------------------------
+
+
+def commit_activation(
+    kill: bool,
+    capital_ready: bool,
+    live_verified: bool,
+    invariant: bool,
+    snapshot_ready: bool,
+) -> bool:
+    """Final consolidated activation gate with mandatory critical-level diagnostics.
+
+    Logs all five gate values in a single line so every activation attempt is
+    fully observable in the logs regardless of which condition blocks it.
+    Returns ``True`` only when **every** gate passes.
+
+    Parameters
+    ----------
+    kill:
+        ``True`` when the emergency kill switch is active (blocks activation).
+    capital_ready:
+        ``True`` when the capital-readiness gate (CA_READY +
+        EXECUTION_PIPELINE_HEALTHY) passes.
+    live_verified:
+        ``True`` when the ``LIVE_CAPITAL_VERIFIED`` environment variable is set
+        to a truthy value (operator master switch).
+    invariant:
+        ``True`` when :func:`activation_invariant` returns ``True`` for the
+        current cycle snapshot.
+    snapshot_ready:
+        ``True`` when at least one valid live-exchange capital snapshot has been
+        accepted (``TradingStateMachine._first_snap_accepted``).
+    """
+    logger.critical(
+        "ACTIVATION GATES | "
+        f"kill={kill} | "
+        f"capital={capital_ready} | "
+        f"live_capital={live_verified} | "
+        f"invariant={invariant} | "
+        f"snap={snapshot_ready}"
+    )
+
+    if kill:
+        logger.critical("ACTIVATION BLOCKED")
+        return False
+
+    if not live_verified:
+        logger.critical("ACTIVATION BLOCKED")
+        return False
+
+    if not capital_ready:
+        logger.critical("ACTIVATION BLOCKED")
+        return False
+
+    if not snapshot_ready:
+        logger.critical("ACTIVATION BLOCKED")
+        return False
+
+    if not invariant:
+        logger.critical("ACTIVATION BLOCKED")
+        return False
+
+    return True
 
 
 # Global singleton instance
