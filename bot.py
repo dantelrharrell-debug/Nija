@@ -2311,6 +2311,7 @@ def _run_bot_startup_and_trading():
             print("INIT_A1 RAW STDERR", flush=True)
             if _startup_buffer:
                 _startup_buffer.flush_phase("PREFLIGHT")
+            logger.critical("🚨 BOOTSTRAP: PREFLIGHT COMPLETE — ENTERING FINAL INIT")
 
         # ═══════════════════════════════════════════════════════════════════════
         # BOT INITIALIZATION - This is where Kraken connection happens
@@ -3432,6 +3433,7 @@ def _run_bot_startup_and_trading():
                 _startup_buffer.flush_phase("EXECUTION_LAYER")
                 _startup_buffer.uninstall()
 
+            logger.critical("🚨 BOOTSTRAP: COMPLETING — SETTING STATE + EXITING")
             _rerun_supervisor_loop(_state_for_supervisor)
 
         except RuntimeError as e:
