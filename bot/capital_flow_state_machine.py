@@ -1023,6 +1023,16 @@ class CapitalRefreshCoordinator:
             is_stale=not is_fresh,
         )
 
+        logger.critical(
+            "SNAPSHOT TRACE | "
+            "balances=%s | "
+            "valid_brokers=%d | "
+            "source=%s",
+            snapshot.broker_balances,
+            snapshot.broker_count,
+            "live_exchange" if snapshot.broker_count > 0 else "placeholder",
+        )
+
         self._bus.emit(CapitalEvent(
             event_type=CapitalEventType.SNAPSHOT_COMPUTED,
             trigger=trigger,

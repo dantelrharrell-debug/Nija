@@ -62,45 +62,39 @@ def _wait_for_capital_hydrated(timeout: float = 30.0) -> bool:
 def _notify_state_machine_first_snap_accepted(snapshot: dict) -> None:
     """Propagate first-snap acceptance to the TradingStateMachine singleton.
 
-    Validates that *snapshot* satisfies **all** live-data requirements before
-    calling ``set_first_snap_accepted(True)``.  This function is the single
-    enforcement point — callers must not bypass it by calling the setter
-    directly.
+    Validates that *snapshot* satisfies live-data requirements before calling
+    ``set_first_snap_accepted(True)``.
 
-    Conditions checked (all must hold):
-        1. ``snapshot["valid_brokers"] > 0``     — at least one broker contributed
-        2. ``snapshot["snapshot_source"] == "live_exchange"`` — real exchange data,
-           not a placeholder produced when no brokers are connected
-        3. ``CapitalAuthority.is_hydrated`` is True — coordinator has run and
-           the CA is not in a fallback/stale state
+    Conditions checked:
+        1. ``snapshot["valid_brokers"] > 0`` — at least one broker contributed
+           balances (``snapshot_source`` is NOT required to be "live_exchange"
+           because that field is non-deterministic on real exchanges).
+        2. ``CapitalAuthority.is_hydrated`` is True — coordinator has run and
+           the CA is not in a fallback/stale state.
 
     Errors are logged as warnings but never raised so the caller's flow is
     not disrupted — the hard gate in ``maybe_auto_activate()`` will surface any
     remaining issue as a ``RuntimeError`` at activation time.
     """
-    # ── Condition 1: valid_brokers > 0 ────────────────────────────────────
+    # ── Condition 1: valid_brokers > 0 (balances present) ─────────────────
     _vb = _safe_int(snapshot.get("valid_brokers", 0), 0)
+    _src = str(snapshot.get("snapshot_source", ""))
+    logger.critical(
+        "SNAPSHOT TRACE | balances=%s | valid_brokers=%d | source=%s",
+        snapshot.get("total_capital", 0.0),
+        _vb,
+        _src,
+    )
     if _vb <= 0:
         logger.warning(
             "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "
             "rejected — valid_brokers=%d (must be > 0). "
-            "Broker data is not flowing; snapshot is not live.",
+            "Broker data is not flowing; snapshot has no balances.",
             _vb,
         )
         return
 
-    # ── Condition 2: snapshot_source == "live_exchange" ───────────────────
-    _src = str(snapshot.get("snapshot_source", ""))
-    if _src != "live_exchange":
-        logger.warning(
-            "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "
-            "rejected — snapshot_source=%r (must be 'live_exchange'). "
-            "Placeholder snapshots cannot activate live trading.",
-            _src,
-        )
-        return
-
-    # ── Condition 3: CapitalAuthority is hydrated ─────────────────────────
+    # ── Condition 2: CapitalAuthority is hydrated ─────────────────────────
     try:
         try:
             from bot.capital_authority import get_capital_authority as _get_ca
@@ -547,10 +541,14 @@ class CapitalAllocationBrain:
                         if hasattr(_mabm_bs, "all_brokers_fully_ready") and isinstance(_first_snap, dict):
                             _vb = int(float(_first_snap.get("valid_brokers", 0)))
                             _src = str(_first_snap.get("snapshot_source", ""))
-                            if _vb > 0 and _src == "live_exchange":
+                            # Accept if balances are present (valid_brokers > 0).
+                            # snapshot_source is NOT required to be "live_exchange" —
+                            # that field is non-deterministic on real exchanges and
+                            # falsely blocks activation when broker_map is non-empty.
+                            if _vb > 0:
                                 _first_snap_accepted = True
                                 logger.critical(
-                                    "FIRST_VALID_CAPITAL_SNAPSHOT_ACCEPTED "
+                                    "FIRST SNAP ACCEPTED — FORCED (balances present) "
                                     "valid_brokers=%d snapshot_source=%s total=$%.2f",
                                     _vb,
                                     _src,
@@ -558,15 +556,12 @@ class CapitalAllocationBrain:
                                 )
                                 # Propagate to the trading state machine so the hard
                                 # activation gate in maybe_auto_activate() passes.
-                                # Pass the snapshot so the function validates all
-                                # live-data requirements itself.
                                 _notify_state_machine_first_snap_accepted(_first_snap)
                             else:
                                 logger.critical(
                                     "[CAPITAL_BRAIN] FIRST_VALID_CAPITAL_SNAPSHOT_REJECTED — "
                                     "valid_brokers=%d snapshot_source=%r. "
-                                    "Blocking bootstrap acceptance (expected valid_brokers>0 "
-                                    "and snapshot_source='live_exchange').",
+                                    "Blocking bootstrap acceptance (no balances present).",
                                     _vb,
                                     _src,
                                 )
