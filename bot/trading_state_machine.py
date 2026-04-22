@@ -507,29 +507,29 @@ class TradingStateMachine:
 
         if not _current_ready:
             # Log which sub-condition is blocking activation (for observability).
-        if not _inv_ready:
-            # Log which sub-condition is still blocking.
-            if not self._first_snap_accepted:
-                logger.warning(
-                    "🔒 BLOCK LIVE_ACTIVE: no valid live-exchange capital snapshot accepted"
-                    " — will retry next cycle"
-                )
-            elif _ca_gate is not None and not _ca_gate.is_hydrated:
-                logger.warning(
-                    "🔒 BLOCK LIVE_ACTIVE: CapitalAuthority not hydrated — will retry next cycle"
-                )
-            elif _ca_gate is not None and _ca_gate.is_stale():
-                logger.warning(
-                    "🔒 BLOCK LIVE_ACTIVE: CapitalAuthority data is stale — will retry next cycle"
-                )
-            elif (
-                _mabm_gate is not None
-                and hasattr(_mabm_gate, "all_brokers_fully_ready")
-                and not _mabm_gate.all_brokers_fully_ready()
-            ):
-                logger.warning(
-                    "🔒 BLOCK LIVE_ACTIVE: brokers not fully ready — will retry next cycle"
-                )
+            if not _inv_ready:
+                # Log which sub-condition is still blocking.
+                if not self._first_snap_accepted:
+                    logger.warning(
+                        "🔒 BLOCK LIVE_ACTIVE: no valid live-exchange capital snapshot accepted"
+                        " — will retry next cycle"
+                    )
+                elif _ca_gate is not None and not _ca_gate.is_hydrated:
+                    logger.warning(
+                        "🔒 BLOCK LIVE_ACTIVE: CapitalAuthority not hydrated — will retry next cycle"
+                    )
+                elif _ca_gate is not None and _ca_gate.is_stale():
+                    logger.warning(
+                        "🔒 BLOCK LIVE_ACTIVE: CapitalAuthority data is stale — will retry next cycle"
+                    )
+                elif (
+                    _mabm_gate is not None
+                    and hasattr(_mabm_gate, "all_brokers_fully_ready")
+                    and not _mabm_gate.all_brokers_fully_ready()
+                ):
+                    logger.warning(
+                        "🔒 BLOCK LIVE_ACTIVE: brokers not fully ready — will retry next cycle"
+                    )
             return False
 
         # ── All gates passed — commit the activation atomically ───────────
