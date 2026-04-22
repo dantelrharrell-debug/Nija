@@ -606,6 +606,15 @@ except ImportError:
         _eov_validate_order = None  # type: ignore
         logger.warning("⚠️ Exchange Order Validator not available — order normalisation disabled")
 
+# Module-level cache: NotionalGateConfig for exchange minimum notional checks.
+# Instantiated once at import time to avoid repeated per-order construction.
+try:
+    from bot.minimum_notional_gate import NotionalGateConfig as _NotionalGateConfig
+    _NOTIONAL_GATE_CONFIG: Optional[Any] = _NotionalGateConfig()
+except ImportError:
+    _NOTIONAL_GATE_CONFIG = None
+    logger.warning("⚠️ MinimumNotionalGate not available — exchange minimum notional check disabled")
+
 # Root nija logger for flushing all handlers
 # Child loggers (like 'nija.broker', 'nija.multi_account') propagate to this logger
 # but don't have their own handlers, so we need to flush the root logger's handlers
@@ -2014,6 +2023,36 @@ class BaseBroker(ABC):
                     "partial_fill": False,
                     "filled_pct": 0.0
                 }
+
+        # PRE-FLIGHT CHECK 4: Exchange minimum notional (hard floor — not bypassable by ignore_min_trade)
+        # Even when the bot's policy minimum is bypassed (e.g. EXEC_TEST_PROBE), the exchange's
+        # absolute floor must still be respected so the API never rejects the order outright.
+        # Only force_liquidate (emergency exit) is permitted to skip this guard.
+        if size_type == 'quote' and not force_liquidate:
+            if _NOTIONAL_GATE_CONFIG is not None:
+                exchange_min_notional = _NOTIONAL_GATE_CONFIG.get_min_notional_for_broker(broker_name)
+                order_value = quantity
+                if order_value < exchange_min_notional:
+                    logger.critical("🛑 ORDER BLOCKED: BELOW MIN NOTIONAL")
+                    logger.critical(
+                        "   order_value=$%.2f < exchange_min_notional=$%.2f (%s)",
+                        order_value, exchange_min_notional, broker_title,
+                    )
+                    return {
+                        "status": "unfilled",
+                        "error": "BELOW_MIN_NOTIONAL",
+                        "message": (
+                            f"Order value ${order_value:.2f} is below the exchange "
+                            f"minimum notional ${exchange_min_notional:.2f} for {broker_title}"
+                        ),
+                        "partial_fill": False,
+                        "filled_pct": 0.0,
+                    }
+            else:
+                logger.warning(
+                    "⚠️ Skipping exchange min-notional check for %s — NotionalGateConfig unavailable",
+                    symbol,
+                )
 
         # All pre-flight checks passed - execute order
         return self.place_market_order(
