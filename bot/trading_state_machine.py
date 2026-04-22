@@ -132,6 +132,14 @@ class TradingStateMachine:
         # EMERGENCY_STOP so re-activation after recovery always re-validates.
         self._activation_ready_last_cycle: bool = False
 
+        # Single atomic activation commitment flag.  Set to True exactly once
+        # per activation cycle when commit_activation() successfully transitions
+        # to LIVE_ACTIVE.  Reset to False when the state returns to OFF or
+        # EMERGENCY_STOP so the next activation attempt re-validates all gates.
+        # All supervisor paths MUST check this flag and call commit_activation()
+        # as the sole authority for the OFF → LIVE_ACTIVE transition.
+        self._activation_committed: bool = False
+
         # Try to load persisted state, but NEVER start in LIVE_ACTIVE
         self._load_state()
 
@@ -314,6 +322,9 @@ class TradingStateMachine:
             # False → True transition is re-detected on the next activation attempt.
             if new_state in (TradingState.OFF, TradingState.EMERGENCY_STOP):
                 self._activation_ready_last_cycle = False
+                # Reset the commitment flag so commit_activation() re-validates
+                # on the next activation attempt after recovery.
+                self._activation_committed = False
 
             # Persist
             self._persist_state()
@@ -350,182 +361,95 @@ class TradingStateMachine:
             except Exception as e:
                 logger.error(f"❌ Error executing state callback: {e}")
 
-    def maybe_auto_activate(
+    def commit_activation(
         self,
         cycle_capital: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """
-        Auto-transition from OFF → LIVE_ACTIVE when all safety gates pass.
+        """Single atomic activation commit — the ONE source of truth for OFF → LIVE_ACTIVE.
 
-        Gates (evaluated in this exact order — all must be true):
-          Gate 0. Current state is OFF
-          Gate 1. No active kill switch (fast-fail before any env-var reads)
-          Gate 2. Environment variable LIVE_CAPITAL_VERIFIED is truthy
-                  (operator master switch — TRADING_ENABLED concept)
-          Gate 3. ``_capital_readiness_gate()`` passes:
-                  a. CA_READY — CapitalAuthority not stale AND is_hydrated=True
-                                (system has data; balance magnitude is not checked here)
-                  b. EXECUTION_PIPELINE_HEALTHY — ExecutionRouter has no
-                                                   circuit-breaking session failures
-                  NOTE: CAPITAL_ELIGIBLE (total_capital >= MINIMUM_TRADING_BALANCE)
-                  is intentionally NOT checked here — it belongs in the
-                  execution / position-sizing layer only.
+        This is the FINAL AUTHORITY for the activation transition.  All callers
+        (supervisor loop, self-healing startup, watchdog) MUST route through this
+        method exclusively.  No other code path may trigger the OFF → LIVE_ACTIVE
+        transition.
+
+        The method is idempotent: once ``_activation_committed`` is True it
+        returns ``True`` immediately without re-evaluating any gates.
+
+        Gates (evaluated in order — ALL must pass):
+          Gate 0. Not already committed (idempotency guard)
+          Gate 1. Current state is OFF (or already LIVE_ACTIVE — see above)
+          Gate 2. Kill switch is inactive
+          Gate 3. LIVE_CAPITAL_VERIFIED env var is truthy (operator master switch)
+          Gate 4. CapitalAuthority ready + ExecutionPipeline healthy
+          Gate 5. ``activation_invariant()`` — all subsystems simultaneously valid
 
         Parameters
         ----------
-        cycle_capital : optional pre-captured capital snapshot dict produced by
-            ``nija_core_loop._capture_cycle_capital_state()`` at cycle start.
-            When supplied, the hard activation gate uses ``ca_is_hydrated`` and
-            ``mabm_brokers_ready`` from this dict instead of re-reading live
-            state, ensuring every sub-system in a single cycle operates on the
-            same frozen world-view.
+        cycle_capital : optional frozen capital-state dict captured once per
+            cycle by ``nija_core_loop._capture_cycle_capital_state()``.
+            When supplied, gate 5 uses this snapshot so the activation check
+            sees the same world-view as the rest of the current cycle.
 
-        Returns:
-            True  if the transition was performed (or already LIVE_ACTIVE)
-            False if any gate blocked it
+        Returns
+        -------
+        True  — activation committed (transition performed or was already live)
+        False — one or more gates blocked; will be retried on the next cycle
         """
-        logger.critical("MAYBE_AUTO_ACTIVATE_ENTERED")
-
+        # ── Gate 0: idempotency — read under lock for thread-safety ──────
         with self._lock:
+            if self._activation_committed:
+                return True
             current = self._current_state
 
         if current == TradingState.LIVE_ACTIVE:
-            return True  # already live
+            # State was set externally (e.g. manual transition); sync the flag.
+            with self._lock:
+                self._activation_committed = True
+            return True
 
         if current != TradingState.OFF:
             logger.debug(
-                "maybe_auto_activate: state is %s (not OFF) — skipping", current.value
+                "commit_activation: state is %s (not OFF) — skipping", current.value
             )
             return False
 
-        # Gate 1: kill switch must be inactive (checked first — fast fail)
+        # ── Gate 2: kill switch must be inactive ─────────────────────────
         kill_state = False
         try:
             from kill_switch import get_kill_switch
             kill_state = get_kill_switch().is_active()
             if kill_state:
-                logger.warning(
-                    "🔒 Auto-activate blocked: kill switch is active"
-                )
+                logger.warning("🔒 Activation blocked: kill switch is active")
                 return False
         except Exception as _ks_err:
-            logger.debug("maybe_auto_activate: could not check kill switch: %s", _ks_err)
+            logger.debug("commit_activation: could not check kill switch: %s", _ks_err)
 
-        # Gate 2: LIVE_CAPITAL_VERIFIED (operator master switch)
+        # ── Gate 3: LIVE_CAPITAL_VERIFIED (operator master switch) ────────
         lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
         if lcv not in ("true", "1", "yes", "enabled"):
             logger.info(
-                "🔒 Auto-activate blocked: LIVE_CAPITAL_VERIFIED is not set to true "
-                "(current value: %r).  Set it in your .env to enable live trading.",
+                "🔒 Activation blocked: LIVE_CAPITAL_VERIFIED is not set to true "
+                "(current value: %r). Set it in your .env to enable live trading.",
                 lcv,
             )
             return False
 
-        # Gate 3: CA_READY + EXECUTION_PIPELINE_HEALTHY
+        # ── Gate 4: CA_READY + EXECUTION_PIPELINE_HEALTHY ────────────────
         ready, reason = _capital_readiness_gate()
         if not ready:
-            logger.info("🔒 Auto-activate blocked by capital readiness gate: %s", reason)
+            logger.info("🔒 Activation blocked by capital readiness gate: %s", reason)
             return False
 
-        # ── Hard activation gate — edge-triggered ─────────────────────────
-        # A single activation_invariant evaluates ALL required subsystems
-        # simultaneously in the same snapshot cycle.  The edge trigger fires
-        # ONLY on the False → True transition so activation is never retried
-        # on every loop iteration and is never missed.
-
+        # ── Gate 5: activation_invariant — all subsystems simultaneously valid
         _mabm_gate = _get_mabm_instance()
         _ca_gate = _get_capital_authority_instance()
-
-        # When a pre-captured cycle_capital dict is available, use its frozen
-        # values instead of re-reading live MABM/CA state.  This guarantees
-        # that the state machine activation check sees the same capital
-        # snapshot that was used to build the NijaCoreLoop CycleSnapshot for
-        # this cycle, preventing inconsistency caused by background threads
-        # updating broker/CA state between the two reads.
         _snap = cycle_capital if cycle_capital else {}
 
-        # Inline cycle-driven snap acceptance: if _first_snap_accepted has not
-        # been set yet (e.g. bootstrap escape hatch was missed because CA
-        # hydrated before brokers were fully ready), attempt it here directly.
-        # This is idempotent — already-accepted snaps skip the block — and
-        # cycle-driven — it is retried on every maybe_auto_activate call until
-        # a valid live-exchange snapshot is available.
-        if not self._first_snap_accepted and _mabm_gate is not None and hasattr(_mabm_gate, "refresh_capital_authority"):
-            try:
-                _inline_snap = _mabm_gate.refresh_capital_authority(trigger="inline_activation_check")
-                if isinstance(_inline_snap, dict):
-                    _inline_vb = int(float(_inline_snap.get("valid_brokers", 0)))
-                    _inline_src = str(_inline_snap.get("snapshot_source", ""))
-                    # Accept if balances are present (valid_brokers > 0).
-                    # snapshot_source is NOT checked — it is non-deterministic
-                    # on real exchanges and falsely blocks activation.
-                    if _inline_vb > 0:
-                        self._first_snap_accepted = True
-                        logger.critical(
-                            "FIRST SNAP ACCEPTED — FORCED (balances present) "
-                            "[inline] valid_brokers=%d snapshot_source=%s",
-                            _inline_vb,
-                            _inline_src,
-                        )
-                    else:
-                        logger.debug(
-                            "[TradingStateMachine] inline snap check: "
-                            "valid_brokers=%d snapshot_source=%r — no balances, will retry next cycle",
-                            _inline_vb,
-                            _inline_src,
-                        )
-            except Exception as _inline_err:
-                logger.warning(
-                    "[TradingStateMachine] inline snap acceptance attempt failed: %s"
-                    " — will retry next cycle",
-                    _inline_err,
-                )
+        _inv_ready = activation_invariant(_snap, _ca_gate, _mabm_gate, self)
 
-        # Hard activation failsafe: if the pipeline has been running for more
-        # than 20 s and _first_snap_accepted is still False, force it open so
-        # trading is never permanently blocked by a stale bootstrap state.
-        if not self._first_snap_accepted:
-            _time_since_start = time.time() - self._init_time
-            if _time_since_start > 20:
-                logger.critical(
-                    "FORCED ACTIVATION — FAILSAFE: _first_snap_accepted still False "
-                    "after %.0fs — forcing True to unblock trading pipeline",
-                    _time_since_start,
-                )
-        # Final gate state trace — confirm every condition visible before invariant fires.
-        _brokers_ready_trace = (
-            _mabm_gate.all_brokers_fully_ready()
-            if _mabm_gate is not None and hasattr(_mabm_gate, "all_brokers_fully_ready")
-            else None
-        )
         logger.critical(
-            "FINAL GATE STATE | "
-            "hydrated=%s | "
-            "snap=%s | "
-            "brokers=%s | "
-            "post_hydration=%s",
-            _ca_gate.is_hydrated if _ca_gate is not None else None,
-            self._first_snap_accepted,
-            _brokers_ready_trace,
-            bool(_snap.get("is_post_hydration", False)),
-        )
-        # 30-second forced snap acceptance escape hatch: if no valid live-exchange
-        # snapshot has been accepted within 30 seconds of startup, force the flag so
-        # the activation invariant can proceed rather than blocking indefinitely.
-        if not self._first_snap_accepted:
-            time_since_start = time.monotonic() - self._init_time
-            if time_since_start > 30:
-                logger.critical("FORCED SNAP ACCEPTANCE")
-                self._first_snap_accepted = True
-
-        # Evaluate the single activation invariant: all subsystems simultaneously valid.
-        _current_ready = activation_invariant(_snap, _ca_gate, _mabm_gate, self)
-
-        # Emit the mandatory proof log so every path through activation is visible.
-        logger.critical(
-            "ACTIVATION_INVARIANT "
+            "COMMIT_ACTIVATION_INVARIANT "
             "ready=%s "
-            "prev_ready=%s "
             "first_snap=%s "
             "ca_hydrated=%s "
             "ca_not_stale=%s "
@@ -533,8 +457,7 @@ class TradingStateMachine:
             "snap_source=%s "
             "brokers_ready=%s "
             "kill_switch=%s",
-            _current_ready,
-            self._activation_ready_last_cycle,
+            _inv_ready,
             self._first_snap_accepted,
             _ca_gate.is_hydrated if _ca_gate is not None else None,
             (not _ca_gate.is_stale()) if _ca_gate is not None else None,
@@ -584,6 +507,8 @@ class TradingStateMachine:
 
         if not _current_ready:
             # Log which sub-condition is blocking activation (for observability).
+        if not _inv_ready:
+            # Log which sub-condition is still blocking.
             if not self._first_snap_accepted:
                 logger.warning(
                     "🔒 BLOCK LIVE_ACTIVE: no valid live-exchange capital snapshot accepted"
@@ -607,9 +532,47 @@ class TradingStateMachine:
                 )
             return False
 
-        # _current_ready and _prev_ready are both True — invariant has been
-        # consistently True; transition_to already succeeded on the edge cycle.
-        return self._current_state == TradingState.LIVE_ACTIVE
+        # ── All gates passed — commit the activation atomically ───────────
+        try:
+            self.transition_to(
+                TradingState.LIVE_ACTIVE,
+                "COMMIT_ACTIVATION: all gates passed — single-source activation commit",
+            )
+            with self._lock:
+                self._activation_committed = True
+            logger.critical("ACTIVATION_COMMITTED — LIVE_ACTIVE confirmed")
+            logger.critical(
+                "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
+                self._current_state.value,
+                self.is_live_trading_active(),
+            )
+            return True
+        except Exception as exc:
+            logger.error("❌ commit_activation transition failed: %s", exc)
+            return False
+
+    def get_activation_committed(self) -> bool:
+        """Return True once commit_activation() has successfully transitioned to LIVE_ACTIVE.
+
+        Supervisors and guards use this to skip redundant activation attempts and
+        to hard-block trading operations until activation is confirmed.
+        Thread-safe: reads the flag under the instance lock.
+        """
+        with self._lock:
+            return self._activation_committed
+
+    def maybe_auto_activate(
+        self,
+        cycle_capital: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Backward-compatible shim — delegates to :meth:`commit_activation`.
+
+        All new callers should use ``commit_activation()`` directly.
+        This method is retained only to avoid breaking existing call sites
+        that have not yet been updated.
+        """
+        logger.critical("MAYBE_AUTO_ACTIVATE_ENTERED")
+        return self.commit_activation(cycle_capital=cycle_capital)
 
 
     def get_state_history(self, limit: int = 10) -> list:
