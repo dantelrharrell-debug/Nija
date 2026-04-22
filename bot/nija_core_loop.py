@@ -689,6 +689,7 @@ class NijaCoreLoop:
 
     def start(self, strategy: Any = None) -> None:
         """Start the continuous execution loop in a daemon thread (idempotent)."""
+        print("🔥 CORE LOOP START CALLED")
         _target = strategy if strategy is not None else self.apex
         if _target is None:
             logger.warning("NijaCoreLoop.start(): no strategy — execution loop NOT started")
