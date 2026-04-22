@@ -687,6 +687,20 @@ class NijaCoreLoop:
                 reject_counts=self.reject_reason_counts,
             )
 
+    def start(self, strategy: Any = None) -> None:
+        """Start the continuous execution loop in a daemon thread (idempotent)."""
+        _target = strategy if strategy is not None else self.apex
+        if _target is None:
+            logger.warning("NijaCoreLoop.start(): no strategy — execution loop NOT started")
+            return
+        threading.Thread(
+            target=run_trading_loop,
+            args=(_target,),
+            daemon=True,
+            name="NijaCoreLoop-Execution",
+        ).start()
+        logger.info("✅ NijaCoreLoop.start(): execution loop started")
+
     # ------------------------------------------------------------------
     # Lazy component loaders
     # ------------------------------------------------------------------
@@ -1564,10 +1578,19 @@ class NijaCoreLoop:
 _loop: Optional[NijaCoreLoop] = None
 
 
-def get_nija_core_loop(apex_strategy: Any, max_positions: int = 5) -> NijaCoreLoop:
-    """Return (or lazily create) the module-level singleton NijaCoreLoop."""
+def get_nija_core_loop(apex_strategy: Any = None, max_positions: int = 5) -> NijaCoreLoop:
+    """Return (or lazily create) the module-level singleton NijaCoreLoop.
+
+    ``apex_strategy`` is required only on the first call (when the singleton
+    does not yet exist).  Subsequent calls may omit it to retrieve the already-
+    created instance.
+    """
     global _loop
     if _loop is None:
+        if apex_strategy is None:
+            raise ValueError(
+                "get_nija_core_loop: apex_strategy must be provided on the first call"
+            )
         _loop = NijaCoreLoop(apex_strategy=apex_strategy, max_positions=max_positions)
     return _loop
 
