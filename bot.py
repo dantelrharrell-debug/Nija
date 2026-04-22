@@ -3369,6 +3369,30 @@ def _run_bot_startup_and_trading():
             _bootstrap_completed_event.set()
             logger.info("✅ BOOTSTRAP COMPLETE — system handed to supervisor loop")
 
+            # ── Bulletproof loop start: fire immediately from the bootstrap ──
+            # Starting the trading loop here (as well as in main()) guarantees
+            # execution regardless of threading race conditions.  run_trading_loop
+            # has an internal _loop_running guard that makes a second start a
+            # safe no-op, so there is no risk of running two loops.
+            logger.critical("🚨 STARTING CORE LOOP FROM BOOTSTRAP COMPLETION")
+            try:
+                from bot.nija_core_loop import run_trading_loop as _rtl_boot
+                with _initialized_state_lock:
+                    _boot_strategy = _initialized_state.get("strategy")
+                if _boot_strategy is None:
+                    raise RuntimeError("❌ Strategy missing at bootstrap completion")
+                threading.Thread(
+                    target=_rtl_boot,
+                    args=(_boot_strategy,),
+                    daemon=True,
+                    name="TradingCoreLoop",
+                ).start()
+            except Exception as _boot_loop_err:
+                logger.critical(
+                    "❌ Failed to start TradingCoreLoop from bootstrap: %s",
+                    _boot_loop_err,
+                )
+
             # FIX OPTION A: Force activation check AFTER INIT completes.
             # maybe_auto_activate() was called earlier (during the capital gate
             # phase) but the full bootstrap (threads started, _initialized_state
@@ -3462,7 +3486,8 @@ def _run_bot_startup_and_trading():
 
 def main():
     """Main entry point for NIJA trading bot - Railway optimized"""
-    
+    logger.critical("🧭 MAIN STARTUP PATH ENTERED")
+
     # ═══════════════════════════════════════════════════════════════════════
     # CRITICAL: START HEALTH SERVER FIRST (Railway requirement)
     # ═══════════════════════════════════════════════════════════════════════
@@ -3625,7 +3650,9 @@ def main():
     )
     
     # Wait for initialization to complete, then start the execution loop.
+    logger.critical("🧭 BEFORE bootstrap wait")
     _bootstrap_completed_event.wait()
+    logger.critical("🧭 AFTER bootstrap wait")
     from bot.nija_core_loop import run_trading_loop
     _acquired = _initialized_state_lock.acquire(timeout=5)
     if not _acquired:
