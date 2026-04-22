@@ -805,7 +805,7 @@ class NIJAApexStrategyV71:
             try:
                 self._cycle_barrier = get_cycle_barrier_scheduler()
                 logger.info("✅ Cycle Barrier Scheduler: ENABLED (atomic 4-signal capture)")
-            except Exception as _cb_err:
+            except (TypeError, AttributeError, RuntimeError) as _cb_err:
                 logger.warning("⚠️  Cycle Barrier Scheduler init failed: %s", _cb_err)
                 self._cycle_barrier = None
         else:
@@ -1829,15 +1829,18 @@ class NIJAApexStrategyV71:
         # check_long/short_entry runs, eliminating the one-cycle regime lag where RSI
         # range boundaries could differ from the regime present in the market data.
         if self._cycle_barrier is not None:
-            _snap = self._cycle_barrier.capture(
-                df=df,
-                indicators=indicators,
-                side=side,
-                regime_detector=self.regime_detector if self.use_enhanced_scoring else None,
-            )
-            # Publish fresh regime so legacy entry checks use THIS cycle's value
-            if _snap.regime is not None:
-                self.current_regime = _snap.regime
+            try:
+                _snap = self._cycle_barrier.capture(
+                    df=df,
+                    indicators=indicators,
+                    side=side,
+                    regime_detector=self.regime_detector if self.use_enhanced_scoring else None,
+                )
+                # Publish fresh regime so legacy entry checks use THIS cycle's value
+                if _snap.regime is not None:
+                    self.current_regime = _snap.regime
+            except Exception as _barrier_err:
+                logger.debug("[CycleBarrier] capture failed, continuing with cached regime: %s", _barrier_err)
 
         # ── Always run legacy check (needed for metadata + fallback) ──────
         if side == "long":
