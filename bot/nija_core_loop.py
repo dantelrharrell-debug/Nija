@@ -348,7 +348,23 @@ def _supervisor_step_state_machine() -> None:
         # LIVE_CAPITAL_VERIFIED, _capital_readiness_gate, hard activation gate).
         # The cycle_capital dict is forwarded so the state machine uses the
         # same frozen world-view captured at cycle start.
-        sm.maybe_auto_activate(cycle_capital=_cap or None)
+        logger.critical(
+            "SUPERVISOR CYCLE CHECK | "
+            "hydrated=%s | "
+            "snap=%s | "
+            "brokers=%s | "
+            "state=%s",
+            _CAPITAL_HYDRATED_EVENT.is_set() if _CAPITAL_HYDRATED_EVENT is not None else None,
+            sm.get_first_snap_accepted(),
+            _brokers_ready,
+            sm.get_current_state().value,
+        )
+        result = sm.maybe_auto_activate(cycle_capital=_cap or None)
+        logger.critical(
+            "ACTIVATION RESULT | committed=%s | state=%s",
+            result,
+            sm.get_current_state().value,
+        )
     except Exception as _sm_err:
         logger.debug("supervisor state machine step failed: %s", _sm_err)
 
