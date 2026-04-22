@@ -1015,6 +1015,136 @@ def _is_truthy_env(var_name: str, default: str = "false") -> bool:
     return os.environ.get(var_name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _run_preflight_check() -> bool:
+    """
+    Synchronous pre-flight check — runs directly in main(), before any
+    background threads are spawned.
+
+    Prints a plain-English PASS / FAIL table to stdout so that regardless
+    of the logging configuration the operator always sees the result.
+
+    Returns
+    -------
+    bool
+        True  — every critical requirement is satisfied; startup may proceed.
+        False — at least one critical blocker was found; the caller should
+                sys.exit(1) immediately.
+    """
+    import importlib.util as _iutil
+
+    SEP = "═" * 70
+    checks = []   # list of (label, passed: bool, detail: str)
+    blockers = []  # human-readable reasons trading cannot start
+
+    # ── 1. Kraken credentials ────────────────────────────────────────────────
+    kraken_key = (
+        os.getenv("KRAKEN_PLATFORM_API_KEY")
+        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_KEY")
+        or os.getenv("KRAKEN_API_KEY")
+    )
+    kraken_secret = (
+        os.getenv("KRAKEN_PLATFORM_API_SECRET")
+        or os.getenv("KRAKEN_USER_TANIA_GILBERT_API_SECRET")
+        or os.getenv("KRAKEN_API_SECRET")
+    )
+    kraken_creds_ok = bool(kraken_key and kraken_secret)
+    if kraken_creds_ok:
+        checks.append(("Kraken credentials", True, "key and secret present"))
+    else:
+        missing = []
+        if not kraken_key:
+            missing.append("key (KRAKEN_PLATFORM_API_KEY / KRAKEN_USER_TANIA_GILBERT_API_KEY / KRAKEN_API_KEY)")
+        if not kraken_secret:
+            missing.append("secret (KRAKEN_PLATFORM_API_SECRET / KRAKEN_USER_TANIA_GILBERT_API_SECRET / KRAKEN_API_SECRET)")
+        detail = "Missing: " + " AND ".join(missing)
+        checks.append(("Kraken credentials", False, detail))
+        blockers.append(f"Kraken credentials absent — {detail}")
+
+    # ── 2. Kraken SDK (krakenex + pykrakenapi) ───────────────────────────────
+    krakenex_ok = _iutil.find_spec("krakenex") is not None
+    pykrakenapi_ok = _iutil.find_spec("pykrakenapi") is not None
+    kraken_sdk_ok = krakenex_ok and pykrakenapi_ok
+    if kraken_sdk_ok:
+        checks.append(("Kraken SDK (krakenex + pykrakenapi)", True, "both modules importable"))
+    else:
+        missing_mods = [m for m, ok in [("krakenex", krakenex_ok), ("pykrakenapi", pykrakenapi_ok)] if not ok]
+        detail = f"Missing packages: {', '.join(missing_mods)}  →  pip install {' '.join(missing_mods)}"
+        checks.append(("Kraken SDK (krakenex + pykrakenapi)", False, detail))
+        if kraken_creds_ok:
+            # Only a blocker when Kraken creds are configured and SDK is absent
+            blockers.append(f"Kraken SDK unavailable — {detail}")
+
+    # ── 3. Coinbase (only checked when not explicitly disabled) ──────────────
+    coinbase_disabled = _is_truthy_env("NIJA_DISABLE_COINBASE")
+    if coinbase_disabled:
+        checks.append(("Coinbase SDK", True, "disabled via NIJA_DISABLE_COINBASE — skipped"))
+    else:
+        cb_sdk_ok = _iutil.find_spec("coinbase") is not None or _iutil.find_spec("coinbase.rest") is not None
+        cb_key = os.getenv("COINBASE_API_KEY") or os.getenv("CDP_API_KEY_NAME") or ""
+        cb_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("CDP_API_KEY_PRIVATE_KEY") or os.getenv("COINBASE_PEM_CONTENT") or ""
+        cb_creds_ok = bool(cb_key and cb_secret)
+        if cb_sdk_ok and cb_creds_ok:
+            checks.append(("Coinbase SDK + credentials", True, "SDK present, key and secret present"))
+        elif not cb_sdk_ok:
+            detail = "coinbase-advanced-py not installed  →  pip install coinbase-advanced-py  OR set NIJA_DISABLE_COINBASE=true"
+            checks.append(("Coinbase SDK + credentials", False, detail))
+            blockers.append(f"Coinbase SDK missing — {detail}")
+        else:
+            detail = "SDK present but credentials missing (COINBASE_API_KEY / COINBASE_API_SECRET)"
+            checks.append(("Coinbase SDK + credentials", False, detail))
+            blockers.append(f"Coinbase credentials missing — {detail}")
+
+    # ── 4. LIVE_CAPITAL_VERIFIED flag (advisory — not a hard blocker) ────────
+    live_capital = _is_truthy_env("LIVE_CAPITAL_VERIFIED")
+    checks.append((
+        "LIVE_CAPITAL_VERIFIED",
+        True,  # always informational — not a blocker
+        "ENABLED — live trades will execute" if live_capital else "not set — dry-run / paper mode active",
+    ))
+
+    # ── 5. Data directory writable ───────────────────────────────────────────
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        _probe = os.path.join(data_dir, ".preflight_write_probe")
+        with open(_probe, "w") as _f:
+            _f.write("ok")
+        os.remove(_probe)
+        checks.append(("Data directory writable", True, data_dir))
+    except Exception as _dir_err:
+        detail = f"{data_dir} — {_dir_err}"
+        checks.append(("Data directory writable", False, detail))
+        blockers.append(f"Data directory not writable — {detail}")
+
+    # ── Print results ────────────────────────────────────────────────────────
+    print("", flush=True)
+    print(SEP, flush=True)
+    print("  🔍  NIJA PRE-FLIGHT CHECK", flush=True)
+    print(SEP, flush=True)
+    for label, passed, detail in checks:
+        icon = "  ✅" if passed else "  ❌"
+        print(f"{icon}  {label}", flush=True)
+        if detail:
+            print(f"       {detail}", flush=True)
+    print(SEP, flush=True)
+
+    if blockers:
+        print("", flush=True)
+        print("  🚫  TRADING CANNOT START — fix the following:", flush=True)
+        for i, reason in enumerate(blockers, 1):
+            print(f"       {i}. {reason}", flush=True)
+        print("", flush=True)
+        print(SEP, flush=True)
+        print("", flush=True)
+        return False
+
+    print("", flush=True)
+    print("  🚀  ALL CHECKS PASSED — proceeding to start trading", flush=True)
+    print(SEP, flush=True)
+    print("", flush=True)
+    return True
+
+
 def _coinbase_sdk_is_available() -> bool:
     """Return True if Coinbase SDK import path is available."""
     try:
@@ -3358,7 +3488,18 @@ def main():
     
     # Small delay to ensure health server is fully bound
     time.sleep(0.2)
-    
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SYNCHRONOUS PRE-FLIGHT CHECK — runs here, not in a thread, not behind
+    # any conditional logic.  This is the first thing that executes after the
+    # health server binds.  If every check passes the bot proceeds to start
+    # trading.  If any critical requirement is missing the bot prints exactly
+    # what is wrong and exits immediately.
+    # ═══════════════════════════════════════════════════════════════════════
+    if not _run_preflight_check():
+        _release_process_lock()
+        sys.exit(1)
+
     # Now setup logging (after health server is running)
     # Log process startup
     _log_lifecycle_banner(
