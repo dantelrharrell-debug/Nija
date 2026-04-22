@@ -477,16 +477,16 @@ class TradingStateMachine:
             kill=kill_state,
             capital_ready=ready,
             live_verified=_live_verified_bool,
-            invariant=_current_ready,
+            invariant=_inv_ready,
             snapshot_ready=self._first_snap_accepted,
         )
 
         # EDGE: only trigger on transition False → True.
         # This prevents spurious repeated activation attempts every loop cycle.
         _prev_ready = self._activation_ready_last_cycle
-        self._activation_ready_last_cycle = _current_ready
+        self._activation_ready_last_cycle = _inv_ready
 
-        if _current_ready and not _prev_ready:
+        if _inv_ready and not _prev_ready:
             # All subsystems simultaneously valid — confirm snap and activate.
             self._first_snap_accepted = True
             try:
@@ -505,7 +505,7 @@ class TradingStateMachine:
                 logger.error("❌ Auto-activate transition failed: %s", exc)
                 return False
 
-        if not _current_ready:
+        if not _inv_ready:
             # Log which sub-condition is blocking activation (for observability).
             if not _inv_ready:
                 # Log which sub-condition is still blocking.
@@ -958,23 +958,23 @@ def commit_activation(
     )
 
     if kill:
-        logger.critical("ACTIVATION BLOCKED")
+        logger.critical("ACTIVATION BLOCKED: kill switch is active")
         return False
 
     if not live_verified:
-        logger.critical("ACTIVATION BLOCKED")
+        logger.critical("ACTIVATION BLOCKED: LIVE_CAPITAL_VERIFIED is not set to true")
         return False
 
     if not capital_ready:
-        logger.critical("ACTIVATION BLOCKED")
+        logger.critical("ACTIVATION BLOCKED: capital readiness gate failed (CA_READY or EXECUTION_PIPELINE_HEALTHY is false)")
         return False
 
     if not snapshot_ready:
-        logger.critical("ACTIVATION BLOCKED")
+        logger.critical("ACTIVATION BLOCKED: no valid live-exchange capital snapshot accepted (_first_snap_accepted is False)")
         return False
 
     if not invariant:
-        logger.critical("ACTIVATION BLOCKED")
+        logger.critical("ACTIVATION BLOCKED: activation_invariant returned False (check valid_brokers, snap_source, ca_hydrated, ca_not_stale, brokers_ready)")
         return False
 
     return True
