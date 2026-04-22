@@ -3302,6 +3302,11 @@ def _run_bot_startup_and_trading():
         # after startup completes or fails.  uninstall() is idempotent.
         if _startup_buffer:
             _startup_buffer.uninstall()
+        # B: Unconditionally set the bootstrap completed event so the supervisor
+        # loop's _bootstrap_completed_event.wait() never hangs forever when INIT
+        # exits via an exception.  The supervisor checks is_set() to distinguish
+        # a successful bootstrap from a failed one.
+        _bootstrap_completed_event.set()
 
 
 def main():
