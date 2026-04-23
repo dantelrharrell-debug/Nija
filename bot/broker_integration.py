@@ -577,6 +577,12 @@ class CoinbaseBrokerAdapter(BrokerInterface):
             )
             if result and result.get('status') not in ('error', 'unfilled'):
                 logger.info(f"✅ Coinbase market {side} order placed: {symbol} size={size}")
+            elif result:
+                error_code = result.get('error', 'UNKNOWN_ERROR')
+                error_message = result.get('message', 'No detail provided')
+                logger.error(f"❌ Coinbase {side} order REJECTED: {symbol}")
+                logger.error(f"   Error Code:    {error_code}")
+                logger.error(f"   Error Message: {error_message}")
             return result
         except Exception as e:
             logger.error(f"Failed to place Coinbase market order {side} {symbol}: {e}")

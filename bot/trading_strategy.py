@@ -3296,6 +3296,29 @@ class TradingStrategy:
             
             # Store dry_run_mode for backward compatibility
             self.dry_run_mode = (self.safety.get_current_mode() == TradingMode.DRY_RUN)
+
+            # ── FIX 3: Detect conflicting mode flags and log a clear resolution ──
+            # Multiple env flags may be set simultaneously (e.g. DRY_RUN_MODE=true
+            # AND HEARTBEAT_TRADE=true).  SafetyController already picks ONE mode via
+            # strict priority, but the startup log would show conflicting indicators
+            # without this banner.  This makes the resolved state unambiguous.
+            _mode_flags = {
+                'APP_STORE_MODE':       os.getenv('APP_STORE_MODE', 'false').lower() in ('true', '1', 'yes'),
+                'DRY_RUN_MODE':         os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes'),
+                'HEARTBEAT_TRADE':      os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes'),
+                'LIVE_CAPITAL_VERIFIED': os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes'),
+            }
+            _active_flags = [k for k, v in _mode_flags.items() if v]
+            if len(_active_flags) > 1:
+                logger.warning("=" * 70)
+                logger.warning("⚠️  MULTIPLE MODE FLAGS DETECTED")
+                logger.warning("=" * 70)
+                logger.warning(f"   Active flags : {', '.join(_active_flags)}")
+                logger.warning(f"   Resolved mode: {self.safety.get_current_mode().value.upper()}")
+                logger.warning("   Only ONE mode is active — all others are INACTIVE")
+                logger.warning("   Disable unused flags to eliminate this warning")
+                logger.warning("=" * 70)
+
         except ImportError:
             # Fallback if safety_controller not available
             logger.warning("⚠️ Safety controller not available - using legacy safety checks")
@@ -5539,7 +5562,21 @@ class TradingStrategy:
             # ============================================================================
             # Execute a single tiny test trade if HEARTBEAT_TRADE=true
             # This verifies API credentials, trading logic, and order execution
-            if os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes'):
+            #
+            # FIX 3: Use SafetyController as the single source of truth for heartbeat
+            # mode so that conflicting flags (e.g. DRY_RUN_MODE=true + HEARTBEAT_TRADE=true)
+            # never both execute.  SafetyController resolves to ONE mode by priority.
+            _run_heartbeat_startup = False
+            if hasattr(self, 'safety') and self.safety is not None:
+                try:
+                    from safety_controller import TradingMode as _SCHB
+                    _run_heartbeat_startup = (self.safety.get_current_mode() == _SCHB.HEARTBEAT)
+                except Exception:
+                    _run_heartbeat_startup = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
+            else:
+                _run_heartbeat_startup = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
+
+            if _run_heartbeat_startup:
                 logger.info("=" * 70)
                 logger.info("💓 HEARTBEAT TRADE MODE ACTIVATED")
                 logger.info("=" * 70)
@@ -10752,7 +10789,9 @@ class TradingStrategy:
                                                         if hasattr(self, 'trades_since_last_cleanup'):
                                                             self.trades_since_last_cleanup += 1
                                                     else:
-                                                        error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                        error_code = result.get('error', 'Unknown') if result else 'No response'
+                                                        error_detail = result.get('message', '') if result else ''
+                                                        error_msg = f"{error_code}" + (f" — {error_detail}" if error_detail and error_detail != error_code else "")
                                                         logger.error(f"   ❌ ORDER REJECTED: {error_msg}")
                                                 except Exception as sell_err:
                                                     logger.error(f"   ❌ ORDER EXCEPTION: {sell_err}")
@@ -10807,7 +10846,9 @@ class TradingStrategy:
                                                         if hasattr(self, 'trades_since_last_cleanup'):
                                                             self.trades_since_last_cleanup += 1
                                                     else:
-                                                        error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                        error_code = result.get('error', 'Unknown') if result else 'No response'
+                                                        error_detail = result.get('message', '') if result else ''
+                                                        error_msg = f"{error_code}" + (f" — {error_detail}" if error_detail and error_detail != error_code else "")
                                                         logger.error(f"   ❌ MICRO-STOP FAILED: {error_msg}")
                                                 except Exception as sell_err:
                                                     logger.error(f"   ❌ MICRO-STOP EXCEPTION: {sell_err}")
@@ -10897,7 +10938,9 @@ class TradingStrategy:
                                                     if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                         active_broker.position_tracker.track_exit(symbol, quantity)
                                                 else:
-                                                    error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                    error_code = result.get('error', 'Unknown') if result else 'No response'
+                                                    error_detail = result.get('message', '') if result else ''
+                                                    error_msg = f"{error_code}" + (f" — {error_detail}" if error_detail and error_detail != error_code else "")
                                                     logger.error(f"   ❌ CATASTROPHIC EXIT ATTEMPT 1 FAILED: {error_msg}")
 
                                                     # Retry once for catastrophic exits
@@ -10917,7 +10960,9 @@ class TradingStrategy:
                                                         if hasattr(active_broker, 'position_tracker') and active_broker.position_tracker:
                                                             active_broker.position_tracker.track_exit(symbol, quantity)
                                                     else:
-                                                        error_msg = result.get('error', 'Unknown error') if result else 'No response'
+                                                        error_code = result.get('error', 'Unknown') if result else 'No response'
+                                                        error_detail = result.get('message', '') if result else ''
+                                                        error_msg = f"{error_code}" + (f" — {error_detail}" if error_detail and error_detail != error_code else "")
                                                         logger.error(f"   ❌ CATASTROPHIC EXIT RETRY FAILED: {error_msg}")
                                             except Exception as emergency_err:
                                                 logger.error(f"   ❌ CATASTROPHIC EXIT EXCEPTION: {symbol} - {emergency_err}")
@@ -17304,7 +17349,26 @@ class TradingStrategy:
                         # exchange connection is healthy — investigate strategy filters.
                         # If the heartbeat ALSO fails, the problem is in the execution
                         # layer (broker auth, network, order API), not the strategy.
-                        if HEARTBEAT_TRADE_ENABLED and active_broker:
+                        #
+                        # FIX 3: Gate in-loop heartbeat on SafetyController mode so it
+                        # never fires in DRY_RUN, MONITOR, or APP_STORE modes.  Only
+                        # HEARTBEAT and LIVE modes should produce real connectivity checks.
+                        _hb_loop_allowed = HEARTBEAT_TRADE_ENABLED
+                        if _hb_loop_allowed and hasattr(self, 'safety') and self.safety is not None:
+                            try:
+                                from safety_controller import TradingMode as _SCHBL
+                                _sc_mode_now = self.safety.get_current_mode()
+                                if _sc_mode_now not in (_SCHBL.HEARTBEAT, _SCHBL.LIVE):
+                                    _hb_loop_allowed = False
+                                    logger.debug(
+                                        "❤️  In-loop heartbeat suppressed: SafetyController mode is %s "
+                                        "(only fires in HEARTBEAT or LIVE mode)",
+                                        _sc_mode_now.value,
+                                    )
+                            except Exception:
+                                pass  # keep _hb_loop_allowed as-is on import error
+
+                        if _hb_loop_allowed and active_broker:
                             _hb_fired = self._execute_heartbeat_trade(broker=active_broker)
                             if _hb_fired:
                                 logger.info(
