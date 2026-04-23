@@ -1681,6 +1681,17 @@ _trading_active = False
 # Set to True after _exec_test_probe() fires so the probe only runs once
 # per process lifetime, even if NIJA_EXEC_TEST_MODE stays "true" externally.
 _exec_test_fired = False
+# Set by bot.py (via set_bootstrap_completed) once the bootstrap sequence
+# has fully succeeded and the strategy is ready.  run_trading_loop() checks
+# this at entry and refuses to proceed if it is not set, making the reason
+# visible in the logs.
+_bootstrap_completed = threading.Event()
+
+
+def set_bootstrap_completed() -> None:
+    """Called by bot.py after successful bootstrap to unblock run_trading_loop."""
+    _bootstrap_completed.set()
+    logger.critical("✅ [nija_core_loop] bootstrap_completed event set")
 
 
 # ---------------------------------------------------------------------------
@@ -1787,6 +1798,16 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     global _loop_running, _trading_active
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
+
+    # ── Bootstrap gate (FIX 2) ────────────────────────────────────────────
+    # Refuse to proceed until bootstrap has fully succeeded.  This makes the
+    # reason visible in logs instead of silently running with a half-ready
+    # system.  set_bootstrap_completed() is called by bot.py immediately
+    # after _strategy_ready_event is set on the success path.
+    if not _bootstrap_completed.is_set():
+        logger.critical("❌ BLOCKED: BOOTSTRAP NOT COMPLETE")
+        return
+    # ── End Bootstrap gate ────────────────────────────────────────────────
 
     # ── Strategy existence guard ────────────────────────────────────────────
     # Must be checked BEFORE acquiring _loop_guard / setting _loop_running so
