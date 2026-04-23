@@ -3065,7 +3065,7 @@ def _run_bot_startup_and_trading():
                 _b1_capital_hydrated = False
                 try:
                     if _bms_ca is None:
-                        _b1_capital_hydrated = False  # capital authority required — never skip
+                        _b1_capital_hydrated = False  # CA absent: hydration cannot be confirmed
                     else:
                         _b1_capital_hydrated = bool(_bms_ca.is_hydrated)
                 except Exception as _b1_ch_err:
@@ -3074,24 +3074,22 @@ def _run_bot_startup_and_trading():
                 _b1_aggregation_normalized = True  # True when capital FSM module is absent
                 try:
                     from bot.capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm_b1
-                    _b1_aggregation_normalized = False  # module present → probe it (fail-closed)
                     _cbfsm_b1 = _get_cbfsm_b1()
                     _b1_aggregation_normalized = bool(_cbfsm_b1.is_ready)
                 except ImportError:
                     pass  # capital FSM not present → no aggregation requirement
                 except Exception as _b1_an_err:
-                    _b1_aggregation_normalized = False
+                    _b1_aggregation_normalized = False  # probe failed on present module
                     logger.warning("[B1-Guard] aggregation_normalized probe failed (fail-closed False): %s", _b1_an_err)
 
                 _b1_nonce_ready = True  # True when Kraken FSM absent (Coinbase-only deployment)
                 try:
                     from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kfsm_b1
-                    _b1_nonce_ready = False  # Kraken FSM present → probe it (fail-closed)
                     _b1_nonce_ready = bool(_kfsm_b1.is_nonce_ready())
                 except ImportError:
                     pass  # no Kraken → nonce not required
                 except Exception as _b1_nr_err:
-                    _b1_nonce_ready = False
+                    _b1_nonce_ready = False  # probe failed on present module
                     logger.warning("[B1-Guard] nonce_ready probe failed (fail-closed False): %s", _b1_nr_err)
 
                 logger.critical("CRITICAL B1 CONDITIONS: %s", {
@@ -3485,7 +3483,7 @@ def _run_bot_startup_and_trading():
                 _bce_brokers_ready = False
                 _bce_capital_fsm_ready = False
                 _bce_capital_hydrated = False
-                _bce_aggregation_normalized = False  # fail-closed: mismatch is False until proven True
+                _bce_aggregation_normalized = False  # fail-closed: False until aggregation is proven normalized or not applicable
                 _bce_nonce_ready = False
                 _bce_deadline = time.monotonic() + 30
                 # Resolve module references once, outside the polling loop.
