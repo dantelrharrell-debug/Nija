@@ -2007,38 +2007,63 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _cycle_balance = _current_cycle_capital.get("ca_total_capital", 0.0)
                 logger.critical("💰 AVAILABLE CAPITAL: %.2f", _cycle_balance)
 
-                # ── Pipeline diagnostic probes (Steps 1-4) ────────────────────
-                # Step 1 — Raw broker balances (confirms each exchange responds)
+                # ── Capital pipeline diagnostic block ─────────────────────────
                 try:
-                    _bm_diag = getattr(strategy, "broker_manager", None)
-                    if _bm_diag is not None:
-                        logger.critical(
-                            "💰 RAW BROKER BALANCES: %s",
-                            _bm_diag.get_all_balances(),
+                    _diag_bm = getattr(strategy, "broker_manager", None)
+                    _diag_mabm = None
+                    try:
+                        from bot.multi_account_broker_manager import (
+                            multi_account_broker_manager as _diag_mabm,
                         )
-                except Exception as _diag_bm_err:
-                    logger.warning("[DIAG] broker balance probe failed: %s", _diag_bm_err)
+                    except ImportError:
+                        try:
+                            from multi_account_broker_manager import (  # type: ignore[import]
+                                multi_account_broker_manager as _diag_mabm,
+                            )
+                        except ImportError:
+                            pass
+                    _diag_ca = None
+                    try:
+                        from bot.capital_authority import get_capital_authority as _get_diag_ca
+                        _diag_ca = _get_diag_ca()
+                    except ImportError:
+                        try:
+                            from capital_authority import get_capital_authority as _get_diag_ca  # type: ignore[import]
+                            _diag_ca = _get_diag_ca()
+                        except ImportError:
+                            pass
+                    _diag_ac = None
+                    try:
+                        from bot.capital.active_capital import get_active_capital as _get_diag_ac
+                        _diag_ac = _get_diag_ac()
+                    except ImportError:
+                        try:
+                            from capital.active_capital import get_active_capital as _get_diag_ac  # type: ignore[import]
+                            _diag_ac = _get_diag_ac()
+                        except ImportError:
+                            pass
 
-                # Step 2 — Aggregation layer
-                logger.critical(
-                    "💰 aggregation_normalized = %s",
-                    _current_cycle_capital.get("aggregation_normalized"),
-                )
-
-                # Step 3 — CapitalFSM hydration
-                logger.critical(
-                    "💰 capital_hydrated = %s",
-                    _current_cycle_capital.get("ca_is_hydrated"),
-                )
-
-                # Step 4 — ActiveCapital execution balance
-                try:
-                    from bot.capital.active_capital import get_active_capital as _get_ac
-                    _ac_bal = _get_ac().get_available_balance()
-                    logger.critical("💰 EXECUTION CAPITAL: %.2f", _ac_bal)
-                except Exception as _diag_ac_err:
-                    logger.warning("[DIAG] ActiveCapital probe failed: %s", _diag_ac_err)
-                # ── End pipeline diagnostic probes ────────────────────────────
+                    logger.critical("=== CAPITAL PIPELINE DEBUG START ===")
+                    logger.critical(
+                        "BROKER BALANCES: %s",
+                        _diag_bm.get_all_balances() if _diag_bm is not None else "broker_manager unavailable",
+                    )
+                    logger.critical(
+                        "AGGREGATED STATE: %s",
+                        _diag_mabm.get_state() if _diag_mabm is not None else "capital_aggregator unavailable",
+                    )
+                    logger.critical(
+                        "FSM CAPITAL SNAPSHOT: %s",
+                        _diag_ca.get_snapshot() if _diag_ca is not None else "capital_fsm unavailable",
+                    )
+                    logger.critical(
+                        "ACTIVE CAPITAL: %s",
+                        _diag_ac.get_available_balance() if _diag_ac is not None else "active_capital unavailable",
+                    )
+                    logger.critical("=== CAPITAL PIPELINE DEBUG END ===")
+                except Exception as _diag_err:
+                    logger.warning("[DIAG] capital pipeline probe failed: %s", _diag_err)
+                # ── End capital pipeline diagnostic block ─────────────────────
                 logger.debug(
                     "🔒 [%s] capital snapshot: hydrated=%s total=$%.2f "
                     "valid_brokers=%d brokers_ready=%s",

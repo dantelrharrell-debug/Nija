@@ -2328,6 +2328,57 @@ class MultiAccountBrokerManager:
             return False
         return all(is_broker_fully_ready(b) for b in brokers)
 
+    def get_state(self) -> dict:
+        """Return a diagnostic snapshot of the aggregation pipeline state.
+
+        This is the ``capital_aggregator.get_state()`` call described in the
+        capital-pipeline diagnostic guide.  Operators can log it every cycle to
+        confirm the sequential pipeline (broker fetch → CA aggregation → tier
+        classification) has completed correctly.
+
+        Returns a plain dict so it is safe to pass directly to
+        ``logger.critical("AGGREGATED STATE: %s", ...)``.
+
+        Keys
+        ----
+        aggregation_ready   : bool  — True when CA is hydrated AND all registered
+                                      broker balances have propagated through.
+        capital_authority_ready : bool  — delegates to is_capital_authority_ready().
+        all_brokers_ready   : bool  — delegates to all_brokers_fully_ready().
+        valid_brokers       : int   — number of brokers that contributed a balance.
+        platform_brokers    : list  — broker-type values of registered platform brokers.
+        bootstrap_state     : str   — current CapitalBootstrapStateMachine state.
+        runtime_state       : str   — current CapitalRuntimeStateMachine state.
+        """
+        ca_ready = self.is_capital_authority_ready()
+        all_ready = self.all_brokers_fully_ready()
+        valid_brokers = int(self._capital_last_valid_brokers or 0)
+        platform_broker_names = [bt.value for bt in self._platform_brokers]
+
+        bootstrap_state = "unavailable"
+        if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
+            try:
+                bootstrap_state = str(self._capital_bootstrap_fsm.state.value)
+            except Exception:
+                pass
+
+        runtime_state = "unavailable"
+        if _CAPITAL_FSM_AVAILABLE and self._capital_runtime_fsm is not None:
+            try:
+                runtime_state = str(self._capital_runtime_fsm.state.value)
+            except Exception:
+                pass
+
+        return {
+            "aggregation_ready": ca_ready and valid_brokers > 0,
+            "capital_authority_ready": ca_ready,
+            "all_brokers_ready": all_ready,
+            "valid_brokers": valid_brokers,
+            "platform_brokers": platform_broker_names,
+            "bootstrap_state": bootstrap_state,
+            "runtime_state": runtime_state,
+        }
+
     def is_trading_halted_due_to_capital(self) -> bool:
         """Return True when capital is halted.
 
