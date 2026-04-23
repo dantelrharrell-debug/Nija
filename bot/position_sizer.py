@@ -53,6 +53,11 @@ COINBASE_MIN_TRADE_USD: float = float(
 # Default minimum for other exchanges
 MIN_POSITION_USD = _GLOBAL_MIN_TRADE  # Minimum USD value for any position (avoids dust + rejections)
 
+# Fee buffer applied when capping a user position to their available balance.
+# Set conservatively at 2% to cover Coinbase taker fee (~0.6%) and Kraken (~0.26%)
+# plus rounding — matches the 2% pre-flight buffer used by CoinbaseBroker.place_market_order.
+POSITION_SIZE_FEE_BUFFER_FACTOR = 1.02
+
 # Exchange-specific minimums (with fee buffers)
 EXCHANGE_MIN_TRADE_USD = {
     'kraken': KRAKEN_MIN_TRADE_USD,      # $10.50 (accounts for Kraken $10 min + fees)
@@ -268,17 +273,17 @@ def calculate_user_position_size(
         logger.info(f"   Calculated User Size: {user_size} ({size_type})")
 
         # ── Fee-aware balance cap ─────────────────────────────────────────────
-        # Ensure the order leaves room for exchange fees (2 % conservative buffer
-        # covers Coinbase taker fee ~0.6 % + Kraken ~0.26 % + rounding).  Without
+        # Ensure the order leaves room for exchange fees (conservative buffer
+        # covers Coinbase taker fee ~0.6% + Kraken ~0.26% + rounding).  Without
         # this cap the broker pre-flight check may reject orders where fees would
         # push the total above the available balance.
         if size_type == 'quote':
-            FEE_BUFFER_FACTOR = 1.02  # 2 % buffer — matches CoinbaseBroker pre-flight check
-            fee_adjusted_cap = math.floor((user_balance / FEE_BUFFER_FACTOR) * 100) / 100
+            fee_adjusted_cap = math.floor((user_balance / POSITION_SIZE_FEE_BUFFER_FACTOR) * 100) / 100
             if user_size > fee_adjusted_cap:
                 logger.info(
                     f"   📉 Size capped: ${user_size:.2f} → ${fee_adjusted_cap:.2f} "
-                    f"(2% fee reserve on ${user_balance:.2f} balance)"
+                    f"({(POSITION_SIZE_FEE_BUFFER_FACTOR - 1) * 100:.0f}% fee reserve "
+                    f"on ${user_balance:.2f} balance)"
                 )
                 user_size = fee_adjusted_cap
 
