@@ -127,6 +127,17 @@ _STRATEGY_ARM_ALLOWED_STATES = frozenset({
     BootstrapState.RUNNING_SUPERVISED,
 })
 
+# ---------------------------------------------------------------------------
+# Emergency / terminal states that any thread may drive (FIX 4 — ownership)
+# ---------------------------------------------------------------------------
+# The bootstrap kernel (BotStartup thread) owns all non-terminal transitions.
+# EXTERNAL_RESTART_REQUIRED and SHUTDOWN represent irreversible emergency
+# conditions that the supervisor loop or signal handlers may also trigger.
+_ANY_THREAD_ALLOWED_TARGETS = frozenset({
+    BootstrapState.EXTERNAL_RESTART_REQUIRED,
+    BootstrapState.SHUTDOWN,
+})
+
 
 # ---------------------------------------------------------------------------
 # Transition table — the only legal moves
@@ -330,23 +341,28 @@ class BootstrapStateMachine:
             ``True`` if the transition was applied; ``False`` if illegal.
         """
         with self._lock:
-            # Single-owner enforcement: warn when a non-owner thread drives a
-            # transition.  Supervisor threads must be observer-only; only the
-            # bootstrap kernel thread should advance the FSM.
+            # Single-owner enforcement (FIX 4 — unify bootstrap ownership):
+            # Non-terminal transitions may only be driven by the registered bootstrap
+            # kernel thread (BotStartup).  Terminal transitions (EXTERNAL_RESTART_REQUIRED,
+            # SHUTDOWN) are also permitted from the supervisor loop and signal handlers
+            # so emergency shutdown is never blocked by an ownership mismatch.
             _caller_id = threading.get_ident()
             if (
                 self._owner_thread_id is not None
                 and _caller_id != self._owner_thread_id
+                and new_state not in _ANY_THREAD_ALLOWED_TARGETS
             ):
-                logger.warning(
-                    "⚠️  [BootstrapFSM] Non-owner thread %d (%s) driving transition"
-                    " → %s (bootstrap owner=%d). Supervisor threads must be"
-                    " observer-only.",
-                    _caller_id,
-                    threading.current_thread().name,
-                    new_state.value if hasattr(new_state, "value") else str(new_state),
-                    self._owner_thread_id,
+                msg = (
+                    f"Non-owner thread {_caller_id} ({threading.current_thread().name})"
+                    f" attempted non-terminal transition → {new_state.value if hasattr(new_state, 'value') else new_state}"
+                    f" (bootstrap owner={self._owner_thread_id})."
+                    " Supervisor threads must be observer-only."
+                    " This transition is REJECTED to enforce single-owner boot contract."
                 )
+                logger.error("❌ [BootstrapFSM] OWNERSHIP VIOLATION: %s", msg)
+                if raise_on_invalid:
+                    raise BootstrapInvariantError("FSM_OWNERSHIP", msg)
+                return False
 
             current = self._state
             allowed = _VALID_TRANSITIONS.get(current, [])
@@ -801,4 +817,5 @@ __all__ = [
     "BootstrapStateMachine",
     "get_bootstrap_fsm",
     "_STRATEGY_ARM_ALLOWED_STATES",
+    "_ANY_THREAD_ALLOWED_TARGETS",
 ]
