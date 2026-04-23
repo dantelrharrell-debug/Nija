@@ -11,7 +11,7 @@ from capital_authority import CapitalAuthority, STARTUP_LOCK, CAPITAL_HYDRATED_E
 
 def _reset_state():
     """Reset module-level singleton and startup lock between tests."""
-    reset_capital_authority_singleton()
+    reset_capital_authority_singleton(clear_disk_cache=True)
 
 
 class _StubBroker:
