@@ -59,6 +59,14 @@ _bootstrap_complete_flag = threading.Event()
 # thread hands off, so trader threads can keep running without interruption.
 _bootstrap_completed_event = threading.Event()
 
+# Single-source strategy-ready event — set ONLY on the success path, after
+# _initialized_state is fully populated (strategy + active_threads + all
+# metadata) and BEFORE _rerun_supervisor_loop is called.  Distinct from
+# _bootstrap_completed_event which is also set in the finally block on
+# failure.  All three components (BootstrapFSM, supervisor, core loop) should
+# test this event to confirm that the strategy is truly initialised.
+_strategy_ready_event = threading.Event()
+
 # Bootstrap-window nonce flag — set to True the moment the pre-connection nonce
 # jump is executed.  Any attempt to run the same jump after bootstrap is complete
 # (i.e. from a background scheduler or async path) is blocked and logged so it
@@ -3302,8 +3310,14 @@ def _run_bot_startup_and_trading():
                 }
             finally:
                 _initialized_state_lock.release()
+            # Signal that strategy initialization is complete — set before
+            # _rerun_supervisor_loop so the supervisor never starts with a
+            # partially initialised state.  This is the single authoritative
+            # "strategy ready" gate used by the supervisor, core loop, and
+            # BootstrapFSM (FIX A + FIX C from architecture spec).
+            _strategy_ready_event.set()
             logger.critical(f"STATE CHECK: {_initialized_state}")
-            logger.critical("🧠 STATE STORED — entering supervisor mode")
+            logger.critical("🧠 STATE STORED — strategy_ready_event SET — entering supervisor mode")
 
             _log_lifecycle_banner(
                 "🔒 ORCHESTRATOR ACTIVE",
@@ -3736,15 +3750,25 @@ def main():
     logger.critical("🧭 AFTER bootstrap wait")
 
     # ── Strategy existence gate ─────────────────────────────────────────────
-    # Guarantee the strategy object exists BEFORE TradingCoreLoop starts.
+    # Guarantee the strategy object exists AND _strategy_ready_event is set
+    # BEFORE TradingCoreLoop starts.  _strategy_ready_event is the single
+    # source of truth (FIX C): it is set only on the SUCCESS bootstrap path
+    # after _initialized_state is fully populated and all trader threads are
+    # running — never from the finally block on failure.
+    #
+    # _bootstrap_completed_event can also be fired from the finally block when
+    # bootstrap fails, so relying on it alone to guard core-loop startup leads
+    # to the mismatch described in the architecture spec (BootstrapFSM thinks
+    # ready → supervisor checks different flag → core loop checks local var).
+    # Using _strategy_ready_event here collapses all three into ONE check.
+    #
     # If bootstrap failed (e.g. broker credentials missing, transient network
-    # error) the finally block in _run_bot_startup_and_trading() still fires
-    # _bootstrap_completed_event so main() is never blocked forever.  In that
-    # case strategy is None and we MUST NOT start — or crash — here.  The
-    # bootstrap retry kernel (_run_bot_startup_and_trading_with_retry) is still
-    # running and will start TradingCoreLoop itself once it succeeds.
+    # error) _strategy_ready_event is NOT set, so we skip the core-loop start
+    # here.  The bootstrap retry kernel (_run_bot_startup_and_trading_with_retry)
+    # is still running and will start TradingCoreLoop itself once it succeeds.
     # Crashing here (via RuntimeError / sys.exit) would kill the process before
     # the retry has any chance to recover.
+    strategy_ready = _strategy_ready_event.is_set()
     _acquired = _initialized_state_lock.acquire(timeout=5)
     if _acquired:
         try:
@@ -3755,11 +3779,21 @@ def main():
         logger.critical("⚠️  [Supervisor] Could not acquire lock — treating strategy as None")
         strategy = None
 
-    if strategy is None:
+    if not strategy_ready:
         logger.critical(
-            "⚠️  [Supervisor] Strategy not yet initialized after bootstrap event "
-            "— skipping TradingCoreLoop start from main(). "
+            "⚠️  [Supervisor] _strategy_ready_event not set after bootstrap — "
+            "skipping TradingCoreLoop start from main(). "
             "Bootstrap retry kernel will start the loop once strategy is ready."
+        )
+    elif strategy is None:
+        # This should be impossible: _strategy_ready_event is only set after
+        # _initialized_state["strategy"] is populated in the same code block.
+        # If we arrive here, there is a serious invariant violation — raise
+        # rather than starting the loop with a None strategy.
+        raise RuntimeError(
+            "INVARIANT VIOLATION: _strategy_ready_event is set but "
+            "_initialized_state['strategy'] is None.  "
+            "This indicates a race condition or logic error in bootstrap."
         )
     else:
         from bot.nija_core_loop import run_trading_loop
