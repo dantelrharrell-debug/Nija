@@ -3023,6 +3023,71 @@ def _run_bot_startup_and_trading():
 
             logger.critical("B1 REACHED - BOOTSTRAP COMPLETE — activation delegated to core loop")
 
+            # ── B1 PRE-FLIGHT GUARD ────────────────────────────────────────────────
+            # Deterministic forward-movement contract: B1 MUST exit via one of two
+            # paths — B2 (proceed to thread launch) or B1_BLOCKED (halt with error).
+            # A silent return here (check passes but no transition is made) causes
+            # FSM freeze: the trading state machine stalls in OFF with no thread,
+            # no loop, and no observable error.
+            # Each condition defaults to True for graceful degradation: if a probe
+            # raises (e.g. module not present in a Coinbase-only deployment), the
+            # previously-confirmed state from the capital gate loop is assumed to
+            # still hold.  This matches the identical pattern used in the
+            # "HARD STARTUP BARRIER" below (see _bce_brokers_ready / _bce_capital_fsm_ready).
+            _b1_brokers_ready = True
+            try:
+                if _bms_mabm is not None and hasattr(_bms_mabm, "all_brokers_fully_ready"):
+                    _b1_brokers_ready = bool(_bms_mabm.all_brokers_fully_ready())
+            except Exception as _b1_br_err:
+                logger.warning("[B1-Guard] brokers_ready probe failed (treating as True): %s", _b1_br_err)
+
+            _b1_capital_hydrated = True
+            try:
+                if _bms_ca is not None:
+                    _b1_capital_hydrated = bool(_bms_ca.is_hydrated)
+            except Exception as _b1_ch_err:
+                logger.warning("[B1-Guard] capital_hydrated probe failed (treating as True): %s", _b1_ch_err)
+
+            _b1_aggregation_normalized = True
+            try:
+                from bot.capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm_b1
+                _cbfsm_b1 = _get_cbfsm_b1()
+                _b1_aggregation_normalized = bool(_cbfsm_b1.is_ready)
+            except Exception as _b1_an_err:
+                logger.warning("[B1-Guard] aggregation_normalized probe failed (treating as True): %s", _b1_an_err)
+
+            _b1_nonce_ready = True
+            try:
+                from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kfsm_b1
+                _b1_nonce_ready = bool(_kfsm_b1.is_nonce_ready())
+            except Exception as _b1_nr_err:
+                logger.warning("[B1-Guard] nonce_ready probe failed (treating as True): %s", _b1_nr_err)
+
+            logger.critical("B1 PREFLIGHT CHECK: %s", {
+                "brokers_ready": _b1_brokers_ready,
+                "aggregation_normalized": _b1_aggregation_normalized,
+                "capital_hydrated": _b1_capital_hydrated,
+                "nonce_ready": _b1_nonce_ready,
+            })
+
+            _b1_preflight_ready = (
+                _b1_brokers_ready
+                and _b1_aggregation_normalized
+                and _b1_capital_hydrated
+                and _b1_nonce_ready
+            )
+
+            if not _b1_preflight_ready:
+                logger.critical("❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE")
+                try:
+                    from bot.exceptions import CapitalIntegrityError as _CIE_b1
+                except ImportError:
+                    from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
+                raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
+
+            logger.critical("✅ B1 PASSED — transitioning to B2")
+            # ── END B1 PRE-FLIGHT GUARD ───────────────────────────────────────────
+
             # ── CONNECTION → INIT HANDOFF ──────────────────────────────────────────
             # Activation is now owned exclusively by the core trading loop
             # (nija_core_loop.run_trading_loop).  maybe_auto_activate() is NOT
