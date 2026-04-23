@@ -2006,6 +2006,39 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _current_cycle_capital = _capture_cycle_capital_state()
                 _cycle_balance = _current_cycle_capital.get("ca_total_capital", 0.0)
                 logger.critical("💰 AVAILABLE CAPITAL: %.2f", _cycle_balance)
+
+                # ── Pipeline diagnostic probes (Steps 1-4) ────────────────────
+                # Step 1 — Raw broker balances (confirms each exchange responds)
+                try:
+                    _bm_diag = getattr(strategy, "broker_manager", None)
+                    if _bm_diag is not None:
+                        logger.critical(
+                            "💰 RAW BROKER BALANCES: %s",
+                            _bm_diag.get_all_balances(),
+                        )
+                except Exception as _diag_bm_err:
+                    logger.warning("[DIAG] broker balance probe failed: %s", _diag_bm_err)
+
+                # Step 2 — Aggregation layer
+                logger.critical(
+                    "💰 aggregation_normalized = %s",
+                    _current_cycle_capital.get("aggregation_normalized"),
+                )
+
+                # Step 3 — CapitalFSM hydration
+                logger.critical(
+                    "💰 capital_hydrated = %s",
+                    _current_cycle_capital.get("ca_is_hydrated"),
+                )
+
+                # Step 4 — ActiveCapital execution balance
+                try:
+                    from bot.capital.active_capital import get_active_capital as _get_ac
+                    _ac_bal = _get_ac().get_available_balance()
+                    logger.critical("💰 EXECUTION CAPITAL: %.2f", _ac_bal)
+                except Exception as _diag_ac_err:
+                    logger.warning("[DIAG] ActiveCapital probe failed: %s", _diag_ac_err)
+                # ── End pipeline diagnostic probes ────────────────────────────
                 logger.debug(
                     "🔒 [%s] capital snapshot: hydrated=%s total=$%.2f "
                     "valid_brokers=%d brokers_ready=%s",
