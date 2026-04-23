@@ -534,9 +534,13 @@ class TradingStateMachine:
             # All subsystems simultaneously valid — confirm snap and activate.
             self._first_snap_accepted = True
             try:
+                logger.critical("🚀 ACTIVATING TRADING ENGINE")
                 self.transition_to(
                     TradingState.LIVE_ACTIVE,
                     "CONVERGENCE_EDGE: all subsystems simultaneously valid in same snapshot cycle",
+                )
+                assert self._current_state == TradingState.LIVE_ACTIVE, (
+                    f"FSM state must be LIVE_ACTIVE after activation, got {self._current_state}"
                 )
                 with self._lock:
                     self._current_state = TradingState.LIVE_ACTIVE
@@ -595,9 +599,13 @@ class TradingStateMachine:
 
         # ── All gates passed — commit the activation atomically ───────────
         try:
+            logger.critical("🚀 ACTIVATING TRADING ENGINE")
             self.transition_to(
                 TradingState.LIVE_ACTIVE,
                 "COMMIT_ACTIVATION: all gates passed — single-source activation commit",
+            )
+            assert self._current_state == TradingState.LIVE_ACTIVE, (
+                f"FSM state must be LIVE_ACTIVE after activation, got {self._current_state}"
             )
             with self._lock:
                 self._current_state = TradingState.LIVE_ACTIVE
