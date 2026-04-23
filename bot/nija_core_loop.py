@@ -191,13 +191,17 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
     check and the subsequent strategy cycle see the same frozen capital view.
 
     Returns a plain dict with keys:
-        ca_is_hydrated     (bool)
-        ca_total_capital   (float)
-        ca_valid_brokers   (int)
-        mabm_brokers_ready (bool)
-        is_post_hydration  (bool)  — True when CAPITAL_HYDRATED_EVENT has fired
-                                     AND ca_is_hydrated is confirmed for this cycle
-        snapshot_source    (str)  "live_exchange" | "placeholder"
+        ca_is_hydrated        (bool)
+        ca_total_capital      (float)
+        ca_valid_brokers      (int)
+        mabm_brokers_ready    (bool)
+        is_post_hydration     (bool)  — True when CAPITAL_HYDRATED_EVENT has fired
+                                        AND ca_is_hydrated is confirmed for this cycle
+        snapshot_source       (str)  "live_exchange" | "placeholder"
+        aggregation_normalized (bool) — True when CA's registered broker count is
+                                        consistent with MABM's reported viable broker
+                                        count, confirming aggregation pipeline ran
+                                        sequentially (FIX 2).
     """
     result: Dict[str, Any] = {
         "ca_is_hydrated": False,
@@ -206,6 +210,7 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
         "mabm_brokers_ready": False,
         "is_post_hydration": False,
         "snapshot_source": "placeholder",
+        "aggregation_normalized": True,  # default True (safe: don't block when unknown)
     }
 
     # ── CapitalAuthority state ────────────────────────────────────────────
@@ -249,6 +254,75 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
         result["snapshot_source"] = "live_exchange" if _last_vb > 0 else "placeholder"
     except Exception as _me:
         logger.debug("_capture_cycle_capital_state: MABM read failed: %s", _me)
+
+    # ── FIX 2: Broker aggregation consistency check ───────────────────────
+    # Verify that the CA's registered broker count is consistent with the
+    # number of viable brokers MABM reports.  When MABM says N viable brokers
+    # but CA has M < N registered balance entries, aggregation is still in
+    # flight (pipeline is not yet sequential-complete).  Mark this cycle as
+    # aggregation_normalized=False so activation is deferred until all broker
+    # balances have propagated through to CA.
+    #
+    # Default is True (not False) intentionally.  This check is *additive*
+    # — it only sets False when we can positively confirm a mismatch
+    # (MABM says N brokers but CA has fewer).  If the check itself raises an
+    # exception (CA or MABM unavailable), failing open (True) is correct:
+    # the downstream activation_invariant already has independent hydration,
+    # staleness, and broker-readiness gates that will catch the real issue.
+    # Failing closed here (False) when modules are absent would permanently
+    # block activation on systems that do not use this particular check.
+    #
+    # Pipeline contract (sequential, NOT parallel):
+    #   Broker balances → ActiveCapital aggregation → Tier classification
+    #   → ExecutionEngine gating → Strategy loop
+    try:
+        _ca_registered = 0
+        if _CA_LOOP_AVAILABLE and _get_ca is not None:
+            try:
+                _ca_inst = _get_ca()
+                _ca_registered = int(
+                    getattr(_ca_inst, "registered_broker_count", 0) or 0
+                )
+            except Exception:
+                pass
+        # _last_vb is the number of brokers MABM has confirmed contributed
+        # a valid balance payload (set by refresh_capital_authority()).
+        # If MABM says viable_brokers > 0 but CA has fewer registered entries,
+        # aggregation has not yet propagated — mark as not normalized.
+        _expected_for_agg = int(result.get("ca_valid_brokers") or 0)
+        _mabm_last_vb = 0
+        try:
+            # Dual-import pattern follows the established convention in this file
+            # (module-level imports at top may not be available at call time).
+            try:
+                from multi_account_broker_manager import (  # type: ignore[import]
+                    multi_account_broker_manager as _mabm_agg,
+                )
+            except ImportError:
+                from bot.multi_account_broker_manager import (  # type: ignore[import]
+                    multi_account_broker_manager as _mabm_agg,
+                )
+            _mabm_last_vb = int(
+                getattr(_mabm_agg, "_capital_last_valid_brokers", 0) or 0
+            ) if _mabm_agg is not None else 0
+        except Exception:
+            pass
+        _expected_for_agg = max(_expected_for_agg, _mabm_last_vb)
+        if _expected_for_agg > 0 and _ca_registered < _expected_for_agg:
+            # CA has fewer broker entries than MABM reports — aggregation lag.
+            result["aggregation_normalized"] = False
+            logger.warning(
+                "[PIPELINE] aggregation_normalized=False — MABM reports %d viable brokers "
+                "but CA has only %d registered balance entries. Deferring tier classification "
+                "until aggregation propagates (sequential pipeline not yet complete).",
+                _expected_for_agg,
+                _ca_registered,
+            )
+        else:
+            result["aggregation_normalized"] = True
+    except Exception as _agg_err:
+        logger.debug("_capture_cycle_capital_state: aggregation check failed: %s", _agg_err)
+        # Default already True — don't block on unexpected errors in the check itself.
 
     return result
 
@@ -1720,6 +1794,48 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             _loop_running = True
 
         logger.info("🟢 Trading loop alive (INITIAL START)")
+
+        # ── Capital Hydration Barrier (FIX 1) ─────────────────────────────────
+        # Block until CapitalAuthority has received at least one broker snapshot.
+        # This prevents the race where the strategy loop evaluates capital before
+        # any broker balance has been fetched (returning $0.00), which caused the
+        # "Balance $0.00 below minimum / AUTO mode fallback" log pattern.
+        # Timeout: 30 s (configurable via NIJA_HYDRATION_BARRIER_TIMEOUT).
+        _hydration_timeout = float(
+            os.getenv("NIJA_HYDRATION_BARRIER_TIMEOUT", "30")
+        )
+        try:
+            try:
+                from bot.capital_authority import (
+                    wait_for_hydration as _wait_hydration,
+                    CapitalIntegrityError as _CapIntegrityErr,
+                )
+            except ImportError:
+                from capital_authority import (  # type: ignore[import]
+                    wait_for_hydration as _wait_hydration,
+                    CapitalIntegrityError as _CapIntegrityErr,
+                )
+            _wait_hydration(timeout_s=_hydration_timeout)
+            logger.critical(
+                "✅ [HYDRATION_BARRIER] Capital hydration confirmed — "
+                "is_hydrated=True, broker snapshot received. Proceeding to trading loop."
+            )
+        except _CapIntegrityErr as _hb_err:
+            logger.critical(
+                "🚨 [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR: %s — "
+                "trading loop aborted. Bot will not trade until capital is hydrated.",
+                _hb_err,
+            )
+            with _loop_guard:
+                _loop_running = False
+            return
+        except (ImportError, Exception) as _hb_exc:
+            logger.warning(
+                "⚠️ [HYDRATION_BARRIER] Could not enforce hydration barrier (%s) — "
+                "proceeding without guarantee. Check capital_authority module.",
+                _hb_exc,
+            )
+        # ── End Capital Hydration Barrier ──────────────────────────────────────
 
         cycle = 0
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
