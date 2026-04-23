@@ -12563,6 +12563,42 @@ class BrokerManager:
         """
         return self.brokers.copy()
 
+    def get_all_balances(self) -> Dict[str, float]:
+        """Return a per-broker balance snapshot for diagnostic logging.
+
+        Iterates over every registered broker, calls ``get_account_balance()``,
+        and emits an INFO log line per broker so operators can confirm each
+        exchange actually returned a non-zero figure.
+
+        Returns:
+            ``{broker_name: balance_usd}`` for every registered broker.
+            Disconnected or error-prone brokers are included with a ``0.0``
+            fallback so the dict always has an entry for every configured venue.
+
+        Example log output::
+
+            Fetched balance: $312.50 from Kraken
+            Fetched balance: $0.00 from Coinbase (disconnected or error)
+        """
+        balances: Dict[str, float] = {}
+        for broker_type, broker in self.brokers.items():
+            name = broker_type.value
+            try:
+                if getattr(broker, "connected", False):
+                    raw = broker.get_account_balance()
+                    bal = float(raw) if raw is not None else 0.0
+                else:
+                    bal = 0.0
+                    logger.info("Fetched balance: $%.2f from %s (disconnected)", bal, name)
+                    balances[name] = bal
+                    continue
+                logger.info("Fetched balance: $%.2f from %s", bal, name)
+            except Exception as exc:
+                bal = 0.0
+                logger.warning("Fetched balance: $%.2f from %s (error: %s)", bal, name, exc)
+            balances[name] = bal
+        return balances
+
 # Global instance
 broker_manager = BrokerManager()
 

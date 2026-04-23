@@ -163,6 +163,23 @@ class ActiveCapital:
         except Exception:
             return False
 
+    # Alias used in diagnostic log calls (problem-statement §4 quick test)
+    def get_available_balance(self) -> float:
+        """Alias for :meth:`get_total_available_balance`.
+
+        Provided so callers can use the name suggested in the diagnostic
+        guide::
+
+            logger.critical("💰 EXECUTION CAPITAL: %s",
+                            active_capital.get_available_balance())
+
+        Raises
+        ------
+        CapitalIntegrityError
+            Same conditions as :meth:`get_total_available_balance`.
+        """
+        return self.get_total_available_balance()
+
 
 # ---------------------------------------------------------------------------
 # Process-level singleton
