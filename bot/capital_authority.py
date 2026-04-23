@@ -497,7 +497,7 @@ class CapitalAuthority:
                 "saved_at": datetime.now(timezone.utc).isoformat(),
             }
             tmp_file = _STATE_FILE.with_suffix(".tmp")
-            with open(tmp_file, "w") as fh:
+            with open(tmp_file, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=2)
             tmp_file.replace(_STATE_FILE)
             logger.debug(
@@ -542,7 +542,7 @@ class CapitalAuthority:
             return False
 
         try:
-            with open(_STATE_FILE, "r") as fh:
+            with open(_STATE_FILE, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception as exc:
             logger.warning("[CapitalAuthority] CSM v3 state file unreadable — cold start: %s", exc)
@@ -579,12 +579,20 @@ class CapitalAuthority:
             )
             return False
 
-        # Validate broker balances.
-        broker_balances: Dict[str, float] = {
-            str(k): float(v)
-            for k, v in data.get("broker_balances", {}).items()
-            if v is not None
-        }
+        # Validate broker balances — skip any entry whose value cannot be
+        # safely converted to float (guards against corrupted or hand-edited files).
+        broker_balances: Dict[str, float] = {}
+        for k, v in data.get("broker_balances", {}).items():
+            if v is None:
+                continue
+            try:
+                broker_balances[str(k)] = float(v)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[CapitalAuthority] CSM v3 skipping invalid balance for broker=%s value=%r",
+                    k,
+                    v,
+                )
         if not broker_balances:
             logger.info("[CapitalAuthority] CSM v3 state file has no broker balances — cold start")
             return False
