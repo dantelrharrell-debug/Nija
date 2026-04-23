@@ -193,13 +193,13 @@ except ImportError:
 try:
     from bot.exceptions import (
         ExecutionError, BrokerMismatchError, InvalidTxidError,
-        InvalidFillPriceError, OrderRejectedError
+        InvalidFillPriceError, OrderRejectedError, CapitalIntegrityError
     )
 except ImportError:
     try:
         from exceptions import (
             ExecutionError, BrokerMismatchError, InvalidTxidError,
-            InvalidFillPriceError, OrderRejectedError
+            InvalidFillPriceError, OrderRejectedError, CapitalIntegrityError
         )
     except ImportError:
         # Fallback: Define locally if import fails
@@ -213,6 +213,23 @@ except ImportError:
             pass
         class OrderRejectedError(ExecutionError):
             pass
+        class CapitalIntegrityError(Exception):
+            pass
+
+# Import ActiveCapital for execution gating (FIX 4)
+try:
+    from bot.capital.active_capital import get_active_capital
+    ACTIVE_CAPITAL_AVAILABLE = True
+    logger.info("✅ ActiveCapital loaded — execution capital gate active")
+except ImportError:
+    try:
+        from capital.active_capital import get_active_capital  # type: ignore
+        ACTIVE_CAPITAL_AVAILABLE = True
+        logger.info("✅ ActiveCapital loaded — execution capital gate active")
+    except ImportError:
+        ACTIVE_CAPITAL_AVAILABLE = False
+        get_active_capital = None  # type: ignore
+        logger.warning("⚠️ ActiveCapital not available — capital gate disabled")
 
 # Import restriction manager for geographic restriction handling
 try:
@@ -666,6 +683,70 @@ class ExecutionEngine:
 
         _log_exec_result(result)
 
+    def can_execute_trade(self, order_size_usd: float) -> bool:
+        """
+        Hard gate: return True only when the system has confirmed capital
+        sufficient to cover *order_size_usd*.
+
+        This is the execution layer's capital guard (FIX 4).  It is called
+        automatically by :meth:`execute_entry` before any broker interaction.
+        External callers (e.g. the strategy loop) may also call it directly
+        as a pre-flight check.
+
+        Logic
+        -----
+        1. Fetch the total available balance via :class:`ActiveCapital`.
+        2. Block (return ``False``) if balance ≤ 0.
+        3. Block (return ``False``) if the requested order size exceeds the
+           available balance.
+        4. Allow (return ``True``) otherwise.
+
+        If :class:`ActiveCapital` is unavailable or raises
+        :class:`CapitalIntegrityError`, the method logs a warning and returns
+        ``False`` (fail-closed).
+
+        Parameters
+        ----------
+        order_size_usd:
+            Requested order notional value in USD.
+
+        Returns
+        -------
+        bool
+        """
+        if not ACTIVE_CAPITAL_AVAILABLE or get_active_capital is None:
+            logger.warning("⚠️ ActiveCapital not available — capital gate skipped (fail-open)")
+            return True  # fail-open when capital layer is absent (legacy compatibility)
+
+        try:
+            balance = get_active_capital().get_total_available_balance()
+        except CapitalIntegrityError as exc:
+            logger.warning("🚫 CAPITAL INTEGRITY ERROR — trade blocked: %s", exc)
+            return False
+        except Exception as exc:
+            logger.warning("🚫 CAPITAL CHECK FAILED — trade blocked: %s", exc)
+            return False
+
+        if balance <= 0:
+            logger.warning(
+                "🚫 NO CAPITAL AVAILABLE — trade blocked "
+                "(balance=$%.2f, order_size=$%.2f)",
+                balance,
+                order_size_usd,
+            )
+            return False
+
+        if order_size_usd > balance:
+            logger.warning(
+                "🚫 ORDER EXCEEDS BALANCE — trade blocked "
+                "(order_size=$%.2f > balance=$%.2f)",
+                order_size_usd,
+                balance,
+            )
+            return False
+
+        return True
+
     def execute_entry(self, symbol: str, side: str, position_size: float,
                      entry_price: float, stop_loss: float,
                      take_profit_levels: Dict[str, float]) -> Optional[Dict]:
@@ -684,6 +765,19 @@ class ExecutionEngine:
             Position dictionary or None if failed
         """
         try:
+            # ✅ LAYER -1: CAPITAL INTEGRITY GATE (FIX 4)
+            # Hard gate: block any trade if capital is insufficient or unavailable.
+            # Must run before Recovery Controller and LIVE_CAPITAL_VERIFIED checks
+            # so that a zero-capital state is caught before any further validation.
+            if not self.can_execute_trade(position_size):
+                logger.warning(
+                    "🚫 CAPITAL GATE BLOCKED ENTRY — Symbol: %s | Side: %s | Size: $%.2f",
+                    symbol,
+                    side,
+                    position_size,
+                )
+                return None
+
             # ✅ LAYER 0: RECOVERY CONTROLLER - Capital-first safety layer
             # This is the AUTHORITATIVE control layer that sits above everything
             # Checks BEFORE any other validation
