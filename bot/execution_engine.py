@@ -189,6 +189,21 @@ except ImportError:
         logger.warning("⚠️ Recovery Controller not available - safety layer disabled")
         get_recovery_controller = None
 
+# Import Capital CSM v2 for proof-of-trade forced sizing
+try:
+    from bot.capital_csm_v2 import get_csm_v2
+    CAPITAL_CSM_V2_AVAILABLE = True
+    logger.info("✅ Capital CSM v2 loaded - proof-of-trade forced sizing active")
+except ImportError:
+    try:
+        from capital_csm_v2 import get_csm_v2
+        CAPITAL_CSM_V2_AVAILABLE = True
+        logger.info("✅ Capital CSM v2 loaded - proof-of-trade forced sizing active")
+    except ImportError:
+        CAPITAL_CSM_V2_AVAILABLE = False
+        logger.warning("⚠️ Capital CSM v2 not available - proof-of-trade sizing disabled")
+        get_csm_v2 = None
+
 # Import custom exceptions for safety checks
 try:
     from bot.exceptions import (
@@ -777,6 +792,30 @@ class ExecutionEngine:
                     position_size,
                 )
                 return None
+
+            # ── PROOF-OF-TRADE: forced order sizing + critical attempt log ────────
+            # Temporarily overrides position_size with a conservative forced size so
+            # every execution path is exercised regardless of strategy signal quality.
+            # Remove or gate behind a feature flag once live execution is verified.
+            if CAPITAL_CSM_V2_AVAILABLE and get_csm_v2:
+                try:
+                    _csm = get_csm_v2()
+                    _csm_status = _csm.status_dict()
+                    _real_capital = _csm_status.get("real_capital") or 0.0
+                    if _real_capital > 0:
+                        order_size = min(5.00, _real_capital * 0.2)
+                        position_size = order_size
+                        logger.critical(
+                            f"ATTEMPTING TRADE: size={order_size:.4f} "
+                            f"(real_capital=${_real_capital:.2f}, symbol={symbol}, side={side})"
+                        )
+                except Exception as _pot_err:
+                    logger.warning(f"⚠️ Proof-of-trade sizing skipped: {_pot_err}")
+            else:
+                logger.critical(
+                    f"ATTEMPTING TRADE: size={position_size:.4f} "
+                    f"(CSM unavailable, symbol={symbol}, side={side})"
+                )
 
             # ✅ LAYER 0: RECOVERY CONTROLLER - Capital-first safety layer
             # This is the AUTHORITATIVE control layer that sits above everything
