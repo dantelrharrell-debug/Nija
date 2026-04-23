@@ -2,7 +2,7 @@
   "name": "Tania Gilbert",
   "broker": "kraken",
   "role": "user",
-  "enabled": false,
+  "enabled": true,
   "copy_from_platform": true,
   "independent_trading": true,
   "active_trading": true,
