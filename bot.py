@@ -59,6 +59,13 @@ _bootstrap_complete_flag = threading.Event()
 # thread hands off, so trader threads can keep running without interruption.
 _bootstrap_completed_event = threading.Event()
 
+# Bootstrap-window nonce flag — set to True the moment the pre-connection nonce
+# jump is executed.  Any attempt to run the same jump after bootstrap is complete
+# (i.e. from a background scheduler or async path) is blocked and logged so it
+# can never accidentally advance the nonce during live trading.
+_nonce_bootstrap_jump_done = False
+_nonce_bootstrap_jump_lock = threading.Lock()
+
 # State machine loop thread — started once after INIT completes.
 # Runs a periodic health check that fires maybe_auto_activate() if the
 # state machine is stuck in OFF while CapitalAuthority is ready.
@@ -2077,53 +2084,72 @@ def _run_bot_startup_and_trading():
             # Jump the global Kraken nonce forward before any connection attempt.
             # This clears any "burned" nonce window left by a previous session and
             # prevents "EAPI:Invalid nonce" errors on the very first API call.
+            #
+            # BOOTSTRAP-WINDOW GUARD: this jump runs ONCE, inside the bootstrap
+            # owner thread, BEFORE any trading threads are spawned.  The module-
+            # level _nonce_bootstrap_jump_done flag prevents a duplicate jump from
+            # any background scheduler or async code path that might also call this
+            # block after the bot is running.
             # ═══════════════════════════════════════════════════════════════════════
             _kraken_creds_present = bool(
                 (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
                 and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
             )
+            global _nonce_bootstrap_jump_done
             if _kraken_creds_present:
-                logger.info("=" * 70)
-                logger.info("⚡ KRAKEN PRE-CONNECTION NONCE RESET")
-                logger.info("=" * 70)
-                try:
-                    from bot.global_kraken_nonce import (
-                        get_global_nonce_manager,
-                        jump_global_kraken_nonce_forward,
+                with _nonce_bootstrap_jump_lock:
+                    _already_jumped = _nonce_bootstrap_jump_done
+                if _already_jumped:
+                    logger.warning(
+                        "⚠️  NONCE BOOTSTRAP-WINDOW GUARD: nonce jump already performed — "
+                        "skipping duplicate call from non-bootstrap path"
                     )
+                else:
+                    logger.info("=" * 70)
+                    logger.info("⚡ KRAKEN PRE-CONNECTION NONCE RESET")
+                    logger.info("=" * 70)
+                    try:
+                        from bot.global_kraken_nonce import (
+                            get_global_nonce_manager,
+                            jump_global_kraken_nonce_forward,
+                        )
 
-                    # ── Sentinel A0.1: entering nonce-manager init ──────────────
-                    logger.critical("A0.1 before nonce manager")
+                        # ── Sentinel A0.1: entering nonce-manager init ──────────────
+                        logger.critical("A0.1 before nonce manager")
 
-                    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeoutError
+                        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeoutError
 
-                    with ThreadPoolExecutor(max_workers=1) as _ex:
-                        _future = _ex.submit(get_global_nonce_manager)
-                        try:
-                            _nonce_mgr = _future.result(timeout=10)
-                        except _FuturesTimeoutError:
-                            raise RuntimeError("Nonce init hung (>10s)")
+                        with ThreadPoolExecutor(max_workers=1) as _ex:
+                            _future = _ex.submit(get_global_nonce_manager)
+                            try:
+                                _nonce_mgr = _future.result(timeout=10)
+                            except _FuturesTimeoutError:
+                                raise RuntimeError("Nonce init hung (>10s)")
 
-                    # ── Sentinel A0.2: nonce manager obtained ───────────────────
-                    logger.critical("A0.2 after nonce manager")
+                        # ── Sentinel A0.2: nonce manager obtained ───────────────────
+                        logger.critical("A0.2 after nonce manager")
 
-                    # Jump 60 seconds forward (in milliseconds) to skip any nonces
-                    # Kraken may still have cached from the previous session.
-                    _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
-                    _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
+                        # Jump 60 seconds forward (in milliseconds) to skip any nonces
+                        # Kraken may still have cached from the previous session.
+                        _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
+                        _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
 
-                    # ── Sentinel A0.3 / B5: nonce reset complete ────────────────
-                    logger.critical("B5 after nonce lock / nonce-jump complete")
-                    logger.critical("🔥 PREFLIGHT: POST-NONCE ENTRY REACHED")
+                        # Mark bootstrap jump as done so no scheduler/async path repeats it.
+                        with _nonce_bootstrap_jump_lock:
+                            _nonce_bootstrap_jump_done = True
 
-                    logger.info(
-                        "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
-                        _new_nonce,
-                    )
-                except ImportError:
-                    logger.warning("   ⚠️  global_kraken_nonce module not available — skipping pre-reset")
-                except Exception as _nonce_err:
-                    logger.warning("   ⚠️  Nonce pre-reset failed (non-fatal): %s", _nonce_err)
+                        # ── Sentinel A0.3 / B5: nonce reset complete ────────────────
+                        logger.critical("B5 after nonce lock / nonce-jump complete")
+                        logger.critical("🔥 PREFLIGHT: POST-NONCE ENTRY REACHED")
+
+                        logger.info(
+                            "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
+                            _new_nonce,
+                        )
+                    except ImportError:
+                        logger.warning("   ⚠️  global_kraken_nonce module not available — skipping pre-reset")
+                    except Exception as _nonce_err:
+                        logger.warning("   ⚠️  Nonce pre-reset failed (non-fatal): %s", _nonce_err)
 
             logger.critical("🔥 PREFLIGHT ANCHOR: entered post-nonce execution path")
             try:
@@ -3407,6 +3433,7 @@ def _run_bot_startup_and_trading():
                     daemon=True,
                     name="TradingCoreLoop",
                 ).start()
+                logger.critical("✅ TradingCoreLoop started from bootstrap completion")
             except Exception as _boot_loop_err:
                 logger.critical(
                     "❌ Failed to start TradingCoreLoop from bootstrap: %s",
@@ -3700,6 +3727,7 @@ def main():
         daemon=True,
         name="TradingCoreLoop",
     ).start()
+    logger.critical("✅ TradingCoreLoop started from main supervisor")
 
     logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0

@@ -1510,6 +1510,15 @@ class KrakenNonceManager:
         Only ever *increases* the nonce — never decreases it.  Safe to call
         proactively from connect() without risking a Kraken rejection.
         """
+        # Guard: do not mutate nonce state during interpreter shutdown.
+        # sys._is_shutting_down is available from CPython 3.13+; on earlier
+        # versions the getattr() returns the False default so this is safe and
+        # forward-compatible.  The main-thread liveness check provides the same
+        # protection on Python 3.11/3.12 where the attribute does not exist.
+        if getattr(sys, "_is_shutting_down", False):
+            return
+        if not threading.main_thread().is_alive():
+            return
         with _LOCK:
             floor = int(time.time() * 1000) + offset_ms
             if floor > self._last_nonce:
