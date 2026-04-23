@@ -68,33 +68,4 @@ class ExecutionFailed(ExecutionError):
     pass
 
 
-class CapitalIntegrityError(RuntimeError):
-    """
-    Raised when the capital hydration barrier times out or capital pipeline
-    integrity cannot be confirmed before the trading loop starts.
 
-    This exception is a hard stop: the trading loop must not proceed until
-    CapitalAuthority has received at least one broker balance snapshot.
-
-    Root causes that trigger this exception:
-    - Broker connection failed before the hydration timeout (default 30 s)
-    - CapitalAuthority was never refreshed (coordinator not running)
-    - Bootstrap sequence did not complete in time
-
-    Callers that catch this exception should log it as CRITICAL and either
-    retry with back-off or abort the trading loop entirely.
-class CapitalIntegrityError(Exception):
-    """
-    Raised when the capital source is invalid or unreliable.
-
-    This exception prevents fallback-to-STARTER behavior when capital
-    cannot be fetched or verified.  Trading MUST NOT proceed when this
-    exception is raised — the capital pipeline has failed and no tier or
-    position-sizing logic may produce a meaningful result.
-
-    Typical causes:
-    - CapitalAuthority has not been hydrated (no balance fetched yet)
-    - All broker balance fetches returned None / failed
-    - Capital system gate not yet released (startup incomplete)
-    """
-    pass
