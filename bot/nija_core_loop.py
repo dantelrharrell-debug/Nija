@@ -1905,6 +1905,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
         _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
         _activation_stuck_cycles = 0  # consecutive cycles blocked at ACTIVATION NOT READY
+        _live_loop_announced = False  # guard: log 🟢 LIVE TRADING LOOP ACTIVE exactly once
         # After this many stuck cycles, attempt a self-healing first_snap rescue
         # (unblocks the activation chain when the bootstrap timing window was missed).
         # Configurable via ACTIVATION_RESCUE_THRESHOLD env var (default: 10).
@@ -2032,6 +2033,14 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                 # Activation succeeded — reset the stuck-cycle counter.
                 _activation_stuck_cycles = 0
+
+                # ── First-activation announcement ────────────────────────────────
+                # Emit exactly once when the trading loop first becomes LIVE_ACTIVE
+                # so operators can confirm the full activation chain completed.
+                if not _live_loop_announced:
+                    logger.critical("🟢 LIVE TRADING LOOP ACTIVE")
+                    _live_loop_announced = True
+                # ── End first-activation announcement ────────────────────────────
 
                 # ── Proactive broker liveness check before entering run_cycle ─────
                 # If the strategy's broker is disconnected, attempt reconnect here
