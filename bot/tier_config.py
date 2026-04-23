@@ -20,6 +20,7 @@ Date: January 23, 2026
 """
 
 import os
+import sys
 from enum import Enum
 from typing import Dict, Tuple, Optional, Any
 from dataclasses import dataclass
@@ -28,18 +29,29 @@ import logging
 
 logger = logging.getLogger("nija.tier_config")
 
+# FIX 4: Prevent double-execution when the module is imported under two names
+# (e.g. both `bot.tier_config` and `tier_config` end up in sys.modules).
+if "bot.tier_config" in sys.modules and hasattr(sys.modules["bot.tier_config"], "_loaded"):
+    TradingTier = sys.modules["bot.tier_config"].TradingTier
+else:
+    _loaded = True
 
-class TradingTier(Enum):
-    """User trading tiers with associated capital ranges."""
-    NO_CAPITAL = "NO_CAPITAL"       # $0 confirmed — account empty, trading blocked
-    NANO_PLATFORM = "NANO_PLATFORM"  # < $25 — isolated micro-capital build mode
-    STARTER = "STARTER"
-    SAVER = "SAVER"
-    INVESTOR = "INVESTOR"
-    INCOME = "INCOME"
-    LIVABLE = "LIVABLE"
-    BALLER = "BALLER"
-    INCUBATION = "INCUBATION"  # Disciplined incubation mode (spot-only, conservative)
+    # FIX 2: Guard against redefinition caused by import-path collisions.
+    if "TradingTier" not in globals():
+
+        # FIX 1: Inherit from str so that TradingTier values compare equal to
+        # plain strings and survive JSON round-trips without extra conversion.
+        class TradingTier(str, Enum):
+            """User trading tiers with associated capital ranges."""
+            NO_CAPITAL = "NO_CAPITAL"       # $0 confirmed — account empty, trading blocked
+            NANO_PLATFORM = "NANO_PLATFORM"  # < $25 — isolated micro-capital build mode
+            STARTER = "STARTER"
+            SAVER = "SAVER"
+            INVESTOR = "INVESTOR"
+            INCOME = "INCOME"
+            LIVABLE = "LIVABLE"
+            BALLER = "BALLER"
+            INCUBATION = "INCUBATION"  # Disciplined incubation mode (spot-only, conservative)
 
 
 @dataclass
