@@ -54,7 +54,13 @@
       "to": "LIVE_ACTIVE",
       "reason": "test",
       "timestamp": "2026-04-23T10:30:43.769170"
+    },
+    {
+      "from": "OFF",
+      "to": "LIVE_ACTIVE",
+      "reason": "test",
+      "timestamp": "2026-04-23T10:32:10.037284"
     }
   ],
-  "last_updated": "2026-04-23T10:30:43.769183"
+  "last_updated": "2026-04-23T10:32:10.037296"
 }
