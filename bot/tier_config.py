@@ -32,6 +32,7 @@ logger = logging.getLogger("nija.tier_config")
 class TradingTier(Enum):
     """User trading tiers with associated capital ranges."""
     NO_CAPITAL = "NO_CAPITAL"   # capital pipeline not yet hydrated — tier unknown
+    NO_CAPITAL = "NO_CAPITAL"       # $0 confirmed — account empty, trading blocked
     NANO_PLATFORM = "NANO_PLATFORM"  # < $25 — isolated micro-capital build mode
     STARTER = "STARTER"
     SAVER = "SAVER"
@@ -447,6 +448,12 @@ def get_tier_from_balance_internal(balance: float) -> TradingTier:
 
     Returns:
         TradingTier enum
+
+    Notes:
+        - Returns NO_CAPITAL for balance == 0 (account empty — trading blocked).
+        - Returns NANO_PLATFORM for 0 < balance < $50 (micro-cap range).
+        - Never falls back to STARTER for sub-minimum balances; callers that
+          see NO_CAPITAL must refuse to open new positions.
     """
     # Gate on hydration: if the capital pipeline has not run yet, falling back
     # to STARTER with balance=0 would be a false tier assignment that could
@@ -463,9 +470,22 @@ def get_tier_from_balance_internal(balance: float) -> TradingTier:
     except ImportError:
         pass
 
+    # Explicitly empty account — do not allow trading
+    if balance <= 0.0:
+        logger.warning(
+            "Balance $%.2f is zero or negative — returning NO_CAPITAL tier (trading blocked)",
+            balance,
+        )
+        return TradingTier.NO_CAPITAL
+
+    # Sub-STARTER range ($0 < balance < $50) — micro-capital, isolated mode
     if balance < TIER_CONFIGS[TradingTier.STARTER].capital_min:
-        logger.warning(f"Balance ${balance:.2f} below minimum for STARTER tier (${TIER_CONFIGS[TradingTier.STARTER].capital_min:.2f})")
-        return TradingTier.STARTER
+        logger.warning(
+            "Balance $%.2f below STARTER minimum ($%.2f) — returning NANO_PLATFORM tier",
+            balance,
+            TIER_CONFIGS[TradingTier.STARTER].capital_min,
+        )
+        return TradingTier.NANO_PLATFORM
 
     # Check tiers in reverse order (highest first) to handle boundaries correctly
     tier_order = [
@@ -483,7 +503,7 @@ def get_tier_from_balance_internal(balance: float) -> TradingTier:
             return tier
 
     # Fallback (should not reach here)
-    return TradingTier.STARTER
+    return TradingTier.NANO_PLATFORM
 
 
 def get_tier_config(tier: TradingTier) -> TierConfig:
