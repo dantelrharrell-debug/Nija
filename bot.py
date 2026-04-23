@@ -3106,22 +3106,25 @@ def _run_bot_startup_and_trading():
                     and _b1_nonce_ready
                 )
 
-                if not _b1_preflight_ready:
-                    logger.critical("CRITICAL B1 RESULT: FAIL")
-                    logger.critical("❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE")
-                    with _b1_executed_lock:
-                        # Mark executed even on failure so the barrier below does not re-run
-                        globals()["_b1_executed"] = True
-                    try:
-                        from bot.exceptions import CapitalIntegrityError as _CIE_b1
-                    except ImportError:
-                        from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
-                    raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
+                try:
+                    if not _b1_preflight_ready:
+                        logger.critical("CRITICAL B1 RESULT: FAIL")
+                        logger.critical("❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE")
+                        with _b1_executed_lock:
+                            # Mark executed even on failure so the barrier below does not re-run
+                            globals()["_b1_executed"] = True
+                        try:
+                            from bot.exceptions import CapitalIntegrityError as _CIE_b1
+                        except ImportError:
+                            from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
+                        raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
 
-                logger.critical("CRITICAL B1 RESULT: PASS")
-                logger.critical("✅ B1 PASSED — transitioning to B2")
-                with _b1_executed_lock:
-                    globals()["_b1_executed"] = True
+                    logger.critical("CRITICAL B1 RESULT: PASS")
+                    logger.critical("✅ B1 PASSED — transitioning to B2")
+                    with _b1_executed_lock:
+                        globals()["_b1_executed"] = True
+                finally:
+                    logger.critical("⚠️ B1 EXIT GUARANTEE REACHED (this must always print)")
             # ── END B1 PRE-FLIGHT GUARD ───────────────────────────────────────────
 
             # ── CONNECTION → INIT HANDOFF ──────────────────────────────────────────
