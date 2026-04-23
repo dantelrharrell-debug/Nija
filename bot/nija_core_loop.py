@@ -1919,6 +1919,46 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         except Exception as _fa_err:
             logger.critical("🔥 FINAL ACTIVATION CHECKPOINT failed: %s", _fa_err)
         # ── End Final Activation Checkpoint ────────────────────────────────────
+        # ── FINAL ACTIVATION CHECKPOINT ───────────────────────────────────────
+        # This is the true execution path.  Both hydration and CSM barriers have
+        # already passed, so capital is confirmed > 0.  Call commit_activation()
+        # unconditionally here — before the first trading cycle — so the state
+        # machine is guaranteed to be LIVE_ACTIVE when the loop runs.
+        # maybe_auto_activate() still fires every cycle as a belt-and-suspenders
+        # recovery path, but this single call on startup is the authoritative one.
+        logger.critical("🔥 FINAL ACTIVATION CHECKPOINT REACHED")
+        _lcv_final = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+        if _lcv_final in ("true", "1", "yes", "enabled"):
+            logger.critical("🚀 ACTIVATING TRADING ENGINE (FINAL PATH)")
+            _act_sm_final = (
+                _get_state_machine()
+                if _SM_AVAILABLE and _get_state_machine is not None
+                else None
+            )
+            if _act_sm_final is not None:
+                try:
+                    _act_sm_final.commit_activation()
+                    logger.critical(
+                        "STATE AFTER ACTIVATION = %s",
+                        _act_sm_final.get_current_state().value,
+                    )
+                    logger.critical("🟢 LIVE TRADING LOOP ACTIVE")
+                except Exception as _final_act_err:
+                    logger.critical(
+                        "⚠️ FINAL ACTIVATION failed: %s — "
+                        "maybe_auto_activate() will retry each cycle",
+                        _final_act_err,
+                    )
+            else:
+                logger.critical("⚠️ FINAL ACTIVATION: state machine unavailable — skipping")
+        else:
+            logger.critical(
+                "🔒 FINAL ACTIVATION: LIVE_CAPITAL_VERIFIED not set (value=%r) — "
+                "trading engine will NOT activate. "
+                "Set LIVE_CAPITAL_VERIFIED=true to enable live trading.",
+                _lcv_final,
+            )
+        # ── END FINAL ACTIVATION CHECKPOINT ───────────────────────────────────
 
         cycle = 0
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
@@ -2149,6 +2189,14 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         logger.critical("🚧 LOOP BLOCKED PATH REACHED — exec test mode fired, skipping normal cycle")
                         continue
 
+                # Log available capital so operators can spot a $0.00 balance
+                # that would silently block all position sizing and entries.
+                _cycle_cap = (
+                    _current_cycle_capital.get("ca_total_capital", 0.0)
+                    if _current_cycle_capital
+                    else 0.0
+                )
+                logger.critical("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
                 logger.critical("🚀 RUNNING TRADE CYCLE")
                 strategy.run_cycle()
                 time.sleep(cycle_secs)
