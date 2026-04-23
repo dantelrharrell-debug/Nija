@@ -31,7 +31,6 @@ logger = logging.getLogger("nija.tier_config")
 
 class TradingTier(Enum):
     """User trading tiers with associated capital ranges."""
-    NO_CAPITAL = "NO_CAPITAL"   # capital pipeline not yet hydrated — tier unknown
     NO_CAPITAL = "NO_CAPITAL"       # $0 confirmed — account empty, trading blocked
     NANO_PLATFORM = "NANO_PLATFORM"  # < $25 — isolated micro-capital build mode
     STARTER = "STARTER"
