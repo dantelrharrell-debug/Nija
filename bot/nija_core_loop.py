@@ -1901,6 +1901,24 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         logger.critical("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED")
         # ── End Trading Loop Entry Anchor ──────────────────────────────────────
 
+        # ── Final Activation Checkpoint ────────────────────────────────────────
+        # Both hydration and CSM barriers have passed; this is the actual trading
+        # thread.  Force a commit_activation() here so the state machine reaches
+        # LIVE_ACTIVE even if the bootstrap thread missed its window.
+        logger.critical("🔥 FINAL ACTIVATION CHECKPOINT")
+        try:
+            _fa_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
+            if _fa_sm is not None:
+                _fa_sm.commit_activation()
+                logger.critical(
+                    "🔥 FORCED ACTIVATION COMPLETE: %s",
+                    _fa_sm.get_current_state(),
+                )
+            else:
+                logger.critical("🔥 FINAL ACTIVATION CHECKPOINT: state machine unavailable")
+        except Exception as _fa_err:
+            logger.critical("🔥 FINAL ACTIVATION CHECKPOINT failed: %s", _fa_err)
+        # ── End Final Activation Checkpoint ────────────────────────────────────
         # ── FINAL ACTIVATION CHECKPOINT ───────────────────────────────────────
         # This is the true execution path.  Both hydration and CSM barriers have
         # already passed, so capital is confirmed > 0.  Call commit_activation()
@@ -1986,12 +2004,14 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{cycle:06d}"
                 )
                 _current_cycle_capital = _capture_cycle_capital_state()
+                _cycle_balance = _current_cycle_capital.get("ca_total_capital", 0.0)
+                logger.critical("💰 AVAILABLE CAPITAL: %.2f", _cycle_balance)
                 logger.debug(
                     "🔒 [%s] capital snapshot: hydrated=%s total=$%.2f "
                     "valid_brokers=%d brokers_ready=%s",
                     _current_cycle_id,
                     _current_cycle_capital.get("ca_is_hydrated"),
-                    _current_cycle_capital.get("ca_total_capital", 0.0),
+                    _cycle_balance,
                     _current_cycle_capital.get("ca_valid_brokers", 0),
                     _current_cycle_capital.get("mabm_brokers_ready"),
                 )
@@ -2082,6 +2102,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     logger.critical("🟢 LIVE TRADING LOOP ACTIVE")
                     _live_loop_announced = True
                 # ── End first-activation announcement ────────────────────────────
+
+                logger.critical("🟢 LIVE LOOP TICK — scanning markets")
 
                 # ── Proactive broker liveness check before entering run_cycle ─────
                 # If the strategy's broker is disconnected, attempt reconnect here
