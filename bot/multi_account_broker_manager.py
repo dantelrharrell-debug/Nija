@@ -1396,6 +1396,21 @@ class MultiAccountBrokerManager:
                                 # already advanced the FSM partway.
                                 if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
                                     _bseed_fsm = self._capital_bootstrap_fsm
+                                    # ── Notify CSM-v2 BEFORE the READY transition ────────────────
+                                    # The READY transition fires _on_capital_bootstrap_ready
+                                    # synchronously; that callback calls advance_to_capital_ready()
+                                    # which runs the I12 hydration barrier.  Feed CSM-v2 the seed
+                                    # snapshot here so it is already hydrated when I12 fires.
+                                    try:
+                                        from bot.capital_csm_v2 import get_csm_v2 as _csmv2  # noqa: PLC0415
+                                        _csmv2().ingest_snapshot(_seed_snapshot)
+                                    except ImportError:
+                                        pass
+                                    except Exception as _csm_seed_exc:
+                                        logger.warning(
+                                            "[MABM] bootstrap seed CSM-v2 ingest failed (non-fatal): %s",
+                                            _csm_seed_exc,
+                                        )
                                     _bseed_fsm.transition(
                                         CapitalBootstrapState.REFRESH_REQUESTED, "bootstrap_seed"
                                     )

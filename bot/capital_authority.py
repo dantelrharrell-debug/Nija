@@ -64,6 +64,36 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 logger = logging.getLogger("nija.capital_authority")
 
 # ---------------------------------------------------------------------------
+# CapitalIntegrityError — raised by wait_for_hydration on timeout
+# ---------------------------------------------------------------------------
+# Imported here from exceptions so capital_authority remains the canonical
+# import path for callers that need both the barrier and the error type.
+try:
+    from bot.exceptions import CapitalIntegrityError
+except ImportError:
+    try:
+        from exceptions import CapitalIntegrityError  # type: ignore[import]
+    except ImportError:
+        # Inline fallback so this module never hard-fails on import.
+        class CapitalIntegrityError(RuntimeError):  # type: ignore[no-redef]
+            """
+            Raised when the capital hydration barrier times out or capital pipeline
+            integrity cannot be confirmed before the trading loop starts.
+
+            This exception is a hard stop: the trading loop must not proceed until
+            CapitalAuthority has received at least one broker balance snapshot.
+
+            Root causes that trigger this exception:
+            - Broker connection failed before the hydration timeout (default 30 s)
+            - CapitalAuthority was never refreshed (coordinator not running)
+            - Bootstrap sequence did not complete in time
+
+            Callers that catch this exception should log it as CRITICAL and either
+            retry with back-off or abort the trading loop entirely.
+            """
+            pass
+
+# ---------------------------------------------------------------------------
 # Module-level constants (all overridable via environment variables)
 # ---------------------------------------------------------------------------
 
@@ -265,6 +295,41 @@ def get_startup_lock() -> threading.Event:
             return  # HARD BLOCK — startup not complete
     """
     return STARTUP_LOCK
+
+
+def wait_for_hydration(timeout_s: float = 30.0) -> None:
+    """Block until CapitalAuthority confirms at least one broker snapshot.
+
+    This is the canonical **capital hydration barrier** — call it once at
+    startup *before* entering the AUTO trading loop.  It guarantees that
+    :attr:`CapitalAuthority.is_hydrated` is ``True`` (and therefore
+    :data:`CAPITAL_HYDRATED_EVENT` is set) before any downstream
+    capital-dependent logic runs, eliminating the race condition where the
+    strategy loop evaluates capital before any broker balance has been fetched.
+
+    Parameters
+    ----------
+    timeout_s:
+        Maximum seconds to block.  Default: 30 s (matches the bootstrap
+        barrier used elsewhere in the pipeline).
+
+    Raises
+    ------
+    CapitalIntegrityError
+        If :data:`CAPITAL_HYDRATED_EVENT` is not set within *timeout_s*
+        seconds.  The trading loop must not start until this barrier clears.
+    """
+    acquired = CAPITAL_HYDRATED_EVENT.wait(timeout=timeout_s)
+    if not acquired:
+        raise CapitalIntegrityError(
+            f"Capital hydration barrier timed out after {timeout_s}s — "
+            "CapitalAuthority has not received a broker snapshot. "
+            "Check broker connectivity and credentials, then restart."
+        )
+    logger.info(
+        "[CapitalAuthority] wait_for_hydration: barrier cleared — "
+        "CAPITAL_HYDRATED_EVENT is set, is_hydrated confirmed."
+    )
 
 
 # ---------------------------------------------------------------------------

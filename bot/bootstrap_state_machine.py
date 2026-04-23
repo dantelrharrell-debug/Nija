@@ -71,6 +71,9 @@ Global invariants
                              publish capital snapshots.
   I11 Strategy arm           strategy engine arming is illegal before
                              BootstrapStateMachine reaches CAPITAL_READY.
+  I12 Capital hydration      CAPITAL_READY is illegal unless the CSM-v2 capital
+                             pipeline has run at least once (is_hydrated=True);
+                             enforced synchronously in advance_to_capital_ready().
 """
 
 from __future__ import annotations
@@ -461,6 +464,18 @@ class BootstrapStateMachine:
             )
             return False
 
+        # I12 — enforce the capital hydration barrier BEFORE declaring CAPITAL_READY.
+        # This guarantees the CSM-v2 pipeline has run at least once and the
+        # "balance is $0" is never confused with "balance is unknown".
+        try:
+            self.assert_invariant_i12_capital_hydration(timeout=5.0)
+        except BootstrapInvariantError as _i12_err:
+            logger.error(
+                "❌ [BootstrapFSM] advance_to_capital_ready: I12 hydration barrier failed: %s",
+                _i12_err,
+            )
+            return False
+
         for target in _HAPPY_PATH_TO_CAPITAL_READY:
             if self.state in _STRATEGY_ARM_ALLOWED_STATES:
                 break
@@ -657,6 +672,59 @@ class BootstrapStateMachine:
                 "before initialising trading engines.",
             )
 
+    def assert_invariant_i12_capital_hydration(self, timeout: float = 5.0) -> None:
+        """I12 — capital pipeline must be hydrated before CAPITAL_READY is legal.
+
+        Enforces the hard hydration barrier introduced by CSM-v2.  Calls
+        :meth:`~bot.capital_csm_v2.CapitalCSMv2.wait_for_hydration` on the
+        process-wide CSM-v2 singleton.
+
+        Must execute:
+
+        * BEFORE tier calculation
+        * BEFORE strategy init
+        * BEFORE the execution engine starts
+
+        This invariant is automatically checked by :meth:`advance_to_capital_ready`
+        before the FSM steps into ``CAPITAL_READY``.
+
+        Parameters
+        ----------
+        timeout:
+            Maximum seconds to wait for hydration.  Default 5 s.
+
+        Raises
+        ------
+        BootstrapInvariantError
+            If hydration is not confirmed within *timeout*.
+        """
+        try:
+            from bot.capital_csm_v2 import (  # noqa: PLC0415
+                CapitalIntegrityError as _CIE,
+                get_csm_v2 as _get_csm,
+            )
+        except ImportError:
+            try:
+                from capital_csm_v2 import (  # type: ignore[no-redef]  # noqa: PLC0415
+                    CapitalIntegrityError as _CIE,
+                    get_csm_v2 as _get_csm,
+                )
+            except ImportError:
+                logger.debug(
+                    "[BootstrapFSM] I12: CapitalCSMv2 unavailable — skipping hydration check"
+                )
+                return
+        try:
+            _get_csm().wait_for_hydration(timeout=timeout)
+        except _CIE as exc:
+            raise BootstrapInvariantError(
+                "I12_CAPITAL_HYDRATION",
+                f"Capital hydration barrier failed: {exc}. "
+                "Ensure the capital pipeline runs before CAPITAL_READY is declared. "
+                "Bootstrap order: broker_connect → balance_fetch → wait_for_hydration "
+                "→ tier_calc → strategy_init → execution_loop.",
+            ) from exc
+
     # ------------------------------------------------------------------
     # Convenience dispatcher
     # ------------------------------------------------------------------
@@ -668,12 +736,13 @@ class BootstrapStateMachine:
         Parameters
         ----------
         invariant_id:
-            One of ``"I1"`` through ``"I11"``.
+            One of ``"I1"`` through ``"I12"``.
         **kwargs:
             Extra context for static invariant methods:
 
             - ``exc`` — for I9 (the exception object to classify)
             - ``writer_id`` — for I10
+            - ``timeout`` — for I12 (hydration wait timeout in seconds)
 
         Raises
         ------
@@ -702,6 +771,9 @@ class BootstrapStateMachine:
         elif invariant_id == "I10":
             writer_id = kwargs.get("writer_id", "")
             self.assert_invariant_i10_capital_writer(writer_id)
+        elif invariant_id == "I12":
+            timeout = float(kwargs.get("timeout", 5.0))
+            self.assert_invariant_i12_capital_hydration(timeout=timeout)
         else:
             raise ValueError(f"Unknown invariant id: {invariant_id!r}")
 

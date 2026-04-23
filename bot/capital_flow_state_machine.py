@@ -1136,6 +1136,21 @@ class CapitalRefreshCoordinator:
         # / CAPITAL_STALE events; they are captured in the same dispatch below.
         self._runtime.on_snapshot_received(snapshot, self._bus)
 
+        # ── Notify CSM-v2 BEFORE the bootstrap FSM advances ──────────────────────
+        # The bootstrap transition below fires _on_capital_bootstrap_ready
+        # synchronously, which calls advance_to_capital_ready(), which calls
+        # assert_invariant_i12_capital_hydration().  The hydration barrier needs
+        # the CSM-v2 to be hydrated *before* that callback runs, so ingest here
+        # — after the snapshot is accepted by CapitalAuthority but before the
+        # bootstrap FSM transitions.
+        try:
+            from bot.capital_csm_v2 import get_csm_v2 as _get_csm_v2  # noqa: PLC0415
+            _get_csm_v2().ingest_snapshot(snapshot)
+        except ImportError:
+            pass
+        except Exception as _csm_exc:
+            logger.warning("[Coordinator] CSM-v2 ingest failed (non-fatal): %s", _csm_exc)
+
         # ── Synchronous event flush (same-tick guarantee) ─────────────────────
         # Drain every event enqueued during this pipeline run — SNAPSHOT_PUBLISHED,
         # CAPITAL_READY / CAPITAL_DEGRADED, any runtime-FSM events — before the
@@ -1146,7 +1161,8 @@ class CapitalRefreshCoordinator:
 
         # ── Advance bootstrap FSM to terminal state ───────────────────────────
         # _on_ready_callbacks are fired synchronously inside transition() when
-        # _boot_target is READY.  They observe a fully-dispatched event queue.
+        # _boot_target is READY.  They observe a fully-dispatched event queue
+        # and a fully-hydrated CSM-v2 (ingested above).
         self._boot.transition(_boot_target, _boot_reason)
 
         logger.info(
