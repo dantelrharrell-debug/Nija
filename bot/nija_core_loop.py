@@ -1724,6 +1724,14 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         cycle = 0
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
         _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
+        _activation_stuck_cycles = 0  # consecutive cycles blocked at ACTIVATION NOT READY
+        # After this many stuck cycles, attempt a self-healing first_snap rescue
+        # (unblocks the activation chain when the bootstrap timing window was missed).
+        # Configurable via ACTIVATION_RESCUE_THRESHOLD env var (default: 10).
+        _ACTIVATION_RESCUE_THRESHOLD = max(
+            1,
+            int(os.getenv("ACTIVATION_RESCUE_THRESHOLD", "10") or "10"),
+        )
 
         while True:
             try:
@@ -1732,6 +1740,17 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 if cycle == 1:
                     logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
                     logger.critical("✅ FIRST STRATEGY TICK")
+                    # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
+                    _lcv_val = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+                    if _lcv_val not in ("true", "1", "yes", "enabled"):
+                        logger.critical(
+                            "⚠️  OPERATOR ACTION REQUIRED: "
+                            "LIVE_CAPITAL_VERIFIED is not set to 'true' (current value=%r). "
+                            "Trading is permanently blocked until this env var is set. "
+                            "Add 'LIVE_CAPITAL_VERIFIED=true' to your environment / Railway "
+                            "variables and redeploy.",
+                            _lcv_val,
+                        )
 
                 # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
                 # Must happen BEFORE activation so the state machine uses the same
@@ -1768,9 +1787,70 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 logger.critical("🔄 LOOP HEARTBEAT — activation=%s", activated)
 
                 if not activated:
-                    logger.critical("🚧 ACTIVATION NOT READY — skipping cycle")
+                    _activation_stuck_cycles += 1
+                    logger.critical(
+                        "🚧 ACTIVATION NOT READY — skipping cycle (stuck_cycles=%d)",
+                        _activation_stuck_cycles,
+                    )
+
+                    # ── Self-healing first_snap rescue ──────────────────────────────
+                    # If the bootstrap timing window was missed (broker connected after
+                    # the 30s barrier expired), sm._first_snap_accepted stays False and
+                    # activation loops here forever.  After _ACTIVATION_RESCUE_THRESHOLD
+                    # cycles check whether MABM already has valid broker data and, if so,
+                    # force-set first_snap_accepted to unblock the activation chain.
+                    if (
+                        _activation_stuck_cycles >= _ACTIVATION_RESCUE_THRESHOLD
+                        and _activation_stuck_cycles % _ACTIVATION_RESCUE_THRESHOLD == 0
+                        and _act_sm is not None
+                        and not _act_sm.get_first_snap_accepted()
+                    ):
+                        try:
+                            _rescued = False
+                            try:
+                                from bot.multi_account_broker_manager import (
+                                    multi_account_broker_manager as _mabm_rescue,
+                                )
+                            except ImportError:
+                                from multi_account_broker_manager import (  # type: ignore[import]
+                                    multi_account_broker_manager as _mabm_rescue,
+                                )
+                            if _mabm_rescue is not None:
+                                _rescue_vb = int(
+                                    getattr(_mabm_rescue, "_capital_last_valid_brokers", 0) or 0
+                                )
+                            else:
+                                _rescue_vb = 0
+                            _cap_snap = _current_cycle_capital or {}
+                            _rescue_hydrated = bool(_cap_snap.get("ca_is_hydrated", False))
+                            if _rescue_vb > 0 and _rescue_hydrated:
+                                _act_sm.set_first_snap_accepted(True)
+                                _rescued = True
+                                logger.critical(
+                                    "✅ [ACTIVATION_RESCUE] first_snap_accepted force-set: "
+                                    "valid_brokers=%d ca_hydrated=%s stuck_cycles=%d",
+                                    _rescue_vb,
+                                    _rescue_hydrated,
+                                    _activation_stuck_cycles,
+                                )
+                            if not _rescued:
+                                logger.critical(
+                                    "⏳ [ACTIVATION_RESCUE] conditions not met yet — "
+                                    "valid_brokers=%d ca_hydrated=%s stuck_cycles=%d. "
+                                    "Check: LIVE_CAPITAL_VERIFIED env var, Kraken credentials, "
+                                    "account balance.",
+                                    _rescue_vb,
+                                    _rescue_hydrated,
+                                    _activation_stuck_cycles,
+                                )
+                        except Exception as _rescue_err:
+                            logger.debug("first_snap rescue failed: %s", _rescue_err)
+
                     time.sleep(1)
                     continue
+
+                # Activation succeeded — reset the stuck-cycle counter.
+                _activation_stuck_cycles = 0
 
                 # ── Proactive broker liveness check before entering run_cycle ─────
                 # If the strategy's broker is disconnected, attempt reconnect here
