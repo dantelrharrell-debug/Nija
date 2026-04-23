@@ -1903,65 +1903,42 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         logger.critical("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED")
         # ── End Trading Loop Entry Anchor ──────────────────────────────────────
 
-        # ── Final Activation Checkpoint ────────────────────────────────────────
-        # Both hydration and CSM barriers have passed; this is the actual trading
-        # thread.  Force a commit_activation() here so the state machine reaches
-        # LIVE_ACTIVE even if the bootstrap thread missed its window.
-        logger.critical("🔥 FINAL ACTIVATION CHECKPOINT")
-        try:
-            _fa_sm = _get_state_machine() if _SM_AVAILABLE and _get_state_machine is not None else None
-            if _fa_sm is not None:
-                _fa_sm.commit_activation()
-                logger.critical(
-                    "🔥 FORCED ACTIVATION COMPLETE: %s",
-                    _fa_sm.get_current_state(),
-                )
-            else:
-                logger.critical("🔥 FINAL ACTIVATION CHECKPOINT: state machine unavailable")
-        except Exception as _fa_err:
-            logger.critical("🔥 FINAL ACTIVATION CHECKPOINT failed: %s", _fa_err)
-        # ── End Final Activation Checkpoint ────────────────────────────────────
-        # ── FINAL ACTIVATION CHECKPOINT ───────────────────────────────────────
-        # This is the true execution path.  Both hydration and CSM barriers have
-        # already passed, so capital is confirmed > 0.  Call commit_activation()
-        # unconditionally here — before the first trading cycle — so the state
-        # machine is guaranteed to be LIVE_ACTIVE when the loop runs.
-        # maybe_auto_activate() still fires every cycle as a belt-and-suspenders
-        # recovery path, but this single call on startup is the authoritative one.
-        logger.critical("🔥 FINAL ACTIVATION CHECKPOINT REACHED")
+        # ── Activation — single authority ─────────────────────────────────────
+        # This is the ONLY place commit_activation() is called.  All external
+        # callers (bootstrap, force_post_init_state_machine_step, supervisor)
+        # have been removed.  Both hydration and CSM barriers are already clear
+        # so capital is confirmed > 0 at this point.
         _lcv_final = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
-        logger.critical("🚀 ACTIVATION CONDITION CHECKED: %s", _lcv_final)
+        logger.critical("🚀 ACTIVATION CONDITION: LIVE_CAPITAL_VERIFIED=%r", _lcv_final)
         if _lcv_final in ("true", "1", "yes", "enabled"):
-            logger.critical("🚀 ACTIVATING TRADING ENGINE (FINAL PATH)")
-            _act_sm_final = (
+            _act_sm = (
                 _get_state_machine()
                 if _SM_AVAILABLE and _get_state_machine is not None
                 else None
             )
-            if _act_sm_final is not None:
+            if _act_sm is not None:
                 try:
-                    _act_sm_final.commit_activation()
+                    _act_sm.commit_activation()
                     logger.critical(
-                        "STATE AFTER ACTIVATION = %s",
-                        _act_sm_final.get_current_state().value,
+                        "🟢 TRADING ENGINE ACTIVATED — state=%s",
+                        _act_sm.get_current_state().value,
                     )
-                    logger.critical("🟢 LIVE TRADING LOOP ACTIVE")
-                except Exception as _final_act_err:
+                except Exception as _act_err:
                     logger.critical(
-                        "⚠️ FINAL ACTIVATION failed: %s — "
+                        "⚠️ commit_activation failed: %s — "
                         "maybe_auto_activate() will retry each cycle",
-                        _final_act_err,
+                        _act_err,
                     )
             else:
-                logger.critical("⚠️ FINAL ACTIVATION: state machine unavailable — skipping")
+                logger.critical("⚠️ ACTIVATION: state machine unavailable — skipping")
         else:
             logger.critical(
-                "🔒 FINAL ACTIVATION: LIVE_CAPITAL_VERIFIED not set (value=%r) — "
+                "🔒 ACTIVATION: LIVE_CAPITAL_VERIFIED not set (value=%r) — "
                 "trading engine will NOT activate. "
                 "Set LIVE_CAPITAL_VERIFIED=true to enable live trading.",
                 _lcv_final,
             )
-        # ── END FINAL ACTIVATION CHECKPOINT ───────────────────────────────────
+        # ── End Activation ─────────────────────────────────────────────────────
 
         cycle = 0
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
