@@ -186,7 +186,7 @@ class CapitalCSMv2:
     def __init__(self) -> None:
         self._lock: threading.Lock = threading.Lock()
         self._state: CapitalCSMState = CapitalCSMState.INITIALIZING
-        self._blocked_reason: str = "system not yet initialised (INITIALIZING)"
+        self._blocked_reason: str = "system not yet initialized (INITIALIZING)"
         self._last_snapshot: Optional[Any] = None
         self._ingest_count: int = 0
         self._history: List[Dict[str, Any]] = []
@@ -504,7 +504,7 @@ class CapitalCSMv2:
     # ------------------------------------------------------------------
 
     def status_dict(self) -> Dict[str, Any]:
-        """Serialisable status snapshot for health/monitoring endpoints."""
+        """Serializable status snapshot for health/monitoring endpoints."""
         with self._lock:
             snap = self._last_snapshot
             state = self._state
