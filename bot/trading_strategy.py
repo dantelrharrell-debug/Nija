@@ -7099,6 +7099,33 @@ class TradingStrategy:
         logger.info("   Initializing advanced trading modules...")
         logger.info("=" * 70)
 
+        # ── FIX 6: Assert that LIVE_CAPITAL_VERIFIED means actual capital > 0 ──
+        # The flag previously only meant "system is allowed to trade" without
+        # confirming that capital is actually available.  This assertion ensures
+        # the flag is only meaningful when real capital has been confirmed.
+        try:
+            from bot.capital.active_capital import get_active_capital
+            _lcv_balance = get_active_capital().get_total_available_balance()
+            if _lcv_balance <= 0:
+                logger.error("=" * 70)
+                logger.error("🔴 LIVE_CAPITAL_VERIFIED SET BUT NO USABLE CAPITAL DETECTED")
+                logger.error(f"   Available balance: ${_lcv_balance:.2f}")
+                logger.error("   Advanced modules will NOT be initialised.")
+                logger.error("   Fund the account or correct the capital pipeline before enabling LIVE_CAPITAL_VERIFIED.")
+                logger.error("=" * 70)
+                self.rotation_manager = None
+                self.pro_mode_enabled = False
+                self.advanced_manager = None
+                self.ai_capital_rotator = None
+                return
+            logger.info("💰 LIVE_CAPITAL_VERIFIED capital confirmed: $%.2f", _lcv_balance)
+        except Exception as _lcv_exc:
+            logger.warning(
+                "⚠️ LIVE_CAPITAL_VERIFIED capital check could not be completed (%s) — "
+                "proceeding with caution",
+                _lcv_exc,
+            )
+
         # Initialize PRO MODE rotation manager
         pro_mode_enabled = os.getenv('PRO_MODE', 'false').lower() in ('true', '1', 'yes')
         min_free_reserve_pct = float(os.getenv('PRO_MODE_MIN_RESERVE_PCT', '0.15'))
