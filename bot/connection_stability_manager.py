@@ -196,6 +196,10 @@ class ConnectionStabilityManager:
     def is_connected(self) -> bool:
         return self.state == ConnectionState.CONNECTED
 
+    def get_state(self) -> ConnectionState:
+        """Return the current connection state."""
+        return self.state
+
     def get_status(self) -> Dict[str, Any]:
         """Return a status dictionary suitable for dashboards / health endpoints."""
         with self._state_lock:
@@ -391,6 +395,8 @@ class ConnectionStabilityManager:
             # Wait for next probe interval (or stop signal)
             if self._stop_event.wait(timeout=cfg.check_interval_s):
                 break
+
+            logger.critical(f"CSM POST-WAIT STATE: {self.get_state()}")
 
             now = time.monotonic()
             self._last_probe_time = now
