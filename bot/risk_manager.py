@@ -67,7 +67,7 @@ except ImportError:
 
 # Import tier configuration for tier-aware risk management
 try:
-    from tier_config import (
+    from bot.tier_config import (
         get_tier_from_balance, 
         get_tier_config, 
         log_tier_floors,
@@ -844,7 +844,7 @@ class AdaptiveRiskManager:
                 if self.tier_lock:
                     # Use locked tier instead of balance-based detection
                     try:
-                        from tier_config import TradingTier
+                        from bot.tier_config import TradingTier
                         # Ensure tier_lock is a string before calling upper()
                         if isinstance(self.tier_lock, str):
                             tier = TradingTier[self.tier_lock.upper()]
@@ -873,7 +873,7 @@ class AdaptiveRiskManager:
                     # IMPORTANT: Use PLATFORM_FUNDING_RULES max_trade_size_pct for tier floor
                     # This ensures LOW_CAPITAL and other adjustments don't reduce below tier minimum
                     try:
-                        from tier_config import PLATFORM_FUNDING_RULES, get_platform_funding_tier
+                        from bot.tier_config import PLATFORM_FUNDING_RULES, get_platform_funding_tier
                         # Get funding tier based on balance
                         funding_tier_name = get_platform_funding_tier(sizing_base) if sizing_base >= 1.0 else 'NANO_PLATFORM'
                         if funding_tier_name and funding_tier_name in PLATFORM_FUNDING_RULES:

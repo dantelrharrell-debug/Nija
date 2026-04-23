@@ -291,10 +291,13 @@ def get_tier_floors():
     """
     try:
         # Import here to avoid circular dependency
+        # bot.tier_config is preferred; the fallback handles cases where the module
+        # was not imported under the package path (e.g. scripts run from the repo root).
+        # FIX 3 in tier_config.py aliases both paths to the same module instance.
         try:
-            from tier_config import get_tier_floors_for_api
-        except ImportError:
             from bot.tier_config import get_tier_floors_for_api
+        except ImportError:
+            from tier_config import get_tier_floors_for_api
         
         tier_data = get_tier_floors_for_api()
         
