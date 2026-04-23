@@ -3406,6 +3406,32 @@ def _run_bot_startup_and_trading():
                         "proceeding anyway to avoid deadlock",
                         _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
                     )
+                    # ── Bootstrap first_snap rescue ─────────────────────────────────
+                    # The 30-second barrier timed out before _first_snap_accepted was set.
+                    # If MABM already has valid broker data (race between balance-fetch
+                    # and barrier poll), force-set first_snap_accepted now so the core
+                    # loop doesn't spin forever in ACTIVATION_NOT_READY.
+                    if not _bce_first_snap and _get_tsm_bce is not None:
+                        try:
+                            _rescue_vb = int(
+                                getattr(_mabm_bce, "_capital_last_valid_brokers", 0) or 0
+                            ) if _mabm_bce is not None else 0
+                            if _rescue_vb > 0:
+                                _get_tsm_bce().set_first_snap_accepted(True)
+                                logger.critical(
+                                    "✅ [Bootstrap-Rescue] first_snap_accepted force-set at barrier "
+                                    "timeout — valid_brokers=%d",
+                                    _rescue_vb,
+                                )
+                            else:
+                                logger.critical(
+                                    "⚠️  [Bootstrap-Rescue] MABM valid_brokers=%d — rescue skipped. "
+                                    "Core loop self-healing will retry every %s cycles.",
+                                    _rescue_vb,
+                                    os.environ.get("ACTIVATION_RESCUE_THRESHOLD", "10"),
+                                )
+                        except Exception as _bce_rescue_err:
+                            logger.warning("[Bootstrap-Rescue] rescue attempt failed: %s", _bce_rescue_err)
                     break
                 logger.warning(
                     "⏳ [Bootstrap] Waiting for startup invariants — "
