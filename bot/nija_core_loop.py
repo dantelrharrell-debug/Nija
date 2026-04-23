@@ -1697,6 +1697,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
     logger.critical("🔥 ENTERED run_trading_loop()")
 
+    # ── Strategy existence guard ────────────────────────────────────────────
+    # Must be checked BEFORE acquiring _loop_guard / setting _loop_running so
+    # that a None strategy never permanently blocks future valid start attempts.
+    # A None strategy here means the caller violated the contract (strategy must
+    # exist before TradingCoreLoop starts) — refuse to proceed.
+    if strategy is None:
+        logger.critical(
+            "🚫 run_trading_loop called with strategy=None — "
+            "refusing to start; _loop_running NOT set so the loop can be "
+            "started correctly once strategy is available."
+        )
+        return
+
     try:
         logger.critical(f"LOOP START CHECK — _loop_running={_loop_running}")
         with _loop_guard:

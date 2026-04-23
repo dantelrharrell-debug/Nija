@@ -3702,32 +3702,42 @@ def main():
     _bootstrap_completed_event.wait()
     logger.critical("🧭 AFTER bootstrap wait")
 
-    with _initialized_state_lock:
-        strategy = _initialized_state.get("strategy")
-
-    if strategy is None:
-        raise RuntimeError("❌ Strategy not initialized — cannot start trading loop")
-
-    from bot.nija_core_loop import run_trading_loop
-    logger.critical("🚨 DEBUG: ABOUT TO START TRADING LOOP THREAD")
-    logger.critical("🚨 STARTING TradingCoreLoop thread — strategy=%s", strategy)
+    # ── Strategy existence gate ─────────────────────────────────────────────
+    # Guarantee the strategy object exists BEFORE TradingCoreLoop starts.
+    # If bootstrap failed (e.g. broker credentials missing, transient network
+    # error) the finally block in _run_bot_startup_and_trading() still fires
+    # _bootstrap_completed_event so main() is never blocked forever.  In that
+    # case strategy is None and we MUST NOT start — or crash — here.  The
+    # bootstrap retry kernel (_run_bot_startup_and_trading_with_retry) is still
+    # running and will start TradingCoreLoop itself once it succeeds.
+    # Crashing here (via RuntimeError / sys.exit) would kill the process before
+    # the retry has any chance to recover.
     _acquired = _initialized_state_lock.acquire(timeout=5)
-    if not _acquired:
-        raise RuntimeError("DEADLOCK: _initialized_state_lock not acquired")
-    try:
-        strategy = _initialized_state.get("strategy")
-    finally:
-        _initialized_state_lock.release()
-    logger.critical("🚨 STARTING TradingCoreLoop thread — strategy=%s", strategy)
+    if _acquired:
+        try:
+            strategy = _initialized_state.get("strategy")
+        finally:
+            _initialized_state_lock.release()
+    else:
+        logger.critical("⚠️  [Supervisor] Could not acquire lock — treating strategy as None")
+        strategy = None
+
     if strategy is None:
-        raise RuntimeError("❌ CRITICAL: strategy is None — trading loop cannot start")
-    threading.Thread(
-        target=run_trading_loop,
-        args=(strategy,),
-        daemon=True,
-        name="TradingCoreLoop",
-    ).start()
-    logger.critical("✅ TradingCoreLoop started from main supervisor")
+        logger.critical(
+            "⚠️  [Supervisor] Strategy not yet initialized after bootstrap event "
+            "— skipping TradingCoreLoop start from main(). "
+            "Bootstrap retry kernel will start the loop once strategy is ready."
+        )
+    else:
+        from bot.nija_core_loop import run_trading_loop
+        logger.critical("🚨 STARTING TradingCoreLoop thread — strategy=%s", strategy)
+        threading.Thread(
+            target=run_trading_loop,
+            args=(strategy,),
+            daemon=True,
+            name="TradingCoreLoop",
+        ).start()
+        logger.critical("✅ TradingCoreLoop started from main supervisor")
 
     logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0
