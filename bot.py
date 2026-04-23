@@ -3668,6 +3668,37 @@ def _run_bot_startup_and_trading():
             _bootstrap_completed_event.set()
             logger.critical("✅ B1 → B2: _bootstrap_completed_event set — system handed to supervisor loop")
 
+            # ── EXPLICIT ACTIVATION after init completes ──────────────────────
+            # Single, unconditional activation gate: if LIVE_CAPITAL_VERIFIED is
+            # set, activate the trading state machine RIGHT NOW (before the trading
+            # loop starts) so that the first cycle runs immediately in LIVE_ACTIVE
+            # state instead of waiting for maybe_auto_activate() to fire on cycle 1.
+            if _is_truthy_env("LIVE_CAPITAL_VERIFIED"):
+                logger.critical("🚀 ACTIVATING TRADING ENGINE")
+                try:
+                    from bot.trading_state_machine import (
+                        get_state_machine as _get_tsm_act,
+                    )
+                    _fsm_act = _get_tsm_act()
+                    _fsm_act.commit_activation()
+                    logger.critical(
+                        "🚀 TRADING ENGINE ACTIVATED — state=%s",
+                        _fsm_act.get_current_state().value,
+                    )
+                except Exception as _act_err:
+                    logger.critical(
+                        "⚠️  Explicit post-init activation failed: %s — "
+                        "core loop will retry via maybe_auto_activate()",
+                        _act_err,
+                    )
+            else:
+                logger.warning(
+                    "🔒 LIVE_CAPITAL_VERIFIED not set — "
+                    "trading engine NOT activated. "
+                    "Set LIVE_CAPITAL_VERIFIED=true in your environment to enable live trading.",
+                )
+            # ── END EXPLICIT ACTIVATION ────────────────────────────────────────
+
             # ── Bulletproof loop start: fire immediately from the bootstrap ──
             # Starting the trading loop here (as well as in main()) guarantees
             # execution regardless of threading race conditions.  run_trading_loop
