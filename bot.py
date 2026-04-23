@@ -3431,6 +3431,12 @@ def _run_bot_startup_and_trading():
             # "strategy ready" gate used by the supervisor, core loop, and
             # BootstrapFSM (FIX A + FIX C from architecture spec).
             _strategy_ready_event.set()
+            # Unblock run_trading_loop's bootstrap gate (FIX 2).
+            try:
+                from bot.nija_core_loop import set_bootstrap_completed as _set_boot
+                _set_boot()
+            except Exception as _sbc_err:
+                logger.critical("⚠️ set_bootstrap_completed failed: %s", _sbc_err)
             logger.critical(f"STATE CHECK: {_initialized_state}")
             logger.critical("🧠 STATE STORED — strategy_ready_event SET — entering supervisor mode")
 
@@ -3668,82 +3674,8 @@ def _run_bot_startup_and_trading():
             _bootstrap_completed_event.set()
             logger.critical("✅ B1 → B2: _bootstrap_completed_event set — system handed to supervisor loop")
 
-            # ── EXPLICIT ACTIVATION after init completes ──────────────────────
-            # Single, unconditional activation gate: if LIVE_CAPITAL_VERIFIED is
-            # set, activate the trading state machine RIGHT NOW (before the trading
-            # loop starts) so that the first cycle runs immediately in LIVE_ACTIVE
-            # state instead of waiting for maybe_auto_activate() to fire on cycle 1.
-            if _is_truthy_env("LIVE_CAPITAL_VERIFIED"):
-                logger.critical("🚀 ACTIVATING TRADING ENGINE")
-                try:
-                    from bot.trading_state_machine import (
-                        get_state_machine as _get_tsm_act,
-                    )
-                    _fsm_act = _get_tsm_act()
-                    _fsm_act.commit_activation()
-                    logger.critical(
-                        "🚀 TRADING ENGINE ACTIVATED — state=%s",
-                        _fsm_act.get_current_state().value,
-                    )
-                except Exception as _act_err:
-                    logger.critical(
-                        "⚠️  Explicit post-init activation failed: %s — "
-                        "core loop will retry via maybe_auto_activate()",
-                        _act_err,
-                    )
-            else:
-                logger.warning(
-                    "🔒 LIVE_CAPITAL_VERIFIED not set — "
-                    "trading engine NOT activated. "
-                    "Set LIVE_CAPITAL_VERIFIED=true in your environment to enable live trading.",
-                )
-            # ── END EXPLICIT ACTIVATION ────────────────────────────────────────
-
-            # ── Bulletproof loop start: fire immediately from the bootstrap ──
-            # Starting the trading loop here (as well as in main()) guarantees
-            # execution regardless of threading race conditions.  run_trading_loop
-            # has an internal _loop_running guard that makes a second start a
-            # safe no-op, so there is no risk of running two loops.
-            logger.critical("🚨 STARTING CORE LOOP FROM BOOTSTRAP COMPLETION")
-            try:
-                from bot.nija_core_loop import run_trading_loop as _rtl_boot
-                with _initialized_state_lock:
-                    _boot_strategy = _initialized_state.get("strategy")
-                if _boot_strategy is None:
-                    raise RuntimeError("❌ Strategy missing at bootstrap completion")
-                threading.Thread(
-                    target=_rtl_boot,
-                    args=(_boot_strategy,),
-                    daemon=True,
-                    name="TradingCoreLoop",
-                ).start()
-                logger.critical("✅ TradingCoreLoop started from bootstrap completion")
-            except Exception as _boot_loop_err:
-                logger.critical(
-                    "❌ Failed to start TradingCoreLoop from bootstrap: %s",
-                    _boot_loop_err,
-                )
-
-            # FIX OPTION A: Force activation check AFTER INIT completes.
-            # maybe_auto_activate() was called earlier (during the capital gate
-            # phase) but the full bootstrap (threads started, _initialized_state
-            # populated) had not yet completed at that point.  Any race condition
-            # or concurrent reset between that call and here would leave the state
-            # machine in OFF / EMERGENCY_STOP with no recovery path.  Calling
-            # force_post_init_state_machine_step() ensures the trading state machine
-            # is checked — and re-activated if needed — once the bootstrap sequence
-            # is truly complete.
-            try:
-                from bot.self_healing_startup import force_post_init_state_machine_step
-                force_post_init_state_machine_step()
-                logger.critical(
-                    "✅ POST-INIT: state machine step complete after bootstrap"
-                )
-            except Exception as _post_init_sm_err:
-                logger.critical(
-                    "[BOOT] post-init state machine step failed: %s",
-                    _post_init_sm_err,
-                )
+            # Activation is owned exclusively by run_trading_loop().
+            # main() spawns that thread once after this event is set.
 
             # Enforce startup truth conditions before supervised execution.
             _verify_startup_truth_conditions(
@@ -4033,15 +3965,9 @@ def main():
             "This indicates a race condition or logic error in bootstrap."
         )
     else:
-        from bot.nija_core_loop import run_trading_loop
-        logger.critical("🚨 STARTING TradingCoreLoop thread — strategy=%s", strategy)
-        threading.Thread(
-            target=run_trading_loop,
-            args=(strategy,),
-            daemon=True,
-            name="TradingCoreLoop",
-        ).start()
-        logger.critical("✅ TradingCoreLoop started from main supervisor")
+        from bot.nija_core_loop import start_trading_engine
+        start_trading_engine(strategy)
+        logger.critical("✅ TradingLoop started via start_trading_engine()")
 
     logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0
