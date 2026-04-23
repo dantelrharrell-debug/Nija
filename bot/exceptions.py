@@ -51,3 +51,20 @@ class ExecutionFailed(ExecutionError):
     Prevents ledger writes and position increments for unconfirmed orders.
     """
     pass
+
+
+class CapitalIntegrityError(Exception):
+    """
+    Raised when the capital source is invalid or unreliable.
+
+    This exception prevents fallback-to-STARTER behavior when capital
+    cannot be fetched or verified.  Trading MUST NOT proceed when this
+    exception is raised — the capital pipeline has failed and no tier or
+    position-sizing logic may produce a meaningful result.
+
+    Typical causes:
+    - CapitalAuthority has not been hydrated (no balance fetched yet)
+    - All broker balance fetches returned None / failed
+    - Capital system gate not yet released (startup incomplete)
+    """
+    pass
