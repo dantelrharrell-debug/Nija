@@ -267,6 +267,21 @@ def calculate_user_position_size(
         logger.info(f"   Scale Factor: {scale_factor:.4f} ({scale_factor*100:.2f}%)")
         logger.info(f"   Calculated User Size: {user_size} ({size_type})")
 
+        # ── Fee-aware balance cap ─────────────────────────────────────────────
+        # Ensure the order leaves room for exchange fees (2 % conservative buffer
+        # covers Coinbase taker fee ~0.6 % + Kraken ~0.26 % + rounding).  Without
+        # this cap the broker pre-flight check may reject orders where fees would
+        # push the total above the available balance.
+        if size_type == 'quote':
+            FEE_BUFFER_FACTOR = 1.02  # 2 % buffer — matches CoinbaseBroker pre-flight check
+            fee_adjusted_cap = math.floor((user_balance / FEE_BUFFER_FACTOR) * 100) / 100
+            if user_size > fee_adjusted_cap:
+                logger.info(
+                    f"   📉 Size capped: ${user_size:.2f} → ${fee_adjusted_cap:.2f} "
+                    f"(2% fee reserve on ${user_balance:.2f} balance)"
+                )
+                user_size = fee_adjusted_cap
+
         # Validate minimum position size
         if size_type == 'quote':
             # For USD-denominated trades, check against minimum USD
