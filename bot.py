@@ -2474,11 +2474,15 @@ def _run_bot_startup_and_trading():
 
                 _ts_init_start = time.time()
                 logger.critical("PREFLIGHT: FSM BUILD START")
-                strategy = TradingStrategy(
-                    broker_results=_boot_broker_results if _boot_broker_results else None,
-                    connected_user_brokers=_boot_connected_users if _boot_connected_users else None,
-                )
-                logger.critical("PREFLIGHT: FSM BUILD END")
+                try:
+                    strategy = TradingStrategy(
+                        broker_results=_boot_broker_results if _boot_broker_results else None,
+                        connected_user_brokers=_boot_connected_users if _boot_connected_users else None,
+                    )
+                    logger.critical("PREFLIGHT: FSM BUILD END")
+                except Exception as e:
+                    logger.critical("❌ STRATEGY INIT CRASH: %s", e, exc_info=True)
+                    raise
                 _ts_init_elapsed = time.time() - _ts_init_start
                 if _ts_init_elapsed > 5:
                     logger.critical(
@@ -3412,6 +3416,9 @@ def _run_bot_startup_and_trading():
             # Signal bootstrap completion so the supervisor loop knows trader
             # threads are running independently.  From this point forward a
             # thread exit means "hand off to supervisor" not "crash".
+            if strategy is None:
+                logger.critical("❌ FATAL: Bootstrap completing WITHOUT strategy")
+                raise RuntimeError("Strategy not initialized at bootstrap completion")
             _bootstrap_completed_event.set()
             logger.info("✅ BOOTSTRAP COMPLETE — system handed to supervisor loop")
 
