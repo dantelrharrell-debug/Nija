@@ -3355,13 +3355,13 @@ def _run_bot_startup_and_trading():
             logger.info("✅ [Bootstrap] Bootstrap complete — control handed to supervisor")
             # ── HARD STARTUP BARRIER ─────────────────────────────────────────────
             # Enforce the startup invariant: _bootstrap_completed_event must only
-            # be set AFTER all five conditions hold simultaneously (B1 preflight):
+            # be set AFTER all six conditions hold simultaneously (B1 preflight):
             #   1. brokers_ready          — all platform brokers fully connected
             #   2. first_snap             — first live-exchange capital snapshot accepted
             #   3. capital_fsm_ready      — CapitalBootstrapFSM has reached READY
             #   4. capital_hydrated       — CapitalAuthority is hydrated (is_hydrated=True)
             #   5. aggregation_normalized — CA registered broker count matches MABM viable count
-            #   (+) nonce_ready           — Kraken nonce FSM has authorized nonce issuance
+            #   6. nonce_ready            — Kraken nonce FSM has authorized nonce issuance
             #
             # Without this gate the core loop (which calls maybe_auto_activate)
             # could start before the system is truly ready, causing phantom vetoes.
@@ -3372,7 +3372,7 @@ def _run_bot_startup_and_trading():
             _bce_brokers_ready = False
             _bce_capital_fsm_ready = False
             _bce_capital_hydrated = False
-            _bce_aggregation_normalized = True  # default True (fail-open per nija_core_loop convention)
+            _bce_aggregation_normalized = True  # default True (fail-open: mirrors nija_core_loop — only block when mismatch is positively confirmed)
             _bce_nonce_ready = False
             _bce_deadline = time.monotonic() + 30
             # Resolve module references once, outside the polling loop.
@@ -3452,11 +3452,11 @@ def _run_bot_startup_and_trading():
                     "B1 PREFLIGHT CHECK: %s",
                     {
                         "brokers_ready": _bce_brokers_ready,
-                        "aggregation_normalized": _bce_aggregation_normalized,
-                        "capital_hydrated": _bce_capital_hydrated,
-                        "nonce_ready": _bce_nonce_ready,
                         "first_snap": _bce_first_snap,
                         "capital_fsm_ready": _bce_capital_fsm_ready,
+                        "capital_hydrated": _bce_capital_hydrated,
+                        "aggregation_normalized": _bce_aggregation_normalized,
+                        "nonce_ready": _bce_nonce_ready,
                     },
                 )
                 if _bce_preflight_ready:
