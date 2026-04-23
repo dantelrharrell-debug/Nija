@@ -24,7 +24,10 @@ from typing import Dict, Optional, Tuple
 from datetime import datetime, timedelta
 import logging
 
-from tier_config import TradingTier, get_tier_from_balance, get_tier_config
+try:
+    from bot.tier_config import TradingTier, get_tier_from_balance, get_tier_config
+except ImportError:
+    from tier_config import TradingTier, get_tier_from_balance, get_tier_config
 
 logger = logging.getLogger("nija.dynamic_tiers")
 
