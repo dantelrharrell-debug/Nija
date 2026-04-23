@@ -1680,6 +1680,10 @@ def get_nija_core_loop(apex_strategy: Any = None, max_positions: int = 5) -> Nij
 #                    one continuous cycle ever runs.
 _loop_guard = threading.Lock()
 _loop_running = False
+# Hard trading-active flag.  Set to True only after BOTH the hydration and CSM
+# barriers have passed.  The main while-loop is conditioned on this flag so the
+# loop body never executes until the bot is genuinely ready to trade.
+_trading_active = False
 # Set to True after _exec_test_probe() fires so the probe only runs once
 # per process lifetime, even if NIJA_EXEC_TEST_MODE stays "true" externally.
 _exec_test_fired = False
@@ -1767,7 +1771,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         daemon=True,
     ).start()
     """
-    global _loop_running
+    global _loop_running, _trading_active
 
     logger.critical("🔥 ENTERED run_trading_loop()")
 
@@ -1856,8 +1860,15 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 )
             _csm = _get_csm_v2()
             logger.critical("CSM PRE-WAIT STATE: %s", _csm.state)
-            _csm.wait_for_ready(timeout=_csm_timeout)
+            _csm_ready = _csm.wait_for_ready(timeout=_csm_timeout)
             logger.critical("CSM POST-WAIT STATE: %s", _csm.state)
+            if not _csm_ready:
+                logger.critical(
+                    "❌ CSM NOT READY — TRADING LOOP ABORTED"
+                )
+                with _loop_guard:
+                    _loop_running = False
+                raise _CsmIntegrityErr("CSM NOT READY")
             logger.critical(
                 "✅ CAPITAL READY — STARTING TRADING LOOP"
             )
@@ -1878,6 +1889,18 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             )
         # ── End CSM v2 Ready Barrier ───────────────────────────────────────────
 
+        # ── Trading Loop Entry Anchor (FIX 1) ─────────────────────────────────
+        # Both hydration and CSM barriers have passed.  Arm the trading-active
+        # flag HERE and verify it before entering the loop — this is the single
+        # authoritative gate.  If the assert fires something above cleared the
+        # flag unexpectedly; that is a logic bug that must be surfaced loudly.
+        _trading_active = True
+        if not _trading_active:
+            logger.critical("💥 _trading_active failed to set — logic error, aborting")
+            raise RuntimeError("_trading_active must be True before entering trading loop")
+        logger.critical("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED")
+        # ── End Trading Loop Entry Anchor ──────────────────────────────────────
+
         cycle = 0
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
         _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
@@ -1890,7 +1913,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             int(os.getenv("ACTIVATION_RESCUE_THRESHOLD", "10") or "10"),
         )
 
-        while True:
+        while _trading_active:
             try:
                 cycle += 1
 
@@ -1942,6 +1965,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 else:
                     activated = False
                 logger.critical("🔄 LOOP HEARTBEAT — activation=%s", activated)
+                logger.critical("🔥 TRADE LOOP HEARTBEAT: active=%s", _trading_active)
 
                 if not activated:
                     _activation_stuck_cycles += 1

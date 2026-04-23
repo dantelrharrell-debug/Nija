@@ -379,7 +379,7 @@ class CapitalCSMv2:
             f"(CSM-v2 state={self.state.value})"
         )
 
-    def wait_for_ready(self, timeout: float = 30.0) -> None:
+    def wait_for_ready(self, timeout: float = 30.0) -> bool:
         """Block until the CSM reaches :attr:`CapitalCSMState.READY`.
 
         ``READY`` requires all of:
@@ -394,10 +394,12 @@ class CapitalCSMv2:
         timeout:
             Maximum seconds to wait.  Default 30 s.
 
-        Raises
-        ------
-        CapitalIntegrityError
-            If ``timeout`` elapses without reaching ``READY`` state.
+        Returns
+        -------
+        bool
+            ``True`` if the CSM reached ``READY`` within *timeout* seconds,
+            ``False`` otherwise.  The caller is responsible for aborting if
+            ``False`` is returned.
         """
         if self._ready_event.wait(timeout=timeout):
             # Verify we are still READY (not just "was once ready").
@@ -405,16 +407,17 @@ class CapitalCSMv2:
                 current = self._state
             if current == CapitalCSMState.READY:
                 logger.info("✅ [CSM-v2] Capital READY confirmed")
-                return
+                return True
         with self._lock:
             current = self._state
             reason = self._blocked_reason
-        raise CapitalIntegrityError(
-            f"Capital readiness timeout after {timeout:.0f}s: "
-            f"state={current.value}  blocked_reason={reason!r}.  "
-            "Ensure LIVE_CAPITAL_VERIFIED=true, brokers are connected, "
-            "and the account has a positive balance."
+        logger.critical(
+            "❌ [CSM-v2] Capital NOT ready after %.0fs: state=%s blocked_reason=%r",
+            timeout,
+            current.value,
+            reason,
         )
+        return False
 
     # ------------------------------------------------------------------
     # Read-only accessors (all non-blocking)
