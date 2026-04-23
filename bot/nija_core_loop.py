@@ -762,18 +762,12 @@ class NijaCoreLoop:
             )
 
     def start(self, strategy: Any = None) -> None:
-        """Start the continuous execution loop in a daemon thread (idempotent)."""
-        print("🔥 CORE LOOP START CALLED")
+        """Start the continuous execution loop via start_trading_engine() (idempotent)."""
         _target = strategy if strategy is not None else self.apex
         if _target is None:
             logger.warning("NijaCoreLoop.start(): no strategy — execution loop NOT started")
             return
-        threading.Thread(
-            target=run_trading_loop,
-            args=(_target,),
-            daemon=True,
-            name="NijaCoreLoop-Execution",
-        ).start()
+        start_trading_engine(_target)
         logger.info("✅ NijaCoreLoop.start(): execution loop started")
 
     # ------------------------------------------------------------------
@@ -1749,27 +1743,44 @@ def _exec_test_probe(strategy: Any) -> Dict:
     return result
 
 
+def start_trading_engine(strategy: Any) -> threading.Thread:
+    """Single, guaranteed entry point for the trading loop thread.
+
+    This is the ONLY function that may spawn a ``run_trading_loop`` thread.
+    All callers (``bot.py`` main, ``NijaCoreLoop.start``, etc.) must go
+    through here — no one else is permitted to call ``threading.Thread``
+    with ``run_trading_loop`` as the target directly.
+
+    Parameters
+    ----------
+    strategy : TradingStrategy instance (must not be None)
+
+    Returns
+    -------
+    threading.Thread — the started daemon thread
+    """
+    logger.critical("🚀 STARTING TRADING ENGINE THREAD")
+    t = threading.Thread(
+        target=run_trading_loop,
+        args=(strategy,),
+        name="TradingLoop",
+        daemon=True,
+    )
+    t.start()
+    return t
+
+
 def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     """
     Continuous self-healing trading loop.
 
-    Designed to be launched as a daemon thread target directly from
-    TradingStrategy initialisation so the core trading cycle is
-    guaranteed to start even if the outer orchestrator (bot.py) hits
-    an unexpected exception before starting its own threads.
+    Must be started exclusively via :func:`start_trading_engine`.
+    Do NOT spawn this function as a thread target anywhere else.
 
     Parameters
     ----------
     strategy   : TradingStrategy instance
     cycle_secs : Seconds to sleep between cycles (default 150 = 2.5 min)
-
-    Usage
-    -----
-    threading.Thread(
-        target=nija_core_loop.run_trading_loop,
-        args=(self,),
-        daemon=True,
-    ).start()
     """
     logger.critical("🧵 TRADING LOOP THREAD ALIVE")
 
@@ -1926,7 +1937,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 except Exception as _act_err:
                     logger.critical(
                         "⚠️ commit_activation failed: %s — "
-                        "maybe_auto_activate() will retry each cycle",
+                        "per-cycle safety check will attempt recovery",
                         _act_err,
                     )
             else:

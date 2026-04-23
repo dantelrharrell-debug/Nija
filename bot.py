@@ -3959,15 +3959,9 @@ def main():
             "This indicates a race condition or logic error in bootstrap."
         )
     else:
-        from bot.nija_core_loop import run_trading_loop
-        logger.critical("🚨 STARTING TradingCoreLoop thread — strategy=%s", strategy)
-        threading.Thread(
-            target=run_trading_loop,
-            args=(strategy,),
-            daemon=True,
-            name="TradingCoreLoop",
-        ).start()
-        logger.critical("✅ TradingCoreLoop started from main supervisor")
+        from bot.nija_core_loop import start_trading_engine
+        start_trading_engine(strategy)
+        logger.critical("✅ TradingLoop started via start_trading_engine()")
 
     logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0
