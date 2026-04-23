@@ -3431,6 +3431,12 @@ def _run_bot_startup_and_trading():
             # "strategy ready" gate used by the supervisor, core loop, and
             # BootstrapFSM (FIX A + FIX C from architecture spec).
             _strategy_ready_event.set()
+            # Unblock run_trading_loop's bootstrap gate (FIX 2).
+            try:
+                from bot.nija_core_loop import set_bootstrap_completed as _set_boot
+                _set_boot()
+            except Exception as _sbc_err:
+                logger.critical("⚠️ set_bootstrap_completed failed: %s", _sbc_err)
             logger.critical(f"STATE CHECK: {_initialized_state}")
             logger.critical("🧠 STATE STORED — strategy_ready_event SET — entering supervisor mode")
 

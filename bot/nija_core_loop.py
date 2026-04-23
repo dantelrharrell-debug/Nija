@@ -1987,6 +1987,15 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
         while _trading_active:
             try:
+                # FIX 4: emit every cycle so a silent dead-bot is immediately visible.
+                logger.critical("🟢 LIVE LOOP TICK")
+
+                # FIX 5: assert we are executing on the correct named thread.
+                assert threading.current_thread().name == "TradingLoop", (
+                    f"run_trading_loop executing on wrong thread: "
+                    f"{threading.current_thread().name!r} (expected 'TradingLoop')"
+                )
+
                 cycle += 1
 
                 if cycle == 1:
@@ -2272,9 +2281,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 time.sleep(cycle_secs)
 
             except Exception as _err:
-                logger.error(
-                    "❌ Trading loop cycle #%d error: %s — retrying in 15s",
-                    cycle,
+                logger.critical(
+                    "❌ LOOP ERROR: %s",
                     _err,
                     exc_info=True,
                 )
