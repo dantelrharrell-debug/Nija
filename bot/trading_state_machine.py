@@ -424,11 +424,52 @@ class TradingStateMachine:
         except Exception as _ks_err:
             logger.debug("commit_activation: could not check kill switch: %s", _ks_err)
 
-        # ── Gate 3: LIVE_CAPITAL_VERIFIED (operator master switch) ────────
+        # ── Gate 3: LIVE_CAPITAL_VERIFIED — composite semantic check ──────────
+        # Semantics: flag==true AND capital_hydrated==true AND total_balance is not None.
+        # Previously Gate 3 only checked the env var flag, which allowed the trading
+        # loop to start with $0 balance when brokers hadn't finished hydrating CA.
+        #
+        # New contract (FIX 3):
+        #   LIVE_CAPITAL_VERIFIED = (flag == true
+        #                            AND capital_hydrated == true
+        #                            AND total_balance is not None)
         lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
         if lcv not in ("true", "1", "yes", "enabled"):
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_NOT_SET value=%r",
+                lcv,
+            )
+            return False
+
+        # Gate 3b: CA must be hydrated (at least one broker snapshot received).
+        # Fail-closed: if CA is unavailable (None), we cannot confirm hydration,
+        # so we treat it as a hard block rather than gracefully degrading.
+        # If the CA module is absent at this point it indicates an infrastructure
+        # error that must be resolved before live trading can proceed.
+        _ca_lcv = _get_capital_authority_instance()
+        _ca_hydrated_lcv = _ca_lcv is not None and bool(_ca_lcv.is_hydrated)
+        if not _ca_hydrated_lcv:
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED "
+                "flag=%r ca_available=%s ca_hydrated=%s — LIVE_CAPITAL_VERIFIED requires "
+                "CapitalAuthority to have received at least one broker snapshot before activation.",
+                lcv,
+                _ca_lcv is not None,
+                bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False,
+            )
+            return False
+
+        # Gate 3c: CA total_balance must be resolvable (not None — CA initialized).
+        _ca_balance_lcv: Optional[float] = None
+        try:
+            if _ca_lcv is not None:
+                _ca_balance_lcv = _ca_lcv.get_real_capital()
+        except Exception as _bal_err:
+            logger.debug("commit_activation: Gate 3c balance read failed: %s", _bal_err)
+        if _ca_lcv is not None and _ca_balance_lcv is None:
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_BALANCE_UNKNOWN "
+                "flag=%r total_balance=None — capital balance not resolvable from CA.",
                 lcv,
             )
             return False
@@ -457,6 +498,7 @@ class TradingStateMachine:
             "valid_brokers=%s "
             "snap_source=%s "
             "brokers_ready=%s "
+            "aggregation_normalized=%s "
             "kill_switch=%s",
             _inv_ready,
             self._first_snap_accepted,
@@ -469,6 +511,7 @@ class TradingStateMachine:
                 if _mabm_gate is not None and hasattr(_mabm_gate, "all_brokers_fully_ready")
                 else None
             ),
+            _snap.get("aggregation_normalized", True),
             kill_state,
         )
 
@@ -532,6 +575,14 @@ class TradingStateMachine:
             ):
                 logger.critical(
                     "[AUTO_ACTIVATE BLOCKED] reason=BROKERS_NOT_READY"
+                )
+            elif not _snap.get("aggregation_normalized", True):
+                # FIX 2: broker aggregation pipeline not yet sequential-complete.
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=AGGREGATION_NOT_NORMALIZED"
+                    " — MABM viable broker count not yet reflected in CA balance entries."
+                    " Waiting for sequential pipeline: Broker balances"
+                    " → ActiveCapital aggregation → Tier classification."
                 )
             else:
                 logger.critical(
@@ -625,15 +676,27 @@ class TradingStateMachine:
 
         _first_snap_accepted = self._first_snap_accepted
 
+        # FIX 3: Compute composite LIVE_CAPITAL_VERIFIED status for diagnostics.
+        # live_verified below reflects only the env var flag (for the log line).
+        # commit_activation() applies the full composite check (flag + hydration + balance).
+        _ca_hydrated_diag = bool(CA_READY) if CA_READY is not None else None
+        _aggregation_norm_diag = bool(
+            cycle_capital.get("aggregation_normalized", True)
+        ) if cycle_capital else True
+
         logger.critical(
             "[AUTO_ACTIVATE ENTRY] kill_switch=%s "
             "LIVE_CAPITAL_VERIFIED=%s "
+            "ca_hydrated=%s "
+            "aggregation_normalized=%s "
             "capital_ready=%s "
             "execution_healthy=%s "
             "first_snap=%s "
             "brokers_ready=%s",
             kill_switch,
             live_verified,
+            _ca_hydrated_diag,
+            _aggregation_norm_diag,
             CA_READY,
             EXECUTION_PIPELINE_HEALTHY,
             _first_snap_accepted,
@@ -970,6 +1033,12 @@ def activation_invariant(
     )
     valid_brokers = int(cycle_capital.get("ca_valid_brokers", 0))
     snap_source = str(cycle_capital.get("snapshot_source", ""))
+    # FIX 2: Enforce sequential pipeline — Broker balances → ActiveCapital
+    # aggregation → Tier classification → ExecutionEngine gating → Strategy loop.
+    # aggregation_normalized=True when CA's registered broker count matches
+    # MABM's viable broker count (all broker balances propagated to CA).
+    # Defaults to True so unknown state never permanently blocks activation.
+    aggregation_normalized = bool(cycle_capital.get("aggregation_normalized", True))
     return all((
         sm._first_snap_accepted,
         ca_hydrated,
@@ -977,6 +1046,7 @@ def activation_invariant(
         brokers_ready,
         valid_brokers > 0,
         snap_source == "live_exchange",
+        aggregation_normalized,
     ))
 
 
