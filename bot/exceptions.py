@@ -5,6 +5,21 @@ Custom exception classes for error handling and safety checks.
 """
 
 
+class CapitalIntegrityError(RuntimeError):
+    """Raised when a capital safety invariant is violated.
+
+    Specifically raised by:
+
+    * ``CapitalCSMv2.wait_for_hydration()`` — no snapshot arrived in time.
+    * ``CapitalCSMv2.wait_for_ready()`` — READY state not reached in time.
+
+    These are **blocking errors**: the caller must not proceed with trading.
+    The canonical definition lives in :mod:`bot.capital_csm_v2`; this alias
+    allows consumers that import from :mod:`bot.exceptions` to use the same
+    exception class.
+    """
+
+
 class ExecutionError(Exception):
     """
     Critical execution error that should halt trade execution.

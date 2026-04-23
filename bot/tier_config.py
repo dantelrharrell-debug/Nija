@@ -31,6 +31,7 @@ logger = logging.getLogger("nija.tier_config")
 
 class TradingTier(Enum):
     """User trading tiers with associated capital ranges."""
+    NO_CAPITAL = "NO_CAPITAL"   # capital pipeline not yet hydrated — tier unknown
     NO_CAPITAL = "NO_CAPITAL"       # $0 confirmed — account empty, trading blocked
     NANO_PLATFORM = "NANO_PLATFORM"  # < $25 — isolated micro-capital build mode
     STARTER = "STARTER"
@@ -454,6 +455,21 @@ def get_tier_from_balance_internal(balance: float) -> TradingTier:
         - Never falls back to STARTER for sub-minimum balances; callers that
           see NO_CAPITAL must refuse to open new positions.
     """
+    # Gate on hydration: if the capital pipeline has not run yet, falling back
+    # to STARTER with balance=0 would be a false tier assignment that could
+    # trigger real trade-sizing logic.  Return NO_CAPITAL instead so callers
+    # know to wait for a real snapshot.
+    try:
+        from bot.capital_csm_v2 import get_csm_v2 as _get_csm
+        if not _get_csm().is_hydrated:
+            logger.warning(
+                "get_tier_from_balance_internal: capital pipeline not yet hydrated "
+                "(CSM-v2 state=INITIALIZING) — returning NO_CAPITAL instead of STARTER"
+            )
+            return TradingTier.NO_CAPITAL
+    except ImportError:
+        pass
+
     # Explicitly empty account — do not allow trading
     if balance <= 0.0:
         logger.warning(

@@ -436,6 +436,26 @@ class HardControls:
         if not self.live_capital_verified:
             return False, "🔴 LIVE CAPITAL VERIFIED: FALSE - Trading disabled. Set LIVE_CAPITAL_VERIFIED=true in .env to enable live trading."
 
+        # CRITICAL LAYER 2b: CSM-v2 full capital validity gate
+        # Checks beyond the env-var flag: hydration (pipeline ran), real_capital > 0,
+        # and snapshot confidence/freshness.  A BLOCKED or INITIALIZING CSM-v2 state
+        # means money is either unconfirmed or zero — either way, no trades.
+        try:
+            from bot.capital_csm_v2 import get_csm_v2 as _get_csm  # noqa: PLC0415
+            _csm = _get_csm()
+            if not _csm.is_live_capital_valid():
+                _reason = (
+                    _csm.blocked_reason
+                    or f"CSM-v2 state={_csm.state.value} (not READY)"
+                )
+                return False, (
+                    f"🔴 CAPITAL NOT VALIDATED: {_reason}. "
+                    "Capital pipeline may not have run, account balance is zero, "
+                    "or snapshot quality is too low."
+                )
+        except ImportError:
+            pass
+
         # Check global kill switch
         if self.global_kill_switch == KillSwitchStatus.TRIGGERED:
             return False, "Global trading halted (kill switch triggered)"
