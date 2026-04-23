@@ -1771,9 +1771,11 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         daemon=True,
     ).start()
     """
+    logger.critical("🧵 TRADING LOOP THREAD ALIVE")
+
     global _loop_running, _trading_active
 
-    logger.critical("🔥 ENTERED run_trading_loop()")
+    logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
 
     # ── Strategy existence guard ────────────────────────────────────────────
     # Must be checked BEFORE acquiring _loop_guard / setting _loop_running so
@@ -1928,6 +1930,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         # recovery path, but this single call on startup is the authoritative one.
         logger.critical("🔥 FINAL ACTIVATION CHECKPOINT REACHED")
         _lcv_final = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+        logger.critical("🚀 ACTIVATION CONDITION CHECKED: %s", _lcv_final)
         if _lcv_final in ("true", "1", "yes", "enabled"):
             logger.critical("🚀 ACTIVATING TRADING ENGINE (FINAL PATH)")
             _act_sm_final = (
