@@ -3355,19 +3355,25 @@ def _run_bot_startup_and_trading():
             logger.info("✅ [Bootstrap] Bootstrap complete — control handed to supervisor")
             # ── HARD STARTUP BARRIER ─────────────────────────────────────────────
             # Enforce the startup invariant: _bootstrap_completed_event must only
-            # be set AFTER all three conditions hold simultaneously:
-            #   1. brokers_ready    — all platform brokers fully connected
-            #   2. first_snap       — first live-exchange capital snapshot accepted
-            #   3. capital_fsm_ready — CapitalBootstrapFSM has reached READY
+            # be set AFTER all six conditions hold simultaneously (B1 preflight):
+            #   1. brokers_ready          — all platform brokers fully connected
+            #   2. first_snap             — first live-exchange capital snapshot accepted
+            #   3. capital_fsm_ready      — CapitalBootstrapFSM has reached READY
+            #   4. capital_hydrated       — CapitalAuthority is hydrated (is_hydrated=True)
+            #   5. aggregation_normalized — CA registered broker count matches MABM viable count
+            #   6. nonce_ready            — Kraken nonce FSM has authorized nonce issuance
             #
             # Without this gate the core loop (which calls maybe_auto_activate)
             # could start before the system is truly ready, causing phantom vetoes.
             # We wait up to 30 s for conditions already expected to be true from
             # earlier in the bootstrap sequence; if they still are not met we log
-            # a critical warning and proceed anyway to avoid a deadlock.
+            # B1 BLOCKED and proceed as a fail-safe to avoid a deadlock.
             _bce_first_snap = False
             _bce_brokers_ready = False
             _bce_capital_fsm_ready = False
+            _bce_capital_hydrated = False
+            _bce_aggregation_normalized = True  # default True (fail-open: mirrors nija_core_loop — only block when mismatch is positively confirmed)
+            _bce_nonce_ready = False
             _bce_deadline = time.monotonic() + 30
             # Resolve module references once, outside the polling loop.
             try:
@@ -3389,6 +3395,11 @@ def _run_bot_startup_and_trading():
             except Exception as _bce_import_err:
                 logger.warning("[Bootstrap-Barrier] could not import capital_flow_state_machine: %s", _bce_import_err)
                 _get_cbfsm_bce = None  # type: ignore[assignment]
+            try:
+                from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kraken_fsm_bce
+            except Exception as _bce_import_err:
+                logger.warning("[Bootstrap-Barrier] could not import _KRAKEN_STARTUP_FSM: %s", _bce_import_err)
+                _kraken_fsm_bce = None  # type: ignore[assignment]
             while True:
                 try:
                     _bce_first_snap = _get_tsm_bce().get_first_snap_accepted() if _get_tsm_bce is not None else False
@@ -3405,20 +3416,66 @@ def _run_bot_startup_and_trading():
                 except Exception as _bce_err:
                     logger.debug("[Bootstrap-Barrier] capital_fsm probe failed (treating as passing): %s", _bce_err)
                     _bce_capital_fsm_ready = True  # graceful degradation — treat as passing
+                try:
+                    _bce_capital_hydrated = bool(_bms_ca.is_hydrated) if _bms_ca is not None else False
+                except Exception as _bce_err:
+                    logger.debug("[Bootstrap-Barrier] capital_hydrated probe failed: %s", _bce_err)
+                    _bce_capital_hydrated = False
+                try:
+                    if _mabm_bce is not None and _bms_ca is not None:
+                        _bce_ca_registered = int(getattr(_bms_ca, "registered_broker_count", 0) or 0)
+                        _bce_mabm_last_vb = int(getattr(_mabm_bce, "_capital_last_valid_brokers", 0) or 0)
+                        if _bce_mabm_last_vb > 0 and _bce_ca_registered < _bce_mabm_last_vb:
+                            _bce_aggregation_normalized = False
+                        else:
+                            _bce_aggregation_normalized = True
+                    else:
+                        _bce_aggregation_normalized = True  # graceful degradation
+                except Exception as _bce_err:
+                    logger.debug("[Bootstrap-Barrier] aggregation_normalized probe failed: %s", _bce_err)
+                    _bce_aggregation_normalized = True  # fail-open
+                try:
+                    _bce_nonce_ready = bool(_kraken_fsm_bce.is_nonce_ready()) if _kraken_fsm_bce is not None else True
+                except Exception as _bce_err:
+                    logger.debug("[Bootstrap-Barrier] nonce_ready probe failed (treating as passing): %s", _bce_err)
+                    _bce_nonce_ready = True  # graceful degradation — treat as passing
 
-                if _bce_first_snap and _bce_brokers_ready and _bce_capital_fsm_ready:
-                    logger.info(
-                        "✅ [Bootstrap] All startup invariants confirmed — "
-                        "first_snap=%s brokers_ready=%s capital_fsm_ready=%s",
+                _bce_preflight_ready = (
+                    _bce_first_snap
+                    and _bce_brokers_ready
+                    and _bce_capital_fsm_ready
+                    and _bce_capital_hydrated
+                    and _bce_aggregation_normalized
+                    and _bce_nonce_ready
+                )
+                logger.critical(
+                    "B1 PREFLIGHT CHECK: %s",
+                    {
+                        "brokers_ready": _bce_brokers_ready,
+                        "first_snap": _bce_first_snap,
+                        "capital_fsm_ready": _bce_capital_fsm_ready,
+                        "capital_hydrated": _bce_capital_hydrated,
+                        "aggregation_normalized": _bce_aggregation_normalized,
+                        "nonce_ready": _bce_nonce_ready,
+                    },
+                )
+                if _bce_preflight_ready:
+                    logger.critical(
+                        "✅ [Bootstrap] B1 PREFLIGHT PASSED — advancing to B2 — "
+                        "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
+                        "capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s",
                         _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
+                        _bce_capital_hydrated, _bce_aggregation_normalized, _bce_nonce_ready,
                     )
                     break
                 if time.monotonic() >= _bce_deadline:
                     logger.critical(
-                        "⚠️ [Bootstrap] Startup invariants NOT fully satisfied after 30s — "
-                        "first_snap=%s brokers_ready=%s capital_fsm_ready=%s — "
-                        "proceeding anyway to avoid deadlock",
+                        "❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE after 30s — "
+                        "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
+                        "capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s — "
+                        "proceeding to B2 as fail-safe to avoid deadlock",
                         _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
+                        _bce_capital_hydrated, _bce_aggregation_normalized, _bce_nonce_ready,
                     )
                     # ── Bootstrap first_snap rescue ─────────────────────────────────
                     # The 30-second barrier timed out before _first_snap_accepted was set.
@@ -3448,9 +3505,11 @@ def _run_bot_startup_and_trading():
                             logger.warning("[Bootstrap-Rescue] rescue attempt failed: %s", _bce_rescue_err)
                     break
                 logger.warning(
-                    "⏳ [Bootstrap] Waiting for startup invariants — "
-                    "first_snap=%s brokers_ready=%s capital_fsm_ready=%s",
+                    "⏳ [Bootstrap] Waiting for B1 preflight — "
+                    "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
+                    "capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s",
                     _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
+                    _bce_capital_hydrated, _bce_aggregation_normalized, _bce_nonce_ready,
                 )
                 time.sleep(1)
             # Signal bootstrap completion so the supervisor loop knows trader
@@ -3460,7 +3519,7 @@ def _run_bot_startup_and_trading():
                 logger.critical("❌ FATAL: Bootstrap completing WITHOUT strategy")
                 raise RuntimeError("Strategy not initialized at bootstrap completion")
             _bootstrap_completed_event.set()
-            logger.info("✅ BOOTSTRAP COMPLETE — system handed to supervisor loop")
+            logger.critical("✅ B1 → B2: _bootstrap_completed_event set — system handed to supervisor loop")
 
             # ── Bulletproof loop start: fire immediately from the bootstrap ──
             # Starting the trading loop here (as well as in main()) guarantees
