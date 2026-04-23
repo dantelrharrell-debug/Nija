@@ -1837,6 +1837,47 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             )
         # ── End Capital Hydration Barrier ──────────────────────────────────────
 
+        # ── CSM v2 Ready Barrier ───────────────────────────────────────────────
+        # Block until CapitalCSMv2 transitions to READY state.  This is the
+        # second hard barrier (after hydration) and ensures that all readiness
+        # criteria (LIVE_CAPITAL_VERIFIED, positive balance, confidence score,
+        # fresh snapshot) are satisfied before the first strategy cycle runs.
+        _csm_timeout = float(os.getenv("NIJA_CSM_READY_TIMEOUT", "30"))
+        try:
+            try:
+                from bot.capital_csm_v2 import (
+                    get_csm_v2 as _get_csm_v2,
+                    CapitalIntegrityError as _CsmIntegrityErr,
+                )
+            except ImportError:
+                from capital_csm_v2 import (  # type: ignore[import]
+                    get_csm_v2 as _get_csm_v2,
+                    CapitalIntegrityError as _CsmIntegrityErr,
+                )
+            _csm = _get_csm_v2()
+            logger.critical("CSM PRE-WAIT STATE: %s", _csm.state)
+            _csm.wait_for_ready(timeout=_csm_timeout)
+            logger.critical("CSM POST-WAIT STATE: %s", _csm.state)
+            logger.critical(
+                "✅ CAPITAL READY — STARTING TRADING LOOP"
+            )
+        except _CsmIntegrityErr as _csm_err:
+            logger.critical(
+                "🚨 [CSM-BARRIER] CAPITAL NOT READY: %s — "
+                "trading loop aborted. Bot will not trade until CSM reaches READY state.",
+                _csm_err,
+            )
+            with _loop_guard:
+                _loop_running = False
+            return
+        except (ImportError, Exception) as _csm_exc:
+            logger.warning(
+                "⚠️ [CSM-BARRIER] Could not enforce CSM ready barrier (%s) — "
+                "proceeding without guarantee. Check capital_csm_v2 module.",
+                _csm_exc,
+            )
+        # ── End CSM v2 Ready Barrier ───────────────────────────────────────────
+
         cycle = 0
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
         _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
