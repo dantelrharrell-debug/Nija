@@ -29,13 +29,15 @@ import logging
 
 logger = logging.getLogger("nija.tier_config")
 
-# FIX 4 + FIX 2: Prevent double class creation when the module is imported
-# under two names (e.g. both `bot.tier_config` and bare `tier_config`).
-# If we already loaded this module as `bot.tier_config`, reuse that class.
-if "bot.tier_config" in sys.modules and hasattr(sys.modules["bot.tier_config"], "_loaded"):
+# FIX 1: Hard-stop duplicate enum creation.
+# If TradingTier already exists in this module's globals, reuse it.
+# Also handles the case where the module was previously loaded as `bot.tier_config`.
+if "TradingTier" in globals():
+    TradingTier = globals()["TradingTier"]
+elif "bot.tier_config" in sys.modules and hasattr(sys.modules["bot.tier_config"], "_loaded"):
     TradingTier = sys.modules["bot.tier_config"].TradingTier
 else:
-    # FIX 1: Inherit from str so that TradingTier values compare equal to
+    # Inherit from str so that TradingTier values compare equal to
     # plain strings and survive JSON round-trips without extra conversion.
     class TradingTier(str, Enum):
         """User trading tiers with associated capital ranges."""
@@ -1373,6 +1375,10 @@ def get_tier_floors_for_api() -> Dict[str, Any]:
         )
     }
 
+
+# FIX 3: Force module aliasing so that both import paths resolve to the
+# same module object, preventing duplicate TradingTier class instances.
+sys.modules["tier_config"] = sys.modules[__name__]
 
 # Example usage logger
 if __name__ == "__main__":
