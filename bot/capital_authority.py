@@ -49,6 +49,7 @@ Date: April 2026
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -57,6 +58,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.capital_authority")
@@ -66,6 +68,24 @@ logger = logging.getLogger("nija.capital_authority")
 # ---------------------------------------------------------------------------
 
 _DEFAULT_RESERVE_PCT: float = 0.02  # 2 % held back as reserve dust
+
+# ---------------------------------------------------------------------------
+# CSM v3 — persistent capital state recovery
+# ---------------------------------------------------------------------------
+
+# Directory where the on-disk capital state is stored (mirrors CompoundingEngine
+# convention: <repo_root>/data/).
+_STATE_DIR: Path = Path(__file__).parent.parent / "data"
+_STATE_FILE: Path = _STATE_DIR / "capital_authority_state.json"
+
+# Maximum age (seconds) of a saved state that can be used for warm-start.
+# Saved state older than this is ignored and the authority starts cold.
+# Override via env var NIJA_CAPITAL_STATE_MAX_AGE_S (e.g. "3600").
+_DEFAULT_STATE_MAX_AGE_S: float = 3600.0
+
+# Schema version — increment whenever the saved-state format changes in a
+# backward-incompatible way so stale files from older deployments are rejected.
+_STATE_SCHEMA_VERSION: int = 1
 
 # ---------------------------------------------------------------------------
 # Broker role constants — determines which brokers count as "authoritative"
@@ -366,12 +386,26 @@ class CapitalAuthority:
         # Queue of (broker_key, balance, timestamp) tuples received before the
         # registration gate was lifted.  Flushed by finalize_broker_registration().
         self._pending_feeds: List[Tuple[str, float, datetime]] = []
+        # ── CSM v3 — warm-start flag ───────────────────────────────────────────
+        # True when this instance was pre-populated from the on-disk state cache
+        # (i.e. no live API call was needed to reach HYDRATED / ACTIVE_CAPITAL).
+        # Cleared to False the first time a live snapshot is published via
+        # publish_snapshot() or a live refresh completes successfully.
+        self._warm_start: bool = False
+        # Maximum age (seconds) of a saved state file accepted for warm-start.
+        # Override with NIJA_CAPITAL_STATE_MAX_AGE_S env var.
+        self._state_max_age_s: float = float(
+            os.environ.get("NIJA_CAPITAL_STATE_MAX_AGE_S", str(_DEFAULT_STATE_MAX_AGE_S))
+        )
         # Register this instance in the module-level identity guard so that any
         # accidental second instantiation is detected by assert_singleton().
         global _EXPECTED_ID
         if _EXPECTED_ID is None:
             _EXPECTED_ID = id(self)
         logger.info("[CapitalAuthority] instance_id=%d", id(self))
+
+        # ── CSM v3 — attempt warm-start from persisted state ──────────────────
+        self._load_cached_state()
 
     # ------------------------------------------------------------------
     # Lock helper
@@ -413,6 +447,218 @@ class CapitalAuthority:
                 f"CapitalAuthority instance mismatch detected — "
                 f"expected id={_EXPECTED_ID}, got id={id(self)}"
             )
+
+    # ------------------------------------------------------------------
+    # CSM v3 — persistent capital state (warm-start)
+    # ------------------------------------------------------------------
+
+    @property
+    def warm_start(self) -> bool:
+        """``True`` when this instance was pre-populated from the on-disk state
+        cache at startup (CSM v3 warm-start).  Transitions to ``False`` the
+        first time a live snapshot is successfully published or a live
+        ``refresh()`` completes, confirming the authority now holds
+        broker-validated data.
+
+        Callers may use this flag to differentiate cached startup capital from
+        live-confirmed capital, e.g. to emit a warning in dashboards.
+        """
+        return self._warm_start
+
+    def _save_cached_state(self) -> None:
+        """Persist the current broker balances and metadata to disk.
+
+        Called automatically after every successful :meth:`publish_snapshot`
+        and :meth:`refresh`.  The file is written atomically (write to a
+        temporary file then rename) to avoid partial-write corruption.
+
+        Silently swallows all errors — a failed save must never interrupt the
+        trading pipeline.
+        """
+        try:
+            _STATE_DIR.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                balances = dict(self._broker_balances)
+                roles = dict(self._broker_roles)
+                last_updated_iso = (
+                    self.last_updated.isoformat() if self.last_updated is not None else None
+                )
+                expected = self._expected_brokers
+
+            if not balances:
+                return
+
+            payload = {
+                "schema_version": _STATE_SCHEMA_VERSION,
+                "broker_balances": balances,
+                "broker_roles": roles,
+                "last_updated": last_updated_iso,
+                "expected_brokers": expected,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+            }
+            tmp_file = _STATE_FILE.with_suffix(".tmp")
+            with open(tmp_file, "w") as fh:
+                json.dump(payload, fh, indent=2)
+            tmp_file.replace(_STATE_FILE)
+            logger.debug(
+                "[CapitalAuthority] CSM v3 state saved — brokers=%s real=$%.2f",
+                sorted(balances.keys()),
+                sum(balances.values()),
+            )
+        except Exception as exc:
+            logger.warning("[CapitalAuthority] CSM v3 state save failed (non-fatal): %s", exc)
+
+    def _load_cached_state(self) -> bool:
+        """Attempt to restore the last valid capital state from disk.
+
+        Called once from :meth:`__init__`.  On success:
+
+        * ``_broker_balances`` is pre-populated with the saved figures.
+        * ``_broker_roles`` is restored so role-gated capital accessors work
+          immediately.
+        * ``_hydrated`` is set to ``True`` and :data:`CAPITAL_HYDRATED_EVENT`
+          is fired so ``block_until_hydrated()`` returns without blocking.
+        * When the restored capital is positive and the broker threshold is met,
+          :data:`CAPITAL_SYSTEM_READY` is also set, allowing
+          ``wait_for_capital_ready()`` to return instantly.
+        * ``_warm_start`` is set to ``True`` to mark that data came from cache.
+
+        The monotonic-timestamp guard in :meth:`publish_snapshot` and
+        :meth:`feed_broker_balance` ensures that live data arriving shortly
+        after startup always overwrites the cached figures because the live
+        timestamp is strictly newer than the stored ``last_updated``.
+
+        Returns
+        -------
+        bool
+            ``True`` if warm-start succeeded; ``False`` otherwise (cold start).
+        """
+        if self._state_max_age_s <= 0.0:
+            logger.debug("[CapitalAuthority] CSM v3 warm-start disabled (max_age=0)")
+            return False
+
+        if not _STATE_FILE.exists():
+            logger.debug("[CapitalAuthority] CSM v3 no state file found — cold start")
+            return False
+
+        try:
+            with open(_STATE_FILE, "r") as fh:
+                data = json.load(fh)
+        except Exception as exc:
+            logger.warning("[CapitalAuthority] CSM v3 state file unreadable — cold start: %s", exc)
+            return False
+
+        # Schema version guard — reject files from incompatible older releases.
+        if data.get("schema_version", 0) != _STATE_SCHEMA_VERSION:
+            logger.warning(
+                "[CapitalAuthority] CSM v3 state file schema mismatch "
+                "(file=%s expected=%d) — cold start",
+                data.get("schema_version"),
+                _STATE_SCHEMA_VERSION,
+            )
+            return False
+
+        # Age check — reject state older than _state_max_age_s.
+        saved_at_raw = data.get("saved_at")
+        if saved_at_raw is None:
+            logger.warning("[CapitalAuthority] CSM v3 state file missing 'saved_at' — cold start")
+            return False
+
+        try:
+            saved_at = _ensure_utc(datetime.fromisoformat(saved_at_raw))
+        except Exception as exc:
+            logger.warning("[CapitalAuthority] CSM v3 invalid 'saved_at' — cold start: %s", exc)
+            return False
+
+        age_s = (datetime.now(timezone.utc) - saved_at).total_seconds()
+        if age_s > self._state_max_age_s:
+            logger.info(
+                "[CapitalAuthority] CSM v3 state file expired (age=%.0fs > max=%.0fs) — cold start",
+                age_s,
+                self._state_max_age_s,
+            )
+            return False
+
+        # Validate broker balances.
+        broker_balances: Dict[str, float] = {
+            str(k): float(v)
+            for k, v in data.get("broker_balances", {}).items()
+            if v is not None
+        }
+        if not broker_balances:
+            logger.info("[CapitalAuthority] CSM v3 state file has no broker balances — cold start")
+            return False
+
+        broker_roles: Dict[str, str] = {
+            str(k): str(v)
+            for k, v in data.get("broker_roles", {}).items()
+        }
+
+        last_updated_raw = data.get("last_updated")
+        last_updated: Optional[datetime] = None
+        if last_updated_raw:
+            try:
+                last_updated = _ensure_utc(datetime.fromisoformat(last_updated_raw))
+            except Exception:
+                last_updated = None
+
+        saved_expected_brokers: int = int(data.get("expected_brokers", 1))
+
+        # All checks passed — apply cached state under the lock.
+        with self._lock:
+            self._broker_balances = broker_balances
+            self._broker_roles = broker_roles
+            if last_updated is not None:
+                self.last_updated = last_updated
+                # Stamp feed timestamps with the same value so the monotonic
+                # guard in feed_broker_balance rejects feeds older than cache.
+                for bk in broker_balances:
+                    self._broker_feed_timestamps[bk] = last_updated
+            if saved_expected_brokers > self._expected_brokers:
+                self._expected_brokers = saved_expected_brokers
+            self._hydrated = True
+            self._warm_start = True
+
+        # Fire CAPITAL_HYDRATED_EVENT so block_until_hydrated() returns instantly.
+        CAPITAL_HYDRATED_EVENT.set()
+
+        # Fire CAPITAL_SYSTEM_READY if the restored capital meets ACTIVE_CAPITAL
+        # conditions (positive balance + broker threshold).
+        real_capital = sum(broker_balances.values())
+        broker_threshold = 1 if self._opportunistic else max(1, self._expected_brokers)
+        if real_capital > 0.0 and len(broker_balances) >= broker_threshold:
+            CAPITAL_SYSTEM_READY.set()
+            logger.info(
+                "⚡ [CapitalAuthority] CSM v3 WARM START — "
+                "restored real=$%.2f from cache (age=%.1fs, brokers=%s)",
+                real_capital,
+                age_s,
+                sorted(broker_balances.keys()),
+            )
+        else:
+            logger.info(
+                "[CapitalAuthority] CSM v3 warm start (zero capital) — "
+                "brokers=%s age=%.1fs",
+                sorted(broker_balances.keys()),
+                age_s,
+            )
+
+        return True
+
+    def clear_cached_state(self) -> None:
+        """Delete the on-disk capital state file (if it exists).
+
+        Use this in tests or after a deliberate balance reset to prevent the
+        next startup from loading stale cached data.  This method is safe to
+        call at any time — it silently ignores the case where the file does not
+        exist.
+        """
+        try:
+            if _STATE_FILE.exists():
+                _STATE_FILE.unlink()
+                logger.info("[CapitalAuthority] CSM v3 state cache cleared")
+        except Exception as exc:
+            logger.warning("[CapitalAuthority] CSM v3 failed to clear state cache: %s", exc)
 
     # ------------------------------------------------------------------
     # Broker registration hard gate
@@ -782,6 +1028,9 @@ class CapitalAuthority:
             len(new_balances),
             dict(new_balances),
         )
+        # CSM v3 — persist live-refreshed state to disk.
+        self._warm_start = False
+        self._save_cached_state()
 
     def update(self, total_capital: float) -> None:
         """
@@ -1656,6 +1905,9 @@ class CapitalAuthority:
             ),
             len(new_balances),
         )
+        # CSM v3 — persist state immediately after a live publish.
+        self._warm_start = False
+        self._save_cached_state()
         return True
 
     def get_typed_snapshot(self) -> Optional[Any]:
@@ -1740,13 +1992,22 @@ def get_capital_authority() -> CapitalAuthority:
     return _authority_instance
 
 
-def reset_capital_authority_singleton() -> None:
+def reset_capital_authority_singleton(clear_disk_cache: bool = False) -> None:
     """Clear the cached CapitalAuthority singleton (cold-start helper).
 
     Also clears :data:`STARTUP_LOCK` and :data:`CAPITAL_SYSTEM_READY` so that
     the next singleton creation starts from a clean bootstrap state.  Intended
     for use in tests and cold-start recovery only — never call this during
     live trading.
+
+    Parameters
+    ----------
+    clear_disk_cache:
+        When ``True``, also deletes the CSM v3 on-disk state file so that the
+        next singleton creation performs a full cold start rather than a
+        warm start from cached data.  Pass ``True`` in tests that assert
+        ``INITIALIZING`` lifecycle state at startup.  Defaults to ``False``
+        to preserve backward compatibility with existing callers.
     """
     global _authority_instance, _EXPECTED_ID
     with _authority_lock:
@@ -1756,6 +2017,13 @@ def reset_capital_authority_singleton() -> None:
     CAPITAL_SYSTEM_READY.clear()
     CAPITAL_HYDRATED_EVENT.clear()
     logger.warning("[CapitalAuthority] singleton cache cleared (STARTUP_LOCK + CAPITAL_SYSTEM_READY + CAPITAL_HYDRATED_EVENT reset)")
+    if clear_disk_cache:
+        try:
+            if _STATE_FILE.exists():
+                _STATE_FILE.unlink()
+                logger.info("[CapitalAuthority] CSM v3 on-disk state cache cleared")
+        except Exception as exc:
+            logger.warning("[CapitalAuthority] CSM v3 failed to clear on-disk state cache: %s", exc)
 
 
 def wait_for_capital_ready(timeout: float = CAPITAL_READY_TIMEOUT) -> bool:
