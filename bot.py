@@ -3122,6 +3122,7 @@ def _run_bot_startup_and_trading():
                 logger.critical("✅ B1 PASSED — transitioning to B2")
                 with _b1_executed_lock:
                     globals()["_b1_executed"] = True
+            logger.critical("⚠️ B1 EXIT GUARANTEE REACHED (this must always print)")
             # ── END B1 PRE-FLIGHT GUARD ───────────────────────────────────────────
 
             # ── CONNECTION → INIT HANDOFF ──────────────────────────────────────────
