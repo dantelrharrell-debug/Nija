@@ -485,6 +485,35 @@ class CapitalBootstrapStateMachine:
                     logger.exception("on_ready callback raised an exception: %s", cb)
         return True
 
+    def force_transition(self, new_state: CapitalBootstrapState, reason: str = "") -> None:
+        """
+        Forcibly set the bootstrap state, bypassing transition validation.
+
+        This is reserved for deadlock recovery paths (for example, startup
+        timeout fallback while waiting in WAIT_PLATFORM).  Normal control flow
+        should always use :meth:`transition`.
+        """
+        with self._lock:
+            old = self._state
+            self._state = new_state
+            just_ready = new_state == CapitalBootstrapState.READY
+            callbacks = list(self._on_ready_callbacks) if just_ready else []
+            if just_ready:
+                self._on_ready_callbacks.clear()
+        logger.warning(
+            "[BootstrapFSM] FORCE %s → %s  reason=%s",
+            old.value,
+            new_state.value,
+            reason or "—",
+        )
+        if just_ready:
+            self._ready_event.set()
+            for cb in callbacks:
+                try:
+                    cb()
+                except Exception:
+                    logger.exception("on_ready callback raised an exception: %s", cb)
+
     def register_on_ready(self, callback: Callable[[], None]) -> None:
         """
         Register *callback* to be called exactly once when the FSM enters READY.

@@ -488,6 +488,12 @@ class MultiAccountBrokerManager:
             self.MIN_STARTUP_CAPITAL_POLL_S,
             float(os.environ.get("NIJA_CAPITAL_STARTUP_INVARIANT_POLL_S", "1.0")),
         )
+        # Max time to allow CapitalBootstrapFSM to remain in WAIT_PLATFORM
+        # before we force a recovery transition and trigger a bootstrap refresh.
+        self.wait_platform_timeout_s: float = max(
+            1.0,
+            float(os.environ.get("NIJA_WAIT_PLATFORM_TIMEOUT_S", "45.0")),
+        )
 
         # ── Deterministic capital-flow infrastructure ──────────────────────────
         logger.info("[MABM-M3] optional managers done — constructing CapitalFSM / coordinator")
@@ -3094,6 +3100,74 @@ class MultiAccountBrokerManager:
                 )
             except Exception:
                 pass
+        self._on_platform_ready(broker_type)
+
+    def _on_platform_ready(self, broker_type: BrokerType) -> None:
+        """Event-driven continuation when a platform broker becomes ready.
+
+        This callback advances the capital bootstrap flow out of WAIT_PLATFORM
+        and immediately triggers a startup refresh so execution can continue
+        without waiting for a later periodic tick.
+        """
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            return
+        trigger = f"on_platform_ready:{broker_type.value}"
+        self._capital_bootstrap_fsm.transition(
+            CapitalBootstrapState.REFRESH_REQUESTED,
+            trigger,
+        )
+        try:
+            self.refresh_capital_authority(trigger=trigger)
+        except Exception as exc:
+            logger.warning(
+                "[MABM] on_platform_ready refresh failed for %s: %s",
+                broker_type.value,
+                exc,
+            )
+
+    def _any_platform_ready(self) -> bool:
+        """Return True once any platform broker reaches a connected/ready state."""
+        for broker_type, broker in self._platform_brokers.items():
+            if self.is_platform_connected(broker_type):
+                return True
+            if self._broker_ready_flag(broker):
+                return True
+        return False
+
+    def _wait_for_platform_ready_or_timeout(self) -> None:
+        """Poll for platform readiness and recover if WAIT_PLATFORM stalls."""
+        if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
+            return
+
+        deadline = time.monotonic() + self.wait_platform_timeout_s
+        while not self._any_platform_ready():
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(1.0)
+
+        if self._any_platform_ready():
+            self._capital_bootstrap_fsm.transition(
+                CapitalBootstrapState.REFRESH_REQUESTED,
+                "wait_platform_poll_ready",
+            )
+            return
+
+        if self._capital_bootstrap_fsm.state == CapitalBootstrapState.WAIT_PLATFORM:
+            logger.error(
+                "⛔ [MABM] WAIT_PLATFORM timeout after %.1fs — forcing bootstrap continuation",
+                self.wait_platform_timeout_s,
+            )
+            self._capital_bootstrap_fsm.force_transition(
+                CapitalBootstrapState.REFRESH_REQUESTED,
+                "wait_platform_timeout_fallback",
+            )
+            try:
+                self.refresh_capital_authority(trigger="wait_platform_timeout_fallback")
+            except Exception as exc:
+                logger.warning(
+                    "[MABM] timeout fallback refresh failed: %s",
+                    exc,
+                )
 
     def mark_platform_failed(self, broker_type: BrokerType) -> None:
         """
@@ -4976,10 +5050,23 @@ class MultiAccountBrokerManager:
         #   This call is idempotent: if trading_strategy.py already called it via
         #   finalize_broker_registration() the second invocation is a no-op.
         self.finalize_broker_registration()
+        self._wait_for_platform_ready_or_timeout()
         _startup_cap = self.enforce_trading_bootstrap_contract(
             max_attempts=3,
             retry_delay_s=1.0,
         )
+        if (
+            not bool(_startup_cap.get("ready", 0.0))
+            and _CAPITAL_FSM_AVAILABLE
+            and self._capital_bootstrap_fsm is not None
+            and self._capital_bootstrap_fsm.state != CapitalBootstrapState.WAIT_PLATFORM
+        ):
+            # Forced WAIT_PLATFORM recovery may have just fired; run one more
+            # contract pass so startup can observe the new state immediately.
+            _startup_cap = self.enforce_trading_bootstrap_contract(
+                max_attempts=1,
+                retry_delay_s=0.0,
+            )
         if bool(_startup_cap.get("ready", 0.0)):
             logger.info(
                 "✅ CapitalAuthority READY at startup (brokers=%d total=$%.2f)",
