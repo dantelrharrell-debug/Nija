@@ -39,6 +39,46 @@ except Exception:
 # supervisor-loop-only restart path so TradingStrategy is never created twice.
 _initialized_state: dict = {}
 _initialized_state_lock = threading.RLock()
+_bootstrap_owner_thread_id = None
+
+
+def _set_bootstrap_owner_thread() -> None:
+    """Mark the current thread as the sole bootstrap lifecycle owner."""
+    global _bootstrap_owner_thread_id
+    _bootstrap_owner_thread_id = threading.get_ident()
+
+
+def _clear_bootstrap_owner_thread() -> None:
+    """Clear bootstrap lifecycle ownership marker."""
+    global _bootstrap_owner_thread_id
+    _bootstrap_owner_thread_id = None
+
+
+def _is_bootstrap_owner_thread() -> bool:
+    """Return True only for the thread that owns bootstrap lifecycle transitions."""
+    return _bootstrap_owner_thread_id == threading.get_ident()
+
+
+def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool:
+    """Acquire INIT lock only from bootstrap owner thread.
+
+    Any non-owner acquire attempt is rejected and logged as an ownership
+    violation to preserve deterministic bootstrap lifecycle authority.
+    """
+    if not _is_bootstrap_owner_thread():
+        logger.error(
+            "INIT_LOCK_OWNERSHIP_VIOLATION context=%s owner_tid=%s caller_tid=%s",
+            context,
+            _bootstrap_owner_thread_id,
+            threading.get_ident(),
+        )
+        return False
+
+    print("INIT_LOCK_ATTEMPT", flush=True)
+    acquired = _initialized_state_lock.acquire(timeout=timeout_s)
+    if acquired:
+        print("INIT_LOCK_ACQUIRED", flush=True)
+    return acquired
 
 
 def _read_initialized_state_snapshot(
@@ -53,12 +93,18 @@ def _read_initialized_state_snapshot(
     empty snapshot so bootstrap can continue into trading initialization rather
     than hanging or crashing on lock contention.
     """
+    if not _is_bootstrap_owner_thread():
+        # Single-authority rule: only bootstrap owner acquires INIT lock.
+        # Non-owner readers get a best-effort snapshot without locking.
+        return dict(_initialized_state)
+
     for attempt in range(1, max_attempts + 1):
-        print("INIT_LOCK_ATTEMPT", flush=True)
-        acquired = _initialized_state_lock.acquire(timeout=lock_timeout_s)
+        acquired = _acquire_init_lock_bootstrap_only(
+            context=f"read snapshot: {context}",
+            timeout_s=lock_timeout_s,
+        )
         if acquired:
             try:
-                print("INIT_LOCK_ACQUIRED", flush=True)
                 return dict(_initialized_state)
             finally:
                 _initialized_state_lock.release()
@@ -112,6 +158,46 @@ _strategy_ready_event = threading.Event()
 # can never accidentally advance the nonce during live trading.
 _nonce_bootstrap_jump_done = False
 _nonce_bootstrap_jump_lock = threading.Lock()
+
+
+def _bootstrap_nonce_reset_once() -> None:
+    """Bootstrap-owned nonce reset gate (single execution, post-INIT only)."""
+    _kraken_creds_present = bool(
+        (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+        and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
+    )
+    if not _kraken_creds_present:
+        return
+
+    global _nonce_bootstrap_jump_done
+    with _nonce_bootstrap_jump_lock:
+        if _nonce_bootstrap_jump_done:
+            logger.debug(
+                "NONCE BOOTSTRAP guard: nonce jump already completed in this process"
+            )
+            return
+
+    logger.info("=" * 70)
+    logger.info("⚡ KRAKEN NONCE RESET (BOOTSTRAP OWNER)")
+    logger.info("=" * 70)
+    try:
+        from bot.global_kraken_nonce import jump_global_kraken_nonce_forward
+
+        # Jump 60 seconds forward (in milliseconds) to skip any stale nonce window.
+        _jump_ms = 60 * 1000
+        _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
+
+        with _nonce_bootstrap_jump_lock:
+            _nonce_bootstrap_jump_done = True
+
+        logger.info(
+            "✅ Global Kraken nonce jumped +60 s → %s (bootstrap-owned post-INIT step)",
+            _new_nonce,
+        )
+    except ImportError:
+        logger.warning("⚠️ global_kraken_nonce module not available — skipping nonce pre-reset")
+    except Exception as _nonce_err:
+        logger.warning("⚠️ Nonce pre-reset failed (non-fatal): %s", _nonce_err)
 
 # B1 bootstrap phase execution guard — prevents B1 pre-flight from running twice.
 # The single-owner bootstrap kernel (BotStartup thread) sets this the first time
@@ -1643,6 +1729,7 @@ def _run_bot_startup_and_trading_with_retry():
         )
         return
     try:
+        _set_bootstrap_owner_thread()
         # Claim FSM ownership: from this point forward, only this thread should
         # drive the bootstrap FSM forward.  Non-owner transitions will be
         # logged as warnings so races are immediately visible.
@@ -1727,6 +1814,7 @@ def _run_bot_startup_and_trading_with_retry():
                 time.sleep(delay)
 
     finally:
+        _clear_bootstrap_owner_thread()
         _BOOTSTRAP_SINGLE_OWNER_LOCK.release()
         logger.critical("🚨 FORCING bootstrap completion event")
         _bootstrap_completed_event.set()
@@ -2106,78 +2194,10 @@ def _run_bot_startup_and_trading():
             if _startup_blockers:
                 raise RuntimeError("Hard startup blockers detected: " + " | ".join(_startup_blockers))
 
-            # ═══════════════════════════════════════════════════════════════════════
-            # KRAKEN PRE-CONNECTION NONCE RESET
-            # ═══════════════════════════════════════════════════════════════════════
-            # Jump the global Kraken nonce forward before any connection attempt.
-            # This clears any "burned" nonce window left by a previous session and
-            # prevents "EAPI:Invalid nonce" errors on the very first API call.
-            #
-            # BOOTSTRAP-WINDOW GUARD: this jump runs ONCE, inside the bootstrap
-            # owner thread, BEFORE any trading threads are spawned.  The module-
-            # level _nonce_bootstrap_jump_done flag prevents a duplicate jump from
-            # any background scheduler or async code path that might also call this
-            # block after the bot is running.
-            # ═══════════════════════════════════════════════════════════════════════
-            _kraken_creds_present = bool(
-                (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
-                and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
-            )
-            global _nonce_bootstrap_jump_done
-            if _kraken_creds_present:
-                with _nonce_bootstrap_jump_lock:
-                    _already_jumped = _nonce_bootstrap_jump_done
-                if _already_jumped:
-                    logger.warning(
-                        "⚠️  NONCE BOOTSTRAP-WINDOW GUARD: nonce jump already performed — "
-                        "skipping duplicate call from non-bootstrap path"
-                    )
-                else:
-                    logger.info("=" * 70)
-                    logger.info("⚡ KRAKEN PRE-CONNECTION NONCE RESET")
-                    logger.info("=" * 70)
-                    try:
-                        from bot.global_kraken_nonce import (
-                            get_global_nonce_manager,
-                            jump_global_kraken_nonce_forward,
-                        )
-
-                        # ── Sentinel A0.1: entering nonce-manager init ──────────────
-                        logger.critical("A0.1 before nonce manager")
-
-                        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeoutError
-
-                        with ThreadPoolExecutor(max_workers=1) as _ex:
-                            _future = _ex.submit(get_global_nonce_manager)
-                            try:
-                                _nonce_mgr = _future.result(timeout=10)
-                            except _FuturesTimeoutError:
-                                raise RuntimeError("Nonce init hung (>10s)")
-
-                        # ── Sentinel A0.2: nonce manager obtained ───────────────────
-                        logger.critical("A0.2 after nonce manager")
-
-                        # Jump 60 seconds forward (in milliseconds) to skip any nonces
-                        # Kraken may still have cached from the previous session.
-                        _jump_ms  = 60 * 1000  # 60 seconds in milliseconds
-                        _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
-
-                        # Mark bootstrap jump as done so no scheduler/async path repeats it.
-                        with _nonce_bootstrap_jump_lock:
-                            _nonce_bootstrap_jump_done = True
-
-                        # ── Sentinel A0.3 / B5: nonce reset complete ────────────────
-                        logger.critical("B5 after nonce lock / nonce-jump complete")
-                        logger.critical("🔥 PREFLIGHT: POST-NONCE ENTRY REACHED")
-
-                        logger.info(
-                            "   ✅ Global Kraken nonce jumped +60 s → %s (prevents stale-nonce errors)",
-                            _new_nonce,
-                        )
-                    except ImportError:
-                        logger.warning("   ⚠️  global_kraken_nonce module not available — skipping pre-reset")
-                    except Exception as _nonce_err:
-                        logger.warning("   ⚠️  Nonce pre-reset failed (non-fatal): %s", _nonce_err)
+            # Sentinel A is observer-only: no lifecycle transitions, no lock
+            # ownership, no nonce manager initialization. Bootstrap-owned nonce
+            # reset runs later in the post-INIT handoff stage.
+            logger.critical("SENTINEL A OBSERVER: preflight complete; lifecycle ownership remains with BootstrapFSM")
 
             logger.critical("🔥 PREFLIGHT ANCHOR: entered post-nonce execution path")
             try:
@@ -2349,25 +2369,14 @@ def _run_bot_startup_and_trading():
                     logger.warning(f"⚠️  Single exchange trading ({exchanges_configured} exchange configured). Consider enabling more exchanges for better diversification and resilience.")
                     logger.info("📖 See MULTI_EXCHANGE_TRADING_GUIDE.md for setup instructions")
 
-                # Save credential flags so retries can restore them without re-running checks
-                print("INIT_LOCK_ATTEMPT", flush=True)
-                _acquired = _initialized_state_lock.acquire(timeout=5)
-                if not _acquired:
-                    logger.critical(
-                        "INIT_LOCK_BYPASS context=save credential flags — lock unavailable; "
-                        "skipping snapshot persistence for this cycle"
-                    )
-                if _acquired:
-                    try:
-                        print("INIT_LOCK_ACQUIRED", flush=True)
-                        _initialized_state["connection_complete"] = True
-                        _initialized_state["kraken_platform_configured"] = kraken_platform_configured
-                        _initialized_state["coinbase_configured"] = coinbase_configured
-                        _initialized_state["exchanges_configured"] = exchanges_configured
-                        _initialized_state["kraken_credentials_valid"] = _kraken_credentials_valid
-                        _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
-                    finally:
-                        _initialized_state_lock.release()
+                # Save credential flags in bootstrap-owner thread before INIT handoff.
+                # Sentinel A remains lock-free observer only.
+                _initialized_state["connection_complete"] = True
+                _initialized_state["kraken_platform_configured"] = kraken_platform_configured
+                _initialized_state["coinbase_configured"] = coinbase_configured
+                _initialized_state["exchanges_configured"] = exchanges_configured
+                _initialized_state["kraken_credentials_valid"] = _kraken_credentials_valid
+                _initialized_state["coinbase_sdk_available"] = _coinbase_sdk_available
 
             except Exception as _preflight_crash:
                 logger.critical("❌ PREFLIGHT CRASH: %s", _preflight_crash, exc_info=True)
@@ -2522,8 +2531,10 @@ def _run_bot_startup_and_trading():
                         "strategy failed to initialize.  Check broker credentials "
                         "and apex strategy import."
                     )
-                print("INIT_LOCK_ATTEMPT", flush=True)
-                _acquired = _initialized_state_lock.acquire(timeout=5)
+                _acquired = _acquire_init_lock_bootstrap_only(
+                    context="store strategy singleton",
+                    timeout_s=5.0,
+                )
                 if not _acquired:
                     logger.critical(
                         "INIT_LOCK_BYPASS context=store strategy singleton — lock unavailable; "
@@ -2531,7 +2542,6 @@ def _run_bot_startup_and_trading():
                     )
                 else:
                     try:
-                        print("INIT_LOCK_ACQUIRED", flush=True)
                         _initialized_state["strategy"] = strategy
                     finally:
                         _initialized_state_lock.release()
@@ -3267,6 +3277,10 @@ def _run_bot_startup_and_trading():
                 _tsm.get_current_state().value,
             )
 
+            # Bootstrap-owned NONCE phase: execute after INIT completion and
+            # before RUN loop thread launch.
+            _bootstrap_nonce_reset_once()
+
             # Advance bootstrap FSM to THREADS_STARTING only after LIVE_ACTIVE is
             # confirmed so that any failure above leaves the FSM at CAPITAL_READY
             # (from which reset_for_retry can now reach BOOT_FAILED_RETRY).
@@ -3480,8 +3494,10 @@ def _run_bot_startup_and_trading():
 
             # Persist initialised state (thread-safe) so a supervisor-loop crash
             # can be retried WITHOUT recreating TradingStrategy or reconnecting brokers.
-            print("INIT_LOCK_ATTEMPT", flush=True)
-            _acquired = _initialized_state_lock.acquire(timeout=5)
+            _acquired = _acquire_init_lock_bootstrap_only(
+                context="persist initialized state",
+                timeout_s=5.0,
+            )
             if not _acquired:
                 logger.critical(
                     "INIT_LOCK_BYPASS context=persist initialized state — lock unavailable; "
@@ -3489,7 +3505,6 @@ def _run_bot_startup_and_trading():
                 )
             else:
                 try:
-                    print("INIT_LOCK_ACQUIRED", flush=True)
                     _initialized_state = {
                         "strategy": strategy,
                         "active_threads": _active_threads,
@@ -3521,8 +3536,10 @@ def _run_bot_startup_and_trading():
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
             # Delegates to _rerun_supervisor_loop so the supervisor logic lives
             # in exactly one place and retries (fast-path) use the same code.
-            print("INIT_LOCK_ATTEMPT", flush=True)
-            _acquired = _initialized_state_lock.acquire(timeout=5)
+            _acquired = _acquire_init_lock_bootstrap_only(
+                context="supervisor handoff snapshot",
+                timeout_s=5.0,
+            )
             if not _acquired:
                 logger.critical(
                     "INIT_LOCK_BYPASS context=supervisor handoff snapshot — lock unavailable; "
@@ -3536,7 +3553,6 @@ def _run_bot_startup_and_trading():
                 }
             else:
                 try:
-                    print("INIT_LOCK_ACQUIRED", flush=True)
                     _state_for_supervisor = dict(_initialized_state)
                 finally:
                     _initialized_state_lock.release()
@@ -4033,15 +4049,8 @@ def main():
     # Crashing here (via RuntimeError / sys.exit) would kill the process before
     # the retry has any chance to recover.
     strategy_ready = _strategy_ready_event.is_set()
-    _acquired = _initialized_state_lock.acquire(timeout=5)
-    if _acquired:
-        try:
-            strategy = _initialized_state.get("strategy")
-        finally:
-            _initialized_state_lock.release()
-    else:
-        logger.critical("⚠️  [Supervisor] Could not acquire lock — treating strategy as None")
-        strategy = None
+    _state_snapshot = _read_initialized_state_snapshot(context="supervisor strategy probe")
+    strategy = _state_snapshot.get("strategy")
 
     if not strategy_ready:
         logger.critical(
