@@ -507,8 +507,17 @@ class MultiAccountBrokerManager:
         # call or accidental double-construction), skip it entirely to prevent
         # creating a second set of FSM / coordinator objects that would shadow
         # the process-wide singletons.
-        self._fsm_initialized: bool = False
-        if _CAPITAL_FSM_AVAILABLE:
+        #
+        # CRITICAL: check getattr() BEFORE writing the flag — writing False
+        # unconditionally here would defeat the guard on every subsequent call.
+        if getattr(self, "_fsm_initialized", False):
+            logger.warning(
+                "[MABM-M3] FSM already initialized (id=%d) — skipping duplicate init",
+                id(get_capital_bootstrap_fsm()),
+            )
+        else:
+            self._fsm_initialized: bool = False  # will be set True on success
+        if not getattr(self, "_fsm_initialized", False) and _CAPITAL_FSM_AVAILABLE:
             self._capital_event_bus: CapitalEventBus = get_capital_event_bus()
             self._capital_bootstrap_fsm: CapitalBootstrapStateMachine = (
                 get_capital_bootstrap_fsm()
@@ -543,7 +552,14 @@ class MultiAccountBrokerManager:
                 self._on_capital_bootstrap_ready
             )
             self._fsm_initialized = True
-        else:
+            logger.info(
+                "[MABM-M3] FSM init complete — bootstrap_fsm id=%d runtime_fsm id=%d coordinator id=%d",
+                id(self._capital_bootstrap_fsm),
+                id(self._capital_runtime_fsm),
+                id(self._capital_coordinator),
+            )
+        elif not getattr(self, "_fsm_initialized", False):
+            # _CAPITAL_FSM_AVAILABLE is False — null out refs only on first pass.
             self._capital_event_bus = None  # type: ignore[assignment]
             self._capital_bootstrap_fsm = None  # type: ignore[assignment]
             self._capital_runtime_fsm = None  # type: ignore[assignment]
