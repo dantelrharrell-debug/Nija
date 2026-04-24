@@ -4,6 +4,17 @@
 
 ---
 
+## ✅ Final Activation Gate Update (Apr 24, 2026)
+
+- Resolved blocker: CapitalFSM not transitioning out of BOOT_IDLE.
+- Fix landed in `bot/capital_flow_state_machine.py` with startup self-heal path:
+        BOOT_IDLE -> WAIT_PLATFORM -> INIT_COMPLETE -> REFRESH_REQUESTED.
+- Prevented split singleton state across mixed imports by unifying
+        `bot.capital_flow_state_machine` and `capital_flow_state_machine`.
+- Regression coverage added in `bot/test_capital_fsm_boot_idle_transition.py`.
+
+---
+
 ## 📚 Documentation Suite
 
 This activation package includes three complementary documents designed for different use cases:

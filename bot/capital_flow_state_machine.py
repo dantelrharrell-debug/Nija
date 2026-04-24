@@ -67,6 +67,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -75,6 +76,14 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("nija.capital_flow_sm")
+
+# Keep both import paths bound to the same module object.
+# This avoids duplicate process-wide singletons when callers mix
+# `bot.capital_flow_state_machine` and `capital_flow_state_machine`.
+if __name__ == "bot.capital_flow_state_machine":
+    sys.modules.setdefault("capital_flow_state_machine", sys.modules[__name__])
+elif __name__ == "capital_flow_state_machine":
+    sys.modules.setdefault("bot.capital_flow_state_machine", sys.modules[__name__])
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -383,6 +392,18 @@ def get_capital_event_bus() -> CapitalEventBus:
     """Return the process-wide :class:`CapitalEventBus` singleton."""
     global _event_bus
     if _event_bus is None:
+        # Import-path alias guard: if the same module was imported under the
+        # alternate name, reuse its singleton instead of creating a duplicate.
+        _peer = sys.modules.get(
+            "bot.capital_flow_state_machine"
+            if __name__ == "capital_flow_state_machine"
+            else "capital_flow_state_machine"
+        )
+        if _peer is not None:
+            _peer_bus = getattr(_peer, "_event_bus", None)
+            if _peer_bus is not None:
+                _event_bus = _peer_bus
+    if _event_bus is None:
         with _event_bus_lock:
             if _event_bus is None:
                 _event_bus = CapitalEventBus()
@@ -573,6 +594,18 @@ _bootstrap_fsm_lock = threading.Lock()
 def get_capital_bootstrap_fsm() -> CapitalBootstrapStateMachine:
     """Return the process-wide :class:`CapitalBootstrapStateMachine` singleton."""
     global _bootstrap_fsm
+    if _bootstrap_fsm is None:
+        # Import-path alias guard: if the same module was imported under the
+        # alternate name, reuse its singleton instead of creating a duplicate.
+        _peer = sys.modules.get(
+            "bot.capital_flow_state_machine"
+            if __name__ == "capital_flow_state_machine"
+            else "capital_flow_state_machine"
+        )
+        if _peer is not None:
+            _peer_fsm = getattr(_peer, "_bootstrap_fsm", None)
+            if _peer_fsm is not None:
+                _bootstrap_fsm = _peer_fsm
     if _bootstrap_fsm is None:
         with _bootstrap_fsm_lock:
             if _bootstrap_fsm is None:
@@ -876,11 +909,15 @@ class CapitalRefreshCoordinator:
         ))
         # Advance bootstrap FSM through any valid entry state before taking the
         # pipeline in-flight.  Allowed origins:
+        #   BOOT_IDLE       → WAIT_PLATFORM → INIT_COMPLETE → REFRESH_REQUESTED
+        #                    (cold-start self-heal when preflight transition
+        #                    has not executed yet)
         #   WAIT_PLATFORM   → INIT_COMPLETE → REFRESH_REQUESTED  (first-ever refresh)
         #   DEGRADED        → REFRESH_REQUESTED  (retry after confidence failure)
         #   FAILED          → REFRESH_REQUESTED  (recovery after capital-zero run)
         # Already-REFRESH_REQUESTED state: transition() is a no-op (invalid from
         # REFRESH_REQUESTED back to REFRESH_REQUESTED per the validation table).
+        self._boot.transition(CapitalBootstrapState.WAIT_PLATFORM, trigger)
         self._boot.transition(CapitalBootstrapState.INIT_COMPLETE, trigger)
         self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
         self._boot.transition(CapitalBootstrapState.REFRESH_IN_FLIGHT, trigger)

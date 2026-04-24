@@ -4,6 +4,15 @@
 
 ---
 
+## FINAL ACTIVATION GATE FIXES (APR 24, 2026)
+
+- [x] CapitalFSM BOOT_IDLE progression fixed in `bot/capital_flow_state_machine.py`
+- [x] Coordinator startup prelude now self-heals BOOT_IDLE -> WAIT_PLATFORM -> INIT_COMPLETE -> REFRESH_REQUESTED
+- [x] Import-path singleton split prevented (`bot.capital_flow_state_machine` and `capital_flow_state_machine` unified)
+- [x] Regression test added: `bot/test_capital_fsm_boot_idle_transition.py`
+
+---
+
 ## 🔧 PHASE 1: Environment Setup
 
 ### Repository & Dependencies
