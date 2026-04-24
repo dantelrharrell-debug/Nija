@@ -105,6 +105,34 @@ except ImportError:
         logger.warning("⚠️ Exchange Constraints Enforcer not available")
         validate_order_constraints = None
         calculate_fillable_order_size = None
+
+# Import Exchange Order Compiler (canonical order validation at final authority)
+try:
+    from bot.exchange_order_compiler import (
+        ExchangeOrderCompiler,
+        PricingSnapshot,
+        OrderCompileError,
+    )
+    EXCHANGE_ORDER_COMPILER_AVAILABLE = True
+    _eoc = ExchangeOrderCompiler()
+    logger.info("✅ Exchange Order Compiler loaded - Final authority order validation active")
+except ImportError:
+    try:
+        from exchange_order_compiler import (
+            ExchangeOrderCompiler,
+            PricingSnapshot,
+            OrderCompileError,
+        )
+        EXCHANGE_ORDER_COMPILER_AVAILABLE = True
+        _eoc = ExchangeOrderCompiler()
+        logger.info("✅ Exchange Order Compiler loaded - Final authority order validation active")
+    except ImportError:
+        EXCHANGE_ORDER_COMPILER_AVAILABLE = False
+        logger.warning("⚠️ Exchange Order Compiler not available")
+        ExchangeOrderCompiler = None
+        PricingSnapshot = None
+        OrderCompileError = None
+        _eoc = None
         get_minimum_notional_gate = None
         NotionalGateConfig = None
 
@@ -1717,46 +1745,70 @@ class ExecutionEngine:
                         _order_reason = "broker does not support limit orders"
                     logger.info(f"   📊 Dynamic order type: MARKET ({_order_reason})")
 
-                    # ✅ EXCHANGE CONSTRAINTS ENFORCER: Validate before placement
-                    # Ensures: notional floor met, base-currency precision OK, fillable
+                    # ✅ EXCHANGE ORDER COMPILER: Final authority before broker placement
+                    # Pre-hoc canonicalization: constraints → sizing → simulation → approval
                     _broker_name = "unknown"
                     if self.broker_client and hasattr(self.broker_client, "broker_type"):
                         _broker_type = self.broker_client.broker_type
                         _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
 
-                    if EXCHANGE_CONSTRAINTS_AVAILABLE and validate_order_constraints:
-                        _constraints = validate_order_constraints(
-                            symbol=symbol,
-                            order_size_usd=position_size,
-                            price_usd=entry_price,
-                            broker_type=_broker_name,
-                        )
-                        if not _constraints.is_valid:
+                    _compiled_order = None
+                    if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc:
+                        try:
+                            # Get current balance
+                            _available_balance = 0.0
+                            if self.broker_client and hasattr(self.broker_client, "get_account_balance"):
+                                try:
+                                    _bal_data = self.broker_client.get_account_balance()
+                                    if isinstance(_bal_data, dict):
+                                        _available_balance = float(
+                                            _bal_data.get('available_balance', _bal_data.get('total_balance', 0.0))
+                                        )
+                                    else:
+                                        _available_balance = float(_bal_data)
+                                except Exception:
+                                    pass
+
+                            # Build pricing snapshot
+                            _pricing = PricingSnapshot(
+                                symbol=symbol,
+                                bid=entry_price * 0.999,  # Conservative bid (0.1% lower)
+                                ask=entry_price * 1.001,   # Conservative ask (0.1% higher)
+                                mid=entry_price,
+                                available_balance_usd=_available_balance,
+                            )
+
+                            # Compile order through all four gates
+                            _compiled_order = _eoc.compile(
+                                symbol=symbol,
+                                side="buy" if side == "long" else "sell",
+                                size_usd=position_size,
+                                pricing=_pricing,
+                                exchange=_broker_name,
+                                min_profit_threshold_usd=5.0,  # Minimum $5 profit
+                            )
+                            logger.info(
+                                "[EOC] ✅ Order compiled successfully: %s",
+                                _compiled_order,
+                            )
+                        except OrderCompileError as _eoc_err:
                             logger.error(
-                                "❌ EXCHANGE CONSTRAINTS BLOCKED ENTRY\n"
-                                "   Symbol: %s\n"
-                                "   Size: $%.2f\n"
-                                "   Price: $%.2f\n"
-                                "   Broker: %s\n"
-                                "   Reason: %s",
-                                symbol, position_size, entry_price, _broker_name, _constraints.reason,
+                                "[EOC] ❌ ORDER COMPILATION FAILED: %s — trade REJECTED",
+                                _eoc_err,
                             )
                             return None
-                        # Use validated quantity if available
-                        _order_quantity = _constraints.recommended_quantity or position_size
-                        _order_size_usd = _constraints.recommended_size_usd or position_size
-                        logger.info(
-                            "✅ Exchange constraints validated: $%.2f (qty=%.8f %s) @ $%.2f\n"
-                            "   Exchange minimum: $%.2f (qty=%.8f) | %s",
-                            _order_size_usd,
-                            _order_quantity,
-                            symbol,
-                            entry_price,
-                            _constraints.min_required_usd or 0.0,
-                            _constraints.min_required_quantity or 0.0,
-                            _constraints.reason,
-                        )
+                        except Exception as _eoc_exc:
+                            logger.warning(
+                                "[EOC] Warning: order compilation exception: %s — using fallback",
+                                _eoc_exc,
+                            )
+
+                    # Use compiled quantity if available, else fallback
+                    if _compiled_order:
+                        _order_quantity = _compiled_order.quantity
+                        _order_size_usd = _compiled_order.size_usd
                     else:
+                        # Fallback: simple calculation (less safe)
                         _order_size_usd = position_size
                         _order_quantity = position_size / entry_price if entry_price > 0 else 0.0
 
@@ -2122,48 +2174,71 @@ class ExecutionEngine:
                 if self.broker_client:
                     order_side = 'sell' if position['side'] == 'long' else 'buy'
 
-                    # ✅ EXCHANGE CONSTRAINTS ENFORCER: Validate exit size before placement
+                    # ✅ EXCHANGE ORDER COMPILER: Final authority for exit orders
                     _broker_name = "unknown"
                     if hasattr(self.broker_client, "broker_type"):
                         _broker_type = self.broker_client.broker_type
                         _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
 
-                    _exit_constraints_ok = True
-                    _exit_quantity = exit_size  # default USD-based
+                    _exit_compiled_order = None
+                    if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc:
+                        try:
+                            # Get current balance
+                            _available_balance = 0.0
+                            if hasattr(self.broker_client, "get_account_balance"):
+                                try:
+                                    _bal_data = self.broker_client.get_account_balance()
+                                    if isinstance(_bal_data, dict):
+                                        _available_balance = float(
+                                            _bal_data.get('available_balance', _bal_data.get('total_balance', 0.0))
+                                        )
+                                    else:
+                                        _available_balance = float(_bal_data)
+                                except Exception:
+                                    pass
 
-                    if EXCHANGE_CONSTRAINTS_AVAILABLE and validate_order_constraints:
-                        _constraints = validate_order_constraints(
-                            symbol=symbol,
-                            order_size_usd=exit_size,
-                            price_usd=exit_price,
-                            broker_type=_broker_name,
-                        )
-                        if not _constraints.is_valid:
+                            # Build pricing snapshot for exit
+                            _exit_pricing = PricingSnapshot(
+                                symbol=symbol,
+                                bid=exit_price * 0.999,  # Conservative bid
+                                ask=exit_price * 1.001,   # Conservative ask
+                                mid=exit_price,
+                                available_balance_usd=_available_balance,
+                            )
+
+                            # Compile exit order
+                            _exit_compiled_order = _eoc.compile(
+                                symbol=symbol,
+                                side="sell" if order_side == "sell" else "buy",
+                                size_usd=exit_size,
+                                pricing=_exit_pricing,
+                                exchange=_broker_name,
+                                min_profit_threshold_usd=0.1,  # Minimal threshold for exits
+                            )
+                            logger.info("[EOC] Exit order compiled: $%.2f (qty=%.8f)",
+                                       _exit_compiled_order.size_usd,
+                                       _exit_compiled_order.quantity)
+                        except OrderCompileError as _eoc_err:
                             logger.error(
-                                "❌ EXCHANGE CONSTRAINTS BLOCKED EXIT\n"
-                                "   Symbol: %s\n"
-                                "   Size: $%.2f\n"
-                                "   Price: $%.2f\n"
-                                "   Broker: %s\n"
-                                "   Reason: %s",
-                                symbol, exit_size, exit_price, _broker_name, _constraints.reason,
+                                "[EOC] ❌ EXIT ORDER COMPILATION FAILED: %s — trade REJECTED",
+                                _eoc_err,
                             )
-                            _exit_constraints_ok = False
-                        else:
-                            _exit_quantity = _constraints.recommended_quantity or exit_size
-                            logger.info(
-                                "✅ Exit exchange constraints validated: $%.2f (qty=%.8f %s) @ $%.2f",
-                                exit_size, _exit_quantity, symbol, exit_price,
+                            with self._get_closing_lock():
+                                self.closing_positions.discard(symbol)
+                            with self._get_exit_lock():
+                                self.active_exit_orders.discard(symbol)
+                            return False
+                        except Exception as _eoc_exc:
+                            logger.warning(
+                                "[EOC] Exit compilation warning: %s — using fallback",
+                                _eoc_exc,
                             )
 
-                    if not _exit_constraints_ok:
-                        # FIX #1: Unlock on constraint rejection
-                        with self._get_closing_lock():
-                            self.closing_positions.discard(symbol)
-                        # FIX #3: Remove from active exit orders on rejection
-                        with self._get_exit_lock():
-                            self.active_exit_orders.discard(symbol)
-                        return False
+                    # Use compiled quantity if available
+                    if _exit_compiled_order:
+                        _exit_quantity = _exit_compiled_order.quantity
+                    else:
+                        _exit_quantity = exit_size
 
                     _exit_t0 = _time.monotonic()
                     _exit_exc: Optional[Exception] = None
