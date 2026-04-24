@@ -1,0 +1,1022 @@
+# Mobile App UX Flow Architecture
+
+## Executive Summary
+
+This document outlines the complete user experience flow for the NIJA mobile application (iOS and Android). The app provides cryptocurrency traders with a powerful, intuitive interface to monitor their automated trading bot, manage settings, and track performance in real-time.
+
+## Design Philosophy
+
+### Core Principles
+
+1. **Mobile-First**: Optimized for small screens and touch interactions
+2. **Real-Time**: Live updates for positions, P&L, and trade executions
+3. **Secure**: Biometric authentication and secure credential management
+4. **Simple**: Complex trading made accessible to non-technical users
+5. **Trustworthy**: Transparent about what the bot is doing at all times
+
+### User Personas
+
+**Persona 1: Active Trader ("Alex")**
+- Age: 28-45
+- Goal: Maximize profits with minimal time investment
+- Pain Point: Can't monitor markets 24/7
+- Needs: Real-time alerts, performance tracking, quick settings changes
+
+**Persona 2: Passive Investor ("Pat")**
+- Age: 35-60
+- Goal: Steady returns with low risk
+- Pain Point: Doesn't understand technical trading
+- Needs: Simple dashboard, clear explanations, safety controls
+
+**Persona 3: Whale Trader ("Whitney")**
+- Age: 30-55
+- Goal: Manage large capital across multiple exchanges
+- Pain Point: Needs advanced controls and analytics
+- Needs: Multi-exchange management, detailed analytics, custom alerts
+
+## Technical Stack
+
+### Frontend
+- **Framework**: React Native 0.72+
+- **Language**: TypeScript
+- **State Management**: Redux Toolkit + RTK Query
+- **Navigation**: React Navigation 6
+- **UI Components**: React Native Paper (Material Design)
+- **Charts**: Victory Native (performance-optimized charts)
+- **Real-Time**: Socket.io client
+- **Authentication**: React Native Biometrics + JWT
+
+### Backend Integration
+- **API**: REST API (FastAPI)
+- **WebSocket**: Socket.io for real-time updates
+- **Authentication**: JWT with refresh tokens
+- **Push Notifications**: Firebase Cloud Messaging (FCM)
+
+## App Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Native Layer                              │
+│  iOS (Swift) / Android (Kotlin)                             │
+│  - Biometric Auth  - Push Notifications  - Secure Storage   │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────────────┐
+│                React Native Layer                            │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │  Navigation  │  │  Redux Store │  │  API Client  │     │
+│  │   Stack      │  │   (State)    │  │  (RTK Query) │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │   Screens    │  │  Components  │  │  WebSocket   │     │
+│  │              │  │              │  │   Client     │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+└───────────────────────┬─────────────────────────────────────┘
+                        │ HTTPS/WSS
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   NIJA Backend API                           │
+│  Dashboard API / Trading API / WebSocket Server              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## User Flow Map
+
+### 1. Onboarding Flow
+
+```
+┌─────────────┐
+│  App Opens  │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────┐     ┌──────────────────┐
+│  Splash Screen  │────>│  Welcome Screen  │
+│  (2 seconds)    │     │  (First Launch)  │
+└─────────────────┘     └────────┬─────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │  Sign Up Flow   │
+                        └────────┬────────┘
+                                 │
+                ┌────────────────┼────────────────┐
+                │                │                │
+                ▼                ▼                ▼
+       ┌────────────┐   ┌────────────┐   ┌────────────┐
+       │   Email    │   │   Phone    │   │   Google   │
+       │  Sign Up   │   │  Sign Up   │   │   OAuth    │
+       └─────┬──────┘   └─────┬──────┘   └─────┬──────┘
+             │                │                │
+             └────────────────┼────────────────┘
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │  Setup Profile  │
+                     │  (Name, Photo)  │
+                     └────────┬────────┘
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │  Choose Tier    │
+                     │ Basic/Pro/Ent.  │
+                     └────────┬────────┘
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │  Connect        │
+                     │  Exchange API   │
+                     └────────┬────────┘
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │  Enable         │
+                     │  Biometrics     │
+                     └────────┬────────┘
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │  Setup Complete │
+                     │  -> Dashboard   │
+                     └─────────────────┘
+```
+
+### 2. Authentication Flow
+
+```
+┌─────────────┐
+│  App Opens  │
+└──────┬──────┘
+       │
+       ▼
+┌──────────────────┐
+│  Check Session   │
+└────────┬─────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌────────┐  ┌────────────────┐
+│ Valid  │  │    Expired     │
+│Session │  │    Session     │
+└───┬────┘  └────────┬───────┘
+    │                │
+    │                ▼
+    │       ┌────────────────┐
+    │       │  Login Screen  │
+    │       └────────┬───────┘
+    │                │
+    │       ┌────────┴────────┐
+    │       │                 │
+    │       ▼                 ▼
+    │  ┌──────────┐    ┌──────────┐
+    │  │Biometric │    │Email +   │
+    │  │  Auth    │    │Password  │
+    │  └─────┬────┘    └─────┬────┘
+    │        │               │
+    │        └───────┬───────┘
+    │                │
+    ▼                ▼
+┌─────────────────────────┐
+│     Dashboard Home      │
+└─────────────────────────┘
+```
+
+### 3. Main Navigation Structure
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Bottom Tab Navigation                     │
+├──────────────┬──────────────┬──────────────┬────────────────┤
+│   Dashboard  │  Positions   │   Activity   │   Settings     │
+│     🏠       │     📊       │      📜      │      ⚙️        │
+└──────┬───────┴──────┬───────┴──────┬───────┴──────┬─────────┘
+       │              │              │              │
+       ▼              ▼              ▼              ▼
+  [See Below]    [See Below]    [See Below]    [See Below]
+```
+
+## Screen Designs
+
+### Screen 1: Dashboard (Home)
+
+**Purpose**: Quick overview of bot performance and status
+
+**Layout:**
+
+```
+┌─────────────────────────────────────────┐
+│  NIJA  👤Alex                    🔔(3)  │ ← Header
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌─────────────────────────────────┐   │ ← Bot Status Card
+│  │ 🟢 Bot Active                   │   │
+│  │ Trading on Coinbase, Kraken     │   │
+│  │                                 │   │
+│  │ Last trade: 2 minutes ago       │   │
+│  │ [Pause Bot]                     │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │ ← P&L Summary Card
+│  │ Today's Performance              │   │
+│  │                                 │   │
+│  │ Total P&L:  +$245.67  (+2.4%)   │   │
+│  │ Trades:     12                  │   │
+│  │ Win Rate:   75%                 │   │
+│  │                                 │   │
+│  │ ───────────────────────────────│   │
+│  │ All-Time:   +$3,892.18 (+15.2%) │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │ ← Active Positions
+│  │ Active Positions (3)            │   │
+│  │                                 │   │
+│  │ BTC-USD   $150.00   +$12.45▲   │   │
+│  │ ETH-USD   $100.00   +$8.20▲    │   │
+│  │ SOL-USD   $50.00    -$2.10▼    │   │
+│  │                                 │   │
+│  │ [View All Positions →]          │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │ ← Recent Activity
+│  │ Recent Activity                 │   │
+│  │                                 │   │
+│  │ 🟢 BTC-USD Buy  $150  2m ago    │   │
+│  │ 🔴 ETH-USD Sell $80   15m ago   │   │
+│  │ 🟢 SOL-USD Buy  $50   1h ago    │   │
+│  │                                 │   │
+│  │ [View All Activity →]           │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**Interactive Elements:**
+- Pull to refresh (updates all data)
+- Tap "Pause Bot" → Confirmation dialog → Pause trading
+- Tap position → Navigate to Position Detail
+- Tap activity item → Navigate to Trade Detail
+- Real-time updates via WebSocket (P&L, positions, activity)
+
+**API Endpoints Used:**
+- `GET /v1/dashboard/overview` (on load)
+- `WebSocket /ws/dashboard` (real-time updates)
+
+### Screen 2: Positions
+
+**Purpose**: Detailed view of all open positions
+
+**Layout:**
+
+```
+┌─────────────────────────────────────────┐
+│  ← Positions          [Filter ▼]  🔍   │ ← Header
+├─────────────────────────────────────────┤
+│                                         │
+│  Summary                                │
+│  ┌─────────────────────────────────┐   │
+│  │ Open: 3    Closed: 47           │   │
+│  │ Total Value: $300.00            │   │
+│  │ Unrealized P&L: +$18.55 (6.2%)  │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Open Positions                         │
+│  ┌─────────────────────────────────┐   │
+│  │ BTC-USD                         │   │
+│  │ Entry: $62,450  Current: $63,280│   │
+│  │ Size: $150.00                   │   │
+│  │ P&L: +$12.45 (8.3%) ▲          │   │
+│  │ Duration: 2h 15m                │   │
+│  │ [Close Position]                │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ ETH-USD                         │   │
+│  │ Entry: $3,210  Current: $3,290  │   │
+│  │ Size: $100.00                   │   │
+│  │ P&L: +$8.20 (8.2%) ▲           │   │
+│  │ Duration: 3h 42m                │   │
+│  │ [Close Position]                │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ SOL-USD                         │   │
+│  │ Entry: $108.50  Current: $104.20│   │
+│  │ Size: $50.00                    │   │
+│  │ P&L: -$2.10 (-4.2%) ▼          │   │
+│  │ Duration: 45m                   │   │
+│  │ [Close Position]                │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**Interactive Elements:**
+- Tap position card → Navigate to Position Detail
+- Swipe left on position → Quick actions (Close, Set Alert)
+- Tap "Close Position" → Confirmation dialog → Close trade
+- Filter button → Filter by exchange, P&L, duration
+- Search → Search by pair name
+- Pull to refresh
+
+**API Endpoints Used:**
+- `GET /v1/positions/open` (on load)
+- `WebSocket /ws/positions` (real-time P&L updates)
+- `POST /v1/positions/{id}/close` (close position)
+
+### Screen 3: Position Detail
+
+**Purpose**: Deep dive into a specific position
+
+**Layout:**
+
+```
+┌─────────────────────────────────────────┐
+│  ← BTC-USD Position            ⋮       │ ← Header
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌─────────────────────────────────┐   │ ← Price Chart
+│  │                                 │   │
+│  │      ╱╲    ╱╲                  │   │
+│  │     ╱  ╲  ╱  ╲  ╱╲             │   │
+│  │    ╱    ╲╱    ╲╱  ╲            │   │
+│  │                                 │   │
+│  │ Entry ─────────────────         │   │
+│  │                                 │   │
+│  │ 1H  4H  1D  1W  1M  ALL        │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Position Details                       │
+│  ┌─────────────────────────────────┐   │
+│  │ Side:         Long (Buy)        │   │
+│  │ Entry Price:  $62,450.00        │   │
+│  │ Current:      $63,280.00        │   │
+│  │ Size:         $150.00           │   │
+│  │ Amount:       0.0024 BTC        │   │
+│  │ P&L:          +$12.45 (8.3%)▲   │   │
+│  │ Duration:     2h 15m            │   │
+│  │ Exchange:     Coinbase          │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Strategy Details                       │
+│  ┌─────────────────────────────────┐   │
+│  │ Strategy:     APEX V7.1         │   │
+│  │ Signal:       RSI Oversold      │   │
+│  │ Entry Score:  85/100            │   │
+│  │ Stop Loss:    $61,200 (-2.0%)   │   │
+│  │ Take Profit:  $64,500 (+3.3%)   │   │
+│  │ Trailing:     Enabled           │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │    [Close Position Now]         │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**Interactive Elements:**
+- Tap chart → Full-screen chart view
+- Tap time period → Update chart
+- Tap "Close Position Now" → Confirmation → Close
+- Menu (⋮) → Share, Set Alert, View on Exchange
+- Pull to refresh
+
+**API Endpoints Used:**
+- `GET /v1/positions/{id}` (position details)
+- `GET /v1/positions/{id}/chart` (price history)
+- `WebSocket /ws/positions/{id}` (real-time updates)
+
+### Screen 4: Activity (Trade History)
+
+**Purpose**: Complete history of all trades and bot actions
+
+**Layout:**
+
+```
+┌─────────────────────────────────────────┐
+│  ← Activity          [Filter ▼]  📅    │ ← Header
+├─────────────────────────────────────────┤
+│                                         │
+│  Today - January 27, 2026               │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ 🟢 BTC-USD Buy                  │   │
+│  │ 4:42 PM                         │   │
+│  │ Entry at $63,280 × 0.0024 BTC   │   │
+│  │ Total: $150.00                  │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ 🔴 ETH-USD Sell (Profit Take)   │   │
+│  │ 4:27 PM                         │   │
+│  │ Exit at $3,290 × 0.0304 ETH     │   │
+│  │ Total: $80.00                   │   │
+│  │ Profit: +$8.20 (11.4%) ✓       │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ 🟢 SOL-USD Buy                  │   │
+│  │ 3:02 PM                         │   │
+│  │ Entry at $108.50 × 0.461 SOL    │   │
+│  │ Total: $50.00                   │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Yesterday - January 26, 2026           │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ 🔴 BTC-USD Sell (Stop Loss)     │   │
+│  │ 11:18 PM                        │   │
+│  │ Exit at $61,850 × 0.0024 BTC    │   │
+│  │ Total: $148.00                  │   │
+│  │ Loss: -$4.50 (-3.0%) ✗         │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  [Load More...]                         │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**Interactive Elements:**
+- Tap activity item → Trade Detail view
+- Filter button → Filter by type, exchange, P&L
+- Calendar button → Date range picker
+- Pull to refresh
+- Infinite scroll (load more)
+
+**API Endpoints Used:**
+- `GET /v1/activity?page=1&limit=20` (paginated)
+- `GET /v1/activity/filters` (filter options)
+
+### Screen 5: Settings
+
+**Purpose**: Manage account, bot configuration, and preferences
+
+**Layout:**
+
+```
+┌─────────────────────────────────────────┐
+│  ← Settings                             │
+├─────────────────────────────────────────┤
+│                                         │
+│  Profile                                │
+│  ┌─────────────────────────────────┐   │
+│  │ 👤 Alex Smith                   │   │
+│  │    alex@example.com             │   │
+│  │    Pro Tier                     │   │
+│  │                         [Edit]  │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Trading                                │
+│  ┌─────────────────────────────────┐   │
+│  │ Bot Status        🟢 Active  ⚡  │   │
+│  │ Risk Level        Medium      › │   │
+│  │ Max Position      $200        › │   │
+│  │ Max Daily Loss    $100        › │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Exchanges                              │
+│  ┌─────────────────────────────────┐   │
+│  │ Coinbase         Connected ✓  › │   │
+│  │ Kraken           Connected ✓  › │   │
+│  │ Binance          Not Connected› │   │
+│  │ [+ Add Exchange]                │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Notifications                          │
+│  ┌─────────────────────────────────┐   │
+│  │ Push Notifications    ⚡ ON     │   │
+│  │ Trade Alerts          ⚡ ON     │   │
+│  │ Price Alerts          ⚡ OFF    │   │
+│  │ Email Digest          ⚡ ON     │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Security                               │
+│  ┌─────────────────────────────────┐   │
+│  │ Biometric Auth        ⚡ ON     │   │
+│  │ Two-Factor (2FA)      ⚡ ON     │   │
+│  │ Change Password              › │   │
+│  │ Session Timeout              › │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Support                                │
+│  ┌─────────────────────────────────┐   │
+│  │ Help Center                   › │   │
+│  │ Contact Support               › │   │
+│  │ Privacy Policy                › │   │
+│  │ Terms of Service              › │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  [Sign Out]                             │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**Interactive Elements:**
+- Toggle switches → Update settings immediately
+- List items with › → Navigate to sub-screen
+- Edit profile → Profile edit screen
+- Add Exchange → Exchange connection flow
+- Sign Out → Confirmation → Clear session
+
+**API Endpoints Used:**
+- `GET /v1/settings/user` (load settings)
+- `PATCH /v1/settings/user` (update settings)
+- `GET /v1/settings/exchanges` (exchange connections)
+
+### Screen 6: Exchange Connection Flow
+
+**Purpose**: Connect a new exchange account
+
+**Layout:**
+
+```
+┌─────────────────────────────────────────┐
+│  ← Connect Coinbase               [1/3] │
+├─────────────────────────────────────────┤
+│                                         │
+│  Step 1: Get Your API Credentials       │
+│                                         │
+│  To connect Coinbase, you need:         │
+│                                         │
+│  ✓ API Key                              │
+│  ✓ API Secret                           │
+│  ✓ Organization ID (if applicable)      │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ 📖 How to create API keys:      │   │
+│  │                                 │   │
+│  │ 1. Go to Coinbase Advanced      │   │
+│  │ 2. Settings > API Keys          │   │
+│  │ 3. Create new key               │   │
+│  │ 4. Enable "Trade" permission    │   │
+│  │ 5. Copy key & secret            │   │
+│  │                                 │   │
+│  │ [View Detailed Guide →]         │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ⚠️ Security Tips:                      │
+│  • Never share your API secret          │
+│  • Use IP whitelisting if available     │
+│  • Enable only "Trade" permissions      │
+│  • DO NOT enable "Withdraw"             │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │         [I Have My Keys]        │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+
+                    ↓ (Next Step)
+
+┌─────────────────────────────────────────┐
+│  ← Connect Coinbase               [2/3] │
+├─────────────────────────────────────────┤
+│                                         │
+│  Step 2: Enter Your Credentials         │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ API Key                         │   │
+│  │ ┌─────────────────────────────┐ │   │
+│  │ │ abcd1234efgh5678ijkl9012... │ │   │
+│  │ └─────────────────────────────┘ │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ API Secret                      │   │
+│  │ ┌─────────────────────────────┐ │   │
+│  │ │ ••••••••••••••••••••••••••  │ │   │
+│  │ └─────────────────────────────┘ │   │
+│  │ [👁 Show]                       │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ Organization ID (Optional)      │   │
+│  │ ┌─────────────────────────────┐ │   │
+│  │ │                             │ │   │
+│  │ └─────────────────────────────┘ │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  🔒 Your credentials are encrypted      │
+│  and stored securely in our vault.      │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │      [Verify Connection]        │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+
+                    ↓ (Next Step)
+
+┌─────────────────────────────────────────┐
+│  ← Connect Coinbase               [3/3] │
+├─────────────────────────────────────────┤
+│                                         │
+│  ✓ Connection Successful!               │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ Account verified:               │   │
+│  │                                 │   │
+│  │ Account: alex@example.com       │   │
+│  │ Balance: $5,482.19              │   │
+│  │ Markets: 247 pairs available    │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  Trading Preferences                    │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ Max Position Size               │   │
+│  │ ┌─────────────────────────────┐ │   │
+│  │ │ $200                        │ │   │
+│  │ └─────────────────────────────┘ │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │ Allowed Pairs                   │   │
+│  │ ⚡ All Pairs                     │   │
+│  │ ○ Top 20 Only                   │   │
+│  │ ○ Custom Selection...           │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+│  ┌─────────────────────────────────┐   │
+│  │        [Start Trading]          │   │
+│  └─────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**Interactive Elements:**
+- Text inputs with validation
+- Show/hide password toggle
+- Verify Connection → API call to test credentials
+- Loading state during verification
+- Error handling with clear messages
+- Success state with account details
+
+**API Endpoints Used:**
+- `POST /v1/credentials/verify` (verify credentials)
+- `POST /v1/credentials/store` (store encrypted)
+- `PATCH /v1/settings/trading` (save preferences)
+
+## Real-Time Updates (WebSocket)
+
+### WebSocket Event Flow
+
+```javascript
+// Connect to WebSocket
+const socket = io('wss://api.nija.io', {
+  auth: {
+    token: jwtToken
+  }
+});
+
+// Subscribe to user's channel
+socket.emit('subscribe', { channel: `user:${userId}` });
+
+// Listen for real-time events
+socket.on('position:update', (data) => {
+  // Update position in Redux store
+  dispatch(updatePosition(data));
+});
+
+socket.on('trade:executed', (data) => {
+  // Show notification
+  showNotification({
+    title: 'Trade Executed',
+    body: `${data.side} ${data.pair} for $${data.size}`
+  });
+
+  // Update activity feed
+  dispatch(addActivity(data));
+});
+
+socket.on('pnl:update', (data) => {
+  // Update P&L displays
+  dispatch(updatePnL(data));
+});
+
+socket.on('bot:status', (data) => {
+  // Update bot status
+  dispatch(updateBotStatus(data));
+});
+```
+
+### Push Notifications
+
+**Notification Types:**
+
+1. **Trade Executed**
+   - Title: "Trade Executed: BTC-USD"
+   - Body: "Bought $150.00 at $63,280"
+   - Action: Open to Position Detail
+
+2. **Position Closed**
+   - Title: "Position Closed: ETH-USD"
+   - Body: "Profit: +$8.20 (11.4%)"
+   - Action: Open to Activity
+
+3. **Stop Loss Hit**
+   - Title: "⚠️ Stop Loss: SOL-USD"
+   - Body: "Loss: -$2.10 (-4.2%)"
+   - Action: Open to Position Detail
+
+4. **Daily Summary**
+   - Title: "Daily Summary - Jan 27"
+   - Body: "12 trades, +$245.67 profit (75% win rate)"
+   - Action: Open to Dashboard
+
+5. **Bot Status Change**
+   - Title: "Bot Paused"
+   - Body: "Trading has been paused by kill switch"
+   - Action: Open to Settings
+
+## UI Components Library
+
+### Reusable Components
+
+```typescript
+// PositionCard.tsx
+interface PositionCardProps {
+  pair: string;
+  entryPrice: number;
+  currentPrice: number;
+  size: number;
+  pnl: number;
+  pnlPercent: number;
+  duration: string;
+  onPress: () => void;
+}
+
+// TradeListItem.tsx
+interface TradeListItemProps {
+  type: 'buy' | 'sell';
+  pair: string;
+  price: number;
+  size: number;
+  timestamp: Date;
+  pnl?: number;
+  onPress: () => void;
+}
+
+// StatCard.tsx
+interface StatCardProps {
+  title: string;
+  value: string | number;
+  change?: number;
+  icon?: string;
+  trend?: 'up' | 'down' | 'neutral';
+}
+
+// ActionButton.tsx
+interface ActionButtonProps {
+  title: string;
+  variant: 'primary' | 'secondary' | 'danger';
+  loading?: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+}
+
+// PriceChart.tsx
+interface PriceChartProps {
+  data: Array<{timestamp: Date, price: number}>;
+  interval: '1H' | '4H' | '1D' | '1W' | '1M';
+  entryPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+}
+```
+
+## Accessibility
+
+### Features
+
+1. **Screen Reader Support**
+   - All interactive elements labeled
+   - Semantic grouping of content
+   - Announcements for real-time updates
+
+2. **Text Sizing**
+   - Respects system font size settings
+   - Minimum 16px base font size
+   - Dynamic type scaling
+
+3. **Color Contrast**
+   - WCAG AA compliance (4.5:1 minimum)
+   - Not relying solely on color (icons + text)
+   - Dark mode support
+
+4. **Touch Targets**
+   - Minimum 44x44 pt touch targets
+   - Adequate spacing between buttons
+   - Swipe gestures have alternatives
+
+5. **Keyboard Navigation**
+   - Tab order logical
+   - Focus indicators visible
+   - Keyboard shortcuts for power users
+
+## Performance Optimization
+
+### Strategies
+
+1. **Lazy Loading**
+   - Load screens on demand
+   - Defer non-critical data fetching
+   - Lazy load images and charts
+
+2. **Caching**
+   - Cache API responses (5 min TTL)
+   - Persist Redux store to AsyncStorage
+   - Prefetch next screen data
+
+3. **Rendering**
+   - React.memo for expensive components
+   - FlatList for long lists (virtualization)
+   - Debounce search inputs
+
+4. **Bundle Size**
+   - Code splitting by route
+   - Remove unused dependencies
+   - Optimize images (WebP format)
+
+5. **Network**
+   - HTTP/2 connection pooling
+   - Compress API responses (gzip)
+   - WebSocket for real-time (not polling)
+
+### Performance Targets
+
+- **App Launch**: < 2 seconds to interactive
+- **Screen Transition**: < 300ms animation
+- **API Response**: < 500ms p95 latency
+- **Bundle Size**: < 15 MB (iOS), < 20 MB (Android)
+- **Memory Usage**: < 150 MB average
+- **Battery Impact**: < 5% per hour active use
+
+## Security Features
+
+### App-Level Security
+
+1. **Biometric Authentication**
+   - Face ID / Touch ID on iOS
+   - Fingerprint / Face Unlock on Android
+   - Fallback to PIN/password
+
+2. **Session Management**
+   - JWT with 15-minute expiry
+   - Refresh token rotation
+   - Auto-logout after 30 min inactivity
+
+3. **Data Protection**
+   - Sensitive data encrypted at rest (Keychain/Keystore)
+   - No credentials in logs
+   - Screenshot prevention for sensitive screens
+
+4. **Network Security**
+   - Certificate pinning
+   - TLS 1.3 only
+   - No cleartext HTTP traffic
+
+5. **Code Obfuscation**
+   - ProGuard (Android)
+   - Bitcode (iOS)
+   - No hardcoded secrets
+
+## Testing Strategy
+
+### Test Types
+
+1. **Unit Tests** (Jest)
+   - Redux reducers and actions
+   - Utility functions
+   - API client functions
+   - Target: 80% coverage
+
+2. **Component Tests** (React Testing Library)
+   - UI component rendering
+   - User interactions
+   - State changes
+   - Target: 70% coverage
+
+3. **Integration Tests** (Detox)
+   - End-to-end user flows
+   - Authentication flow
+   - Trade execution flow
+   - Critical paths covered
+
+4. **Manual QA**
+   - Beta testing with real users
+   - Different device sizes
+   - Various network conditions
+   - Edge cases and error states
+
+## Deployment
+
+### CI/CD Pipeline
+
+```yaml
+# .github/workflows/mobile-app.yml
+name: Mobile App CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+      - run: npm install
+      - run: npm test
+      - run: npm run lint
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+      - run: npm install
+      - run: cd ios && pod install
+      - run: npm run ios:build
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ios-app
+          path: ios/build/NIJA.ipa
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+      - uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+      - run: npm install
+      - run: cd android && ./gradlew assembleRelease
+      - uses: actions/upload-artifact@v3
+        with:
+          name: android-app
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+  deploy-testflight:
+    needs: build-ios
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: ios-app
+      - run: fastlane ios beta
+
+  deploy-play-store:
+    needs: build-android
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: android-app
+      - run: fastlane android beta
+```
+
+### Release Process
+
+1. **Development** → Continuous deployment to dev environment
+2. **Staging** → Beta releases (TestFlight, Play Console Beta)
+3. **Production** → Gradual rollout (10% → 50% → 100%)
+
+## Success Metrics
+
+### User Engagement
+- Daily Active Users (DAU): > 60%
+- Session Duration: > 5 minutes average
+- Retention Rate: > 80% day-7, > 60% day-30
+
+### Performance
+- Crash Rate: < 0.1%
+- App Store Rating: > 4.5 stars
+- Load Time: < 2 seconds p95
+
+### Business
+- User Acquisition Cost: < $20
+- Lifetime Value: > $200
+- Net Promoter Score: > 50
+
+## Related Documentation
+
+- [Multi-User Platform Architecture](./MULTI_USER_PLATFORM_ARCHITECTURE.md)
+- [Secure API Vault System](./SECURE_API_VAULT_ARCHITECTURE.md)
+- [Execution Routing Model](./EXECUTION_ROUTING_ARCHITECTURE.md)
+
+---
+
+**Document Version**: 1.0
+**Last Updated**: January 27, 2026
+**Status**: ✅ Ready for Implementation
+**Owner**: Mobile Team

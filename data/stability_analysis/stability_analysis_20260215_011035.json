@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-02-15T01:10:35.945567",
+  "stability": {
+    "is_stable": false,
+    "stability_score": 0.8,
+    "confidence_level": 0.95
+  },
+  "tests": {
+    "ks_test": true,
+    "chi_square_test": true,
+    "t_test": true,
+    "variance_test": true
+  },
+  "performance_changes": {
+    "mean_return_change_pct": 991.8202561987212,
+    "volatility_change_pct": -6.355979289096705,
+    "win_rate_change_pct": 19.230769230769226
+  },
+  "warnings": [
+    "\u26a0\ufe0f Strategy distribution is UNSTABLE (score: 0.80)",
+    "\u26a0\ufe0f Performance drift detected (magnitude: 991.82%)",
+    "   \u2022 Mean return drift: +991.8% (threshold: 20%)",
+    "   \u2022 Win rate drift: +19.2% (threshold: 10%)",
+    "\u26a0\ufe0f Unusually high performance improvement: 991.8%"
+  ],
+  "recommendations": [
+    "Consider recalibrating strategy parameters",
+    "Verify recent trades - ensure no data errors or overfitting"
+  ]
+}

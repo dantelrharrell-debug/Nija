@@ -1,0 +1,5 @@
+broker: KRAKEN
+api_key: YOUR_API_KEY_HERE
+api_secret: YOUR_API_SECRET_HERE
+enabled: true
+copy_from_master: true

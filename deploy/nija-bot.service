@@ -1,0 +1,66 @@
+# NIJA Trading Bot — systemd unit file
+#
+# Installation
+# ------------
+#   sudo cp deploy/nija-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now nija-bot
+#
+# Watchdog behaviour
+# ------------------
+#   Restart=on-failure       — auto-restart on crash or non-zero exit
+#   RestartSec=10            — 10-second back-off between restart attempts
+#   StartLimitIntervalSec=300 — reset the start-limit counter every 5 minutes
+#   StartLimitBurst=5        — allow at most 5 restarts within that window
+#
+# Override any setting without editing this file:
+#   sudo systemctl edit nija-bot
+#   (creates /etc/systemd/system/nija-bot.service.d/override.conf)
+
+[Unit]
+Description=NIJA Autonomous Cryptocurrency Trading Bot
+Documentation=https://github.com/dantelrharrell-debug/Nija
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# ── Identity ────────────────────────────────────────────────────────────────
+# Run as a dedicated non-root user for security.
+# Create with: sudo useradd -r -s /sbin/nologin nija
+User=nija
+Group=nija
+
+# ── Working directory & executable ──────────────────────────────────────────
+WorkingDirectory=/opt/nija
+ExecStart=/opt/nija/venv/bin/python /opt/nija/bot.py
+
+# ── Environment ─────────────────────────────────────────────────────────────
+# Load secrets from an env file so credentials are never in this unit file.
+# Create /opt/nija/.env from .env.example and set 0600 permissions.
+EnvironmentFile=-/opt/nija/.env
+
+# ── Restart / watchdog policy ────────────────────────────────────────────────
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+# Output goes to the journal; view with: journalctl -u nija-bot -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nija-bot
+
+# ── Resource limits ─────────────────────────────────────────────────────────
+# Prevent a runaway bot from exhausting system memory.
+MemoryMax=1G
+CPUQuota=100%
+
+# ── Security hardening ──────────────────────────────────────────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/nija/data /opt/nija/logs /opt/nija/cache
+
+[Install]
+WantedBy=multi-user.target

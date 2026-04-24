@@ -1,0 +1,121 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nija-canary
+  namespace: nija
+  labels:
+    app: nija
+    version: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nija
+      version: canary
+  template:
+    metadata:
+      labels:
+        app: nija
+        version: canary
+      annotations:
+        # Seccomp profile
+        seccomp.security.alpha.kubernetes.io/pod: 'runtime/default'
+        # AppArmor profile
+        container.apparmor.security.beta.kubernetes.io/nija: 'runtime/default'
+    spec:
+      # Security context for pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # Service account with minimal permissions
+      serviceAccountName: nija-sa
+      automountServiceAccountToken: false
+      
+      containers:
+      - name: nija
+        image: ${CANARY_IMAGE}
+        imagePullPolicy: Always
+        
+        # Container security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+              - ALL
+        
+        # Resource limits
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        # Environment variables
+        env:
+        - name: CANARY_DEPLOYMENT
+          value: "true"
+        
+        envFrom:
+        - secretRef:
+            name: nija-secrets
+        
+        # Temporary writable volumes
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /app/cache
+        - name: logs
+          mountPath: /app/logs
+      
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      
+      # Network policy and affinity
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - nija
+              topologyKey: kubernetes.io/hostname

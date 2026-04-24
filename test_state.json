@@ -1,0 +1,99 @@
+{
+  "state": "monitoring",
+  "enabled": true,
+  "cycle_number": 0,
+  "last_evolution": null,
+  "last_regime_check": "2026-01-30T07:53:08.010156",
+  "last_rebalance": null,
+  "genetic": {
+    "population_size": 10,
+    "generation": 0,
+    "best_strategies": 10,
+    "hall_of_fame": 0,
+    "patterns_discovered": 0
+  },
+  "regime": {
+    "current_regime": "weak_trend",
+    "current_confidence": 1.0,
+    "active_strategy": "trend_following",
+    "strategy_switches": 0,
+    "regime_distribution": {
+      "weak_trend": 1
+    },
+    "avg_confidence_by_regime": {
+      "weak_trend": 1.0
+    },
+    "performance_by_regime": {
+      "weak_trend": {
+        "strategy": "trend_following",
+        "trades": 2,
+        "win_rate": 1.0,
+        "profit_factor": 0.0,
+        "total_pnl": 1000.0,
+        "roi_improvement": 0.0
+      }
+    },
+    "total_classifications": 1
+  },
+  "capital": {
+    "total_capital": 10000.0,
+    "allocated_capital": 9000.0,
+    "reserve_capital": 1000.0,
+    "method": "equal_weight",
+    "num_targets": 5,
+    "allocations": {
+      "gen0_strat0_20260130_075308": 1800.0,
+      "gen0_strat1_20260130_075308": 1800.0,
+      "gen0_strat2_20260130_075308": 1800.0,
+      "gen0_strat3_20260130_075308": 1800.0,
+      "gen0_strat4_20260130_075308": 1800.0
+    },
+    "allocation_pcts": {
+      "gen0_strat0_20260130_075308": 0.18,
+      "gen0_strat1_20260130_075308": 0.18,
+      "gen0_strat2_20260130_075308": 0.18,
+      "gen0_strat3_20260130_075308": 0.18,
+      "gen0_strat4_20260130_075308": 0.18
+    },
+    "expected_metrics": {
+      "return": 0.0,
+      "volatility": 0.0670820393249937,
+      "sharpe": 0.0,
+      "diversification": 0.9999999999999999
+    },
+    "last_rebalance": "2026-01-30T07:53:08.008788",
+    "rebalancing_needed": false
+  },
+  "deployed_strategies": {
+    "gen0_strat0_20260130_075308": {
+      "fitness": 0.5000000000000001,
+      "generation": 0,
+      "trades": 30,
+      "win_rate": 0.55
+    },
+    "gen0_strat1_20260130_075308": {
+      "fitness": 0.5000000000000001,
+      "generation": 0,
+      "trades": 30,
+      "win_rate": 0.55
+    },
+    "gen0_strat2_20260130_075308": {
+      "fitness": 0.0,
+      "generation": 0,
+      "trades": 0,
+      "win_rate": 0.0
+    },
+    "gen0_strat3_20260130_075308": {
+      "fitness": 0.0,
+      "generation": 0,
+      "trades": 0,
+      "win_rate": 0.0
+    },
+    "gen0_strat4_20260130_075308": {
+      "fitness": 0.0,
+      "generation": 0,
+      "trades": 0,
+      "win_rate": 0.0
+    }
+  }
+}

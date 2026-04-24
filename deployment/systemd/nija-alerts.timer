@@ -1,0 +1,9 @@
+[Unit]
+Description=NIJA Status Alerts Timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

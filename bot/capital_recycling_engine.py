@@ -1,0 +1,1045 @@
+"""
+NIJA Capital Recycling Engine
+==============================
+
+Automatically allocates **harvested profits** (from the ProfitHarvestLayer
+and PortfolioProfitEngine) to the strategies with the strongest recent
+performance.
+
+How it works
+------------
+1. Harvested profit is **deposited** into the engine's recycling pool via
+   ``deposit_profit()``.  The caller may optionally pass the current market
+   regime so that strategy scores are regime-aware.
+2. On every ``allocate()`` call the engine queries the
+   ``MetaLearningOptimizer`` (or falls back to the
+   ``SelfLearningStrategyAllocator``) for per-strategy composite scores in
+   the current regime.
+3. Scores are normalised and clipped to configurable min/max bounds, then
+   used to split the available pool into per-strategy allocations.
+4. A strategy (or orchestrator) calls ``claim_allocation(strategy, amount)``
+   to draw down its share.  The deducted amount is removed from the pool.
+5. State is persisted to JSON so the pool survives restarts.
+
+Architecture
+------------
+::
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │                CapitalRecyclingEngine  (NEW)                 │
+  │                                                             │
+  │  Pool ← deposit_profit(amount, source_symbol, regime)       │
+  │                                                             │
+  │  Scores ← MetaLearningOptimizer.get_regime_weights(regime)  │
+  │       or   SelfLearningAllocator.get_weights()              │
+  │                                                             │
+  │  allocation[strategy] = pool × weight[strategy]             │
+  │                                                             │
+  │  Pool -= claim_allocation(strategy, amount)                 │
+  └─────────────────────────────────────────────────────────────┘
+
+Usage
+-----
+    from bot.capital_recycling_engine import get_capital_recycling_engine
+
+    engine = get_capital_recycling_engine()
+
+    # Deposit a harvested profit (e.g. called by ProfitHarvestLayer):
+    engine.deposit_profit(amount_usd=250.0,
+                          source_symbol="BTC-USD",
+                          regime="BULL_TRENDING")
+
+    # Compute / refresh allocations for the current regime:
+    allocations = engine.allocate(regime="BULL_TRENDING")
+    # → {"ApexTrend": 132.5, "MomentumBreakout": 71.0, ...}
+
+    # A strategy claims its share before placing an order:
+    granted = engine.claim_allocation("ApexTrend", requested_usd=100.0)
+
+    # Status dashboard:
+    print(engine.get_report())
+
+Author: NIJA Trading Systems
+Version: 1.0
+Date: March 2026
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import os
+import threading
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger("nija.capital_recycling")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+#: Default strategies the recycler knows about.
+DEFAULT_STRATEGIES: List[str] = [
+    "ApexTrend",
+    "MeanReversion",
+    "MomentumBreakout",
+    "LiquidityReversal",
+    "Macro",
+]
+
+#: Minimum fraction of the pool any single strategy can receive.
+MIN_ALLOCATION_FRAC: float = 0.05   # 5 %
+
+#: Maximum fraction of the pool any single strategy can receive.
+MAX_ALLOCATION_FRAC: float = 0.60   # 60 %
+
+#: When the pool falls below this USD threshold the engine skips allocation
+#: to avoid noise from micro-amounts.
+MIN_POOL_FOR_ALLOCATION: float = 1.0   # $1
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RecycleEvent:
+    """A single profit-deposit event into the recycling pool."""
+    timestamp: str
+    source_symbol: str      # symbol that generated the profit (e.g. "BTC-USD")
+    amount_usd: float       # amount added to the pool
+    regime: str             # market regime at deposit time
+    note: str = ""
+
+
+@dataclass
+class ClaimEvent:
+    """A recorded allocation claim by a strategy."""
+    timestamp: str
+    strategy: str
+    requested_usd: float
+    granted_usd: float      # may be less than requested if pool is short
+    regime: str
+    note: str = ""
+
+
+@dataclass
+class EngineState:
+    """Persistent state for the Capital Recycling Engine."""
+    pool_usd: float = 0.0                  # currently available recycled capital
+    total_deposited_usd: float = 0.0       # cumulative amount deposited
+    total_claimed_usd: float = 0.0         # cumulative amount claimed
+    recycle_events: List[Dict] = field(default_factory=list)
+    claim_events: List[Dict] = field(default_factory=list)
+    # Last computed per-strategy allocations (informational snapshot)
+    last_allocations: Dict[str, float] = field(default_factory=dict)
+    last_allocation_regime: str = ""
+    last_allocation_ts: str = ""
+    # Cached normalised weights — recomputed on the rebalance schedule
+    cached_weights: Dict[str, float] = field(default_factory=dict)
+    weights_computed_at: str = ""
+    next_rebalance_ts: str = ""
+    # Throttle snapshot at time of last allocation
+    throttle_multiplier: float = 1.0
+    throttle_label: str = "UNRESTRICTED"
+    throttle_drawdown_pct: float = 0.0
+    # Per-strategy health factors applied during last rebalance
+    strategy_health_factors: Dict[str, float] = field(default_factory=dict)
+    # Meta-learner condition quality snapshot at time of last allocation
+    condition_quality_multiplier: float = 1.0
+    condition_quality_fingerprint: str = ""
+    condition_quality_confidence: float = 0.0
+    created_at: str = ""
+    last_updated: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
+
+class CapitalRecyclingEngine:
+    """
+    Capital Recycling Engine — channels harvested profits into the highest-
+    performing strategies.
+
+    Parameters
+    ----------
+    state_path : str
+        Path to the JSON persistence file.
+    strategies : list[str]
+        Strategy names this engine knows about.
+    min_allocation_frac : float
+        Minimum fraction any strategy receives (default 5 %).
+    max_allocation_frac : float
+        Maximum fraction any strategy receives (default 60 %).
+    min_pool_for_allocation : float
+        Minimum pool size before allocations are computed (default $1).
+    rebalance_interval_hours : float
+        Minimum time between weight recomputations (default 1 h).
+        Too-frequent rebalancing generates extra fees/slippage; set to 24 h
+        for daily-only rebalancing.
+    """
+
+    def __init__(
+        self,
+        state_path: str = "data/capital_recycling_state.json",
+        strategies: Optional[List[str]] = None,
+        min_allocation_frac: float = MIN_ALLOCATION_FRAC,
+        max_allocation_frac: float = MAX_ALLOCATION_FRAC,
+        min_pool_for_allocation: float = MIN_POOL_FOR_ALLOCATION,
+        rebalance_interval_hours: float = 1.0,
+    ) -> None:
+        self.state_path = state_path
+        self.strategies = list(strategies or DEFAULT_STRATEGIES)
+        self.min_allocation_frac = min_allocation_frac
+        self.max_allocation_frac = max_allocation_frac
+        self.min_pool_for_allocation = min_pool_for_allocation
+        self.rebalance_interval_hours = max(0.0, rebalance_interval_hours)
+        self._lock = threading.RLock()
+
+        self._state = EngineState(
+            created_at=_now(),
+            last_updated=_now(),
+        )
+        self._load_state()
+
+        logger.info(
+            "♻️  CapitalRecyclingEngine ready | pool=$%.2f | strategies=%s | rebalance_interval=%.1fh",
+            self._state.pool_usd,
+            self.strategies,
+            self.rebalance_interval_hours,
+        )
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def deposit_profit(
+        self,
+        amount_usd: float,
+        source_symbol: str = "PORTFOLIO",
+        regime: str = "UNKNOWN",
+        note: str = "",
+    ) -> float:
+        """
+        Deposit harvested profit into the recycling pool.
+
+        Parameters
+        ----------
+        amount_usd : float
+            USD amount to add (must be > 0).
+        source_symbol : str
+            Symbol that generated the profit (for audit trail).
+        regime : str
+            Current market regime (used by ``allocate()``).
+        note : str
+            Optional free-text annotation.
+
+        Returns
+        -------
+        float
+            Updated pool balance after deposit.
+        """
+        if amount_usd <= 0:
+            logger.warning("[Recycle] deposit_profit called with non-positive amount: %.2f", amount_usd)
+            return self._state.pool_usd
+
+        with self._lock:
+            self._state.pool_usd += amount_usd
+            self._state.total_deposited_usd += amount_usd
+
+            event = RecycleEvent(
+                timestamp=_now(),
+                source_symbol=source_symbol,
+                amount_usd=amount_usd,
+                regime=regime,
+                note=note,
+            )
+            self._state.recycle_events.append(asdict(event))
+
+            # Keep log bounded to last 500 events
+            if len(self._state.recycle_events) > 500:
+                self._state.recycle_events = self._state.recycle_events[-500:]
+
+            self._state.last_updated = _now()
+            self._save_state()
+
+        logger.info(
+            "♻️  [Recycle] Deposited $%.2f from %s | pool=$%.2f",
+            amount_usd, source_symbol, self._state.pool_usd,
+        )
+        return self._state.pool_usd
+
+    def allocate(self, regime: str = "UNKNOWN") -> Dict[str, float]:
+        """
+        Compute per-strategy dollar allocations from the current pool.
+
+        The allocation is a *snapshot* — it does not modify the pool.  Strategies
+        draw down their share by calling ``claim_allocation()``.
+
+        Weights are recomputed only when the ``rebalance_interval_hours`` window
+        has elapsed since the last computation, preventing over-frequent strategy
+        shifts that generate unnecessary fees and slippage.
+
+        The effective pool used for allocation is scaled by the global
+        ``CapitalGrowthThrottle`` multiplier so that less capital is deployed
+        during drawdown periods.  The undeployed remainder stays in the pool.
+
+        Parameters
+        ----------
+        regime : str
+            Current market regime (used to query MetaLearningOptimizer).
+
+        Returns
+        -------
+        dict
+            ``{strategy_name: dollar_amount}`` for every known strategy.
+            All values are >= 0.  Returns an empty dict if the pool is below
+            the minimum threshold.
+        """
+        with self._lock:
+            pool = self._state.pool_usd
+
+        if pool < self.min_pool_for_allocation:
+            logger.debug(
+                "[Recycle] Pool $%.2f below minimum $%.2f — skipping allocation.",
+                pool, self.min_pool_for_allocation,
+            )
+            return {s: 0.0 for s in self.strategies}
+
+        # ── Rebalance frequency gate ─────────────────────────────────────────
+        # Only recompute strategy weights when the configured interval has passed
+        # to avoid over-frequent reallocations that generate fees/slippage.
+        weights = self._get_strategy_weights_cached(regime)
+
+        # ── Global drawdown throttle ─────────────────────────────────────────
+        # Scale the effective pool by the capital growth throttle multiplier.
+        # During drawdowns the multiplier < 1.0 so only a fraction of the pool
+        # is deployed; the rest stays in the pool for later.
+        throttle_multiplier = self._get_global_throttle_multiplier()
+
+        # ── Meta-learner condition quality ───────────────────────────────────
+        # Apply an additional multiplier from the ReinvestMetaLearner based on
+        # how historically profitable the current conditions are.  When the
+        # learner has insufficient data the multiplier defaults to 1.0.
+        cq_mult, cq_fp, cq_conf = self._get_condition_quality_multiplier(regime, pool)
+        effective_pool = pool * throttle_multiplier * cq_mult
+
+        allocations = {s: effective_pool * w for s, w in weights.items()}
+
+        with self._lock:
+            self._state.last_allocations = {s: round(v, 4) for s, v in allocations.items()}
+            self._state.last_allocation_regime = regime
+            self._state.last_allocation_ts = _now()
+            self._state.throttle_multiplier = throttle_multiplier
+            self._state.condition_quality_multiplier = cq_mult
+            self._state.condition_quality_fingerprint = cq_fp
+            self._state.condition_quality_confidence = cq_conf
+            self._save_state()
+
+        logger.info(
+            "[Recycle] Allocations computed for regime=%s | pool=$%.2f | "
+            "effective_pool=$%.2f (throttle=%.2f, cq_mult=%.2f, cq_conf=%.2f)",
+            regime, pool, effective_pool, throttle_multiplier, cq_mult, cq_conf,
+        )
+        for strat, amt in sorted(allocations.items(), key=lambda x: x[1], reverse=True):
+            logger.info("  %-22s $%10.2f  (%.1f%%)", strat, amt, (amt / effective_pool * 100) if effective_pool else 0)
+
+        return allocations
+
+    def claim_allocation(
+        self,
+        strategy: str,
+        requested_usd: float,
+        regime: str = "UNKNOWN",
+        note: str = "",
+    ) -> float:
+        """
+        Claim recycled capital for a strategy.
+
+        The granted amount is ``min(requested_usd, pool_usd)``.  The pool is
+        reduced by the granted amount.
+
+        Parameters
+        ----------
+        strategy : str
+            Name of the strategy claiming the capital.
+        requested_usd : float
+            Dollar amount the strategy wishes to draw.
+        regime : str
+            Current market regime (for audit trail).
+        note : str
+            Optional annotation.
+
+        Returns
+        -------
+        float
+            Granted amount (may be less than requested if pool is short).
+        """
+        if requested_usd <= 0:
+            return 0.0
+
+        with self._lock:
+            granted = min(requested_usd, max(0.0, self._state.pool_usd))
+            self._state.pool_usd -= granted
+            self._state.total_claimed_usd += granted
+
+            event = ClaimEvent(
+                timestamp=_now(),
+                strategy=strategy,
+                requested_usd=requested_usd,
+                granted_usd=granted,
+                regime=regime,
+                note=note,
+            )
+            self._state.claim_events.append(asdict(event))
+
+            # Keep log bounded to last 500 events
+            if len(self._state.claim_events) > 500:
+                self._state.claim_events = self._state.claim_events[-500:]
+
+            self._state.last_updated = _now()
+            self._save_state()
+
+        logger.info(
+            "♻️  [Recycle] %s claimed $%.2f (requested $%.2f) | pool=$%.2f",
+            strategy, granted, requested_usd, self._state.pool_usd,
+        )
+        return granted
+
+    def allocate_and_claim(
+        self,
+        strategy: str,
+        regime: str = "UNKNOWN",
+        note: str = "",
+    ) -> float:
+        """
+        Convenience helper: compute the strategy's share of the current pool
+        and immediately claim it.
+
+        Parameters
+        ----------
+        strategy : str
+            The strategy claiming its recycled-profit share.
+        regime : str
+            Current market regime.
+        note : str
+            Optional annotation.
+
+        Returns
+        -------
+        float
+            Dollar amount granted to the strategy.
+        """
+        allocations = self.allocate(regime=regime)
+        share = allocations.get(strategy, 0.0)
+        if share <= 0:
+            return 0.0
+        return self.claim_allocation(strategy, share, regime=regime, note=note)
+
+    def record_reinvest_outcome(
+        self,
+        token: str,
+        pnl: float,
+        won: bool,
+    ) -> None:
+        """
+        Feed back the trade outcome for a previously issued reinvestment token.
+
+        Delegates to :class:`~bot.reinvest_meta_learner.ReinvestMetaLearner` so
+        the system can learn which conditions produce the best reinvest returns.
+
+        Parameters
+        ----------
+        token : str
+            The token returned by :meth:`claim_allocation_with_token`.
+        pnl : float
+            P&L in USD from the reinvested trade (positive = profit).
+        won : bool
+            Whether the trade closed as a winner.
+        """
+        try:
+            from bot.reinvest_meta_learner import get_reinvest_meta_learner
+            get_reinvest_meta_learner().record_outcome(token, pnl=pnl, won=won)
+        except Exception as exc:
+            logger.debug("[Recycle] ReinvestMetaLearner outcome recording failed: %s", exc)
+
+    def claim_allocation_with_token(
+        self,
+        strategy: str,
+        requested_usd: float,
+        regime: str = "UNKNOWN",
+        volatility: str = "CALM",
+        win_rate_tier: str = "MODERATE",
+        note: str = "",
+    ) -> Tuple[float, str]:
+        """
+        Claim recycled capital **and** register the conditions with the
+        :class:`~bot.reinvest_meta_learner.ReinvestMetaLearner`.
+
+        Use this instead of :meth:`claim_allocation` when you intend to report
+        the trade outcome later via :meth:`record_reinvest_outcome`.
+
+        Parameters
+        ----------
+        strategy : str
+            Name of the claiming strategy.
+        requested_usd : float
+            Dollar amount the strategy wishes to draw.
+        regime : str
+            Current market regime.
+        volatility : str
+            Current volatility tier (``"CALM"`` / ``"MINOR"`` / etc.).
+        win_rate_tier : str
+            Current rolling win-rate tier (``"LOW"`` / ``"MODERATE"`` / ``"HIGH"``).
+        note : str
+            Optional annotation.
+
+        Returns
+        -------
+        tuple[float, str]
+            ``(granted_usd, tracking_token)`` — pass the token to
+            :meth:`record_reinvest_outcome` after the trade closes.
+        """
+        granted = self.claim_allocation(strategy, requested_usd, regime=regime, note=note)
+
+        # Record entry in meta-learner for outcome tracking
+        token = ""
+        if granted > 0:
+            try:
+                from bot.reinvest_meta_learner import (
+                    get_reinvest_meta_learner,
+                    classify_pool_tier,
+                )
+                pool_tier = classify_pool_tier(self.get_pool_balance())
+                token = get_reinvest_meta_learner().record_entry(
+                    regime=regime,
+                    volatility=volatility,
+                    win_rate_tier=win_rate_tier,
+                    pool_tier=pool_tier,
+                    amount_usd=granted,
+                    strategy=strategy,
+                )
+            except Exception as exc:
+                logger.debug("[Recycle] ReinvestMetaLearner entry recording failed: %s", exc)
+
+        return granted, token
+
+    def get_pool_balance(self) -> float:
+        """Return the current available pool balance in USD."""
+        with self._lock:
+            return self._state.pool_usd
+
+    def get_status(self) -> Dict[str, Any]:
+        """Return a structured status dict for dashboards and APIs."""
+        with self._lock:
+            s = self._state
+            utilisation = (
+                s.total_claimed_usd / s.total_deposited_usd
+                if s.total_deposited_usd > 0 else 0.0
+            )
+            # Build allocation-percentage view alongside dollar amounts
+            effective_pool = s.pool_usd * s.throttle_multiplier
+            alloc_pcts: Dict[str, float] = {}
+            if effective_pool > 0:
+                for strat, amt in s.last_allocations.items():
+                    alloc_pcts[strat] = round(amt / effective_pool * 100, 2)
+            return {
+                "pool_usd": round(s.pool_usd, 4),
+                "total_deposited_usd": round(s.total_deposited_usd, 4),
+                "total_claimed_usd": round(s.total_claimed_usd, 4),
+                "utilisation_pct": round(utilisation * 100, 2),
+                "last_allocations": {k: round(v, 4) for k, v in s.last_allocations.items()},
+                "allocation_pcts": alloc_pcts,
+                "last_allocation_regime": s.last_allocation_regime,
+                "last_allocation_ts": s.last_allocation_ts,
+                # Rebalance schedule
+                "rebalance_interval_hours": self.rebalance_interval_hours,
+                "weights_computed_at": s.weights_computed_at,
+                "next_rebalance_ts": s.next_rebalance_ts,
+                # Throttle snapshot
+                "throttle_multiplier": round(s.throttle_multiplier, 4),
+                "throttle_label": s.throttle_label,
+                "throttle_drawdown_pct": round(s.throttle_drawdown_pct, 2),
+                # Per-strategy health factors
+                "strategy_health_factors": {k: round(v, 4) for k, v in s.strategy_health_factors.items()},
+                # Meta-learner condition quality
+                "condition_quality_multiplier": round(s.condition_quality_multiplier, 4),
+                "condition_quality_fingerprint": s.condition_quality_fingerprint,
+                "condition_quality_confidence": round(s.condition_quality_confidence, 4),
+                "strategies": self.strategies,
+                "recent_deposits": s.recycle_events[-10:],
+                "recent_claims": s.claim_events[-10:],
+                "created_at": s.created_at,
+                "last_updated": s.last_updated,
+            }
+
+    def get_report(self) -> str:
+        """Return a human-readable text report."""
+        with self._lock:
+            s = self._state
+            utilisation = (
+                s.total_claimed_usd / s.total_deposited_usd
+                if s.total_deposited_usd > 0 else 0.0
+            )
+            effective_pool = s.pool_usd * s.throttle_multiplier * s.condition_quality_multiplier
+            lines = [
+                "=" * 70,
+                "  ♻️   CAPITAL RECYCLING ENGINE — STATUS REPORT",
+                "=" * 70,
+                f"  Pool Balance        : ${s.pool_usd:>12,.2f}",
+                f"  Total Deposited     : ${s.total_deposited_usd:>12,.2f}",
+                f"  Total Claimed       : ${s.total_claimed_usd:>12,.2f}",
+                f"  Utilisation         : {utilisation * 100:>11.1f} %",
+                f"  Last Regime         : {s.last_allocation_regime or 'N/A'}",
+                f"  Last Allocation     : {s.last_allocation_ts or 'N/A'}",
+                "",
+                "  Drawdown Throttle:",
+                f"    Label             : {s.throttle_label}",
+                f"    Drawdown          : {s.throttle_drawdown_pct:>8.2f} %",
+                f"    Multiplier        : {s.throttle_multiplier:>8.2f}",
+                "",
+                "  Meta-Learner Condition Quality:",
+                f"    Fingerprint       : {s.condition_quality_fingerprint or 'N/A'}",
+                f"    Multiplier        : {s.condition_quality_multiplier:>8.2f}",
+                f"    Confidence        : {s.condition_quality_confidence:>8.2f}",
+                f"    Effective Pool    : ${effective_pool:>10,.2f}",
+                "",
+                f"  Rebalance Interval  : {self.rebalance_interval_hours:.1f} h",
+                f"  Weights Computed At : {s.weights_computed_at or 'N/A'}",
+                f"  Next Rebalance      : {s.next_rebalance_ts or 'N/A'}",
+                "",
+                "  Strategy Allocation Plan:",
+            ]
+            if s.last_allocations:
+                for strat, amt in sorted(s.last_allocations.items(), key=lambda x: x[1], reverse=True):
+                    pct = (amt / effective_pool * 100) if effective_pool > 0 else 0.0
+                    hf = s.strategy_health_factors.get(strat, 1.0)
+                    hf_str = f"  health={hf:.2f}" if hf < 1.0 else ""
+                    lines.append(f"    {strat:<22s} ${amt:>10,.2f}  ({pct:>5.1f} %){hf_str}")
+            else:
+                lines.append("    (no allocations computed yet)")
+
+            lines += [
+                "",
+                f"  Recent Deposits ({min(5, len(s.recycle_events))} of {len(s.recycle_events)}):",
+            ]
+            for ev in s.recycle_events[-5:]:
+                lines.append(
+                    f"    {ev.get('timestamp', '')[:19]}  "
+                    f"{ev.get('source_symbol', ''):>10}  "
+                    f"+${ev.get('amount_usd', 0):>8,.2f}  "
+                    f"[{ev.get('regime', '')}]"
+                )
+
+            lines += [
+                "",
+                f"  Recent Claims ({min(5, len(s.claim_events))} of {len(s.claim_events)}):",
+            ]
+            for ev in s.claim_events[-5:]:
+                lines.append(
+                    f"    {ev.get('timestamp', '')[:19]}  "
+                    f"{ev.get('strategy', ''):>22}  "
+                    f"${ev.get('granted_usd', 0):>8,.2f}  "
+                    f"[{ev.get('regime', '')}]"
+                )
+
+            lines.append("=" * 70)
+            return "\n".join(lines)
+
+    # ── Internals ────────────────────────────────────────────────────────────
+
+    def _get_strategy_weights_cached(self, regime: str) -> Dict[str, float]:
+        """
+        Return cached normalised weights, recomputing only when the
+        ``rebalance_interval_hours`` window has elapsed.
+
+        This prevents over-frequent strategy-weight recomputation that can
+        drive unnecessary fees and slippage.
+        """
+        with self._lock:
+            cached_at_str = self._state.weights_computed_at
+            cached_weights = self._state.cached_weights
+
+        # Decide whether a recompute is needed
+        needs_recompute = True
+        if cached_at_str and cached_weights:
+            try:
+                cached_at = datetime.fromisoformat(cached_at_str)
+                age_hours = (datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
+                if age_hours < self.rebalance_interval_hours:
+                    needs_recompute = False
+            except Exception:
+                pass  # malformed timestamp → recompute
+
+        if needs_recompute:
+            logger.info(
+                "[Recycle] Recomputing strategy weights for regime=%s "
+                "(interval=%.1fh)",
+                regime, self.rebalance_interval_hours,
+            )
+            new_weights = self._get_strategy_weights(regime)
+            next_ts = (
+                datetime.now(timezone.utc) + timedelta(hours=self.rebalance_interval_hours)
+            ).isoformat()
+            with self._lock:
+                self._state.cached_weights = new_weights
+                self._state.weights_computed_at = _now()
+                self._state.next_rebalance_ts = next_ts
+            return new_weights
+
+        logger.debug(
+            "[Recycle] Using cached weights (next rebalance: %s)",
+            self._state.next_rebalance_ts,
+        )
+        return cached_weights
+
+    def _get_global_throttle_multiplier(self) -> float:
+        """
+        Return the position-size multiplier from the CapitalGrowthThrottle.
+
+        Queries ``get_size_multiplier()`` and records the throttle snapshot in
+        ``EngineState`` for dashboard/audit visibility.  If the throttle is
+        unavailable the method returns 1.0 (no throttle applied).
+        """
+        try:
+            from bot.capital_growth_throttle import get_capital_growth_throttle
+            throttle = get_capital_growth_throttle()
+            multiplier = throttle.get_size_multiplier()
+            # Collect status snapshot (works with both throttle implementations)
+            status = throttle.get_status() if hasattr(throttle, "get_status") else {}
+            label = (
+                status.get("throttle_level") or
+                getattr(getattr(throttle, "state", None), "label", "UNKNOWN")
+            )
+            drawdown_pct = status.get("short_growth_pct", 0.0)
+            with self._lock:
+                self._state.throttle_multiplier = multiplier
+                self._state.throttle_label = str(label)
+                self._state.throttle_drawdown_pct = drawdown_pct
+            if multiplier < 1.0:
+                logger.info(
+                    "[Recycle] Growth throttle active: %s (multiplier=%.2f) — "
+                    "effective pool scaled down accordingly.",
+                    label, multiplier,
+                )
+            return multiplier
+        except Exception as exc:
+            logger.debug("[Recycle] CapitalGrowthThrottle unavailable (%s) — assuming 1.0.", exc)
+            return 1.0
+
+    def _get_condition_quality_multiplier(
+        self, regime: str, pool_usd: float
+    ) -> Tuple[float, str, float]:
+        """
+        Query the :class:`~bot.reinvest_meta_learner.ReinvestMetaLearner` for a
+        condition quality multiplier based on the current environment.
+
+        Attempts to read volatility and win-rate from live monitoring modules;
+        falls back to neutral values if those modules are unavailable.
+
+        Parameters
+        ----------
+        regime : str
+            Current market regime.
+        pool_usd : float
+            Current pool balance (used to classify pool tier).
+
+        Returns
+        -------
+        tuple[float, str, float]
+            ``(multiplier, fingerprint, confidence)`` — the multiplier is in
+            ``[CONDITION_QUALITY_MIN, CONDITION_QUALITY_MAX]`` or 1.0 when the
+            learner is unavailable.
+        """
+        try:
+            from bot.reinvest_meta_learner import (
+                get_reinvest_meta_learner,
+                classify_pool_tier,
+                classify_win_rate_tier,
+            )
+            from bot.reinvest_meta_learner import _make_fingerprint  # noqa: F401
+
+            # --- volatility tier ---
+            volatility = "CALM"
+            try:
+                from bot.volatility_shock_detector import get_volatility_shock_detector
+                shock = get_volatility_shock_detector()
+                portfolio_shock = shock.get_portfolio_shock()
+                severity = str(
+                    getattr(portfolio_shock, "severity", None)
+                    or portfolio_shock.get("severity", "NONE")
+                ).upper()
+                volatility = severity if severity not in ("NONE", "") else "CALM"
+            except Exception:
+                pass
+
+            # --- win-rate tier ---
+            win_rate_tier = "MODERATE"
+            try:
+                from bot.strategy_health_monitor import get_strategy_health_monitor
+                monitor = get_strategy_health_monitor()
+                win_rates = []
+                for strat in self.strategies:
+                    try:
+                        health = monitor.get_health(strat)
+                        wr = getattr(health, "win_rate", None)
+                        if wr is not None:
+                            win_rates.append(float(wr))
+                    except Exception:
+                        pass
+                if win_rates:
+                    avg_wr = sum(win_rates) / len(win_rates)
+                    win_rate_tier = classify_win_rate_tier(avg_wr)
+            except Exception:
+                pass
+
+            pool_tier = classify_pool_tier(pool_usd)
+            learner = get_reinvest_meta_learner()
+            mult = learner.get_quality_multiplier(
+                regime=regime,
+                volatility=volatility,
+                win_rate_tier=win_rate_tier,
+                pool_tier=pool_tier,
+            )
+            _score, confidence = learner.get_condition_score(
+                regime=regime,
+                volatility=volatility,
+                win_rate_tier=win_rate_tier,
+                pool_tier=pool_tier,
+            )
+            fp = f"{regime}|{volatility}|{win_rate_tier}|{pool_tier}"
+            if mult != 1.0:
+                logger.info(
+                    "[Recycle] Meta-learner condition quality: %s → mult=%.2f (conf=%.2f)",
+                    fp, mult, confidence,
+                )
+            return mult, fp, confidence
+
+        except Exception as exc:
+            logger.debug(
+                "[Recycle] ReinvestMetaLearner unavailable (%s) — condition mult=1.0.", exc
+            )
+            return 1.0, "", 0.0
+
+    def _get_strategy_weights(self, regime: str) -> Dict[str, float]:
+        """
+        Query the best available scorer for normalised strategy weights,
+        then apply per-strategy health factors so throttled or degraded
+        strategies receive proportionally less capital.
+
+        Priority:
+        1. MetaLearningOptimizer (regime-aware, Sharpe-weighted)
+        2. SelfLearningStrategyAllocator (simpler EMA-based)
+        3. Equal-weight fallback
+
+        After obtaining base weights the method applies a health-level factor
+        for each strategy from StrategyHealthMonitor:
+          - SUSPENDED  → 0.0  (minimal allocation — floor applied by clip)
+          - DEGRADED   → 0.5  (half allocation)
+          - WATCHING   → 0.75 (reduced allocation)
+          - HEALTHY    → 1.0  (full allocation)
+
+        Returns normalised weights clipped to [min_allocation_frac, max_allocation_frac].
+        """
+        weights: Optional[Dict[str, float]] = None
+
+        # --- attempt MetaLearningOptimizer ---
+        try:
+            from bot.meta_learning_optimizer import get_meta_learning_optimizer
+            opt = get_meta_learning_optimizer()
+            raw_weights = opt.get_regime_weights(regime)
+            weights = {s: raw_weights.get(s, self.min_allocation_frac) for s in self.strategies}
+        except Exception as exc:
+            logger.debug("[Recycle] MetaLearningOptimizer unavailable (%s), trying SLA.", exc)
+
+        # --- attempt SelfLearningStrategyAllocator ---
+        if weights is None:
+            try:
+                from bot.self_learning_strategy_allocator import get_self_learning_allocator
+                sla = get_self_learning_allocator()
+                sla_weights = sla.get_weights()
+                weights = {s: sla_weights.get(s, self.min_allocation_frac) for s in self.strategies}
+            except Exception as exc:
+                logger.debug("[Recycle] SelfLearningAllocator unavailable (%s), using equal weights.", exc)
+
+        # --- equal-weight fallback ---
+        if weights is None:
+            n = len(self.strategies)
+            if n == 0:
+                return {}
+            weights = {s: 1.0 / n for s in self.strategies}
+
+        # ── Apply per-strategy health / throttle factors ─────────────────────
+        health_factors = self._get_strategy_health_factors()
+        if health_factors:
+            for s in list(weights.keys()):
+                factor = health_factors.get(s, 1.0)
+                weights[s] *= factor  # factor=0.0 for SUSPENDED; clip enforces floor
+            with self._lock:
+                self._state.strategy_health_factors = {k: round(v, 4) for k, v in health_factors.items()}
+
+        return self._normalise_and_clip(weights)
+
+    def _get_strategy_health_factors(self) -> Dict[str, float]:
+        """
+        Return a dict mapping strategy name → health multiplier (0.0–1.0).
+
+        Health levels map to multipliers as follows:
+          SUSPENDED → 0.0  (weight set to 0; clipped to min_allocation_frac by normaliser)
+          DEGRADED  → 0.50 · WATCHING → 0.75 · HEALTHY → 1.0
+        """
+        try:
+            from bot.strategy_health_monitor import get_strategy_health_monitor
+            monitor = get_strategy_health_monitor()
+            level_factors = {
+                "SUSPENDED": 0.0,
+                "DEGRADED":  0.50,
+                "WATCHING":  0.75,
+                "HEALTHY":   1.0,
+            }
+            factors: Dict[str, float] = {}
+            for s in self.strategies:
+                try:
+                    health = monitor.get_health(s)
+                    level_str = (
+                        health.level.value
+                        if hasattr(health.level, "value") else str(health.level)
+                    ).upper()
+                    factors[s] = level_factors.get(level_str, 1.0)
+                    if factors[s] < 1.0:
+                        logger.info(
+                            "[Recycle] Strategy %s health=%s → allocation factor=%.2f",
+                            s, level_str, factors[s],
+                        )
+                except Exception:
+                    factors[s] = 1.0  # unknown strategy → full weight
+            return factors
+        except Exception as exc:
+            logger.debug("[Recycle] StrategyHealthMonitor unavailable (%s) — no health factors.", exc)
+            return {}
+
+    def _normalise_and_clip(self, weights: Dict[str, float]) -> Dict[str, float]:
+        """
+        Apply min/max allocation bounds and re-normalise to sum to 1.0.
+
+        Uses iterative clipping (one pass suffices for practical bound values).
+        """
+        # Clip to bounds
+        clipped = {
+            s: max(self.min_allocation_frac, min(self.max_allocation_frac, w))
+            for s, w in weights.items()
+        }
+        total = sum(clipped.values()) or 1.0
+        normalised = {s: v / total for s, v in clipped.items()}
+
+        # Second clip in case normalisation pushed any weight out of bounds
+        clipped2 = {
+            s: max(self.min_allocation_frac, min(self.max_allocation_frac, v))
+            for s, v in normalised.items()
+        }
+        total2 = sum(clipped2.values()) or 1.0
+        return {s: v / total2 for s, v in clipped2.items()}
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    def _load_state(self) -> None:
+        try:
+            if os.path.exists(self.state_path):
+                with open(self.state_path) as fh:
+                    data = json.load(fh)
+                self._state = EngineState(
+                    pool_usd=data.get("pool_usd", 0.0),
+                    total_deposited_usd=data.get("total_deposited_usd", 0.0),
+                    total_claimed_usd=data.get("total_claimed_usd", 0.0),
+                    recycle_events=data.get("recycle_events", []),
+                    claim_events=data.get("claim_events", []),
+                    last_allocations=data.get("last_allocations", {}),
+                    last_allocation_regime=data.get("last_allocation_regime", ""),
+                    last_allocation_ts=data.get("last_allocation_ts", ""),
+                    cached_weights=data.get("cached_weights", {}),
+                    weights_computed_at=data.get("weights_computed_at", ""),
+                    next_rebalance_ts=data.get("next_rebalance_ts", ""),
+                    throttle_multiplier=data.get("throttle_multiplier", 1.0),
+                    throttle_label=data.get("throttle_label", "UNRESTRICTED"),
+                    throttle_drawdown_pct=data.get("throttle_drawdown_pct", 0.0),
+                    strategy_health_factors=data.get("strategy_health_factors", {}),
+                    condition_quality_multiplier=data.get("condition_quality_multiplier", 1.0),
+                    condition_quality_fingerprint=data.get("condition_quality_fingerprint", ""),
+                    condition_quality_confidence=data.get("condition_quality_confidence", 0.0),
+                    created_at=data.get("created_at", _now()),
+                    last_updated=data.get("last_updated", _now()),
+                )
+                logger.info(
+                    "[Recycle] State restored from %s | pool=$%.2f",
+                    self.state_path, self._state.pool_usd,
+                )
+        except Exception as exc:
+            logger.warning("[Recycle] Could not load state (%s) — starting fresh.", exc)
+
+    def _save_state(self) -> None:
+        """Persist state to JSON (must be called while holding self._lock)."""
+        try:
+            os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
+            with open(self.state_path, "w") as fh:
+                json.dump(asdict(self._state), fh, indent=2)
+        except Exception as exc:
+            logger.warning("[Recycle] Could not persist state: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Singleton
+# ---------------------------------------------------------------------------
+
+_engine_instance: Optional[CapitalRecyclingEngine] = None
+_engine_lock = threading.Lock()
+
+
+def get_capital_recycling_engine(
+    state_path: str = "data/capital_recycling_state.json",
+    **kwargs: Any,
+) -> CapitalRecyclingEngine:
+    """Return the process-wide CapitalRecyclingEngine singleton."""
+    global _engine_instance
+    with _engine_lock:
+        if _engine_instance is None:
+            _engine_instance = CapitalRecyclingEngine(
+                state_path=state_path, **kwargs
+            )
+    return _engine_instance
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now() -> str:
+    """Return current UTC time as an ISO-8601 string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# CLI self-test
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+    engine = CapitalRecyclingEngine(state_path="/tmp/cre_test_state.json")
+
+    print("\n--- Depositing profits ---")
+    engine.deposit_profit(500.0, source_symbol="BTC-USD", regime="BULL_TRENDING")
+    engine.deposit_profit(250.0, source_symbol="ETH-USD", regime="BULL_TRENDING")
+
+    print("\n--- Computing allocations ---")
+    allocs = engine.allocate(regime="BULL_TRENDING")
+    for s, a in sorted(allocs.items(), key=lambda x: x[1], reverse=True):
+        print(f"  {s:<22s} ${a:>8,.2f}")
+
+    print("\n--- Claiming for ApexTrend ---")
+    granted = engine.claim_allocation("ApexTrend", 200.0, regime="BULL_TRENDING")
+    print(f"  Granted: ${granted:.2f}")
+
+    print("\n--- Full report ---")
+    print(engine.get_report())

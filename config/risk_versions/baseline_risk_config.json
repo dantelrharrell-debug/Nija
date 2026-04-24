@@ -1,0 +1,90 @@
+{
+  "version": "RISK_CONFIG_v1.0.0",
+  "date": "2026-02-12T22:00:00Z",
+  "description": "Baseline frozen risk configuration - approved and active",
+  "risk_parameters": {
+    "max_position_size": 0.10,
+    "min_position_size": 0.01,
+    "max_risk_per_trade": 0.02,
+    "max_daily_loss": 0.025,
+    "max_total_exposure": 0.30,
+    "max_drawdown": 0.10,
+    "max_positions": 10,
+    "max_trades_per_day": 50,
+    "max_leverage": 3.0,
+    "stop_loss_atr_multiplier": 1.5,
+    "min_stop_pct": 0.003,
+    "trailing_stop_pct": 0.005,
+    "min_trail_pct": 0.003,
+    "take_profit_tp1_pct": 0.008,
+    "take_profit_tp2_pct": 0.015,
+    "take_profit_tp3_pct": 0.025,
+    "tp1_exit_size": 0.50,
+    "tp2_exit_size": 0.30,
+    "tp3_exit_size": 0.20,
+    "position_size_base_pct": 0.03,
+    "position_size_max_pct": 0.10,
+    "adx_threshold": 10,
+    "adx_strong_threshold": 40,
+    "volume_threshold": 0.10,
+    "min_signal_score": 4,
+    "require_ema_alignment": true,
+    "require_vwap_alignment": true,
+    "require_adx_minimum": true
+  },
+  "position_sizing_rules": {
+    "trend_quality": {
+      "very_strong": {
+        "position_size": 0.10,
+        "description": "ADX >= 40: Very strong trend"
+      },
+      "strong": {
+        "position_size": 0.08,
+        "description": "ADX >= 30: Strong trend"
+      },
+      "good": {
+        "position_size": 0.05,
+        "description": "ADX >= 25: Good trend"
+      },
+      "weak": {
+        "position_size": 0.03,
+        "description": "ADX >= 20: Weak trend"
+      }
+    }
+  },
+  "adx_multiplier_rules": {
+    "weak_trend": {
+      "adx_range": "<20",
+      "multiplier": 0.5
+    },
+    "moderate_trend": {
+      "adx_range": "20-40",
+      "multiplier": "0.5 + (adx - 20) * 0.025"
+    },
+    "strong_trend": {
+      "adx_range": ">40",
+      "multiplier": "1.0 + min((adx - 40) * 0.0125, 0.5)"
+    }
+  },
+  "signal_strength_multipliers": {
+    "1": 0.4,
+    "2": 0.6,
+    "3": 0.8,
+    "4": 1.0,
+    "5": 1.2
+  },
+  "circuit_breakers": {
+    "daily_loss_warning_threshold": 0.80,
+    "drawdown_warning_threshold": 0.80,
+    "margin_utilization_warning": 0.80,
+    "position_count_warning": 0.80
+  },
+  "approval_metadata": {
+    "approved_by": "Technical Lead",
+    "approval_date": "2026-02-12T22:00:00Z",
+    "approval_method": "RISK FREEZE Declaration",
+    "backtest_period": "N/A - Baseline configuration",
+    "paper_trading_period": "N/A - Baseline configuration",
+    "notes": "Initial frozen configuration established at RISK FREEZE declaration"
+  }
+}

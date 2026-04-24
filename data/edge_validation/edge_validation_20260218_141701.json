@@ -1,0 +1,43 @@
+{
+  "status": "proven",
+  "overall_sharpe": 8.024463319121766,
+  "sharpe_after_costs": 3.416666631240434,
+  "in_sample_sharpe": 0.0,
+  "out_sample_sharpe": 0.0,
+  "oos_efficiency": 0.0,
+  "walk_forward_passed": true,
+  "parameter_stability": 0.8,
+  "monte_carlo_passed": true,
+  "probability_of_ruin": 0.0,
+  "validation_timestamp": "2026-02-18T14:17:01.682868",
+  "total_trades": 500,
+  "validation_message": "\u2705 EDGE PROVEN - Sharpe 3.42, OOS efficiency 0.00%, Parameter stability 80.00%, Probability of ruin 0.00% - READY TO SCALE",
+  "ready_to_scale": true,
+  "bull_performance": {
+    "regime_name": "bull",
+    "num_trades": 200,
+    "win_rate": 0.595,
+    "avg_return": 0.010053264142485809,
+    "sharpe_ratio": 8.453082420672738,
+    "max_drawdown": -0.05297310703433627,
+    "total_return": 6.139109944741851
+  },
+  "bear_performance": {
+    "regime_name": "bear",
+    "num_trades": 172,
+    "win_rate": 0.5697674418604651,
+    "avg_return": 0.009021000025745256,
+    "sharpe_ratio": 7.644431075824999,
+    "max_drawdown": -0.05444451449723067,
+    "total_return": 3.549252608196112
+  },
+  "sideways_performance": {
+    "regime_name": "sideways",
+    "num_trades": 128,
+    "win_rate": 0.5859375,
+    "avg_return": 0.009856885800802778,
+    "sharpe_ratio": 7.8866317919335405,
+    "max_drawdown": -0.05419497586844526,
+    "total_return": 2.4238231639662597
+  }
+}

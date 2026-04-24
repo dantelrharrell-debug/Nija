@@ -1,0 +1,56 @@
+{
+  "status": "statistical_fail",
+  "step1_passed": true,
+  "step2_passed": false,
+  "step3_passed": false,
+  "step4_passed": false,
+  "ready_for_capital_scaling": false,
+  "validation_timestamp": "2026-02-18T14:16:53.561250",
+  "validation_message": "Failed Step 2: Sharpe 1.47 < 1.0 after costs",
+  "alpha_discovery": {
+    "total_trades": 200,
+    "win_rate": 0.51,
+    "avg_win": 0.025063814400414258,
+    "avg_loss": -0.014968588336816392,
+    "profit_factor": 1.731752116581951,
+    "expectancy": 57.29534167122035,
+    "total_return": 1.8374796194887315,
+    "max_drawdown": -0.10896139984097426
+  },
+  "statistical_validation": {
+    "sharpe_raw": 4.111854000785901,
+    "sharpe_after_costs": 1.4702138998740264,
+    "sortino_ratio": 6.8167067143275135,
+    "calmar_ratio": 2.3496722549484956,
+    "t_statistic": 1.306492112619896,
+    "p_value": 0.19289319883726685,
+    "avg_cost_per_trade": 0.003500000000000001,
+    "total_costs": 0.7000000000000002,
+    "net_return_after_costs": 0.41225637490304123
+  },
+  "regime_testing": {
+    "bull_sharpe": 0,
+    "bull_win_rate": 0,
+    "bull_trades": 0,
+    "bear_sharpe": 0,
+    "bear_win_rate": 0,
+    "bear_trades": 0,
+    "sideways_sharpe": 0,
+    "sideways_win_rate": 0,
+    "sideways_trades": 0,
+    "worst_regime_sharpe": 0,
+    "regime_consistency": 0
+  },
+  "monte_carlo_stress": {
+    "num_simulations": 0,
+    "probability_of_ruin": 1.0,
+    "probability_of_10pct_loss": 1.0,
+    "median_return": 0,
+    "percentile_5": 0,
+    "percentile_95": 0,
+    "worst_drawdown": -1.0,
+    "worst_return": -1.0,
+    "avg_recovery_time_days": 0,
+    "max_recovery_time_days": 0
+  }
+}

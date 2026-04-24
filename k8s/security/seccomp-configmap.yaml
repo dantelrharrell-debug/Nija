@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nija-seccomp
+  namespace: nija
+data:
+  seccomp-profile.json: |
+    {
+      "defaultAction": "SCMP_ACT_ERRNO",
+      "architectures": [
+        "SCMP_ARCH_X86_64",
+        "SCMP_ARCH_X86",
+        "SCMP_ARCH_X32"
+      ],
+      "syscalls": [
+        {
+          "names": [
+            "accept", "accept4", "access", "bind", "brk", "chdir",
+            "close", "connect", "dup", "dup2", "epoll_create", "epoll_ctl",
+            "epoll_wait", "eventfd", "execve", "exit", "exit_group",
+            "fcntl", "fstat", "futex", "getcwd", "getdents", "getpid",
+            "getsockname", "getsockopt", "ioctl", "listen", "lseek",
+            "mmap", "mprotect", "munmap", "nanosleep", "open", "openat",
+            "pipe", "poll", "read", "readv", "recv", "recvfrom", "recvmsg",
+            "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "sched_yield",
+            "select", "send", "sendmsg", "sendto", "setsockopt", "shutdown",
+            "socket", "socketpair", "stat", "write", "writev"
+          ],
+          "action": "SCMP_ACT_ALLOW"
+        }
+      ]
+    }

@@ -1,0 +1,15 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: nija-traffic-split
+  namespace: nija
+spec:
+  hosts:
+  - nija.svc.cluster.local
+  http:
+  - route:
+    - destination:
+        host: nija-stable
+        port:
+          number: 80
+      weight: 100

@@ -1,0 +1,611 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "NIJA Trading API Gateway",
+    "description": "API for controlling the NIJA autonomous trading bot (v7.2 Strategy Locked)",
+    "version": "1.0.0",
+    "contact": {
+      "name": "NIJA Trading Systems"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://your-nija-deployment.railway.app",
+      "description": "Production server"
+    },
+    {
+      "url": "http://localhost:8000",
+      "description": "Development server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Info",
+      "description": "API information and health check"
+    },
+    {
+      "name": "Trading Control",
+      "description": "Start and stop trading operations"
+    },
+    {
+      "name": "Account",
+      "description": "Account balance and information"
+    },
+    {
+      "name": "Positions",
+      "description": "Active trading positions"
+    },
+    {
+      "name": "Performance",
+      "description": "Trading performance metrics"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": ["Info"],
+        "summary": "API Information",
+        "description": "Get basic API information and status",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "example": "NIJA Trading API Gateway"
+                    },
+                    "version": {
+                      "type": "string",
+                      "example": "1.0.0"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "example": "v7.2 (Locked - Profitability Mode)"
+                    },
+                    "status": {
+                      "type": "string",
+                      "example": "operational"
+                    },
+                    "docs": {
+                      "type": "string",
+                      "example": "/api/v1/docs"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["Info"],
+        "summary": "Health Check",
+        "description": "Check if the API is operational",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "healthy"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time",
+                      "example": "2026-01-27T22:23:53.510Z"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/start": {
+      "post": {
+        "tags": ["Trading Control"],
+        "summary": "Start Trading",
+        "description": "Start the trading engine for the authenticated user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Trading started successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingControlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - User not enabled or other error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stop": {
+      "post": {
+        "tags": ["Trading Control"],
+        "summary": "Stop Trading",
+        "description": "Stop the trading engine for the authenticated user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Trading stopped successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingControlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/balance": {
+      "get": {
+        "tags": ["Account"],
+        "summary": "Get Balance",
+        "description": "Get current account balance for the authenticated user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Balance retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/positions": {
+      "get": {
+        "tags": ["Positions"],
+        "summary": "Get Positions",
+        "description": "Get all active positions for the authenticated user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Positions retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/performance": {
+      "get": {
+        "tags": ["Performance"],
+        "summary": "Get Performance Metrics",
+        "description": "Get trading performance metrics for the authenticated user",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "description": "Time period for metrics",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["all_time", "30d", "7d", "24h"],
+              "default": "all_time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Performance metrics retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerformanceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or expired token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT authentication token"
+      }
+    },
+    "schemas": {
+      "TradingControlResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "message": {
+            "type": "string",
+            "example": "Trading engine started successfully"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "stopped", "paused"],
+            "example": "running"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-01-27T22:23:53.510Z"
+          }
+        },
+        "required": ["success", "message", "timestamp"]
+      },
+      "BalanceResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "balance": {
+            "type": "number",
+            "format": "float",
+            "example": 1250.50
+          },
+          "currency": {
+            "type": "string",
+            "example": "USD"
+          },
+          "available_for_trading": {
+            "type": "number",
+            "format": "float",
+            "example": 1187.97,
+            "nullable": true
+          },
+          "broker": {
+            "type": "string",
+            "example": "Coinbase",
+            "nullable": true
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-01-27T22:23:53.510Z"
+          }
+        },
+        "required": ["success", "balance", "currency", "timestamp"]
+      },
+      "Position": {
+        "type": "object",
+        "properties": {
+          "pair": {
+            "type": "string",
+            "example": "BTC-USD"
+          },
+          "side": {
+            "type": "string",
+            "enum": ["long", "short"],
+            "example": "long"
+          },
+          "size": {
+            "type": "number",
+            "format": "float",
+            "example": 0.05
+          },
+          "entry_price": {
+            "type": "number",
+            "format": "float",
+            "example": 42500.00
+          },
+          "current_price": {
+            "type": "number",
+            "format": "float",
+            "example": 43200.00,
+            "nullable": true
+          },
+          "unrealized_pnl": {
+            "type": "number",
+            "format": "float",
+            "example": 35.00,
+            "nullable": true
+          },
+          "unrealized_pnl_percent": {
+            "type": "number",
+            "format": "float",
+            "example": 1.65,
+            "nullable": true
+          },
+          "stop_loss": {
+            "type": "number",
+            "format": "float",
+            "example": 41800.00,
+            "nullable": true
+          },
+          "take_profit": {
+            "type": "number",
+            "format": "float",
+            "example": 44000.00,
+            "nullable": true
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-01-27T20:15:30.000Z",
+            "nullable": true
+          }
+        },
+        "required": ["pair", "side", "size", "entry_price"]
+      },
+      "PositionsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Position"
+            }
+          },
+          "total_positions": {
+            "type": "integer",
+            "example": 2
+          },
+          "total_unrealized_pnl": {
+            "type": "number",
+            "format": "float",
+            "example": 110.00,
+            "nullable": true
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-01-27T22:23:53.510Z"
+          }
+        },
+        "required": ["success", "positions", "total_positions", "timestamp"]
+      },
+      "PerformanceMetrics": {
+        "type": "object",
+        "properties": {
+          "total_trades": {
+            "type": "integer",
+            "example": 150
+          },
+          "winning_trades": {
+            "type": "integer",
+            "example": 98
+          },
+          "losing_trades": {
+            "type": "integer",
+            "example": 52
+          },
+          "win_rate": {
+            "type": "number",
+            "format": "float",
+            "example": 65.33
+          },
+          "total_pnl": {
+            "type": "number",
+            "format": "float",
+            "example": 1250.75
+          },
+          "total_profit": {
+            "type": "number",
+            "format": "float",
+            "example": 2100.50
+          },
+          "total_loss": {
+            "type": "number",
+            "format": "float",
+            "example": -849.75
+          },
+          "average_win": {
+            "type": "number",
+            "format": "float",
+            "example": 21.43
+          },
+          "average_loss": {
+            "type": "number",
+            "format": "float",
+            "example": -16.34
+          },
+          "profit_factor": {
+            "type": "number",
+            "format": "float",
+            "example": 2.47,
+            "nullable": true
+          },
+          "sharpe_ratio": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "max_drawdown": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "active_positions": {
+            "type": "integer",
+            "example": 2
+          }
+        }
+      },
+      "PerformanceResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/PerformanceMetrics"
+          },
+          "period": {
+            "type": "string",
+            "example": "all_time"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-01-27T22:23:53.510Z"
+          }
+        },
+        "required": ["success", "metrics", "period", "timestamp"]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "type": "string",
+            "example": "Invalid or expired token"
+          }
+        },
+        "required": ["detail"]
+      }
+    }
+  }
+}

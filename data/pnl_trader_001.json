@@ -1,0 +1,66 @@
+{
+  "user_id": "trader_001",
+  "trades": [
+    {
+      "timestamp": "2026-02-08T14:12:34.463584",
+      "symbol": "BTC-USD",
+      "side": "buy",
+      "quantity": 0.001,
+      "price": 50000.0,
+      "size_usd": 50.0,
+      "pnl_usd": null,
+      "pnl_pct": null,
+      "strategy": "APEX_v7.1",
+      "broker": "coinbase",
+      "fee_usd": null,
+      "entry_time": null,
+      "exit_time": null
+    },
+    {
+      "timestamp": "2026-02-08T14:12:34.464023",
+      "symbol": "BTC-USD",
+      "side": "sell",
+      "quantity": 0.001,
+      "price": 52000.0,
+      "size_usd": 52.0,
+      "pnl_usd": 1.388,
+      "pnl_pct": 2.776,
+      "strategy": "APEX_v7.1",
+      "broker": "coinbase",
+      "fee_usd": 0.612,
+      "entry_time": null,
+      "exit_time": null
+    },
+    {
+      "timestamp": "2026-02-08T14:12:55.624595",
+      "symbol": "BTC-USD",
+      "side": "buy",
+      "quantity": 0.001,
+      "price": 50000.0,
+      "size_usd": 50.0,
+      "pnl_usd": null,
+      "pnl_pct": null,
+      "strategy": "APEX_v7.1",
+      "broker": "coinbase",
+      "fee_usd": null,
+      "entry_time": null,
+      "exit_time": null
+    },
+    {
+      "timestamp": "2026-02-08T14:12:55.625175",
+      "symbol": "BTC-USD",
+      "side": "sell",
+      "quantity": 0.001,
+      "price": 52000.0,
+      "size_usd": 52.0,
+      "pnl_usd": 1.388,
+      "pnl_pct": 2.776,
+      "strategy": "APEX_v7.1",
+      "broker": "coinbase",
+      "fee_usd": 0.612,
+      "entry_time": null,
+      "exit_time": null
+    }
+  ],
+  "last_updated": "2026-02-08T14:12:55.625220"
+}

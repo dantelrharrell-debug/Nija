@@ -1,0 +1,10 @@
+[
+  {
+    "reason": "Coinbase increased margin requirements from 2x to 3x",
+    "authorized_by": "Technical Lead - Emergency Authorization",
+    "parameters_changed": [
+      "max_leverage"
+    ],
+    "timestamp": "2026-02-12T22:08:21.375266"
+  }
+]

@@ -1,0 +1,171 @@
+# Gitleaks Configuration for NIJA Trading Bot
+# Organization-wide secret scanning policy
+# https://github.com/gitleaks/gitleaks
+
+title = "NIJA Secret Scanning Policy"
+
+[extend]
+# Use default gitleaks rules as base
+useDefault = true
+
+# Custom rules specific to NIJA
+
+[[rules]]
+id = "coinbase-api-key"
+description = "Coinbase API Key"
+regex = '''(?i)(coinbase[_-]?api[_-]?key|cb[_-]?api[_-]?key)\s*[:=]\s*['\"]?([a-zA-Z0-9]{32,})['\"]?'''
+tags = ["key", "coinbase", "api"]
+severity = "critical"
+
+[[rules]]
+id = "coinbase-api-secret"
+description = "Coinbase API Secret"
+regex = '''(?i)(coinbase[_-]?api[_-]?secret|cb[_-]?api[_-]?secret)\s*[:=]\s*['\"]?([a-zA-Z0-9]{64,})['\"]?'''
+tags = ["secret", "coinbase", "api"]
+severity = "critical"
+
+[[rules]]
+id = "coinbase-pem-content"
+description = "Coinbase PEM Certificate Content"
+regex = '''-----BEGIN [A-Z ]+-----[\s\S]*?-----END [A-Z ]+-----'''
+tags = ["certificate", "pem", "coinbase"]
+severity = "critical"
+
+[[rules]]
+id = "kraken-api-key"
+description = "Kraken API Key"
+regex = '''(?i)(kraken[_-]?api[_-]?key|kraken[_-]?key)\s*[:=]\s*['\"]?([a-zA-Z0-9+/]{56,}={0,2})['\"]?'''
+tags = ["key", "kraken", "api"]
+severity = "critical"
+
+[[rules]]
+id = "kraken-api-secret"
+description = "Kraken API Secret"
+regex = '''(?i)(kraken[_-]?api[_-]?secret|kraken[_-]?private[_-]?key)\s*[:=]\s*['\"]?([a-zA-Z0-9+/]{88,}={0,2})['\"]?'''
+tags = ["secret", "kraken", "api"]
+severity = "critical"
+
+[[rules]]
+id = "alpaca-api-key"
+description = "Alpaca API Key"
+regex = '''(?i)(alpaca[_-]?api[_-]?key|alpaca[_-]?key[_-]?id)\s*[:=]\s*['\"]?(AK[A-Z0-9]{18,})['\"]?'''
+tags = ["key", "alpaca", "api"]
+severity = "critical"
+
+[[rules]]
+id = "alpaca-api-secret"
+description = "Alpaca API Secret"
+regex = '''(?i)(alpaca[_-]?api[_-]?secret|alpaca[_-]?secret[_-]?key)\s*[:=]\s*['\"]?([a-zA-Z0-9]{40,})['\"]?'''
+tags = ["secret", "alpaca", "api"]
+severity = "critical"
+
+[[rules]]
+id = "tradingview-webhook-secret"
+description = "TradingView Webhook Secret"
+regex = '''(?i)(webhook[_-]?secret|tv[_-]?webhook[_-]?secret)\s*[:=]\s*['\"]?([a-zA-Z0-9]{32,})['\"]?'''
+tags = ["secret", "webhook", "tradingview"]
+severity = "high"
+
+[[rules]]
+id = "encryption-key-fernet"
+description = "Fernet Encryption Key"
+regex = '''(?i)(encryption[_-]?key|fernet[_-]?key|nija[_-]?encryption[_-]?key)\s*[:=]\s*['\"]?([a-zA-Z0-9+/=]{44})['\"]?'''
+tags = ["encryption", "fernet", "key"]
+severity = "critical"
+
+[[rules]]
+id = "database-password"
+description = "Database Password"
+regex = '''(?i)(db[_-]?password|database[_-]?password|postgres[_-]?password|mysql[_-]?password)\s*[:=]\s*['\"]?([^'\"\\s]{8,})['\"]?'''
+tags = ["password", "database"]
+severity = "critical"
+
+[[rules]]
+id = "jwt-secret"
+description = "JWT Secret Key"
+regex = '''(?i)(jwt[_-]?secret|jwt[_-]?key|secret[_-]?key)\s*[:=]\s*['\"]?([a-zA-Z0-9]{32,})['\"]?'''
+tags = ["jwt", "secret", "authentication"]
+severity = "high"
+
+[[rules]]
+id = "private-ssh-key"
+description = "SSH Private Key"
+regex = '''-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'''
+tags = ["ssh", "private-key"]
+severity = "critical"
+
+# Allowlist - paths and patterns to ignore
+[allowlist]
+description = "Allowlisted files and patterns"
+
+# Ignore example and template files
+paths = [
+  # Environment templates
+  '''.env.example''',
+  '''.env.production.example''',
+  '''.env.copy_trading_example''',
+  '''.env.saver_tier''',
+  '''.env.investor_tier''',
+  '''.env.income_tier''',
+  '''.env.livable_tier''',
+  '''.env.baller_tier''',
+  '''.env.small_account_preset''',
+  '''.env.profit_optimized''',
+
+  # Documentation
+  '''.*\.md$''',
+  '''.*\.txt$''',
+
+  # Archive
+  '''archive/.*''',
+
+  # Git
+  '''.git/.*''',
+
+  # Dependencies
+  '''node_modules/.*''',
+  '''venv/.*''',
+  '''.venv/.*''',
+
+  # Frontend/Mobile
+  '''frontend/.*''',
+  '''mobile/.*''',
+
+  # Build artifacts
+  '''build/.*''',
+  '''dist/.*''',
+
+  # Test files
+  '''test_.*\.py''',
+
+  # Baseline files
+  '''.secrets.baseline''',
+  '''.gitleaks.toml''',
+]
+
+# Allowlist specific strings that look like secrets but aren't
+regexes = [
+  # Example API keys in documentation
+  '''(example|sample|placeholder|your|insert).*api.*key''',
+  '''<.*>''',  # Template placeholders
+  '''{{.*}}''',  # Template variables
+  '''xxx+''',  # Placeholder X's
+  '''000+''',  # Placeholder 0's
+]
+
+# Commit-level allowlist (specific commits to skip)
+commits = []
+
+# Stop words - if these appear near a secret, it's probably an example
+stopwords = [
+  "example",
+  "sample",
+  "placeholder",
+  "test",
+  "dummy",
+  "fake",
+  "insert",
+  "your",
+  "template",
+  "documentation",
+]

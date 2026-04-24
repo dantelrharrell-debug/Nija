@@ -1,0 +1,25 @@
+name: CI — preflight check & lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x ./scripts/prebuild-check.sh
+
+      - name: Run prebuild checks
+        run: ./scripts/prebuild-check.sh
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'

@@ -1,0 +1,15 @@
+[Unit]
+Description=NIJA Status Monitor Daemon
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=nija
+WorkingDirectory=/opt/nija
+Environment="DATABASE_URL=postgresql://nija:password@localhost/nija"
+ExecStart=/usr/bin/python3 /opt/nija/status_monitor.py --interval 300
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

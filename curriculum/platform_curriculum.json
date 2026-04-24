@@ -1,0 +1,80 @@
+{
+  "curriculum_version": "1.0.0",
+  "last_updated": "2026-01-31",
+  "description": "NIJA Financial Operating System - Complete Educational Curriculum",
+  "total_lessons": 20,
+  "categories": 6,
+  "estimated_completion_hours": 2.0,
+  
+  "graduation_tiers": {
+    "beginner": {
+      "tier_name": "Beginner",
+      "required_lessons": ["gs_001", "gs_002", "gs_003", "gs_004", "gs_005", "gs_006", "gs_007", "gs_008"],
+      "minimum_score_percentage": 70,
+      "minimum_points": 100,
+      "description": "Complete all Getting Started lessons",
+      "enables": "Basic platform access and guided trading",
+      "lessons_count": 8,
+      "estimated_hours": 0.5
+    },
+    "intermediate": {
+      "tier_name": "Intermediate",
+      "required_lessons": ["gs_001", "gs_002", "gs_003", "gs_004", "gs_005", "gs_006", "gs_007", "gs_008", "tb_001", "tb_002", "tb_003", "tb_004", "tb_005"],
+      "minimum_score_percentage": 75,
+      "minimum_points": 300,
+      "description": "Complete Getting Started and core Trading Basics",
+      "enables": "Independent trading with basic strategies",
+      "lessons_count": 13,
+      "estimated_hours": 1.0
+    },
+    "advanced": {
+      "tier_name": "Advanced",
+      "required_lessons": ["gs_001", "gs_002", "gs_003", "gs_004", "gs_005", "gs_006", "gs_007", "gs_008", "tb_001", "tb_002", "tb_003", "tb_004", "tb_005", "tb_006", "tb_007", "tb_008", "tb_009", "tb_010", "rm_001", "rm_002", "rm_003", "rm_004"],
+      "minimum_score_percentage": 80,
+      "minimum_points": 600,
+      "description": "Complete all core educational content including risk management",
+      "enables": "Advanced trading with full risk management",
+      "lessons_count": 20,
+      "estimated_hours": 2.0
+    }
+  },
+  
+  "learning_paths": {
+    "essential_path": {
+      "name": "Essential Trading Path",
+      "description": "Minimum required lessons to start trading safely",
+      "lessons": ["gs_001", "gs_002", "gs_003", "gs_004", "gs_005", "gs_006", "rm_001", "rm_002", "rm_003", "cp_001"],
+      "estimated_hours": 0.75,
+      "enables_trading": true
+    },
+    "beginner_path": {
+      "name": "Beginner Trader Path",
+      "description": "Complete path for new traders",
+      "lessons": ["gs_001", "gs_002", "gs_003", "gs_004", "gs_005", "gs_006", "gs_007", "gs_008"],
+      "estimated_hours": 0.5,
+      "enables_trading": false
+    },
+    "technical_analysis_path": {
+      "name": "Technical Analysis Mastery",
+      "description": "Deep dive into technical analysis",
+      "lessons": ["tb_001", "tb_002", "tb_003", "tb_004", "tb_005", "tb_006", "tb_007", "tb_008", "tb_009", "tb_010"],
+      "estimated_hours": 1.0,
+      "prerequisite_tier": "beginner"
+    },
+    "risk_management_path": {
+      "name": "Risk Management Excellence",
+      "description": "Master risk control and capital protection",
+      "lessons": ["rm_001", "rm_002", "rm_003", "rm_004"],
+      "estimated_hours": 0.4,
+      "prerequisite_tier": "beginner"
+    }
+  },
+  
+  "trading_eligibility_requirements": {
+    "description": "Requirements to enable live trading",
+    "minimum_tier": "beginner",
+    "required_lessons": ["gs_001", "gs_002", "gs_003", "gs_004", "gs_006", "rm_001", "rm_002", "rm_003", "cp_001"],
+    "required_score_percentage": 70,
+    "compliance_acknowledgments_required": ["trading_risk", "no_guarantee", "not_advice", "regulatory"]
+  }
+}

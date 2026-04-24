@@ -1,0 +1,23 @@
+{
+  "_comment": "Growth Ladder (Account Evolution) config. Defines tier thresholds, fixed trade sizes per tier, and the max capital per trade safety cap. Update trade sizes as account grows through each tier. NOTE: max_capital_per_trade_pct is also enforced in bot/enhanced_strategy_config.py RISK_CONFIG; keep values in sync.",
+
+  "micro_max": 1000,
+  "growth_max": 5000,
+  "expansion_max": 25000,
+
+  "micro_trade_size": 80,
+  "growth_trade_size": 150,
+  "expansion_trade_size": 300,
+  "capital_engine_trade_size": 500,
+
+  "max_capital_per_trade_pct": 25,
+
+  "tiers": {
+    "MICRO_PLATFORM": {
+      "floor_pct": 40.0,
+      "max_capital_per_trade_pct": 40.0,
+      "min_trade_size_usd": 1.0,
+      "max_trade_size_usd": 1000.0
+    }
+  }
+}

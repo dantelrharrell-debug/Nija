@@ -1,0 +1,549 @@
+# Bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual envs
+venv/
+.env
+.env.*
+!.env.saver_tier           # Allow SAVER tier template
+!.env.investor_tier         # Allow INVESTOR tier template
+!.env.income_tier           # Allow INCOME tier template
+!.env.livable_tier          # Allow LIVABLE tier template
+!.env.baller_tier           # Allow BALLER tier template
+!.env.small_account_preset  # Allow small account preset
+!.env.micro_capital         # Allow micro capital mode template
+!.env.example               # Allow example template
+!.env.copy_trading_example  # Allow copy trading example
+.venv/
+pip-wheel-metadata/
+build/
+dist/
+
+# IDEs / editors
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Node
+node_modules/
+
+# Test / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Git metadata
+.git
+
+scanner.out
+
+nija.log.*
+
+# Security reports and artifacts
+security-reports/
+chaos-results/
+all-reports/
+all-chaos-results/
+
+# KPI Dashboard data directories
+bot/data/kpi/
+bot/data/performance/
+bot/data/risk_alarms/
+data/kpi/
+data/performance/
+data/risk_alarms/
+reports/
+*.sha256
+*-report.json
+THREAT_MODEL_REPORT.md
+CHAOS_TEST_REPORT.md
+canary-metrics*.json
+
+# Kraken nonce persistence (contains state, should not be committed)
+# Updated Jan 17, 2026: Account-specific nonce files in /data directory
+kraken_nonce.txt
+bot/kraken_nonce.txt
+data/kraken*nonce*.txt
+data/kraken_nonce.txt
+data/kraken_nonce_*.txt
+data/kraken_nonce.state
+data/kraken_nonce.state.*
+data/kraken_nonce_offsets.json
+
+# User management data files (test data, should not be committed)
+data/pnl_test_*.json
+data/risk_state_test_*.json
+data/risk_state_*.json
+data/risk_limits_test_*.json
+data/risk_limits_*.json
+data/webhook_config_test_*.json
+
+# Capital Scaling Engine data files (runtime state, should not be committed)
+data/compounding_state.json
+data/drawdown_protection.json
+data/milestones.json
+data/capital_allocation.json
+
+# Regime-Aware Memory and Capital Scaling Triggers runtime state
+data/regime_aware_memory.json
+data/capital_scaling_trigger.jsonl
+
+# Intelligence & performance module runtime state (should not be committed)
+data/trade_intelligence_state.json
+data/strategy_performance_state.json
+data/regime_intelligence_state.json
+data/compounding_engine_state.json
+data/performance_reporter_state.json
+
+# Trading state files (runtime state, should not be committed)
+# Daily profit tracking
+data/daily_profit_history.json
+data/daily_profit_state.json
+# Progressive targets
+data/progressive_targets.json
+data/progressive_targets_*.json
+# Trade history and positions
+data/trade_history.json
+data/trade_history_*.json
+data/open_positions.json
+data/open_positions.json.*
+# Trade exports and database
+data/nija_trades_*.csv
+data/trade_ledger.db
+data/trade_ledger.db-journal
+
+# Demo and learning data (runtime state, should not be committed)
+data/demo_live_tracking/
+data/learning/
+
+# Secure vault database (contains encrypted credentials)
+vault.db
+vault.db-journal
+users.db
+users.db-journal
+
+# User YAML configuration files with API keys (should not be committed)
+config/users/*.yaml
+
+# Temporary test files
+test_broker_get_all_products.py
+test_alpaca_client_property.py
+users_db.json
+
+# Test log files (examples for documentation)
+test_logs_*.txt
+
+# Deployment trigger files
+.railway-*
+.render-*
+.redeploy*
+
+# Backup files
+*.backup
+*_backup.json
+*_backup_*.json
+*.bak
+*.old
+*.save
+*.orig
+*.rej
+*.swp
+
+# Temporary documentation (COMPREHENSIVE - prevents accumulation)
+# Core implementation documentation (allowed)
+!IMPLEMENTATION_SUMMARY.md
+!IMPLEMENTATION_SUMMARY_UNIFIED_EXECUTION.md
+!IMPLEMENTATION_COMPLETE.md
+!IMPLEMENTATION_COMPLETE_MULTI_ASSET.md
+!IMPLEMENTATION_SUMMARY_CONSUMER_PLATFORM.md
+!IMPLEMENTATION_SUMMARY_PROFIT_OPTIMIZATION.md
+!MOBILE_APP_IMPLEMENTATION_SUMMARY.md
+!KRAKEN_SYMBOL_MAPPER_IMPLEMENTATION.md
+# Mobile testing guide (allowed)
+!mobile/TESTING_GUIDE.md
+# Temporary documentation patterns (excluded)
+ANSWER*.md
+CHECK*.md
+FIX_*.md
+DEPLOY*.md
+QUICK*.md
+!QUICK_REFERENCE_IMPROVEMENTS.md  # Keep improvements quick reference
+CRITICAL*.md
+EMERGENCY*.md
+COMMIT*.md
+*_STATUS*.md
+*_COMPLETE*.md
+*_FIX*.md
+*_SUMMARY*.md
+*_REPORT*.md
+SOLUTION*.md
+!IMPLEMENTATION_SUMMARY_DRY_RUN_MODE.md  # Keep dry-run mode implementation summary
+IMPLEMENTATION*.md
+!IMPLEMENTATION_COMPLETE_IMPROVEMENTS.md  # Keep improvements summary
+!IMPLEMENTATION_SUMMARY_PAPER_ANALYTICS.md  # Keep paper analytics summary
+INDEX*.md
+README_*.md
+TASK*.md
+START_HERE*.md
+ISSUE*.md
+INVESTIGATION*.md
+MASTER*.md
+KRAKEN*.md
+!KRAKEN_SYMBOL_MAPPER_IMPLEMENTATION.md  # Core implementation doc
+NONCE*.md
+OPTION*.md
+ORPHANED*.md
+POSITION*.md
+PROFITABILITY*.md
+OPTIMIZATION*.md
+USER*.md
+!USER_MANAGEMENT.md  # Core user guide
+!USER_TRADING_ACTIVATION_QUICK_REF.md  # User activation quick reference card
+!USER_TRADING_ACTIVATION_CHECKLIST.md  # User activation checklist
+TRADING*.md
+!TRADINGVIEW_SETUP.md  # Core setup guide
+UNBOUNDLOCALERROR*.md
+URGENT*.md
+XRP*.md
+YOUR*.md
+ZOMBIE*.md
+COPY_TRADING*.md
+!COPY_TRADING_SETUP.md  # Core copy trading setup guide
+!COPY_TRADING_ACTIVATION_CHECKLIST.md  # Core activation checklist
+!COPY_TRADING_ACTIVATION_SUMMARY.md  # Activation completion summary
+LOSING*.md
+STOP_LOSS*.md
+THREE_TIER*.md
+RECURRING*.md
+SELL*.md
+MIN_BALANCE*.md
+MULTI_ASSET*.md
+FUND*.md
+IMMEDIATE*.md
+BALANCE*.md
+BROKER_*.md
+!BROKER_INTEGRATION_GUIDE.md  # Core integration guide
+AUTO_IMPORT*.md
+A_*.md
+B_*.md
+C_*.md
+D_*.md
+GLOBAL*.md
+LOG*.md
+QUICKSTART*.md
+QUICKFIX*.md
+RAILWAY*.md
+!RAILWAY_BUILD_CONFIGURATION.md  # Core Railway build guide
+CONFIGURE*.md
+CONNECT*.md
+ENABLE*.md
+EXCHANGE*.md
+FEATURE*.md
+FIXES*.md
+HOW_TO*.md
+PERMISSION*.md
+PRO_MODE*.md
+!PRO_MODE_README.md  # Core feature guide
+RESTART*.md
+SECURITY_*.md
+!SECURITY.md  # Core security guide - exception to SECURITY_*.md
+!SECURITY_MODEL.md  # Investor-facing security model document - exception to SECURITY_*.md
+SETUP*.md
+TEST_RESULTS*.md
+TROUBLESHOOTING*.md
+CREDENTIALS*.md
+DIAGNOSTIC*.md
+SYMBOL_MAPPER*.md
+TESTING*.md
+CONFIRMATION*.md
+ENHANCEMENT*.md
+RESOLUTION*.md
+RESTORATION*.md
+VERIFICATION*.md
+VISIBILITY*.md
+WARNING*.md
+ACCOUNT*.md
+!ARCHITECTURE.md  # Core architecture doc
+ACTION*.md
+AGRESSIVE*.md
+ALL_*.md
+APEX_*.md
+!APEX_STRATEGY_README.md  # Core strategy doc
+!APEX_V71_DOCUMENTATION.md  # Core strategy version doc
+CLEANUP*.md
+COINBASE*.md
+COMPLETE*.md
+CONNECTION*.md
+DASHBOARD*.md
+DEPLOYMENT*.md
+DOCKERFILE*.md
+!DOCKER_DEPLOYMENT_GUIDE.md  # Core deployment guide
+DISPLAY*.md
+EMERGENCY_*.md
+ENV*.md
+EXECUTION*.md
+FAILSAFE*.md
+FEE*.md
+FORCE*.md
+GETTING*.md
+!GETTING_STARTED.md  # Core getting started guide
+GUARDRAILS*.md
+GUIDE*.md
+HEALTH*.md
+HIERARCHY*.md
+HOTFIX*.md
+IMPORT*.md
+INDEPENDENT*.md
+INFRASTRUCTURE*.md
+INSTALLATION*.md
+INTEGRATION_*.md
+ISOLATION*.md
+LIBRARY*.md
+LIQUIDATION*.md
+MANAGEMENT*.md
+MARKET*.md
+MONOTONIC*.md
+MULTI_*.md
+!MULTI_EXCHANGE_TRADING_GUIDE.md  # Core multi-exchange guide
+NIJA_*.md
+PACKAGE*.md
+PARAMETERS*.md
+PERSISTENT*.md
+PRECISION*.md
+PROFIT*.md
+QUICK_*.md
+REDUNDANT*.md
+REQUIRED*.md
+RESPONSE*.md
+REVIEW*.md
+SAFEGUARDS*.md
+SAFE_*.md
+SCAN*.md
+SDK*.md
+SERIALIZATION*.md
+SIGNAL*.md
+SIZING*.md
+SMALL*.md
+SPAM*.md
+STANDALONE*.md
+STATE*.md
+STRATEGY_*.md
+TIER*.md
+TIMING*.md
+TRACKER*.md
+UPGRADE*.md
+WATCHLIST*.md
+
+# Temporary scripts
+check_*.py
+check_*.sh
+verify_*.py
+verify_*.sh
+validate_*.py
+# Allow pre-flight credential checker (used as a permanent bot utility)
+!validate_all_env_vars.py
+validate_*.sh
+diagnose_*.py
+diagnose_*.sh
+deploy_*.py
+deploy_*.sh
+commit_*.py
+commit_*.sh
+push_*.sh
+# Emergency/test files (commented out - emergency_kill_switch.py is needed)
+# emergency_*.py  
+# emergency_*.sh
+liquidate_*.py
+force_*.py
+cleanup_*.sh
+deep_clean.sh
+quick_*.py
+quick_*.sh
+enable_*.py
+connect_*.py
+setup_kraken*.py
+setup_user*.py
+start_user*.py
+display_*.py
+import_*.py
+sell_*.py
+restore_*.py
+kraken_*.py
+audit_*.py
+generate_*.py
+example_*.py
+!example_apex_integration.py  # Keep example integration
+!example_apex_v71.py  # Keep example usage
+!example_usage.py  # Keep example usage
+!example_user_management_integration.py  # Keep example integration
+!test_mvp_components.py  # Keep MVP test suite
+!test_dry_run_mode.py  # Keep dry-run mode test (operational test)
+test_*.py
+!test_kraken_connection.py  # Keep Kraken connection tester (operational tool)
+!test_v2_balance.py
+!bot/test_*.py  # Keep bot tests
+!bot/tests/test_*.py  # Keep bot/tests directory tests
+!bot/tests/test_delisted_asset_registry.py
+!scripts/chaos/test_*.py  # Keep chaos testing scripts
+
+# Temporary text/config files
+*.txt.bak
+REDEPLOY_*.txt
+READY_*.txt
+COMPLETE_*.txt
+FINAL_*.txt
+*_STATUS.txt
+broker_status_output.txt
+balance_check_result.txt
+git_analysis.txt
+*_README.txt
+*_CONFIRMATION.txt
+
+# Temporary JSON files
+nija_health_check_results.json
+nija_profit_capability_report.json
+*_readiness_report.json
+*_test_results.json
+connection_test_results.json
+*_history_report.json
+trade_journal.jsonl
+
+# Archived content (now organized in /archive directory)
+# Keep /archive directory in git for historical reference
+# archive/
+
+# Deployment trigger files (generated by platforms)
+.railway-*
+.render-*
+.redeploy*
+
+# Build artifacts and metadata
+.env.build
+bot/version_info.py
+
+# NIXPACKS configuration (removed - use Dockerfile exclusively)
+# Railway should use Dockerfile via railway.json, not NIXPACKS auto-detection
+nixpacks.toml
+
+# Temporary documentation (archive these instead)
+archive/old_documentation/
+archive/old_scripts/
+archive/deployment_scripts/
+
+# Temporary output files
+*.txt.bak
+broker_status_output.txt
+balance_check_result.txt
+git_analysis.txt
+nija_health_check_results.json
+nija_profit_capability_report.json
+
+# Cleanup script (temporary)
+cleanup_repository.sh
+test_user_connection_status.py
+test_connection_error_handling.py
+data/test_trade_ledger.db
+bot/data/trade_ledger.db
+
+# Kubernetes secrets (NEVER commit these!)
+k8s/base/secrets.yaml
+k8s/overlays/*/secrets.yaml
+k8s/**/secrets.yaml
+
+# Mobile app build artifacts
+ios/App/
+ios/Pods/
+ios/*.xcworkspace
+android/app/build/
+android/app/release/
+android/.gradle/
+!mobile/ios/  # Keep mobile/ios config directory
+!mobile/android/  # Keep mobile/android config directory
+node_modules/
+package-lock.json
+
+# Mobile app keystore and signing configs (NEVER commit these!)
+android/release.keystore
+android/key.properties
+android/app/google-services.json
+ios/App/GoogleService-Info.plist
+
+# Capacitor generated files
+.capacitor/
+capacitor.config.ts
+
+# Mobile app build outputs
+*.apk
+*.aab
+*.ipa
+*.dSYM.zip
+
+# Security scanning outputs
+bandit-report.json
+safety-report.json
+
+# Paper trading data (user-specific, don't commit)
+paper_trading_data.json
+data/paper_trading_30day/
+data/paper_trading/
+
+# Backtest results and data (user-specific, large files)
+results/*.json
+data/*_historical_5y.csv
+data/backtest/
+
+# Auto-optimization engine data directories
+data/optimization/
+data/optimization_example/
+data/test_optimization/
+data/monitoring_example/
+data/custom_strategy_optimization/
+data/brain_optimization/
+data/validation_test/
+
+# Graduation demo data (generated by tests/demos)
+data/graduation_demo/
+test_lifecycle_logging.py
+
+# Paper trading analytics demo data (generated by demo)
+data/test_demo_analytics/
+data/demo_paper_analytics/
+# Analytics data files (can be large)
+data/analytics/*.jsonl
+test_forced_cleanup.py
+
+# Emergency stop file (runtime artifact, never commit)
+EMERGENCY_STOP
+# Kill switch runtime state (generated by GlobalRiskController, never commit)
+.nija_kill_switch_state.json
+
+# Global Risk Governor runtime state (generated at runtime, never commit)
+data/global_risk_governor.json
+data/global_risk_governor_audit.jsonl
+
+# AI Market Regime Forecaster runtime state (generated at runtime, never commit)
+data/ai_regime_forecaster.json
+
+# Correlation Risk Engine / Strategy Health Monitor / VSD / DPC audit logs (runtime, never commit)
+data/correlation_decisions.jsonl
+data/strategy_health.jsonl
+data/volatility_shocks.jsonl
+data/concentration_decisions.jsonl
+data/liquidity_risk_gate_decisions.jsonl
+data/asset_exposure_correlation_decisions.jsonl
+
+data/profit_lock_state.json
+data/*.json
+
+# Owner control layer / accounting runtime state (never commit)
+data/owner_control/
+data/accounting/
+
+# Profit-stack engine runtime state files (bot/data, never commit)
+bot/data/*.json
+bot/data/*.jsonl

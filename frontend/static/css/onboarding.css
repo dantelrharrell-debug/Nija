@@ -1,0 +1,449 @@
+/**
+ * NIJA Onboarding & Education Mode Styles
+ * 
+ * Styles for the three-layer onboarding UX flow
+ */
+
+/* ========================================
+   Onboarding Screen Container
+   ======================================== */
+
+.onboarding-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    overflow-y: auto;
+    z-index: 1000;
+}
+
+.onboarding-container {
+    max-width: 800px;
+    width: 100%;
+    background: white;
+    border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    padding: 3rem;
+    animation: slideUp 0.4s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ========================================
+   Onboarding Step 1: Welcome
+   ======================================== */
+
+.onboarding-header {
+    text-align: center;
+    margin-bottom: 3rem;
+}
+
+.onboarding-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.onboarding-header h1 {
+    font-size: 2.5rem;
+    color: #1a202c;
+    margin-bottom: 0.5rem;
+    font-weight: 700;
+}
+
+.onboarding-subtitle {
+    font-size: 1.25rem;
+    color: #718096;
+}
+
+.onboarding-features {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+    margin-bottom: 3rem;
+}
+
+.feature-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1.5rem;
+    background: #f7fafc;
+    border-radius: 12px;
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.feature-item:hover {
+    border-color: #667eea;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+}
+
+.feature-icon {
+    font-size: 2rem;
+    flex-shrink: 0;
+}
+
+.feature-content h3 {
+    font-size: 1.25rem;
+    color: #2d3748;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+}
+
+.feature-content p {
+    color: #718096;
+    font-size: 1rem;
+    line-height: 1.5;
+}
+
+.onboarding-disclaimer {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: #edf2f7;
+    border-radius: 12px;
+    border-left: 4px solid #48bb78;
+}
+
+.onboarding-disclaimer p {
+    color: #2d3748;
+    margin-bottom: 0.75rem;
+    font-size: 0.95rem;
+}
+
+.onboarding-disclaimer p:last-child {
+    margin-bottom: 0;
+}
+
+.btn-large {
+    width: 100%;
+    padding: 1.25rem 2rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+/* ========================================
+   Onboarding Step 2: Education Mode Active
+   ======================================== */
+
+.education-badge {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 30px;
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.education-notice {
+    background: #fef5e7;
+    border-left: 4px solid #f39c12;
+    padding: 1rem;
+    border-radius: 8px;
+    color: #856404;
+    font-weight: 500;
+    margin-bottom: 2rem;
+}
+
+.progress-card {
+    background: #f7fafc;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+}
+
+.progress-card h3 {
+    color: #2d3748;
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 12px;
+    background: #e2e8f0;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    border-radius: 10px;
+    transition: width 0.5s ease;
+}
+
+.progress-text {
+    color: #718096;
+    font-size: 0.9rem;
+    text-align: right;
+    margin-bottom: 2rem;
+}
+
+.milestones {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+}
+
+.milestone {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: white;
+    border-radius: 8px;
+    border: 2px solid #e2e8f0;
+    transition: all 0.3s ease;
+}
+
+.milestone.completed {
+    border-color: #48bb78;
+    background: #f0fff4;
+}
+
+.milestone-icon {
+    font-size: 1.5rem;
+}
+
+.milestone span:last-child {
+    color: #2d3748;
+    font-weight: 500;
+}
+
+/* ========================================
+   Onboarding Step 3: Upgrade to Live
+   ======================================== */
+
+.upgrade-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.success-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.upgrade-header h2 {
+    font-size: 2rem;
+    color: #2d3748;
+    margin-bottom: 0.5rem;
+}
+
+.upgrade-header p {
+    color: #718096;
+    font-size: 1.1rem;
+}
+
+.upgrade-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.upgrade-stat {
+    text-align: center;
+    padding: 1.5rem;
+    background: #f7fafc;
+    border-radius: 12px;
+    border: 2px solid #e2e8f0;
+}
+
+.upgrade-stat .stat-label {
+    color: #718096;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+    display: block;
+}
+
+.upgrade-stat .stat-value {
+    color: #2d3748;
+    font-size: 1.75rem;
+    font-weight: 700;
+}
+
+.upgrade-option {
+    background: #f7fafc;
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+}
+
+.upgrade-option h3 {
+    color: #2d3748;
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.upgrade-option > p {
+    color: #718096;
+    margin-bottom: 2rem;
+}
+
+.consent-checklist {
+    margin-bottom: 2rem;
+}
+
+.consent-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1rem;
+    background: white;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    cursor: pointer;
+    border: 2px solid #e2e8f0;
+    transition: all 0.2s ease;
+}
+
+.consent-item:hover {
+    border-color: #cbd5e0;
+}
+
+.consent-item input[type="checkbox"] {
+    margin-top: 0.25rem;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+}
+
+.consent-item span {
+    color: #2d3748;
+    font-size: 1rem;
+    line-height: 1.5;
+}
+
+.btn-secondary {
+    background: #e2e8f0;
+    color: #2d3748;
+    border: none;
+    padding: 1rem 2rem;
+    font-size: 1rem;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+    background: #cbd5e0;
+}
+
+.btn-small {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+/* ========================================
+   Education Mode Banner (Dashboard)
+   ======================================== */
+
+.education-mode-banner {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.5rem;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+}
+
+.education-mode-banner .banner-icon {
+    font-size: 3rem;
+    flex-shrink: 0;
+}
+
+.education-mode-banner .banner-content {
+    flex: 1;
+}
+
+.education-mode-banner .banner-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+
+.education-mode-banner .banner-subtitle {
+    font-size: 1rem;
+    opacity: 0.9;
+    margin-bottom: 1rem;
+}
+
+.education-mode-banner .banner-actions {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.education-mode-banner .btn {
+    background: white;
+    color: #667eea;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.education-mode-banner .btn:hover {
+    background: #f7fafc;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* ========================================
+   Responsive Design
+   ======================================== */
+
+@media (max-width: 768px) {
+    .onboarding-container {
+        padding: 2rem;
+    }
+
+    .onboarding-header h1 {
+        font-size: 2rem;
+    }
+
+    .upgrade-stats {
+        grid-template-columns: 1fr;
+    }
+
+    .education-mode-banner {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .education-mode-banner .banner-actions {
+        justify-content: center;
+    }
+}
+
+/* ========================================
+   Utility Classes
+   ======================================== */
+
+.hidden {
+    display: none !important;
+}

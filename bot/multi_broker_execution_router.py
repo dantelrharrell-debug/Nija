@@ -1,0 +1,1291 @@
+"""
+NIJA Multi-Broker Execution Router
+====================================
+
+Routes trade signals to the correct broker and market based on asset class:
+
+  * **crypto**   → Coinbase / Kraken / Binance (existing BrokerManager)
+  * **equities** → Alpaca / Interactive Brokers
+  * **futures**  → Interactive Brokers / TD Ameritrade
+  * **options**  → Interactive Brokers / TD Ameritrade
+
+The router selects the best available broker for the requested asset class,
+validates that the broker supports the symbol, and dispatches the order.
+Falls back to an alternate broker when the primary one is unavailable.
+
+Architecture
+------------
+::
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │              MultiBrokerExecutionRouter                      │
+  │                                                              │
+  │  route(signal) ──► detect_asset_class(symbol)               │
+  │                ──► select_broker(asset_class)               │
+  │                ──► validate & dispatch order                 │
+  │                ──► record fill / record failure             │
+  └──────────────────────────────────────────────────────────────┘
+
+Usage
+-----
+    from bot.multi_broker_execution_router import (
+        get_multi_broker_router, RouteRequest, RouteResult
+    )
+
+    router = get_multi_broker_router()
+
+    result = router.route(RouteRequest(
+        strategy="ApexTrend",
+        symbol="BTC-USD",
+        side="buy",
+        size_usd=500.0,
+    ))
+
+    if result.success:
+        print(f"Routed to {result.broker} | filled at {result.fill_price:.4f}")
+    else:
+        print(f"Routing failed: {result.error}")
+
+Author: NIJA Trading Systems
+Version: 1.0
+Date: March 2026
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+logger = logging.getLogger("nija.multi_broker_router")
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Minimum number of observed routes required before a broker's runtime ranking
+# is trusted for selection.  Brokers with fewer observations fall back to the
+# static-priority leader, preventing a single lucky fill from elevating a new
+# broker to the top slot.
+MIN_OBSERVATIONS: int = 10
+
+# ---------------------------------------------------------------------------
+# Optional subsystem imports — degrade gracefully when unavailable.
+# ---------------------------------------------------------------------------
+
+try:
+    from bot.execution_router import get_execution_router, OrderRequest, ExecutionResult
+    _INNER_ROUTER_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_router import get_execution_router, OrderRequest, ExecutionResult
+        _INNER_ROUTER_AVAILABLE = True
+    except ImportError:
+        _INNER_ROUTER_AVAILABLE = False
+        get_execution_router = None  # type: ignore
+        logger.warning("ExecutionRouter not available — crypto routing will use stub")
+
+try:
+    from bot.capital_allocation_engine import get_capital_allocation_engine
+    _CAE_AVAILABLE = True
+except ImportError:
+    try:
+        from capital_allocation_engine import get_capital_allocation_engine
+        _CAE_AVAILABLE = True
+    except ImportError:
+        _CAE_AVAILABLE = False
+        get_capital_allocation_engine = None  # type: ignore
+
+try:
+    from bot.broker_performance_scorer import get_broker_performance_scorer
+    _BPS_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_performance_scorer import get_broker_performance_scorer
+        _BPS_AVAILABLE = True
+    except ImportError:
+        _BPS_AVAILABLE = False
+        get_broker_performance_scorer = None  # type: ignore
+        logger.warning("BrokerPerformanceScorer not available — performance-aware routing disabled")
+
+try:
+    from bot.execution_quality_filter import (
+        get_execution_quality_filter,
+        FilterVerdict,
+    )
+    _EQF_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_quality_filter import (
+            get_execution_quality_filter,
+            FilterVerdict,
+        )
+        _EQF_AVAILABLE = True
+    except ImportError:
+        _EQF_AVAILABLE = False
+        get_execution_quality_filter = None  # type: ignore
+        FilterVerdict = None  # type: ignore
+        logger.warning("ExecutionQualityFilter not available — AI execution quality filtering disabled")
+
+try:
+    from bot.arb_best_execution_router import get_arb_best_execution_router
+    _ABE_AVAILABLE = True
+except ImportError:
+    try:
+        from arb_best_execution_router import get_arb_best_execution_router
+        _ABE_AVAILABLE = True
+    except ImportError:
+        _ABE_AVAILABLE = False
+        get_arb_best_execution_router = None  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# Asset-class detection helpers
+# ---------------------------------------------------------------------------
+
+# Patterns for crypto symbols (e.g. BTC-USD, ETH-USDT, SOL-BTC)
+_CRYPTO_PATTERN = re.compile(
+    r"^(BTC|ETH|SOL|ADA|DOT|AVAX|MATIC|LINK|UNI|DOGE|XRP|LTC|BCH|"
+    r"ATOM|NEAR|FTM|ALGO|VET|ICP|FIL|TRX|XLM|EOS|THETA|HBAR|EGLD|"
+    r"FLOW|XTZ|AXS|SAND|MANA|GRT|MKR|COMP|AAVE|SNX|YFI|SUSHI|CRV|"
+    r"1INCH|ENJ|BAT|ZRX|ZEC|DASH|XMR|NEO|WAVES|QTUM|ONT|ICX|OMG|"
+    r"SC|DCR|DGB|LSK|ARK|STEEM|ZIL|REN|UMA|BAL|SKL|NMR|BAND|ANKR|"
+    r"STX|KAVA|HNT|STORJ|OXT|NKN|CGLD|KEEP|CVC|DNT|LOOM|REP|"
+    r"WBTC|USDC|USDT|DAI|BUSD|TUSD|USDP|FRAX|LUSD|GUSD|PAX"
+    r")[-/](USD|USDT|USDC|BTC|ETH|BNB|BUSD|EUR|GBP)$",
+    re.IGNORECASE,
+)
+
+# Patterns for equity symbols (e.g. AAPL, MSFT, SPY, QQQ)
+_EQUITY_PATTERN = re.compile(r"^[A-Z]{1,5}$")
+
+# Patterns for futures symbols (e.g. ES=F, NQ=F, CL=F, /ES, BTC-PERP)
+_FUTURES_PATTERN = re.compile(
+    r"(=F$|^/|[-_]PERP$|[-_]FUT$|[-_]\d{2}[A-Z]\d{4}$)",
+    re.IGNORECASE,
+)
+
+# Patterns for options symbols (e.g. AAPL240119C00150000, SPY_C_400, AAPL 2024-01-19 call 150)
+_OPTIONS_PATTERN = re.compile(
+    r"(\d{6}[CP]\d{8}$|[-_](CALL|PUT|[CP])\d|options?|strangle|straddle|condor|butterfly)",
+    re.IGNORECASE,
+)
+
+
+class AssetClass(str, Enum):
+    """Asset class taxonomy used for broker routing."""
+    CRYPTO = "crypto"
+    EQUITY = "equity"
+    FUTURES = "futures"
+    OPTIONS = "options"
+    UNKNOWN = "unknown"
+
+
+def detect_asset_class(symbol: str) -> AssetClass:
+    """
+    Infer the asset class of *symbol* from its format.
+
+    Returns ``AssetClass.UNKNOWN`` when the symbol cannot be classified;
+    callers should treat unknown symbols as crypto (the bot's primary market).
+    """
+    s = symbol.strip().upper()
+
+    if _FUTURES_PATTERN.search(s):
+        return AssetClass.FUTURES
+    if _OPTIONS_PATTERN.search(s):
+        return AssetClass.OPTIONS
+    if _CRYPTO_PATTERN.match(s):
+        return AssetClass.CRYPTO
+    if _EQUITY_PATTERN.match(s):
+        return AssetClass.EQUITY
+
+    # Default — treat as crypto (Coinbase-first bot)
+    return AssetClass.CRYPTO
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RouteRequest:
+    """Specification for a trade the multi-broker router should handle."""
+    strategy: str
+    symbol: str
+    side: str                           # "buy" | "sell"
+    size_usd: float
+    asset_class: Optional[str] = None   # override auto-detection
+    order_type: Optional[str] = None    # "MARKET" | "LIMIT" | "TWAP"
+    limit_price: Optional[float] = None
+    preferred_broker: Optional[str] = None   # force a specific broker
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RouteResult:
+    """Result of a routing + execution attempt."""
+    success: bool
+    symbol: str
+    side: str
+    size_usd: float
+    asset_class: str = AssetClass.UNKNOWN
+    broker: str = "NONE"
+    fill_price: float = 0.0
+    filled_size_usd: float = 0.0
+    order_type: str = "MARKET"
+    latency_ms: float = 0.0
+    retries: int = 0
+    error: Optional[str] = None
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+@dataclass
+class BrokerProfile:
+    """Configuration entry for a broker/exchange."""
+    name: str
+    asset_classes: List[AssetClass]      # which asset classes this broker handles
+    priority: int = 5                    # 1 = highest priority
+    available: bool = True
+    # Callable(symbol, side, size_usd, order_type, limit_price) → (fill_price, filled_usd)
+    dispatch_fn: Optional[Callable] = None
+    # Minimum notional in USD
+    min_notional_usd: float = 1.0
+    fee_bps: float = 10.0
+    # Number of routes dispatched through this broker.  Used by _select_broker()
+    # to enforce MIN_OBSERVATIONS before trusting any dynamically-derived ranking.
+    observation_count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# MultiBrokerExecutionRouter
+# ---------------------------------------------------------------------------
+
+
+class MultiBrokerExecutionRouter:
+    """
+    Routes trade orders to the correct broker and market based on asset class.
+
+    Thread-safe; process-wide singleton via ``get_multi_broker_router()``.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._brokers: Dict[str, BrokerProfile] = {}
+        self._route_log: List[Dict[str, Any]] = []
+        self._stats: Dict[str, int] = {
+            "total_routes": 0,
+            "successful_routes": 0,
+            "failed_routes": 0,
+        }
+
+        # Lazy-initialised performance scorer
+        self._scorer = None
+
+        # Register default broker profiles
+        self._register_default_brokers()
+        logger.info("MultiBrokerExecutionRouter initialised")
+
+    # ------------------------------------------------------------------
+    # Broker management
+    # ------------------------------------------------------------------
+
+    def _register_default_brokers(self) -> None:
+        """Register the built-in broker profiles."""
+
+        # ── Crypto brokers ──────────────────────────────────────────
+        self.register_broker(BrokerProfile(
+            name="coinbase",
+            asset_classes=[AssetClass.CRYPTO],
+            priority=1,
+            fee_bps=25.0,  # Coinbase Advanced Trade taker fee
+            dispatch_fn=self._dispatch_via_inner_router,
+        ))
+        self.register_broker(BrokerProfile(
+            name="kraken",
+            asset_classes=[AssetClass.CRYPTO],
+            priority=2,
+            fee_bps=16.0,
+            dispatch_fn=self._dispatch_via_inner_router,
+        ))
+        self.register_broker(BrokerProfile(
+            name="binance",
+            asset_classes=[AssetClass.CRYPTO],
+            priority=3,
+            fee_bps=10.0,
+            dispatch_fn=self._dispatch_via_inner_router,
+        ))
+
+        # ── Equity brokers ───────────────────────────────────────────
+        self.register_broker(BrokerProfile(
+            name="alpaca",
+            asset_classes=[AssetClass.EQUITY],
+            priority=1,
+            fee_bps=0.0,    # Alpaca is commission-free
+            dispatch_fn=self._dispatch_equity_stub,
+        ))
+        self.register_broker(BrokerProfile(
+            name="interactive_brokers_equity",
+            asset_classes=[AssetClass.EQUITY],
+            priority=2,
+            fee_bps=5.0,
+            dispatch_fn=self._dispatch_equity_stub,
+        ))
+
+        # ── Futures brokers ──────────────────────────────────────────
+        self.register_broker(BrokerProfile(
+            name="interactive_brokers_futures",
+            asset_classes=[AssetClass.FUTURES],
+            priority=1,
+            fee_bps=5.0,
+            dispatch_fn=self._dispatch_futures_stub,
+        ))
+        self.register_broker(BrokerProfile(
+            name="td_ameritrade_futures",
+            asset_classes=[AssetClass.FUTURES],
+            priority=2,
+            fee_bps=8.0,
+            dispatch_fn=self._dispatch_futures_stub,
+        ))
+
+        # ── Options brokers ──────────────────────────────────────────
+        self.register_broker(BrokerProfile(
+            name="interactive_brokers_options",
+            asset_classes=[AssetClass.OPTIONS],
+            priority=1,
+            fee_bps=5.0,
+            dispatch_fn=self._dispatch_options_stub,
+        ))
+        self.register_broker(BrokerProfile(
+            name="td_ameritrade_options",
+            asset_classes=[AssetClass.OPTIONS],
+            priority=2,
+            fee_bps=8.0,
+            dispatch_fn=self._dispatch_options_stub,
+        ))
+
+    def register_broker(self, profile: BrokerProfile) -> None:
+        """Add or replace a broker profile in the registry."""
+        with self._lock:
+            self._brokers[profile.name] = profile
+            logger.debug("Registered broker: %s (classes=%s, priority=%d)",
+                         profile.name, profile.asset_classes, profile.priority)
+
+    def set_broker_available(self, broker_name: str, available: bool) -> None:
+        """Mark a broker as available or unavailable."""
+        with self._lock:
+            if broker_name in self._brokers:
+                self._brokers[broker_name].available = available
+                status = "AVAILABLE" if available else "UNAVAILABLE"
+                logger.info("Broker %s marked %s", broker_name, status)
+            else:
+                logger.warning("Unknown broker: %s", broker_name)
+
+    # ------------------------------------------------------------------
+    # Core routing
+    # ------------------------------------------------------------------
+
+    def route(self, request: RouteRequest) -> RouteResult:
+        """
+        Route a trade request to the appropriate broker.
+
+        Returns a :class:`RouteResult` describing success or failure.
+        """
+        t0 = time.monotonic()
+
+        # 1. Determine asset class
+        if request.asset_class:
+            try:
+                ac = AssetClass(request.asset_class.lower())
+            except ValueError:
+                ac = detect_asset_class(request.symbol)
+        else:
+            ac = detect_asset_class(request.symbol)
+
+        logger.info(
+            "Routing %s %s %s (size=%.2f, asset_class=%s)",
+            request.side.upper(), request.symbol, request.strategy,
+            request.size_usd, ac.value,
+        )
+
+        # Expose symbol + side as instance attributes so _select_broker can use
+        # the ArbBestExecutionRouter for real-time best-execution selection.
+        self._pending_request_symbol = request.symbol
+        self._pending_request_side = request.side
+
+        # 2. Select broker
+        broker = self._select_broker(ac, request.preferred_broker)
+        if broker is None:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            error = f"No available broker for asset_class={ac.value}"
+            logger.error(error)
+            return self._make_result(request, ac, "NONE", False, 0.0, 0.0,
+                                     elapsed_ms, error)
+
+        # 3. Validate minimum notional
+        if request.size_usd < broker.min_notional_usd:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            error = (f"Order size ${request.size_usd:.2f} below "
+                     f"minimum notional ${broker.min_notional_usd:.2f} for {broker.name}")
+            logger.warning(error)
+            return self._make_result(request, ac, broker.name, False, 0.0, 0.0,
+                                     elapsed_ms, error)
+
+        # 3.5  AI execution-quality gate — filter before dispatch
+        eqf_filter = self._get_execution_quality_filter()
+        if eqf_filter is not None and not getattr(request, "skip_quality_filter", False):
+            try:
+                eqf_decision = eqf_filter.filter_trade(
+                    symbol=request.symbol,
+                    broker=broker.name,
+                    side=request.side,
+                    size_usd=request.size_usd,
+                    urgency=getattr(request, "urgency", 0.5),
+                )
+                if FilterVerdict is not None and eqf_decision.verdict == FilterVerdict.REJECT:
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    error = f"Execution quality filter REJECTED: {eqf_decision.reason}"
+                    if eqf_decision.suggested_broker:
+                        error += f" (try broker: {eqf_decision.suggested_broker})"
+                    logger.warning("🚫 %s", error)
+                    return self._make_result(request, ac, broker.name, False, 0.0, 0.0,
+                                             elapsed_ms, error)
+                if FilterVerdict is not None and eqf_decision.verdict == FilterVerdict.DEFER:
+                    logger.info(
+                        "⏳ Execution quality filter DEFERRED %s@%s — "
+                        "score=%.1f  retry_in=%ds  reason=%s",
+                        request.symbol, broker.name,
+                        eqf_decision.quality_score,
+                        eqf_decision.defer_seconds,
+                        eqf_decision.reason,
+                    )
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    error = (
+                        f"Execution quality filter DEFERRED (score={eqf_decision.quality_score:.1f},"
+                        f" retry_in={eqf_decision.defer_seconds}s): {eqf_decision.reason}"
+                    )
+                    return self._make_result(request, ac, broker.name, False, 0.0, 0.0,
+                                             elapsed_ms, error)
+            except Exception as _eqf_exc:
+                logger.debug("ExecutionQualityFilter raised (non-fatal): %s", _eqf_exc)
+
+        # 4. Dispatch
+        fill_price, filled_usd, dispatch_error = self._dispatch(request, broker)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        success = dispatch_error is None and fill_price > 0
+
+        result = self._make_result(
+            request, ac, broker.name, success,
+            fill_price, filled_usd, elapsed_ms,
+            dispatch_error,
+        )
+
+        # 5. Feed the performance scorer so future routing improves over time
+        scorer = self._get_scorer()
+        if scorer is not None:
+            try:
+                scorer.record_order_result(
+                    broker=broker.name,
+                    success=success,
+                    latency_ms=elapsed_ms,
+                    slippage_bps=0.0,  # slippage not yet tracked at this layer
+                    error=dispatch_error,
+                )
+            except Exception:
+                pass  # scoring errors must never abort order flow
+
+        # 5b. Feed the execution quality filter with actual outcome
+        if eqf_filter is not None:
+            try:
+                eqf_filter.record_execution(
+                    symbol=request.symbol,
+                    broker=broker.name,
+                    success=success,
+                    slippage_bps=0.0,
+                    latency_ms=elapsed_ms,
+                )
+            except Exception:
+                pass
+
+        # 6. Update stats & log
+        with self._lock:
+            self._stats["total_routes"] += 1
+            if success:
+                self._stats["successful_routes"] += 1
+                logger.info(
+                    "✅ %s %s filled via %s at %.4f (%.2f USD, %.0f ms)",
+                    request.side.upper(), request.symbol, broker.name,
+                    fill_price, filled_usd, elapsed_ms,
+                )
+            else:
+                self._stats["failed_routes"] += 1
+                logger.error(
+                    "❌ %s %s routing via %s failed: %s",
+                    request.side.upper(), request.symbol, broker.name,
+                    dispatch_error,
+                )
+
+            # Increment observation count so the broker accrues evidence for
+            # future selection decisions (MIN_OBSERVATIONS threshold).
+            if broker.name in self._brokers:
+                self._brokers[broker.name].observation_count += 1
+
+            self._route_log.append({
+                "timestamp": result.timestamp,
+                "symbol": request.symbol,
+                "side": request.side,
+                "size_usd": request.size_usd,
+                "asset_class": ac.value,
+                "broker": broker.name,
+                "success": success,
+                "fill_price": fill_price,
+                "latency_ms": elapsed_ms,
+                "error": dispatch_error,
+            })
+
+            # Keep log bounded
+            if len(self._route_log) > 1000:
+                self._route_log = self._route_log[-500:]
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_scorer(self):
+        """Return the BrokerPerformanceScorer singleton (lazy init)."""
+        if self._scorer is None and _BPS_AVAILABLE:
+            try:
+                self._scorer = get_broker_performance_scorer()
+            except Exception:
+                pass
+        return self._scorer
+
+    def _get_execution_quality_filter(self):
+        """Return the ExecutionQualityFilter singleton (lazy init)."""
+        if not _EQF_AVAILABLE:
+            return None
+        try:
+            return get_execution_quality_filter()
+        except Exception:
+            return None
+
+    def _select_broker(
+        self, asset_class: AssetClass, preferred: Optional[str]
+    ) -> Optional[BrokerProfile]:
+        """Select the best available broker for the asset class.
+
+        Candidates are sorted by static ``priority`` (ascending, 1 = best)
+        to establish a stable fallback order.  Only brokers that have
+        accumulated at least ``MIN_OBSERVATIONS`` route records are
+        considered "qualified" — this prevents a single lucky fill from
+        promoting a new broker to the top slot.
+
+        Selection logic:
+        1. Build ``candidates`` — available brokers for the asset class.
+        2. Sort ``candidates`` by ``priority``; the first becomes the
+           ``fallback_priority_broker`` (used when no one qualifies).
+        3. Filter to ``qualified`` — those with ``observation_count >=
+           MIN_OBSERVATIONS``.
+        4. Return ``qualified[0]`` if any qualify; otherwise return the
+           static-priority fallback, ensuring a usable route always exists.
+
+        Selection order:
+        1. If a preferred broker is specified and available, use it.
+        2. Otherwise, score all candidates via the BrokerPerformanceScorer
+           and return the highest-scoring one.  Ties are broken by the
+           static ``priority`` field (lower = higher priority).
+        """
+        with self._lock:
+            candidates = [
+                b for b in self._brokers.values()
+                if asset_class in b.asset_classes and b.available
+            ]
+
+        if not candidates:
+            return None
+
+        # If a specific broker is requested, use it if available
+        if preferred:
+            for b in candidates:
+                if b.name == preferred:
+                    return b
+            logger.warning(
+                "Preferred broker '%s' not available for %s — falling back",
+                preferred, asset_class.value,
+            )
+
+        # Score-aware selection via BrokerPerformanceScorer
+        scorer = self._get_scorer()
+        if scorer is not None:
+            candidate_names = [b.name for b in candidates]
+            best_name = scorer.get_best_broker(candidate_names)
+            if best_name is not None:
+                for b in candidates:
+                    if b.name == best_name:
+                        logger.debug(
+                            "Score-based routing: selected '%s' for %s (score=%.1f)",
+                            best_name, asset_class.value, scorer.get_score(best_name),
+                        )
+                        return b
+
+        # Best-execution override via ArbBestExecutionRouter — uses live bid/ask
+        # prices + fees + latency to pick the genuinely cheapest venue.
+        if _ABE_AVAILABLE and get_arb_best_execution_router is not None:
+            try:
+                _abe = get_arb_best_execution_router()
+                _abe_side = getattr(self, "_pending_request_side", None) or "buy"
+                _abe_symbol = getattr(self, "_pending_request_symbol", None) or ""
+                if _abe_symbol:
+                    _abe_best = _abe.get_best_broker(_abe_symbol, _abe_side)
+                    if _abe_best is not None:
+                        for b in candidates:
+                            if b.name == _abe_best:
+                                logger.debug(
+                                    "BestExec routing: selected '%s' for %s %s",
+                                    _abe_best, _abe_side.upper(), _abe_symbol,
+                                )
+                                return b
+            except Exception as _abe_err:
+                logger.debug("ArbBestExecutionRouter skipped: %s", _abe_err)
+
+        # Fallback: sort by priority (ascending = highest priority first)
+        candidates.sort(key=lambda b: b.priority)
+
+        # The static fallback: always the highest-priority (lowest number) broker.
+        # It is returned whenever no candidate has sufficient observations.
+        fallback_priority_broker = candidates[0]
+
+        # Only trust brokers that have enough observations to produce a reliable
+        # ranking.  Skip under-observed brokers and return the static fallback.
+        qualified = [b for b in candidates if b.observation_count >= MIN_OBSERVATIONS]
+
+        if not qualified:
+            logger.debug(
+                "No broker has reached MIN_OBSERVATIONS=%d for asset_class=%s "
+                "— using static-priority fallback '%s'",
+                MIN_OBSERVATIONS, asset_class.value, fallback_priority_broker.name,
+            )
+            return fallback_priority_broker
+
+        return qualified[0]
+
+    def _dispatch(
+        self,
+        request: RouteRequest,
+        broker: BrokerProfile,
+    ) -> Tuple[float, float, Optional[str]]:
+        """
+        Dispatch the order via the broker's dispatch function.
+
+        Returns (fill_price, filled_usd, error_message_or_None).
+        """
+        if broker.dispatch_fn is None:
+            return 0.0, 0.0, f"Broker '{broker.name}' has no dispatch function"
+
+        try:
+            fill_price, filled_usd = broker.dispatch_fn(
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                order_type=request.order_type or "MARKET",
+                limit_price=request.limit_price,
+                broker_name=broker.name,
+            )
+            return fill_price, filled_usd, None
+        except Exception as exc:
+            return 0.0, 0.0, str(exc)
+
+    @staticmethod
+    def _make_result(
+        request: RouteRequest,
+        ac: AssetClass,
+        broker_name: str,
+        success: bool,
+        fill_price: float,
+        filled_usd: float,
+        latency_ms: float,
+        error: Optional[str],
+    ) -> RouteResult:
+        return RouteResult(
+            success=success,
+            symbol=request.symbol,
+            side=request.side,
+            size_usd=request.size_usd,
+            asset_class=ac.value,
+            broker=broker_name,
+            fill_price=fill_price,
+            filled_size_usd=filled_usd,
+            order_type=request.order_type or "MARKET",
+            latency_ms=latency_ms,
+            error=error,
+        )
+
+    # ------------------------------------------------------------------
+    # Dispatch implementations
+    # ------------------------------------------------------------------
+
+    def _dispatch_via_inner_router(
+        self,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        order_type: str = "MARKET",
+        limit_price: Optional[float] = None,
+        broker_name: str = "coinbase",
+    ) -> Tuple[float, float]:
+        """
+        Dispatch crypto orders through the existing ExecutionRouter.
+
+        Falls back to a simulated fill when the inner router is unavailable.
+        """
+        if _INNER_ROUTER_AVAILABLE and get_execution_router is not None:
+            inner = get_execution_router()
+            req = OrderRequest(
+                strategy="MultiBrokerRouter",
+                symbol=symbol,
+                side=side,
+                size_usd=size_usd,
+                order_type=order_type,
+                venue=broker_name,
+            )
+            res: ExecutionResult = inner.execute(req)
+            if res.success:
+                return res.fill_price, res.filled_size_usd
+            raise RuntimeError(res.error or "Inner router returned failure")
+
+        # Stub: simulate a fill (paper-trading / testing)
+        logger.warning(
+            "ExecutionRouter unavailable — simulating crypto fill for %s", symbol
+        )
+        simulated_price = 1.0  # caller should not rely on this in live mode
+        return simulated_price, size_usd
+
+    @staticmethod
+    def _dispatch_equity_stub(
+        symbol: str,
+        side: str,
+        size_usd: float,
+        order_type: str = "MARKET",
+        limit_price: Optional[float] = None,
+        broker_name: str = "alpaca",
+    ) -> Tuple[float, float]:
+        """
+        Stub equity dispatch — replace with real Alpaca / IBKR integration.
+
+        Raises ``NotImplementedError`` in live mode so callers get a clear
+        error rather than a silent bad fill.
+        """
+        logger.info(
+            "[Equity stub] %s %s %.2f USD via %s (order_type=%s)",
+            side.upper(), symbol, size_usd, broker_name, order_type,
+        )
+        # TODO: integrate with Alpaca or IBKR REST API
+        raise NotImplementedError(
+            f"Equity broker '{broker_name}' integration not yet connected. "
+            "Wire up an Alpaca or IBKR REST client in _dispatch_equity_stub()."
+        )
+
+    @staticmethod
+    def _dispatch_futures_stub(
+        symbol: str,
+        side: str,
+        size_usd: float,
+        order_type: str = "MARKET",
+        limit_price: Optional[float] = None,
+        broker_name: str = "interactive_brokers_futures",
+    ) -> Tuple[float, float]:
+        """
+        Stub futures dispatch — replace with real IBKR / CME integration.
+        """
+        logger.info(
+            "[Futures stub] %s %s %.2f USD via %s (order_type=%s)",
+            side.upper(), symbol, size_usd, broker_name, order_type,
+        )
+        # TODO: integrate with IBKR TWS or CME Direct
+        raise NotImplementedError(
+            f"Futures broker '{broker_name}' integration not yet connected. "
+            "Wire up an IBKR TWS or CME Direct client in _dispatch_futures_stub()."
+        )
+
+    @staticmethod
+    def _dispatch_options_stub(
+        symbol: str,
+        side: str,
+        size_usd: float,
+        order_type: str = "MARKET",
+        limit_price: Optional[float] = None,
+        broker_name: str = "interactive_brokers_options",
+    ) -> Tuple[float, float]:
+        """
+        Stub options dispatch — replace with real IBKR / TD Ameritrade integration.
+        """
+        logger.info(
+            "[Options stub] %s %s %.2f USD via %s (order_type=%s)",
+            side.upper(), symbol, size_usd, broker_name, order_type,
+        )
+        # TODO: integrate with IBKR TWS or TD Ameritrade thinkorswim API
+        raise NotImplementedError(
+            f"Options broker '{broker_name}' integration not yet connected. "
+            "Wire up an IBKR TWS or TD Ameritrade client in _dispatch_options_stub()."
+        )
+
+    # ------------------------------------------------------------------
+    # Multi-broker broadcast execution
+    # ------------------------------------------------------------------
+
+    def _select_all_brokers(
+        self, asset_class: AssetClass
+    ) -> List[BrokerProfile]:
+        """Return all available brokers for *asset_class*, sorted by priority."""
+        with self._lock:
+            candidates = [
+                b for b in self._brokers.values()
+                if asset_class in b.asset_classes and b.available
+            ]
+        candidates.sort(key=lambda b: b.priority)
+        return candidates
+
+    def route_all(self, request: RouteRequest) -> List[RouteResult]:
+        """
+        Broadcast a trade signal to **every** available connected broker for
+        the detected asset class.
+
+        This is the multi-account execution path.  Each broker receives an
+        independent fill attempt; successes and failures are reported
+        separately so the caller can act on partial fills.
+
+        The per-broker size is the same ``request.size_usd`` that was passed
+        in.  Use :class:`~bot.cross_account_capital_allocator.CrossAccountCapitalAllocator`
+        upstream to scale each user's size before calling this method.
+
+        Returns:
+            List of :class:`RouteResult` — one entry per broker attempted,
+            in priority order.  An empty list means no brokers were available.
+        """
+        t0 = time.monotonic()
+
+        # Determine asset class
+        if request.asset_class:
+            try:
+                ac = AssetClass(request.asset_class.lower())
+            except ValueError:
+                ac = detect_asset_class(request.symbol)
+        else:
+            ac = detect_asset_class(request.symbol)
+
+        brokers = self._select_all_brokers(ac)
+        if not brokers:
+            logger.warning(
+                "route_all: no available brokers for asset_class=%s", ac.value
+            )
+            return []
+
+        logger.info(
+            "🔀 route_all: broadcasting %s %s to %d broker(s): %s",
+            request.side.upper(),
+            request.symbol,
+            len(brokers),
+            ", ".join(b.name for b in brokers),
+        )
+
+        results: List[RouteResult] = []
+        for broker in brokers:
+            # Validate minimum notional per broker
+            if request.size_usd < broker.min_notional_usd:
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                error = (
+                    f"Order size ${request.size_usd:.2f} below minimum "
+                    f"notional ${broker.min_notional_usd:.2f} for {broker.name}"
+                )
+                logger.warning("route_all: skipping %s — %s", broker.name, error)
+                results.append(
+                    self._make_result(
+                        request, ac, broker.name, False, 0.0, 0.0, elapsed_ms, error
+                    )
+                )
+                continue
+
+            # Dispatch
+            fill_price, filled_usd, dispatch_error = self._dispatch(request, broker)
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            success = dispatch_error is None and fill_price > 0
+
+            result = self._make_result(
+                request, ac, broker.name, success,
+                fill_price, filled_usd, elapsed_ms, dispatch_error,
+            )
+            results.append(result)
+
+            # Feed performance scorer
+            scorer = self._get_scorer()
+            if scorer is not None:
+                try:
+                    scorer.record_order_result(
+                        broker=broker.name,
+                        success=success,
+                        latency_ms=elapsed_ms,
+                        slippage_bps=0.0,
+                        error=dispatch_error,
+                    )
+                except Exception:
+                    pass
+
+            # Update stats
+            with self._lock:
+                self._stats["total_routes"] += 1
+                if success:
+                    self._stats["successful_routes"] += 1
+                    logger.info(
+                        "✅ [route_all] %s %s filled via %s at %.4f (%.2f USD, %.0f ms)",
+                        request.side.upper(), request.symbol, broker.name,
+                        fill_price, filled_usd, elapsed_ms,
+                    )
+                else:
+                    self._stats["failed_routes"] += 1
+                    logger.error(
+                        "❌ [route_all] %s %s via %s failed: %s",
+                        request.side.upper(), request.symbol, broker.name,
+                        dispatch_error,
+                    )
+                if broker.name in self._brokers:
+                    self._brokers[broker.name].observation_count += 1
+                self._route_log.append({
+                    "timestamp": result.timestamp,
+                    "symbol": request.symbol,
+                    "side": request.side,
+                    "size_usd": request.size_usd,
+                    "asset_class": ac.value,
+                    "broker": broker.name,
+                    "success": success,
+                    "fill_price": fill_price,
+                    "latency_ms": elapsed_ms,
+                    "error": dispatch_error,
+                })
+                if len(self._route_log) > 1000:
+                    self._route_log = self._route_log[-500:]
+
+        successes = sum(1 for r in results if r.success)
+        logger.info(
+            "🔀 route_all complete: %d/%d brokers succeeded for %s %s",
+            successes, len(results), request.side.upper(), request.symbol,
+        )
+        return results
+
+    # ------------------------------------------------------------------
+    # Split execution  (institutional-grade multi-broker layer)
+    # ------------------------------------------------------------------
+
+    def execute_trade_split(
+        self,
+        broker: BrokerProfile,
+        request: RouteRequest,
+        slice_usd: float,
+    ) -> RouteResult:
+        """Dispatch a *slice* of a trade through a single *broker*.
+
+        This is the per-venue building-block for :meth:`route_split`.
+        It dispatches exactly ``slice_usd`` to ``broker`` and records the
+        outcome in the route log and performance scorer.
+
+        Args:
+            broker:    The :class:`BrokerProfile` that will receive the order.
+            request:   The original :class:`RouteRequest` (strategy, symbol,
+                       side, metadata).  ``request.size_usd`` is ignored here;
+                       ``slice_usd`` is used instead.
+            slice_usd: USD notional allocated to this broker.
+
+        Returns:
+            A :class:`RouteResult` describing success or failure for this slice.
+        """
+        t0 = time.monotonic()
+
+        # Detect asset class once so _make_result has the correct label.
+        if request.asset_class:
+            try:
+                ac = AssetClass(request.asset_class.lower())
+            except ValueError:
+                ac = detect_asset_class(request.symbol)
+        else:
+            ac = detect_asset_class(request.symbol)
+
+        # Minimum notional guard
+        if slice_usd < broker.min_notional_usd:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            error = (
+                f"Slice ${slice_usd:.2f} below minimum "
+                f"notional ${broker.min_notional_usd:.2f} for {broker.name}"
+            )
+            logger.warning("execute_trade_split: skipping %s — %s", broker.name, error)
+            return self._make_result(request, ac, broker.name, False, 0.0, 0.0, elapsed_ms, error)
+
+        # Build a size-adjusted sub-request for this slice
+        slice_request = RouteRequest(
+            strategy=request.strategy,
+            symbol=request.symbol,
+            side=request.side,
+            size_usd=slice_usd,
+            asset_class=request.asset_class,
+            order_type=request.order_type,
+            limit_price=request.limit_price,
+            preferred_broker=broker.name,
+            metadata=request.metadata,
+        )
+
+        fill_price, filled_usd, dispatch_error = self._dispatch(slice_request, broker)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        success = dispatch_error is None and fill_price > 0
+
+        result = self._make_result(
+            slice_request, ac, broker.name, success,
+            fill_price, filled_usd, elapsed_ms, dispatch_error,
+        )
+
+        # Feed performance scorer
+        scorer = self._get_scorer()
+        if scorer is not None:
+            try:
+                scorer.record_order_result(
+                    broker=broker.name,
+                    success=success,
+                    latency_ms=elapsed_ms,
+                    slippage_bps=0.0,
+                    error=dispatch_error,
+                )
+            except Exception:
+                pass
+
+        # Update shared stats + route log
+        with self._lock:
+            self._stats["total_routes"] += 1
+            if success:
+                self._stats["successful_routes"] += 1
+                logger.info(
+                    "✅ [split] %s %s filled via %s at %.4f (%.2f USD, %.0f ms)",
+                    request.side.upper(), request.symbol, broker.name,
+                    fill_price, filled_usd, elapsed_ms,
+                )
+            else:
+                self._stats["failed_routes"] += 1
+                logger.error(
+                    "❌ [split] %s %s via %s failed: %s",
+                    request.side.upper(), request.symbol, broker.name, dispatch_error,
+                )
+            if broker.name in self._brokers:
+                self._brokers[broker.name].observation_count += 1
+            self._route_log.append({
+                "timestamp": result.timestamp,
+                "symbol": request.symbol,
+                "side": request.side,
+                "size_usd": slice_usd,
+                "asset_class": ac.value,
+                "broker": broker.name,
+                "success": success,
+                "fill_price": fill_price,
+                "latency_ms": elapsed_ms,
+                "error": dispatch_error,
+                "split": True,
+            })
+            if len(self._route_log) > 1000:
+                self._route_log = self._route_log[-500:]
+
+        return result
+
+    def route_split(
+        self,
+        request: RouteRequest,
+        n_brokers: Optional[int] = None,
+    ) -> List[RouteResult]:
+        """Split a trade evenly across all active brokers for the asset class.
+
+        This is the institutional-grade multi-broker execution path.  Instead
+        of routing the full ``request.size_usd`` to a single primary venue, the
+        order is divided equally across every available broker for the detected
+        asset class::
+
+            for broker in active_brokers:
+                execute_trade_split(broker, slice_usd)
+
+        When only one broker is available the call degrades gracefully to a
+        single-venue order, matching the behaviour of :meth:`route`.
+
+        Args:
+            request:   Full :class:`RouteRequest` with the *total* notional in
+                       ``request.size_usd``.
+            n_brokers: Optional cap on the number of brokers to use.  When
+                       ``None`` (default) all available brokers participate.
+
+        Returns:
+            List of :class:`RouteResult` — one per broker attempted, in
+            priority order.  An empty list means no broker was available.
+        """
+        # Determine asset class
+        if request.asset_class:
+            try:
+                ac = AssetClass(request.asset_class.lower())
+            except ValueError:
+                ac = detect_asset_class(request.symbol)
+        else:
+            ac = detect_asset_class(request.symbol)
+
+        brokers = self._select_all_brokers(ac)
+        if not brokers:
+            logger.warning(
+                "route_split: no available brokers for asset_class=%s", ac.value
+            )
+            return []
+
+        if n_brokers is not None:
+            brokers = brokers[:n_brokers]
+
+        n = len(brokers)
+        base_slice = round(request.size_usd / n, 6)
+        # Last broker absorbs any rounding residual so all slices sum exactly to total.
+        final_slice = round(request.size_usd - base_slice * (n - 1), 6)
+        slices = [base_slice] * (n - 1) + [final_slice]
+
+        logger.info(
+            "🏦 route_split: distributing %.2f USD across %d broker(s): %s",
+            request.size_usd,
+            n,
+            ", ".join(f"{b.name}=${s:.2f}" for b, s in zip(brokers, slices)),
+        )
+
+        results: List[RouteResult] = []
+        for broker, slice_usd in zip(brokers, slices):
+            result = self.execute_trade_split(broker, request, slice_usd)
+            results.append(result)
+
+        successes = sum(1 for r in results if r.success)
+        total_filled = sum(r.filled_size_usd for r in results if r.success)
+        logger.info(
+            "🏦 route_split complete: %d/%d brokers succeeded | "
+            "%.2f / %.2f USD filled for %s %s",
+            successes, n, total_filled, request.size_usd,
+            request.side.upper(), request.symbol,
+        )
+        return results
+
+
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return routing statistics."""
+        with self._lock:
+            stats = dict(self._stats)
+            stats["success_rate_pct"] = (
+                (stats["successful_routes"] / stats["total_routes"] * 100)
+                if stats["total_routes"] > 0 else 0.0
+            )
+            return stats
+
+    def get_recent_routes(self, n: int = 20) -> List[Dict[str, Any]]:
+        """Return the *n* most recent routing events."""
+        with self._lock:
+            return list(self._route_log[-n:])
+
+    def get_report(self) -> str:
+        """Generate a human-readable routing report."""
+        stats = self.get_stats()
+        lines = [
+            "=" * 70,
+            "  NIJA MULTI-BROKER EXECUTION ROUTER — STATUS REPORT",
+            "=" * 70,
+            f"  Total Routes      : {stats['total_routes']:>10,}",
+            f"  Successful Routes : {stats['successful_routes']:>10,}",
+            f"  Failed Routes     : {stats['failed_routes']:>10,}",
+            f"  Success Rate      : {stats['success_rate_pct']:>10.1f} %",
+            f"  Min Observations  : {MIN_OBSERVATIONS:>10}  (threshold before trusting broker ranking)",
+            "",
+            "  REGISTERED BROKERS",
+            "-" * 70,
+        ]
+        with self._lock:
+            for b in sorted(self._brokers.values(), key=lambda x: (x.asset_classes[0].value, x.priority)):
+                status = "✅ AVAILABLE" if b.available else "❌ UNAVAILABLE"
+                classes = ", ".join(a.value for a in b.asset_classes)
+                obs_flag = "" if b.observation_count >= MIN_OBSERVATIONS else " ⚠️ (warming up)"
+                lines.append(
+                    f"  {b.name:<40} [{classes:<10}] priority={b.priority}  obs={b.observation_count}{obs_flag}  {status}"
+                )
+        lines.append("=" * 70)
+        return "\n".join(lines)
+
+    def get_broker_scores(self) -> str:
+        """
+        Return a human-readable table of live broker performance scores.
+
+        Delegates to the BrokerPerformanceScorer when available; otherwise
+        returns a short notice that scoring data is not yet collected.
+        """
+        scorer = self._get_scorer()
+        if scorer is None:
+            return "BrokerPerformanceScorer not available — install bot.broker_performance_scorer"
+        return scorer.get_report()
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton
+# ---------------------------------------------------------------------------
+
+_instance: Optional[MultiBrokerExecutionRouter] = None
+_instance_lock = threading.Lock()
+
+
+def get_multi_broker_router() -> MultiBrokerExecutionRouter:
+    """Return the process-wide MultiBrokerExecutionRouter singleton."""
+    global _instance
+    if _instance is None:
+        with _instance_lock:
+            if _instance is None:
+                _instance = MultiBrokerExecutionRouter()
+    return _instance
+
+
+__all__ = [
+    "AssetClass",
+    "detect_asset_class",
+    "RouteRequest",
+    "RouteResult",
+    "BrokerProfile",
+    "MultiBrokerExecutionRouter",
+    "get_multi_broker_router",
+]
+
+# ---------------------------------------------------------------------------
+# Quick smoke-test
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+
+    router = get_multi_broker_router()
+    print(router.get_report())
+
+    # Asset-class detection demo
+    test_symbols = [
+        ("BTC-USD", AssetClass.CRYPTO),
+        ("ETH-USDT", AssetClass.CRYPTO),
+        ("AAPL", AssetClass.EQUITY),
+        ("MSFT", AssetClass.EQUITY),
+        ("/ES", AssetClass.FUTURES),
+        ("ES=F", AssetClass.FUTURES),
+        ("BTC-PERP", AssetClass.FUTURES),
+    ]
+    print("\nAsset-class detection:")
+    all_ok = True
+    for sym, expected in test_symbols:
+        detected = detect_asset_class(sym)
+        ok = detected == expected
+        if not ok:
+            all_ok = False
+        print(f"  {sym:<20} → {detected.value:<10}  {'✅' if ok else '❌ expected ' + expected.value}")
+
+    print("\n✅ All detection tests passed." if all_ok else "\n❌ Some detection tests FAILED.")

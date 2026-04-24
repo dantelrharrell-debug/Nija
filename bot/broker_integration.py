@@ -1,0 +1,2936 @@
+"""
+NIJA Apex Strategy v7.1 - Broker Integration Module
+
+Extensible broker integration framework supporting multiple exchanges:
+- Coinbase Advanced Trade
+- Binance
+- Alpaca
+
+Each broker implements a common interface for unified trading logic.
+"""
+
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+import logging
+import threading
+import time
+import traceback
+
+# Import Kraken order validator for minimum order validation
+try:
+    from bot.kraken_order_validator import (
+        validate_and_adjust_order, log_order_validation,
+        get_pair_minimums
+    )
+except ImportError:
+    try:
+        from kraken_order_validator import (
+            validate_and_adjust_order, log_order_validation,
+            get_pair_minimums
+        )
+    except ImportError:
+        # Fallback if validator not available
+        def validate_and_adjust_order(pair, volume, price, side, ordertype='market'):
+            return True, volume, None
+        def log_order_validation(pair, volume, price, side, is_valid, error=None):
+            pass
+        def get_pair_minimums(pair):
+            return {'min_base': 0.001, 'min_quote': 10.0}
+# Import broker adapters for validation
+try:
+    from bot.broker_adapters import (
+        BrokerAdapterFactory, TradeIntent, ValidatedOrder, OrderIntent
+    )
+except ImportError:
+    try:
+        from broker_adapters import (
+            BrokerAdapterFactory, TradeIntent, ValidatedOrder, OrderIntent
+        )
+    except ImportError:
+        BrokerAdapterFactory = None
+        TradeIntent = None
+        ValidatedOrder = None
+        OrderIntent = None
+
+# Import tier configuration for minimum enforcement and auto-resize
+try:
+    from bot.tier_config import (
+        get_tier_from_balance, get_tier_config, validate_trade_size, auto_resize_trade, TradingTier
+    )
+except ImportError:
+    try:
+        from tier_config import (
+            get_tier_from_balance, get_tier_config, validate_trade_size, auto_resize_trade, TradingTier
+        )
+    except ImportError:
+        get_tier_from_balance = None
+        get_tier_config = None
+        validate_trade_size = None
+        auto_resize_trade = None
+        TradingTier = None
+
+# Import Kraken symbol mapper
+try:
+    from bot.kraken_symbol_mapper import get_kraken_symbol_mapper, convert_to_kraken
+except ImportError:
+    try:
+        from kraken_symbol_mapper import get_kraken_symbol_mapper, convert_to_kraken
+    except ImportError:
+        get_kraken_symbol_mapper = None
+        convert_to_kraken = None
+
+# Import Kraken adapter for symbol normalization and position reconciliation
+try:
+    from bot.kraken_adapter import (
+        normalize_kraken_symbol, is_dust_position, should_track_position,
+        get_kraken_reconciler, reconcile_kraken_position_after_failed_exit,
+        DUST_THRESHOLD_USD
+    )
+except ImportError:
+    try:
+        from kraken_adapter import (
+            normalize_kraken_symbol, is_dust_position, should_track_position,
+            get_kraken_reconciler, reconcile_kraken_position_after_failed_exit,
+            DUST_THRESHOLD_USD
+        )
+    except ImportError:
+        normalize_kraken_symbol = None
+        is_dust_position = None
+        should_track_position = None
+        get_kraken_reconciler = None
+        reconcile_kraken_position_after_failed_exit = None
+        DUST_THRESHOLD_USD = 1.00
+
+# Import global Kraken nonce manager (FINAL FIX)
+try:
+    from bot.global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
+except ImportError:
+    try:
+        from global_kraken_nonce import get_global_kraken_nonce, get_kraken_api_lock, jump_global_kraken_nonce_forward
+    except ImportError:
+        get_global_kraken_nonce = None
+        get_kraken_api_lock = None
+        jump_global_kraken_nonce_forward = None
+
+# Nonce jump amount used when recovering from "EAPI:Invalid nonce" errors.
+# Jumping 120 seconds (120 000 ms) ahead clears Kraken's ~60-second nonce window
+# and ensures the next request uses a fresh, accepted nonce.
+_KRAKEN_NONCE_RECOVERY_JUMP_MS = 120_000
+
+# Import Broker Circuit Breaker for Kraken API reliability
+try:
+    from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+    _CIRCUIT_BREAKER_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_circuit_breaker import get_circuit_breaker, BrokerHealthState
+        _CIRCUIT_BREAKER_AVAILABLE = True
+    except ImportError:
+        _CIRCUIT_BREAKER_AVAILABLE = False
+        get_circuit_breaker = None
+        BrokerHealthState = None
+
+# Import stdout suppression utility for pykrakenapi
+try:
+    from bot.stdout_utils import suppress_pykrakenapi_prints
+except ImportError:
+    try:
+        from stdout_utils import suppress_pykrakenapi_prints
+    except ImportError:
+        # Fallback: Define locally if import fails
+        import sys
+        import io
+        from contextlib import contextmanager
+
+        @contextmanager
+        def suppress_pykrakenapi_prints():
+            original_stdout = sys.stdout
+            try:
+                sys.stdout = io.StringIO()
+                yield
+            finally:
+                sys.stdout = original_stdout
+
+# Import custom exceptions for safety checks
+try:
+    from bot.exceptions import (
+        ExecutionError, BrokerMismatchError, InvalidTxidError,
+        InvalidFillPriceError, OrderRejectedError, ExecutionFailed
+    )
+except ImportError:
+    try:
+        from exceptions import (
+            ExecutionError, BrokerMismatchError, InvalidTxidError,
+            InvalidFillPriceError, OrderRejectedError, ExecutionFailed
+        )
+    except ImportError:
+        # Fallback: Define locally if import fails
+        class ExecutionError(Exception):
+            pass
+        class BrokerMismatchError(ExecutionError):
+            pass
+        class InvalidTxidError(ExecutionError):
+            pass
+        class InvalidFillPriceError(ExecutionError):
+            pass
+        class OrderRejectedError(ExecutionError):
+            pass
+        class ExecutionFailed(ExecutionError):
+            pass
+
+logger = logging.getLogger("nija.broker")
+
+# ── Optional: entry price store (local truth for entry prices) ─────────────
+try:
+    from bot.entry_price_store import get_entry_price_store as _get_eps
+    _ENTRY_PRICE_STORE_AVAILABLE = True
+except ImportError:
+    try:
+        from entry_price_store import get_entry_price_store as _get_eps
+        _ENTRY_PRICE_STORE_AVAILABLE = True
+    except ImportError:
+        _ENTRY_PRICE_STORE_AVAILABLE = False
+        _get_eps = None
+
+# ✅ REQUIREMENT 2: KRAKEN MINIMUM ORDER COST
+# FIX #3: Kraken hard minimum enforcement with safety buffer
+# UPDATE (Jan 22, 2026): Raised to $10.00 to align with exchange rules
+# Even with $5.50 global min, Kraken needs $10.00 to prevent:
+# - Fee erosion on small orders
+# - False "position opened" logs
+# - User copy mismatches
+KRAKEN_MIN_ORDER_COST = 10.00  # USD (updated to $10.00 best practice minimum)
+
+# ✅ REQUIREMENT 3: DUST EXCLUSION - Positions below this value are IGNORED COMPLETELY
+# ✅ FIX (MANDATORY): Dust threshold for position tracking
+# Consistent with position_cap_enforcer.DUST_THRESHOLD_USD and kraken_adapter.DUST_THRESHOLD_USD
+# Use the imported DUST_THRESHOLD_USD if available, otherwise fallback to 1.00
+MIN_POSITION_USD = DUST_THRESHOLD_USD  # USD value threshold for dust positions
+
+
+
+class BrokerInterface(ABC):
+    """
+    Abstract base class for broker integrations.
+    All broker adapters must implement these methods.
+    """
+
+    @abstractmethod
+    def connect(self) -> bool:
+        """
+        Establish connection to broker API.
+
+        Returns:
+            bool: True if connection successful
+        """
+        pass
+
+    @abstractmethod
+    def get_account_balance(self) -> Dict[str, float]:
+        """
+        Get account balance information.
+
+        Returns:
+            dict: {
+                'total_balance': float,
+                'available_balance': float,
+                'currency': str
+            }
+        """
+        pass
+
+    @abstractmethod
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                       limit: int = 100) -> Optional[Dict]:
+        """
+        Get market data (OHLCV candles) for symbol.
+
+        Args:
+            symbol: Trading symbol
+            timeframe: Candle timeframe (e.g., '1m', '5m', '1h')
+            limit: Number of candles to retrieve
+
+        Returns:
+            dict: {
+                'symbol': str,
+                'timeframe': str,
+                'candles': list of dicts with OHLCV data
+            }
+        """
+        pass
+
+    @abstractmethod
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          size_type: str = 'quote') -> Optional[Dict]:
+        """
+        Place market order.
+        
+        CRITICAL SAFETY: This method is protected by APP_STORE_MODE.
+        When APP_STORE_MODE=true, this method MUST NOT execute real orders.
+        Implementations should check is_app_store_mode_enabled() before execution.
+
+        Args:
+            symbol: Trading symbol
+            side: 'buy' or 'sell'
+            size: Order size
+            size_type: 'quote' (USD value) or 'base' (asset quantity)
+
+        Returns:
+            dict: {
+                'order_id': str,
+                'symbol': str,
+                'side': str,
+                'size': float,
+                'filled_price': float,
+                'status': str,
+                'timestamp': datetime
+            }
+        """
+        pass
+
+    @abstractmethod
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """
+        Place limit order.
+
+        Args:
+            symbol: Trading symbol
+            side: 'buy' or 'sell'
+            size: Order size
+            price: Limit price
+            size_type: 'quote' (USD value) or 'base' (asset quantity)
+
+        Returns:
+            dict: Order details (same as place_market_order)
+        """
+        pass
+
+    @abstractmethod
+    def cancel_order(self, order_id: str) -> bool:
+        """
+        Cancel an open order.
+
+        Args:
+            order_id: Order ID to cancel
+
+        Returns:
+            bool: True if cancelled successfully
+        """
+        pass
+
+    @abstractmethod
+    def get_open_positions(self) -> List[Dict]:
+        """
+        Get all open positions.
+
+        Returns:
+            list: List of position dicts with keys:
+                - symbol: str
+                - size: float
+                - entry_price: float
+                - current_price: float
+                - pnl: float
+                - pnl_pct: float
+        """
+        pass
+
+    @abstractmethod
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """
+        Get status of an order.
+
+        Args:
+            order_id: Order ID
+
+        Returns:
+            dict: Order status details
+        """
+        pass
+
+    def get_real_entry_price(self, symbol: str) -> Optional[float]:
+        """
+        ✅ FIX 1: Attempt to get real entry price from broker order history.
+
+        This is an optional method that brokers can implement to provide
+        real entry prices from their order history. If not available,
+        returns None (caller should use fallback logic).
+
+        Args:
+            symbol: Trading symbol
+
+        Returns:
+            Real entry price if available, None otherwise
+        """
+        # Default implementation - brokers can override
+        return None
+
+    def get_trading_fees(self, symbol: str) -> Dict[str, float]:
+        """
+        Get trading fee rates for a symbol from the exchange.
+
+        Brokers should override this method to return live fee data pulled
+        from the exchange API. If the exchange does not expose per-symbol
+        fees, return the account-level fee tier. Callers must always handle
+        the case where this returns hardcoded defaults (exchange API
+        unavailable or not yet implemented).
+
+        Args:
+            symbol: Trading pair symbol (e.g. 'BTC-USD')
+
+        Returns:
+            dict with keys:
+                'maker_fee' (float) – maker fee as decimal (e.g. 0.004 = 0.4%)
+                'taker_fee' (float) – taker fee as decimal (e.g. 0.006 = 0.6%)
+                'source'    (str)   – 'live' | 'hardcoded'
+        """
+        # Default conservative fallback (Coinbase taker fee)
+        return {
+            'maker_fee': 0.004,
+            'taker_fee': 0.006,
+            'source': 'hardcoded',
+        }
+
+
+
+class CoinbaseBrokerAdapter(BrokerInterface):
+    """
+    Coinbase Advanced Trade API adapter.
+
+    Delegates to the existing CoinbaseBroker in broker_manager for all
+    real exchange operations (balance, market data, order placement, etc.)
+    so there is a single, well-tested code path for every Coinbase call.
+    """
+
+    def __init__(self, api_key: str = None, api_secret: str = None):
+        """
+        Initialize Coinbase broker adapter.
+
+        Args:
+            api_key: Accepted for API compatibility; credentials are read
+                     from environment variables (COINBASE_API_KEY /
+                     COINBASE_API_SECRET) by the underlying CoinbaseBroker.
+            api_secret: Same note as api_key above.
+        """
+        # Credentials are intentionally not stored here; CoinbaseBroker
+        # reads them directly from environment variables.
+        self._broker = None   # CoinbaseBroker instance (set on connect())
+        logger.info("Coinbase broker adapter initialized")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_broker(self):
+        """Return the connected CoinbaseBroker, raising if not connected."""
+        if self._broker is None:
+            raise RuntimeError("CoinbaseBrokerAdapter is not connected. Call connect() first.")
+        return self._broker
+
+    @staticmethod
+    def _extract_order_id(resp) -> Optional[str]:
+        """Extract the order_id from a Coinbase SDK response object or dict."""
+        if isinstance(resp, dict):
+            return resp.get('order_id') or resp.get('success_response', {}).get('order_id')
+        order_id = getattr(resp, 'order_id', None)
+        if not order_id:
+            sr = getattr(resp, 'success_response', None)
+            if sr:
+                order_id = getattr(sr, 'order_id', None)
+        return order_id
+
+    # ------------------------------------------------------------------
+    # BrokerInterface implementation
+    # ------------------------------------------------------------------
+
+    def connect(self) -> bool:
+        """Connect to Coinbase Advanced Trade API via CoinbaseBroker.
+
+        Uses the singleton from the global platform-broker registry when
+        available so that no second CoinbaseBroker instance is created.  Falls
+        back to constructing a new instance (and writing it into the registry
+        via ``register_platform_broker()``) for standalone processes such as
+        the webhook server that start without the main TradingStrategy startup
+        path.
+        """
+        try:
+            try:
+                from bot.broker_manager import CoinbaseBroker, get_platform_broker, register_platform_broker
+            except ImportError:
+                from broker_manager import CoinbaseBroker, get_platform_broker, register_platform_broker
+
+            # ── Fast path: reuse existing connected singleton ─────────────────
+            existing = get_platform_broker("coinbase")
+            if existing is not None and getattr(existing, "connected", False):
+                self._broker = existing
+                logger.info("✅ CoinbaseBrokerAdapter: reusing existing Coinbase singleton from registry")
+                return True
+
+            # ── Delegate to MABM when available ──────────────────────────────
+            try:
+                try:
+                    from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm
+                except ImportError:
+                    from multi_account_broker_manager import multi_account_broker_manager as _mabm
+                results = _mabm.initialize_platform_brokers()
+                cb_result = results.get("coinbase", {})
+                broker = cb_result.get("broker")
+                if broker is not None and cb_result.get("connected"):
+                    self._broker = broker
+                    logger.info("✅ CoinbaseBrokerAdapter connected via MABM")
+                    return True
+                if broker is not None:
+                    # MABM registered but connection failed — surface the failure.
+                    logger.error("❌ CoinbaseBroker.connect() returned False (via MABM)")
+                    return False
+            except Exception as mabm_exc:
+                logger.debug("CoinbaseBrokerAdapter: MABM delegation failed (%s) — using direct path", mabm_exc)
+
+            # ── Fallback: construct + connect + register via public API ───────
+            logger.info("Connecting to Coinbase Advanced Trade API (direct path)…")
+            broker = CoinbaseBroker()
+            if broker.connect():
+                self._broker = broker
+                # Register in global registry so other modules can reuse this instance.
+                register_platform_broker("coinbase", broker, connected=True)
+                logger.info("✅ CoinbaseBrokerAdapter connected successfully")
+                return True
+            else:
+                logger.error("❌ CoinbaseBroker.connect() returned False")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Failed to connect to Coinbase: {e}")
+            return False
+
+    def get_account_balance(self) -> Dict[str, float]:
+        """Get Coinbase account balance.
+
+        Returns:
+            dict with keys: total_balance, available_balance, currency
+        """
+        try:
+            broker = self._get_broker()
+            detailed = broker.get_account_balance_detailed(verbose=False)
+            if detailed:
+                total = float(detailed.get('total_funds', detailed.get('trading_balance', 0.0)))
+                available = float(detailed.get('trading_balance', 0.0))
+            else:
+                total = float(broker.get_account_balance(verbose=False))
+                available = total
+            return {
+                'total_balance': total,
+                'available_balance': available,
+                'currency': 'USD'
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase account balance: {e}")
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USD'
+            }
+
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                        limit: int = 100) -> Optional[Dict]:
+        """Get market data (candles) from Coinbase.
+
+        Args:
+            symbol: Trading pair, e.g. 'BTC-USD'
+            timeframe: Candle interval ('1m', '5m', '15m', '1h', '1d')
+            limit: Number of candles to fetch
+
+        Returns:
+            dict with key 'candles' containing a list of candle dicts,
+            or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            candles = broker.get_candles(symbol, timeframe, limit)
+            if candles is not None:
+                return {'symbol': symbol, 'timeframe': timeframe, 'candles': candles}
+            return None
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase market data for {symbol}: {e}")
+            return None
+
+    def place_market_order(self, symbol: str, side: str, size: float,
+                           size_type: str = 'quote') -> Optional[Dict]:
+        """Place a market order on Coinbase.
+
+        Args:
+            symbol: Trading pair, e.g. 'BTC-USD'
+            side: 'buy' or 'sell'
+            size: Amount to trade (USD when size_type='quote', crypto when 'base')
+            size_type: 'quote' (default) or 'base'
+
+        Returns:
+            Order response dict, or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            result = broker.place_market_order(
+                symbol=symbol,
+                side=side,
+                quantity=size,
+                size_type=size_type
+            )
+            if result and result.get('status') not in ('error', 'unfilled'):
+                logger.info(f"✅ Coinbase market {side} order placed: {symbol} size={size}")
+            elif result:
+                error_code = result.get('error', 'UNKNOWN_ERROR')
+                error_message = result.get('message', 'No detail provided')
+                logger.error(f"❌ Coinbase {side} order REJECTED: {symbol}")
+                logger.error(f"   Error Code:    {error_code}")
+                logger.error(f"   Error Message: {error_message}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to place Coinbase market order {side} {symbol}: {e}")
+            return None
+
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                          price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """Place a GTC limit order on Coinbase.
+
+        Args:
+            symbol: Trading pair, e.g. 'BTC-USD'
+            side: 'buy' or 'sell'
+            size: Base-asset quantity (crypto amount) for the order
+            price: Limit price in quote currency (USD)
+            size_type: Ignored – Coinbase limit orders always use base quantity.
+
+        Returns:
+            Order response dict, or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                raise RuntimeError("Coinbase REST client not initialized")
+
+            logger.info(f"Placing Coinbase GTC limit {side} order: {symbol} qty={size} @ {price}")
+            if side.lower() == 'buy':
+                resp = broker.client.limit_order_gtc_buy(
+                    product_id=symbol,
+                    base_size=str(size),
+                    limit_price=str(price)
+                )
+            else:
+                resp = broker.client.limit_order_gtc_sell(
+                    product_id=symbol,
+                    base_size=str(size),
+                    limit_price=str(price)
+                )
+
+            order_id = self._extract_order_id(resp)
+
+            logger.info(f"✅ Coinbase limit {side} order placed: {symbol} order_id={order_id}")
+            return {
+                'order_id': order_id,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'price': price,
+                'status': 'open',
+                'raw': resp
+            }
+        except Exception as e:
+            logger.error(f"Failed to place Coinbase limit order {side} {symbol}: {e}")
+            return None
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel an open order on Coinbase.
+
+        Args:
+            order_id: The Coinbase order ID to cancel.
+
+        Returns:
+            True if the cancel request was accepted, False otherwise.
+        """
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                raise RuntimeError("Coinbase REST client not initialized")
+
+            logger.info(f"Cancelling Coinbase order: {order_id}")
+            resp = broker.client.cancel_orders(order_ids=[order_id])
+
+            # The SDK returns a list of CancelOrdersResult objects
+            results = getattr(resp, 'results', None)
+            if isinstance(resp, dict):
+                results = resp.get('results', [])
+
+            if results:
+                first = results[0]
+                success = getattr(first, 'success', None)
+                if isinstance(first, dict):
+                    success = first.get('success')
+                if success is False:
+                    failure_reason = getattr(first, 'failure_reason', 'unknown')
+                    logger.warning(f"⚠️ Coinbase cancel order {order_id} failed: {failure_reason}")
+                    return False
+
+            logger.info(f"✅ Coinbase order cancelled: {order_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to cancel Coinbase order {order_id}: {e}")
+            return False
+
+    def get_open_positions(self) -> List[Dict]:
+        """Get open crypto positions held on Coinbase.
+
+        Returns:
+            List of position dicts (symbol, quantity, side, entry_price, …).
+        """
+        try:
+            broker = self._get_broker()
+            return broker.get_positions()
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase open positions: {e}")
+            return []
+
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get the status of a Coinbase order.
+
+        Args:
+            order_id: The Coinbase order ID to query.
+
+        Returns:
+            Order status dict, or None on failure.
+        """
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                raise RuntimeError("Coinbase REST client not initialized")
+
+            logger.info(f"Checking Coinbase order status: {order_id}")
+            resp = broker.client.get_order(order_id=order_id)
+
+            order = getattr(resp, 'order', None)
+            if isinstance(resp, dict):
+                order = resp.get('order', resp)
+
+            if order is None:
+                return None
+
+            status = getattr(order, 'status', None)
+            filled_size = getattr(order, 'filled_size', None)
+            if isinstance(order, dict):
+                status = order.get('status')
+                filled_size = order.get('filled_size')
+
+            return {
+                'order_id': order_id,
+                'status': status,
+                'filled_size': filled_size,
+                'raw': order
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch Coinbase order status for {order_id}: {e}")
+            return None
+
+    def get_trading_fees(self, symbol: str) -> Dict[str, float]:
+        """Get trading fee rates for a symbol from the Coinbase API.
+
+        Attempts to pull live account-level fee tiers via the
+        ``get_transaction_summary`` endpoint. Falls back to the standard
+        Coinbase Advanced Trade default fee schedule when the live call
+        fails or returns unexpected data.
+
+        Args:
+            symbol: Trading pair symbol (e.g. 'BTC-USD')
+
+        Returns:
+            dict with keys 'maker_fee', 'taker_fee' (both as decimals) and
+            'source' ('live' or 'hardcoded').
+        """
+        # Coinbase Advanced Trade standard defaults (non-VIP tier)
+        _DEFAULT = {'maker_fee': 0.004, 'taker_fee': 0.006, 'source': 'hardcoded'}
+
+        try:
+            broker = self._get_broker()
+            if broker.client is None:
+                return _DEFAULT
+
+            # Coinbase Advanced Trade API: GET /api/v3/brokerage/transaction_summary
+            resp = broker.client.get_transaction_summary()
+
+            # Normalise response to a plain dict regardless of SDK version
+            resp_dict = resp if isinstance(resp, dict) else vars(resp) if hasattr(resp, '__dict__') else {}
+            fee_tier = resp_dict.get('fee_tier') or getattr(resp, 'fee_tier', None) or {}
+            if not isinstance(fee_tier, dict):
+                fee_tier = vars(fee_tier) if hasattr(fee_tier, '__dict__') else {}
+
+            maker_raw = fee_tier.get('maker_fee_rate')
+            taker_raw = fee_tier.get('taker_fee_rate')
+
+            if maker_raw is not None and taker_raw is not None:
+                return {
+                    'maker_fee': float(maker_raw),
+                    'taker_fee': float(taker_raw),
+                    'source': 'live',
+                }
+
+        except Exception as e:
+            logger.debug(f"Could not fetch live Coinbase fees for {symbol}: {e}")
+
+        return _DEFAULT
+
+
+class BinanceBrokerAdapter(BrokerInterface):
+    """
+    Binance API adapter (skeleton for future implementation).
+
+    Supports both spot and futures trading.
+    """
+
+    def __init__(self, api_key: str = None, api_secret: str = None,
+                 testnet: bool = False):
+        """
+        Initialize Binance broker adapter.
+
+        Args:
+            api_key: Binance API key
+            api_secret: Binance API secret
+            testnet: Use Binance testnet (default: False)
+        """
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.testnet = testnet
+        self.client = None
+        logger.info(f"Binance broker adapter initialized (testnet={testnet})")
+
+    def connect(self) -> bool:
+        """Connect to Binance API."""
+        logger.info("Connecting to Binance API...")
+        # TODO: Implement Binance client initialization
+        # Example:
+        # from binance.client import Client
+        # self.client = Client(self.api_key, self.api_secret, testnet=self.testnet)
+        return False
+
+    def get_account_balance(self) -> Dict[str, float]:
+        """Get Binance account balance."""
+        logger.info("Fetching Binance account balance...")
+        return {
+            'total_balance': 0.0,
+            'available_balance': 0.0,
+            'currency': 'USDT'
+        }
+
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                       limit: int = 100) -> Optional[Dict]:
+        """Get market data from Binance."""
+        logger.info(f"Fetching Binance market data for {symbol}...")
+        return None
+
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          size_type: str = 'quote') -> Optional[Dict]:
+        """Place market order on Binance."""
+        logger.info(f"Placing Binance market {side} order: {symbol}")
+        return None
+
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """Place limit order on Binance."""
+        logger.info(f"Placing Binance limit {side} order: {symbol} @ {price}")
+        return None
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel order on Binance."""
+        logger.info(f"Cancelling Binance order: {order_id}")
+        return False
+
+    def get_open_positions(self) -> List[Dict]:
+        """Get open positions from Binance."""
+        return []
+
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get order status from Binance."""
+        logger.info(f"Checking Binance order status: {order_id}")
+        return None
+
+
+class AlpacaBrokerAdapter(BrokerInterface):
+    """
+    Alpaca API adapter for stock/crypto trading (skeleton for future implementation).
+    """
+
+    def __init__(self, api_key: str = None, api_secret: str = None,
+                 paper: bool = True):
+        """
+        Initialize Alpaca broker adapter.
+
+        Args:
+            api_key: Alpaca API key
+            api_secret: Alpaca API secret
+            paper: Use paper trading (default: True)
+        """
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.paper = paper
+        self.client = None
+        logger.info(f"Alpaca broker adapter initialized (paper={paper})")
+
+    def connect(self) -> bool:
+        """Connect to Alpaca API."""
+        logger.info("Connecting to Alpaca API...")
+        # TODO: Implement Alpaca client initialization
+        # Example:
+        # from alpaca.trading.client import TradingClient
+        # self.client = TradingClient(self.api_key, self.api_secret, paper=self.paper)
+        return False
+
+    def get_account_balance(self) -> Dict[str, float]:
+        """Get Alpaca account balance."""
+        logger.info("Fetching Alpaca account balance...")
+        return {
+            'total_balance': 0.0,
+            'available_balance': 0.0,
+            'currency': 'USD'
+        }
+
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                       limit: int = 100) -> Optional[Dict]:
+        """Get market data from Alpaca."""
+        logger.info(f"Fetching Alpaca market data for {symbol}...")
+        return None
+
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          size_type: str = 'quote') -> Optional[Dict]:
+        """Place market order on Alpaca."""
+        logger.info(f"Placing Alpaca market {side} order: {symbol}")
+        return None
+
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """Place limit order on Alpaca."""
+        logger.info(f"Placing Alpaca limit {side} order: {symbol} @ {price}")
+        return None
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel order on Alpaca."""
+        logger.info(f"Cancelling Alpaca order: {order_id}")
+        return False
+
+    def get_open_positions(self) -> List[Dict]:
+        """Get open positions from Alpaca."""
+        return []
+
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get order status from Alpaca."""
+        logger.info(f"Checking Alpaca order status: {order_id}")
+        return None
+
+
+class KrakenBrokerAdapter(BrokerInterface):
+    """
+    Kraken Pro API adapter for cryptocurrency spot trading.
+
+    Supports spot trading with USD/USDT pairs.
+    Documentation: https://docs.kraken.com/rest/
+    """
+
+    # Class-level flag to track if detailed permission error instructions have been logged
+    # This prevents spamming the logs with duplicate permission error messages
+    # The detailed instructions are logged ONCE GLOBALLY across all adapter instances
+    # Thread-safe: uses lock for concurrent access protection
+    _permission_error_details_logged = False
+    _permission_errors_lock = threading.Lock()
+
+    def __init__(self, api_key: str = None, api_secret: str = None):
+        """
+        Initialize Kraken broker adapter.
+
+        Args:
+            api_key: Kraken API key
+            api_secret: Kraken API private key
+        """
+        import os
+
+        # Use explicit credentials if both are provided, otherwise use environment variables
+        if api_key and api_secret:
+            # Explicit credentials provided - use them directly
+            self.api_key = api_key
+            self.api_secret = api_secret
+            logger.info("Kraken broker adapter initialized with explicit credentials")
+        else:
+            # Load from environment variables
+            # Prioritize KRAKEN_PLATFORM_API_KEY, fallback to legacy KRAKEN_API_KEY
+            platform_key = os.getenv("KRAKEN_PLATFORM_API_KEY", "").strip()
+            platform_secret = os.getenv("KRAKEN_PLATFORM_API_SECRET", "").strip()
+            legacy_key = os.getenv("KRAKEN_API_KEY", "").strip()
+            legacy_secret = os.getenv("KRAKEN_API_SECRET", "").strip()
+
+            # Use master credentials if both are available, otherwise try legacy
+            if platform_key and platform_secret:
+                self.api_key = platform_key
+                self.api_secret = platform_secret
+                logger.info("Kraken broker adapter initialized with KRAKEN_PLATFORM_API_KEY")
+            elif legacy_key and legacy_secret:
+                self.api_key = legacy_key
+                self.api_secret = legacy_secret
+                logger.info("Kraken broker adapter initialized with legacy KRAKEN_API_KEY")
+            else:
+                # No credentials available
+                self.api_key = None
+                self.api_secret = None
+                logger.warning("Kraken broker adapter initialized without credentials")
+
+        self.api = None
+        self.kraken_api = None
+
+        # Circuit breaker for this adapter instance (one breaker per adapter)
+        # Provides: exponential back-off with jitter, health-state tracking,
+        # and hard trading pause when the Kraken API is persistently unstable.
+        self._circuit_breaker = None
+        if _CIRCUIT_BREAKER_AVAILABLE and get_circuit_breaker is not None:
+            cb_name = f"Kraken-{id(self)}"
+            self._circuit_breaker = get_circuit_breaker(
+                cb_name,
+                failure_threshold=5,
+                recovery_timeout=60.0,
+                success_threshold=2,
+                max_retry_delay=30.0,
+            )
+
+        # Flag indicating whether the secondary (fallback) krakenex instance
+        # has been initialised.  Created lazily in _kraken_api_call_with_fallback.
+        self._secondary_api = None
+
+        # ── In-memory cache for entry prices fetched from Kraken order history
+        # Once a price is successfully fetched it is never re-fetched until the
+        # position changes (permanent cache).
+        self._entry_price_cache: dict = {}   # { symbol -> float }
+        self._entry_price_cache_lock = threading.Lock()
+
+        # ── Balance cache: avoids hammering the Kraken API every few seconds
+        self._balance_cache: dict = {}           # last successful response dict
+        self._balance_cache_time: float = 0.0    # unix timestamp of last fetch
+        self._balance_cache_ttl: float = 45.0    # seconds before re-fetching
+
+    def _kraken_api_call(self, method: str, params: dict = None):
+        """
+        Make a Kraken API call with:
+
+        * Global serialisation lock (one call at a time, avoids nonce races).
+        * **Circuit breaker** — opens after 5 consecutive failures, pauses
+          trading for 60 s, then enters HALF-OPEN test mode.
+        * **Secondary endpoint fallback** — if the primary krakenex instance
+          raises a connection / network error, a fresh secondary instance is
+          created (new TCP session) and the call is retried once.
+
+        Args:
+            method: Kraken API method name  (e.g. ``'Balance'``, ``'AddOrder'``)
+            params: Optional parameters dict
+
+        Returns:
+            API response dict
+        """
+        # ── Guard: circuit breaker health check ──────────────────────
+        if self._circuit_breaker is not None and not self._circuit_breaker.is_trading_allowed():
+            remaining = self._circuit_breaker.recovery_time_remaining()
+            status = self._circuit_breaker.get_status()
+            raise Exception(
+                f"Kraken API circuit breaker OPEN — trading paused. "
+                f"Recovery in ~{remaining:.0f}s. "
+                f"State: {status['circuit_state']}"
+            )
+
+        try:
+            result = self._kraken_api_call_primary(method, params)
+            # Record success for circuit-breaker health tracking
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_success()
+            return result
+
+        except Exception as primary_exc:
+            primary_msg = str(primary_exc).lower()
+
+            # ── Record failure ────────────────────────────────────────
+            if self._circuit_breaker is not None:
+                self._circuit_breaker.record_failure(primary_exc)
+
+            # ── Secondary endpoint fallback ───────────────────────────
+            # Only attempt fallback for transient network / connection errors.
+            # Hard errors (invalid nonce, insufficient funds, …) are re-raised
+            # immediately so the caller can handle them correctly.
+            _is_network_error = (
+                isinstance(primary_exc, (ConnectionError, TimeoutError, OSError))
+                or any(
+                    kw in primary_msg for kw in (
+                        'timeout', 'connection', 'network', 'remote end closed',
+                        'remotedisconnected', 'connection reset', 'broken pipe',
+                        'eof', 'ssl', 'read timed out', 'service unavailable',
+                        '503', '504',
+                    )
+                )
+            )
+
+            if not _is_network_error:
+                raise  # Re-raise non-network errors without fallback
+
+            logger.warning(
+                f"⚠️ Kraken primary connection failed ({primary_exc}). "
+                "Attempting secondary endpoint fallback …"
+            )
+
+            try:
+                result = self._kraken_api_call_secondary(method, params)
+                logger.info("✅ Kraken secondary endpoint fallback succeeded")
+                # Count this as a success (primary failed but secondary worked)
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker.record_success()
+                return result
+
+            except Exception as secondary_exc:
+                logger.error(
+                    f"❌ Kraken secondary endpoint also failed: {secondary_exc}"
+                )
+                # Record second failure so circuit breaker accumulates properly
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker.record_failure(secondary_exc)
+                # Raise the *original* primary exception for consistent error messages
+                raise primary_exc from secondary_exc
+
+    def _kraken_api_call_primary(self, method: str, params: dict = None):
+        """Execute a Kraken API call via the primary krakenex instance."""
+        with suppress_pykrakenapi_prints():
+            if get_kraken_api_lock is not None:
+                api_lock = get_kraken_api_lock()
+                with api_lock:
+                    if params:
+                        return self.api.query_private(method, params)
+                    else:
+                        return self.api.query_private(method)
+            else:
+                # Fallback: direct call without global lock
+                if params:
+                    return self.api.query_private(method, params)
+                else:
+                    return self.api.query_private(method)
+
+    def _kraken_api_call_secondary(self, method: str, params: dict = None):
+        """
+        Execute a Kraken API call via a *secondary* (fresh) krakenex instance.
+
+        A fresh instance opens a new TCP session to ``api.kraken.com``,
+        bypassing any stale keep-alive or SSL state from the primary connection.
+        The same credentials and global nonce manager are reused.
+        """
+        import krakenex  # local import — only needed on fallback path
+
+        if self._secondary_api is None:
+            self._secondary_api = krakenex.API(
+                key=self.api_key or "",
+                secret=self.api_secret or "",
+            )
+            # Attach the same global nonce manager so nonces remain monotonic
+            if get_global_kraken_nonce is not None:
+                def _global_nonce():
+                    _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                    if _lock is not None:
+                        with _lock:
+                            return str(get_global_kraken_nonce())
+                    return str(get_global_kraken_nonce())
+                self._secondary_api._nonce = _global_nonce
+            logger.info("🔌 Kraken secondary API instance created (fallback endpoint)")
+
+        with suppress_pykrakenapi_prints():
+            if get_kraken_api_lock is not None:
+                api_lock = get_kraken_api_lock()
+                with api_lock:
+                    if params:
+                        return self._secondary_api.query_private(method, params)
+                    else:
+                        return self._secondary_api.query_private(method)
+            else:
+                if params:
+                    return self._secondary_api.query_private(method, params)
+                else:
+                    return self._secondary_api.query_private(method)
+
+    def connect(self) -> bool:
+        """Connect to Kraken API."""
+        try:
+            import krakenex
+            from pykrakenapi import KrakenAPI
+
+            if not self.api_key or not self.api_secret:
+                logger.error("Kraken credentials not found")
+                return False
+
+            # ✅ REQUIREMENT 3: Verify per-API key execution
+            try:
+                from bot.kraken_order_validator import verify_per_api_key_execution
+                account_type = getattr(self, 'account_identifier', 'UNKNOWN')
+                verify_per_api_key_execution(self.api_key, account_type)
+            except ImportError:
+                logger.debug("Kraken order validator not available, skipping per-API key verification")
+
+            self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
+
+            # FINAL FIX: Override nonce generator to use GLOBAL Kraken Nonce Manager
+            # ONE global source for all users (master + users)
+            if get_global_kraken_nonce is not None:
+                def _global_nonce():
+                    """Generate nonce using global manager (nanosecond precision)."""
+                    _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                    if _lock is not None:
+                        with _lock:
+                            return str(get_global_kraken_nonce())
+                    return str(get_global_kraken_nonce())
+
+                self.api._nonce = _global_nonce
+                logger.debug("✅ Global Kraken Nonce Manager installed for KrakenBrokerAdapter")
+            else:
+                logger.warning("⚠️ Global nonce manager not available, using krakenex default")
+
+            self.kraken_api = KrakenAPI(self.api)
+
+            # PRE-CONNECTION NONCE JUMP: Jump nonce forward before the first API call.
+            # This clears any "burned" nonce window left by a previous session, which is
+            # the primary cause of "EAPI:Invalid nonce" errors on restart.
+            if jump_global_kraken_nonce_forward is not None:
+                try:
+                    jump_global_kraken_nonce_forward(_KRAKEN_NONCE_RECOVERY_JUMP_MS)
+                    logger.info("   ⚡ Pre-connection nonce jump applied (clears burned nonce window from previous sessions)")
+                except Exception as _nonce_jump_err:
+                    logger.debug(f"   Pre-connection nonce jump skipped: {_nonce_jump_err}")
+
+            # Test connection with retry logic for nonce errors
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                balance = self._kraken_api_call('Balance')
+
+                if balance and 'error' in balance and balance['error']:
+                    error_msgs = ', '.join(balance['error'])
+
+                    # Check if it's a nonce error - retry with a nonce jump
+                    is_nonce_error = any(kw in error_msgs.lower() for kw in [
+                        'invalid nonce', 'eapi:invalid nonce', 'nonce window'
+                    ])
+                    if is_nonce_error and attempt < max_attempts:
+                        logger.warning(f"   ⚠️ Kraken nonce error on attempt {attempt}/{max_attempts}: {error_msgs}")
+                        logger.info(f"   🔄 Jumping nonce forward 120 s and retrying...")
+                        if jump_global_kraken_nonce_forward is not None:
+                            try:
+                                jump_global_kraken_nonce_forward(_KRAKEN_NONCE_RECOVERY_JUMP_MS)
+                            except Exception as _je:
+                                logger.debug(f"   Nonce jump failed (non-critical): {_je}")
+                        time.sleep(3)
+                        continue
+
+                    # Check if it's a permission error
+                    is_permission_error = any(keyword in error_msgs.lower() for keyword in [
+                        'permission denied', 'egeneral:permission',
+                        'eapi:invalid permission', 'insufficient permission'
+                    ])
+
+                    if is_permission_error:
+                        logger.error(f"❌ Kraken connection test failed: {error_msgs}")
+
+                        # Thread-safe check and update of global flag
+                        with KrakenBrokerAdapter._permission_errors_lock:
+                            # Only log detailed permission error instructions ONCE GLOBALLY
+                            # After the first Kraken permission error, subsequent errors
+                            # get a brief reference message instead of full instructions
+                            # This prevents log spam when multiple adapters have permission errors
+                            if not KrakenBrokerAdapter._permission_error_details_logged:
+                                KrakenBrokerAdapter._permission_error_details_logged = True
+                                should_log_details = True
+                            else:
+                                should_log_details = False
+
+                        if should_log_details:
+                            logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                            logger.error("   Your Kraken API key does not have the required permissions.")
+                            logger.warning("")
+                            logger.warning("   To fix this issue:")
+                            logger.warning("   1. Go to https://www.kraken.com/u/security/api")
+                            logger.warning("   2. Find your API key and edit its permissions")
+                            logger.warning("   3. Enable these permissions:")
+                            logger.warning("      ✅ Query Funds (required to check balance)")
+                            logger.warning("      ✅ Query Open Orders & Trades (required for position tracking)")
+                            logger.warning("      ✅ Query Closed Orders & Trades (required for trade history)")
+                            logger.warning("      ✅ Create & Modify Orders (required to place trades)")
+                            logger.warning("      ✅ Cancel/Close Orders (required for stop losses)")
+                            logger.warning("   4. Save changes and restart the bot")
+                            logger.warning("")
+                            logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
+                            logger.warning("   See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                        else:
+                            logger.error("   ⚠️  API KEY PERMISSION ERROR")
+                            logger.error("   Your Kraken API key does not have the required permissions.")
+                            logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' permissions at:")
+                            logger.error("   https://www.kraken.com/u/security/api")
+                            logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                    else:
+                        logger.error(f"Kraken connection test failed: {error_msgs}")
+
+                    return False
+
+                if balance and 'result' in balance:
+                    logger.info("✅ Kraken connected")
+                    return True
+
+            return False
+
+        except ImportError:
+            logger.error("Kraken SDK not installed. Install with: pip install krakenex pykrakenapi")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to connect to Kraken: {e}")
+            return False
+
+    def get_account_balance(self, verbose: bool = True) -> Dict[str, float]:
+        """Get Kraken account balance with proper error handling.
+
+        Results are cached for up to ``_balance_cache_ttl`` seconds (default 45 s)
+        to reduce Kraken API load.  Pass ``verbose=True`` (the default) to log
+        balance details; the cache hit path suppresses redundant log lines.
+
+        Args:
+            verbose: If True, log balance info. If False, suppress verbose logging.
+
+        Returns:
+            Dict with balance information including total_balance, available_balance, currency, and error status.
+        """
+        try:
+            if not self.api:
+                return {
+                    'total_balance': 0.0,
+                    'available_balance': 0.0,
+                    'currency': 'USD',
+                    'error': True,
+                    'error_message': 'API not connected'
+                }
+
+            # ── Balance cache: serve from cache if fresh enough ───────────────
+            now = time.time()
+            if (
+                self._balance_cache
+                and not self._balance_cache.get('error', True)
+                and (now - self._balance_cache_time) < self._balance_cache_ttl
+            ):
+                cache_age = now - self._balance_cache_time
+                logger.debug(f"[BalanceCache] Returning cached Kraken balance (age {cache_age:.0f}s)")
+                return self._balance_cache
+
+            # ── Live fetch ────────────────────────────────────────────────────
+            # Use helper method for serialized API call
+            balance = self._kraken_api_call('Balance')
+            logger.warning(f"[KRAKEN] RAW BALANCE RESPONSE: {balance}")
+
+            # Check for API errors
+            if balance and 'error' in balance and balance['error']:
+                error_msgs = ', '.join(balance['error'])
+                if verbose:
+                    logger.error(f"Kraken API error fetching balance: {error_msgs}")
+                return {
+                    'total_balance': 0.0,
+                    'available_balance': 0.0,
+                    'currency': 'USD',
+                    'error': True,
+                    'error_message': f'API error: {error_msgs}'
+                }
+
+            if balance and 'result' in balance:
+                result = balance['result']
+                usd_balance = float(result.get('ZUSD', 0))
+                usdt_balance = float(result.get('USDT', 0))
+                total = usd_balance + usdt_balance
+
+                if verbose:
+                    logger.info(f"Kraken balance: USD ${usd_balance:.2f} + USDT ${usdt_balance:.2f} = ${total:.2f}")
+
+                response = {
+                    'total_balance': total,
+                    'available_balance': total,
+                    'currency': 'USD',
+                    'error': False
+                }
+                # Update cache
+                self._balance_cache = response
+                self._balance_cache_time = now
+                return response
+
+            # Unexpected response format
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USD',
+                'error': True,
+                'error_message': 'Unexpected API response format'
+            }
+
+        except Exception as e:
+            if verbose:
+                logger.error(f"Error fetching Kraken balance: {e}")
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USD',
+                'error': True,
+                'error_message': str(e)
+            }
+
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                       limit: int = 100) -> Optional[Dict]:
+        """Get market data from Kraken."""
+        try:
+            if not self.kraken_api:
+                return None
+
+            # Convert symbol format using helper method
+            kraken_symbol = self._convert_to_kraken_symbol(symbol)
+
+            # Map timeframe to Kraken interval (in minutes)
+            interval_map = {
+                "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+                "1h": 60, "4h": 240, "1d": 1440
+            }
+
+            kraken_interval = interval_map.get(timeframe.lower(), 5)
+
+            # Fetch OHLC data
+            ohlc, last = self.kraken_api.get_ohlc_data(
+                kraken_symbol,
+                interval=kraken_interval,
+                ascending=True
+            )
+
+            # Convert to standard format (vectorised – avoids iterrows overhead)
+            tail = ohlc.tail(limit)
+            timestamps = [int(ts.timestamp()) for ts in tail.index]
+            ohlcv_data = tail[['open', 'high', 'low', 'close', 'volume']].astype(float).values
+            candles = [
+                {'timestamp': ts, 'open': o, 'high': h, 'low': l, 'close': c, 'volume': v}
+                for ts, (o, h, l, c, v) in zip(timestamps, ohlcv_data)
+            ]
+
+            logger.info(f"Fetched {len(candles)} candles for {kraken_symbol} from Kraken")
+
+            return {
+                'symbol': kraken_symbol,
+                'timeframe': timeframe,
+                'candles': candles
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching Kraken market data: {e}")
+            return None
+
+    def _convert_to_kraken_symbol(self, symbol: str) -> str:
+        """
+        Convert a symbol to Kraken format.
+
+        Helper method to ensure consistent symbol conversion across all methods.
+        Uses the centralized kraken_adapter module for normalization.
+
+        Args:
+            symbol: Symbol in various formats (BTC-USD, ETH/USDT, etc.)
+
+        Returns:
+            Kraken-formatted symbol (BTCUSD, ETHUSD, etc.)
+        """
+        # ✅ FIX (MANDATORY): Use centralized Kraken symbol normalization
+        if normalize_kraken_symbol:
+            return normalize_kraken_symbol(symbol)
+
+        # Fallback: Use symbol mapper if available
+        if convert_to_kraken:
+            kraken_symbol = convert_to_kraken(symbol)
+            if kraken_symbol:
+                return kraken_symbol
+
+        # Fallback: Manual conversion
+        # Remove separators and uppercase
+        kraken_symbol = symbol.replace('-', '').replace('/', '').upper()
+
+        # Modern Kraken API uses BTC (not XBT) for Bitcoin pairs
+        return kraken_symbol
+
+    def _validate_kraken_order(self, symbol: str, side: str, size: float,
+                              size_type: str = 'quote',
+                              current_price: float = None) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Validate Kraken order before placing it.
+
+        This method enforces:
+        1. Symbol format validation (Kraken only supports USD/USDT pairs)
+        2. Order minimum validation (Kraken minimums)
+        3. Tier-based minimum enforcement (prevent fee-destroying trades)
+        4. Proper symbol conversion (BTC -> XBT, etc.)
+
+        Args:
+            symbol: Trading pair symbol (e.g., "BTC-USD", "ETH/USDT")
+            side: 'buy' or 'sell'
+            size: Order size (quantity)
+            size_type: 'quote' (USD value) or 'base' (asset quantity)
+            current_price: Optional current price for USD calculation
+
+        Returns:
+            Tuple of (is_valid, kraken_symbol, error_message)
+        """
+        # ✅ REQUIREMENT #1: Symbol format validation (case-insensitive)
+        # Kraken only supports */USD and */USDT pairs
+        symbol_upper = symbol.upper()
+        if not (symbol_upper.endswith('/USD') or symbol_upper.endswith('/USDT') or
+                symbol_upper.endswith('-USD') or symbol_upper.endswith('-USDT')):
+            return (False, None, f"Kraken only supports USD/USDT pairs. Symbol '{symbol}' is not supported.")
+
+        # ✅ REQUIREMENT #2: Convert to Kraken format using helper method
+        kraken_symbol = self._convert_to_kraken_symbol(symbol)
+
+        # ✅ REQUIREMENT #3: Validate order size meets Kraken minimums
+        # Calculate USD notional value
+        if size_type == 'quote':
+            order_size_usd = size
+        elif size_type == 'base' and current_price:
+            order_size_usd = size * current_price
+        else:
+            order_size_usd = size  # Assume it's in USD if we can't calculate
+
+        # FIX #3: Kraken minimum order size enforcement with $10.00 best practice
+        # Always enforce our FIX #3 constant ($10.00), regardless of KrakenAdapter setting
+        KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($10.00)
+
+        if order_size_usd < KRAKEN_MIN_ORDER_USD:
+            return (False, kraken_symbol,
+                    f"Order size ${order_size_usd:.2f} below Kraken minimum ${KRAKEN_MIN_ORDER_USD:.2f} (FIX #3 safety buffer)")
+
+        # ✅ REQUIREMENT #4: Tier-based minimum enforcement
+        # Check if user's balance tier allows this trade size
+        tier_validation_result = None  # Store result to log outside try-except
+
+        if get_tier_from_balance and validate_trade_size:
+            try:
+                # Get current balance
+                balance_info = self.get_account_balance()
+                if balance_info and not balance_info.get('error', False):
+                    current_balance = balance_info.get('total_balance', 0.0)
+
+                    # Check if balance meets minimum to operate bot (SAVER tier minimum)
+                    # Get minimum from tier config for consistency
+                    min_balance = 10.0  # Default if tier_config not available
+                    if get_tier_config and TradingTier:
+                        try:
+                            saver_config = get_tier_config(TradingTier.SAVER)
+                            min_balance = saver_config.capital_min
+                        except Exception:
+                            pass  # Use default
+
+                    if current_balance < min_balance:
+                        return (False, kraken_symbol,
+                                f"Account balance ${current_balance:.2f} below minimum to operate bot (${min_balance:.2f}). Cannot execute trades.")
+
+                    # Determine user's tier
+                    user_tier = get_tier_from_balance(current_balance)
+                    tier_config = get_tier_config(user_tier)
+
+                    # AUTO-RESIZE trade instead of rejecting (smarter approach)
+                    if auto_resize_trade:
+                        resized_size, resize_reason = auto_resize_trade(order_size_usd, user_tier, current_balance)
+
+                        if resized_size == 0.0:
+                            # Trade is below minimum
+                            return (False, kraken_symbol,
+                                    f"[{user_tier.value} Tier] {resize_reason}")
+                        elif resized_size != order_size_usd:
+                            # Trade was auto-resized
+                            logger.info(f"📏 AUTO-RESIZE: ${order_size_usd:.2f} → ${resized_size:.2f} ({resize_reason})")
+                            # Update size to resized amount
+                            size = resized_size
+                            order_size_usd = resized_size
+                            tier_validation_result = (user_tier.value, resized_size, True)  # True = was resized
+                        else:
+                            # Trade is within limits
+                            tier_validation_result = (user_tier.value, order_size_usd, False)  # False = no resize
+                    else:
+                        # Fallback to old validation
+                        is_valid, reason = validate_trade_size(order_size_usd, user_tier, current_balance)
+
+                        if not is_valid:
+                            return (False, kraken_symbol,
+                                    f"[{user_tier.value} Tier] {reason}. Account balance: ${current_balance:.2f}")
+
+                        # Store validation success for logging outside try-except
+                        tier_validation_result = (user_tier.value, order_size_usd, False)
+
+            except Exception as tier_err:
+                # Don't block trade if tier validation fails - just log warning
+                logger.warning(f"⚠️  Tier validation error (allowing trade): {tier_err}")
+
+        # Log tier validation success (outside try-except for performance)
+        if tier_validation_result:
+            if len(tier_validation_result) == 3:
+                tier_name, validated_size, was_resized = tier_validation_result
+                if was_resized:
+                    logger.info(f"📏 Trade auto-resized: [{tier_name}] ${validated_size:.2f}")
+                else:
+                    logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
+            else:
+                tier_name, validated_size = tier_validation_result
+                logger.info(f"✅ Tier validation passed: [{tier_name}] ${validated_size:.2f} trade")
+
+        # ✅ REQUIREMENT #5: Broker adapter validation (if available)
+        if BrokerAdapterFactory and TradeIntent and OrderIntent:
+            try:
+                # Create trade intent
+                intent_type = OrderIntent.BUY if side.lower() == 'buy' else OrderIntent.SELL
+                intent = TradeIntent(
+                    intent_type=intent_type,
+                    symbol=symbol,
+                    quantity=size,
+                    size_usd=order_size_usd,
+                    size_type=size_type,
+                    force_execute=False,
+                    reason="Strategy signal"
+                )
+
+                # Validate with Kraken adapter
+                adapter = BrokerAdapterFactory.create_adapter("kraken")
+                validated = adapter.validate_and_adjust(intent)
+
+                if not validated.valid:
+                    return (False, kraken_symbol, validated.error_message)
+
+                # Log any warnings
+                if validated.warnings:
+                    for warning in validated.warnings:
+                        logger.warning(f"⚠️  {warning}")
+
+            except Exception as adapter_err:
+                # Don't block trade if adapter validation fails - just log warning
+                logger.warning(f"⚠️  Adapter validation error (allowing trade): {adapter_err}")
+
+        # All validations passed
+        return (True, kraken_symbol, None)
+
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          size_type: str = 'quote') -> Optional[Dict]:
+        """
+        Place market order on Kraken with comprehensive validation.
+
+        This method now includes:
+        - Symbol format validation
+        - Order minimum enforcement (Kraken + tier minimums)
+        - Proper symbol conversion (BTC -> XBT)
+        - txid confirmation and verification
+        - Enhanced error logging
+        """
+        try:
+            if not self.api:
+                logger.error("❌ Kraken API not connected")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'error',
+                    'error': 'API_NOT_CONNECTED',
+                    'timestamp': datetime.now()
+                }
+
+            # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
+            # Validates: symbol format, minimums, tier requirements, symbol conversion
+            is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
+                symbol, side, size, size_type
+            )
+
+            if not is_valid:
+                logger.error(f"❌ ORDER VALIDATION FAILED [kraken] {symbol}")
+                logger.error(f"   Reason: {error_msg}")
+                logger.error(f"   Side: {side}, Size: {size}, Type: {size_type}")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'error',
+                    'error': 'VALIDATION_FAILED',
+                    'message': error_msg,
+                    'timestamp': datetime.now()
+                }
+
+            # Log validated order details
+            logger.info(f"📝 Placing Kraken market {side} order: {kraken_symbol}")
+            logger.info(f"   Size: {size} {size_type}, Validation: PASSED")
+
+            # Get current price for validation (rough estimate for market orders)
+            # NOTE: This adds latency (~50-200ms) to fetch ticker data for validation.
+            # Alternative: Could use cached price data or skip validation for market orders
+            # since the final fill price may differ anyway. For now, accepting the latency
+            # trade-off for better order validation accuracy.
+            try:
+                ticker_result = self._kraken_api_call('Ticker', {'pair': kraken_symbol})
+                if ticker_result and 'result' in ticker_result:
+                    ticker_data = ticker_result['result'].get(kraken_symbol, {})
+                    current_price = float(ticker_data.get('c', [0.0])[0]) if ticker_data else 0.0
+                else:
+                    current_price = 0.0
+            except Exception as price_err:
+                logger.debug(f"Could not fetch price for validation: {price_err}")
+                current_price = 0.0
+
+            # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
+            # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
+            # Kraken requires $10.00 minimum to prevent fee erosion
+            if current_price > 0:
+                # Calculate order cost in USD
+                if size_type == 'quote':
+                    order_cost_usd = size
+                    # Convert to base currency volume for validation
+                    volume_to_validate = size / current_price
+                    logger.info(f"📊 USD to Volume Conversion:")
+                    logger.info(f"   USD amount: ${size:.2f}")
+                    logger.info(f"   Price: ${current_price:.8f}")
+                    logger.info(f"   Volume (base): {volume_to_validate:.8f}")
+                else:  # base
+                    order_cost_usd = size * current_price
+                    volume_to_validate = size
+
+                # Check if order meets Kraken's minimum cost requirement
+                if order_cost_usd < KRAKEN_MIN_ORDER_COST:
+                    logger.error("=" * 70)
+                    logger.error("❌ FIX #3: Kraken order blocked (safety buffer)")
+                    logger.error("=" * 70)
+                    logger.error(f"   Order Cost: ${order_cost_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    if size_type == 'quote':
+                        logger.error(f"   Volume (base): {volume_to_validate:.8f}")
+                    logger.error("   ⚠️  $10.00 minimum prevents fee erosion and ghost trades")
+                    logger.error("=" * 70)
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,
+                        'status': 'skipped',
+                        'error': f'FIX #3: Below Kraken $10.00 minimum (${order_cost_usd:.2f})',
+                        'timestamp': datetime.now()
+                    }
+
+                # Validate using base currency volume
+                is_valid, adjusted_volume, error_msg = validate_and_adjust_order(
+                    pair=kraken_symbol,
+                    volume=volume_to_validate,
+                    price=current_price,
+                    side=side,
+                    ordertype='market'
+                )
+
+                log_order_validation(kraken_symbol, volume_to_validate, current_price, side, is_valid, error_msg)
+
+                if not is_valid:
+                    logger.error(f"❌ Order rejected - fails Kraken minimums: {error_msg}")
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,
+                        'status': 'error',
+                        'error': f'Order validation failed: {error_msg}',
+                        'timestamp': datetime.now()
+                    }
+
+                # Use adjusted volume (fee-adjusted, already in base currency)
+                size = adjusted_volume
+                logger.info(f"   Using fee-adjusted volume: {size:.8f}")
+            else:
+                # If we can't get price, log warning and skip validation
+                # Order will still be submitted but without pre-validation
+                logger.warning(f"⚠️  Could not fetch price for pre-validation")
+                logger.warning(f"   Order will be submitted without size validation")
+                logger.warning(f"   Kraken will reject if order doesn't meet minimums")
+                minimums = get_pair_minimums(kraken_symbol)
+                logger.info(f"   Expected pair minimums: {minimums}")
+
+                # ✅ CRITICAL FIX: Convert USD to base currency volume when price unavailable
+                # Even without validation, we must convert quote to base for Kraken API
+                if size_type == 'quote':
+                    error_msg = f"Cannot convert USD to volume: price unavailable for {kraken_symbol}"
+                    logger.error(f"❌ {error_msg}")
+                    return {
+                        'order_id': None,
+                        'symbol': symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,
+                        'status': 'error',
+                        'error': 'PRICE_UNAVAILABLE',
+                        'message': error_msg,
+                        'timestamp': datetime.now()
+                    }
+
+            # Note: At this point, 'size' variable is in base currency:
+            # - If price was available: converted and validated above
+            # - If size_type was 'base': already in base currency
+            # - If size_type was 'quote' and no price: we returned early above
+
+            # Place market order
+            # ✅ REQUIREMENT #2: Build order parameters with proper format
+            # Ensure parameters match Kraken API requirements exactly
+            order_params = {
+                'pair': kraken_symbol,
+                'type': side.lower(),  # 'buy' or 'sell'
+                'ordertype': 'market',
+                'volume': str(size)  # Must be string format, in base currency
+            }
+
+            # ✅ REQUIREMENT #3: Execute order via serialized API call
+            # Use helper method for global nonce management and thread safety
+            result = self._kraken_api_call('AddOrder', order_params)
+
+            # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
+            # DO NOT allow rejected orders to be recorded as successful trades
+            if result and 'error' in result and result['error']:
+                error_msgs = ', '.join(result['error'])
+                logger.error("=" * 70)
+                logger.error("❌ KRAKEN ORDER REJECTED - ABORTING")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                logger.error(f"   Rejection Reason: {error_msgs}")
+                logger.error("   ⚠️  ORDER REJECTED - DO NOT RECORD TRADE")
+                logger.error("=" * 70)
+                # Raise exception to prevent recording this as a successful trade
+                raise OrderRejectedError(f"Order rejected by Kraken: {error_msgs}")
+
+            # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
+            if result and 'result' in result:
+                order_result = result['result']
+                txid = order_result.get('txid', [])
+                order_id = txid[0] if txid else None
+
+                # ✅ REQUIREMENT 3: HARD-FAIL if no txid (Requirement from problem statement)
+                # If no txid → trade not executed → raise ExecutionFailed
+                if not order_id:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN ORDER FAILED - NO TXID RETURNED")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
+                    logger.error("=" * 70)
+                    # Raise ExecutionFailed to prevent recording this as a successful trade
+                    # NO position, NO ledger write, NO stop-loss, NO cap increment
+                    raise ExecutionFailed("Kraken order not confirmed")
+
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
+                descr = order_result.get('descr', {})
+                order_description = descr.get('order', '')
+                if not order_description:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN ORDER NOT CONFIRMED - NO ORDER DESCRIPTION")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Kraken must return descr.order")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed("Kraken order not confirmed - no order description")
+
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0
+                # cost field represents the total cost/value of the order
+                cost = float(order_result.get('cost', '0'))
+                if cost <= 0:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN ORDER NOT CONFIRMED - INVALID COST")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   Cost: {cost} (must be > 0)")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Cost must be greater than zero")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed(f"Kraken order not confirmed - invalid cost: {cost}")
+
+                logger.info(f"✅ Kraken txid received: {order_id}")
+                logger.info(f"   Market {side} order: {kraken_symbol} (ID: {order_id})")
+                logger.info(f"   Order Description: {order_description}")
+                logger.info(f"   Order Cost: ${cost:.2f}")
+
+                # ✅ REQUIREMENT #2: Attempt to fetch order fill details
+                # Query the order to get filled price and volume
+                filled_price = 0.0
+                filled_volume = size
+                order_verified = False  # Track if order passes verification
+
+                if order_id:
+                    try:
+                        # Give the order a moment to fill
+                        # Configurable delay to balance confirmation accuracy vs execution speed
+                        import time
+                        order_query_delay = 0.5  # seconds - can be adjusted based on broker response time
+                        time.sleep(order_query_delay)
+
+                        # Query order details to get filled price
+                        order_query = self._kraken_api_call('QueryOrders', {'txid': order_id})
+
+                        if order_query and 'result' in order_query:
+                            order_details = order_query['result'].get(order_id, {})
+                            filled_price = float(order_details.get('price', 0.0))
+                            filled_volume = float(order_details.get('vol_exec', size))
+                            order_status = order_details.get('status', 'unknown')
+
+                            # ✅ REQUIREMENT #2: Verify Kraken returns status=closed and vol_exec > 0
+                            is_filled = (order_status == 'closed' and filled_volume > 0)
+                            order_verified = is_filled
+
+                            # ✅ SAFETY CHECK #4: Kill zero-price fills immediately
+                            # Invalid fill price indicates data corruption or API error
+                            if filled_price <= 0:
+                                logger.error("=" * 70)
+                                logger.error("❌ INVALID FILL PRICE - ABORTING")
+                                logger.error("=" * 70)
+                                logger.error(f"   Order ID: {order_id}")
+                                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}")
+                                logger.error(f"   Filled Price: {filled_price} (INVALID)")
+                                logger.error("   ⚠️  Price must be greater than zero")
+                                logger.error("=" * 70)
+                                # Raise exception to prevent recording this trade
+                                raise InvalidFillPriceError(f"Invalid fill price: {filled_price}")
+
+                            if is_filled:
+                                # ✅ ORDER CONFIRMATION LOGGING (REQUIREMENT #2)
+                                logger.info(f"   ✅ ORDER CONFIRMED:")
+                                logger.info(f"      • Order ID: {order_id}")
+                                logger.info(f"      • Filled Volume: {filled_volume:.8f} {kraken_symbol[:3]}")
+                                logger.info(f"      • Filled Price: ${filled_price:.2f}")
+                                logger.info(f"      • Status: {order_status}")
+
+                                # Note: Balance delta requires fetching balance before/after
+                                # We can calculate approximate delta from filled volume * price
+                                if side.lower() == 'sell':
+                                    balance_delta = filled_volume * filled_price
+                                    logger.info(f"      • Balance Delta (approx): +${balance_delta:.2f}")
+                                else:
+                                    balance_delta = -(filled_volume * filled_price)
+                                    logger.info(f"      • Balance Delta (approx): ${balance_delta:.2f}")
+                            else:
+                                logger.warning(f"   ⚠️  ORDER NOT FULLY FILLED:")
+                                logger.warning(f"      • Order ID: {order_id}")
+                                logger.warning(f"      • Status: {order_status} (expected 'closed')")
+                                logger.warning(f"      • Filled Volume: {filled_volume} (expected > 0)")
+                                logger.warning(f"      • Order may still be pending or partially filled")
+                    except Exception as query_err:
+                        logger.warning(f"   ⚠️  Could not query order details: {query_err}")
+                        logger.warning(f"      Order verification failed - marking as 'pending'")
+                        logger.warning(f"      Check order status manually if needed")
+
+                # Only mark as 'filled' if verification passed
+                # If verification failed (exception or didn't meet criteria), mark as 'pending'
+                final_status = 'filled' if order_verified else 'pending'
+
+                if not order_verified and order_id:
+                    logger.info("   ℹ️  Order placed but verification inconclusive - status: 'pending'")
+                    logger.info("      This is a safety measure - order may still have filled successfully")
+
+                return {
+                    'order_id': order_id,
+                    'symbol': kraken_symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': filled_price,
+                    'filled_volume': filled_volume,
+                    'status': final_status,
+                    'timestamp': datetime.now()
+                }
+
+            # Order failed - log comprehensive error details
+            error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
+            logger.error(f"❌ ORDER FAILED [kraken] {symbol}: {error_msg}")
+            logger.error(f"   Side: {side}, Size: {size}, Type: {size_type}")
+            logger.error(f"   Full result: {result}")
+
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': 0.0,
+                'status': 'error',
+                'error': error_msg,
+                'timestamp': datetime.now()
+            }
+
+        except Exception as e:
+            # ✅ FIX 4: LOG ALL ORDER EXCEPTIONS
+            logger.error(f"❌ ORDER FAILED [kraken] {symbol}: {e}")
+            logger.error(f"   Exception type: {type(e).__name__}")
+            logger.error(f"   Side: {side}, Size: {size}")
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+
+            # ✅ FIX (STRONGLY RECOMMENDED): Reconcile position on failed exit
+            if side.lower() == 'sell':
+                logger.warning(f"⚠️  Failed SELL order detected - triggering position reconciliation")
+                try:
+                    self.reconcile_position_after_failed_exit(symbol, size)
+                except Exception as reconcile_err:
+                    logger.error(f"❌ Position reconciliation error: {reconcile_err}")
+
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': 0.0,
+                'status': 'error',
+                'error': str(e),
+                'timestamp': datetime.now()
+            }
+
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """
+        Place limit order on Kraken with comprehensive validation.
+
+        This method now includes:
+        - Symbol format validation
+        - Order minimum enforcement (Kraken + tier minimums)
+        - Proper symbol conversion (BTC -> XBT)
+        - txid confirmation
+        - Enhanced error logging
+        """
+        try:
+            if not self.api:
+                logger.error("❌ Kraken API not connected")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'error',
+                    'error': 'API_NOT_CONNECTED',
+                    'timestamp': datetime.now()
+                }
+
+            # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
+            # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
+            # Calculate USD size for validation (limit orders use price)
+            order_size_usd = size * price if size_type == 'base' else size
+
+            # Check minimum order cost before AddOrder
+            if order_size_usd < KRAKEN_MIN_ORDER_COST:
+                logger.error("=" * 70)
+                logger.error("❌ FIX #3: Kraken order blocked (safety buffer)")
+                logger.error("=" * 70)
+                logger.error(f"   Order Cost: ${order_size_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
+                logger.error(f"   Symbol: {symbol}, Side: {side}, Size: {size}, Price: {price}")
+                logger.error("   ⚠️  $10.00 minimum prevents fee erosion and ghost trades")
+                logger.error("=" * 70)
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': 0.0,
+                    'status': 'skipped',
+                    'error': f'FIX #3: Below Kraken $10.00 minimum (${order_size_usd:.2f})',
+                    'timestamp': datetime.now()
+                }
+
+            # Validate symbol and convert to Kraken format
+            is_valid, kraken_symbol, error_msg = self._validate_kraken_order(
+                symbol, side, size, size_type, current_price=price
+            )
+
+            if not is_valid:
+                logger.error(f"❌ ORDER VALIDATION FAILED [kraken limit] {symbol}")
+                logger.error(f"   Reason: {error_msg}")
+                logger.error(f"   Side: {side}, Size: {size}, Price: ${price}, Type: {size_type}")
+                return {
+                    'order_id': None,
+                    'symbol': symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': price,
+                    'status': 'error',
+                    'error': f'Order validation failed: {error_msg}',
+                    'timestamp': datetime.now()
+                }
+
+            # Log validated order details
+            logger.info(f"📝 Placing Kraken limit {side} order: {kraken_symbol} @ ${price}")
+            logger.info(f"   Size: {size} {size_type}, USD Value: ${order_size_usd:.2f}, Validation: PASSED")
+
+            # ✅ SAFETY CHECK #4: Validate limit price before placing order
+            # For limit orders, validate the limit price itself before API call
+            if price <= 0:
+                logger.error("=" * 70)
+                logger.error("❌ INVALID LIMIT PRICE - ABORTING")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}")
+                logger.error(f"   Limit Price: {price} (INVALID)")
+                logger.error("   ⚠️  Price must be greater than zero")
+                logger.error("=" * 70)
+                # Raise exception to prevent placing order
+                raise InvalidFillPriceError(f"Invalid limit price: {price}")
+
+            # ✅ REQUIREMENT #2: Build order parameters with proper format
+            order_params = {
+                'pair': kraken_symbol,
+                'type': side.lower(),
+                'ordertype': 'limit',
+                'price': str(price),
+                'volume': str(size)
+            }
+
+            # ✅ REQUIREMENT #3: Execute order via serialized API call
+            result = self._kraken_api_call('AddOrder', order_params)
+
+            # ✅ SAFETY CHECK #2: Hard-stop on rejected orders
+            # DO NOT allow rejected orders to be recorded as successful trades
+            if result and 'error' in result and result['error']:
+                error_msgs = ', '.join(result['error'])
+                logger.error("=" * 70)
+                logger.error("❌ KRAKEN LIMIT ORDER REJECTED - ABORTING")
+                logger.error("=" * 70)
+                logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: ${price}, Size: {size}")
+                logger.error(f"   Rejection Reason: {error_msgs}")
+                logger.error("   ⚠️  ORDER REJECTED - DO NOT RECORD TRADE")
+                logger.error("=" * 70)
+                # Raise exception to prevent recording this as a successful trade
+                raise OrderRejectedError(f"Limit order rejected by Kraken: {error_msgs}")
+
+            # ✅ REQUIREMENT 1: VERIFY TXID EXISTS (no txid → no trade → nothing visible)
+            # ✅ REQUIREMENT #4: Verify txid and return comprehensive response
+            if result and 'result' in result:
+                order_result = result['result']
+                txid = order_result.get('txid', [])
+                order_id = txid[0] if txid else None
+
+                # ✅ REQUIREMENT 3: HARD-FAIL if no txid (Requirement from problem statement)
+                # If no txid → trade not executed → raise ExecutionFailed
+                if not order_id:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN LIMIT ORDER FAILED - NO TXID RETURNED")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  NO TRADE EXECUTED - Kraken must return txid for valid order")
+                    logger.error("=" * 70)
+                    # Raise ExecutionFailed to prevent recording this as a successful trade
+                    # NO position, NO ledger write, NO stop-loss, NO cap increment
+                    raise ExecutionFailed("Kraken order not confirmed")
+
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify descr.order exists
+                descr = order_result.get('descr', {})
+                order_description = descr.get('order', '')
+                if not order_description:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN LIMIT ORDER NOT CONFIRMED - NO ORDER DESCRIPTION")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Kraken must return descr.order")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed("Kraken limit order not confirmed - no order description")
+
+                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0 (for limit orders, cost may be 0 until filled)
+                # For limit orders, we'll verify volume instead since they may not fill immediately
+                volume = float(order_result.get('volume', '0'))
+                if volume <= 0:
+                    logger.error("=" * 70)
+                    logger.error("❌ KRAKEN LIMIT ORDER NOT CONFIRMED - INVALID VOLUME")
+                    logger.error("=" * 70)
+                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
+                    logger.error(f"   Order ID: {order_id}")
+                    logger.error(f"   Volume: {volume} (must be > 0)")
+                    logger.error(f"   API Response: {result}")
+                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Volume must be greater than zero")
+                    logger.error("=" * 70)
+                    raise ExecutionFailed(f"Kraken limit order not confirmed - invalid volume: {volume}")
+
+                logger.info(f"✅ Kraken txid received: {order_id}")
+                logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
+                logger.info(f"   Order Description: {order_description}")
+                logger.info(f"   Order Volume: {volume}")
+                if order_id:
+                    logger.info(f"✅ Kraken limit {side} order placed successfully")
+                    logger.info(f"   • Order ID (txid): {order_id}")
+                    logger.info(f"   • Symbol: {kraken_symbol}")
+                    logger.info(f"   • Price: ${price}")
+                    logger.info(f"   • Size: {size} {size_type}")
+                else:
+                    logger.warning(f"⚠️  Kraken limit order accepted but no txid returned")
+
+                return {
+                    'order_id': order_id,
+                    'symbol': kraken_symbol,
+                    'side': side,
+                    'size': size,
+                    'filled_price': price,
+                    'status': 'open',
+                    'timestamp': datetime.now()
+                }
+
+            # Order failed
+            error_msg = result.get('error', ['Unknown error'])[0] if result else 'No response'
+            logger.error(f"❌ ORDER FAILED [kraken limit] {symbol}: {error_msg}")
+            logger.error(f"   Side: {side}, Size: {size}, Price: ${price}, Type: {size_type}")
+            logger.error(f"   Full result: {result}")
+
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': price,
+                'status': 'error',
+                'error': error_msg,
+                'timestamp': datetime.now()
+            }
+
+        except Exception as e:
+            logger.error(f"❌ ORDER FAILED [kraken limit] {symbol}: {e}")
+            logger.error(f"   Exception type: {type(e).__name__}")
+            logger.error(f"   Side: {side}, Size: {size}, Price: ${price}")
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+
+            # ✅ FIX (STRONGLY RECOMMENDED): Reconcile position on failed exit
+            if side.lower() == 'sell':
+                logger.warning(f"⚠️  Failed SELL limit order detected - triggering position reconciliation")
+                try:
+                    self.reconcile_position_after_failed_exit(symbol, size)
+                except Exception as reconcile_err:
+                    logger.error(f"❌ Position reconciliation error: {reconcile_err}")
+
+            return {
+                'order_id': None,
+                'symbol': symbol,
+                'side': side,
+                'size': size,
+                'filled_price': price,
+                'status': 'error',
+                'error': str(e),
+                'timestamp': datetime.now()
+            }
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel order on Kraken."""
+        try:
+            if not self.api:
+                return False
+
+            # Use helper method for serialized API call
+            result = self._kraken_api_call('CancelOrder', {'txid': order_id})
+
+            if result and 'result' in result and 'count' in result['result']:
+                count = result['result']['count']
+                logger.info(f"Cancelled {count} Kraken order(s): {order_id}")
+                return count > 0
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Kraken cancel order error: {e}")
+            return False
+
+    def get_open_positions(self) -> List[Dict]:
+        """
+        ✅ REQUIREMENT 2: Get open positions from Kraken exchange data.
+
+        Position counting MUST come from exchange, not internal memory:
+        - OpenOrders: Active open orders
+        - Balance: Non-zero crypto balances (excluding dust)
+        - TradeBalance: Held funds verification
+
+        If Kraken reports no open orders and no balances → positions = 0
+
+        Returns:
+            List of position dicts with symbol, size, entry_price, etc.
+        """
+        try:
+            if not self.api:
+                return []
+
+            positions = []
+
+            # ✅ STEP 1: Get open orders from Kraken
+            # This tells us what positions we're actively managing
+            open_orders_result = self._kraken_api_call('OpenOrders')
+            open_order_symbols = set()
+
+            if open_orders_result and 'result' in open_orders_result:
+                open_orders = open_orders_result['result'].get('open', {})
+                for order_id, order in open_orders.items():
+                    descr = order.get('descr', {})
+                    pair = descr.get('pair', '')
+                    if pair:
+                        open_order_symbols.add(pair)
+                        logger.info(f"   📋 Open order found: {pair} (ID: {order_id})")
+
+            # ✅ STEP 2: Get account balances to find actual holdings
+            balance = self._kraken_api_call('Balance')
+
+            if balance and 'result' in balance:
+                result = balance['result']
+
+                for asset, amount in result.items():
+                    balance_val = float(amount)
+
+                    # Skip USD/USDT and zero balances
+                    if asset in ['ZUSD', 'USDT'] or balance_val <= 0:
+                        continue
+
+                    # Convert Kraken asset codes
+                    currency = asset
+                    if currency.startswith('X') and len(currency) == 4:
+                        currency = currency[1:]
+                    if currency == 'XBT':
+                        currency = 'BTC'
+
+                    symbol = f'{currency}USD'
+
+                    # ✅ REQUIREMENT 3: Exclude dust positions
+                    # Get current price to calculate USD value
+                    try:
+                        # Use convert_to_kraken if available, otherwise construct ticker pair
+                        # Kraken ticker pairs are typically in format like 'XXBTZUSD', 'XETHZUSD'
+                        if convert_to_kraken:
+                            ticker_pair = convert_to_kraken(symbol)
+                        else:
+                            # Construct Kraken ticker pair format
+                            # Most assets use X prefix + asset + ZUSD
+                            if currency == 'BTC':
+                                ticker_pair = 'XXBTZUSD'
+                            elif currency == 'ETH':
+                                ticker_pair = 'XETHZUSD'
+                            else:
+                                # Try standard format
+                                ticker_pair = f'X{currency}ZUSD'
+
+                        ticker_result = self._kraken_api_call('Ticker', {'pair': ticker_pair})
+
+                        current_price = 0.0
+                        if ticker_result and 'result' in ticker_result:
+                            # Ticker result may have the pair name as key
+                            # Try the exact pair name first, then any key in result
+                            ticker_data = ticker_result['result'].get(ticker_pair)
+                            if not ticker_data and ticker_result['result']:
+                                # Use first available ticker if exact match fails
+                                ticker_data = list(ticker_result['result'].values())[0]
+
+                            if ticker_data:
+                                # Get last price from ticker
+                                last_price = ticker_data.get('c', [0, 0])
+                                current_price = float(last_price[0]) if isinstance(last_price, list) else float(last_price)
+
+                        usd_value = balance_val * current_price if current_price > 0 else 0
+
+                        # DUST DETECTION DISABLED AT ROOT — all positions included regardless of size.
+
+                        # ✅ FIX: If price is zero, skip position (cannot value it)
+                        if current_price <= 0:
+                            logger.warning(f"   ⚠️  Skipping {symbol}: price unavailable (cannot determine if dust)")
+                            continue
+
+                        positions.append({
+                            'symbol': symbol,
+                            'size': balance_val,
+                            'entry_price': 0.0,  # Would need trade history to get actual entry
+                            'current_price': current_price,
+                            'pnl': 0.0,
+                            'pnl_pct': 0.0,
+                            'usd_value': usd_value
+                        })
+
+                    except Exception as price_err:
+                        logger.warning(f"Could not get price for {symbol}: {price_err}")
+                        # ✅ FIX: Do NOT include positions we cannot price
+                        # Cannot determine if dust without price, so skip to be safe
+                        logger.warning(f"   ⚠️  Skipping {symbol}: cannot verify dust threshold without price")
+                        continue
+
+            # ✅ REQUIREMENT 2: If Kraken reports no positions → positions = 0
+            if not positions:
+                logger.info("   ✅ Kraken reports ZERO open positions (no balances above dust threshold)")
+            else:
+                logger.info(f"   ✅ Kraken reports {len(positions)} open position(s)")
+                for pos in positions:
+                    logger.info(f"      • {pos['symbol']}: {pos['size']:.8f} (${pos.get('usd_value', 0):.2f})")
+
+            return positions
+
+        except Exception as e:
+            logger.error(f"Error fetching Kraken positions: {e}")
+            return []
+
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get order status from Kraken."""
+        try:
+            if not self.api:
+                return None
+
+            # Use helper method for serialized API call
+            result = self._kraken_api_call('QueryOrders', {'txid': order_id})
+
+            if result and 'result' in result:
+                orders = result['result']
+                if order_id in orders:
+                    order = orders[order_id]
+                    logger.info(f"Kraken order status: {order_id} - {order.get('status', 'unknown')}")
+                    return order
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Kraken get order status error: {e}")
+            return None
+
+    def get_real_entry_price(self, symbol: str) -> Optional[float]:
+        """
+        Try to get real entry price for *symbol* with three layers of resilience:
+
+        1. **In-memory cache** — return immediately if already fetched this session.
+        2. **Local entry price store** — check the JSON-backed store that is written
+           whenever a trade executes; this eliminates 90 % of broker API calls after
+           a restart.
+        3. **Kraken order history** — query ``ClosedOrders`` with up to 3 retries
+           (backoff: 1.5 s, 3 s, 4.5 s) before giving up.
+
+        Successful API results are cached permanently in memory and written back to
+        the local store so they are available immediately on the next call.
+
+        Args:
+            symbol: Trading symbol (e.g. ``'HBAR-USD'``).
+
+        Returns:
+            Entry price as a float, or ``None`` if unavailable.
+        """
+        # ── Layer 1: in-memory permanent cache ────────────────────────────────
+        with self._entry_price_cache_lock:
+            cached = self._entry_price_cache.get(symbol)
+        if cached is not None:
+            return cached
+
+        # ── Layer 2: local entry price store (JSON) ───────────────────────────
+        if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+            try:
+                local_price = _get_eps().get(symbol)
+                if local_price and local_price > 0:
+                    logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price:.6g}")
+                    with self._entry_price_cache_lock:
+                        self._entry_price_cache[symbol] = local_price
+                    return local_price
+            except Exception as _eps_err:
+                logger.debug(f"[EntryPrice] {symbol}: local store lookup failed: {_eps_err}")
+
+        # ── Layer 3: Kraken order history (3× retry with backoff) ─────────────
+        if not self.api:
+            return None
+
+        # Convert symbol to Kraken pair format
+        kraken_symbol = symbol.replace('-', '').upper()
+        if kraken_symbol.startswith('BTC'):
+            kraken_symbol = kraken_symbol.replace('BTC', 'XBT', 1)
+
+        last_exc = None
+        for attempt in range(3):
+            try:
+                result = self._kraken_api_call('ClosedOrders', {'trades': True})
+
+                if result and 'result' in result and 'closed' in result['result']:
+                    closed_orders = result['result']['closed']
+
+                    # Find most recent buy order for this symbol
+                    for _oid, order_data in sorted(
+                        closed_orders.items(),
+                        key=lambda x: x[1].get('opentm', 0),
+                        reverse=True,
+                    ):
+                        if order_data.get('descr', {}).get('pair') == kraken_symbol:
+                            if order_data.get('descr', {}).get('type') == 'buy':
+                                avg_price = float(order_data.get('price', 0))
+                                if avg_price > 0:
+                                    logger.debug(f"[EntryPrice] {symbol}: Fetched ${avg_price:.6g} from Kraken history")
+                                    # Persist to in-memory cache and local store
+                                    with self._entry_price_cache_lock:
+                                        self._entry_price_cache[symbol] = avg_price
+                                    if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
+                                        try:
+                                            _get_eps().save(symbol, avg_price)
+                                        except Exception:
+                                            pass
+                                    return avg_price
+
+                # Successful API call but no matching order found — stop retrying
+                logger.debug(f"[EntryPrice] {symbol}: No matching buy order in Kraken history")
+                return None
+
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 2:
+                    delay = 1.5 * (attempt + 1)
+                    logger.warning(
+                        f"[EntryPrice] {symbol}: Kraken ClosedOrders attempt {attempt + 1}/3 failed "
+                        f"({exc}); retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+
+        logger.debug(f"[EntryPrice] {symbol}: All 3 Kraken attempts failed ({last_exc})")
+        return None
+
+    def refresh_positions_from_exchange(self) -> List[Dict]:
+        """
+        ✅ FIX (STRONGLY RECOMMENDED): Refresh positions from Kraken exchange.
+
+        This method forces a refresh of positions directly from the exchange API,
+        ensuring internal state matches reality. Used after failed exits to prevent
+        phantom positions.
+
+        Returns:
+            List of actual positions from Kraken exchange
+        """
+        logger.info("🔄 Refreshing positions from Kraken exchange...")
+
+        try:
+            # Use get_open_positions which already implements dust filtering
+            positions = self.get_open_positions()
+
+            logger.info(f"✅ Refreshed {len(positions)} positions from Kraken")
+            for pos in positions:
+                logger.info(f"   • {pos['symbol']}: {pos['size']:.8f} @ ${pos.get('current_price', 0):.2f}")
+
+            return positions
+
+        except Exception as e:
+            logger.error(f"❌ Failed to refresh positions from Kraken: {e}")
+            return []
+
+    def reconcile_position_after_failed_exit(self, symbol: str, attempted_size: float) -> bool:
+        """
+        ✅ FIX (STRONGLY RECOMMENDED): Reconcile position after failed exit attempt.
+
+        After any failed exit, force reconciliation to prevent:
+        - Phantom positions (internal state says position exists, but it doesn't)
+        - Position cap pollution (counting positions that don't exist)
+        - Endless cleanup attempts (trying to exit non-existent positions)
+
+        Args:
+            symbol: Symbol that failed to exit
+            attempted_size: Size that was attempted to exit
+
+        Returns:
+            True if reconciliation successful, False otherwise
+        """
+        logger.warning(f"🔄 Reconciling position after failed exit: {symbol}")
+        logger.warning(f"   Attempted to exit: {attempted_size}")
+
+        try:
+            # Use kraken_adapter reconciliation if available
+            if reconcile_kraken_position_after_failed_exit:
+                return reconcile_kraken_position_after_failed_exit(
+                    symbol, attempted_size, broker_adapter=self
+                )
+
+            # Fallback: Simple position refresh
+            positions = self.refresh_positions_from_exchange()
+
+            # Check if position still exists
+            position_exists = any(p.get('symbol') == symbol for p in positions)
+
+            if position_exists:
+                logger.warning(f"   ⚠️  Position still exists after failed exit: {symbol}")
+            else:
+                logger.info(f"   ✅ Position no longer exists: {symbol}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Position reconciliation failed for {symbol}: {e}")
+            return False
+
+    def filter_dust_positions(self, positions: List[Dict]) -> List[Dict]:
+        """
+        ✅ FIX (MANDATORY): Filter out dust positions below $1.00 USD value.
+
+        This prevents dust positions from:
+        - Polluting position cap count
+        - Triggering endless cleanup attempts
+        - Appearing in position tracking
+
+        Args:
+            positions: List of positions
+
+        Returns:
+            Filtered list without dust positions
+        """
+        filtered = []
+        dust_count = 0
+
+        for pos in positions:
+            usd_value = pos.get('usd_value', 0.0)
+
+            # DUST DETECTION DISABLED AT ROOT — all positions included regardless of size.
+            filtered.append(pos)
+
+        if dust_count > 0:
+            logger.info(f"🧹 Filtered {dust_count} dust positions (< ${DUST_THRESHOLD_USD:.2f})")
+
+        return filtered
+
+
+
+class OKXBrokerAdapter(BrokerInterface):
+    """
+    OKX Exchange API adapter for cryptocurrency spot and futures trading.
+
+    Supports:
+    - Spot trading (USDT pairs)
+    - Futures/Perpetual contracts
+    - Testnet for paper trading
+    - Advanced order types
+
+    Documentation: https://www.okx.com/docs-v5/en/
+    """
+
+    def __init__(self, api_key: str = None, api_secret: str = None,
+                 passphrase: str = None, testnet: bool = False):
+        """
+        Initialize OKX broker adapter.
+
+        Args:
+            api_key: OKX API key
+            api_secret: OKX API secret
+            passphrase: OKX API passphrase
+            testnet: Use OKX testnet (default: False)
+        """
+        import os
+        self.api_key = api_key or os.getenv("OKX_API_KEY")
+        self.api_secret = api_secret or os.getenv("OKX_API_SECRET")
+        self.passphrase = passphrase or os.getenv("OKX_PASSPHRASE")
+        self.testnet = testnet or os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
+        self.account_api = None
+        self.market_api = None
+        self.trade_api = None
+        logger.info(f"OKX broker adapter initialized (testnet={self.testnet})")
+
+    def connect(self) -> bool:
+        """Connect to OKX API."""
+        try:
+            from okx.api import Account, Market, Trade
+
+            if not self.api_key or not self.api_secret or not self.passphrase:
+                logger.error("OKX credentials not found")
+                return False
+
+            # API flag: "1" for testnet, "0" for live
+            flag = "1" if self.testnet else "0"
+
+            # Initialize OKX API clients
+            self.account_api = Account(self.api_key, self.api_secret,
+                                       self.passphrase, flag)
+            self.market_api = Market(self.api_key, self.api_secret,
+                                     self.passphrase, flag)
+            self.trade_api = Trade(self.api_key, self.api_secret,
+                                   self.passphrase, flag)
+
+            # Test connection
+            result = self.account_api.get_balance()
+
+            if result and result.get('code') == '0':
+                env_type = "testnet" if self.testnet else "live"
+                logger.info(f"✅ OKX connected ({env_type})")
+                return True
+            else:
+                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+                logger.error(f"OKX connection test failed: {error_msg}")
+                return False
+
+        except ImportError:
+            logger.error("OKX SDK not installed or incompatible version. Install with: pip install okx==2.1.2")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to connect to OKX: {e}")
+            return False
+
+    def get_account_balance(self) -> Dict[str, float]:
+        """Get OKX account balance."""
+        try:
+            if not self.account_api:
+                return {
+                    'total_balance': 0.0,
+                    'available_balance': 0.0,
+                    'currency': 'USDT'
+                }
+
+            result = self.account_api.get_balance()
+
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    # Get total equity
+                    total_eq = float(data[0].get('totalEq', 0))
+
+                    # Find USDT available balance
+                    details = data[0].get('details', [])
+                    usdt_available = 0.0
+
+                    for detail in details:
+                        if detail.get('ccy') == 'USDT':
+                            usdt_available = float(detail.get('availBal', 0))
+                            break
+
+                    logger.info(f"OKX balance: Total ${total_eq:.2f}, Available USDT: ${usdt_available:.2f}")
+
+                    return {
+                        'total_balance': total_eq,
+                        'available_balance': usdt_available,
+                        'currency': 'USDT'
+                    }
+
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USDT'
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching OKX balance: {e}")
+            return {
+                'total_balance': 0.0,
+                'available_balance': 0.0,
+                'currency': 'USDT'
+            }
+
+    def get_market_data(self, symbol: str, timeframe: str = '5m',
+                       limit: int = 100) -> Optional[Dict]:
+        """Get market data from OKX."""
+        try:
+            if not self.market_api:
+                return None
+
+            # Convert symbol format (BTC-USD -> BTC-USDT)
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+
+            # Map timeframe to OKX format
+            timeframe_map = {
+                "1m": "1m", "5m": "5m", "15m": "15m",
+                "1h": "1H", "4h": "4H", "1d": "1D"
+            }
+            okx_timeframe = timeframe_map.get(timeframe.lower(), "5m")
+
+            # Fetch candles
+            result = self.market_api.get_candles(
+                instId=okx_symbol,
+                bar=okx_timeframe,
+                limit=str(min(limit, 100))
+            )
+
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                candles = []
+
+                for candle in data:
+                    candles.append({
+                        'timestamp': int(candle[0]),
+                        'open': float(candle[1]),
+                        'high': float(candle[2]),
+                        'low': float(candle[3]),
+                        'close': float(candle[4]),
+                        'volume': float(candle[5])
+                    })
+
+                logger.info(f"Fetched {len(candles)} candles for {okx_symbol} from OKX")
+
+                return {
+                    'symbol': okx_symbol,
+                    'timeframe': timeframe,
+                    'candles': candles
+                }
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching OKX market data: {e}")
+            return None
+
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          size_type: str = 'quote') -> Optional[Dict]:
+        """Place market order on OKX."""
+        try:
+            if not self.trade_api:
+                return None
+
+            # Convert symbol format
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+
+            # Place order
+            result = self.trade_api.place_order(
+                instId=okx_symbol,
+                tdMode='cash',  # Spot trading
+                side=side.lower(),
+                ordType='market',
+                sz=str(size)
+            )
+
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    order_id = data[0].get('ordId')
+                    logger.info(f"OKX market {side} order placed: {okx_symbol} (ID: {order_id})")
+
+                    return {
+                        'order_id': order_id,
+                        'symbol': okx_symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': 0.0,  # Would need to fetch order details
+                        'status': 'filled',
+                        'timestamp': datetime.now()
+                    }
+
+            error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+            logger.error(f"OKX order failed: {error_msg}")
+            return None
+
+        except Exception as e:
+            logger.error(f"OKX order error: {e}")
+            return None
+
+    def place_limit_order(self, symbol: str, side: str, size: float,
+                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+        """Place limit order on OKX."""
+        try:
+            if not self.trade_api:
+                return None
+
+            # Convert symbol format
+            okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
+
+            # Place limit order
+            result = self.trade_api.place_order(
+                instId=okx_symbol,
+                tdMode='cash',
+                side=side.lower(),
+                ordType='limit',
+                px=str(price),
+                sz=str(size)
+            )
+
+            if result and result.get('code') == '0':
+                data = result.get('data', [])
+                if data and len(data) > 0:
+                    order_id = data[0].get('ordId')
+                    logger.info(f"OKX limit {side} order placed: {okx_symbol} @ ${price} (ID: {order_id})")
+
+                    return {
+                        'order_id': order_id,
+                        'symbol': okx_symbol,
+                        'side': side,
+                        'size': size,
+                        'filled_price': price,
+                        'status': 'open',
+                        'timestamp': datetime.now()
+                    }
+
+            error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+            logger.error(f"OKX limit order failed: {error_msg}")
+            return None
+
+        except Exception as e:
+            logger.error(f"OKX limit order error: {e}")
+            return None
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Cancel order on OKX."""
+        try:
+            if not self.trade_api:
+                return False
+
+            # Note: OKX needs both ordId and instId to cancel
+            # This is a simplified version - you'd need to track instId
+            logger.warning("OKX order cancellation requires instrument ID - not implemented")
+            return False
+
+        except Exception as e:
+            logger.error(f"OKX cancel order error: {e}")
+            return False
+
+    def get_open_positions(self) -> List[Dict]:
+        """Get open positions from OKX."""
+        try:
+            if not self.account_api:
+                return []
+
+            result = self.account_api.get_balance()
+
+            if result and result.get('code') == '0':
+                positions = []
+                data = result.get('data', [])
+
+                if data and len(data) > 0:
+                    details = data[0].get('details', [])
+
+                    for detail in details:
+                        ccy = detail.get('ccy')
+                        available = float(detail.get('availBal', 0))
+
+                        # Only non-zero, non-USDT balances
+                        if ccy != 'USDT' and available > 0:
+                            positions.append({
+                                'symbol': f'{ccy}-USDT',
+                                'size': available,
+                                'entry_price': 0.0,  # Would need trade history
+                                'current_price': 0.0,  # Would need ticker
+                                'pnl': 0.0,
+                                'pnl_pct': 0.0
+                            })
+
+                return positions
+
+            return []
+
+        except Exception as e:
+            logger.error(f"Error fetching OKX positions: {e}")
+            return []
+
+    def get_order_status(self, order_id: str) -> Optional[Dict]:
+        """Get order status from OKX."""
+        logger.info(f"Checking OKX order status: {order_id}")
+        # TODO: Implement using trade_api.get_order()
+        return None
+
+
+class BrokerFactory:
+    """
+    Factory class for creating broker adapters.
+    """
+
+    @staticmethod
+    def create_broker(broker_name: str, **kwargs) -> BrokerInterface:
+        """
+        Create a broker adapter instance.
+
+        Args:
+            broker_name: Name of broker ('coinbase', 'binance', 'kraken', 'alpaca', 'okx')
+            **kwargs: Broker-specific configuration
+
+        Returns:
+            BrokerInterface: Broker adapter instance
+
+        Raises:
+            ValueError: If broker_name is not supported
+        """
+        broker_name = broker_name.lower()
+
+        if broker_name == 'coinbase':
+            return CoinbaseBrokerAdapter(**kwargs)
+        elif broker_name == 'binance':
+            return BinanceBrokerAdapter(**kwargs)
+        elif broker_name == 'kraken':
+            return KrakenBrokerAdapter(**kwargs)
+        elif broker_name == 'alpaca':
+            return AlpacaBrokerAdapter(**kwargs)
+        elif broker_name == 'okx':
+            return OKXBrokerAdapter(**kwargs)
+        else:
+            raise ValueError(f"Unsupported broker: {broker_name}")

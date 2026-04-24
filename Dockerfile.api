@@ -1,0 +1,42 @@
+# Dockerfile for NIJA FastAPI Backend
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create non-root user for security
+RUN useradd -m -u 1000 nija && chown -R nija:nija /app
+USER nija
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Startup script to handle database initialization
+COPY --chown=nija:nija docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Run with entrypoint for database initialization
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+# Default command: Run mobile backend server with Socket.IO support
+# For WebSocket support, use eventlet worker
+CMD ["gunicorn", "mobile_backend_server:app", "--bind", "0.0.0.0:8000", "--workers", "1", "--worker-class", "eventlet", "--timeout", "120"]

@@ -1,0 +1,604 @@
+"""
+AUTO DUST SWEEPER
+=================
+Enhanced dust sweeper that converts all sub-threshold positions into a single
+configurable target asset (e.g. BTC-USD, ETH-USD) rather than leaving them as
+USDT fragments.
+
+Why "one asset" consolidation beats plain USDT conversion
+----------------------------------------------------------
+* Keeps capital deployed in a single high-conviction hold instead of idle cash.
+* Reduces the position count which lowers portfolio complexity and fee drag.
+* Allows the bot to benefit from upside on the chosen consolidation asset.
+
+Pipeline (called once per cleanup cycle):
+  1. **Scan** – identify all positions below ``dust_threshold_usd``.
+  2. **Sort** – order dust positions by PnL% ascending (sell worst-losers first).
+  3. **Sell each dust position** – market-sell into quote currency (USDT/USD).
+  4. **Re-buy target asset** – once all dust is sold, aggregate the proceeds and
+     buy a single position in ``target_asset``.
+  5. **Report** – return a structured ``DustSweepResult`` for audit/logging.
+
+Usage
+-----
+    from bot.auto_dust_sweeper import get_auto_dust_sweeper
+    result = get_auto_dust_sweeper(target_asset="BTC-USD").sweep(
+        broker, positions, portfolio_value_usd=5000.0
+    )
+
+Author: NIJA Trading Systems
+Version: 1.0
+Date: March 2026
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("nija.auto_dust_sweeper")
+
+# ---------------------------------------------------------------------------
+# Default configuration constants
+# ---------------------------------------------------------------------------
+
+# Positions below this value (in USD) are treated as dust and swept.
+# Aligned with MIN_REBUY_USD so the recycler triggers as soon as aggregated
+# dust is large enough to re-buy the target asset.
+DEFAULT_DUST_THRESHOLD_USD: float = 5.0    # Positions below $5 are swept
+
+# RECYCLER_TARGET: the top-tier asset that ALL dust and recycled profits are
+# consolidated into.  Choosing a high-liquidity asset (BTC-USD or ETH-USD)
+# prevents re-creating dust in low-liquidity coins, stabilises growth and
+# reduces portfolio volatility.
+RECYCLER_TARGET: str = "BTC-USD"
+
+# Backward-compatible alias — existing callers that reference DEFAULT_TARGET_ASSET
+# continue to work; new code should prefer RECYCLER_TARGET.
+DEFAULT_TARGET_ASSET: str = RECYCLER_TARGET
+
+MIN_REBUY_USD: float = 5.0                  # Minimum aggregated proceeds to trigger re-buy
+DUST_RECYCLER_TRIGGER_USD: float = 5.0     # Fire sweep proactively when total dust value ≥ this threshold
+
+# EXECUTION LOOP STABILISER: minimum seconds between sweep attempts for the
+# same symbol.  Prevents the same unsellable dust position from being retried
+# on every scan cycle.
+CLEANUP_COOLDOWN: float = 300.0  # 5 minutes
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DustSweepAction:
+    """Record for one sell action during a dust sweep."""
+    symbol: str
+    size_usd: float
+    quantity: float
+    pnl_pct: float
+    action: str          # "SOLD" | "SKIP" | "ERROR"
+    success: bool
+    message: str
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+@dataclass
+class DustSweepResult:
+    """Full result returned by AutoDustSweeper.sweep()."""
+    run_timestamp: str
+    target_asset: str
+    positions_scanned: int
+    dust_found: int
+    dust_sold: int
+    dust_skipped: int
+    proceeds_usd: float              # Total USD recovered from dust sales
+    rebuy_attempted: bool
+    rebuy_success: bool
+    rebuy_usd: float                 # Amount re-invested in target_asset
+    actions: List[DustSweepAction] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        return (
+            f"AutoDustSweeper: scanned={self.positions_scanned} "
+            f"dust={self.dust_found} sold={self.dust_sold} "
+            f"skipped={self.dust_skipped} proceeds=${self.proceeds_usd:.4f} "
+            f"rebuy={'✅' if self.rebuy_success else '❌'} "
+            f"→{self.target_asset} ${self.rebuy_usd:.4f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Core engine
+# ---------------------------------------------------------------------------
+
+class AutoDustSweeper:
+    """
+    Convert all dust positions into a single configurable target asset.
+
+    Parameters
+    ----------
+    dust_threshold_usd:
+        Positions (USD value) below this threshold are treated as dust.
+    target_asset:
+        The symbol to re-buy with the aggregated dust proceeds
+        (e.g. ``"BTC-USD"``, ``"ETH-USD"``).
+    dry_run:
+        When ``True``, logs all planned actions but makes no broker calls.
+    min_rebuy_usd:
+        Minimum aggregated proceeds required before attempting the re-buy.
+        Prevents placing orders too small for exchange minimums.
+    """
+
+    def __init__(
+        self,
+        dust_threshold_usd: float = DEFAULT_DUST_THRESHOLD_USD,
+        target_asset: str = DEFAULT_TARGET_ASSET,
+        dry_run: bool = False,
+        min_rebuy_usd: float = MIN_REBUY_USD,
+    ) -> None:
+        self.dust_threshold_usd = dust_threshold_usd
+        self.target_asset = target_asset
+        self.dry_run = dry_run
+        self.min_rebuy_usd = min_rebuy_usd
+        self._lock = threading.Lock()
+        # Global (cross-symbol) accumulated proceeds from dust sales.
+        # This intentionally aggregates proceeds from ALL symbols sold across
+        # multiple sweep cycles — it is NOT tracked per symbol.  Once the
+        # total reaches min_rebuy_usd it fires a single re-buy into the
+        # target asset and the accumulator is reset to 0.
+        self._accumulated_proceeds: float = 0.0
+        # EXECUTION LOOP STABILISER: symbol -> last sweep-attempt timestamp.
+        # _should_cleanup() uses this to enforce a CLEANUP_COOLDOWN window so
+        # unsellable / failed positions are never retried on every scan cycle.
+        self._cleanup_cooldown: Dict[str, float] = {}
+
+        # CYCLE-LEVEL DEDUPLICATION: wall-clock timestamp of the last
+        # run_cleanup_cycle() execution.  Set to 0 so the very first call
+        # always runs.  run_cleanup_cycle() rejects re-entry within 120s.
+        self._last_cleanup_cycle_ts: float = 0
+
+        logger.info(
+            "🧹 AutoDustSweeper initialised | dust<$%.2f | target=%s | dry_run=%s | min_rebuy=$%.2f",
+            dust_threshold_usd, target_asset, dry_run, min_rebuy_usd,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_total_dust_value(
+        positions: List[Dict],
+        threshold_usd: float = DEFAULT_DUST_THRESHOLD_USD,
+        exclude_symbol: Optional[str] = None,
+    ) -> float:
+        """Return the total USD value of all dust positions (value < threshold_usd).
+
+        Args:
+            positions:       Current open positions list.
+            threshold_usd:   Individual position threshold for "dust" classification.
+            exclude_symbol:  Optional symbol to exclude (e.g. the target/rebuy asset).
+
+        Returns:
+            Sum of USD values of all qualifying dust positions.
+        """
+        total = 0.0
+        for p in positions:
+            sym = p.get("symbol", "")
+            if exclude_symbol and sym == exclude_symbol:
+                continue
+            val = float(p.get("size_usd") or p.get("usd_value") or 0)
+            if 0 < val < threshold_usd:
+                total += val
+        return total
+
+    def should_trigger_now(self, positions: List[Dict]) -> bool:
+        """Return True when total dust value across all symbols ≥ DUST_RECYCLER_TRIGGER_USD.
+
+        Use this as a proactive every-cycle check so the recycler fires
+        the moment enough dust has accumulated — without waiting for the
+        next scheduled cleanup cycle.
+
+        The check aggregates across ALL symbols (not per symbol) by summing
+        positions whose individual value is below ``dust_threshold_usd``.
+        """
+        total_dust = self.get_total_dust_value(
+            positions,
+            threshold_usd=self.dust_threshold_usd,
+            exclude_symbol=self.target_asset,
+        )
+        # Also include the already-accumulated-but-not-yet-rebuyed proceeds
+        total_available = total_dust + self._accumulated_proceeds
+        if total_available >= DUST_RECYCLER_TRIGGER_USD:
+            logger.info(
+                "♻️  DustRecycler trigger: total_dust=$%.4f + accumulated=$%.4f → $%.4f ≥ $%.2f — firing sweep",
+                total_dust, self._accumulated_proceeds, total_available, DUST_RECYCLER_TRIGGER_USD,
+            )
+            return True
+        logger.debug(
+            "♻️  DustRecycler: total_dust=$%.4f + accumulated=$%.4f → $%.4f < $%.2f trigger (%.1f%% of threshold)",
+            total_dust, self._accumulated_proceeds, total_available, DUST_RECYCLER_TRIGGER_USD,
+            (total_available / DUST_RECYCLER_TRIGGER_USD * 100) if DUST_RECYCLER_TRIGGER_USD > 0 else 0,
+        )
+        return False
+
+    def sweep(
+        self,
+        broker: Any,
+        positions: List[Dict],
+        portfolio_value_usd: float = 0.0,
+    ) -> DustSweepResult:
+        """
+        Run the full dust-to-one-asset sweep.
+
+        Parameters
+        ----------
+        broker:
+            Live broker instance exposing ``place_market_order``.
+        positions:
+            Current open positions list.  Each entry needs at minimum:
+            ``symbol``, ``size_usd`` (or ``usd_value``), ``quantity``
+            (or ``base_size``).
+        portfolio_value_usd:
+            Total portfolio value (used for logging/context only).
+        """
+        with self._lock:
+            return self._run(broker, positions, portfolio_value_usd)
+
+    def run_cleanup_cycle(
+        self,
+        broker: Any,
+        positions: List[Dict],
+        portfolio_value_usd: float = 0.0,
+    ) -> Optional[DustSweepResult]:
+        """Cycle-level entry-point with deduplication guard.
+
+        Prevents the sweep engine from executing more than once within the
+        same ~2-minute scan window.  Callers that previously invoked
+        ``sweep`` directly should switch to this method so the guard is
+        honoured automatically.
+
+        The timestamp check and the sweep itself are performed under
+        ``self._lock`` to guarantee thread-safety.
+
+        Returns:
+            The ``DustSweepResult`` from the sweep, or ``None`` when the
+            call is suppressed by the cooldown window.
+        """
+        now = time.time()
+        with self._lock:
+            if now - self._last_cleanup_cycle_ts < 120:
+                logger.debug(
+                    "🧹 AutoDustSweeper: skipping run_cleanup_cycle — "
+                    "last run was %.0fs ago (min interval=120s)",
+                    now - self._last_cleanup_cycle_ts,
+                )
+                return None
+            self._last_cleanup_cycle_ts = now
+            return self._run(broker, positions, portfolio_value_usd)
+
+    # ------------------------------------------------------------------
+    # Internal implementation
+    # ------------------------------------------------------------------
+
+    def _run(
+        self,
+        broker: Any,
+        positions: List[Dict],
+        portfolio_value_usd: float,
+    ) -> DustSweepResult:
+        now_ts = datetime.now(timezone.utc).isoformat()
+        result = DustSweepResult(
+            run_timestamp=now_ts,
+            target_asset=self.target_asset,
+            positions_scanned=len(positions),
+            dust_found=0,
+            dust_sold=0,
+            dust_skipped=0,
+            proceeds_usd=0.0,
+            rebuy_attempted=False,
+            rebuy_success=False,
+            rebuy_usd=0.0,
+        )
+
+        if not positions:
+            logger.info("🧹 AutoDustSweeper: no positions to scan")
+            return result
+
+        logger.info(
+            "🧹 AutoDustSweeper START | %d positions | portfolio=$%.2f | target=%s",
+            len(positions), portfolio_value_usd, self.target_asset,
+        )
+
+        # Pre-sweep: log total dust value so the recycler trigger is visible
+        total_dust_usd = self.get_total_dust_value(
+            positions,
+            threshold_usd=self.dust_threshold_usd,
+            exclude_symbol=self.target_asset,
+        )
+        logger.info(
+            "♻️  DustRecycler: total_dust=$%.4f (threshold per-position=$%.2f, "
+            "trigger=$%.2f, accumulated=$%.4f)",
+            total_dust_usd, self.dust_threshold_usd,
+            DUST_RECYCLER_TRIGGER_USD, self._accumulated_proceeds,
+        )
+
+        # Step 1 – identify dust positions (exclude the target asset itself)
+        dust = [
+            p for p in positions
+            if p.get("symbol") != self.target_asset
+            and 0 < self._size_usd(p) < self.dust_threshold_usd
+        ]
+
+        # Also include positions with zero USD value but non-zero quantity (stranded)
+        for p in positions:
+            if p.get("symbol") == self.target_asset:
+                continue
+            size = self._size_usd(p)
+            qty = self._quantity(p)
+            if size == 0 and qty > 0 and p not in dust:
+                dust.append(p)
+
+        result.dust_found = len(dust)
+
+        if not dust:
+            logger.info("🧹 AutoDustSweeper: no dust found")
+            return result
+
+        logger.warning(
+            "🧹 AutoDustSweeper: %d dust position(s) below $%.2f",
+            len(dust), self.dust_threshold_usd,
+        )
+
+        # Step 2 – sort by PnL% ascending (sell worst losers first)
+        dust.sort(key=lambda p: float(p.get("pnl_pct") or 0))
+
+        # Step 3 – sell each dust position
+        # processed_symbols: same-cycle dedup guard — a symbol cannot be
+        # attempted more than once per sweep run even if it appears multiple
+        # times in the dust list (e.g. from different position dict sources).
+        processed_symbols: set = set()
+        for pos in dust:
+            symbol = pos.get("symbol", "")
+            if not symbol:
+                logger.warning("   ⚠️  Dust position missing symbol key — skipping")
+                result.dust_skipped += 1
+                continue
+
+            # SAME-CYCLE RETRY GUARD
+            if symbol in processed_symbols:
+                logger.debug("   ⏭️ %s already processed this sweep cycle — skipping", symbol)
+                result.dust_skipped += 1
+                continue
+            processed_symbols.add(symbol)
+
+            # CLEANUP_COOLDOWN GUARD: skip symbols attempted within the last 5 minutes
+            if not self._should_cleanup(symbol):
+                result.dust_skipped += 1
+                continue
+
+            action = self._sell_dust(broker, pos)
+            result.actions.append(action)
+            if action.success:
+                result.dust_sold += 1
+                result.proceeds_usd += action.size_usd
+            else:
+                result.dust_skipped += 1
+                if action.action == "ERROR":
+                    result.errors.append(action.message)
+
+        # Step 4 – re-buy target asset with aggregated proceeds
+        # Accumulate proceeds across sweep cycles — this is intentionally
+        # global (cross-symbol, not per-symbol) so that tiny amounts from
+        # many different symbols combine into a single meaningful re-buy.
+        self._accumulated_proceeds += result.proceeds_usd
+        total_available = self._accumulated_proceeds
+
+        if total_available >= self.min_rebuy_usd:
+            rebuy_action = self._buy_target(broker, total_available)
+            result.rebuy_attempted = True
+            result.rebuy_success = rebuy_action.success
+            result.rebuy_usd = total_available if rebuy_action.success else 0.0
+            result.actions.append(rebuy_action)
+            if rebuy_action.success:
+                # Reset accumulator after a successful re-buy
+                self._accumulated_proceeds = 0.0
+            else:
+                result.errors.append(rebuy_action.message)
+        else:
+            logger.info(
+                "🧹 AutoDustSweeper: accumulated $%.4f (need $%.2f for re-buy) — "
+                "holding proceeds for next sweep cycle",
+                total_available, self.min_rebuy_usd,
+            )
+
+        logger.info("🧹 AutoDustSweeper DONE | %s", result.summary())
+        return result
+
+    # ------------------------------------------------------------------
+    # Execution helpers
+    # ------------------------------------------------------------------
+
+    def _should_cleanup(self, symbol: str) -> bool:
+        """Return True when *symbol* is eligible for a sweep attempt this cycle.
+
+        Enforces CLEANUP_COOLDOWN (5 minutes) between attempts so positions that
+        were skipped or failed are not hammered on every 2.5-minute scan cycle.
+        The timestamp is stamped on the first True return so subsequent calls
+        within the cooldown window return False immediately.
+        """
+        now = time.time()
+        last = self._cleanup_cooldown.get(symbol)
+        if last is None or (now - last) > CLEANUP_COOLDOWN:
+            self._cleanup_cooldown[symbol] = now
+            return True
+        remaining = CLEANUP_COOLDOWN - (now - last)
+        logger.debug(
+            "   ⏳ %s in sweep cooldown (%.0fs remaining) — skipping this cycle",
+            symbol, remaining,
+        )
+        return False
+
+    def _sell_dust(self, broker: Any, position: Dict) -> DustSweepAction:
+        """Market-sell one dust position and return an audit record."""
+        symbol = position.get("symbol", "UNKNOWN")
+        size_usd = self._size_usd(position)
+        quantity = self._quantity(position)
+        pnl_pct = float(position.get("pnl_pct") or 0)
+
+        if quantity <= 0:
+            msg = f"No quantity to sell for {symbol} (qty={quantity})"
+            logger.warning("   ⚠️  %s", msg)
+            return DustSweepAction(
+                symbol=symbol, size_usd=size_usd, quantity=quantity,
+                pnl_pct=pnl_pct, action="SKIP", success=False, message=msg,
+            )
+
+        if self.dry_run:
+            msg = f"[DRY RUN] Would sell {symbol} qty={quantity:.8f} (${size_usd:.4f}, pnl={pnl_pct:+.2f}%)"
+            logger.info("   %s", msg)
+            return DustSweepAction(
+                symbol=symbol, size_usd=size_usd, quantity=quantity,
+                pnl_pct=pnl_pct, action="SOLD", success=True, message=msg,
+            )
+
+        try:
+            logger.info(
+                "   💱 Selling dust %s qty=%.8f ($%.4f, pnl=%+.2f%%)",
+                symbol, quantity, size_usd, pnl_pct,
+            )
+            order = broker.place_market_order(
+                symbol=symbol,
+                side="sell",
+                quantity=quantity,
+                size_type="base",
+            )
+            filled = bool(
+                order and order.get("status") in {"filled", "completed", "success"}
+            )
+            if filled:
+                msg = f"Sold {symbol} qty={quantity:.8f} ${size_usd:.4f} | order={order.get('order_id', '?')}"
+                logger.info("   ✅ %s", msg)
+                return DustSweepAction(
+                    symbol=symbol, size_usd=size_usd, quantity=quantity,
+                    pnl_pct=pnl_pct, action="SOLD", success=True, message=msg,
+                )
+            else:
+                msg = f"Order did not fill: {order}"
+                logger.warning("   ⚠️  %s → %s", symbol, msg)
+                return DustSweepAction(
+                    symbol=symbol, size_usd=size_usd, quantity=quantity,
+                    pnl_pct=pnl_pct, action="SKIP", success=False, message=msg,
+                )
+        except Exception as exc:
+            msg = f"Exception selling {symbol}: {exc}"
+            logger.error("   ❌ %s", msg)
+            return DustSweepAction(
+                symbol=symbol, size_usd=size_usd, quantity=quantity,
+                pnl_pct=pnl_pct, action="ERROR", success=False, message=msg,
+            )
+
+    def _buy_target(self, broker: Any, amount_usd: float) -> DustSweepAction:
+        """Buy ``self.target_asset`` with ``amount_usd`` of quote currency."""
+        if self.dry_run:
+            msg = f"[DRY RUN] Would buy ${amount_usd:.4f} of {self.target_asset}"
+            logger.info("   %s", msg)
+            return DustSweepAction(
+                symbol=self.target_asset, size_usd=amount_usd, quantity=0.0,
+                pnl_pct=0.0, action="BUY_TARGET", success=True, message=msg,
+            )
+
+        try:
+            logger.info(
+                "   🎯 Buying $%.4f of %s (consolidation)", amount_usd, self.target_asset
+            )
+            order = broker.place_market_order(
+                symbol=self.target_asset,
+                side="buy",
+                quantity=amount_usd,
+                size_type="quote",
+            )
+            filled = bool(
+                order and order.get("status") in {"filled", "completed", "success"}
+            )
+            if filled:
+                msg = (
+                    f"Consolidated ${amount_usd:.4f} dust → {self.target_asset} "
+                    f"| order={order.get('order_id', '?')}"
+                )
+                logger.info("   ✅ %s", msg)
+                return DustSweepAction(
+                    symbol=self.target_asset, size_usd=amount_usd, quantity=0.0,
+                    pnl_pct=0.0, action="BUY_TARGET", success=True, message=msg,
+                )
+            else:
+                msg = f"Re-buy into {self.target_asset} did not fill: {order}"
+                logger.warning("   ⚠️  %s", msg)
+                return DustSweepAction(
+                    symbol=self.target_asset, size_usd=amount_usd, quantity=0.0,
+                    pnl_pct=0.0, action="BUY_TARGET", success=False, message=msg,
+                )
+        except Exception as exc:
+            msg = f"Exception buying {self.target_asset}: {exc}"
+            logger.error("   ❌ %s", msg)
+            return DustSweepAction(
+                symbol=self.target_asset, size_usd=amount_usd, quantity=0.0,
+                pnl_pct=0.0, action="BUY_TARGET", success=False, message=msg,
+            )
+
+    # ------------------------------------------------------------------
+    # Field extractors
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _size_usd(position: Dict) -> float:
+        return float(position.get("size_usd") or position.get("usd_value") or 0)
+
+    @staticmethod
+    def _quantity(position: Dict) -> float:
+        return float(
+            position.get("quantity")
+            or position.get("base_size")
+            or position.get("size")
+            or position.get("balance")
+            or 0
+        )
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton
+# ---------------------------------------------------------------------------
+
+_instance: Optional[AutoDustSweeper] = None
+_instance_lock = threading.Lock()
+
+
+def get_auto_dust_sweeper(
+    dust_threshold_usd: float = DEFAULT_DUST_THRESHOLD_USD,
+    target_asset: str = DEFAULT_TARGET_ASSET,
+    dry_run: bool = False,
+    min_rebuy_usd: float = MIN_REBUY_USD,
+) -> AutoDustSweeper:
+    """
+    Return the process-wide AutoDustSweeper singleton.
+
+    Configuration is applied only on the **first** call; subsequent calls
+    return the existing instance unchanged.
+    """
+    global _instance
+    if _instance is None:
+        with _instance_lock:
+            if _instance is None:
+                _instance = AutoDustSweeper(
+                    dust_threshold_usd=dust_threshold_usd,
+                    target_asset=target_asset,
+                    dry_run=dry_run,
+                    min_rebuy_usd=min_rebuy_usd,
+                )
+    return _instance

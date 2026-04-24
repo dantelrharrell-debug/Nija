@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: founder-dashboard
+  namespace: nija-platform
+  labels:
+    app: founder-dashboard
+    component: dashboard
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 5001
+    protocol: TCP
+    name: http
+  selector:
+    app: founder-dashboard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: founder-dashboard
+  namespace: nija-platform
+  labels:
+    app: founder-dashboard
+    component: dashboard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: founder-dashboard
+  template:
+    metadata:
+      labels:
+        app: founder-dashboard
+        component: dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: nija-dashboard:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5001
+          name: http
+        env:
+        - name: DATABASE_URL
+          value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/nija
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+        - name: REDIS_URL
+          value: redis://:$(REDIS_PASSWORD)@redis:6379/0
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: password
+        - name: PORT
+          value: "5001"
+        - name: UPDATE_INTERVAL
+          value: "5"
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 5001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 5001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
