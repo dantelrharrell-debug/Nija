@@ -1287,6 +1287,11 @@ class KrakenNonceManager:
                 self._redis_backend = None
 
         # ── File mode (default) ────────────────────────────────────────────
+        # Wait for any active probe window *before* taking NONCE_LOCK.
+        # This avoids a circular wait where startup holds NONCE_LOCK while
+        # waiting for bootstrap/probe activity that itself needs nonce progress.
+        _wait_for_probe_window("KrakenNonceManager._init")
+
         # Startup is the most likely moment for two processes to race.  Hold the
         # cross-process lock for the entire read → compute → write sequence so a
         # second process starting at the same time cannot claim the same nonce.
@@ -2246,16 +2251,6 @@ class KrakenNonceManager:
                 self._pid_lock_file,
                 stale_pid,
             )
-            _logger.critical("B0 AFTER_NONCE_CLEANUP_REACHED")
-            _logger.critical("B0_TO_B1_GUARD_CHECK",
-                extra={
-                    "init_lock": getattr(self, "_init_lock_released", None),
-                    "ca_hydrated": getattr(getattr(self, "capital_authority", None), "is_hydrated", None),
-                    "brokers_ready": self.mabm.all_brokers_fully_ready() if getattr(self, "mabm", None) else None,
-                    "first_snap": getattr(self, "_first_snap_accepted", None)
-                }
-            )
-            _logger.critical("B1 BEFORE_PREFLIGHT_CONTINUE")
             return True
         except FileNotFoundError:
             return True
@@ -2636,7 +2631,6 @@ class KrakenNonceManager:
 
         Must be called while holding both ``_LOCK`` and ``_CrossProcessLock``.
         """
-        _wait_for_probe_window("KrakenNonceManager._load_last_nonce")
         persisted_nonce = self._read_state_file_raw()
         now_ms = int(time.time() * 1000)
         # Startup floor is intentionally local-time based for deterministic
