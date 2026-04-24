@@ -776,6 +776,31 @@ class CapitalRuntimeStateMachine:
         return self.transition(CapitalRuntimeState.RUN_REFRESHING, "recovery_requested")
 
 
+# Module-level singleton ─────────────────────────────────────────────────────
+_runtime_fsm: Optional[CapitalRuntimeStateMachine] = None
+_runtime_fsm_lock = threading.Lock()
+
+
+def get_capital_runtime_fsm() -> CapitalRuntimeStateMachine:
+    """Return the process-wide :class:`CapitalRuntimeStateMachine` singleton."""
+    global _runtime_fsm
+    if _runtime_fsm is None:
+        _peer = sys.modules.get(
+            "bot.capital_flow_state_machine"
+            if __name__ == "capital_flow_state_machine"
+            else "capital_flow_state_machine"
+        )
+        if _peer is not None:
+            _peer_rt = getattr(_peer, "_runtime_fsm", None)
+            if _peer_rt is not None:
+                _runtime_fsm = _peer_rt
+    if _runtime_fsm is None:
+        with _runtime_fsm_lock:
+            if _runtime_fsm is None:
+                _runtime_fsm = CapitalRuntimeStateMachine()
+    return _runtime_fsm
+
+
 # ---------------------------------------------------------------------------
 # Refresh coordinator — the single writer
 # ---------------------------------------------------------------------------

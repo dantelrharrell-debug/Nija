@@ -128,6 +128,7 @@ try:
         CapitalRuntimeStateMachine,
         get_capital_bootstrap_fsm,
         get_capital_event_bus,
+        get_capital_runtime_fsm,
     )
     _CAPITAL_FSM_AVAILABLE = True
 except ImportError:
@@ -145,6 +146,7 @@ except ImportError:
             CapitalRuntimeStateMachine,
             get_capital_bootstrap_fsm,
             get_capital_event_bus,
+            get_capital_runtime_fsm,
         )
         _CAPITAL_FSM_AVAILABLE = True
     except ImportError:
@@ -500,13 +502,19 @@ class MultiAccountBrokerManager:
         # The coordinator is the **single writer** for CapitalAuthority.  All
         # balance fetches, snapshot computations, and authority publishes go
         # through it.  The bootstrap / runtime FSMs track readiness state.
+        #
+        # Guard: if this block has already run (e.g. due to a re-entrant __init__
+        # call or accidental double-construction), skip it entirely to prevent
+        # creating a second set of FSM / coordinator objects that would shadow
+        # the process-wide singletons.
+        self._fsm_initialized: bool = False
         if _CAPITAL_FSM_AVAILABLE:
             self._capital_event_bus: CapitalEventBus = get_capital_event_bus()
             self._capital_bootstrap_fsm: CapitalBootstrapStateMachine = (
                 get_capital_bootstrap_fsm()
             )
             self._capital_runtime_fsm: CapitalRuntimeStateMachine = (
-                CapitalRuntimeStateMachine()
+                get_capital_runtime_fsm()
             )
             self._capital_coordinator: CapitalRefreshCoordinator = (
                 CapitalRefreshCoordinator(
@@ -534,6 +542,7 @@ class MultiAccountBrokerManager:
             self._capital_bootstrap_fsm.register_on_ready(
                 self._on_capital_bootstrap_ready
             )
+            self._fsm_initialized = True
         else:
             self._capital_event_bus = None  # type: ignore[assignment]
             self._capital_bootstrap_fsm = None  # type: ignore[assignment]
@@ -3114,6 +3123,17 @@ class MultiAccountBrokerManager:
         """
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
             return
+        # Hard identity assertion — detect any FSM duplication at the earliest
+        # possible moment.  If get_capital_bootstrap_fsm() returns a *different*
+        # object than self._capital_bootstrap_fsm, two separate singleton
+        # instances exist and the system is in an inconsistent state.
+        _singleton_fsm = get_capital_bootstrap_fsm()
+        assert id(_singleton_fsm) == id(self._capital_bootstrap_fsm), (
+            f"CapitalBootstrapFSM identity mismatch: "
+            f"singleton id={id(_singleton_fsm)}, "
+            f"self id={id(self._capital_bootstrap_fsm)} — "
+            "duplicate FSM instances detected; check import paths and __init__ ordering"
+        )
         trigger = f"on_platform_ready:{broker_type.value}"
         # Advance through startup states deterministically from any cold-start
         # entry point (including BOOT_IDLE) before requesting refresh.
