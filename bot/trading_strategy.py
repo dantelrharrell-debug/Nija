@@ -9635,36 +9635,54 @@ class TradingStrategy:
             _bs_key = _broker_key(active_broker)
 
             # ── Hydration pre-check ───────────────────────────────────────────
-            # Block the live balance fetch (and any new entries) until all four
-            # CapitalAuthority hydration invariants are met:
-            #   connected, payload_hydrated, capital_ready, nonce_lock_acquired
-            # If not yet hydrated, fall back to the strategy cache and skip new
-            # entries so exits can still run without a live balance call.
+            # Two-phase hydration gate — breaks the circular dependency between
+            # balance_fetch, capital_ready, and nonce_lock_acquired:
+            #
+            #   Phase 1 (balance fetch gate): only requires connected + payload_hydrated.
+            #             The balance fetch itself is what *produces* capital_ready, so
+            #             capital_ready must NOT be checked here.
+            #   Phase 2 (entry gate): requires all four invariants after the balance
+            #             fetch completes.  New entries are suppressed until fully hydrated.
+            #
             _mabm_for_hydration = getattr(self, 'multi_account_manager', None)
-            _hydration_ok = True
-            _hydration_reason = ""
-            if _mabm_for_hydration is not None and hasattr(_mabm_for_hydration, 'is_fully_hydrated_for_trading'):
-                try:
-                    _hydration_ok, _hydration_reason = _mabm_for_hydration.is_fully_hydrated_for_trading()
-                except Exception as _hyd_err:
-                    logger.debug("Hydration gate check error: %s", _hyd_err)
+            _fetch_ok = True
+            _fetch_reason = ""
+            _entry_ok = True
+            _entry_reason = ""
+            if _mabm_for_hydration is not None:
+                if hasattr(_mabm_for_hydration, 'is_ready_for_balance_fetch'):
+                    try:
+                        _fetch_ok, _fetch_reason = _mabm_for_hydration.is_ready_for_balance_fetch()
+                    except Exception as _hyd_err:
+                        logger.debug("Balance-fetch gate check error: %s", _hyd_err)
+                if hasattr(_mabm_for_hydration, 'is_fully_hydrated_for_trading'):
+                    try:
+                        _entry_ok, _entry_reason = _mabm_for_hydration.is_fully_hydrated_for_trading()
+                    except Exception as _hyd_err:
+                        logger.debug("Entry hydration gate check error: %s", _hyd_err)
 
-            if not _hydration_ok:
-                logger.warning(
-                    "⏳ HYDRATION GATE BLOCKED (reason=%s) — skipping live balance fetch; "
-                    "using cached balance if available. "
-                    "New entries will be suppressed until all four invariants are satisfied: "
+            if not _entry_ok:
+                logger.info(
+                    "⏳ ENTRY GATE not yet fully hydrated (reason=%s) — "
+                    "new entries suppressed until all four invariants are satisfied: "
                     "connected, payload_hydrated, capital_ready, nonce_lock_acquired.",
-                    _hydration_reason,
+                    _entry_reason,
                 )
-                # Use cached balance for position management; suppress new entries.
+                _balance_grace_mode = True  # allow exits; block entries
+
+            if not _fetch_ok:
+                logger.warning(
+                    "⏳ BALANCE FETCH GATE BLOCKED (reason=%s) — "
+                    "using cached balance if available.",
+                    _fetch_reason,
+                )
+                # Use cached balance for position management; new entries already suppressed.
                 account_balance = self._last_known_balance or 0.0
-                _balance_grace_mode = bool(account_balance > 0)
                 if account_balance <= 0:
                     logger.error(
-                        "❌ Hydration incomplete (%s) and no cached balance — "
+                        "❌ Broker not connected (%s) and no cached balance — "
                         "cannot size positions; skipping cycle.",
-                        _hydration_reason,
+                        _fetch_reason,
                     )
                     return
             else:

@@ -2224,8 +2224,59 @@ class MultiAccountBrokerManager:
         with self._capital_state_lock:
             return bool(self._capital_ready)
 
+    def is_ready_for_balance_fetch(self) -> Tuple[bool, str]:
+        """Return (True, "") when a live balance fetch is safe to perform.
+
+        Checks only the two pre-fetch prerequisites:
+
+        1. **connected** — at least one platform broker has ``broker.connected == True``.
+        2. **payload_hydrated** — at least one connected broker has produced a
+           prior balance payload.
+
+        Intentionally does NOT check ``capital_ready`` or ``nonce_lock_acquired``
+        because the balance fetch is what *produces* capital-ready state, and the
+        nonce lock only gates order placement, not balance reads.
+
+        Returns
+        -------
+        Tuple[bool, str]
+            ``(True, "")`` when the fetch may proceed.
+            ``(False, reason)`` otherwise (reason codes: ``"not_connected"``,
+            ``"payload_not_hydrated"``).
+        """
+        connected = any(
+            getattr(b, "connected", False)
+            for b in self._platform_brokers.values()
+        )
+        if not connected:
+            return False, "not_connected"
+
+        payload_ok = False
+        for broker in self._platform_brokers.values():
+            if not getattr(broker, "connected", False):
+                continue
+            has_payload = (
+                (callable(getattr(broker, "has_balance_payload_for_capital", None))
+                 and broker.has_balance_payload_for_capital())
+                or (callable(getattr(broker, "has_balance_payload", None))
+                    and broker.has_balance_payload())
+                or getattr(broker, "_last_known_balance", None) is not None
+            )
+            if has_payload:
+                payload_ok = True
+                break
+        if not payload_ok:
+            return False, "payload_not_hydrated"
+
+        return True, ""
+
     def is_fully_hydrated_for_trading(self) -> Tuple[bool, str]:
         """Return (True, "") only when all four hydration invariants are met.
+
+        Gates new *entry* execution (not balance fetching).  Balance fetching
+        uses the lighter :meth:`is_ready_for_balance_fetch` check so that the
+        capital pipeline can run and set ``capital_ready`` before this gate is
+        consulted.
 
         The four required conditions, checked in order:
 
