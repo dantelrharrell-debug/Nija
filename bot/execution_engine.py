@@ -1983,13 +1983,13 @@ class ExecutionEngine:
                     # In EMERGENCY_HALT, even exits are blocked
                     return False
 
-            if not self._assert_bootstrap_ready_for_execution_locks():
-                logger.error(
-                    "Execution lock gate blocked exit for %s: bootstrap not READY/RUNNING",
-                    symbol,
-                )
-                return False
-            
+            # Bootstrap gate is enforced strictly INSIDE _get_closing_lock() and
+            # _get_exit_lock() via _assert_bootstrap_ready_for_execution_locks(strict=True).
+            # Those calls BLOCK until FSM reaches READY/RUNNING — no early return,
+            # no bypass.  Do NOT add a non-strict pre-check here: it would allow
+            # the execution path to bail out silently before the FSM is ready,
+            # which is exactly the unsafe bypass we are eliminating.
+
             # FIX #1: Check if position is already being closed
             with self._get_closing_lock():
                 if symbol in self.closing_positions:
