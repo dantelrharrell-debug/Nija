@@ -428,7 +428,7 @@ class ExecutionEngine:
         """
         FIX 2: Enforce state gate for execution locks.
 
-        Returns True only if capital bootstrap FSM is at RUNNING.
+        Returns True only if capital bootstrap FSM is READY or RUNNING.
         Execution locks (for position management and exit orders) may only be
         acquired when the system is fully bootstrapped and ready for live trading.
 
@@ -442,9 +442,9 @@ class ExecutionEngine:
                 from capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm_exec  # type: ignore[import]
             _cbfsm_exec = _get_cbfsm_exec()
             _current_state_exec = _cbfsm_exec.state
-            if _current_state_exec.value != "RUNNING":
+            if _current_state_exec.value not in {"READY", "RUNNING"}:
                 logger.debug(
-                    "EXECUTION_LOCK_STATE_GATE_BLOCKED capital_bootstrap_state=%s — execution locks blocked until RUNNING",
+                    "EXECUTION_LOCK_STATE_GATE_BLOCKED capital_bootstrap_state=%s — execution locks blocked until READY/RUNNING",
                     _current_state_exec.value,
                 )
                 return False
@@ -457,19 +457,11 @@ class ExecutionEngine:
             return False
 
     def _get_closing_lock(self):
-        """Context manager proxy that checks bootstrap state before acquiring closing lock."""
-        if not self._assert_bootstrap_ready_for_execution_locks():
-            # Return a no-op context manager if bootstrap not ready
-            import contextlib
-            return contextlib.nullcontext()
+        """Return the real closing lock context manager (never bypassed)."""
         return self._closing_lock
 
     def _get_exit_lock(self):
-        """Context manager proxy that checks bootstrap state before acquiring exit lock."""
-        if not self._assert_bootstrap_ready_for_execution_locks():
-            # Return a no-op context manager if bootstrap not ready
-            import contextlib
-            return contextlib.nullcontext()
+        """Return the real exit lock context manager (never bypassed)."""
         return self._exit_lock
 
     def _get_market_microstructure(self, symbol: str) -> Optional[MarketMicrostructure]:
@@ -1930,6 +1922,13 @@ class ExecutionEngine:
                     logger.error("=" * 80)
                     # In EMERGENCY_HALT, even exits are blocked
                     return False
+
+            if not self._assert_bootstrap_ready_for_execution_locks():
+                logger.error(
+                    "Execution lock gate blocked exit for %s: bootstrap not READY/RUNNING",
+                    symbol,
+                )
+                return False
             
             # FIX #1: Check if position is already being closed
             with self._get_closing_lock():

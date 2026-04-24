@@ -3115,6 +3115,16 @@ class MultiAccountBrokerManager:
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
             return
         trigger = f"on_platform_ready:{broker_type.value}"
+        # Advance through startup states deterministically from any cold-start
+        # entry point (including BOOT_IDLE) before requesting refresh.
+        self._capital_bootstrap_fsm.transition(
+            CapitalBootstrapState.WAIT_PLATFORM,
+            trigger,
+        )
+        self._capital_bootstrap_fsm.transition(
+            CapitalBootstrapState.INIT_COMPLETE,
+            trigger,
+        )
         self._capital_bootstrap_fsm.transition(
             CapitalBootstrapState.REFRESH_REQUESTED,
             trigger,

@@ -60,25 +60,15 @@ def _is_bootstrap_owner_thread() -> bool:
 
 
 def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool:
-    """Acquire INIT lock only from bootstrap owner thread, after READY/RUNNING.
+    """Acquire INIT lock only from bootstrap owner thread.
 
     Any non-owner acquire attempt is rejected and logged as an ownership
     violation to preserve deterministic bootstrap lifecycle authority.
 
-    FIX 1: Lock Acquisition Boundary
-    ─────────────────────────────────
-    INIT_LOCK may only be acquired after capital bootstrap reaches READY or RUNNING.
-    Prior states (including PRE-FLIGHT) must not acquire this lock.
+    INIT lock serializes bootstrap state publication and supervisor handoff.
+    The lock itself is the safety boundary; additional startup-state gates here
+    can deadlock legitimate owner-thread writes and create false timeout bypasses.
     """
-    _capital_state = _capital_bootstrap_state_value()
-    if _capital_state not in {"READY", "RUNNING"}:
-        logger.warning(
-            "INIT_LOCK_STATE_GATE_BLOCKED context=%s capital_bootstrap_state=%s — lock acquisition blocked until READY/RUNNING",
-            context,
-            _capital_state,
-        )
-        return False
-    
     if not _is_bootstrap_owner_thread():
         logger.error(
             "INIT_LOCK_OWNERSHIP_VIOLATION context=%s owner_tid=%s caller_tid=%s",
@@ -103,9 +93,8 @@ def _read_initialized_state_snapshot(
 ) -> dict:
     """Read `_initialized_state` safely without stalling startup.
 
-    If the lock cannot be acquired within bounded retries, fail-open with an
-    empty snapshot so bootstrap can continue into trading initialization rather
-    than hanging or crashing on lock contention.
+    If the lock cannot be acquired within bounded retries, raise a runtime
+    error so bootstrap retries safely instead of bypassing the lock contract.
     """
     if not _is_bootstrap_owner_thread():
         # Single-authority rule: only bootstrap owner acquires INIT lock.
@@ -131,13 +120,9 @@ def _read_initialized_state_snapshot(
             lock_timeout_s,
         )
 
-    logger.critical(
-        "INIT_LOCK_BYPASS context=%s — lock unavailable after %d attempts; "
-        "continuing with empty state snapshot",
-        context,
-        max_attempts,
+    raise RuntimeError(
+        f"INIT_LOCK_TIMEOUT context={context} — lock unavailable after {max_attempts} attempts"
     )
-    return {}
 
 # Single-owner bootstrap kernel lock.
 # Only one bootstrap execution sequence may run at a time.  The BotStartup
@@ -2580,9 +2565,9 @@ def _run_bot_startup_and_trading():
                     timeout_s=5.0,
                 )
                 if not _acquired:
-                    logger.critical(
-                        "INIT_LOCK_BYPASS context=store strategy singleton — lock unavailable; "
-                        "continuing with local strategy instance"
+                    raise RuntimeError(
+                        "INIT_LOCK_TIMEOUT context=store strategy singleton — "
+                        "cannot persist strategy safely"
                     )
                 else:
                     try:
@@ -3552,9 +3537,9 @@ def _run_bot_startup_and_trading():
                 timeout_s=5.0,
             )
             if not _acquired:
-                logger.critical(
-                    "INIT_LOCK_BYPASS context=persist initialized state — lock unavailable; "
-                    "continuing runtime without cache persistence"
+                raise RuntimeError(
+                    "INIT_LOCK_TIMEOUT context=persist initialized state — "
+                    "runtime cache persistence blocked"
                 )
             else:
                 try:
@@ -3594,16 +3579,10 @@ def _run_bot_startup_and_trading():
                 timeout_s=5.0,
             )
             if not _acquired:
-                logger.critical(
-                    "INIT_LOCK_BYPASS context=supervisor handoff snapshot — lock unavailable; "
-                    "building handoff state from local variables"
+                raise RuntimeError(
+                    "INIT_LOCK_TIMEOUT context=supervisor handoff snapshot — "
+                    "cannot hand off supervisor state safely"
                 )
-                _state_for_supervisor = {
-                    "strategy": strategy,
-                    "active_threads": _active_threads,
-                    "use_independent_trading": use_independent_trading,
-                    "health_manager": health_manager,
-                }
             else:
                 try:
                     _state_for_supervisor = dict(_initialized_state)

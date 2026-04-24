@@ -56,6 +56,7 @@ Author: NIJA Trading Systems
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -427,6 +428,10 @@ def install_no_failure_activation_contract(
     """
     global _hydration_loop_installed, _fallback_timer_installed
 
+    _forced_fallback_enabled = os.environ.get(
+        "NIJA_ENABLE_FORCED_ACTIVATION_FALLBACK", "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
     with _install_lock:
         # ── Shared trigger event between hydration loop and fallback timer ──
         # When the hydration loop exhausts retries it sets this event so the
@@ -434,15 +439,21 @@ def install_no_failure_activation_contract(
         trigger = threading.Event()
 
         # ── Invariant 3: fallback timer ──────────────────────────────────────
-        if not _fallback_timer_installed:
-            timer = ForcedActivationFallbackTimer(
-                fallback_timeout_s=fallback_timeout_s,
-                trigger_event=trigger,
-            )
-            timer.start()
-            _fallback_timer_installed = True
+        if _forced_fallback_enabled:
+            if not _fallback_timer_installed:
+                timer = ForcedActivationFallbackTimer(
+                    fallback_timeout_s=fallback_timeout_s,
+                    trigger_event=trigger,
+                )
+                timer.start()
+                _fallback_timer_installed = True
+            else:
+                logger.debug("[install_no_failure_activation_contract] fallback timer already installed")
         else:
-            logger.debug("[install_no_failure_activation_contract] fallback timer already installed")
+            logger.warning(
+                "[install_no_failure_activation_contract] forced activation fallback disabled "
+                "(set NIJA_ENABLE_FORCED_ACTIVATION_FALLBACK=1 to enable emergency bypass)"
+            )
 
         # ── Invariant 2: hydration loop ──────────────────────────────────────
         if not _hydration_loop_installed:
@@ -460,7 +471,7 @@ def install_no_failure_activation_contract(
                 logger.info(
                     "[install_no_failure_activation_contract] "
                     "coordinator/broker_map not provided — Invariant 2 (hydration loop) skipped; "
-                    "Invariant 3 (fallback timer) is active"
+                    "Invariant 3 (fallback timer) is active only when NIJA_ENABLE_FORCED_ACTIVATION_FALLBACK=1"
                 )
                 # Mark as installed anyway so repeated calls with a coordinator
                 # do not start a second loop.
@@ -470,7 +481,8 @@ def install_no_failure_activation_contract(
 
     logger.info(
         "✅ [no_failure_activation_contract] installed — "
-        "fallback_timeout=%.0fs retry_interval=%.0fs max_attempts=%d",
+        "forced_fallback=%s fallback_timeout=%.0fs retry_interval=%.0fs max_attempts=%d",
+        "enabled" if _forced_fallback_enabled else "disabled",
         fallback_timeout_s,
         retry_interval_s,
         max_hydration_attempts,
