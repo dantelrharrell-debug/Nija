@@ -312,10 +312,10 @@ class BootstrapStateMachine:
 
         The single-owner kernel invariant: exactly one thread drives the bootstrap
         DAG forward.  Any other thread that calls :meth:`transition` while an
-        owner is registered produces a warning log so the violation is immediately
-        visible.  Transitions from non-owner threads are still applied (fail-open)
-        so the bot never deadlocks on a stale owner ID, but the warning surface
-        makes races obvious in both development and production logs.
+        owner is registered is rejected for non-terminal transitions and logged
+        as an ownership violation.  This keeps bootstrap progression deterministic
+        under a single authority while still allowing emergency terminal transitions
+        (EXTERNAL_RESTART_REQUIRED / SHUTDOWN) from other threads.
 
         Idempotent: safe to call multiple times from the same thread.
         """

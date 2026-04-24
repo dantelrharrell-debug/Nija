@@ -679,17 +679,15 @@ class TestOwnershipEnforcement(unittest.TestCase):
         self.assertEqual(warning_msgs, [])
 
     def test_non_owner_thread_logs_warning(self):
-        """A non-owner thread driving a transition must emit the warning."""
+        """A non-owner non-terminal transition must emit ownership violation."""
         fsm = _fresh()
         fsm.claim_bootstrap_ownership()  # main test thread is owner
         warning_seen: list = []
 
         def _non_owner_transition():
             with self.assertLogs("nija.bootstrap_fsm", level="WARNING") as cm:
-                # Attempt any transition from a different thread.
-                # Use an illegal one so we get at least one log entry (ERROR)
-                # that satisfies assertLogs even if the warning fires too.
-                fsm.transition(BootstrapState.SHUTDOWN, "non-owner attempt")
+                # Use a non-terminal transition to trigger ownership enforcement.
+                fsm.transition(BootstrapState.LOCK_ACQUIRED, "non-owner attempt")
             non_owner_warns = [r for r in cm.output if "Non-owner" in r]
             warning_seen.extend(non_owner_warns)
 
@@ -728,16 +726,16 @@ class TestOwnershipEnforcement(unittest.TestCase):
         status_after = fsm.get_status()
         self.assertEqual(status_after["owner_thread_id"], threading.get_ident())
 
-    def test_transitions_still_succeed_from_non_owner(self):
-        """Non-owner transitions are fail-open: they warn but still apply."""
+    def test_non_owner_non_terminal_transition_is_rejected(self):
+        """Non-owner non-terminal transitions are fail-closed and rejected."""
         fsm = _fresh()
         fsm.claim_bootstrap_ownership()  # this thread owns it
 
         applied: list = []
 
         def _non_owner():
-            # Drive a *valid* transition (BOOT_INIT → LOCK_ACQUIRED) from a
-            # non-owner thread; it should succeed (fail-open) despite the warning.
+            # Drive a valid non-terminal transition from a non-owner thread;
+            # ownership enforcement must reject it.
             r = fsm.transition(BootstrapState.LOCK_ACQUIRED, "non-owner valid")
             applied.append(r)
 
@@ -745,8 +743,8 @@ class TestOwnershipEnforcement(unittest.TestCase):
         t.start()
         t.join()
 
-        self.assertEqual(applied, [True])
-        self.assertEqual(fsm.state, BootstrapState.LOCK_ACQUIRED)
+        self.assertEqual(applied, [False])
+        self.assertEqual(fsm.state, BootstrapState.BOOT_INIT)
 
 
 if __name__ == "__main__":
