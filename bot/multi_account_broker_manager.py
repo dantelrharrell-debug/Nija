@@ -1039,31 +1039,70 @@ class MultiAccountBrokerManager:
         * any other I11-gated module that checks ``get_bootstrap_fsm().state``
 
         which is the final guard before the trading loop is permitted to run.
+
+        Lifecycle synchronization
+        -------------------------
+        The I12 hydration barrier inside ``advance_to_capital_ready`` may not
+        be satisfied on the very first call if the CSM-v2 pipeline finishes
+        hydration milliseconds after this callback fires.  In that case a
+        background retry thread is spawned so the system FSM still converges
+        to CAPITAL_READY without any manual intervention.
         """
-        try:
+        def _try_advance(attempt: int = 0) -> None:
             try:
-                from bot.bootstrap_state_machine import get_bootstrap_fsm
-            except ImportError:
-                from bootstrap_state_machine import get_bootstrap_fsm  # type: ignore[no-redef]
-            fsm = get_bootstrap_fsm()
-            advanced = fsm.advance_to_capital_ready("capital_fsm_ready")
-            if advanced:
-                logger.info(
-                    "✅ [MABM] Option A: BootstrapStateMachine → %s "
-                    "— trading loop unblocked",
-                    fsm.state.value,
-                )
-            else:
+                try:
+                    from bot.bootstrap_state_machine import get_bootstrap_fsm
+                except ImportError:
+                    from bootstrap_state_machine import get_bootstrap_fsm  # type: ignore[no-redef]
+                fsm = get_bootstrap_fsm()
+                advanced = fsm.advance_to_capital_ready("capital_fsm_ready")
+                if advanced:
+                    logger.info(
+                        "✅ [MABM] Option A: BootstrapStateMachine → %s "
+                        "— trading loop unblocked (attempt=%d)",
+                        fsm.state.value,
+                        attempt,
+                    )
+                    return
+                # advance_to_capital_ready returned False — I12 hydration timed out
+                # (5 s default) or the system FSM is in an error state.
+                # Spawn a retry thread that backs off and retries until the system
+                # FSM reaches CAPITAL_READY.
                 logger.warning(
-                    "⚠️  [MABM] Option A: BootstrapStateMachine could not advance "
-                    "to CAPITAL_READY (current=%s) — I11 invariant may still block",
+                    "⚠️  [MABM] Option A attempt=%d: BootstrapStateMachine at %s "
+                    "— not CAPITAL_READY yet; scheduling retry thread",
+                    attempt,
                     fsm.state.value,
                 )
-        except Exception as _exc:
-            logger.warning(
-                "[MABM] _on_capital_bootstrap_ready: could not advance system FSM: %s",
-                _exc,
-            )
+                if attempt >= 5:
+                    logger.error(
+                        "❌ [MABM] Option A: giving up after %d attempts — "
+                        "BootstrapStateMachine stuck at %s; I11 invariant may block trading",
+                        attempt,
+                        fsm.state.value,
+                    )
+                    return
+                import threading as _threading
+                import time as _time
+
+                def _retry() -> None:
+                    _time.sleep(min(2 ** attempt, 30))  # 1s, 2s, 4s, 8s, 16s
+                    _try_advance(attempt + 1)
+
+                _threading.Thread(
+                    target=_retry,
+                    name=f"capital-ready-retry-{attempt}",
+                    daemon=True,
+                ).start()
+            except Exception as _exc:
+                logger.warning(
+                    "[MABM] _on_capital_bootstrap_ready attempt=%d: "
+                    "could not advance system FSM: %s",
+                    attempt,
+                    _exc,
+                )
+
+        _try_advance(attempt=0)
 
     def _record_broker_registration(self, broker_type: BrokerType, broker: BaseBroker) -> None:
         """Propagate broker-registration metadata and notifications."""
