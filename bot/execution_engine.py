@@ -83,6 +83,28 @@ except ImportError:
     except ImportError:
         MIN_NOTIONAL_GATE_AVAILABLE = False
         logger.warning("⚠️ Minimum Notional Gate not available")
+
+# Import Exchange Constraints Enforcer (reject-proof order validation)
+try:
+    from bot.exchange_constraints_enforcer import (
+        validate_order_constraints,
+        calculate_fillable_order_size,
+    )
+    EXCHANGE_CONSTRAINTS_AVAILABLE = True
+    logger.info("✅ Exchange Constraints Enforcer loaded - Reject-proof order sizing active")
+except ImportError:
+    try:
+        from exchange_constraints_enforcer import (
+            validate_order_constraints,
+            calculate_fillable_order_size,
+        )
+        EXCHANGE_CONSTRAINTS_AVAILABLE = True
+        logger.info("✅ Exchange Constraints Enforcer loaded - Reject-proof order sizing active")
+    except ImportError:
+        EXCHANGE_CONSTRAINTS_AVAILABLE = False
+        logger.warning("⚠️ Exchange Constraints Enforcer not available")
+        validate_order_constraints = None
+        calculate_fillable_order_size = None
         get_minimum_notional_gate = None
         NotionalGateConfig = None
 
@@ -1694,13 +1716,57 @@ class ExecutionEngine:
                     else:
                         _order_reason = "broker does not support limit orders"
                     logger.info(f"   📊 Dynamic order type: MARKET ({_order_reason})")
+
+                    # ✅ EXCHANGE CONSTRAINTS ENFORCER: Validate before placement
+                    # Ensures: notional floor met, base-currency precision OK, fillable
+                    _broker_name = "unknown"
+                    if self.broker_client and hasattr(self.broker_client, "broker_type"):
+                        _broker_type = self.broker_client.broker_type
+                        _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
+
+                    if EXCHANGE_CONSTRAINTS_AVAILABLE and validate_order_constraints:
+                        _constraints = validate_order_constraints(
+                            symbol=symbol,
+                            order_size_usd=position_size,
+                            price_usd=entry_price,
+                            broker_type=_broker_name,
+                        )
+                        if not _constraints.is_valid:
+                            logger.error(
+                                "❌ EXCHANGE CONSTRAINTS BLOCKED ENTRY\n"
+                                "   Symbol: %s\n"
+                                "   Size: $%.2f\n"
+                                "   Price: $%.2f\n"
+                                "   Broker: %s\n"
+                                "   Reason: %s",
+                                symbol, position_size, entry_price, _broker_name, _constraints.reason,
+                            )
+                            return None
+                        # Use validated quantity if available
+                        _order_quantity = _constraints.recommended_quantity or position_size
+                        _order_size_usd = _constraints.recommended_size_usd or position_size
+                        logger.info(
+                            "✅ Exchange constraints validated: $%.2f (qty=%.8f %s) @ $%.2f\n"
+                            "   Exchange minimum: $%.2f (qty=%.8f) | %s",
+                            _order_size_usd,
+                            _order_quantity,
+                            symbol,
+                            entry_price,
+                            _constraints.min_required_usd or 0.0,
+                            _constraints.min_required_quantity or 0.0,
+                            _constraints.reason,
+                        )
+                    else:
+                        _order_size_usd = position_size
+                        _order_quantity = position_size / entry_price if entry_price > 0 else 0.0
+
                     _entry_t0 = _time.monotonic()
                     _market_exc: Optional[Exception] = None
                     try:
                         result = self.broker_client.place_market_order(
                             symbol=symbol,
                             side=order_side,
-                            quantity=position_size
+                            quantity=_order_quantity
                         )
                     except Exception as _mk_exc:
                         _market_exc = _mk_exc
@@ -2055,13 +2121,57 @@ class ExecutionEngine:
                 # Place exit order via broker
                 if self.broker_client:
                     order_side = 'sell' if position['side'] == 'long' else 'buy'
+
+                    # ✅ EXCHANGE CONSTRAINTS ENFORCER: Validate exit size before placement
+                    _broker_name = "unknown"
+                    if hasattr(self.broker_client, "broker_type"):
+                        _broker_type = self.broker_client.broker_type
+                        _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
+
+                    _exit_constraints_ok = True
+                    _exit_quantity = exit_size  # default USD-based
+
+                    if EXCHANGE_CONSTRAINTS_AVAILABLE and validate_order_constraints:
+                        _constraints = validate_order_constraints(
+                            symbol=symbol,
+                            order_size_usd=exit_size,
+                            price_usd=exit_price,
+                            broker_type=_broker_name,
+                        )
+                        if not _constraints.is_valid:
+                            logger.error(
+                                "❌ EXCHANGE CONSTRAINTS BLOCKED EXIT\n"
+                                "   Symbol: %s\n"
+                                "   Size: $%.2f\n"
+                                "   Price: $%.2f\n"
+                                "   Broker: %s\n"
+                                "   Reason: %s",
+                                symbol, exit_size, exit_price, _broker_name, _constraints.reason,
+                            )
+                            _exit_constraints_ok = False
+                        else:
+                            _exit_quantity = _constraints.recommended_quantity or exit_size
+                            logger.info(
+                                "✅ Exit exchange constraints validated: $%.2f (qty=%.8f %s) @ $%.2f",
+                                exit_size, _exit_quantity, symbol, exit_price,
+                            )
+
+                    if not _exit_constraints_ok:
+                        # FIX #1: Unlock on constraint rejection
+                        with self._get_closing_lock():
+                            self.closing_positions.discard(symbol)
+                        # FIX #3: Remove from active exit orders on rejection
+                        with self._get_exit_lock():
+                            self.active_exit_orders.discard(symbol)
+                        return False
+
                     _exit_t0 = _time.monotonic()
                     _exit_exc: Optional[Exception] = None
                     try:
                         result = self.broker_client.place_market_order(
                             symbol=symbol,
                             side=order_side,
-                            quantity=exit_size
+                            quantity=_exit_quantity
                         )
                     except Exception as _ex_exc:
                         _exit_exc = _ex_exc
