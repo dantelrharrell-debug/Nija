@@ -424,6 +424,54 @@ class ExecutionEngine:
         else:
             self.profit_logger = None
 
+    def _assert_bootstrap_ready_for_execution_locks(self) -> bool:
+        """
+        FIX 2: Enforce state gate for execution locks.
+
+        Returns True only if capital bootstrap FSM is at RUNNING.
+        Execution locks (for position management and exit orders) may only be
+        acquired when the system is fully bootstrapped and ready for live trading.
+
+        Returns:
+            bool: True if safe to acquire execution locks, False otherwise.
+        """
+        try:
+            try:
+                from bot.capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm_exec
+            except ImportError:
+                from capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm_exec  # type: ignore[import]
+            _cbfsm_exec = _get_cbfsm_exec()
+            _current_state_exec = _cbfsm_exec.state
+            if _current_state_exec.value != "RUNNING":
+                logger.debug(
+                    "EXECUTION_LOCK_STATE_GATE_BLOCKED capital_bootstrap_state=%s — execution locks blocked until RUNNING",
+                    _current_state_exec.value,
+                )
+                return False
+            return True
+        except Exception as _state_check_err:
+            logger.warning(
+                "Execution lock state gate check failed: %s — blocking lock acquisition",
+                _state_check_err,
+            )
+            return False
+
+    def _get_closing_lock(self):
+        """Context manager proxy that checks bootstrap state before acquiring closing lock."""
+        if not self._assert_bootstrap_ready_for_execution_locks():
+            # Return a no-op context manager if bootstrap not ready
+            import contextlib
+            return contextlib.nullcontext()
+        return self._closing_lock
+
+    def _get_exit_lock(self):
+        """Context manager proxy that checks bootstrap state before acquiring exit lock."""
+        if not self._assert_bootstrap_ready_for_execution_locks():
+            # Return a no-op context manager if bootstrap not ready
+            import contextlib
+            return contextlib.nullcontext()
+        return self._exit_lock
+
     def _get_market_microstructure(self, symbol: str) -> Optional[MarketMicrostructure]:
         """
         Get current market microstructure data for execution optimization.
@@ -1884,13 +1932,13 @@ class ExecutionEngine:
                     return False
             
             # FIX #1: Check if position is already being closed
-            with self._closing_lock:
+            with self._get_closing_lock():
                 if symbol in self.closing_positions:
                     logger.warning(f"⚠️ CONCURRENCY PROTECTION: {symbol} already being closed, skipping duplicate exit")
                     return False  # Prevent double-sell
 
             # FIX #3: Check if there's already an active exit order for this symbol
-            with self._exit_lock:
+            with self._get_exit_lock():
                 if symbol in self.active_exit_orders:
                     logger.warning(f"⚠️ CONCURRENCY PROTECTION: Active exit order for {symbol}, skipping concurrent exit")
                     return False  # Block concurrent exit
@@ -1937,11 +1985,11 @@ class ExecutionEngine:
                 logger.info(f"   Gross P&L: {gross_pnl_pct*100:+.2f}% | Fees: ${fees_usd:.2f} | NET P&L: {net_pnl_pct*100:+.2f}%")
 
             # FIX #1: Lock this symbol as being closed before submitting order
-            with self._closing_lock:
+            with self._get_closing_lock():
                 self.closing_positions.add(symbol)
 
             # FIX #3: Mark as active exit order
-            with self._exit_lock:
+            with self._get_exit_lock():
                 self.active_exit_orders.add(symbol)
 
             try:
@@ -1968,11 +2016,11 @@ class ExecutionEngine:
                         logger.error(f"Exit order failed: {error_msg}")
 
                         # FIX #1: Unlock on confirmed rejection
-                        with self._closing_lock:
+                        with self._get_closing_lock():
                             self.closing_positions.discard(symbol)
 
                         # FIX #3: Remove from active exit orders on failure
-                        with self._exit_lock:
+                        with self._get_exit_lock():
                             self.active_exit_orders.discard(symbol)
 
                         return False
@@ -2180,32 +2228,32 @@ class ExecutionEngine:
                             )
 
                     # FIX #1: Unlock after final settlement (position fully closed)
-                    with self._closing_lock:
+                    with self._get_closing_lock():
                         self.closing_positions.discard(symbol)
 
                     # FIX #3: Remove from active exit orders after completion
-                    with self._exit_lock:
+                    with self._get_exit_lock():
                         self.active_exit_orders.discard(symbol)
                 else:
                     logger.info(f"Partial exit: {symbol} ({position['remaining_size']*100:.0f}% remaining)")
 
                     # Partial exit complete - unlock for potential future exits
-                    with self._closing_lock:
+                    with self._get_closing_lock():
                         self.closing_positions.discard(symbol)
 
                     # FIX #3: Remove from active exit orders after partial exit completes
-                    with self._exit_lock:
+                    with self._get_exit_lock():
                         self.active_exit_orders.discard(symbol)
 
                 return True
 
             except Exception as order_error:
                 # FIX #1: Unlock on confirmed failure
-                with self._closing_lock:
+                with self._get_closing_lock():
                     self.closing_positions.discard(symbol)
 
                 # FIX #3: Remove from active exit orders on exception
-                with self._exit_lock:
+                with self._get_exit_lock():
                     self.active_exit_orders.discard(symbol)
 
                 raise order_error
@@ -2214,11 +2262,11 @@ class ExecutionEngine:
             logger.error(f"Exit error: {e}")
 
             # FIX #1: Ensure unlock even on unexpected exceptions
-            with self._closing_lock:
+            with self._get_closing_lock():
                 self.closing_positions.discard(symbol)
 
             # FIX #3: Ensure cleanup even on unexpected exceptions
-            with self._exit_lock:
+            with self._get_exit_lock():
                 self.active_exit_orders.discard(symbol)
 
             return False

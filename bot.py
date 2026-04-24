@@ -60,11 +60,25 @@ def _is_bootstrap_owner_thread() -> bool:
 
 
 def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool:
-    """Acquire INIT lock only from bootstrap owner thread.
+    """Acquire INIT lock only from bootstrap owner thread, after READY/RUNNING.
 
     Any non-owner acquire attempt is rejected and logged as an ownership
     violation to preserve deterministic bootstrap lifecycle authority.
+
+    FIX 1: Lock Acquisition Boundary
+    ─────────────────────────────────
+    INIT_LOCK may only be acquired after capital bootstrap reaches READY or RUNNING.
+    Prior states (including PRE-FLIGHT) must not acquire this lock.
     """
+    _capital_state = _capital_bootstrap_state_value()
+    if _capital_state not in {"READY", "RUNNING"}:
+        logger.warning(
+            "INIT_LOCK_STATE_GATE_BLOCKED context=%s capital_bootstrap_state=%s — lock acquisition blocked until READY/RUNNING",
+            context,
+            _capital_state,
+        )
+        return False
+    
     if not _is_bootstrap_owner_thread():
         logger.error(
             "INIT_LOCK_OWNERSHIP_VIOLATION context=%s owner_tid=%s caller_tid=%s",
@@ -160,13 +174,43 @@ _nonce_bootstrap_jump_done = False
 _nonce_bootstrap_jump_lock = threading.Lock()
 
 
+def _capital_bootstrap_state_value() -> str:
+    """Return capital bootstrap FSM state value, or 'UNAVAILABLE' if import fails."""
+    try:
+        from bot.capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm
+    except ImportError:
+        try:
+            from capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm  # type: ignore[import]
+        except ImportError:
+            return "UNAVAILABLE"
+    try:
+        return str(_get_cbfsm().state.value)
+    except Exception:
+        return "UNAVAILABLE"
+
+
 def _bootstrap_nonce_reset_once() -> None:
-    """Bootstrap-owned nonce reset gate (single execution, post-INIT only)."""
+    """Bootstrap-owned nonce reset gate (single execution, post-READY only).
+    
+    FIX 1: NONCE_LOCK Acquisition Boundary
+    ──────────────────────────────────────
+    The nonce jump must only occur after capital bootstrap reaches READY/RUNNING.
+    Earlier bootstrap phases (PRE-FLIGHT,
+    STARTUP_VALIDATED, etc.) must not trigger nonce operations.
+    """
     _kraken_creds_present = bool(
         (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
         and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
     )
     if not _kraken_creds_present:
+        return
+
+    _capital_state = _capital_bootstrap_state_value()
+    if _capital_state not in {"READY", "RUNNING"}:
+        logger.warning(
+            "NONCE_LOCK_STATE_GATE_BLOCKED capital_bootstrap_state=%s — nonce reset blocked until READY/RUNNING",
+            _capital_state,
+        )
         return
 
     global _nonce_bootstrap_jump_done
@@ -3277,13 +3321,22 @@ def _run_bot_startup_and_trading():
                 _tsm.get_current_state().value,
             )
 
-            # Bootstrap-owned NONCE phase: execute after INIT completion and
-            # before RUN loop thread launch.
+            # FIX 3: Explicit transition boundary — CAPITAL_READY → INIT_COMPLETE
+            # All initialization is now locked. All acquired locks (INIT_LOCK, NONCE_LOCK)
+            # may now be safely acquired. This is the boundary that gates execution locks.
+            if _BOOTSTRAP_FSM_AVAILABLE:
+                _bfsm_transition(
+                    _BootstrapState.INIT_COMPLETE,
+                    "all initialization locked; execution logic ready",
+                )
+
+            # Bootstrap-owned NONCE phase: execute after INIT_COMPLETE boundary
+            # and before RUN loop thread launch.
             _bootstrap_nonce_reset_once()
 
             # Advance bootstrap FSM to THREADS_STARTING only after LIVE_ACTIVE is
-            # confirmed so that any failure above leaves the FSM at CAPITAL_READY
-            # (from which reset_for_retry can now reach BOOT_FAILED_RETRY).
+            # confirmed so that any failure above leaves the FSM at INIT_COMPLETE
+            # (from which reset_for_retry can reach BOOT_FAILED_RETRY).
             if _BOOTSTRAP_FSM_AVAILABLE:
                 _bfsm_transition(
                     _BootstrapState.THREADS_STARTING,
@@ -3562,6 +3615,29 @@ def _run_bot_startup_and_trading():
                 f"{len(_active_threads)} trader thread(s) started; supervisor loop active",
             )
             logger.info("🚀 FSM STATE: RUNNING_SUPERVISED")
+
+            # Explicit capital bootstrap final step: READY -> RUNNING.
+            try:
+                from bot.capital_flow_state_machine import (
+                    CapitalBootstrapState as _CapitalBootstrapState,
+                    get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
+                )
+            except ImportError:
+                try:
+                    from capital_flow_state_machine import (  # type: ignore[import]
+                        CapitalBootstrapState as _CapitalBootstrapState,
+                        get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
+                    )
+                except ImportError:
+                    _get_capital_bootstrap_fsm = None  # type: ignore[assignment]
+            if _get_capital_bootstrap_fsm is not None:
+                try:
+                    _get_capital_bootstrap_fsm().transition(
+                        _CapitalBootstrapState.RUNNING,
+                        "runtime supervised threads active",
+                    )
+                except Exception as _capital_running_err:
+                    logger.warning("Capital bootstrap RUNNING transition failed: %s", _capital_running_err)
             try:
                 from bot.startup_readiness_gate import get_startup_readiness_gate
             except ImportError:

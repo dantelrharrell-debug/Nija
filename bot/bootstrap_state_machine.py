@@ -21,6 +21,7 @@ States (16 total)
   PLATFORM_READY         – at least one platform broker connected
   CAPITAL_REFRESHING     – capital authority refresh in progress
   CAPITAL_READY          – capital > 0 confirmed; trading gate open
+  INIT_COMPLETE          – all initialization locked; execution logic ready
   THREADS_STARTING       – trading worker threads being spawned
   RUNNING_SUPERVISED     – trading threads live; supervisor loop active (resumable)
   CONFIG_ERROR_KEEPALIVE – no exchange credentials; process alive for monitoring
@@ -39,7 +40,8 @@ Allowed transitions
   PLATFORM_CONNECTING    → PLATFORM_READY | BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED
   PLATFORM_READY         → CAPITAL_REFRESHING
   CAPITAL_REFRESHING     → CAPITAL_READY | BOOT_FAILED_RETRY
-  CAPITAL_READY          → THREADS_STARTING
+  CAPITAL_READY          → INIT_COMPLETE
+  INIT_COMPLETE          → THREADS_STARTING
   THREADS_STARTING       → RUNNING_SUPERVISED | BOOT_FAILED_RETRY
   RUNNING_SUPERVISED     → BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED | SHUTDOWN
   BOOT_FAILED_RETRY      → PLATFORM_CONNECTING | EXTERNAL_RESTART_REQUIRED
@@ -70,7 +72,7 @@ Global invariants
   I10 Capital writer         only CapitalRefreshCoordinator (WRITER_ID) may
                              publish capital snapshots.
   I11 Strategy arm           strategy engine arming is illegal before
-                             BootstrapStateMachine reaches CAPITAL_READY.
+                             BootstrapStateMachine reaches CAPITAL_READY or INIT_COMPLETE.
   I12 Capital hydration      CAPITAL_READY is illegal unless the CSM-v2 capital
                              pipeline has run at least once (is_hydrated=True);
                              enforced synchronously in advance_to_capital_ready().
@@ -110,6 +112,7 @@ class BootstrapState(str, Enum):
     PLATFORM_READY = "PLATFORM_READY"
     CAPITAL_REFRESHING = "CAPITAL_REFRESHING"
     CAPITAL_READY = "CAPITAL_READY"
+    INIT_COMPLETE = "INIT_COMPLETE"
     THREADS_STARTING = "THREADS_STARTING"
     RUNNING_SUPERVISED = "RUNNING_SUPERVISED"
     CONFIG_ERROR_KEEPALIVE = "CONFIG_ERROR_KEEPALIVE"
@@ -123,6 +126,7 @@ class BootstrapState(str, Enum):
 # ---------------------------------------------------------------------------
 _STRATEGY_ARM_ALLOWED_STATES = frozenset({
     BootstrapState.CAPITAL_READY,
+    BootstrapState.INIT_COMPLETE,
     BootstrapState.THREADS_STARTING,
     BootstrapState.RUNNING_SUPERVISED,
 })
@@ -177,6 +181,10 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
         BootstrapState.BOOT_FAILED_RETRY,
     ],
     BootstrapState.CAPITAL_READY: [
+        BootstrapState.INIT_COMPLETE,
+        BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.INIT_COMPLETE: [
         BootstrapState.THREADS_STARTING,
         BootstrapState.BOOT_FAILED_RETRY,
     ],
@@ -219,6 +227,7 @@ _HAPPY_PATH_TO_CAPITAL_READY: List[BootstrapState] = [
     BootstrapState.PLATFORM_READY,
     BootstrapState.CAPITAL_REFRESHING,
     BootstrapState.CAPITAL_READY,
+    BootstrapState.INIT_COMPLETE,
 ]
 
 # ---------------------------------------------------------------------------

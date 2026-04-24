@@ -519,6 +519,9 @@ class MultiAccountBrokerManager:
             self._capital_bootstrap_fsm.transition(
                 CapitalBootstrapState.WAIT_PLATFORM, "mabm_init"
             )
+            self._capital_bootstrap_fsm.transition(
+                CapitalBootstrapState.INIT_COMPLETE, "mabm_preflight_complete"
+            )
             # ── Option A: wire capital-ready → system FSM → trading loop ──────
             # Register a one-shot callback on the capital bootstrap FSM.  When
             # the capital pipeline reaches READY (event emitted, bus flushed,
@@ -2202,7 +2205,7 @@ class MultiAccountBrokerManager:
         if not _CAPITAL_FSM_AVAILABLE or self._capital_bootstrap_fsm is None:
             # No FSM available — assume bootstrap until proven otherwise.
             return True
-        return self._capital_bootstrap_fsm.state != CapitalBootstrapState.READY
+        return not self._capital_bootstrap_fsm.is_ready
 
     @property
     def bootstrap_state(self) -> str:
@@ -3147,6 +3150,10 @@ class MultiAccountBrokerManager:
 
         if self._any_platform_ready():
             self._capital_bootstrap_fsm.transition(
+                CapitalBootstrapState.INIT_COMPLETE,
+                "wait_platform_poll_ready",
+            )
+            self._capital_bootstrap_fsm.transition(
                 CapitalBootstrapState.REFRESH_REQUESTED,
                 "wait_platform_poll_ready",
             )
@@ -3158,6 +3165,10 @@ class MultiAccountBrokerManager:
                 self.wait_platform_timeout_s,
             )
             self._capital_bootstrap_fsm.force_transition(
+                CapitalBootstrapState.INIT_COMPLETE,
+                "wait_platform_timeout_fallback",
+            )
+            self._capital_bootstrap_fsm.transition(
                 CapitalBootstrapState.REFRESH_REQUESTED,
                 "wait_platform_timeout_fallback",
             )

@@ -399,10 +399,12 @@ class CapitalBootstrapState(str, Enum):
 
     BOOT_IDLE = "BOOT_IDLE"
     WAIT_PLATFORM = "WAIT_PLATFORM"
+    INIT_COMPLETE = "INIT_COMPLETE"
     REFRESH_REQUESTED = "REFRESH_REQUESTED"
     REFRESH_IN_FLIGHT = "REFRESH_IN_FLIGHT"
     SNAPSHOT_EVALUATING = "SNAPSHOT_EVALUATING"
     READY = "READY"
+    RUNNING = "RUNNING"
     DEGRADED = "DEGRADED"
     FAILED = "FAILED"
 
@@ -413,20 +415,21 @@ class CapitalBootstrapStateMachine:
 
     Forward path::
 
-        BOOT_IDLE → WAIT_PLATFORM → REFRESH_REQUESTED → REFRESH_IN_FLIGHT
-                 → SNAPSHOT_EVALUATING → READY
+        BOOT_IDLE → WAIT_PLATFORM → INIT_COMPLETE → REFRESH_REQUESTED
+                 → REFRESH_IN_FLIGHT → SNAPSHOT_EVALUATING → READY → RUNNING
 
     Retry paths::
 
         SNAPSHOT_EVALUATING → DEGRADED → REFRESH_REQUESTED  (retry)
         SNAPSHOT_EVALUATING → FAILED   → REFRESH_REQUESTED  (recovery)
 
-    ``READY`` is the terminal success state.
+    ``RUNNING`` is the terminal success state.
     """
 
     _VALID_TRANSITIONS: Dict[CapitalBootstrapState, List[CapitalBootstrapState]] = {
         CapitalBootstrapState.BOOT_IDLE: [CapitalBootstrapState.WAIT_PLATFORM],
-        CapitalBootstrapState.WAIT_PLATFORM: [CapitalBootstrapState.REFRESH_REQUESTED],
+        CapitalBootstrapState.WAIT_PLATFORM: [CapitalBootstrapState.INIT_COMPLETE],
+        CapitalBootstrapState.INIT_COMPLETE: [CapitalBootstrapState.REFRESH_REQUESTED],
         CapitalBootstrapState.REFRESH_REQUESTED: [CapitalBootstrapState.REFRESH_IN_FLIGHT],
         CapitalBootstrapState.REFRESH_IN_FLIGHT: [CapitalBootstrapState.SNAPSHOT_EVALUATING],
         CapitalBootstrapState.SNAPSHOT_EVALUATING: [
@@ -436,7 +439,8 @@ class CapitalBootstrapStateMachine:
         ],
         CapitalBootstrapState.DEGRADED: [CapitalBootstrapState.REFRESH_REQUESTED],
         CapitalBootstrapState.FAILED: [CapitalBootstrapState.REFRESH_REQUESTED],
-        CapitalBootstrapState.READY: [],  # terminal — no further transitions
+        CapitalBootstrapState.READY: [CapitalBootstrapState.RUNNING],
+        CapitalBootstrapState.RUNNING: [],  # terminal — no further transitions
     }
 
     def __init__(self) -> None:
@@ -468,7 +472,10 @@ class CapitalBootstrapStateMachine:
                 return False
             old = self._state
             self._state = new_state
-            just_ready = new_state == CapitalBootstrapState.READY
+            just_ready = new_state in (
+                CapitalBootstrapState.READY,
+                CapitalBootstrapState.RUNNING,
+            )
             callbacks = list(self._on_ready_callbacks) if just_ready else []
             if just_ready:
                 self._on_ready_callbacks.clear()
@@ -496,7 +503,10 @@ class CapitalBootstrapStateMachine:
         with self._lock:
             old = self._state
             self._state = new_state
-            just_ready = new_state == CapitalBootstrapState.READY
+            just_ready = new_state in (
+                CapitalBootstrapState.READY,
+                CapitalBootstrapState.RUNNING,
+            )
             callbacks = list(self._on_ready_callbacks) if just_ready else []
             if just_ready:
                 self._on_ready_callbacks.clear()
@@ -527,7 +537,7 @@ class CapitalBootstrapStateMachine:
         ERROR level but do not prevent other callbacks from running.
         """
         with self._lock:
-            if self._state == CapitalBootstrapState.READY:
+            if self._state in (CapitalBootstrapState.READY, CapitalBootstrapState.RUNNING):
                 fire_now = True
             else:
                 self._on_ready_callbacks.append(callback)
@@ -539,12 +549,12 @@ class CapitalBootstrapStateMachine:
                 logger.exception("on_ready callback raised an exception: %s", callback)
 
     def wait_ready(self, timeout: Optional[float] = None) -> bool:
-        """Block until the FSM reaches READY or *timeout* expires."""
+        """Block until the FSM reaches READY/RUNNING or *timeout* expires."""
         return self._ready_event.wait(timeout=timeout)
 
     @property
     def is_ready(self) -> bool:
-        return self._state == CapitalBootstrapState.READY
+        return self._state in (CapitalBootstrapState.READY, CapitalBootstrapState.RUNNING)
 
     @property
     def is_failed(self) -> bool:
@@ -866,11 +876,12 @@ class CapitalRefreshCoordinator:
         ))
         # Advance bootstrap FSM through any valid entry state before taking the
         # pipeline in-flight.  Allowed origins:
-        #   WAIT_PLATFORM   → REFRESH_REQUESTED  (first-ever refresh)
+        #   WAIT_PLATFORM   → INIT_COMPLETE → REFRESH_REQUESTED  (first-ever refresh)
         #   DEGRADED        → REFRESH_REQUESTED  (retry after confidence failure)
         #   FAILED          → REFRESH_REQUESTED  (recovery after capital-zero run)
         # Already-REFRESH_REQUESTED state: transition() is a no-op (invalid from
         # REFRESH_REQUESTED back to REFRESH_REQUESTED per the validation table).
+        self._boot.transition(CapitalBootstrapState.INIT_COMPLETE, trigger)
         self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
         self._boot.transition(CapitalBootstrapState.REFRESH_IN_FLIGHT, trigger)
 
