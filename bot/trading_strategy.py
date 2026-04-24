@@ -2958,7 +2958,7 @@ LOW_CAPITAL_POSITION_PCT: float = float(
 # Minimum AI confidence score required to open a trade in LOW_CAPITAL_MODE.
 # Raised vs the normal SCALP tier (0.35) to filter for only high-quality entries.
 LOW_CAPITAL_MIN_CONFIDENCE: float = float(
-    os.getenv("NIJA_LOW_CAPITAL_MIN_CONFIDENCE", "0.55")
+    os.getenv("NIJA_LOW_CAPITAL_MIN_CONFIDENCE", "0.35")
 )
 # Hard cap on concurrent open positions when LOW_CAPITAL_MODE is active.
 LOW_CAPITAL_MAX_POSITIONS: int = 1

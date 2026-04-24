@@ -118,9 +118,9 @@ class MarketReadinessGate:
     
     # Thresholds for AGGRESSIVE mode (all must be true)
     # RELAXED (Apr 2026): Lowered to allow entries in more market conditions
-    AGGRESSIVE_ATR_MIN = 0.0025       # 0.25% (was 0.4%) — allows lower-volatility intraday conditions
-    AGGRESSIVE_ADX_MIN = 14.0         # 14 (was 18) — includes softer but tradable trends
-    AGGRESSIVE_VOLUME_PERCENTILE_MIN = 30.0  # 30% (was 40%) — normal intraday volume qualifies
+    AGGRESSIVE_ATR_MIN = 0.0015       # 0.15% — lower volatility requirement for more entry opportunities
+    AGGRESSIVE_ADX_MIN = 10.0         # 10 — lower trend-strength requirement
+    AGGRESSIVE_VOLUME_PERCENTILE_MIN = 20.0  # 20% — lower volume requirement
     AGGRESSIVE_SPREAD_MAX = 0.0015    # 0.15%
     AGGRESSIVE_WIN_RATE_MIN = 0.40    # 40%
     

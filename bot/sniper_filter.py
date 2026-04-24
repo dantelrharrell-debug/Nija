@@ -107,7 +107,7 @@ class SniperConfig:
     # ── Pillar 4: Confidence ──────────────────────────────────────────────────
     # env: SNIPER_MIN_CONFIDENCE — override default 0.50 (e.g. 0.35 for flip mode)
     min_confidence: float = field(
-        default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.35)
+        default_factory=lambda: _env_float("SNIPER_MIN_CONFIDENCE", 0.30)
     )
 
     # ── Soft-condition thresholds ─────────────────────────────────────────────
@@ -115,11 +115,11 @@ class SniperConfig:
     # Set to 0.0 to disable (e.g. when ADX column is absent).
     # env: SNIPER_MIN_ADX
     min_adx: float = field(
-        default_factory=lambda: _env_float("SNIPER_MIN_ADX", 10.0)
+        default_factory=lambda: _env_float("SNIPER_MIN_ADX", 6.0)
     )
 
     # Volume below this multiple of average = thin market — scored as volume_pass=False.
-    low_volume_multiplier: float = 0.4  # TUNED: allows quieter markets that were previously hard-blocked
+    low_volume_multiplier: float = 0.25  # TUNED: lower volatility/volume requirement so quieter markets can pass
 
     # Minimum bars required in the DataFrame for any check to run
     min_bars: int = 25
