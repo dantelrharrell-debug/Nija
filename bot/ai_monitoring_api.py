@@ -9,6 +9,7 @@ Flask Blueprint exposing real-time AI/system status endpoints:
     GET /ai/liquidity-map       — order-book liquidity heatmap for a symbol
     GET /system/brain-status    — overall AI brain health dashboard
     GET /system/execution-expectancy — expectancy kill-switch cooldown status
+    GET /system/ecel-status     — ECEL compiler/schema health status
 
 Query Parameters
 ----------------
@@ -105,6 +106,41 @@ def _get_execution_engine_from_context():
         return getattr(strategy, "execution_engine")
 
     return None
+
+
+def _get_execution_pipeline_from_context():
+    """Resolve the active execution pipeline from context or singleton."""
+    app = current_app
+
+    direct = app.config.get("EXECUTION_PIPELINE") or app.config.get("execution_pipeline")
+    if direct is not None:
+        return direct
+
+    exec_engine = _get_execution_engine_from_context()
+    if exec_engine is not None and hasattr(exec_engine, "execution_pipeline"):
+        return getattr(exec_engine, "execution_pipeline")
+
+    strategy = (
+        app.config.get("TRADING_STRATEGY")
+        or app.config.get("APEX_STRATEGY")
+        or app.config.get("strategy")
+    )
+    if strategy is not None and hasattr(strategy, "execution_pipeline"):
+        return getattr(strategy, "execution_pipeline")
+
+    # Final fallback: process-wide singleton.
+    try:
+        from bot.execution_pipeline import get_execution_pipeline
+    except ImportError:
+        try:
+            from execution_pipeline import get_execution_pipeline
+        except ImportError:
+            return None
+
+    try:
+        return get_execution_pipeline()
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +452,38 @@ def system_brain_status():
         }
         issues.append("execution_expectancy_kill_switch")
 
+    # --- ECEL Compiler / Schema Health ---
+    try:
+        pipeline = _get_execution_pipeline_from_context()
+        if pipeline is not None and hasattr(pipeline, "get_status"):
+            pstatus = pipeline.get_status()
+            ecel = pstatus.get("ecel", {}) if isinstance(pstatus, dict) else {}
+
+            if ecel.get("enabled"):
+                status["components"]["ecel_execution_compiler"] = {
+                    "status": "online",
+                    "coinbase_rules": ecel.get("coinbase_rules", 0),
+                    "kraken_rules": ecel.get("kraken_rules", 0),
+                    "background_refresh_thread_alive": ecel.get("background_refresh_thread_alive", False),
+                    "refresh_health": ecel.get("refresh_health", {}),
+                }
+            else:
+                status["components"]["ecel_execution_compiler"] = {
+                    "status": "unavailable",
+                    "note": "execution pipeline present but ECEL not enabled",
+                }
+        else:
+            status["components"]["ecel_execution_compiler"] = {
+                "status": "unavailable",
+                "note": "execution pipeline not attached to monitoring app context",
+            }
+    except Exception as exc:
+        status["components"]["ecel_execution_compiler"] = {
+            "status": "error",
+            "error": str(exc),
+        }
+        issues.append("ecel_execution_compiler")
+
     # Overall health
     if len(issues) >= 2:
         status["overall_health"] = "degraded"
@@ -441,11 +509,33 @@ def execution_expectancy_status():
         return _err(str(exc))
 
 
+@ai_monitoring_bp.route("/system/ecel-status", methods=["GET"])
+def ecel_status():
+    """Return detailed ECEL compiler and schema refresh status."""
+    try:
+        pipeline = _get_execution_pipeline_from_context()
+        if pipeline is None or not hasattr(pipeline, "get_status"):
+            return _err("Execution pipeline not attached to monitoring app context", status=503)
+
+        pstatus = pipeline.get_status()
+        if not isinstance(pstatus, dict):
+            return _err("Execution pipeline status unavailable", status=503)
+
+        ecel = pstatus.get("ecel", {})
+        if not ecel or not ecel.get("enabled"):
+            return _err("ECEL is not enabled in execution pipeline", status=503)
+
+        return _ok(ecel)
+    except Exception as exc:
+        logger.exception("Error in /system/ecel-status")
+        return _err(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Registration helper
 # ---------------------------------------------------------------------------
 
-def register_ai_monitoring(app: Flask, execution_engine=None, strategy=None) -> None:
+def register_ai_monitoring(app: Flask, execution_engine=None, strategy=None, execution_pipeline=None) -> None:
     """
     Register the AI monitoring blueprint on an existing Flask *app*.
 
@@ -460,15 +550,19 @@ def register_ai_monitoring(app: Flask, execution_engine=None, strategy=None) -> 
         Optional live execution engine instance to expose diagnostics for.
     strategy:
         Optional strategy instance that owns ``strategy.execution_engine``.
+    execution_pipeline:
+        Optional execution pipeline instance to expose ECEL diagnostics for.
     """
     if execution_engine is not None:
         app.config["EXECUTION_ENGINE"] = execution_engine
     if strategy is not None:
         app.config["TRADING_STRATEGY"] = strategy
+    if execution_pipeline is not None:
+        app.config["EXECUTION_PIPELINE"] = execution_pipeline
 
     app.register_blueprint(ai_monitoring_bp)
     logger.info(
         "AI Monitoring API registered: "
         "/ai/regime, /ai/trade-confidence, /ai/liquidity-map, "
-        "/system/brain-status, /system/execution-expectancy"
+        "/system/brain-status, /system/execution-expectancy, /system/ecel-status"
     )

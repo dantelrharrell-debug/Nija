@@ -65,9 +65,11 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
+import random
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -90,6 +92,9 @@ class PipelineRequest:
     order_type: Optional[str] = None
     asset_class: Optional[str] = None
     preferred_broker: Optional[str] = None
+    available_balance_usd: Optional[float] = None
+    price_hint_usd: Optional[float] = None
+    account_id: str = "default"
 
 
 @dataclass
@@ -170,9 +175,13 @@ class ExecutionPipeline:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._ecel_refresh_stop = threading.Event()
+        self._ecel_refresh_thread: Optional[threading.Thread] = None
         self._throttler = self._load_throttler()
         self._router = self._load_router()
         self._multi_router = self._load_multi_router()
+        self._ecel = self._load_ecel()
+        self._start_ecel_background_refresh()
 
         self._run_count: int = 0
         self._blocked_count: int = 0
@@ -204,12 +213,46 @@ class ExecutionPipeline:
             On execution: reflects fill/failure from the underlying router.
         """
         t_start = time.monotonic()
+        reservation_id: Optional[str] = None
+        effective_request = request
+
+        # ECEL pre-trade compile: schema checks, step-size compiler, reservation.
+        if self._ecel is not None:
+            try:
+                broker_hint = (request.preferred_broker or "coinbase").lower()
+                compile_req = self._ecel_mod.CompileRequest(  # type: ignore[attr-defined]
+                    broker=broker_hint,
+                    symbol=request.symbol,
+                    side=self._normalise_side(request.side),
+                    order_type=(request.order_type or "MARKET").upper(),
+                    desired_notional_usd=request.size_usd,
+                    available_balance_usd=request.available_balance_usd,
+                    price_hint_usd=request.price_hint_usd,
+                    account_id=request.account_id,
+                )
+                compiled = self._ecel.compile(compile_req)
+                if not compiled.accepted:
+                    return PipelineResult(
+                        success=False,
+                        symbol=request.symbol,
+                        side=request.side,
+                        size_usd=request.size_usd,
+                        error=f"ECEL reject: {compiled.reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+
+                reservation_id = compiled.reservation_id
+                effective_request = replace(request, size_usd=compiled.compiled_notional_usd)
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: ECEL compile failed, using raw request: %s", exc)
 
         # ── Priority-2: Trade Throttler ──────────────────────────────────
         if self._throttler is not None:
             try:
                 allowed, throttle_reason = self._throttler.check()
                 if not allowed:
+                    if reservation_id and self._ecel is not None:
+                        self._ecel.release_reservation(reservation_id)
                     logger.warning(
                         "ExecutionPipeline THROTTLED | %s %s $%.2f | %s",
                         request.side.upper(), request.symbol,
@@ -228,7 +271,10 @@ class ExecutionPipeline:
                 logger.warning("ExecutionPipeline: throttler check failed: %s", exc)
 
         # ── Route to execution ───────────────────────────────────────────
-        result = self._dispatch(request, t_start)
+        result = self._dispatch(effective_request, t_start)
+
+        if reservation_id and self._ecel is not None and not result.success:
+            self._ecel.release_reservation(reservation_id)
 
         # Auto-register successful trades with the throttler
         if result.success and self._throttler is not None:
@@ -260,7 +306,30 @@ class ExecutionPipeline:
                 status["throttler"] = self._throttler.get_status()
             except Exception:
                 pass
+        if self._ecel is not None:
+            try:
+                schema = self._ecel.schema.as_dict()
+                refresh_health = None
+                if hasattr(self._ecel.schema, "get_refresh_health"):
+                    refresh_health = self._ecel.schema.get_refresh_health()
+                status["ecel"] = {
+                    "enabled": True,
+                    "coinbase_rules": len(schema.get("coinbase", {})),
+                    "kraken_rules": len(schema.get("kraken", {})),
+                    "background_refresh_thread_alive": bool(
+                        self._ecel_refresh_thread and self._ecel_refresh_thread.is_alive()
+                    ),
+                    "refresh_health": refresh_health,
+                }
+            except Exception:
+                status["ecel"] = {"enabled": True}
+        else:
+            status["ecel"] = {"enabled": False}
         return status
+
+    def stop_background_tasks(self) -> None:
+        """Request graceful stop of background workers."""
+        self._ecel_refresh_stop.set()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -404,6 +473,92 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.debug("ExecutionPipeline: could not load %s: %s", mod_name, exc)
         return None
+
+    def _load_ecel(self):
+        self._ecel_mod = None
+        warm_refresh = os.getenv("ECEL_WARM_REFRESH_ON_STARTUP", "true").strip().lower() in (
+            "1", "true", "yes"
+        )
+        for mod_name in ("bot.ecel_execution_compiler", "ecel_execution_compiler"):
+            try:
+                mod = __import__(mod_name, fromlist=["get_ecel_execution_compiler", "CompileRequest"])
+                self._ecel_mod = mod
+                compiler = mod.get_ecel_execution_compiler()
+                if warm_refresh:
+                    try:
+                        stats = compiler.schema.refresh_from_public_endpoints()
+                        logger.info(
+                            "ExecutionPipeline: ECEL warm-refresh complete | coinbase=%d | kraken=%d",
+                            stats.get("coinbase", 0),
+                            stats.get("kraken", 0),
+                        )
+                    except Exception as exc:
+                        logger.warning("ExecutionPipeline: ECEL warm-refresh failed: %s", exc)
+                logger.info("ExecutionPipeline: ECEL compiler loaded from %s", mod_name)
+                return compiler
+            except Exception as exc:
+                logger.debug("ExecutionPipeline: could not load ECEL module %s: %s", mod_name, exc)
+        logger.warning("ExecutionPipeline: ECEL compiler unavailable -- pre-trade compile disabled")
+        return None
+
+    def _start_ecel_background_refresh(self) -> None:
+        """Start periodic ECEL schema refresh worker with jitter/backoff."""
+        if self._ecel is None:
+            return
+        ecel = self._ecel
+
+        enabled = os.getenv("ECEL_BACKGROUND_REFRESH_ENABLED", "true").strip().lower() in (
+            "1", "true", "yes"
+        )
+        if not enabled:
+            logger.info("ExecutionPipeline: ECEL background refresh disabled by env")
+            return
+
+        if self._ecel_refresh_thread and self._ecel_refresh_thread.is_alive():
+            return
+
+        interval_s = float(os.getenv("ECEL_BACKGROUND_REFRESH_INTERVAL_S", "900"))
+        jitter_s = float(os.getenv("ECEL_BACKGROUND_REFRESH_JITTER_S", "30"))
+        max_backoff_s = float(os.getenv("ECEL_BACKGROUND_REFRESH_MAX_BACKOFF_S", "3600"))
+
+        def _worker() -> None:
+            failures = 0
+            logger.info(
+                "ExecutionPipeline: ECEL background refresh started | interval=%.0fs jitter=%.0fs",
+                interval_s,
+                jitter_s,
+            )
+            while not self._ecel_refresh_stop.is_set():
+                sleep_base = interval_s
+                try:
+                    stats = ecel.schema.refresh_from_public_endpoints()
+                    failures = 0
+                    logger.debug(
+                        "ExecutionPipeline: ECEL background refresh ok | coinbase=%d kraken=%d",
+                        stats.get("coinbase", 0),
+                        stats.get("kraken", 0),
+                    )
+                except Exception as exc:
+                    failures += 1
+                    sleep_base = min(interval_s * (2 ** min(failures, 6)), max_backoff_s)
+                    logger.warning(
+                        "ExecutionPipeline: ECEL background refresh failed (%d): %s",
+                        failures,
+                        exc,
+                    )
+
+                jitter = random.uniform(0.0, max(0.0, jitter_s))
+                wait_s = max(1.0, sleep_base + jitter)
+                self._ecel_refresh_stop.wait(wait_s)
+
+            logger.info("ExecutionPipeline: ECEL background refresh stopped")
+
+        self._ecel_refresh_thread = threading.Thread(
+            target=_worker,
+            name="nija-ecel-refresh",
+            daemon=True,
+        )
+        self._ecel_refresh_thread.start()
 
     def run(
         self,
