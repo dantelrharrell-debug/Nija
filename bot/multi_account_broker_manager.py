@@ -35,6 +35,7 @@ try:
         GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
         _PLATFORM_BROKER_CONNECTED, _PLATFORM_BROKER_REGISTRY_LOCK,
         get_platform_broker,
+        MIN_CASH_TO_BUY,
         _user_env_prefix,
     )
 except ImportError:
@@ -45,6 +46,7 @@ except ImportError:
         GLOBAL_PLATFORM_BROKERS, _PLATFORM_BROKER_INSTANCES,
         _PLATFORM_BROKER_CONNECTED, _PLATFORM_BROKER_REGISTRY_LOCK,
         get_platform_broker,
+        MIN_CASH_TO_BUY,
         _user_env_prefix,
     )
 
@@ -152,6 +154,11 @@ except ImportError:
         _CAPITAL_FSM_AVAILABLE = False
 
 logger = logging.getLogger('nija.multi_account')
+
+ACCOUNT_USABLE_BALANCE_MIN = float(os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_MIN", "50"))
+ACCOUNT_USABLE_BALANCE_RECOMMENDED = float(
+    os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_RECOMMENDED", "100")
+)
 
 # Import Execution Risk Firewall for per-venue API-call health scoring
 try:
@@ -358,6 +365,10 @@ class MultiAccountBrokerManager:
         # Track users without credentials (not an error - credentials are optional)
         # Structure: {(user_id, broker_type): True}
         self._users_without_credentials: Dict[Tuple[str, BrokerType], bool] = {}
+
+        # Track connected accounts that are blocked from new entries because
+        # usable capital is too low or tied up in existing positions.
+        self._capital_blocked_users: Dict[Tuple[str, BrokerType], str] = {}
 
         # Track all user broker objects (even disconnected) to check credentials_configured flag
         # Structure: {(user_id, broker_type): BaseBroker}
@@ -3664,6 +3675,105 @@ class MultiAccountBrokerManager:
         portfolio_key = (user_id, broker_type.value)
         return self.user_portfolios.get(portfolio_key)
 
+    @staticmethod
+    def _normalize_balance_value(balance: Any) -> float:
+        """Return the best available cash-like scalar from a broker balance payload."""
+        if isinstance(balance, dict):
+            for key in (
+                "trading_balance",
+                "available_balance",
+                "available_cash",
+                "cash",
+                "usd",
+                "usdc",
+                "total_balance",
+            ):
+                value = balance.get(key)
+                if value is not None:
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        continue
+            return 0.0
+        try:
+            return float(balance or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _extract_position_count(positions: Any) -> int:
+        """Count materially-open positions from a broker payload."""
+        if positions is None:
+            return 0
+        if isinstance(positions, dict):
+            count = 0
+            for value in positions.values():
+                if isinstance(value, dict):
+                    size = value.get("size") or value.get("quantity") or value.get("amount") or value.get("value")
+                    try:
+                        if float(size or 0.0) > 0.0:
+                            count += 1
+                    except (TypeError, ValueError):
+                        count += 1
+                else:
+                    count += 1
+            return count
+        if isinstance(positions, (list, tuple, set)):
+            return len(positions)
+        return 0
+
+    def _audit_user_trading_capital(
+        self,
+        user_id: str,
+        broker_type: BrokerType,
+        broker: BaseBroker,
+    ) -> Tuple[bool, Dict[str, float], str]:
+        """Return whether a connected user account has enough usable capital to trade."""
+        raw_balance = broker.get_account_balance()
+        usable_balance = self._normalize_balance_value(raw_balance)
+        total_equity = usable_balance
+        position_count = 0
+
+        portfolio = self.update_user_portfolio(user_id, broker_type)
+        if portfolio is not None:
+            usable_balance = float(getattr(portfolio, "available_cash", usable_balance) or usable_balance)
+            total_equity = float(getattr(portfolio, "total_equity", usable_balance) or usable_balance)
+            position_count = int(getattr(portfolio, "position_count", 0) or 0)
+
+        if position_count == 0 and hasattr(broker, "get_positions"):
+            try:
+                position_count = self._extract_position_count(broker.get_positions())
+            except Exception:
+                position_count = 0
+
+        locked_capital = max(0.0, total_equity - usable_balance)
+        exchange_minimum = float(MIN_CASH_TO_BUY)
+
+        reasons: List[str] = []
+        if usable_balance < exchange_minimum:
+            reasons.append(
+                f"usable ${usable_balance:.2f} below exchange minimum ${exchange_minimum:.2f}"
+            )
+        if usable_balance < ACCOUNT_USABLE_BALANCE_MIN:
+            reasons.append(
+                f"usable ${usable_balance:.2f} below required trading floor ${ACCOUNT_USABLE_BALANCE_MIN:.2f}"
+            )
+        if locked_capital > 0.0 and usable_balance < ACCOUNT_USABLE_BALANCE_MIN:
+            reasons.append(
+                f"${locked_capital:.2f} locked in {position_count} open position(s)"
+            )
+
+        diagnostics = {
+            "usable_balance": usable_balance,
+            "total_equity": total_equity,
+            "locked_capital": locked_capital,
+            "position_count": float(position_count),
+            "exchange_minimum": exchange_minimum,
+            "required_minimum": ACCOUNT_USABLE_BALANCE_MIN,
+            "recommended_minimum": ACCOUNT_USABLE_BALANCE_RECOMMENDED,
+        }
+        return not reasons, diagnostics, "; ".join(reasons)
+
     def get_all_balances(self) -> Dict:
         """
         Get balances for all accounts.
@@ -4118,23 +4228,56 @@ class MultiAccountBrokerManager:
                 self._user_metadata[user.user_id]['enabled'] = user.enabled
 
                 if broker and broker.connected:
-                    # Successfully connected
-                    # Track connected user and broker connection status
-                    if broker_type.value not in connected_users:
-                        connected_users[broker_type.value] = []
-                    connected_users[broker_type.value].append(user.user_id)
-
-                    # Update metadata with connection status
-                    self._user_metadata[user.user_id]['brokers'][broker_type] = True
-
                     logger.info(f"   ✅ {user.name} connected to {broker_type.value.title()}")
 
-                    # Try to get and log balance
                     try:
-                        balance = broker.get_account_balance()
-                        logger.info(f"   💰 {user.name} balance: ${balance:,.2f}")
+                        is_tradable, capital_diag, capital_reason = self._audit_user_trading_capital(
+                            user.user_id,
+                            broker_type,
+                            broker,
+                        )
+                        if is_tradable:
+                            if broker_type.value not in connected_users:
+                                connected_users[broker_type.value] = []
+                            connected_users[broker_type.value].append(user.user_id)
+                            self._user_metadata[user.user_id]['brokers'][broker_type] = True
+                            self._capital_blocked_users.pop(connection_key, None)
+                            logger.info(
+                                "   💰 %s usable balance: $%.2f (equity=$%.2f, positions=%d)",
+                                user.name,
+                                capital_diag['usable_balance'],
+                                capital_diag['total_equity'],
+                                int(capital_diag['position_count']),
+                            )
+                            if capital_diag['usable_balance'] < capital_diag['recommended_minimum']:
+                                logger.warning(
+                                    "   ⚠️  %s is tradable but under recommended usable cash ($%.2f < $%.2f)",
+                                    user.name,
+                                    capital_diag['usable_balance'],
+                                    capital_diag['recommended_minimum'],
+                                )
+                        else:
+                            self._user_metadata[user.user_id]['brokers'][broker_type] = False
+                            self._capital_blocked_users[connection_key] = capital_reason
+                            logger.error(
+                                "   ⛔ CAPITAL BLOCKED: %s (%s) not eligible for new trades",
+                                user.name,
+                                broker_type.value.title(),
+                            )
+                            logger.error("      Reason: %s", capital_reason)
+                            logger.error(
+                                "      Usable=$%.2f Equity=$%.2f Locked=$%.2f Positions=%d ExchangeMin=$%.2f Required=$%.2f",
+                                capital_diag['usable_balance'],
+                                capital_diag['total_equity'],
+                                capital_diag['locked_capital'],
+                                int(capital_diag['position_count']),
+                                capital_diag['exchange_minimum'],
+                                capital_diag['required_minimum'],
+                            )
                     except Exception as bal_err:
-                        logger.warning(f"   ⚠️  Could not get balance for {user.name}: {bal_err}")
+                        self._user_metadata[user.user_id]['brokers'][broker_type] = False
+                        self._capital_blocked_users[connection_key] = f"capital_audit_failed: {bal_err}"
+                        logger.warning(f"   ⚠️  Could not audit trading capital for {user.name}: {bal_err}")
                 elif broker and not broker.credentials_configured:
                     # Credentials not configured - this is expected, not an error
                     # The broker's connect() method already logged informational messages
@@ -4207,18 +4350,32 @@ class MultiAccountBrokerManager:
             logger.info(f"   ✅ {total_connected} user(s) connected across {len(connected_users)} brokerage(s)")
             for brokerage, user_ids in connected_users.items():
                 logger.info(f"   • {brokerage.upper()}: {len(user_ids)} user(s)")
+            if self._capital_blocked_users:
+                logger.warning(
+                    "   ⛔ %d connected account(s) blocked from new trades due to insufficient usable capital",
+                    len(self._capital_blocked_users),
+                )
         else:
             # Check if there are users without credentials vs actual failures
             total_without_creds = len(self._users_without_credentials)
             total_failed = len(self._failed_user_connections)
+            total_capital_blocked = len(self._capital_blocked_users)
 
-            if total_without_creds > 0 and total_failed == 0:
+            if total_without_creds > 0 and total_failed == 0 and total_capital_blocked == 0:
                 # Only users without credentials - this is informational
                 logger.info(f"   ⚪ No users connected ({total_without_creds} user(s) have no credentials configured)")
                 logger.info("   User accounts are optional. To enable, configure API credentials in environment variables.")
+            elif total_capital_blocked > 0 and total_failed == 0:
+                logger.warning(
+                    "   ⛔ No users eligible for new trades (%d account(s) blocked by capital checks, %d without credentials)",
+                    total_capital_blocked,
+                    total_without_creds,
+                )
             elif total_failed > 0:
                 # Some actual connection failures
-                logger.warning(f"   ⚠️  No users connected ({total_failed} connection failure(s), {total_without_creds} without credentials)")
+                logger.warning(
+                    f"   ⚠️  No users connected ({total_failed} connection failure(s), {total_without_creds} without credentials, {total_capital_blocked} capital-blocked)"
+                )
             else:
                 # No users configured at all
                 logger.info("   ⚪ No user accounts configured")
