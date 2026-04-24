@@ -424,44 +424,104 @@ class ExecutionEngine:
         else:
             self.profit_logger = None
 
-    def _assert_bootstrap_ready_for_execution_locks(self) -> bool:
+    def _assert_bootstrap_ready_for_execution_locks(self, strict: bool = False) -> bool:
         """
-        FIX 2: Enforce state gate for execution locks.
+        Enforce state gate for execution locks.
 
-        Returns True only if capital bootstrap FSM is READY or RUNNING.
-        Execution locks (for position management and exit orders) may only be
-        acquired when the system is fully bootstrapped and ready for live trading.
+        When strict=False: returns True/False immediately (non-blocking).
+        When strict=True:  blocks until FSM reaches READY or RUNNING, then returns True.
+                           Raises RuntimeError if the FSM does not reach a ready state
+                           within the hard deadline (default 120 s).
+
+        Args:
+            strict: If True, block the caller until bootstrap is complete.
 
         Returns:
-            bool: True if safe to acquire execution locks, False otherwise.
+            bool: True if safe to acquire execution locks.
+
+        Raises:
+            RuntimeError: (strict=True only) FSM did not reach READY/RUNNING in time.
         """
-        try:
+        import time as _time
+
+        _READY_STATES = {"READY", "RUNNING"}
+        _POLL_INTERVAL = 0.25   # seconds between FSM state polls
+        _STRICT_TIMEOUT = 120.0  # hard deadline when strict=True
+
+        def _get_fsm():
             try:
-                from bot.capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm_exec
+                from bot.capital_flow_state_machine import get_capital_bootstrap_fsm as _fn
             except ImportError:
-                from capital_flow_state_machine import get_capital_bootstrap_fsm as _get_cbfsm_exec  # type: ignore[import]
-            _cbfsm_exec = _get_cbfsm_exec()
-            _current_state_exec = _cbfsm_exec.state
-            if _current_state_exec.value not in {"READY", "RUNNING"}:
-                logger.debug(
-                    "EXECUTION_LOCK_STATE_GATE_BLOCKED capital_bootstrap_state=%s — execution locks blocked until READY/RUNNING",
-                    _current_state_exec.value,
+                from capital_flow_state_machine import get_capital_bootstrap_fsm as _fn  # type: ignore[import]
+            return _fn()
+
+        if not strict:
+            # Non-blocking path — caller decides what to do with False.
+            try:
+                _cbfsm = _get_fsm()
+                _state_val = _cbfsm.state.value
+                if _state_val not in _READY_STATES:
+                    logger.debug(
+                        "EXECUTION_LOCK_STATE_GATE_BLOCKED capital_bootstrap_state=%s"
+                        " — execution locks blocked until READY/RUNNING",
+                        _state_val,
+                    )
+                    return False
+                return True
+            except Exception as _err:
+                logger.warning(
+                    "Execution lock state gate check failed: %s — blocking lock acquisition",
+                    _err,
                 )
                 return False
-            return True
-        except Exception as _state_check_err:
-            logger.warning(
-                "Execution lock state gate check failed: %s — blocking lock acquisition",
-                _state_check_err,
-            )
-            return False
+
+        # strict=True — blocking synchronization barrier.
+        _deadline = _time.monotonic() + _STRICT_TIMEOUT
+        _warned = False
+        while True:
+            try:
+                _cbfsm = _get_fsm()
+                _state_val = _cbfsm.state.value
+                if _state_val in _READY_STATES:
+                    return True
+                if not _warned:
+                    logger.info(
+                        "EXECUTION_LOCK_BARRIER_WAITING capital_bootstrap_state=%s"
+                        " — holding lock acquisition until FSM reaches READY/RUNNING",
+                        _state_val,
+                    )
+                    _warned = True
+            except Exception as _err:
+                logger.warning("Execution lock barrier FSM poll failed: %s", _err)
+
+            if _time.monotonic() >= _deadline:
+                raise RuntimeError(
+                    f"ExecutionEngine lock barrier timeout: CapitalBootstrapFSM did not reach"
+                    f" READY/RUNNING within {_STRICT_TIMEOUT}s — refusing lock acquisition"
+                    f" (last known state={getattr(_cbfsm, 'state', 'unknown')})"
+                )
+            _time.sleep(_POLL_INTERVAL)
 
     def _get_closing_lock(self):
-        """Return the real closing lock context manager (never bypassed)."""
+        """
+        Return the real closing-lock context manager.
+
+        Enforces a hard synchronization barrier: blocks until CapitalBootstrapFSM
+        reaches READY or RUNNING before the lock is handed to the caller.
+        Raises RuntimeError if the FSM does not become ready within the deadline.
+        """
+        self._assert_bootstrap_ready_for_execution_locks(strict=True)
         return self._closing_lock
 
     def _get_exit_lock(self):
-        """Return the real exit lock context manager (never bypassed)."""
+        """
+        Return the real exit-lock context manager.
+
+        Enforces a hard synchronization barrier: blocks until CapitalBootstrapFSM
+        reaches READY or RUNNING before the lock is handed to the caller.
+        Raises RuntimeError if the FSM does not become ready within the deadline.
+        """
+        self._assert_bootstrap_ready_for_execution_locks(strict=True)
         return self._exit_lock
 
     def _get_market_microstructure(self, symbol: str) -> Optional[MarketMicrostructure]:
