@@ -21,6 +21,11 @@ import signal
 import threading
 import subprocess
 
+# ── Operational override: disable HF scalping mode for now ─────────────────
+# Explicitly force HF flags off before any HF module is initialized.
+os.environ["HF_SCALP_MODE"] = "0"
+os.environ["HF_SCALPING_MODE"] = "0"
+
 # ── Bootstrap Guard — prevent duplicate instances ──────────────────────────
 # Hard-stops if a second bot instance attempts to start.
 try:
