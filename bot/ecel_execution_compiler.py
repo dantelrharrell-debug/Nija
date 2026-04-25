@@ -62,6 +62,18 @@ class CompileRequest:
 
 
 @dataclass
+class CompiledOrder:
+    """Immutable execution truth produced by ECEL — the single source of valid order facts."""
+
+    symbol: str
+    side: str
+    qty: Decimal
+    price: Decimal
+    valid: bool
+    reason: Optional[str] = None
+
+
+@dataclass
 class CompileResult:
     """Output of ECEL compile pass."""
 
@@ -69,12 +81,14 @@ class CompileResult:
     reason: str
     broker: str
     symbol: str
+    side: str = ""
     compiled_notional_usd: float = 0.0
     compiled_base_size: Optional[float] = None
     compiled_price_usd: Optional[float] = None
     reservation_id: Optional[str] = None
     rule: Optional[ContractRule] = None
     diagnostics: Dict[str, float] = field(default_factory=dict)
+    compiled_order: Optional[CompiledOrder] = None
 
 
 class ContractSchemaMap:
@@ -435,6 +449,13 @@ class PrecisionCompiler:
         return float(compiled)
 
 
+# ---------------------------------------------------------------------------
+# Fee and safety constants — used for balance-aware sizing
+# ---------------------------------------------------------------------------
+_FEE_RATE: Decimal = Decimal(os.getenv("ECEL_FEE_RATE", "0.006"))          # 0.6% worst-case taker fee
+_BALANCE_SAFETY_FACTOR: Decimal = Decimal(os.getenv("ECEL_SAFETY_FACTOR", "0.985"))  # 1.5% buffer on top of fee
+
+
 class ECELExecutionCompiler:
     """Main ECEL facade consumed by execution pipeline."""
 
@@ -452,6 +473,70 @@ class ECELExecutionCompiler:
             return Decimal(str(value))
         except (InvalidOperation, ValueError, TypeError):
             return Decimal("0")
+
+    @staticmethod
+    def _reject(
+        reason_code: str,
+        broker: str,
+        symbol: str,
+        side: str,
+        rule: Optional[ContractRule],
+        **diag: object,
+    ) -> "CompileResult":
+        """Log a structured ECEL rejection and return a rejected CompileResult."""
+        diag_lines = "  ".join(f"• {k}: {v}" for k, v in diag.items())
+        logger.warning(
+            "❌ ECEL REJECT\n"
+            "   • symbol: %s\n"
+            "   • reason: %s\n"
+            "   %s",
+            symbol,
+            reason_code,
+            diag_lines,
+        )
+        return CompileResult(
+            accepted=False,
+            reason=reason_code,
+            broker=broker,
+            symbol=symbol,
+            side=side,
+            rule=rule,
+            compiled_order=CompiledOrder(
+                symbol=symbol,
+                side=side,
+                qty=Decimal("0"),
+                price=Decimal("0"),
+                valid=False,
+                reason=reason_code,
+            ),
+        )
+
+    @staticmethod
+    def _preflight_assert(
+        qty: Decimal,
+        price: Decimal,
+        base_step: Decimal,
+        price_step: Decimal,
+        min_qty: Decimal,
+        min_notional: Decimal,
+        balance: Optional[Decimal],
+    ) -> Optional[str]:
+        """Return a rejection code string if any invariant is violated, else None."""
+        if qty <= 0 or price <= 0:
+            return "ZERO_QTY_OR_PRICE"
+        if base_step > 0 and (qty % base_step).normalize() != Decimal("0"):
+            return "BASE_STEP_MISALIGNED"
+        if price_step > 0 and (price % price_step).normalize() != Decimal("0"):
+            return "PRICE_STEP_MISALIGNED"
+        if qty < min_qty:
+            return "DUST_ORDER"
+        if qty * price < min_notional:
+            return "BELOW_MIN_NOTIONAL"
+        if balance is not None:
+            effective_cost = qty * price * (Decimal("1") + _FEE_RATE)
+            if effective_cost > balance:
+                return "INSUFFICIENT_FUNDS"
+        return None
 
     @staticmethod
     def _is_grid_aligned(value: float, step: float, precision: int) -> bool:
