@@ -464,12 +464,39 @@ class CapitalBootstrapStateMachine:
         CapitalBootstrapState.RUNNING: [],  # terminal — no further transitions
     }
 
+    _created: bool = False
+    _created_lock = threading.Lock()
+
     def __init__(self) -> None:
+        with self._created_lock:
+            if self.__class__._created:
+                raise RuntimeError("CapitalBootstrapStateMachine already exists")
+            self.__class__._created = True
         self._state = CapitalBootstrapState.BOOT_IDLE
         self._lock = threading.Lock()
         self._ready_event = threading.Event()
         # Callbacks fired once when the FSM enters READY for the first time.
         self._on_ready_callbacks: List[Callable[[], None]] = []
+        self._owner_thread_id: int = threading.get_ident()
+
+    def claim_bootstrap_ownership(self) -> None:
+        """Assign transition ownership to the current bootstrap thread."""
+        caller = threading.get_ident()
+        with self._lock:
+            self._owner_thread_id = caller
+        logger.info(
+            "[BootstrapFSM] capital ownership claimed by thread %d (%s)",
+            caller,
+            threading.current_thread().name,
+        )
+
+    def _assert_owner_thread(self) -> None:
+        caller = threading.get_ident()
+        if caller != self._owner_thread_id:
+            raise RuntimeError(
+                "Illegal CapitalBootstrapFSM transition from non-bootstrap thread: "
+                f"caller={caller} owner={self._owner_thread_id}"
+            )
 
     @property
     def state(self) -> CapitalBootstrapState:
@@ -483,6 +510,15 @@ class CapitalBootstrapStateMachine:
         Returns ``True`` on success.  Invalid transitions are logged at DEBUG
         level and return ``False`` without mutating state.
         """
+        with self._lock:
+            allowed = self._VALID_TRANSITIONS.get(self._state, [])
+            if new_state not in allowed:
+                logger.debug(
+                    "[BootstrapFSM] invalid transition %s → %s (%s) — ignored",
+                    self._state.value, new_state.value, reason or "no_reason",
+                )
+                return False
+        self._assert_owner_thread()
         with self._lock:
             allowed = self._VALID_TRANSITIONS.get(self._state, [])
             if new_state not in allowed:
@@ -521,6 +557,7 @@ class CapitalBootstrapStateMachine:
         timeout fallback while waiting in WAIT_PLATFORM).  Normal control flow
         should always use :meth:`transition`.
         """
+        self._assert_owner_thread()
         with self._lock:
             old = self._state
             self._state = new_state

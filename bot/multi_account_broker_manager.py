@@ -532,13 +532,10 @@ class MultiAccountBrokerManager:
                     runtime_fsm=self._capital_runtime_fsm,
                 )
             )
-            # Advance bootstrap FSM to WAIT_PLATFORM — brokers not yet connected.
-            self._capital_bootstrap_fsm.transition(
-                CapitalBootstrapState.WAIT_PLATFORM, "mabm_init"
-            )
-            self._capital_bootstrap_fsm.transition(
-                CapitalBootstrapState.INIT_COMPLETE, "mabm_preflight_complete"
-            )
+            # Lifecycle ownership model:
+            # MABM wires capital FSM/coordinator objects but does NOT drive
+            # bootstrap lifecycle transitions. Only BotStartup may transition
+            # the capital bootstrap FSM.
             # ── Option A: wire capital-ready → system FSM → trading loop ──────
             # Register a one-shot callback on the capital bootstrap FSM.  When
             # the capital pipeline reaches READY (event emitted, bus flushed,
@@ -1459,27 +1456,7 @@ class MultiAccountBrokerManager:
                                 )
                                 self.finalize_broker_registration()
                                 self.finalize_bootstrap_ready()
-                                # ── Drive bootstrap FSM to READY (seed path shortcut) ────────
-                                # The coordinator's _pipeline() is the normal FSM driver, but
-                                # the seed path bypasses the coordinator entirely (it uses
-                                # cached balances and returns early).  Without advancing the
-                                # FSM here, is_capital_authority_ready() — which delegates
-                                # exclusively to the FSM — stays False even though the seed
-                                # published a valid snapshot and set _capital_ready = True.
-                                # That False-FSM gap prevents the trading gate from ever
-                                # flipping to ACTIVE:
-                                #
-                                #   seed published → _capital_ready = True
-                                #   is_capital_authority_ready() → _capital_bootstrap_fsm.is_ready
-                                #                                → WAIT_PLATFORM → False  ← BUG
-                                #
-                                # Transition the FSM through the full forward path so the
-                                # process-wide singleton matches the observed capital state.
-                                # Each transition() call is a no-op when invalid (logs DEBUG),
-                                # so this is safe to call even if a concurrent coordinator run
-                                # already advanced the FSM partway.
                                 if _CAPITAL_FSM_AVAILABLE and self._capital_bootstrap_fsm is not None:
-                                    _bseed_fsm = self._capital_bootstrap_fsm
                                     # ── Notify CSM-v2 BEFORE the READY transition ────────────────
                                     # The READY transition fires _on_capital_bootstrap_ready
                                     # synchronously; that callback calls advance_to_capital_ready()
@@ -1495,18 +1472,6 @@ class MultiAccountBrokerManager:
                                             "[MABM] bootstrap seed CSM-v2 ingest failed (non-fatal): %s",
                                             _csm_seed_exc,
                                         )
-                                    _bseed_fsm.transition(
-                                        CapitalBootstrapState.REFRESH_REQUESTED, "bootstrap_seed"
-                                    )
-                                    _bseed_fsm.transition(
-                                        CapitalBootstrapState.REFRESH_IN_FLIGHT, "bootstrap_seed"
-                                    )
-                                    _bseed_fsm.transition(
-                                        CapitalBootstrapState.SNAPSHOT_EVALUATING, "bootstrap_seed"
-                                    )
-                                    _bseed_fsm.transition(
-                                        CapitalBootstrapState.READY, "bootstrap_seed"
-                                    )
                                     if self._capital_event_bus is not None:
                                         self._capital_event_bus.emit(CapitalEvent(
                                             event_type=CapitalEventType.CAPITAL_READY,
@@ -3190,20 +3155,6 @@ class MultiAccountBrokerManager:
             "duplicate FSM instances detected; check import paths and __init__ ordering"
         )
         trigger = f"on_platform_ready:{broker_type.value}"
-        # Advance through startup states deterministically from any cold-start
-        # entry point (including BOOT_IDLE) before requesting refresh.
-        self._capital_bootstrap_fsm.transition(
-            CapitalBootstrapState.WAIT_PLATFORM,
-            trigger,
-        )
-        self._capital_bootstrap_fsm.transition(
-            CapitalBootstrapState.INIT_COMPLETE,
-            trigger,
-        )
-        self._capital_bootstrap_fsm.transition(
-            CapitalBootstrapState.REFRESH_REQUESTED,
-            trigger,
-        )
         try:
             self.refresh_capital_authority(trigger=trigger)
         except Exception as exc:
@@ -3234,28 +3185,12 @@ class MultiAccountBrokerManager:
             time.sleep(1.0)
 
         if self._any_platform_ready():
-            self._capital_bootstrap_fsm.transition(
-                CapitalBootstrapState.INIT_COMPLETE,
-                "wait_platform_poll_ready",
-            )
-            self._capital_bootstrap_fsm.transition(
-                CapitalBootstrapState.REFRESH_REQUESTED,
-                "wait_platform_poll_ready",
-            )
             return
 
         if self._capital_bootstrap_fsm.state == CapitalBootstrapState.WAIT_PLATFORM:
             logger.error(
                 "⛔ [MABM] WAIT_PLATFORM timeout after %.1fs — forcing bootstrap continuation",
                 self.wait_platform_timeout_s,
-            )
-            self._capital_bootstrap_fsm.force_transition(
-                CapitalBootstrapState.INIT_COMPLETE,
-                "wait_platform_timeout_fallback",
-            )
-            self._capital_bootstrap_fsm.transition(
-                CapitalBootstrapState.REFRESH_REQUESTED,
-                "wait_platform_timeout_fallback",
             )
             try:
                 self.refresh_capital_authority(trigger="wait_platform_timeout_fallback")

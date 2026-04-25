@@ -260,7 +260,14 @@ class BootstrapStateMachine:
     module never creates circular import cycles at load time.
     """
 
+    _created: bool = False
+    _created_lock = threading.Lock()
+
     def __init__(self) -> None:
+        with self._created_lock:
+            if self.__class__._created:
+                raise RuntimeError("BootstrapFSM already exists")
+            self.__class__._created = True
         self._state: BootstrapState = BootstrapState.BOOT_INIT
         self._lock = threading.Lock()
         self._history: List[Dict[str, Any]] = []

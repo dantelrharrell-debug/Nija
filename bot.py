@@ -811,6 +811,46 @@ def _bfsm_transition(state, reason: str = "") -> None:
             pass
 
 
+_execution_layer_initialized = False
+_execution_layer_init_lock = threading.Lock()
+
+
+def initialize_execution_layer() -> None:
+    """One-time execution-layer bootstrap guard.
+
+    Ownership model:
+    - Called only by BotStartup/bootstrap thread.
+    - Drives CapitalBootstrapFSM early startup states.
+    - Idempotent via module-level guard.
+    """
+    global _execution_layer_initialized
+    with _execution_layer_init_lock:
+        if _execution_layer_initialized:
+            return
+        _execution_layer_initialized = True
+
+    try:
+        try:
+            from bot.capital_flow_state_machine import (
+                CapitalBootstrapState as _CapitalBootstrapState,
+                get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
+            )
+        except ImportError:
+            from capital_flow_state_machine import (  # type: ignore[import]
+                CapitalBootstrapState as _CapitalBootstrapState,
+                get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
+            )
+
+        _capital_boot_fsm = _get_capital_bootstrap_fsm()
+        _capital_boot_fsm.claim_bootstrap_ownership()
+        _capital_boot_fsm.transition(
+            _CapitalBootstrapState.WAIT_PLATFORM,
+            "bootstrap_execution_layer_init",
+        )
+    except Exception as _exec_layer_err:
+        logger.warning("[Bootstrap] initialize_execution_layer failed: %s", _exec_layer_err)
+
+
 # Verify critical environment variables are present
 def _verify_env() -> None:
     """Warn loudly if required runtime variables are absent after .env loading."""
@@ -2518,6 +2558,7 @@ def _run_bot_startup_and_trading():
                 try:
                     from bot.multi_account_broker_manager import multi_account_broker_manager as _boot_mabm
                     logger.info("🔌 [bootstrap] Connecting platform brokers...")
+                    initialize_execution_layer()
                     # Pre-connection startup delay (bootstrap-owned)
                     _boot_raw_delay = os.environ.get("NIJA_STARTUP_DELAY_S", "")
                     _boot_startup_delay = float(_boot_raw_delay) if _boot_raw_delay else 2.0
@@ -2535,6 +2576,26 @@ def _run_bot_startup_and_trading():
                     if _boot_user_delay > 0:
                         time.sleep(_boot_user_delay)
                     _boot_connected_users = _boot_mabm.connect_users_from_config()
+                    try:
+                        try:
+                            from bot.capital_flow_state_machine import (
+                                CapitalBootstrapState as _CapitalBootstrapState,
+                                get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
+                            )
+                        except ImportError:
+                            from capital_flow_state_machine import (  # type: ignore[import]
+                                CapitalBootstrapState as _CapitalBootstrapState,
+                                get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
+                            )
+                        _get_capital_bootstrap_fsm().transition(
+                            _CapitalBootstrapState.INIT_COMPLETE,
+                            "bootstrap_broker_init_complete",
+                        )
+                    except Exception as _cap_init_complete_err:
+                        logger.warning(
+                            "[Bootstrap] Capital INIT_COMPLETE transition failed: %s",
+                            _cap_init_complete_err,
+                        )
                     logger.critical("PREFLIGHT: KRAKEN SESSION INIT END")
                     logger.info(
                         "✅ [bootstrap] Broker connections complete — handing off to TradingStrategy"
