@@ -1962,6 +1962,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         cycle = 0
         _skipped_cycles = 0          # consecutive cycles skipped due to no broker
         _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
+        _activation_idle_since = None
+        _activation_idle_timeout_s = float(os.getenv("NIJA_IDLE_ACTIVATION_TIMEOUT_S", "90") or 90)
 
         while _trading_active:
             try:
@@ -1979,6 +1981,33 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 logger.critical("🧠 CORE LOOP ACTIVE — evaluating activation")
                 logger.critical("CORE LOOP TICK | live=%s", _live_now)
 
+                if _sm_loop is not None:
+                    _live_verified_loop = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in (
+                        "true", "1", "yes", "enabled"
+                    )
+                    try:
+                        _current_state_loop = _sm_loop.get_current_state()
+                    except Exception:
+                        _current_state_loop = None
+
+                    # Production lifecycle: OFF -> ARM (LIVE_PENDING_CONFIRMATION)
+                    # before attempting final activation to LIVE_ACTIVE.
+                    if (
+                        _live_verified_loop
+                        and _current_state_loop == _TradingState.OFF
+                    ):
+                        try:
+                            _sm_loop.transition_to(
+                                _TradingState.LIVE_PENDING_CONFIRMATION,
+                                "core loop arming: LIVE_CAPITAL_VERIFIED set",
+                            )
+                            logger.critical(
+                                "🟡 LIFECYCLE ARM: OFF -> LIVE_PENDING_CONFIRMATION"
+                            )
+                            _current_state_loop = _TradingState.LIVE_PENDING_CONFIRMATION
+                        except Exception as _arm_err:
+                            logger.warning("Core loop arm transition failed: %s", _arm_err)
+
                 if _sm_loop is not None and not _live_now:
                     logger.critical("⚡ TRYING TO ACTIVATE")
                     logger.critical("⚡ ATTEMPTING AUTO-ACTIVATION")
@@ -1986,6 +2015,36 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _sm_loop.maybe_auto_activate(cycle_capital=_current_cycle_capital)
                     except Exception as _auto_act_err:
                         logger.warning("Core loop maybe_auto_activate failed: %s", _auto_act_err)
+
+                    # Idle fallback: if activation remains inactive too long,
+                    # perform a safe re-arm/retry cycle (no gate bypass).
+                    if _activation_idle_since is None:
+                        _activation_idle_since = time.monotonic()
+                    _idle_elapsed = time.monotonic() - _activation_idle_since
+                    if _idle_elapsed >= _activation_idle_timeout_s:
+                        logger.critical(
+                            "⏱️ ACTIVATION IDLE TIMEOUT: %.1fs elapsed — re-arming lifecycle and retrying activation",
+                            _idle_elapsed,
+                        )
+                        try:
+                            _state_now = _sm_loop.get_current_state()
+                            if _state_now == _TradingState.LIVE_PENDING_CONFIRMATION:
+                                _sm_loop.transition_to(
+                                    _TradingState.OFF,
+                                    "idle activation fallback: reset arm",
+                                )
+                            if _sm_loop.get_current_state() == _TradingState.OFF:
+                                _sm_loop.transition_to(
+                                    _TradingState.LIVE_PENDING_CONFIRMATION,
+                                    "idle activation fallback: re-arm",
+                                )
+                            _sm_loop.maybe_auto_activate(cycle_capital=_current_cycle_capital)
+                        except Exception as _idle_retry_err:
+                            logger.warning("Idle activation fallback retry failed: %s", _idle_retry_err)
+                        finally:
+                            _activation_idle_since = time.monotonic()
+                else:
+                    _activation_idle_since = None
 
                     # Temporary hard bypass for runtime proof. Enable explicitly via env.
                     if os.getenv("NIJA_FORCE_LIVE_BYPASS", "false").lower() in (

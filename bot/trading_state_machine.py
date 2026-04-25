@@ -505,9 +505,9 @@ class TradingStateMachine:
                 self._can_dispatch_trades = True
             return True
 
-        if current != TradingState.OFF:
+        if current not in (TradingState.OFF, TradingState.LIVE_PENDING_CONFIRMATION):
             logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=STATE_NOT_OFF current_state=%s",
+                "[AUTO_ACTIVATE BLOCKED] reason=STATE_NOT_ARMABLE current_state=%s",
                 current.value,
             )
             return False
