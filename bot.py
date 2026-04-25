@@ -4350,19 +4350,6 @@ def main():
             #   BOOTSTRAP_FAILED    – _bootstrap_complete_flag is NOT set,
             #     meaning startup never succeeded.  Exit so an external watchdog
             #     (Railway / Docker / systemd) can restart with a clean slate.
-            if not startup_thread.is_alive():
-                if _bootstrap_complete_flag.is_set():
-                    logger.info(
-                        "✅ [Supervisor] Bootstrap complete — BotStartup thread has exited "
-                        "after handing control to trader threads. "
-                        "Process remains alive; supervisor continues."
-                    )
-                    # Thread exit = state update only.  Continue supervising.
-                else:
-                    logger.critical(
-                        "💥 [Supervisor] Bootstrap kernel (BotStartup) thread has exited "
-                        "WITHOUT completing bootstrap."
-                    )
             # Distinguish between successful bootstrap completion and bootstrap failure.
             # Thread lifecycle is independent of system lifecycle: trader threads
             # continue running after the bootstrap thread hands off control.
@@ -4400,8 +4387,7 @@ def main():
                     if _BOOTSTRAP_FSM_AVAILABLE:
                         _bfsm_transition(
                             _BootstrapState.SHUTDOWN,
-                            "bootstrap kernel thread exited without completing bootstrap",
-                            "bootstrap kernel thread exited before completing",
+                            "bootstrap kernel thread exited before completing bootstrap",
                         )
                     _release_process_lock()
                     sys.exit(1)
