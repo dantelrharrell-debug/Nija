@@ -772,6 +772,22 @@ class ECELExecutionCompiler:
 _INSTANCE: Optional[ECELExecutionCompiler] = None
 _INSTANCE_LOCK = threading.Lock()
 
+# Module-level idempotency guard (double-protection alongside InitRegistry).
+_initialized: bool = False
+
+
+def initialize_ecel() -> None:
+    """Idempotent ECEL initialization entry-point.
+
+    Called once by run_bootstrap() via InitRegistry.run_once("ECEL", initialize_ecel).
+    Safe to call multiple times — subsequent calls are no-ops.
+    """
+    global _initialized
+    if _initialized:
+        return
+    _initialized = True
+    get_ecel_execution_compiler()  # trigger singleton construction
+
 
 def get_ecel_execution_compiler() -> ECELExecutionCompiler:
     """Return process-wide ECEL compiler singleton."""

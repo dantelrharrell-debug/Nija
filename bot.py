@@ -815,6 +815,51 @@ _execution_layer_initialized = False
 _execution_layer_init_lock = threading.Lock()
 
 
+def run_bootstrap() -> None:
+    """Single initialization entry point.
+
+    All subsystem initialization MUST pass through here via InitRegistry.run_once().
+    This function is the ONLY place allowed to drive multi-subsystem startup.
+    Called from the BotStartup thread after acquire_bootstrap_guard().
+    """
+    try:
+        from bot.init_registry import InitRegistry as _IR
+    except ImportError:
+        logger.warning("[run_bootstrap] InitRegistry not available — falling back to direct init")
+        initialize_execution_layer()
+        return
+
+    # ── 1. Feature flags (if module exists) ────────────────────────────────
+    def _init_feature_flags() -> None:
+        try:
+            from bot.feature_flags import initialize_feature_flags as _iff
+            _iff()
+        except (ImportError, AttributeError):
+            pass
+
+    _IR.run_once("FEATURE_FLAGS", _init_feature_flags)
+
+    # ── 2. ECEL ─────────────────────────────────────────────────────────────
+    def _init_ecel() -> None:
+        try:
+            from bot.ecel_execution_compiler import initialize_ecel as _ie
+            _ie()
+        except ImportError:
+            pass
+
+    _IR.run_once("ECEL", _init_ecel)
+
+    # ── 3. MABM ─────────────────────────────────────────────────────────────
+    def _init_mabm() -> None:
+        from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm
+        _mabm.initialize()
+
+    _IR.run_once("MABM", _init_mabm)
+
+    # ── 4. Execution layer ownership (capital FSM bootstrap) ────────────────
+    _IR.run_once("EXECUTION_LAYER", initialize_execution_layer)
+
+
 def initialize_execution_layer() -> None:
     """One-time execution-layer bootstrap guard.
 
@@ -2558,7 +2603,7 @@ def _run_bot_startup_and_trading():
                 try:
                     from bot.multi_account_broker_manager import multi_account_broker_manager as _boot_mabm
                     logger.info("🔌 [bootstrap] Connecting platform brokers...")
-                    initialize_execution_layer()
+                    run_bootstrap()  # single initialization entry point (InitRegistry)
                     # Pre-connection startup delay (bootstrap-owned)
                     _boot_raw_delay = os.environ.get("NIJA_STARTUP_DELAY_S", "")
                     _boot_startup_delay = float(_boot_raw_delay) if _boot_raw_delay else 2.0

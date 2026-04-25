@@ -405,35 +405,12 @@ class MultiAccountBrokerManager:
         # Expected value: False (copy trading module doesn't exist)
         self.kraken_copy_trading_active: bool = False
 
-        logger.info("[MABM-M2] field init complete — importing optional managers (portfolio, isolation, BFM)")
-        # FIX #3: Initialize portfolio manager for user portfolio states
-        try:
-            from portfolio_state import get_portfolio_manager
-            self.portfolio_manager = get_portfolio_manager()
-            logger.info("✅ Portfolio manager initialized for user accounts")
-        except ImportError:
-            logger.warning("⚠️ Portfolio state module not available")
-            self.portfolio_manager = None
-
-        # ISOLATION MANAGER: Initialize account isolation manager for failure isolation
-        # This ensures one account failure can NEVER affect another account
+        logger.info("[MABM-M2] field init complete — external managers deferred to initialize()")
+        # External system references — populated by initialize(), never in __init__.
+        # Constructors must not touch external systems (InitRegistry / ownership model).
+        self.portfolio_manager = None
         self.isolation_manager = None
-        if get_isolation_manager is not None:
-            try:
-                self.isolation_manager = get_isolation_manager()
-                logger.info("✅ Account isolation manager initialized - failure isolation active")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not initialize isolation manager: {e}")
-
-        # BROKER FAILURE MANAGER: per-broker circuit breaker so OKX/Binance
-        # failures are isolated and never cascade to Kraken or other venues.
         self._broker_failure_mgr = None
-        if _BFM_AVAILABLE and get_broker_failure_manager is not None:
-            try:
-                self._broker_failure_mgr = get_broker_failure_manager()
-                logger.info("✅ Broker failure manager initialized - cross-broker isolation active")
-            except Exception as _bfm_init_err:
-                logger.warning("⚠️ Could not initialize broker failure manager: %s", _bfm_init_err)
 
         # ── Broker registration hard gate ─────────────────────────────────────
         # Set exactly once via finalize_broker_registration() after all expected
@@ -498,69 +475,14 @@ class MultiAccountBrokerManager:
         )
 
         # ── Deterministic capital-flow infrastructure ──────────────────────────
-        logger.info("[MABM-M3] optional managers done — constructing CapitalFSM / coordinator")
-        # The coordinator is the **single writer** for CapitalAuthority.  All
-        # balance fetches, snapshot computations, and authority publishes go
-        # through it.  The bootstrap / runtime FSMs track readiness state.
-        #
-        # Guard: if this block has already run (e.g. due to a re-entrant __init__
-        # call or accidental double-construction), skip it entirely to prevent
-        # creating a second set of FSM / coordinator objects that would shadow
-        # the process-wide singletons.
-        #
-        # CRITICAL: check getattr() BEFORE writing the flag — writing False
-        # unconditionally here would defeat the guard on every subsequent call.
-        if getattr(self, "_fsm_initialized", False):
-            logger.warning(
-                "[MABM-M3] FSM already initialized (id=%d) — skipping duplicate init",
-                id(get_capital_bootstrap_fsm()),
-            )
-        else:
-            self._fsm_initialized: bool = False  # will be set True on success
-        if not getattr(self, "_fsm_initialized", False) and _CAPITAL_FSM_AVAILABLE:
-            self._capital_event_bus: CapitalEventBus = get_capital_event_bus()
-            self._capital_bootstrap_fsm: CapitalBootstrapStateMachine = (
-                get_capital_bootstrap_fsm()
-            )
-            self._capital_runtime_fsm: CapitalRuntimeStateMachine = (
-                get_capital_runtime_fsm()
-            )
-            self._capital_coordinator: CapitalRefreshCoordinator = (
-                CapitalRefreshCoordinator(
-                    event_bus=self._capital_event_bus,
-                    bootstrap_fsm=self._capital_bootstrap_fsm,
-                    runtime_fsm=self._capital_runtime_fsm,
-                )
-            )
-            # Lifecycle ownership model:
-            # MABM wires capital FSM/coordinator objects but does NOT drive
-            # bootstrap lifecycle transitions. Only BotStartup may transition
-            # the capital bootstrap FSM.
-            # ── Option A: wire capital-ready → system FSM → trading loop ──────
-            # Register a one-shot callback on the capital bootstrap FSM.  When
-            # the capital pipeline reaches READY (event emitted, bus flushed,
-            # CapitalAuthority confirmed), this callback advances the composite
-            # BootstrapStateMachine through all prerequisite states to
-            # CAPITAL_READY.  That single transition unblocks:
-            #   • assert_invariant_i11_strategy_arm()  in _init_advanced_features()
-            #   • any other I11-gated code that checks get_bootstrap_fsm().state
-            # which is the final gate before the trading loop is allowed to run.
-            self._capital_bootstrap_fsm.register_on_ready(
-                self._on_capital_bootstrap_ready
-            )
-            self._fsm_initialized = True
-            logger.info(
-                "[MABM-M3] FSM init complete — bootstrap_fsm id=%d runtime_fsm id=%d coordinator id=%d",
-                id(self._capital_bootstrap_fsm),
-                id(self._capital_runtime_fsm),
-                id(self._capital_coordinator),
-            )
-        elif not getattr(self, "_fsm_initialized", False):
-            # _CAPITAL_FSM_AVAILABLE is False — null out refs only on first pass.
-            self._capital_event_bus = None  # type: ignore[assignment]
-            self._capital_bootstrap_fsm = None  # type: ignore[assignment]
-            self._capital_runtime_fsm = None  # type: ignore[assignment]
-            self._capital_coordinator = None  # type: ignore[assignment]
+        # Null refs — populated by initialize() via _init_capital_fsm().
+        # Constructors must not wire external singletons.
+        self._fsm_initialized: bool = False
+        self._capital_event_bus: Optional["CapitalEventBus"] = None  # type: ignore[assignment]
+        self._capital_bootstrap_fsm: Optional["CapitalBootstrapStateMachine"] = None  # type: ignore[assignment]
+        self._capital_runtime_fsm: Optional["CapitalRuntimeStateMachine"] = None  # type: ignore[assignment]
+        self._capital_coordinator: Optional["CapitalRefreshCoordinator"] = None  # type: ignore[assignment]
+        logger.info("[MABM-M3] capital FSM fields declared — wiring deferred to initialize()")
 
         # ── Per-broker balance-payload bootstrap FSMs ──────────────────────────
         logger.info("[MABM-M4] CapitalFSM/coordinator wired — initialising per-broker payload FSMs")
@@ -575,6 +497,79 @@ class MultiAccountBrokerManager:
         logger.info("=" * 70)
         logger.info("🔒 MULTI-ACCOUNT BROKER MANAGER INITIALIZED")
         logger.info("=" * 70)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # External-system initialization (must NOT run from __init__)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def initialize(self) -> None:
+        """Wire external subsystems.  Must be called exactly once from the bootstrap
+        thread via InitRegistry — never from __init__ or any constructor chain.
+
+        Called by run_bootstrap() in bot.py through:
+            InitRegistry.run_once("MABM", _boot_mabm.initialize)
+        """
+        from bot.init_registry import InitRegistry as _IR
+
+        _IR.run_once("PORTFOLIO_MANAGER", self._init_portfolio)
+        _IR.run_once("ISOLATION_MANAGER", self._init_isolation)
+        _IR.run_once("BROKER_FAILURE_MANAGER", self._init_broker_failure_mgr)
+        _IR.run_once("MABM_CAPITAL_FSM", self._init_capital_fsm)
+
+    def _init_portfolio(self) -> None:
+        """Initialize portfolio manager (called once via InitRegistry)."""
+        try:
+            from portfolio_state import get_portfolio_manager
+            self.portfolio_manager = get_portfolio_manager()
+            logger.info("✅ Portfolio manager initialized for user accounts")
+        except ImportError:
+            logger.warning("⚠️ Portfolio state module not available")
+            self.portfolio_manager = None
+
+    def _init_isolation(self) -> None:
+        """Initialize account isolation manager (called once via InitRegistry)."""
+        if get_isolation_manager is not None:
+            try:
+                self.isolation_manager = get_isolation_manager()
+                logger.info("✅ Account isolation manager initialized - failure isolation active")
+            except Exception as e:
+                logger.warning("⚠️ Could not initialize isolation manager: %s", e)
+
+    def _init_broker_failure_mgr(self) -> None:
+        """Initialize broker failure manager (called once via InitRegistry)."""
+        if _BFM_AVAILABLE and get_broker_failure_manager is not None:
+            try:
+                self._broker_failure_mgr = get_broker_failure_manager()
+                logger.info("✅ Broker failure manager initialized - cross-broker isolation active")
+            except Exception as _bfm_init_err:
+                logger.warning("⚠️ Could not initialize broker failure manager: %s", _bfm_init_err)
+
+    def _init_capital_fsm(self) -> None:
+        """Wire CapitalFSM / coordinator (called once via InitRegistry)."""
+        if self._fsm_initialized:
+            logger.warning("[MABM] _init_capital_fsm: already initialized — skipping")
+            return
+        if _CAPITAL_FSM_AVAILABLE:
+            self._capital_event_bus = get_capital_event_bus()
+            self._capital_bootstrap_fsm = get_capital_bootstrap_fsm()
+            self._capital_runtime_fsm = get_capital_runtime_fsm()
+            self._capital_coordinator = CapitalRefreshCoordinator(
+                event_bus=self._capital_event_bus,
+                bootstrap_fsm=self._capital_bootstrap_fsm,
+                runtime_fsm=self._capital_runtime_fsm,
+            )
+            # Lifecycle ownership model: MABM wires objects but does NOT drive
+            # bootstrap lifecycle transitions.  Only BotStartup may transition.
+            self._capital_bootstrap_fsm.register_on_ready(self._on_capital_bootstrap_ready)
+            self._fsm_initialized = True
+            logger.info(
+                "[MABM-M3] FSM init complete — bootstrap_fsm id=%d runtime_fsm id=%d coordinator id=%d",
+                id(self._capital_bootstrap_fsm),
+                id(self._capital_runtime_fsm),
+                id(self._capital_coordinator),
+            )
+        else:
+            logger.warning("[MABM-M3] _CAPITAL_FSM_AVAILABLE=False — capital FSM not wired")
 
     @property
     def platform_brokers(self) -> Dict[BrokerType, BaseBroker]:
