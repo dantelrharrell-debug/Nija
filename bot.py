@@ -4299,8 +4299,11 @@ def main():
     )
     
     # Wait for initialization to complete, then start the execution loop.
+    # Hard timeout: if the bootstrap-complete event is never released, fail
+    # loudly instead of hanging forever in observer mode.
     logger.critical("🧭 BEFORE bootstrap wait")
-    _bootstrap_completed_event.wait()
+    if not _bootstrap_completed_event.wait(timeout=5):
+        raise RuntimeError("❌ DEADLOCK: bootstrap_ready was never set")
     logger.critical("🧭 AFTER bootstrap wait")
 
     # ── Strategy existence gate ─────────────────────────────────────────────
