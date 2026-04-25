@@ -66,7 +66,19 @@
       "to": "LIVE_ACTIVE",
       "reason": "core loop forced activation",
       "timestamp": "2026-04-25T13:56:22.727704"
+    },
+    {
+      "from": "OFF",
+      "to": "LIVE_ACTIVE",
+      "reason": "core loop forced activation",
+      "timestamp": "2026-04-25T14:17:04.837237"
+    },
+    {
+      "from": "OFF",
+      "to": "LIVE_ACTIVE",
+      "reason": "core loop forced activation",
+      "timestamp": "2026-04-25T14:22:55.456070"
     }
   ],
-  "last_updated": "2026-04-25T13:56:22.727728"
+  "last_updated": "2026-04-25T14:22:55.456098"
 }
