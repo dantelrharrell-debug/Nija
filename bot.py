@@ -4306,6 +4306,14 @@ def main():
         raise RuntimeError("❌ DEADLOCK: bootstrap_ready was never set")
     logger.critical("🧭 AFTER bootstrap wait")
 
+    # Fastest proof path: force live activation immediately after startup handoff.
+    try:
+        from bot.trading_state_machine import get_state_machine as _get_tsm_force
+        _get_tsm_force().force_activate_live(reason="post-startup proof")
+        logger.critical("🔥 FORCED LIVE ACTIVATION")
+    except Exception as _forced_live_err:
+        logger.warning("Forced live activation probe failed: %s", _forced_live_err)
+
     # ── Strategy existence gate ─────────────────────────────────────────────
     # Guarantee the strategy object exists AND _strategy_ready_event is set
     # BEFORE TradingCoreLoop starts.  _strategy_ready_event is the single
