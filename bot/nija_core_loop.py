@@ -1976,9 +1976,11 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _live_now = bool(_sm_loop.is_live_trading_active())
                 except Exception as _sm_loop_err:
                     logger.debug("CORE LOOP live probe failed: %s", _sm_loop_err)
+                logger.critical("🧠 CORE LOOP ACTIVE — evaluating activation")
                 logger.critical("CORE LOOP TICK | live=%s", _live_now)
 
                 if _sm_loop is not None and not _live_now:
+                    logger.critical("⚡ TRYING TO ACTIVATE")
                     logger.critical("⚡ ATTEMPTING AUTO-ACTIVATION")
                     try:
                         _sm_loop.maybe_auto_activate(cycle_capital=_current_cycle_capital)

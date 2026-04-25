@@ -855,6 +855,19 @@ class TradingStateMachine:
             _first_snap_accepted,
             brokers_ready,
         )
+
+        # One-line truth-test gate names requested by operator.
+        capital_ready = bool(CA_READY) if CA_READY is not None else False
+        exchange_ready = bool(brokers_ready) and bool(EXECUTION_PIPELINE_HEALTHY)
+        risk_clear = not kill_switch
+        _min_trade_threshold = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+        _capital_total = float(cycle_capital.get("ca_total_capital", 0.0) or 0.0) if cycle_capital else 0.0
+        min_trade_ok = _capital_total >= _min_trade_threshold
+        logger.critical(f"capital_ready={capital_ready}")
+        logger.critical(f"exchange_ready={exchange_ready}")
+        logger.critical(f"risk_clear={risk_clear}")
+        logger.critical(f"min_trade_ok={min_trade_ok}")
+
         _activation_result = self.commit_activation(cycle_capital=cycle_capital)
         if not _activation_result:
             logger.critical("❌ ACTIVATION BLOCKED: conditions not met")
