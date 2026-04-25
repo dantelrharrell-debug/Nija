@@ -554,155 +554,160 @@ class ECELExecutionCompiler:
         order_type = (req.order_type or "MARKET").strip().upper()
 
         if side not in ("buy", "sell"):
-            return CompileResult(
-                accepted=False,
-                reason=f"Unsupported side '{req.side}'",
-                broker=broker,
-                symbol=symbol,
-            )
+            return self._reject("UNSUPPORTED_SIDE", broker, symbol, side, None, side=req.side)
 
         if order_type not in ("MARKET", "LIMIT"):
-            return CompileResult(
-                accepted=False,
-                reason=f"Unsupported order type '{order_type}'",
-                broker=broker,
-                symbol=symbol,
-            )
+            return self._reject("UNSUPPORTED_ORDER_TYPE", broker, symbol, side, None, order_type=order_type)
 
         if "-" not in symbol:
-            return CompileResult(
-                accepted=False,
-                reason=f"Invalid symbol format '{symbol}'",
-                broker=broker,
-                symbol=symbol,
-            )
+            return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, symbol=symbol)
 
         # Keep schema data fresh from public endpoints without blocking every call.
         self.schema.refresh_if_due(target_broker=broker)
 
         rule = self.schema.get_rule(broker, symbol)
         if rule is None:
-            return CompileResult(
-                accepted=False,
-                reason=f"No contract rule found for {broker}:{symbol}",
-                broker=broker,
-                symbol=symbol,
-            )
+            return self._reject("NO_CONTRACT_RULE", broker, symbol, side, None, broker=broker, symbol=symbol)
 
         desired_notional = self._to_decimal(req.desired_notional_usd)
         if desired_notional <= 0:
-            return CompileResult(
-                accepted=False,
-                reason="Order notional must be greater than zero",
-                broker=broker,
-                symbol=symbol,
-                rule=rule,
-            )
+            return self._reject("ZERO_NOTIONAL", broker, symbol, side, rule,
+                                desired_notional_usd=req.desired_notional_usd)
 
-        if self._require_price_hint and (req.price_hint_usd is None or req.price_hint_usd <= 0):
-            return CompileResult(
-                accepted=False,
-                reason="Price hint is required by ECEL to compile a grid-valid order",
-                broker=broker,
-                symbol=symbol,
-                rule=rule,
-            )
-
+        # ---------------------------------------------------------------------------
+        # Step 1: Establish working notional (at least min notional)
+        # ---------------------------------------------------------------------------
         compiled_notional = float(max(desired_notional, self._to_decimal(rule.min_notional_usd)))
 
-        compiled_price = None
-        compiled_base = None
-        if req.price_hint_usd is not None and req.price_hint_usd > 0:
-            compiled_price = self.precision.compile_price(req.price_hint_usd, side, rule)
-            raw_base = compiled_notional / max(compiled_price, 1e-12)
-            compiled_base = self.precision.compile_base_size(raw_base, rule)
+        compiled_price: Optional[float] = None
+        compiled_base: Optional[float] = None
 
-            if compiled_base < rule.min_base_size:
-                compiled_base = rule.min_base_size
-                compiled_base = self.precision.compile_base_size(compiled_base, rule)
-
-            compiled_notional = compiled_base * compiled_price
-
-            if rule.max_base_size is not None and compiled_base > rule.max_base_size:
-                return CompileResult(
-                    accepted=False,
-                    reason=(
-                        f"Compiled size {compiled_base:.10f} exceeds max base size "
-                        f"{rule.max_base_size:.10f}"
-                    ),
-                    broker=broker,
-                    symbol=symbol,
-                    rule=rule,
-                )
-
-        if compiled_base is None or compiled_price is None:
-            return CompileResult(
-                accepted=False,
-                reason="ECEL requires compiled base size and price for deterministic validity",
-                broker=broker,
-                symbol=symbol,
-                compiled_notional_usd=compiled_notional,
-                rule=rule,
+        if req.price_hint_usd is None or req.price_hint_usd <= 0:
+            return self._reject(
+                "PRICE_HINT_REQUIRED", broker, symbol, side, rule,
+                price_hint=req.price_hint_usd,
             )
 
-        if compiled_notional < rule.min_notional_usd:
-            return CompileResult(
-                accepted=False,
-                reason=(
-                    f"Compiled notional {compiled_notional:.10f} below min notional "
-                    f"{rule.min_notional_usd:.10f}"
-                ),
-                broker=broker,
-                symbol=symbol,
-                compiled_notional_usd=compiled_notional,
-                compiled_base_size=compiled_base,
-                compiled_price_usd=compiled_price,
-                rule=rule,
-            )
+        # ---------------------------------------------------------------------------
+        # Step 2: Compile price to exchange tick grid
+        # ---------------------------------------------------------------------------
+        compiled_price = self.precision.compile_price(req.price_hint_usd, side, rule)
+        if compiled_price <= 0:
+            return self._reject("INVALID_COMPILED_PRICE", broker, symbol, side, rule,
+                                compiled_price=compiled_price)
 
+        # ---------------------------------------------------------------------------
+        # Step 3: Derive raw base quantity
+        # ---------------------------------------------------------------------------
+        raw_base = compiled_notional / max(compiled_price, 1e-12)
+        compiled_base = self.precision.compile_base_size(raw_base, rule)
+
+        # Bump up to min_base if below (rounding down can produce sub-min sizes)
         if compiled_base < rule.min_base_size:
-            return CompileResult(
-                accepted=False,
-                reason=(
-                    f"Compiled base size {compiled_base:.10f} below min base size "
-                    f"{rule.min_base_size:.10f}"
-                ),
-                broker=broker,
-                symbol=symbol,
-                compiled_notional_usd=compiled_notional,
-                compiled_base_size=compiled_base,
-                compiled_price_usd=compiled_price,
-                rule=rule,
+            compiled_base = self.precision.compile_base_size(rule.min_base_size, rule)
+
+        # Max-size guard
+        if rule.max_base_size is not None and compiled_base > rule.max_base_size:
+            return self._reject(
+                "EXCEEDS_MAX_BASE_SIZE", broker, symbol, side, rule,
+                compiled_base=compiled_base,
+                max_base_size=rule.max_base_size,
             )
 
-        if not self._is_grid_aligned(compiled_base, rule.base_step_size, rule.base_precision):
-            return CompileResult(
-                accepted=False,
-                reason="Compiled base size is not aligned to broker base step size",
-                broker=broker,
-                symbol=symbol,
-                compiled_notional_usd=compiled_notional,
-                compiled_base_size=compiled_base,
-                compiled_price_usd=compiled_price,
-                rule=rule,
+        # ---------------------------------------------------------------------------
+        # Step 4: Balance-aware sizing (fee + safety buffer prevents INSUFFICIENT_FUNDS)
+        # ---------------------------------------------------------------------------
+        balance_d: Optional[Decimal] = None
+        if req.available_balance_usd is not None and req.available_balance_usd > 0:
+            balance_d = Decimal(str(req.available_balance_usd))
+            usable = balance_d * _BALANCE_SAFETY_FACTOR          # e.g. 98.5% of balance
+            price_d = Decimal(str(compiled_price))
+            step_d = Decimal(str(rule.base_step_size))
+
+            max_affordable = usable / price_d
+            compiled_base_d = Decimal(str(compiled_base))
+
+            if compiled_base_d > max_affordable:
+                # Floor to the largest affordable step-aligned quantity
+                if step_d > 0:
+                    units = (max_affordable / step_d).to_integral_value(rounding=ROUND_DOWN)
+                    compiled_base_d = (units * step_d).quantize(
+                        Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN
+                    )
+                else:
+                    compiled_base_d = max_affordable.quantize(
+                        Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN
+                    )
+
+            # Secondary check: ensure effective cost (with fee) fits the raw balance
+            effective_cost = compiled_base_d * price_d * (Decimal("1") + _FEE_RATE)
+            if effective_cost > balance_d:
+                if step_d > 0:
+                    units = (balance_d / (price_d * (Decimal("1") + _FEE_RATE)) / step_d).to_integral_value(
+                        rounding=ROUND_DOWN
+                    )
+                    compiled_base_d = (units * step_d).quantize(
+                        Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN
+                    )
+                else:
+                    compiled_base_d = (
+                        balance_d / (price_d * (Decimal("1") + _FEE_RATE))
+                    ).quantize(Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN)
+
+            compiled_base = float(compiled_base_d)
+
+        # ---------------------------------------------------------------------------
+        # Step 5: Dust prevention — hard floor at min_base_size
+        # ---------------------------------------------------------------------------
+        if compiled_base < rule.min_base_size:
+            return self._reject(
+                "DUST_ORDER", broker, symbol, side, rule,
+                attempted_qty=compiled_base,
+                min_required=rule.min_base_size,
+                available_balance_usd=req.available_balance_usd,
             )
 
-        if not self._is_grid_aligned(compiled_price, rule.price_step_size, rule.price_precision):
-            return CompileResult(
-                accepted=False,
-                reason="Compiled price is not aligned to broker price step size",
-                broker=broker,
-                symbol=symbol,
-                compiled_notional_usd=compiled_notional,
-                compiled_base_size=compiled_base,
-                compiled_price_usd=compiled_price,
-                rule=rule,
+        # ---------------------------------------------------------------------------
+        # Step 6: Recompute final notional
+        # ---------------------------------------------------------------------------
+        compiled_notional = float(
+            Decimal(str(compiled_base)) * Decimal(str(compiled_price))
+        )
+
+        # ---------------------------------------------------------------------------
+        # Step 7: Min-notional gate
+        # ---------------------------------------------------------------------------
+        if compiled_notional < rule.min_notional_usd:
+            return self._reject(
+                "BELOW_MIN_NOTIONAL", broker, symbol, side, rule,
+                attempted_qty=compiled_base,
+                compiled_notional=compiled_notional,
+                min_notional=rule.min_notional_usd,
             )
 
-        notional_from_components = float(self._to_decimal(compiled_base) * self._to_decimal(compiled_price))
-        if abs(notional_from_components - compiled_notional) > 1e-9:
-            compiled_notional = notional_from_components
+        # ---------------------------------------------------------------------------
+        # Step 8: Pre-flight assertion — reject-proof guarantee before exchange
+        # ---------------------------------------------------------------------------
+        pf_err = self._preflight_assert(
+            qty=Decimal(str(compiled_base)),
+            price=Decimal(str(compiled_price)),
+            base_step=Decimal(str(rule.base_step_size)),
+            price_step=Decimal(str(rule.price_step_size)),
+            min_qty=Decimal(str(rule.min_base_size)),
+            min_notional=Decimal(str(rule.min_notional_usd)),
+            balance=balance_d,
+        )
+        if pf_err is not None:
+            return self._reject(
+                pf_err, broker, symbol, side, rule,
+                qty=compiled_base,
+                price=compiled_price,
+                balance=req.available_balance_usd,
+            )
 
+        # ---------------------------------------------------------------------------
+        # Step 9: Capital reservation
+        # ---------------------------------------------------------------------------
         reservation_id = None
         if req.available_balance_usd is not None:
             ok, message, reservation_id = self.reservations.reserve(
@@ -713,32 +718,50 @@ class ECELExecutionCompiler:
                 total_balance_usd=req.available_balance_usd,
             )
             if not ok:
-                return CompileResult(
-                    accepted=False,
-                    reason=f"Pre-trade reservation rejected: {message}",
-                    broker=broker,
-                    symbol=symbol,
-                    compiled_notional_usd=compiled_notional,
-                    compiled_base_size=compiled_base,
-                    compiled_price_usd=compiled_price,
-                    rule=rule,
+                return self._reject(
+                    f"RESERVATION_REJECTED:{message}", broker, symbol, side, rule,
+                    compiled_notional=compiled_notional,
                 )
+
+        # ---------------------------------------------------------------------------
+        # Step 10: Build immutable CompiledOrder — the single execution truth
+        # ---------------------------------------------------------------------------
+        compiled_order = CompiledOrder(
+            symbol=symbol,
+            side=side,
+            qty=Decimal(str(compiled_base)),
+            price=Decimal(str(compiled_price)),
+            valid=True,
+            reason=None,
+        )
+
+        logger.info(
+            "✅ ECEL ACCEPTED | %s %s  qty=%s  price=%s  notional=$%.4f  reservation=%s",
+            side.upper(), symbol,
+            compiled_order.qty, compiled_order.price,
+            compiled_notional,
+            reservation_id or "none",
+        )
 
         return CompileResult(
             accepted=True,
-            reason="accepted",
+            reason="ACCEPTED",
             broker=broker,
             symbol=symbol,
+            side=side,
             compiled_notional_usd=compiled_notional,
             compiled_base_size=compiled_base,
             compiled_price_usd=compiled_price,
             reservation_id=reservation_id,
             rule=rule,
+            compiled_order=compiled_order,
             diagnostics={
                 "min_notional_usd": rule.min_notional_usd,
                 "min_base_size": rule.min_base_size,
                 "base_step_size": rule.base_step_size,
                 "price_step_size": rule.price_step_size,
+                "fee_rate": float(_FEE_RATE),
+                "balance_safety_factor": float(_BALANCE_SAFETY_FACTOR),
             },
         )
 
