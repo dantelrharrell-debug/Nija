@@ -26,6 +26,28 @@ except ImportError:
         get_execution_pipeline = None  # type: ignore
         PipelineRequest = None         # type: ignore
 
+# ── ECEL: mandatory pre-trade choke point ─────────────────────────────────────
+try:
+    from bot.ecel_execution_compiler import (
+        get_ecel_execution_compiler as _get_ecel,
+        CompileRequest as _ECELCompileRequest,
+    )
+    _ECEL_AVAILABLE = True
+    logger.info("✅ ECEL execution compiler loaded — mandatory pre-trade choke point active")
+except ImportError:
+    try:
+        from ecel_execution_compiler import (
+            get_ecel_execution_compiler as _get_ecel,
+            CompileRequest as _ECELCompileRequest,
+        )
+        _ECEL_AVAILABLE = True
+        logger.info("✅ ECEL execution compiler loaded — mandatory pre-trade choke point active")
+    except ImportError:
+        _ECEL_AVAILABLE = False
+        _get_ecel = None  # type: ignore
+        _ECELCompileRequest = None  # type: ignore
+        logger.warning("⚠️ ECEL execution compiler not available — limit orders will use legacy sizing")
+
 # Import canonical ExecutionResult contract
 try:
     from bot.execution_result import (
@@ -553,6 +575,110 @@ class ExecutionEngine:
             "filled_size_usd": res.filled_size_usd,
             "broker": res.broker,
         }
+
+    def _submit_limit_order_via_ecel(
+        self,
+        broker_client,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        limit_price: float,
+        strategy_name: str = "ExecutionEngine",
+    ) -> Dict[str, Any]:
+        """Place a limit order through the ECEL choke point.
+
+        ECEL compiles the order, normalises qty/price to exchange grids,
+        applies balance-aware sizing, and performs pre-flight assertions.
+        Only a ``CompiledOrder`` with ``valid=True`` reaches the broker.
+        """
+        # Resolve broker label for ECEL
+        broker_label = "coinbase"
+        try:
+            btype = getattr(broker_client, "broker_type", None)
+            if btype is not None:
+                raw = btype.value if hasattr(btype, "value") else str(btype)
+                broker_label = raw.strip().lower()
+        except Exception:
+            pass
+
+        # Fetch available balance for fee-aware sizing
+        available_balance: Optional[float] = None
+        if broker_client and hasattr(broker_client, "get_account_balance"):
+            try:
+                _bal = broker_client.get_account_balance()
+                available_balance = (
+                    float(_bal.get("available_balance", _bal.get("total_balance", 0.0)))
+                    if isinstance(_bal, dict) else float(_bal)
+                )
+            except Exception:
+                pass
+
+        if _ECEL_AVAILABLE and _get_ecel and _ECELCompileRequest:
+            ecel = _get_ecel()
+            req = _ECELCompileRequest(
+                broker=broker_label,
+                symbol=symbol,
+                side=side,
+                order_type="LIMIT",
+                desired_notional_usd=size_usd,
+                available_balance_usd=available_balance,
+                price_hint_usd=limit_price,
+            )
+            result = ecel.compile(req)
+
+            if not result.accepted or result.compiled_order is None or not result.compiled_order.valid:
+                logger.error(
+                    "❌ ECEL REJECT (limit)\n"
+                    "   • symbol: %s\n"
+                    "   • reason: %s\n"
+                    "   • attempted_notional: $%.4f\n"
+                    "   • balance: %s",
+                    symbol,
+                    result.reason,
+                    size_usd,
+                    f"${available_balance:.4f}" if available_balance is not None else "unknown",
+                )
+                return {"status": "error", "error": result.reason, "symbol": symbol, "side": side}
+
+            compiled = result.compiled_order
+            compiled_qty = float(compiled.qty)
+            compiled_price = float(compiled.price)
+
+            logger.info(
+                "🧾 ECEL ORDER (limit)\n"
+                "   • symbol: %s\n"
+                "   • side: %s\n"
+                "   • price (normalised): %s\n"
+                "   • qty (normalised): %s\n"
+                "   • notional: $%.4f\n"
+                "   • balance: %s\n"
+                "   • fee_adj_cost: $%.4f",
+                symbol, side,
+                compiled.price, compiled.qty,
+                float(compiled.qty * compiled.price),
+                f"${available_balance:.4f}" if available_balance is not None else "unknown",
+                float(compiled.qty * compiled.price) * 1.006,
+            )
+        else:
+            # ECEL unavailable — fall back to uncompiled values and log clearly
+            logger.warning(
+                "⚠️ ECEL unavailable for limit order %s — using raw sizing (size_usd=%.4f, price=%.4f)",
+                symbol, size_usd, limit_price,
+            )
+            compiled_qty = size_usd / limit_price if limit_price > 0 else 0.0
+            compiled_price = limit_price
+
+        try:
+            order_result = broker_client.place_limit_order(
+                symbol=symbol,
+                side=side,
+                size=compiled_qty,
+                price=compiled_price,
+            )
+            return order_result if isinstance(order_result, dict) else {"status": "filled", "raw": order_result}
+        except Exception as exc:
+            logger.warning("⚠️ Limit order exception for %s via ECEL: %s", symbol, exc)
+            return {"status": "error", "error": str(exc), "symbol": symbol, "side": side}
 
     def _assert_bootstrap_ready_for_execution_locks(self, strict: bool = False) -> bool:
         """
@@ -1771,20 +1897,20 @@ class ExecutionEngine:
 
                 if _use_limit:
                     _limit_price = execution_plan.limit_price
-                    # Limit orders require base-asset quantity (crypto units), not USD
-                    _base_qty = position_size / _limit_price
                     logger.info(
                         f"   📊 Dynamic order type: LIMIT @ ${_limit_price:.6f} "
-                        f"(liquidity/volatility-driven, qty={_base_qty:.8f})"
+                        f"(liquidity/volatility-driven, ECEL will compile qty)"
                     )
                     _entry_t0 = _time.monotonic()
                     _entry_exc: Optional[Exception] = None
                     try:
-                        result = self.broker_client.place_limit_order(
+                        result = self._submit_limit_order_via_ecel(
+                            broker_client=self.broker_client,
                             symbol=symbol,
                             side=order_side,
-                            size=_base_qty,
-                            price=_limit_price
+                            size_usd=position_size,
+                            limit_price=_limit_price,
+                            strategy_name=strategy_name if hasattr(self, "_strategy_name") else "ExecutionEngine",
                         )
                     except Exception as _limit_exc:
                         logger.warning(
