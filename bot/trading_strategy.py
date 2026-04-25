@@ -3238,11 +3238,17 @@ BROKER_MIN_BALANCE = {
 HEARTBEAT_TRADE_ENABLED = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
 HEARTBEAT_TRADE_SIZE_USD = float(os.getenv('HEARTBEAT_TRADE_SIZE', '5.50'))  # Minimum viable trade size
 HEARTBEAT_TRADE_INTERVAL_SECONDS = int(os.getenv('HEARTBEAT_TRADE_INTERVAL', '600'))  # 10 minutes default
+HEARTBEAT_REQUIRED_FIRST_ACTIVATION = os.getenv('HEARTBEAT_REQUIRED_FIRST_ACTIVATION', 'false').lower() in ('true', '1', 'yes')
+HEARTBEAT_AUTO_EXIT = os.getenv('HEARTBEAT_AUTO_EXIT', 'true').lower() in ('true', '1', 'yes')
+HEARTBEAT_MARKER_PATH = os.getenv('HEARTBEAT_MARKER_PATH', './data/heartbeat_verified.flag')
 
 if HEARTBEAT_TRADE_ENABLED:
     logger.info(f"❤️  HEARTBEAT TRADE ENABLED: ${HEARTBEAT_TRADE_SIZE_USD:.2f} every {HEARTBEAT_TRADE_INTERVAL_SECONDS}s")
 else:
     logger.debug("Heartbeat trade disabled (set HEARTBEAT_TRADE=true to enable)")
+
+if HEARTBEAT_REQUIRED_FIRST_ACTIVATION:
+    logger.info(f"❤️  HEARTBEAT REQUIRED ON FIRST ACTIVATION (marker={HEARTBEAT_MARKER_PATH})")
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=60):
     """
@@ -5646,6 +5652,14 @@ class TradingStrategy:
             else:
                 _run_heartbeat_startup = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
 
+            _heartbeat_verified = self._is_heartbeat_verified()
+            _heartbeat_required_now = HEARTBEAT_REQUIRED_FIRST_ACTIVATION and not _heartbeat_verified
+            if _heartbeat_required_now and not _run_heartbeat_startup:
+                logger.critical(
+                    "💓 HEARTBEAT REQUIRED: marker not found and HEARTBEAT_REQUIRED_FIRST_ACTIVATION=true — forcing startup heartbeat"
+                )
+                _run_heartbeat_startup = True
+
             if _run_heartbeat_startup:
                 logger.info("=" * 70)
                 logger.info("💓 HEARTBEAT TRADE MODE ACTIVATED")
@@ -5654,15 +5668,29 @@ class TradingStrategy:
                 logger.info("   Purpose: Verify connectivity and trading functionality")
                 logger.info("   Action: Bot will auto-disable after heartbeat completes")
                 logger.info("=" * 70)
-                self._execute_heartbeat_trade(broker=self.broker)
-                logger.info("=" * 70)
-                logger.info("✅ HEARTBEAT TRADE COMPLETE - BOT SHUTTING DOWN")
-                logger.info("=" * 70)
-                logger.info("   IMPORTANT: Set HEARTBEAT_TRADE=false before restart")
-                logger.info("   This prevents heartbeat from executing again")
-                logger.info("=" * 70)
-                import sys
-                sys.exit(0)  # Graceful shutdown after heartbeat
+                _hb_ok = self._execute_heartbeat_trade(broker=self.broker)
+
+                if _hb_ok:
+                    self._mark_heartbeat_verified()
+                    logger.info("=" * 70)
+                    logger.info("✅ HEARTBEAT TRADE COMPLETE")
+                    logger.info("   Verification marker written — future startup can proceed to LIVE")
+                    logger.info("=" * 70)
+                    if HEARTBEAT_AUTO_EXIT:
+                        logger.info("   HEARTBEAT_AUTO_EXIT=true -> shutting down after verification trade")
+                        import sys
+                        sys.exit(0)  # Graceful shutdown after successful heartbeat
+                    else:
+                        logger.info("   HEARTBEAT_AUTO_EXIT=false -> continuing startup")
+                else:
+                    logger.error("=" * 70)
+                    logger.error("❌ HEARTBEAT TRADE FAILED")
+                    logger.error("=" * 70)
+                    if _heartbeat_required_now:
+                        raise RuntimeError(
+                            "HEARTBEAT_REQUIRED_FIRST_ACTIVATION=true but heartbeat verification failed"
+                        )
+                    logger.warning("Continuing startup because heartbeat is optional in current configuration")
 
             # Initialize independent broker trader for multi-broker support
             try:
@@ -8356,6 +8384,24 @@ class TradingStrategy:
             logger.error(f"   ❤️  Heartbeat trade error: {e}")
             logger.error(f"   {traceback.format_exc()}")
             return False
+
+    def _is_heartbeat_verified(self) -> bool:
+        """Return True when heartbeat verification marker exists."""
+        try:
+            return os.path.exists(HEARTBEAT_MARKER_PATH)
+        except Exception:
+            return False
+
+    def _mark_heartbeat_verified(self) -> None:
+        """Persist heartbeat verification marker after successful heartbeat trade."""
+        try:
+            marker_dir = os.path.dirname(HEARTBEAT_MARKER_PATH) or "."
+            os.makedirs(marker_dir, exist_ok=True)
+            with open(HEARTBEAT_MARKER_PATH, "w", encoding="utf-8") as fh:
+                fh.write(datetime.now(timezone.utc).isoformat())
+            logger.critical("HEARTBEAT VERIFIED: marker created at %s", HEARTBEAT_MARKER_PATH)
+        except Exception as exc:
+            logger.warning("Could not persist heartbeat marker at %s: %s", HEARTBEAT_MARKER_PATH, exc)
 
     def _get_total_capital_snapshot(self, fallback: float = 0.0) -> float:
         """Best-effort authoritative total capital snapshot for safety gates."""

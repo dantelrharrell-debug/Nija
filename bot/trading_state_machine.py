@@ -38,6 +38,24 @@ from pathlib import Path
 logger = logging.getLogger("nija.trading_state_machine")
 
 
+def _env_truthy(name: str, default: str = "false") -> bool:
+    """Return True when an env var is set to a truthy value."""
+    return os.environ.get(name, default).lower().strip() in ("true", "1", "yes", "enabled")
+
+
+def _heartbeat_marker_path() -> str:
+    """Path of persisted heartbeat verification marker."""
+    return os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
+
+
+def _heartbeat_verified() -> bool:
+    """True when the first-run heartbeat verification marker exists."""
+    try:
+        return os.path.exists(_heartbeat_marker_path())
+    except Exception:
+        return False
+
+
 class TradingState(Enum):
     """Trading state enumeration - SINGLE SOURCE OF TRUTH"""
     OFF = "OFF"
@@ -150,12 +168,77 @@ class TradingStateMachine:
         # Try to load persisted state, but NEVER start in LIVE_ACTIVE
         self._load_state()
 
+        # Startup override (operator-intent first):
+        # - DRY_RUN_MODE=true          -> DRY_RUN
+        # - LIVE_CAPITAL_VERIFIED=true and AUTO_ACTIVATE=true
+        #       -> LIVE_ACTIVE (or LIVE_PENDING_CONFIRMATION if HEARTBEAT_TRADE=true)
+        # - LIVE_CAPITAL_VERIFIED=true and AUTO_ACTIVATE=false
+        #       -> LIVE_PENDING_CONFIRMATION (armed, not monitor/OFF)
+        self._apply_startup_state_override()
+
         # Validate state consistency with kill switch
         self._validate_state_consistency()
 
         # Log initialization
         logger.info(f"🔒 Trading State Machine initialized in {self._current_state.value} state")
         logger.info(f"📝 State persistence: {self._state_file}")
+
+    def _apply_startup_state_override(self) -> None:
+        """Apply env-driven startup state so LIVE intent doesn't get stuck in monitor/OFF."""
+        dry_run_mode = _env_truthy("DRY_RUN_MODE")
+        live_verified = _env_truthy("LIVE_CAPITAL_VERIFIED")
+        auto_activate = _env_truthy("AUTO_ACTIVATE")
+        heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
+        force_live = _env_truthy("FORCE_LIVE_TRANSITION")
+        heartbeat_required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
+        heartbeat_ok = _heartbeat_verified()
+
+        with self._lock:
+            if dry_run_mode:
+                self._current_state = TradingState.DRY_RUN
+                self._activation_committed = False
+                self._execution_authority = False
+                self._core_loop_owns_execution = True
+                self._can_dispatch_trades = False
+                logger.critical("[STARTUP STATE OVERRIDE] DRY_RUN_MODE=true -> DRY_RUN")
+                return
+
+            if live_verified and (auto_activate or force_live):
+                if heartbeat_required_first and not heartbeat_ok and not heartbeat_trade:
+                    self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                    self._activation_committed = False
+                    self._execution_authority = False
+                    self._core_loop_owns_execution = True
+                    self._can_dispatch_trades = False
+                    logger.critical(
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: HEARTBEAT_REQUIRED_FIRST_ACTIVATION=true but marker missing and HEARTBEAT_TRADE=false"
+                    )
+                    return
+
+                self._current_state = TradingState.LIVE_ACTIVE
+                self._activation_committed = True
+                self._execution_authority = True
+                self._core_loop_owns_execution = False
+                self._can_dispatch_trades = True
+                if heartbeat_trade:
+                    logger.critical(
+                        "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE + HEARTBEAT_TRADE=true -> FORCE LIVE_ACTIVE (temporary activation override)"
+                    )
+                else:
+                    logger.critical(
+                        "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE=true -> LIVE_ACTIVE"
+                    )
+                return
+
+            if live_verified and not dry_run_mode:
+                self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                self._activation_committed = False
+                self._execution_authority = False
+                self._core_loop_owns_execution = True
+                self._can_dispatch_trades = False
+                logger.critical(
+                    "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_PENDING_CONFIRMATION"
+                )
 
     def _load_state(self):
         """
@@ -472,11 +555,25 @@ class TradingStateMachine:
         # ── ABSOLUTE OVERRIDE: FORCE_TRADE_MODE + LIVE_CAPITAL_VERIFIED ──────
         # When both are set, bypass all gates and force LIVE_ACTIVE immediately.
         _force = (
-            os.environ.get("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
-            or os.environ.get("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("FORCE_LIVE_TRANSITION")
+            or (_env_truthy("AUTO_ACTIVATE") and _env_truthy("HEARTBEAT_TRADE"))
         )
-        _lcv_quick = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes")
-        if _force and _lcv_quick:
+        _lcv_quick = _env_truthy("LIVE_CAPITAL_VERIFIED")
+        _dry_run_quick = _env_truthy("DRY_RUN_MODE")
+        _heartbeat_required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
+        _heartbeat_ok = _heartbeat_verified()
+        _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
+
+        if _heartbeat_required_first and not _heartbeat_ok and not _heartbeat_trade:
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_REQUIRED_FIRST_ACTIVATION marker_missing path=%s",
+                _heartbeat_marker_path(),
+            )
+            return False
+
+        if _force and _lcv_quick and not _dry_run_quick:
             with self._lock:
                 if not self._activation_committed:
                     self._current_state = TradingState.LIVE_ACTIVE
@@ -485,7 +582,7 @@ class TradingStateMachine:
                     self._core_loop_owns_execution = False
                     self._can_dispatch_trades = True
                     logger.critical(
-                        "[AUTO_ACTIVATE] FORCE_TRADE_MODE+LIVE_CAPITAL_VERIFIED — "
+                        "[AUTO_ACTIVATE] FORCE LIVE PATH (FORCE/AUTO_ACTIVATE+HEARTBEAT)+LIVE_CAPITAL_VERIFIED — "
                         "all gates bypassed, state forced to LIVE_ACTIVE"
                     )
             return True
