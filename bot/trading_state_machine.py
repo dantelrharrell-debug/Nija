@@ -336,6 +336,14 @@ class TradingStateMachine:
             logger.error("[FORCE_ACTIVATE FAILED] reason=%s error=%s", reason, exc)
             return False
 
+    def force_activate_live(self, reason: str = "forced bypass") -> bool:
+        """Compatibility wrapper for explicit forced activation requests.
+
+        This method exists to support direct "force live" probes in runtime
+        diagnostics and minimal repro flows.
+        """
+        return self.activate_live_trading(reason=reason)
+
     def transition_to(self, new_state: TradingState, reason: str = "") -> bool:
         """
         Attempt to transition to a new state.
@@ -762,6 +770,8 @@ class TradingStateMachine:
         This method is retained only to avoid breaking existing call sites
         that have not yet been updated.
         """
+        logger.critical("ENTER maybe_auto_activate")
+
         # ── Entry diagnostic — snapshot every gate variable before delegating ──
         kill_switch = False
         try:
@@ -846,6 +856,12 @@ class TradingStateMachine:
             brokers_ready,
         )
         _activation_result = self.commit_activation(cycle_capital=cycle_capital)
+        if not _activation_result:
+            logger.critical("❌ ACTIVATION BLOCKED: conditions not met")
+        else:
+            logger.critical("✅ ACTIVATION CONDITIONS MET")
+            logger.critical("🔥 ACTIVATION EXECUTED")
+
         # Hard confirmation log — always emitted so activation state is never silent.
         logger.critical(
             "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",

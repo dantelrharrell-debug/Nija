@@ -1967,6 +1967,34 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 # FIX 4: emit every cycle so a silent dead-bot is immediately visible.
                 logger.critical("🟢 LIVE LOOP TICK")
 
+                _live_now = False
+                _sm_loop = None
+                try:
+                    if _SM_AVAILABLE and _get_state_machine is not None:
+                        _sm_loop = _get_state_machine()
+                        _live_now = bool(_sm_loop.is_live_trading_active())
+                except Exception as _sm_loop_err:
+                    logger.debug("CORE LOOP live probe failed: %s", _sm_loop_err)
+                logger.critical("CORE LOOP TICK | live=%s", _live_now)
+
+                if _sm_loop is not None and not _live_now:
+                    logger.critical("⚡ ATTEMPTING AUTO-ACTIVATION")
+                    try:
+                        _sm_loop.maybe_auto_activate(cycle_capital=_current_cycle_capital)
+                    except Exception as _auto_act_err:
+                        logger.warning("Core loop maybe_auto_activate failed: %s", _auto_act_err)
+
+                    # Temporary hard bypass for runtime proof. Enable explicitly via env.
+                    if os.getenv("NIJA_FORCE_LIVE_BYPASS", "false").lower() in (
+                        "true", "1", "yes", "enabled"
+                    ):
+                        try:
+                            if hasattr(_sm_loop, "force_activate_live"):
+                                _sm_loop.force_activate_live(reason="core loop hard bypass")
+                                logger.critical("🔥 FORCED LIVE ACTIVATION")
+                        except Exception as _force_live_err:
+                            logger.warning("force_activate_live failed: %s", _force_live_err)
+
                 # FIX 5: assert we are executing on the correct named thread.
                 assert threading.current_thread().name == "TradingLoop", (
                     f"run_trading_loop executing on wrong thread: "
