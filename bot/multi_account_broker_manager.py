@@ -3832,6 +3832,7 @@ class MultiAccountBrokerManager:
         raw_balance_response = self.get_aggregated_balance_breakdown(
             include_all_subaccounts=include_all_subaccounts
         )
+        logger.critical("DEBUG BALANCES: %s", raw_balance_response)
         print("DEBUG BALANCES:", raw_balance_response)
         return float(raw_balance_response.get("total_balance", 0.0) or 0.0)
 
@@ -4056,6 +4057,7 @@ class MultiAccountBrokerManager:
     ) -> Tuple[bool, Dict[str, float], str]:
         """Return whether a connected user account has enough usable capital to trade."""
         raw_balance_response = broker.get_account_balance()
+        logger.critical("DEBUG BALANCES: %s", raw_balance_response)
         print("DEBUG BALANCES:", raw_balance_response)
         raw_balance = raw_balance_response
         usable_balance = self._normalize_balance_value(raw_balance)

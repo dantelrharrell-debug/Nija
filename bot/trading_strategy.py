@@ -4858,6 +4858,7 @@ class TradingStrategy:
                 raw_balance_response = self.multi_account_manager.get_aggregated_balance_breakdown(
                     include_all_subaccounts=True
                 )
+                logger.critical("DEBUG BALANCES: %s", raw_balance_response)
                 print("DEBUG BALANCES:", raw_balance_response)
                 platform_balance = self.multi_account_manager.get_platform_total_balance(
                     include_all_subaccounts=True
@@ -6928,6 +6929,7 @@ class TradingStrategy:
                     raw_balance_response = self.multi_account_manager.get_aggregated_balance_breakdown(
                         include_all_subaccounts=True
                     )
+                    logger.critical("DEBUG BALANCES: %s", raw_balance_response)
                     print("DEBUG BALANCES:", raw_balance_response)
                     total_capital = self.multi_account_manager.get_platform_total_balance(
                         include_all_subaccounts=True
