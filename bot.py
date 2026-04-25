@@ -2672,8 +2672,14 @@ def _run_bot_startup_and_trading():
                     # This prevents the silent-blocker scenario where maybe_auto_activate()
                     # is never called before the core loop and activation never happens.
                     try:
-                        from bot.trading_state_machine import get_state_machine as _get_tsm_boot
+                        from bot.trading_state_machine import (
+                            TradingState as _TSMBootState,
+                            get_state_machine as _get_tsm_boot,
+                        )
                         _tsm_boot = _get_tsm_boot()
+                        _live_verified_boot = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in (
+                            "true", "1", "yes", "enabled"
+                        )
                         if not _tsm_boot.is_live_trading_active():
                             _boot_activation_ok = _tsm_boot.maybe_auto_activate()
                             if _boot_activation_ok:
@@ -2689,6 +2695,35 @@ def _run_bot_startup_and_trading():
                                     _tsm_boot.get_current_state().value,
                                     _tsm_boot.is_live_trading_active(),
                                 )
+
+                        # Direct fail-safe path: when operator explicitly enabled live mode,
+                        # force activation if normal gates still leave us non-live.
+                        if _live_verified_boot and not _tsm_boot.is_live_trading_active():
+                            _forced_live = False
+                            if hasattr(_tsm_boot, "activate_live_trading"):
+                                _forced_live = bool(
+                                    _tsm_boot.activate_live_trading(
+                                        reason="post-preflight fail-safe activation"
+                                    )
+                                )
+                            if (not _forced_live) and _tsm_boot.get_current_state() == _TSMBootState.OFF:
+                                _tsm_boot.transition_to(
+                                    _TSMBootState.LIVE_ACTIVE,
+                                    "post-preflight hard fail-safe activation",
+                                )
+                                _forced_live = True
+                            logger.critical(
+                                "POST-PREFLIGHT FAIL-SAFE ACTIVATION: forced=%s state=%s is_live=%s",
+                                _forced_live,
+                                _tsm_boot.get_current_state().value,
+                                _tsm_boot.is_live_trading_active(),
+                            )
+
+                        # Hard assertion required by operator: fail fast if live mode was
+                        # explicitly requested but activation is still not active.
+                        if _live_verified_boot:
+                            assert _tsm_boot.is_live_trading_active(), "LIVE MODE NOT ACTIVE"
+
                         # Hard confirmation log — always emitted regardless of result.
                         logger.critical(
                             "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",

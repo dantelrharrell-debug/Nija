@@ -1791,6 +1791,26 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     TRADING_ENGINE_READY.wait()
     logger.critical("🟢 START SIGNAL RECEIVED — ENTERING LIVE LOOP")
 
+    # Supervisor-mode hard gate: only block execution when supervisor mode is
+    # enabled AND live trading is not active.
+    _supervisor_mode = os.getenv("SUPERVISOR_MODE", "false").lower() in (
+        "true", "1", "yes", "enabled"
+    )
+    if _supervisor_mode:
+        _live_active_now = False
+        try:
+            if _SM_AVAILABLE and _get_state_machine is not None:
+                _live_active_now = bool(_get_state_machine().is_live_trading_active())
+        except Exception as _sm_probe_err:
+            logger.debug("Supervisor mode live-state probe failed: %s", _sm_probe_err)
+
+        if not _live_active_now:
+            logger.critical(
+                "SUPERVISOR_MODE enabled while live mode is inactive — "
+                "blocking run_trading_loop startup"
+            )
+            return
+
     # ── Strategy existence guard ────────────────────────────────────────────
     # Must be checked BEFORE acquiring _loop_guard / setting _loop_running so
     # that a None strategy never permanently blocks future valid start attempts.
