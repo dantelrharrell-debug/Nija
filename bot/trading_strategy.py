@@ -3034,25 +3034,25 @@ MIN_BALANCE_TO_TRADE_USD = 1.0  # Minimum account balance to allow trading ($1 a
 MIN_DEPLOYABLE_BALANCE = float(os.getenv("NIJA_MIN_DEPLOYABLE_BALANCE", "25.0"))
 
 # ── LOW_CAPITAL_MODE ─────────────────────────────────────────────────────────
-# When account balance < LOW_CAPITAL_THRESHOLD (default = MIN_DEPLOYABLE_BALANCE
-# = $25), the bot switches to a micro-scalping mode instead of shutting down:
+# When account balance < LOW_CAPITAL_THRESHOLD (default = BALANCE_THRESHOLD_MICRO
+# = $50), the bot switches to a micro-scalping mode instead of shutting down:
 #   • Reduces position size to LOW_CAPITAL_POSITION_PCT of balance
 #   • Limits to 1 open position at most
 #   • Raises minimum signal confidence to LOW_CAPITAL_MIN_CONFIDENCE
 #   • Uses PROFIT_TARGETS_LOW_CAPITAL (higher targets to beat fees)
 # Configurable via env vars for live tuning without code changes.
 LOW_CAPITAL_THRESHOLD: float = float(
-    os.getenv("NIJA_LOW_CAPITAL_THRESHOLD", str(MIN_DEPLOYABLE_BALANCE))
+    os.getenv("NIJA_LOW_CAPITAL_THRESHOLD", str(BALANCE_THRESHOLD_MICRO))
 )
 # Maximum position size as a fraction of balance in LOW_CAPITAL_MODE.
-# 30% of a $20 account → $6 position (above $5 dust floor).
+# 20% of a $20 account → $4 position (designed for survival pacing).
 LOW_CAPITAL_POSITION_PCT: float = float(
-    os.getenv("NIJA_LOW_CAPITAL_POSITION_PCT", "0.30")
+    os.getenv("NIJA_LOW_CAPITAL_POSITION_PCT", "0.20")
 )
 # Minimum AI confidence score required to open a trade in LOW_CAPITAL_MODE.
 # Raised vs the normal SCALP tier (0.35) to filter for only high-quality entries.
 LOW_CAPITAL_MIN_CONFIDENCE: float = float(
-    os.getenv("NIJA_LOW_CAPITAL_MIN_CONFIDENCE", "0.35")
+    os.getenv("NIJA_LOW_CAPITAL_MIN_CONFIDENCE", "0.45")
 )
 # Hard cap on concurrent open positions when LOW_CAPITAL_MODE is active.
 LOW_CAPITAL_MAX_POSITIONS: int = 1

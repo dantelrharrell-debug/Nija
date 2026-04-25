@@ -26,6 +26,18 @@ import subprocess
 os.environ["HF_SCALP_MODE"] = "0"
 os.environ["HF_SCALPING_MODE"] = "0"
 
+# ── Operational profile: low-capital survival mode ($20-$50) ───────────────
+# Enabled by default for now; set NIJA_LOW_CAPITAL_SURVIVAL_MODE=0 to opt out.
+if os.getenv("NIJA_LOW_CAPITAL_SURVIVAL_MODE", "1").strip().lower() in ("1", "true", "yes", "on"):
+    os.environ.setdefault("NIJA_LOW_CAPITAL_THRESHOLD", "50")
+    os.environ.setdefault("NIJA_LOW_CAPITAL_POSITION_PCT", "0.20")
+    os.environ.setdefault("NIJA_LOW_CAPITAL_MIN_CONFIDENCE", "0.45")
+    os.environ.setdefault("COINBASE_OPERATIONAL_MIN_NOTIONAL_USD", "3.0")
+    os.environ.setdefault("COINBASE_MAX_POSITION_PCT", "0.20")
+    os.environ.setdefault("MIN_NOTIONAL_USD", "3.0")
+    os.environ.setdefault("COINBASE_MIN_ORDER_USD", "1.0")
+    os.environ.setdefault("COINBASE_MIN_ORDER", "1.0")
+
 # ── Bootstrap Guard — prevent duplicate instances ──────────────────────────
 # Hard-stops if a second bot instance attempts to start.
 try:

@@ -16,6 +16,7 @@ This module provides broker-specific adapters that enforce:
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
@@ -142,8 +143,15 @@ class CoinbaseAdapter(BrokerAdapter):
     # OPERATIONAL MINIMUM: $10 — Coinbase has no hard USD floor; $10 ensures
     # fee-positive trades (1.20% round-trip on $10 = $0.12 fee cost).
     # Micro-accounts ($50–$100) can trade comfortably at this level.
-    MIN_NOTIONAL_DEFAULT = 10.0  # $10 minimum for all pairs (micro-account compatible)
-    MIN_NOTIONAL_BTC = 10.0  # $10 minimum for BTC pairs (same as default)
+    MIN_NOTIONAL_DEFAULT = float(
+        os.getenv(
+            "COINBASE_OPERATIONAL_MIN_NOTIONAL_USD",
+            os.getenv("COINBASE_MIN_ORDER_USD", os.getenv("COINBASE_MIN_ORDER", "10.0")),
+        )
+    )
+    MIN_NOTIONAL_BTC = float(
+        os.getenv("COINBASE_BTC_MIN_NOTIONAL_USD", str(MIN_NOTIONAL_DEFAULT))
+    )
 
     # Coinbase fee structure
     MAKER_FEE_PCT = 0.60  # 0.6% maker fee
