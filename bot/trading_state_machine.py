@@ -812,6 +812,21 @@ class TradingStateMachine:
             cycle_capital.get("aggregation_normalized", True)
         ) if cycle_capital else True
 
+        # ── Gate visibility: log ALL gate status before commit ──────────────────
+        gate_checks = {
+            "kill_switch": not kill_switch,  # False means gate passed (switch OFF)
+            "LIVE_CAPITAL_VERIFIED": live_verified,
+            "ca_hydrated": CA_READY,
+            "execution_healthy": EXECUTION_PIPELINE_HEALTHY,
+            "first_snap_accepted": _first_snap_accepted,
+            "brokers_ready": brokers_ready,
+        }
+        for gate_name, gate_status in gate_checks.items():
+            if gate_status is False:
+                logger.critical(f"❌ GATE BLOCKED: {gate_name}=False")
+            elif gate_status is None:
+                logger.warning(f"⚠️  GATE UNKNOWN: {gate_name}=None")
+
         logger.critical(
             "[AUTO_ACTIVATE ENTRY] kill_switch=%s "
             "LIVE_CAPITAL_VERIFIED=%s "

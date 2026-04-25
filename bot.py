@@ -856,6 +856,21 @@ def run_bootstrap() -> None:
 
     _IR.run_once("MABM", _init_mabm)
 
+    # ⚡ FAST VERIFICATION (Step 2: Don't skip) — Print activation state
+    try:
+        from bot.trading_state_machine import get_state_machine as _get_tsm_verify
+        _tsm_verify = _get_tsm_verify()
+        _verify_state = _tsm_verify.get_current_state().value
+        _verify_live = _tsm_verify.is_live_trading_active()
+        logger.critical(
+            "⚡ FAST VERIFICATION: state=%s live=%s %s",
+            _verify_state,
+            _verify_live,
+            "✅ (trading active)" if _verify_live else "⚠️ (NOT LIVE — CHECK GATES)",
+        )
+    except Exception as _verify_err:
+        logger.warning("[run_bootstrap] Fast verification failed: %s", _verify_err)
+
     # ── 4. Execution layer ownership (capital FSM bootstrap) ────────────────
     _IR.run_once("EXECUTION_LAYER", initialize_execution_layer)
 

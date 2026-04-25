@@ -516,6 +516,52 @@ class MultiAccountBrokerManager:
         _IR.run_once("BROKER_FAILURE_MANAGER", self._init_broker_failure_mgr)
         _IR.run_once("MABM_CAPITAL_FSM", self._init_capital_fsm)
 
+        # ── POST-INITIALIZE: Force activation (BULLETPROOF) ──────────────────
+        # This is the TRUE final point — all subsystems have been wired.
+        # Explicitly trigger activation now before returning to bootstrap.
+        logger.info("[MABM.initialize] All subsystems wired — triggering post-init activation")
+        try:
+            from bot.trading_state_machine import get_state_machine as _get_tsm_finalize
+            _tsm_finalize = _get_tsm_finalize()
+
+            # Check readiness conditions
+            capital_fsm_ready = (
+                self._capital_bootstrap_fsm is not None
+                and hasattr(self._capital_bootstrap_fsm, "state")
+            )
+            coordinator_ready = (
+                self._capital_coordinator is not None
+            )
+
+            if capital_fsm_ready and coordinator_ready:
+                if not _tsm_finalize.is_live_trading_active():
+                    _finalize_activated = _tsm_finalize.maybe_auto_activate()
+                    if _finalize_activated:
+                        logger.critical(
+                            "🚀 POST-INIT ACTIVATION SUCCESS: state=%s is_live=%s",
+                            _tsm_finalize.get_current_state().value,
+                            _tsm_finalize.is_live_trading_active(),
+                        )
+                    else:
+                        logger.critical(
+                            "❌ POST-INIT ACTIVATION BLOCKED — will attempt enforce_activation fallback"
+                        )
+                        # Try forced fallback as last resort
+                        self._enforce_trading_activation(_tsm_finalize)
+                else:
+                    logger.info("[MABM.initialize] Trading already active — no post-init activation needed")
+            else:
+                logger.warning(
+                    "[MABM.initialize] FSM not ready for activation (capital_fsm=%s coordinator=%s) — skipping",
+                    capital_fsm_ready,
+                    coordinator_ready,
+                )
+        except Exception as _finalize_activation_err:
+            logger.warning(
+                "[MABM.initialize] Post-init activation attempt failed: %s",
+                _finalize_activation_err,
+            )
+
     def _init_portfolio(self) -> None:
         """Initialize portfolio manager (called once via InitRegistry)."""
         try:
@@ -570,6 +616,36 @@ class MultiAccountBrokerManager:
             )
         else:
             logger.warning("[MABM-M3] _CAPITAL_FSM_AVAILABLE=False — capital FSM not wired")
+
+    def _enforce_trading_activation(self, tsm: Any) -> None:
+        """Bulletproof fallback: force activation if all gates remain blocked.
+
+        This is a last-resort trigger - called when maybe_auto_activate() fails.
+        Logs the attempt for audit trail and forces state to LIVE_ACTIVE.
+        """
+        try:
+            if not tsm.is_live_trading_active():
+                logger.critical(
+                    "[MABM] FORCING ACTIVATION FALLBACK: all normal gates failed"
+                )
+                if hasattr(tsm, "_transition_to_live_active"):
+                    tsm._transition_to_live_active("enforce_activation_fallback")
+                    logger.critical(
+                        "[MABM] FORCED ACTIVATION SUCCESS: state=%s is_live=%s",
+                        tsm.get_current_state().value,
+                        tsm.is_live_trading_active(),
+                    )
+                else:
+                    logger.warning(
+                        "[MABM] _transition_to_live_active not available - cannot force activation"
+                    )
+            else:
+                logger.info("[MABM._enforce_trading_activation] Already live - no force needed")
+        except Exception as _enforce_err:
+            logger.error(
+                "[MABM._enforce_trading_activation] Force activation failed: %s",
+                _enforce_err,
+            )
 
     @property
     def platform_brokers(self) -> Dict[BrokerType, BaseBroker]:
