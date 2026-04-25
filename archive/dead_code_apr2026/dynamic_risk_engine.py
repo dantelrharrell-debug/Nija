@@ -35,7 +35,7 @@ Usage::
     )
 
     if result.can_trade:
-        place_order(size_usd=result.position_size_usd)
+        ExecutionEngine.submit(intent)
 
     # Record every completed trade to keep Kelly estimates fresh:
     engine.record_trade(win=True, return_pct=0.022, loss_pct=0.0)

@@ -129,7 +129,7 @@ Usage
         continue
 
     # decision.final_position_size already has the snowball multiplier applied
-    place_order(size_usd=decision.final_position_size)
+    ExecutionEngine.submit(intent)
 
     # Check whether reallocation is warranted for a stagnant account:
     reco = brain.check_reallocation("coinbase", ["coinbase", "kraken"],

@@ -69,6 +69,7 @@ import os
 import random
 import threading
 import time
+from decimal import Decimal
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -106,6 +107,7 @@ class PipelineRequest:
     available_balance_usd: Optional[float] = None
     price_hint_usd: Optional[float] = None
     account_id: str = "default"
+    validated: bool = False
 
 
 @dataclass
@@ -232,6 +234,8 @@ class ExecutionPipeline:
         t_start = time.monotonic()
         reservation_id: Optional[str] = None
         effective_request = request
+        order_validated = False
+        compiled = None
 
         if self._ecel is None and self._ecel_required:
             error = "ECEL unavailable: strict execution gate blocks order dispatch"
@@ -271,7 +275,12 @@ class ExecutionPipeline:
                     )
 
                 reservation_id = compiled.reservation_id
-                effective_request = replace(request, size_usd=compiled.compiled_notional_usd)
+                effective_request = replace(
+                    request,
+                    size_usd=compiled.compiled_notional_usd,
+                    validated=True,
+                )
+                order_validated = True
             except Exception as exc:
                 msg = f"ECEL compile exception: {exc}"
                 if self._ecel_fail_closed or self._ecel_required:
@@ -285,6 +294,12 @@ class ExecutionPipeline:
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
                 logger.warning("ExecutionPipeline: %s; using raw request", msg)
+
+        if self._ecel_required:
+            assert order_validated is True, "FATAL: Order bypassed ECEL"
+            assert effective_request.validated is True, "FATAL: Order bypassed ECEL"
+
+        self._log_ecel_final_order(request=request, compiled=compiled)
 
         # ── Priority-2: Trade Throttler ──────────────────────────────────
         if self._throttler is not None:
@@ -314,6 +329,9 @@ class ExecutionPipeline:
         with execution_authority_scope():
             result = self._dispatch(effective_request, t_start)
 
+        if not result.success and not result.throttled:
+            self._on_order_rejected(result.error or "unknown exchange rejection")
+
         if reservation_id and self._ecel is not None and not result.success:
             self._ecel.release_reservation(reservation_id)
 
@@ -325,6 +343,68 @@ class ExecutionPipeline:
                 logger.warning("ExecutionPipeline: throttler.record_trade failed: %s", exc)
 
         return result
+
+    def _on_order_rejected(self, error: str) -> None:
+        logger.critical("🚨 EXCHANGE REJECT: %s", error)
+        raise SystemError("ECEL FAILURE — INVALID ORDER ESCAPED")
+
+    def _log_ecel_final_order(self, request: PipelineRequest, compiled: Any) -> None:
+        if compiled is None or not getattr(compiled, "accepted", False):
+            return
+
+        rule = getattr(compiled, "rule", None)
+        if rule is None:
+            return
+
+        size = float(getattr(compiled, "compiled_base_size", 0.0) or 0.0)
+        price = float(getattr(compiled, "compiled_price_usd", 0.0) or 0.0)
+        notional = float(getattr(compiled, "compiled_notional_usd", 0.0) or 0.0)
+        balance = float(request.available_balance_usd or 0.0)
+
+        step = float(getattr(rule, "base_step_size", 0.0) or 0.0)
+        min_qty = float(getattr(rule, "min_base_size", 0.0) or 0.0)
+        min_notional = float(getattr(rule, "min_notional_usd", 0.0) or 0.0)
+
+        step_valid = True
+        if step > 0:
+            step_valid = (Decimal(str(size)) % Decimal(str(step))) == Decimal("0")
+
+        min_qty_valid = size >= min_qty
+        notional_valid = notional >= min_notional
+        funds_valid = True if request.available_balance_usd is None else notional <= balance
+
+        logger.critical(
+            "\n🧠 ECEL FINAL ORDER\n"
+            "Symbol: %s\n"
+            "Side: %s\n"
+            "Price: %s\n"
+            "Size: %s\n"
+            "Notional: %s\n\n"
+            "Constraints:\n"
+            "  min_qty=%s\n"
+            "  step_size=%s\n"
+            "  min_notional=%s\n\n"
+            "Balance:\n"
+            "  available=%s\n\n"
+            "Validation:\n"
+            "  step_valid=%s\n"
+            "  min_qty_valid=%s\n"
+            "  notional_valid=%s\n"
+            "  funds_valid=%s\n",
+            request.symbol,
+            request.side,
+            price,
+            size,
+            notional,
+            min_qty,
+            step,
+            min_notional,
+            request.available_balance_usd,
+            step_valid,
+            min_qty_valid,
+            notional_valid,
+            funds_valid,
+        )
 
     def record_trade(self, symbol: str = "") -> None:
         """Manually register a trade with the throttler.
@@ -384,6 +464,9 @@ class ExecutionPipeline:
 
     def _dispatch(self, request: PipelineRequest, t_start: float) -> PipelineResult:
         """Try MultiBrokerExecutionRouter, then fall back to ExecutionRouter."""
+
+        if self._ecel_required:
+            assert request.validated is True, "FATAL: Order bypassed ECEL"
 
         # --- MultiBrokerExecutionRouter (preferred for multi-venue) ---
         if self._multi_router is not None:

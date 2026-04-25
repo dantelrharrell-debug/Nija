@@ -547,7 +547,7 @@ def _reject_if_unauthorized_order_submit(
         "Execution authority violation: broker order submission must originate "
         "from ExecutionPipeline"
     )
-    logger.error(
+    logger.critical(
         "🔒 %s | broker=%s symbol=%s side=%s qty=%s",
         msg,
         broker_name,
@@ -555,14 +555,7 @@ def _reject_if_unauthorized_order_submit(
         side,
         quantity,
     )
-    return {
-        "status": "error",
-        "error": "EXECUTION_AUTHORITY_REQUIRED",
-        "message": msg,
-        "broker": broker_name,
-        "symbol": symbol,
-        "side": side,
-    }
+    raise RuntimeError("FATAL: Order bypassed ECEL")
 
 # ── Optional: entry price store (local truth for entry prices) ─────────────
 try:

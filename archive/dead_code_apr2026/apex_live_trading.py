@@ -148,11 +148,7 @@ class ApexLiveTrader:
         """
         try:
             # Place order
-            result = self.broker_manager.place_order(
-                symbol=symbol,
-                side='buy' if analysis['side'] == 'long' else 'sell',
-                quantity=analysis['position_size_usd']
-            )
+            result = ExecutionEngine.submit(intent)
 
             if result['status'] == 'filled' or result['status'] == 'submitted':
                 # Track position
@@ -343,11 +339,7 @@ class ApexLiveTrader:
             exit_size = position['size_usd'] * exit_percentage
 
             # Place order
-            result = self.broker_manager.place_order(
-                symbol=symbol,
-                side='sell' if position['side'] == 'long' else 'buy',
-                quantity=exit_size
-            )
+            result = ExecutionEngine.submit(intent)
 
             if result['status'] == 'filled' or result['status'] == 'submitted':
                 logger.info(f"✅ Closed {exit_percentage*100:.0f}% of {symbol} position")
