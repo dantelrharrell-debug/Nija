@@ -2641,6 +2641,41 @@ def _run_bot_startup_and_trading():
                             "[Bootstrap] Capital INIT_COMPLETE transition failed: %s",
                             _cap_init_complete_err,
                         )
+
+                    # ── POST-INIT_COMPLETE: Force activation attempt ────────────────────
+                    # Explicitly trigger activation now that:
+                    #   • bootstrap is complete (INIT_COMPLETE transitioned)
+                    #   • capital authority has been initialized (broker connections done)
+                    #   • nonce readiness is owned by KrakenStartupFSM.mark_nonce_ready()
+                    # This prevents the silent-blocker scenario where maybe_auto_activate()
+                    # is never called before the core loop and activation never happens.
+                    try:
+                        from bot.trading_state_machine import get_state_machine as _get_tsm_boot
+                        _tsm_boot = _get_tsm_boot()
+                        if not _tsm_boot.is_live_trading_active():
+                            _boot_activation_ok = _tsm_boot.maybe_auto_activate()
+                            if _boot_activation_ok:
+                                logger.critical(
+                                    "🚀 AUTO-ACTIVATION SUCCESS: state=%s is_live=%s",
+                                    _tsm_boot.get_current_state().value,
+                                    _tsm_boot.is_live_trading_active(),
+                                )
+                            else:
+                                logger.critical(
+                                    "❌ AUTO-ACTIVATION FAILED — CHECK GATES "
+                                    "(state=%s is_live=%s)",
+                                    _tsm_boot.get_current_state().value,
+                                    _tsm_boot.is_live_trading_active(),
+                                )
+                        # Hard confirmation log — always emitted regardless of result.
+                        logger.critical(
+                            "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
+                            _tsm_boot.get_current_state().value,
+                            _tsm_boot.is_live_trading_active(),
+                        )
+                    except Exception as _boot_activation_err:
+                        logger.warning("[Bootstrap] post-INIT_COMPLETE activation attempt failed: %s", _boot_activation_err)
+
                     logger.critical("PREFLIGHT: KRAKEN SESSION INIT END")
                     logger.info(
                         "✅ [bootstrap] Broker connections complete — handing off to TradingStrategy"

@@ -830,7 +830,14 @@ class TradingStateMachine:
             _first_snap_accepted,
             brokers_ready,
         )
-        return self.commit_activation(cycle_capital=cycle_capital)
+        _activation_result = self.commit_activation(cycle_capital=cycle_capital)
+        # Hard confirmation log — always emitted so activation state is never silent.
+        logger.critical(
+            "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
+            self.get_current_state().value,
+            self.is_live_trading_active(),
+        )
+        return _activation_result
 
 
     def get_state_history(self, limit: int = 10) -> list:
