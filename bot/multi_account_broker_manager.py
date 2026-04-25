@@ -161,6 +161,8 @@ ACCOUNT_USABLE_BALANCE_MIN = float(os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_MIN", 
 ACCOUNT_USABLE_BALANCE_RECOMMENDED = float(
     os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_RECOMMENDED", "100")
 )
+BALANCE_MODE = os.getenv("BALANCE_MODE", "AGGREGATED").strip().upper()
+ACCOUNT_MODE_SETTING = os.getenv("ACCOUNT_MODE", "global_ledger").strip().lower()
 
 # Import Execution Risk Firewall for per-venue API-call health scoring
 try:
@@ -3743,6 +3745,96 @@ class MultiAccountBrokerManager:
                     total += broker.get_account_balance()
         return total
 
+    def get_aggregated_balance_breakdown(self, include_all_subaccounts: bool = True) -> Dict[str, Any]:
+        """Return cross-broker aggregated balance details for diagnostics and risk gates."""
+        breakdown: Dict[str, Any] = {
+            "mode": BALANCE_MODE,
+            "account_mode": ACCOUNT_MODE_SETTING,
+            "include_all_subaccounts": include_all_subaccounts,
+            "kraken_platform": 0.0,
+            "kraken_users": 0.0,
+            "coinbase": 0.0,
+            "alpaca": 0.0,
+            "other": 0.0,
+            "platform_total": 0.0,
+            "user_total": 0.0,
+            "total_balance": 0.0,
+            "raw_balance_response": [],
+        }
+
+        def _add_bucket(broker_type: BrokerType, amount: float, is_user: bool = False) -> None:
+            if broker_type == BrokerType.KRAKEN:
+                if is_user:
+                    breakdown["kraken_users"] += amount
+                else:
+                    breakdown["kraken_platform"] += amount
+            elif broker_type == BrokerType.COINBASE:
+                breakdown["coinbase"] += amount
+            elif broker_type == BrokerType.ALPACA:
+                breakdown["alpaca"] += amount
+            else:
+                breakdown["other"] += amount
+
+        for broker_type, broker in self._platform_brokers.items():
+            if not broker.connected:
+                continue
+            try:
+                if broker_type == BrokerType.KRAKEN:
+                    balance = self._get_cached_balance('platform', 'platform', broker_type, broker)
+                else:
+                    balance = float(broker.get_account_balance() or 0.0)
+            except Exception as exc:
+                logger.debug("Failed platform balance for %s: %s", broker_type.value, exc)
+                balance = 0.0
+
+            breakdown["platform_total"] += balance
+            _add_bucket(broker_type, balance, is_user=False)
+            breakdown["raw_balance_response"].append({
+                "scope": "platform",
+                "broker": broker_type.value,
+                "balance": balance,
+            })
+
+        if include_all_subaccounts:
+            for user_id, user_broker_dict in self.user_brokers.items():
+                for broker_type, broker in user_broker_dict.items():
+                    if not broker.connected:
+                        continue
+                    try:
+                        if broker_type == BrokerType.KRAKEN:
+                            balance = self._get_cached_balance('user', user_id, broker_type, broker)
+                        else:
+                            balance = float(broker.get_account_balance() or 0.0)
+                    except Exception as exc:
+                        logger.debug("Failed user balance for %s/%s: %s", user_id, broker_type.value, exc)
+                        balance = 0.0
+
+                    breakdown["user_total"] += balance
+                    _add_bucket(broker_type, balance, is_user=True)
+                    breakdown["raw_balance_response"].append({
+                        "scope": "user",
+                        "user_id": user_id,
+                        "broker": broker_type.value,
+                        "balance": balance,
+                    })
+
+        breakdown["total_balance"] = breakdown["platform_total"] + (
+            breakdown["user_total"] if include_all_subaccounts else 0.0
+        )
+        return breakdown
+
+    def get_platform_total_balance(self, include_all_subaccounts: bool = True) -> float:
+        """Get total balance using aggregated ledger mode across platform (+ optional subaccounts)."""
+        mode_is_aggregated = BALANCE_MODE == "AGGREGATED" or ACCOUNT_MODE_SETTING == "global_ledger"
+        if not include_all_subaccounts and not mode_is_aggregated:
+            return self.get_platform_balance()
+
+        raw_balance_response = self.get_aggregated_balance_breakdown(
+            include_all_subaccounts=include_all_subaccounts
+        )
+        print("DEBUG BALANCES:", raw_balance_response)
+        return float(raw_balance_response.get("total_balance", 0.0) or 0.0)
+
     def get_user_balance(self, user_id: str, broker_type: Optional[BrokerType] = None) -> float:
         """
         Get user account balance with isolation guarantee.
@@ -3963,7 +4055,9 @@ class MultiAccountBrokerManager:
         broker: BaseBroker,
     ) -> Tuple[bool, Dict[str, float], str]:
         """Return whether a connected user account has enough usable capital to trade."""
-        raw_balance = broker.get_account_balance()
+        raw_balance_response = broker.get_account_balance()
+        print("DEBUG BALANCES:", raw_balance_response)
+        raw_balance = raw_balance_response
         usable_balance = self._normalize_balance_value(raw_balance)
         total_equity = usable_balance
         position_count = 0

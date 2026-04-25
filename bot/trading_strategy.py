@@ -4854,8 +4854,14 @@ class TradingStrategy:
                 # FIX #1: Calculate LIVE multi-broker capital
                 # Total Capital = Coinbase (available, if >= min) + Kraken PLATFORM + Optional user balances
 
-                # Get master balance from broker_manager (sums all connected master brokers)
-                platform_balance = self.broker_manager.get_total_balance()
+                # FIX: Force aggregated-ledger balance view across platform + subaccounts.
+                raw_balance_response = self.multi_account_manager.get_aggregated_balance_breakdown(
+                    include_all_subaccounts=True
+                )
+                print("DEBUG BALANCES:", raw_balance_response)
+                platform_balance = self.multi_account_manager.get_platform_total_balance(
+                    include_all_subaccounts=True
+                )
 
                 # ── Startup balance seed ─────────────────────────────────────
                 # get_total_balance() calls broker.get_account_balance() but does
@@ -4882,54 +4888,12 @@ class TradingStrategy:
                                 _seed_bt.value, _seed_err,
                             )
 
-                # Break down master balance by broker for transparency
-                coinbase_balance = 0.0
-                kraken_balance = 0.0
-                other_balance = 0.0
-
-                for broker_type, broker in self.multi_account_manager.platform_brokers.items():
-                    if broker and broker.connected:
-                        try:
-                            _bk = _broker_key(broker)
-                            balance = (
-                                self.portfolio_manager.get_balance(_bk)
-                                if self.portfolio_manager else 0.0
-                            ) or BalanceService.get(_bk)
-                            # Direct API fallback: if both cached stores returned 0 for a
-                            # connected broker, fetch live from the broker itself so a cold
-                            # BalanceService never triggers the "no capital" fatal exception.
-                            if balance <= 0:
-                                try:
-                                    balance = broker.get_account_balance() or 0.0
-                                    if balance > 0:
-                                        BalanceService.refresh(
-                                            _bk, lambda b=broker: b.get_account_balance()
-                                        )
-                                except Exception as _live_err:
-                                    logger.debug(
-                                        "Direct balance fallback for %s failed: %s",
-                                        broker_type.value, _live_err,
-                                    )
-                            if broker_type == BrokerType.COINBASE:
-                                coinbase_balance = balance
-                            elif broker_type == BrokerType.KRAKEN:
-                                kraken_balance = balance
-                            else:
-                                other_balance += balance
-                        except Exception as e:
-                            logger.debug(f"Could not get balance for {broker_type.value}: {e}")
-
-                # Get user balances dynamically from multi_account_manager (for copy-trading transparency)
-                user_total_balance = 0.0
-                if self.multi_account_manager.user_brokers:
-                    for user_id, user_broker_dict in self.multi_account_manager.user_brokers.items():
-                        for broker_type, broker in user_broker_dict.items():
-                            try:
-                                if broker.connected:
-                                    user_balance = BalanceService.get(_broker_key(broker))
-                                    user_total_balance += user_balance
-                            except Exception as e:
-                                logger.debug(f"Could not get balance for {user_id}: {e}")
+                # Break down master/user balances from aggregated ledger source of truth.
+                coinbase_balance = float(raw_balance_response.get("coinbase", 0.0) or 0.0)
+                kraken_balance = float(raw_balance_response.get("kraken_platform", 0.0) or 0.0)
+                alpaca_balance = float(raw_balance_response.get("alpaca", 0.0) or 0.0)
+                other_balance = float(raw_balance_response.get("other", 0.0) or 0.0)
+                user_total_balance = float(raw_balance_response.get("user_total", 0.0) or 0.0)
 
                 # Report balances with breakdown
                 logger.info("=" * 70)
@@ -4939,6 +4903,8 @@ class TradingStrategy:
                     logger.info(f"   Coinbase PLATFORM: ${coinbase_balance:,.2f}")
                 if kraken_balance > 0:
                     logger.info(f"   Kraken PLATFORM:   ${kraken_balance:,.2f}")
+                if alpaca_balance > 0:
+                    logger.info(f"   Alpaca PLATFORM:   ${alpaca_balance:,.2f}")
                 if other_balance > 0:
                     logger.info(f"   Other Brokers:   ${other_balance:,.2f}")
                 logger.info(f"   📊 TOTAL PLATFORM: ${platform_balance:,.2f}")
@@ -4956,8 +4922,9 @@ class TradingStrategy:
                 _coinbase_isolated: bool = (
                     0 < coinbase_balance < COINBASE_ISOLATION_THRESHOLD
                 )
-                # Authoritative capital = Kraken + Other (Coinbase excluded when isolated)
-                _authoritative_capital: float = kraken_balance + other_balance
+                # Authoritative capital = Kraken + Alpaca + Other
+                # (Coinbase excluded when isolated)
+                _authoritative_capital: float = kraken_balance + alpaca_balance + other_balance
 
                 # Tag brokers in CapitalAuthority so every downstream reader
                 # can call get_primary_capital() / get_isolated_capital().
@@ -4967,6 +4934,8 @@ class TradingStrategy:
                     _ca_tag = _get_ca_tag()
                     if kraken_balance > 0:
                         _ca_tag.set_broker_role("kraken", BROKER_ROLE_PRIMARY)
+                    if alpaca_balance > 0:
+                        _ca_tag.set_broker_role("alpaca", BROKER_ROLE_PRIMARY)
                     if _coinbase_isolated:
                         _ca_tag.set_broker_role("coinbase", BROKER_ROLE_ISOLATED)
                     elif coinbase_balance > 0:
@@ -4981,10 +4950,10 @@ class TradingStrategy:
                         coinbase_balance, COINBASE_ISOLATION_THRESHOLD,
                     )
 
-                # Use the seeded breakdown aggregate as the GLOBAL platform total.
+                # Use aggregated breakdown as the GLOBAL platform total.
                 # Both Kraken and Coinbase contribute to total_capital for sizing,
                 # but ONLY authoritative capital counts for the global minimum check.
-                global_platform_total = coinbase_balance + kraken_balance + other_balance
+                global_platform_total = coinbase_balance + kraken_balance + alpaca_balance + other_balance
                 # MASTER AUTHORITY RULE: Master capital is always authoritative
                 # Users are followers, not required for startup
                 if global_platform_total > 0:
@@ -4992,9 +4961,9 @@ class TradingStrategy:
                     total_capital = global_platform_total + user_total_balance
                     logger.info(
                         "   ✅ Capital calculation: Kraken=$%.2f + Coinbase=$%.2f"
-                        " (isolated=%s) + Other=$%.2f + Users=$%.2f = $%.2f",
+                        " (isolated=%s) + Alpaca=$%.2f + Other=$%.2f + Users=$%.2f = $%.2f",
                         kraken_balance, coinbase_balance, _coinbase_isolated,
-                        other_balance, user_total_balance, total_capital,
+                        alpaca_balance, other_balance, user_total_balance, total_capital,
                     )
                 elif user_total_balance > 0:
                     # Master unfunded but users have capital - allow user-only trading
@@ -6955,6 +6924,18 @@ class TradingStrategy:
         try:
             # 1. Sum all PLATFORM broker balances
             if hasattr(self, 'multi_account_manager') and self.multi_account_manager:
+                if hasattr(self.multi_account_manager, 'get_aggregated_balance_breakdown') and hasattr(self.multi_account_manager, 'get_platform_total_balance'):
+                    raw_balance_response = self.multi_account_manager.get_aggregated_balance_breakdown(
+                        include_all_subaccounts=True
+                    )
+                    print("DEBUG BALANCES:", raw_balance_response)
+                    total_capital = self.multi_account_manager.get_platform_total_balance(
+                        include_all_subaccounts=True
+                    )
+                    logger.debug("   Aggregated ledger total: $%.2f", total_capital)
+                    logger.info(f"💰 TOTAL CAPITAL (all accounts): ${total_capital:.2f}")
+                    return total_capital
+
                 for broker_type, broker in self.multi_account_manager.platform_brokers.items():
                     if broker and broker.connected:
                         try:
