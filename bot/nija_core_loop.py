@@ -1996,6 +1996,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _live_verified_loop
                         and _current_state_loop == _TradingState.OFF
                     ):
+                        # Explicit OFF exit path (minimal production-safe patch).
+                        # If live capital is verified, force immediate transition
+                        # out of OFF so activation cannot stall silently.
+                        try:
+                            logger.critical("🔥 AUTO-TRANSITION OFF → LIVE_ACTIVE")
+                            if hasattr(_sm_loop, "force_activate_live"):
+                                _sm_loop.force_activate_live(
+                                    reason="core loop auto-transition OFF -> LIVE_ACTIVE"
+                                )
+                                _live_now = bool(_sm_loop.is_live_trading_active())
+                                if _live_now:
+                                    logger.critical("✅ OFF EXIT CONFIRMED: LIVE_ACTIVE")
+                        except Exception as _off_exit_err:
+                            logger.warning("Core loop OFF->LIVE transition failed: %s", _off_exit_err)
+
+                    # Better lifecycle fallback: OFF -> ARMED-like state
+                    # (LIVE_PENDING_CONFIRMATION) -> LIVE_ACTIVE via gate checks.
+                    if (
+                        _live_verified_loop
+                        and _current_state_loop == _TradingState.OFF
+                        and not _live_now
+                    ):
                         try:
                             _sm_loop.transition_to(
                                 _TradingState.LIVE_PENDING_CONFIRMATION,
