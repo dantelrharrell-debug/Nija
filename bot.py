@@ -1365,7 +1365,14 @@ def _run_preflight_check() -> bool:
     if coinbase_disabled:
         checks.append(("Coinbase SDK", True, "disabled via NIJA_DISABLE_COINBASE — skipped"))
     else:
-        cb_sdk_ok = _iutil.find_spec("coinbase") is not None or _iutil.find_spec("coinbase.rest") is not None
+        # Guard against ModuleNotFoundError from nested find_spec("coinbase.rest")
+        # when the parent package is not installed.
+        cb_root_ok = _iutil.find_spec("coinbase") is not None
+        if cb_root_ok:
+            cb_rest_ok = _iutil.find_spec("coinbase.rest") is not None
+        else:
+            cb_rest_ok = False
+        cb_sdk_ok = cb_root_ok or cb_rest_ok
         cb_key = os.getenv("COINBASE_API_KEY") or os.getenv("CDP_API_KEY_NAME") or ""
         cb_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("CDP_API_KEY_PRIVATE_KEY") or os.getenv("COINBASE_PEM_CONTENT") or ""
         cb_creds_ok = bool(cb_key and cb_secret)

@@ -60,7 +60,13 @@
       "to": "LIVE_ACTIVE",
       "reason": "test",
       "timestamp": "2026-04-23T10:32:10.037284"
+    },
+    {
+      "from": "OFF",
+      "to": "LIVE_ACTIVE",
+      "reason": "core loop forced activation",
+      "timestamp": "2026-04-25T13:56:22.727704"
     }
   ],
-  "last_updated": "2026-04-23T10:32:10.037296"
+  "last_updated": "2026-04-25T13:56:22.727728"
 }
