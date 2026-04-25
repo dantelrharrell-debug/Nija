@@ -1969,10 +1969,14 @@ def _run_bot_startup_and_trading_with_retry():
                         f"connection_loop_detected_after_{connection_attempts}_attempts"
                     )
                     logger.critical(
-                        "🚨 CONNECTION LOOP DETECTED — FORCING EXIT after %d attempts",
+                        "🚨 CONNECTION LOOP DETECTED after %d attempts — keeping bootstrap thread alive "
+                        "and continuing retries with capped backoff",
                         connection_attempts,
                     )
-                    break
+                    # Keep the kernel alive; do not exit the startup thread.
+                    # This preserves supervisor continuity and allows transient
+                    # broker/API conditions to recover without process death.
+                    connection_attempts = _MAX_CONNECTION_ATTEMPTS
 
                 # Bootstrap FSM: transient failure → BOOT_FAILED_RETRY so the next
                 # attempt can enter PLATFORM_CONNECTING cleanly.  Skip reset when
