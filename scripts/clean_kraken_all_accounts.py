@@ -68,6 +68,7 @@ Date: 2026-03-22
 import os
 import sys
 import argparse
+from pipeline_order_submitter import submit_market_order_via_pipeline
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -382,11 +383,13 @@ def step1_sell_positions(
         if usd_value >= KRAKEN_MIN_ORDER_USD:
             try:
                 symbol = f"{currency}-USD"
-                res = adapter.place_market_order(
+                res = submit_market_order_via_pipeline(
+                    broker=adapter,
                     symbol=symbol,
                     side='sell',
-                    size=balance,
+                    quantity=balance,
                     size_type='base',
+                    strategy='CleanKrakenAllAccounts',
                 )
                 if res and res.get('status') not in ('error', 'skipped'):
                     order_id = str(res.get('order_id', 'N/A'))[:12]

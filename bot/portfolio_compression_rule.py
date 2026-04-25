@@ -61,7 +61,14 @@ Usage
     decision = rule.evaluate(open_positions)
     if decision.compression_required:
         for sym in decision.positions_to_close:
-            broker.close_position(sym)
+            submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=sym,
+                side="sell",
+                quantity=position_sizes[sym],
+                size_type="base",
+                strategy="PortfolioCompressionRule",
+            )
 
     # After a position closes:
     rule.record_compression_executed(symbol, recovered_usd)

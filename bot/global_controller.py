@@ -50,11 +50,21 @@ Singleton access
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("nija.global_controller")
+
+try:
+    from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+except ImportError:
+    try:
+        from execution_pipeline import get_execution_pipeline, PipelineRequest
+    except ImportError:
+        get_execution_pipeline = None  # type: ignore
+        PipelineRequest = None         # type: ignore
 
 # ---------------------------------------------------------------------------
 # Import sibling controllers and profile registry
@@ -210,7 +220,7 @@ class GlobalController:
         """Route *order* to the correct execution path for *broker*.
 
         Coinbase
-            Order is forwarded to ``broker.place_market_order()``.
+            Order is forwarded to ``ExecutionPipeline.execute()``.
             Sub-minimum order sizes are logged then allowed (micro-cap).
 
         Kraken (isolated)
@@ -244,14 +254,44 @@ class GlobalController:
         return self._forward_order(broker, order)
 
     def _forward_order(self, broker, order: Order) -> dict:
-        """Call the broker's ``place_market_order`` with the order fields."""
+        """Forward orders via ExecutionPipeline; block direct broker bypass in strict mode."""
         try:
-            return broker.place_market_order(
-                symbol=order.symbol,
-                side=order.side,
-                quantity=order.usd_size,
-                size_type="quote",
-            )
+            if get_execution_pipeline is not None and PipelineRequest is not None:
+                broker_name = self._broker_name(broker)
+                price_hint = None
+                try:
+                    if hasattr(broker, "get_current_price"):
+                        px = float(broker.get_current_price(order.symbol) or 0.0)
+                        if px > 0:
+                            price_hint = px
+                except Exception:
+                    price_hint = None
+
+                res = get_execution_pipeline().execute(
+                    PipelineRequest(
+                        strategy="GlobalController",
+                        symbol=order.symbol,
+                        side=order.side,
+                        size_usd=order.usd_size,
+                        order_type="MARKET",
+                        preferred_broker=broker_name,
+                        price_hint_usd=price_hint,
+                    )
+                )
+                if res.success:
+                    return {
+                        "status": "filled",
+                        "broker": res.broker or broker_name,
+                        "filled_price": res.fill_price,
+                        "filled_size_usd": res.filled_size_usd,
+                        "order_id": "pipeline",
+                    }
+                return {"status": "error", "error": res.error or "Execution pipeline rejected order"}
+
+            return {
+                "status": "error",
+                "error": "ExecutionPipeline unavailable and direct broker bypass blocked",
+            }
         except Exception as exc:
             logger.error(
                 "❌ execute_trade: %s order failed — %s",

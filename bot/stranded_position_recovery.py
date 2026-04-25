@@ -455,9 +455,9 @@ class StrandedPositionRecovery:
         Try to close a stranded position via the broker.
 
         Tries, in order:
-        1. ``broker.place_market_order(symbol, side, quantity)``
-        2. ``broker.close_position(symbol, quantity)``
-        3. ``broker.force_liquidate(symbol, quantity)``
+        1. ``submit_market_order_via_pipeline(...)``
+          2. broker-internal recovery liquidation hooks only when invoked within
+              adapter-owned recovery logic, not by direct order-creation callers.
         """
         logger.info(
             "🔧 Attempting stranded recovery: %s qty=%.8f side=%s (reason: %s)",

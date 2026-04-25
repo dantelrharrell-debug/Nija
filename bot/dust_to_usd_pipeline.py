@@ -33,6 +33,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.dust_to_usd_pipeline")
 
 # Default USD value below which a position is considered dust
@@ -100,10 +108,9 @@ class DustToUsdPipeline:
                     broker.get_usd_balance() -> float
                     broker.get_current_price(symbol: str) -> float
 
-                Optionally one of::
+                Orders are submitted through::
 
-                    broker.close_position(symbol: str) -> dict
-                    broker.place_order(symbol, side, order_type, size) -> dict
+                    submit_market_order_via_pipeline(...) -> dict
 
         dust_threshold_usd: Positions with a USD value strictly below this
                             amount are treated as dust. Default: $1.00.
@@ -309,58 +316,31 @@ class DustToUsdPipeline:
         """
         Place a market sell order to liquidate *dp*.
 
-        Tries broker methods in this order:
-          1. ``broker.close_position(symbol)``
-          2. ``broker.place_order(symbol, 'sell', 'market', size)``
-          3. ``broker.place_market_order(symbol, side, quantity, ...)``
+                Tries broker methods in this order:
+                    1. ``submit_market_order_via_pipeline(...)``
 
         Returns ``(success, message)``.
         """
         broker = self.broker
 
-        # Method 1: close_position
-        if hasattr(broker, "close_position"):
-            try:
-                result = broker.close_position(dp.symbol, quantity=dp.quantity)
-                if result and result.get("status") not in ("error", "failed"):
-                    return True, f"close_position succeeded (status={result.get('status')})"
-                return False, f"close_position returned error: {result}"
-            except Exception as exc:
-                logger.debug(f"      close_position raised: {exc}")
+        if submit_market_order_via_pipeline is None:
+            return False, "ExecutionPipeline submit helper unavailable; direct broker fallback blocked"
 
-        # Method 2: place_order
-        if hasattr(broker, "place_order"):
-            try:
-                result = broker.place_order(
-                    symbol=dp.symbol,
-                    side="sell",
-                    order_type="market",
-                    size=dp.quantity,
-                )
-                if result and result.get("status") not in ("error", "failed"):
-                    return True, f"place_order succeeded (status={result.get('status')})"
-                return False, f"place_order returned error: {result}"
-            except Exception as exc:
-                return False, f"place_order raised: {exc}"
-
-        # Method 3: place_market_order (Coinbase-style)
-        if hasattr(broker, "place_market_order"):
-            try:
-                result = broker.place_market_order(
-                    symbol=dp.symbol,
-                    side="sell",
-                    quantity=dp.quantity,
-                    size_type="base",
-                    force_liquidate=True,
-                    ignore_min_trade=True,
-                )
-                if result and result.get("status") in ("filled", "completed", "success"):
-                    return True, f"place_market_order succeeded (status={result.get('status')})"
-                return False, f"place_market_order returned error: {result}"
-            except Exception as exc:
-                return False, f"place_market_order raised: {exc}"
-
-        return False, "Broker has no supported sell method"
+        # Method 1: canonical pipeline submit
+        try:
+            result = submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=dp.symbol,
+                side="sell",
+                quantity=dp.quantity,
+                size_type="base",
+                strategy="DustToUsdPipeline",
+            )
+            if result and result.get("status") in ("filled", "completed", "success"):
+                return True, f"pipeline market sell succeeded (status={result.get('status')})"
+            return False, f"pipeline market sell returned error: {result}"
+        except Exception as exc:
+            return False, f"pipeline market sell raised: {exc}"
 
     # ------------------------------------------------------------------
     # Step 3 – Verify

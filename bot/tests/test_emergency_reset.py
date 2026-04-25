@@ -252,7 +252,7 @@ class TestCancelAllOpenOrders(unittest.TestCase):
 class TestLiquidateAllPositions(unittest.TestCase):
     """Tests for emergency_reset.liquidate_all_positions."""
 
-    def test_liquidates_using_force_liquidate(self):
+    def test_liquidates_using_pipeline_helper(self):
         from emergency_reset import liquidate_all_positions
 
         mock_broker = MagicMock()
@@ -260,15 +260,36 @@ class TestLiquidateAllPositions(unittest.TestCase):
         mock_broker.get_positions.return_value = [
             {'symbol': 'BTC-USD', 'quantity': 0.01}
         ]
-        mock_broker.force_liquidate.return_value = {'status': 'filled'}
 
-        results = liquidate_all_positions([mock_broker])
-        mock_broker.force_liquidate.assert_called_once_with(
+        with patch(
+            'emergency_reset.submit_market_order_via_pipeline',
+            return_value={'status': 'filled'},
+        ) as helper:
+            results = liquidate_all_positions([mock_broker])
+
+        helper.assert_called_once_with(
+            broker=mock_broker,
             symbol='BTC-USD',
+            side='sell',
             quantity=0.01,
-            reason='Emergency reset liquidation',
+            size_type='base',
+            strategy='EmergencyReset',
         )
         self.assertEqual(results.get('coinbase', results.get(str(mock_broker.broker_type))), 1)
+
+    def test_helper_unavailable_fails_closed(self):
+        from emergency_reset import liquidate_all_positions
+
+        mock_broker = MagicMock()
+        mock_broker.broker_type = 'coinbase'
+        mock_broker.get_positions.return_value = [
+            {'symbol': 'BTC-USD', 'quantity': 0.01}
+        ]
+
+        with patch('emergency_reset.submit_market_order_via_pipeline', None):
+            results = liquidate_all_positions([mock_broker])
+
+        self.assertEqual(results.get('coinbase', results.get(str(mock_broker.broker_type))), 0)
 
     def test_no_positions_returns_zero(self):
         from emergency_reset import liquidate_all_positions
@@ -278,7 +299,7 @@ class TestLiquidateAllPositions(unittest.TestCase):
         mock_broker.get_positions.return_value = []
 
         results = liquidate_all_positions([mock_broker])
-        mock_broker.force_liquidate.assert_not_called()
+        self.assertEqual(results.get('coinbase', results.get(str(mock_broker.broker_type))), 0)
 
 
 class TestRunEmergencyReset(unittest.TestCase):

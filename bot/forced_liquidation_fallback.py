@@ -33,7 +33,7 @@ Integration
         symbol="BTC-USD",
         quantity=0.001,          # base asset quantity
         side="sell",             # "sell" to close a long, "buy" to close a short
-        broker=my_broker,        # any object with .place_market_order() / .close_position()
+        broker=my_broker,        # any broker adapter compatible with pipeline/close APIs
         reason="stop-loss hit",
     )
 
@@ -57,6 +57,14 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
 
 logger = logging.getLogger("nija.forced_liquidation_fallback")
 
@@ -188,10 +196,8 @@ class ForcedLiquidationFallback:
         side:
             "sell" to close a long; "buy" to close a short.
         broker:
-            Any broker object that exposes at least one of:
-            * ``place_market_order(symbol, side, quantity, size_type='base', ...)``
-            * ``close_position(symbol, quantity, ...)``
-            * ``force_liquidate(symbol, quantity, ...)``
+            Broker adapter compatible with ``submit_market_order_via_pipeline``.
+            Direct non-pipeline liquidation fallbacks are intentionally blocked.
         reason:
             Human-readable description logged alongside every attempt.
         current_price:
@@ -445,27 +451,16 @@ class ForcedLiquidationFallback:
             "[PATH:min_notional] Last-resort attempt for %s qty=%.8f", symbol, quantity
         )
         try:
-            # Use broker's force-liquidate if available; fall back to market order
-            force_liq = getattr(broker, "force_liquidate", None)
-            if force_liq:
-                response = force_liq(
-                    symbol=symbol,
-                    quantity=quantity,
-                    reason=f"forced_liquidation_fallback: {reason}",
-                )
-            else:
-                place_order = getattr(broker, "place_market_order", None)
-                if place_order is None:
-                    raise RuntimeError("Broker has no place_market_order method")
-                response = place_order(
-                    symbol=symbol,
-                    side=side,
-                    quantity=quantity,
-                    size_type="base",
-                    ignore_balance=True,
-                    ignore_min_trade=True,
-                    force_liquidate=True,
-                )
+            if submit_market_order_via_pipeline is None:
+                raise RuntimeError("ExecutionPipeline submit helper unavailable; direct broker fallback blocked")
+            response = submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                size_type="base",
+                strategy="ForcedLiquidationFallback",
+            )
 
             fill_price, executed_qty = self._parse_response(response, quantity)
 
@@ -515,29 +510,18 @@ class ForcedLiquidationFallback:
 
         Priority
         --------
-        1. ``force_liquidate(symbol, quantity, reason)``
-        2. ``close_position(symbol, quantity)``
-        3. ``place_market_order(symbol, side, quantity, ...)``
+        1. ``submit_market_order_via_pipeline(...)``
         """
-        force_liq = getattr(broker, "force_liquidate", None)
-        if force_liq:
-            return force_liq(symbol=symbol, quantity=quantity, reason=reason)
+        if submit_market_order_via_pipeline is None:
+            raise RuntimeError("ExecutionPipeline submit helper unavailable; direct broker fallback blocked")
 
-        close_pos = getattr(broker, "close_position", None)
-        if close_pos:
-            return close_pos(symbol=symbol, quantity=quantity)
-
-        place_order = getattr(broker, "place_market_order", None)
-        if place_order:
-            return place_order(
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                size_type="base",
-            )
-
-        raise RuntimeError(
-            f"Broker {type(broker).__name__!r} has no recognised liquidation method"
+        return submit_market_order_via_pipeline(
+            broker=broker,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            size_type="base",
+            strategy="ForcedLiquidationFallback",
         )
 
     @staticmethod

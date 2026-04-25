@@ -62,6 +62,15 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+try:
+    from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+except ImportError:
+    try:
+        from execution_pipeline import get_execution_pipeline, PipelineRequest
+    except ImportError:
+        get_execution_pipeline = None  # type: ignore
+        PipelineRequest = None  # type: ignore
+
 logger = logging.getLogger("nija.exotic_instrument_handler")
 
 
@@ -727,8 +736,8 @@ class ExoticInstrumentRouter:
 
     def _execute(self, order: ExoticOrder, fair_value: float, handler) -> Dict:
         """
-        Execute via broker adapter if available, else simulate.
-        For options/OTC, sends a limit order at fair_value.
+        Execute via canonical ExecutionPipeline with a limit order request.
+        For options/OTC, compiles and routes a limit order at fair_value.
         """
         if order.broker_adapter is None:
             logger.info("[ExoticRouter] No broker adapter — simulating execution")
@@ -740,17 +749,38 @@ class ExoticInstrumentRouter:
                 "status": "SIMULATED",
             }
 
-        try:
-            resp = order.broker_adapter.place_order(
-                symbol=order.underlying,
-                side=order.side,
-                size=order.size,
-                order_type="LIMIT",
-                limit_price=fair_value,
-            )
+        if get_execution_pipeline is None or PipelineRequest is None:
             return {
-                "success": resp.get("status", "ERROR") != "ERROR",
-                **resp,
+                "success": False,
+                "status": "ERROR",
+                "error": "ExecutionPipeline unavailable and direct broker bypass blocked",
+            }
+
+        try:
+            preferred_broker = str(getattr(order.broker_adapter, "NAME", "coinbase") or "coinbase").lower()
+            size_usd = max(0.0, float(order.size) * float(fair_value))
+
+            res = get_execution_pipeline().execute(
+                PipelineRequest(
+                    strategy="ExoticInstrumentRouter",
+                    symbol=order.underlying,
+                    side=str(order.side).lower(),
+                    size_usd=size_usd,
+                    order_type="LIMIT",
+                    preferred_broker=preferred_broker,
+                    price_hint_usd=float(fair_value),
+                )
+            )
+
+            return {
+                "success": bool(res.success),
+                "status": "FILLED" if res.success else "ERROR",
+                "order_id": "pipeline" if res.success else None,
+                "filled_price": res.fill_price or fair_value,
+                "filled_size": (res.filled_size_usd / fair_value) if (res.filled_size_usd and fair_value > 0) else order.size,
+                "filled_size_usd": res.filled_size_usd,
+                "broker": res.broker,
+                "error": res.error,
             }
         except Exception as exc:
             logger.error("[ExoticRouter] Execution error: %s", exc)

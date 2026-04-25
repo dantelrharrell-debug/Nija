@@ -24,6 +24,14 @@ import threading
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.exit_enforcer")
 
 
@@ -275,15 +283,20 @@ class ContinuousExitEnforcer:
                     logger.warning(f"  Closing {symbol} to enforce cap...")
                     
                     # Place market sell order
-                    result = broker.place_market_order(
-                        symbol=symbol,
-                        side='sell',
-                        quantity=quantity,
-                        size_type='base',
-                        force_liquidate=True,  # Bypass all validation
-                        ignore_balance=True,
-                        ignore_min_trade=True
-                    )
+                    if submit_market_order_via_pipeline is None:
+                        result = {
+                            "status": "error",
+                            "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
+                        }
+                    else:
+                        result = submit_market_order_via_pipeline(
+                            broker=broker,
+                            symbol=symbol,
+                            side='sell',
+                            quantity=quantity,
+                            size_type='base',
+                            strategy='ContinuousExitEnforcer',
+                        )
                     
                     if result and result.get('status') not in ['error', 'unfilled']:
                         logger.info(f"  ✅ Closed {symbol} to enforce cap")

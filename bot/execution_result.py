@@ -16,11 +16,19 @@ Usage
 ::
 
     from bot.execution_result import ExecutionResult, OrderStatus, log_execution_result
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
     import time
 
     t0 = time.monotonic()
     try:
-        raw = broker.place_market_order(symbol, side, qty)
+        raw = submit_market_order_via_pipeline(
+            broker=broker,
+            symbol=symbol,
+            side=side,
+            quantity=qty,
+            size_type="quote",
+            strategy="ExecutionResultExample",
+        )
         order_id = raw.get("order_id") or raw.get("id")
         if raw.get("status") == "error":
             result = ExecutionResult(

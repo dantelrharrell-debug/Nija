@@ -30,6 +30,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -37,6 +38,24 @@ from enum import Enum
 from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.multi_asset_executor")
+
+try:
+    from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+except ImportError:
+    try:
+        from execution_pipeline import get_execution_pipeline, PipelineRequest
+    except ImportError:
+        get_execution_pipeline = None  # type: ignore
+        PipelineRequest = None         # type: ignore
+
+try:
+    from bot.execution_authority_context import has_execution_authority
+except ImportError:
+    try:
+        from execution_authority_context import has_execution_authority
+    except ImportError:
+        def has_execution_authority() -> bool:
+            return False
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +220,14 @@ class CoinbaseBrokerAdapter(BrokerAdapter):
         if self._client is None:
             logger.warning("[Coinbase] No client configured — simulating order")
             return {"order_id": "sim_" + symbol, "status": "SIMULATED", "filled_size": size}
+        if not has_execution_authority():
+            logger.error("[Coinbase] blocked direct order submit outside ExecutionPipeline")
+            return {
+                "status": "ERROR",
+                "error": "EXECUTION_AUTHORITY_REQUIRED",
+                "symbol": symbol,
+                "side": side,
+            }
         try:
             if side.upper() == "BUY":
                 resp = self._client.market_order_buy(product_id=symbol, base_size=str(size))
@@ -320,6 +347,7 @@ class MultiAssetExecutor:
         self.allocation.validate()
         self.risk_gate = risk_gate
         self._lock = threading.RLock()
+        self._pipeline_required = True
 
         # Start with default adapters (stub for non-crypto asset classes)
         self._adapters: Dict[AssetClass, BrokerAdapter] = {
@@ -343,6 +371,40 @@ class MultiAssetExecutor:
         self._positions: Dict[str, AssetPosition] = {}   # key: symbol
         self._closed_positions: List[AssetPosition] = []
         self._execution_log: List[ExecutionResult] = []
+
+    def _submit_via_pipeline(
+        self,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        order_type: str,
+        preferred_broker: str,
+        price_hint_usd: Optional[float] = None,
+    ) -> Optional[Dict]:
+        if get_execution_pipeline is None or PipelineRequest is None:
+            return None
+
+        pipeline = get_execution_pipeline()
+        req = PipelineRequest(
+            strategy="MultiAssetExecutor",
+            symbol=symbol,
+            side=side.lower(),
+            size_usd=size_usd,
+            order_type=order_type,
+            preferred_broker=preferred_broker,
+            price_hint_usd=price_hint_usd,
+        )
+        res = pipeline.execute(req)
+        status = "FILLED" if res.success else "ERROR"
+        return {
+            "status": status,
+            "order_id": "pipeline",
+            "filled_price": res.fill_price,
+            "filled_size_usd": res.filled_size_usd,
+            "broker": res.broker or preferred_broker,
+            "error": res.error,
+            "latency_ms": res.latency_ms,
+        }
 
     # ------------------------------------------------------------------
     # Configuration
@@ -445,11 +507,34 @@ class MultiAssetExecutor:
             return ExecutionResult(True, symbol, asset_class, action, price, size, adapter.NAME,
                                    message="Dry run — not submitted")
 
-        order_resp = adapter.place_order(symbol, action, size)
+        order_resp = self._submit_via_pipeline(
+            symbol=symbol,
+            side=action,
+            size_usd=trade_usd,
+            order_type="MARKET",
+            preferred_broker=adapter.NAME,
+            price_hint_usd=price,
+        )
+
+        if order_resp is None:
+            return ExecutionResult(
+                False,
+                symbol,
+                asset_class,
+                action,
+                None,
+                None,
+                adapter.NAME,
+                message="ExecutionPipeline unavailable and direct broker bypass blocked",
+            )
+
         success = order_resp.get("status", "ERROR") not in ("ERROR",)
         filled_price = order_resp.get("filled_price", price)
-        filled_size  = order_resp.get("filled_size", size)
-        order_id     = order_resp.get("order_id")
+        filled_size = order_resp.get("filled_size")
+        if filled_size is None:
+            filled_usd = order_resp.get("filled_size_usd", trade_usd if success else 0.0)
+            filled_size = (filled_usd / filled_price) if filled_price else size
+        order_id = order_resp.get("order_id")
 
         result = ExecutionResult(
             success=success,
@@ -517,7 +602,35 @@ class MultiAssetExecutor:
             logger.error("[MultiAssetExecutor] No adapter for %s", position.asset_class)
             return None
 
-        order_resp = adapter.place_order(symbol, close_action, position.size)
+        close_price = position.current_price if position.current_price > 0 else adapter.get_price(symbol)
+        if close_price <= 0:
+            close_price = position.entry_price
+        close_notional_usd = max(0.0, position.size * close_price)
+
+        order_resp = self._submit_via_pipeline(
+            symbol=symbol,
+            side=close_action,
+            size_usd=close_notional_usd,
+            order_type="MARKET",
+            preferred_broker=adapter.NAME,
+            price_hint_usd=close_price,
+        )
+
+        if order_resp is None:
+            logger.error(
+                "[MultiAssetExecutor] close blocked for %s: pipeline required but unavailable",
+                symbol,
+            )
+            return ExecutionResult(
+                False,
+                symbol,
+                position.asset_class,
+                close_action,
+                None,
+                None,
+                adapter.NAME,
+                message="ExecutionPipeline unavailable and direct broker bypass blocked",
+            )
         result = ExecutionResult(
             success=order_resp.get("status", "ERROR") != "ERROR",
             symbol=symbol,
@@ -567,7 +680,7 @@ class MultiAssetExecutor:
             "total_unrealised_pnl": round(total_unrealised, 2),
             "open_positions": len(positions),
             "class_breakdown": class_breakdown,
-            "allocation_pct": {k.value: round(v, 4) for k, v in self.allocation.to_dict().items()},
+            "allocation_pct": {str(k): round(v, 4) for k, v in self.allocation.to_dict().items()},
             "positions": positions,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }

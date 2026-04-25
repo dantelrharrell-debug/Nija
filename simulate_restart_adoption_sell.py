@@ -45,8 +45,8 @@ class MockBroker:
         """Return mock balance"""
         return 5000.0
     
-    def place_market_order(self, symbol, side, quantity, size_type='base'):
-        """Mock order placement"""
+    def submit_market_order_via_pipeline(self, symbol, side, quantity, size_type='base'):
+        """Mock pipeline-style order placement for simulation."""
         order = {
             'symbol': symbol,
             'side': side,
@@ -288,7 +288,7 @@ def simulate_crash_and_restart():
     logger.info("")
     
     # Sell BTC
-    broker.place_market_order(btc_pos['symbol'], 'sell', btc_pos['quantity'])
+    broker.submit_market_order_via_pipeline(btc_pos['symbol'], 'sell', btc_pos['quantity'])
     btc_profit = btc_pos['size_usd'] * (btc_pnl_pct / 100)
     logger.info(f"   ✅ {btc_pos['symbol']} sold at ${btc_pos['current_price']:.2f}")
     logger.info(f"      Profit: ${btc_profit:.2f}")
@@ -296,7 +296,7 @@ def simulate_crash_and_restart():
     time.sleep(0.5)
     
     # Sell ETH
-    broker.place_market_order(eth_pos['symbol'], 'sell', eth_pos['quantity'])
+    broker.submit_market_order_via_pipeline(eth_pos['symbol'], 'sell', eth_pos['quantity'])
     eth_profit = eth_pos['size_usd'] * (eth_pnl_pct / 100)
     logger.info(f"   ✅ {eth_pos['symbol']} sold at ${eth_pos['current_price']:.2f}")
     logger.info(f"      Profit: ${eth_profit:.2f}")
@@ -304,7 +304,7 @@ def simulate_crash_and_restart():
     time.sleep(0.5)
     
     # Sell SOL
-    broker.place_market_order(sol_pos['symbol'], 'sell', sol_pos['quantity'])
+    broker.submit_market_order_via_pipeline(sol_pos['symbol'], 'sell', sol_pos['quantity'])
     sol_loss = sol_pos['size_usd'] * (sol_pnl_pct / 100)
     logger.info(f"   ✅ {sol_pos['symbol']} sold at ${sol_pos['current_price']:.2f}")
     logger.info(f"      Loss: ${sol_loss:.2f}")

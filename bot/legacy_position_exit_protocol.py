@@ -31,6 +31,14 @@ from enum import Enum
 import json
 from pathlib import Path
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.legacy_exit")
 
 
@@ -206,7 +214,7 @@ class LegacyPositionExitProtocol:
             logger.error(f"Could not get open orders: {e}")
             return []
     
-    def _close_position(self, symbol: str, quantity: float, order_type: str = 'market') -> bool:
+    def _close_position(self, symbol: str, quantity: Optional[float], order_type: str = 'market') -> bool:
         """
         Close position, handling various broker implementations.
         
@@ -219,17 +227,26 @@ class LegacyPositionExitProtocol:
             True if successful
         """
         try:
-            # Try close_position if available
-            if hasattr(self.broker, 'close_position'):
-                return self.broker.close_position(symbol=symbol, quantity=quantity, order_type=order_type)
-            
-            # Fallback: use place_market_order with sell side
-            if hasattr(self.broker, 'place_market_order'):
-                result = self.broker.place_market_order(symbol=symbol, side='sell', size=quantity)
-                return result is not None
-            
-            logger.error(f"Broker does not support position closing for {symbol}")
-            return False
+            qty = float(quantity or 0.0)
+            if qty <= 0:
+                logger.error(f"Invalid close quantity for {symbol}: {quantity}")
+                return False
+
+            if submit_market_order_via_pipeline is None:
+                logger.error(
+                    f"ExecutionPipeline submit helper unavailable; direct close fallback blocked for {symbol}"
+                )
+                return False
+
+            result = submit_market_order_via_pipeline(
+                broker=self.broker,
+                symbol=symbol,
+                side='sell',
+                quantity=qty,
+                size_type='base',
+                strategy='LegacyPositionExitProtocol',
+            )
+            return bool(result and result.get('status') in ('filled', 'completed', 'success'))
         except Exception as e:
             logger.error(f"Could not close position {symbol}: {e}")
             return False

@@ -34,6 +34,14 @@ from enum import Enum
 from threading import Lock
 from typing import Dict, List, Optional, Set
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.emergency_symbol_resolver")
 
 
@@ -423,11 +431,16 @@ def attempt_delisted_asset_sell(
 
     logger.info(f"💸 Delisted Asset Protocol: attempting market sell for {symbol} qty={quantity}")
     try:
-        result = broker.place_market_order(
+        if submit_market_order_via_pipeline is None:
+            raise RuntimeError("ExecutionPipeline submit helper unavailable")
+
+        result = submit_market_order_via_pipeline(
+            broker=broker,
             symbol=symbol,
             side="sell",
-            size=quantity,
+            quantity=quantity,
             size_type="base",
+            strategy="DelistedAssetProtocol",
         )
         if result and result.get("status") in ("filled", "assumed_filled"):
             registry.mark_sell_attempted(symbol)

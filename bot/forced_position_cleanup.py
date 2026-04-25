@@ -20,6 +20,14 @@ from typing import Dict, List, Tuple, Optional, Union, Any
 from datetime import datetime
 from enum import Enum
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.cleanup")
 
 # Minimum USD value below which we skip closing (exchange won't accept the order)
@@ -110,7 +118,7 @@ def is_position_closable(pos_data: Dict, broker: Any, base_size=None) -> bool:
             )
             return False
     except Exception as exc:
-        # Non-fatal: balance API errors are surfaced by broker.close_position().
+        # Non-fatal: balance API errors are surfaced by pipeline submission.
         logger.debug(
             "   is_position_closable: %s — balance check skipped (%s)",
             symbol, exc,
@@ -802,7 +810,20 @@ class ForcedPositionCleanup:
                     skipped += 1
                     continue
 
-                result = broker.close_position(symbol, base_size=base_size)
+                if submit_market_order_via_pipeline is None:
+                    result = {
+                        'status': 'error',
+                        'error': 'ExecutionPipeline submit helper unavailable; direct broker fallback blocked',
+                    }
+                else:
+                    result = submit_market_order_via_pipeline(
+                        broker=broker,
+                        symbol=symbol,
+                        side='sell',
+                        quantity=base_size,
+                        size_type='base',
+                        strategy='ForcedPositionCleanup',
+                    )
                 
                 if result and result.get('status') in ['filled', 'success']:
                     logger.warning(f"   ✅ CLOSED SUCCESSFULLY")

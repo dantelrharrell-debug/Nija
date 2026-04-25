@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_UP, InvalidOperation
 from typing import Dict, Optional, Tuple
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -442,10 +442,55 @@ class ECELExecutionCompiler:
         self.schema = ContractSchemaMap()
         self.reservations = PreTradeBalanceReservationSystem()
         self.precision = PrecisionCompiler()
+        self._require_price_hint = os.getenv("ECEL_REQUIRE_PRICE_HINT", "true").strip().lower() in (
+            "1", "true", "yes"
+        )
+
+    @staticmethod
+    def _to_decimal(value: float) -> Decimal:
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal("0")
+
+    @staticmethod
+    def _is_grid_aligned(value: float, step: float, precision: int) -> bool:
+        v = Decimal(str(value)).quantize(Decimal(10) ** -precision)
+        s = Decimal(str(step))
+        if s <= 0:
+            return True
+        remainder = (v % s).normalize()
+        return remainder == Decimal("0")
 
     def compile(self, req: CompileRequest) -> CompileResult:
         broker = (req.broker or "coinbase").lower()
-        symbol = req.symbol
+        symbol = (req.symbol or "").strip().upper().replace("/", "-")
+        side = (req.side or "").strip().lower()
+        order_type = (req.order_type or "MARKET").strip().upper()
+
+        if side not in ("buy", "sell"):
+            return CompileResult(
+                accepted=False,
+                reason=f"Unsupported side '{req.side}'",
+                broker=broker,
+                symbol=symbol,
+            )
+
+        if order_type not in ("MARKET", "LIMIT"):
+            return CompileResult(
+                accepted=False,
+                reason=f"Unsupported order type '{order_type}'",
+                broker=broker,
+                symbol=symbol,
+            )
+
+        if "-" not in symbol:
+            return CompileResult(
+                accepted=False,
+                reason=f"Invalid symbol format '{symbol}'",
+                broker=broker,
+                symbol=symbol,
+            )
 
         # Keep schema data fresh from public endpoints without blocking every call.
         self.schema.refresh_if_due(target_broker=broker)
@@ -459,7 +504,8 @@ class ECELExecutionCompiler:
                 symbol=symbol,
             )
 
-        if req.desired_notional_usd <= 0:
+        desired_notional = self._to_decimal(req.desired_notional_usd)
+        if desired_notional <= 0:
             return CompileResult(
                 accepted=False,
                 reason="Order notional must be greater than zero",
@@ -468,12 +514,21 @@ class ECELExecutionCompiler:
                 rule=rule,
             )
 
-        compiled_notional = max(req.desired_notional_usd, rule.min_notional_usd)
+        if self._require_price_hint and (req.price_hint_usd is None or req.price_hint_usd <= 0):
+            return CompileResult(
+                accepted=False,
+                reason="Price hint is required by ECEL to compile a grid-valid order",
+                broker=broker,
+                symbol=symbol,
+                rule=rule,
+            )
+
+        compiled_notional = float(max(desired_notional, self._to_decimal(rule.min_notional_usd)))
 
         compiled_price = None
         compiled_base = None
         if req.price_hint_usd is not None and req.price_hint_usd > 0:
-            compiled_price = self.precision.compile_price(req.price_hint_usd, req.side, rule)
+            compiled_price = self.precision.compile_price(req.price_hint_usd, side, rule)
             raw_base = compiled_notional / max(compiled_price, 1e-12)
             compiled_base = self.precision.compile_base_size(raw_base, rule)
 
@@ -494,6 +549,74 @@ class ECELExecutionCompiler:
                     symbol=symbol,
                     rule=rule,
                 )
+
+        if compiled_base is None or compiled_price is None:
+            return CompileResult(
+                accepted=False,
+                reason="ECEL requires compiled base size and price for deterministic validity",
+                broker=broker,
+                symbol=symbol,
+                compiled_notional_usd=compiled_notional,
+                rule=rule,
+            )
+
+        if compiled_notional < rule.min_notional_usd:
+            return CompileResult(
+                accepted=False,
+                reason=(
+                    f"Compiled notional {compiled_notional:.10f} below min notional "
+                    f"{rule.min_notional_usd:.10f}"
+                ),
+                broker=broker,
+                symbol=symbol,
+                compiled_notional_usd=compiled_notional,
+                compiled_base_size=compiled_base,
+                compiled_price_usd=compiled_price,
+                rule=rule,
+            )
+
+        if compiled_base < rule.min_base_size:
+            return CompileResult(
+                accepted=False,
+                reason=(
+                    f"Compiled base size {compiled_base:.10f} below min base size "
+                    f"{rule.min_base_size:.10f}"
+                ),
+                broker=broker,
+                symbol=symbol,
+                compiled_notional_usd=compiled_notional,
+                compiled_base_size=compiled_base,
+                compiled_price_usd=compiled_price,
+                rule=rule,
+            )
+
+        if not self._is_grid_aligned(compiled_base, rule.base_step_size, rule.base_precision):
+            return CompileResult(
+                accepted=False,
+                reason="Compiled base size is not aligned to broker base step size",
+                broker=broker,
+                symbol=symbol,
+                compiled_notional_usd=compiled_notional,
+                compiled_base_size=compiled_base,
+                compiled_price_usd=compiled_price,
+                rule=rule,
+            )
+
+        if not self._is_grid_aligned(compiled_price, rule.price_step_size, rule.price_precision):
+            return CompileResult(
+                accepted=False,
+                reason="Compiled price is not aligned to broker price step size",
+                broker=broker,
+                symbol=symbol,
+                compiled_notional_usd=compiled_notional,
+                compiled_base_size=compiled_base,
+                compiled_price_usd=compiled_price,
+                rule=rule,
+            )
+
+        notional_from_components = float(self._to_decimal(compiled_base) * self._to_decimal(compiled_price))
+        if abs(notional_from_components - compiled_notional) > 1e-9:
+            compiled_notional = notional_from_components
 
         reservation_id = None
         if req.available_balance_usd is not None:

@@ -96,7 +96,7 @@ Usage
         return  # do not submit
 
     try:
-        broker.place_order(...)
+        submit_market_order_via_pipeline(...)
     finally:
         # Release the slot so the next *legitimate* order can proceed
         guard.release(symbol="BTC-USD", side="buy", size=0.001, account_id="acc_123")

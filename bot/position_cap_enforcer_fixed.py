@@ -10,7 +10,7 @@ Runs before market entry to keep leverage under control.
 import os
 import sys
 import logging
-from typing import List, Dict, Tuple, Optional
+from typing import Any, List, Dict, Tuple, Optional
 
 # Setup logger
 logger = logging.getLogger("nija.enforcer")
@@ -24,6 +24,11 @@ except ImportError:
     logger.error("Failed to import broker_manager")
     CoinbaseBroker = None
 
+try:
+    from pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    submit_market_order_via_pipeline = None  # type: ignore
+
 
 class PositionCapEnforcer:
     """
@@ -35,7 +40,7 @@ class PositionCapEnforcer:
     - Sells positions in order until count <= max_allowed
     """
 
-    def __init__(self, max_positions: int = 8, broker: Optional[CoinbaseBroker] = None):
+    def __init__(self, max_positions: int = 8, broker: Optional[Any] = None):
         """
         Initialize position cap enforcer.
 
@@ -44,7 +49,12 @@ class PositionCapEnforcer:
             broker: CoinbaseBroker instance (created if None)
         """
         self.max_positions = max_positions
-        self.broker = broker or CoinbaseBroker()
+        if broker is not None:
+            self.broker = broker
+        else:
+            if CoinbaseBroker is None:
+                raise RuntimeError("CoinbaseBroker unavailable; cannot initialize PositionCapEnforcer")
+            self.broker = CoinbaseBroker()
         logger.info(f"PositionCapEnforcer initialized: max={max_positions} positions")
 
     def get_current_positions(self) -> List[Dict]:
@@ -64,6 +74,7 @@ class PositionCapEnforcer:
 
             # Handle both dict and object responses from Coinbase SDK
             accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
+            accounts_list = accounts_list or []
 
             for account in accounts_list:
                 # Handle both dict and object account formats
@@ -137,36 +148,31 @@ class PositionCapEnforcer:
         balance = position['balance']
         currency = position['currency']
 
+        if submit_market_order_via_pipeline is None:
+            logger.error("ExecutionPipeline submit helper unavailable; direct broker bypass blocked")
+            return False
+
         try:
             logger.info(f"🔴 ENFORCER: Selling {currency}... (${position['usd_value']:.2f})")
-
-            # Attempt market sell by quote size (USD value)
-            client_order_id = f"enforcer_{currency}_{int(__import__('time').time())}"
-            order = self.broker.client.market_order_sell(
-                client_order_id,
-                product_id=symbol,
-                quote_size=str(int(position['usd_value']))  # Round down to avoid overage
+            order = submit_market_order_via_pipeline(
+                broker=self.broker,
+                symbol=symbol,
+                side='sell',
+                quantity=balance,
+                size_type='base',
+                strategy='PositionCapEnforcerFixed',
             )
 
-            logger.info(f"✅ SOLD {currency}! Order placed.")
-            return True
+            if order and order.get('status') in ('filled', 'completed', 'success'):
+                logger.info(f"✅ SOLD {currency}! Order placed.")
+                return True
+
+            logger.error(f"❌ Sell rejected for {symbol}: {order}")
+            return False
 
         except Exception as e:
             logger.error(f"❌ Error selling {symbol}: {e}")
-            # Attempt by base_size as fallback
-            try:
-                adjusted = balance * 0.995  # Account for fee slippage
-                client_order_id = f"enforcer_{currency}_retry_{int(__import__('time').time())}"
-                order = self.broker.client.market_order_sell(
-                    client_order_id,
-                    product_id=symbol,
-                    base_size=str(adjusted)
-                )
-                logger.info(f"✅ SOLD {currency} (retry by quantity)!")
-                return True
-            except Exception as e2:
-                logger.error(f"❌ Fallback also failed: {e2}")
-                return False
+            return False
 
     def enforce_cap(self) -> Tuple[bool, Dict]:
         """

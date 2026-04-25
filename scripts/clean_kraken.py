@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'bot'))
 
 # Import required modules
 from broker_integration import KrakenBrokerAdapter
+from pipeline_order_submitter import submit_market_order_via_pipeline
 
 # Import Kraken symbol mapper for proper symbol conversion
 try:
@@ -379,11 +380,13 @@ def force_sell_all_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False
 
             # Place market sell order
             # Note: adapter._convert_to_kraken_symbol will handle format conversion
-            result = adapter.place_market_order(
+            result = submit_market_order_via_pipeline(
+                broker=adapter,
                 symbol=symbol,
                 side='sell',
-                size=balance,
-                size_type='base'
+                quantity=balance,
+                size_type='base',
+                strategy='CleanKraken',
             )
 
             if result and result.get('status') not in ['error', 'skipped']:
@@ -485,11 +488,13 @@ def sweep_dust_positions(adapter: KrakenBrokerAdapter, dry_run: bool = False) ->
         if not converted:
             try:
                 symbol = f"{currency}-USD"
-                sell_result = adapter.place_market_order(
+                sell_result = submit_market_order_via_pipeline(
+                    broker=adapter,
                     symbol=symbol,
                     side='sell',
-                    size=balance,
+                    quantity=balance,
                     size_type='base',
+                    strategy='CleanKrakenDustSweep',
                 )
 
                 if sell_result and sell_result.get('status') not in ['error', 'skipped']:

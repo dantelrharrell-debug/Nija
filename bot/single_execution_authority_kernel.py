@@ -67,7 +67,7 @@ High-level API (preferred)
         return
 
     try:
-        broker.place_order(...)
+        submit_market_order_via_pipeline(...)
     finally:
         seak.release(token)
 

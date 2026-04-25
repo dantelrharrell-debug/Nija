@@ -18,6 +18,14 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from dataclasses import dataclass
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # Dust threshold - positions below this are considered dust
@@ -167,13 +175,16 @@ class BrokerDustCleanup:
             
             # Place market sell order to close position.
             # quantity is explicitly set to the exact amount to sell (fixes missing quantity/base_size bug).
-            result = broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                return False, "ExecutionPipeline submit helper unavailable"
+
+            result = submit_market_order_via_pipeline(
+                broker=broker,
                 symbol=dust_pos.symbol,
                 side='sell',
                 quantity=dust_pos.quantity,
-                size_type='base',  # Sell exact quantity we have
-                force_liquidate=True,  # Force close even if below minimum
-                ignore_min_trade=True  # Ignore minimum trade size for dust cleanup
+                size_type='base',
+                strategy='BrokerDustCleanup',
             )
             
             if result and result.get('status') in ['filled', 'completed', 'success']:

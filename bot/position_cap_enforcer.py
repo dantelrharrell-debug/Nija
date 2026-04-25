@@ -12,7 +12,7 @@ import os
 import sys
 import time
 import logging
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 
 # Setup logger
 logger = logging.getLogger("nija.enforcer")
@@ -43,6 +43,14 @@ except ImportError:
     get_dust_blacklist = None
     BLACKLIST_THRESHOLD = 1.00  # Fallback value when dust_blacklist is not available
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 
 class PositionCapEnforcer:
     """
@@ -63,7 +71,7 @@ class PositionCapEnforcer:
     # before being retried.  Mirrors UNSELLABLE_RETRY_HOURS in trading_strategy.py.
     UNSELLABLE_RETRY_SECONDS = 12 * 3600  # 12 hours
 
-    def __init__(self, max_positions: int = 5, broker: Optional[CoinbaseBroker] = None):
+    def __init__(self, max_positions: int = 5, broker=None):
         """
         Initialize position cap enforcer.
 
@@ -76,12 +84,11 @@ class PositionCapEnforcer:
         # Resolve broker: prefer injected instance → registry singleton → error.
         # Never silently construct a new CoinbaseBroker; that would bypass the
         # global platform-broker registry and create a duplicate connection.
+        self.broker: Any = None
         if broker is not None:
             self.broker = broker
         elif get_platform_broker is not None:
             self.broker = get_platform_broker("coinbase")
-        else:
-            self.broker = None
 
         if self.broker is None:
             raise RuntimeError(
@@ -172,6 +179,10 @@ class PositionCapEnforcer:
             logger.info(f"🔄 {sym}: unsellable retry window expired — will attempt sell again")
 
         try:
+            if self.broker is None:
+                logger.warning("PositionCapEnforcer: broker unavailable — skipping position fetch")
+                return []
+
             if not getattr(self.broker, "connected", False):
                 logger.warning("PositionCapEnforcer: broker not connected — skipping position fetch")
                 return []
@@ -324,11 +335,17 @@ class PositionCapEnforcer:
             logger.info(f"🔴 ENFORCER: Selling {currency}... (${position['usd_value']:.2f})")
 
             # CRITICAL FIX: Use correct parameter names (quantity, not size) and size_type='base'
-            result = self.broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                logger.error("❌ ExecutionPipeline submit helper unavailable")
+                return False
+
+            result = submit_market_order_via_pipeline(
+                broker=self.broker,
                 symbol=symbol,
                 side='sell',
                 quantity=balance,
-                size_type='base'
+                size_type='base',
+                strategy='PositionCapEnforcer',
             )
 
             if result and result.get('status') == 'filled':

@@ -347,7 +347,7 @@ def handle_api_failure(error: Exception, context: Optional[Dict[str, Any]] = Non
     
     Usage:
         try:
-            broker.place_order(...)
+            submit_market_order_via_pipeline(...)
         except Exception as e:
             handle_api_failure(e, {'operation': 'place_order'})
     """

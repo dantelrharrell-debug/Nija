@@ -480,16 +480,19 @@ class UnifiedExecutionEngine:
             logger.info(f"📤 Sending order to {exchange.upper()}...")
 
             # Placeholder: This shows the structure but needs actual broker integration
-            # When integrated, this will call broker_manager methods like:
+            # When integrated, this will call the canonical execution pipeline with
+            # broker routing hints and parse the unified execution response.
+            # Example shape:
             # if order_type_lower == 'market':
-            #     raw_result = broker_manager.place_market_order(
-            #         exchange=exchange, symbol=symbol, side=side,
-            #         size=size, size_type=size_type
+            #     raw_result = execution_pipeline.execute(PipelineRequest(
+            #         strategy='UnifiedExecutionEngine', symbol=symbol, side=side,
+            #         size_usd=size_usd, order_type='MARKET', preferred_broker=exchange
             #     )
             # elif order_type_lower == 'limit':
-            #     raw_result = broker_manager.place_limit_order(
-            #         exchange=exchange, symbol=symbol, side=side,
-            #         size=size, price=price, size_type=size_type
+            #     raw_result = execution_pipeline.execute(PipelineRequest(
+            #         strategy='UnifiedExecutionEngine', symbol=symbol, side=side,
+            #         size_usd=size_usd, order_type='LIMIT',
+            #         preferred_broker=exchange, price_hint_usd=price
             #     )
 
             result = TradeResult(

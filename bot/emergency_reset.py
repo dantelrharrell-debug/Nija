@@ -26,6 +26,14 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.emergency_reset")
 
 # Module-level kill switch import — enables mocking in tests
@@ -205,7 +213,8 @@ def liquidate_all_positions(brokers: List) -> Dict[str, int]:
     """
     Force-sell every open position across all provided broker instances.
 
-    Uses force_liquidate() where available; falls back to close_position().
+    Submits liquidation orders exclusively via ExecutionPipeline helper.
+    If the helper is unavailable, liquidation fails closed.
 
     Args:
         brokers: List of broker instances.
@@ -234,22 +243,19 @@ def liquidate_all_positions(brokers: List) -> Dict[str, int]:
                     continue
 
                 try:
-                    force_liq = getattr(broker, 'force_liquidate', None)
-                    if force_liq:
-                        result = force_liq(
-                            symbol=symbol,
-                            quantity=quantity,
-                            reason="Emergency reset liquidation"
-                        )
+                    if submit_market_order_via_pipeline is None:
+                        result = {
+                            "status": "error",
+                            "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
+                        }
                     else:
-                        result = broker.place_market_order(
+                        result = submit_market_order_via_pipeline(
+                            broker=broker,
                             symbol=symbol,
                             side='sell',
                             quantity=quantity,
                             size_type='base',
-                            ignore_balance=True,
-                            ignore_min_trade=True,
-                            force_liquidate=True,
+                            strategy='EmergencyReset',
                         )
 
                     status = result.get('status', 'unknown') if result else 'unknown'
@@ -325,13 +331,15 @@ def sweep_dust(brokers: List, dust_threshold_usd: float = 1.00) -> Dict[str, int
 
                     if 0 < usd_value < dust_threshold_usd:
                         try:
-                            broker.place_market_order(
+                            if submit_market_order_via_pipeline is None:
+                                raise RuntimeError("ExecutionPipeline submit helper unavailable")
+                            submit_market_order_via_pipeline(
+                                broker=broker,
                                 symbol=symbol,
                                 side='sell',
                                 quantity=quantity,
                                 size_type='base',
-                                force_liquidate=True,
-                                ignore_min_trade=True,
+                                strategy='EmergencyResetDustSweep',
                             )
                             logger.info(f"   🗑️  Swept dust: {symbol} (${usd_value:.4f})")
                             count += 1

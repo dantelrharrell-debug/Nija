@@ -44,6 +44,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.smart_position_consolidator")
 
 
@@ -377,8 +385,16 @@ class SmartPositionConsolidator:
                 "   💱 Selling fragment %s qty=%.8f ($%.4f, pnl=%+.2f%%) → %s",
                 symbol, quantity, size_usd, pnl_pct, target_symbol,
             )
-            order = broker.place_market_order(
-                symbol=symbol, side="sell", quantity=quantity, size_type="base"
+            if submit_market_order_via_pipeline is None:
+                raise RuntimeError("ExecutionPipeline submit helper unavailable")
+
+            order = submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=symbol,
+                side="sell",
+                quantity=quantity,
+                size_type="base",
+                strategy="SmartPositionConsolidator",
             )
             filled = bool(
                 order and order.get("status") in {"filled", "completed", "success"}
@@ -431,11 +447,16 @@ class SmartPositionConsolidator:
                 "   🏆 Buying $%.4f of winner %s (smart consolidation)",
                 amount_usd, target_symbol,
             )
-            order = broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                raise RuntimeError("ExecutionPipeline submit helper unavailable")
+
+            order = submit_market_order_via_pipeline(
+                broker=broker,
                 symbol=target_symbol,
                 side="buy",
                 quantity=amount_usd,
                 size_type="quote",
+                strategy="SmartPositionConsolidator",
             )
             filled = bool(
                 order and order.get("status") in {"filled", "completed", "success"}

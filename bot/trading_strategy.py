@@ -10,7 +10,7 @@ import traceback
 import collections
 from pathlib import Path
 from threading import Thread
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from datetime import datetime, timezone
 # dotenv is optional in some runtime environments (e.g., platform-injected env vars only).
 # Fallback keeps imports from crashing when python-dotenv is absent.
@@ -278,18 +278,112 @@ except ImportError:
 
 # Import Execution Pipeline — final connected flow (Steps 1-6)
 try:
-    from execution_pipeline import get_execution_pipeline
+    from execution_pipeline import get_execution_pipeline, PipelineRequest
     EXECUTION_PIPELINE_AVAILABLE = True
     logger.debug("✅ Execution Pipeline loaded - full cross-account orchestration active")
 except ImportError:
     try:
-        from bot.execution_pipeline import get_execution_pipeline
+        from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
         EXECUTION_PIPELINE_AVAILABLE = True
         logger.debug("✅ Execution Pipeline loaded - full cross-account orchestration active")
     except ImportError:
         EXECUTION_PIPELINE_AVAILABLE = False
         logger.warning("⚠️ Execution Pipeline not available")
         get_execution_pipeline = None
+        PipelineRequest = None
+
+
+def _submit_market_order_via_pipeline(
+    broker,
+    symbol: str,
+    side: str,
+    quantity: float,
+    size_type: str = "quote",
+    strategy: str = "TradingStrategy",
+    **_kwargs,
+) -> Dict[str, Any]:
+    """Canonical market-order submit path through ExecutionPipeline/ECEL."""
+    if not (EXECUTION_PIPELINE_AVAILABLE and get_execution_pipeline and PipelineRequest):
+        return {
+            "status": "error",
+            "error": "ExecutionPipeline unavailable and direct broker submit is blocked",
+            "symbol": symbol,
+            "side": side,
+        }
+
+    side_norm = (side or "buy").strip().lower()
+    size_usd = float(max(0.0, quantity))
+    price_hint = None
+
+    if (size_type or "quote").lower() == "base":
+        try:
+            if hasattr(broker, "get_current_price"):
+                _px = float(broker.get_current_price(symbol) or 0.0)
+                if _px > 0:
+                    price_hint = _px
+                    size_usd = float(max(0.0, quantity * _px))
+        except Exception:
+            price_hint = None
+        if price_hint is None or size_usd <= 0:
+            return {
+                "status": "error",
+                "error": "Cannot compile base-size order without valid price hint",
+                "symbol": symbol,
+                "side": side_norm,
+            }
+
+    preferred_broker = "coinbase"
+    try:
+        _bt = getattr(broker, "broker_type", None)
+        if _bt is not None:
+            if hasattr(_bt, "value"):
+                preferred_broker = str(_bt.value).lower()
+            elif isinstance(_bt, str) and _bt.strip():
+                preferred_broker = _bt.strip().lower()
+        elif isinstance(getattr(broker, "NAME", None), str):
+            _name = str(getattr(broker, "NAME")).strip().lower()
+            if "kraken" in _name:
+                preferred_broker = "kraken"
+            elif "coinbase" in _name:
+                preferred_broker = "coinbase"
+            elif "okx" in _name:
+                preferred_broker = "okx"
+            elif "binance" in _name:
+                preferred_broker = "binance"
+            elif "alpaca" in _name:
+                preferred_broker = "alpaca"
+    except Exception:
+        pass
+
+    res = get_execution_pipeline().execute(
+        PipelineRequest(
+            strategy=strategy,
+            symbol=symbol,
+            side=side_norm,
+            size_usd=size_usd,
+            order_type="MARKET",
+            preferred_broker=preferred_broker,
+            price_hint_usd=price_hint,
+        )
+    )
+
+    if not res.success:
+        return {
+            "status": "error",
+            "error": res.error or "ExecutionPipeline rejected order",
+            "symbol": symbol,
+            "side": side_norm,
+        }
+
+    return {
+        "status": "filled",
+        "order_id": "pipeline",
+        "symbol": symbol,
+        "side": side_norm,
+        "filled_price": res.fill_price,
+        "filled_size_usd": res.filled_size_usd,
+        "broker": res.broker,
+    }
 
 # Import Copy Trade Engine — replicate platform trades into all user accounts
 try:
@@ -3192,8 +3286,7 @@ def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=60):
 
 def safe_close_position(broker, symbol: str, quantity: float) -> bool:
     """
-    Safe wrapper around broker.close_position that prevents exchange errors
-    from halting the pipeline.
+    Safe wrapper around canonical pipeline sell submission.
 
     Args:
         broker: Broker instance with a close_position method.
@@ -3207,8 +3300,15 @@ def safe_close_position(broker, symbol: str, quantity: float) -> bool:
         return False
 
     try:
-        broker.close_position(symbol, quantity=quantity)
-        return True
+        result = _submit_market_order_via_pipeline(
+            broker=broker,
+            symbol=symbol,
+            side='sell',
+            quantity=quantity,
+            size_type='base',
+            strategy='TradingStrategySafeClose',
+        )
+        return bool(result and result.get('status') not in ['error', 'unfilled'])
     except Exception as e:
         logger.warning(f"Dust close failed for {symbol}: {e}")
         return False
@@ -6274,8 +6374,15 @@ class TradingStrategy:
                             if hasattr(broker, 'close_position'):
                                 _recovery_sell_submitted = safe_close_position(broker, symbol, quantity)
                             elif hasattr(broker, 'place_market_order'):
-                                broker.place_market_order(symbol, side='sell', quantity=quantity)
-                                _recovery_sell_submitted = True
+                                _recovery_res = _submit_market_order_via_pipeline(
+                                    broker,
+                                    symbol=symbol,
+                                    side='sell',
+                                    quantity=quantity,
+                                    size_type='base',
+                                    strategy='TradingStrategyRecovery',
+                                )
+                                _recovery_sell_submitted = _recovery_res.get('status') not in ('error', 'unfilled')
                             else:
                                 logger.error(f"   [{i}/{positions_found}] ❌ Cannot liquidate {symbol}: broker has no close_position or place_market_order")
                             if _recovery_sell_submitted:
@@ -8229,19 +8336,22 @@ class TradingStrategy:
             # Note: size_type='quote' means size is in USD, not base currency
             # If broker doesn't support size_type parameter, this will use the size as base currency amount
             try:
-                order_result = broker.place_market_order(
+                order_result = _submit_market_order_via_pipeline(
+                    broker,
                     symbol=heartbeat_symbol,
                     side='buy',
-                    size=HEARTBEAT_TRADE_SIZE_USD,
+                    quantity=HEARTBEAT_TRADE_SIZE_USD,
                     size_type='quote'  # USD amount, not base currency amount
                 )
             except TypeError:
                 # Broker doesn't support size_type parameter - fallback to positional args
                 logger.debug(f"   Broker {broker_name} doesn't support size_type parameter, using default")
-                order_result = broker.place_market_order(
+                order_result = _submit_market_order_via_pipeline(
+                    broker,
                     symbol=heartbeat_symbol,
                     side='buy',
-                    size=HEARTBEAT_TRADE_SIZE_USD
+                    quantity=HEARTBEAT_TRADE_SIZE_USD,
+                    size_type='quote',
                 )
             
             if order_result and order_result.get('status') in ['filled', 'open', 'pending']:
@@ -10770,11 +10880,13 @@ class TradingStrategy:
                                                     logger.error(f"   ❌ DEEP DRAWDOWN EXIT FAILED: {_dd_error}")
                                             else:
                                                 try:
-                                                    _dd_res = active_broker.place_market_order(
+                                                    _dd_res = _submit_market_order_via_pipeline(
+                                                        active_broker,
                                                         symbol=symbol,
                                                         side='sell',
                                                         quantity=quantity,
                                                         size_type='base',
+                                                        strategy='TradingStrategyDeepDrawdown',
                                                     )
                                                     if _dd_res and _dd_res.get('status') not in ['error', 'unfilled']:
                                                         logger.info(f"   ✅ DEEP DRAWDOWN EXIT: {symbol} order={_dd_res.get('order_id', 'N/A')}")
@@ -10818,11 +10930,13 @@ class TradingStrategy:
                                                 # Fallback to legacy stop-loss if protective executor not available
                                                 logger.warning("   ⚠️ Protective stop-loss executor not available, using legacy method")
                                                 try:
-                                                    result = active_broker.place_market_order(
+                                                    result = _submit_market_order_via_pipeline(
+                                                        active_broker,
                                                         symbol=symbol,
                                                         side='sell',
                                                         quantity=quantity,
-                                                        size_type='base'
+                                                        size_type='base',
+                                                        strategy='TradingStrategyPrimaryStop',
                                                     )
 
                                                     if result and result.get('status') not in ['error', 'unfilled']:
@@ -10875,11 +10989,13 @@ class TradingStrategy:
                                             else:
                                                 # Fallback
                                                 try:
-                                                    result = active_broker.place_market_order(
+                                                    result = _submit_market_order_via_pipeline(
+                                                        active_broker,
                                                         symbol=symbol,
                                                         side='sell',
                                                         quantity=quantity,
-                                                        size_type='base'
+                                                        size_type='base',
+                                                        strategy='TradingStrategyMicroStop',
                                                     )
 
                                                     if result and result.get('status') not in ['error', 'unfilled']:
@@ -10968,11 +11084,13 @@ class TradingStrategy:
                                             exit_success = False
                                             try:
                                                 # Attempt 1: Direct market sell
-                                                result = active_broker.place_market_order(
+                                                result = _submit_market_order_via_pipeline(
+                                                    active_broker,
                                                     symbol=symbol,
                                                     side='sell',
                                                     quantity=quantity,
-                                                    size_type='base'
+                                                    size_type='base',
+                                                    strategy='TradingStrategyCatastrophicStop',
                                                 )
 
                                                 # Enhanced logging for catastrophic events
@@ -10992,11 +11110,13 @@ class TradingStrategy:
                                                     logger.error(f"   🔄 Retrying catastrophic exit (attempt 2/2)...")
                                                     time.sleep(1)  # Brief pause
 
-                                                    result = active_broker.place_market_order(
+                                                    result = _submit_market_order_via_pipeline(
+                                                        active_broker,
                                                         symbol=symbol,
                                                         side='sell',
                                                         quantity=quantity,
-                                                        size_type='base'
+                                                        size_type='base',
+                                                        strategy='TradingStrategyCatastrophicStopRetry',
                                                     )
                                                     if result and result.get('status') not in ['error', 'unfilled']:
                                                         order_id = result.get('order_id', 'N/A')
@@ -11781,14 +11901,16 @@ class TradingStrategy:
                             if use_force_liquidate:
                                 logger.info(f"  🛡️ PROTECTIVE MODE: Using force_liquidate for Coinbase exit")
 
-                            result = exit_broker.place_market_order(
+                            result = _submit_market_order_via_pipeline(
+                                exit_broker,
                                 symbol=symbol,
                                 side='sell',
                                 quantity=quantity,
                                 size_type='base',
-                                force_liquidate=use_force_liquidate,  # Bypass ALL validation for Coinbase protective exits
-                                ignore_balance=use_force_liquidate,   # Skip balance checks
-                                ignore_min_trade=use_force_liquidate  # Skip minimum trade size checks
+                                strategy='TradingStrategyExit',
+                                force_liquidate=use_force_liquidate,
+                                ignore_balance=use_force_liquidate,
+                                ignore_min_trade=use_force_liquidate,
                             )
 
                             # Handle dust positions separately from actual failures
@@ -16320,11 +16442,13 @@ class TradingStrategy:
 
                                                 try:
                                                     logger.info(f"      Closing {close_symbol}: {close_qty:.8f}")
-                                                    result = active_broker.place_market_order(
-                                                        close_symbol,
-                                                        'sell',
-                                                        close_qty,
-                                                        size_type='base'
+                                                    result = _submit_market_order_via_pipeline(
+                                                        active_broker,
+                                                        symbol=close_symbol,
+                                                        side='sell',
+                                                        quantity=close_qty,
+                                                        size_type='base',
+                                                        strategy='TradingStrategyRotation',
                                                     )
 
                                                     if result and result.get('status') not in ['error', 'unfilled']:

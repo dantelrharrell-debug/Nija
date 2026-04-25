@@ -47,6 +47,15 @@ from bot.multi_asset_executor import AssetClass, BrokerAdapter
 
 logger = logging.getLogger("nija.live_broker_adapters")
 
+try:
+    from bot.execution_authority_context import has_execution_authority
+except ImportError:
+    try:
+        from execution_authority_context import has_execution_authority
+    except ImportError:
+        def has_execution_authority() -> bool:
+            return False
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -61,6 +70,25 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) -> Optional[Dict]:
+    enforced = True
+    if not enforced or has_execution_authority():
+        return None
+    msg = "Execution authority violation: order must be submitted via ExecutionPipeline"
+    logger.error(
+        "[Authority] blocked broker=%s symbol=%s side=%s size=%s",
+        broker_name,
+        symbol,
+        side,
+        size,
+    )
+    return {
+        "status": "ERROR",
+        "error": msg,
+        "broker": broker_name,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +175,10 @@ class AlpacaEquityBrokerAdapter(BrokerAdapter):
         """
         if not self._connected or self._client is None:
             return self._stub_fill(symbol, side, size)
+
+        blocked = _authority_blocked(self.NAME, symbol, side, size)
+        if blocked is not None:
+            return blocked
 
         try:
             from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
@@ -328,6 +360,10 @@ class InteractiveBrokersFuturesAdapter(BrokerAdapter):
         if not self._connected or self._ib is None:
             return self._stub_fill(symbol, side, size)
 
+        blocked = _authority_blocked(self.NAME, symbol, side, size)
+        if blocked is not None:
+            return blocked
+
         try:
             import ib_insync as ibi
 
@@ -508,6 +544,10 @@ class TradierOptionsAdapter(BrokerAdapter):
         """
         if not self._connected:
             return self._stub_fill(symbol, side, size)
+
+        blocked = _authority_blocked(self.NAME, symbol, side, size)
+        if blocked is not None:
+            return blocked
 
         try:
             import requests

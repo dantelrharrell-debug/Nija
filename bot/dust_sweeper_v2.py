@@ -35,6 +35,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.dust_sweeper_v2")
 
 # ---------------------------------------------------------------------------
@@ -302,11 +310,16 @@ class DustSweeperV2:
                         "   🔁 Consolidating %s ($%.4f, qty=%.8f) → USDT",
                         sym, best_candidate_usd, qty,
                     )
-                    sell_result = broker.place_market_order(
+                    if submit_market_order_via_pipeline is None:
+                        raise RuntimeError("ExecutionPipeline submit helper unavailable")
+
+                    sell_result = submit_market_order_via_pipeline(
+                        broker=broker,
                         symbol=sym,
                         side="sell",
                         quantity=qty,
                         size_type="base",
+                        strategy="DustSweeperV2",
                     )
                     ok = (
                         sell_result is not None

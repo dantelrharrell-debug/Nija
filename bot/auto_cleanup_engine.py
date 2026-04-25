@@ -31,7 +31,7 @@ Architecture
   │    2. _liquidate_dust(broker, dust_entries)  → to USDT          │
   │    3. _merge_micro(broker, micro_entries, best_asset)            │
   │         ├─ _rank_assets(positions)  → best-performing symbol    │
-  │         └─ broker.place_market_order(target, side='buy')        │
+    │         └─ submit_market_order_via_pipeline(...)                 │
   └──────────────────────────────────────────────────────────────────┘
 
 Author: NIJA Trading Systems
@@ -46,6 +46,14 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
 
 logger = logging.getLogger("nija.auto_cleanup")
 
@@ -317,7 +325,7 @@ class AutoCleanupEngine:
     @property
     def symbol_blacklist(self) -> set:
         """Read-only view of symbols blacklisted due to sub-minimum order size."""
-        return frozenset(self._symbol_blacklist)
+        return set(self._symbol_blacklist)
 
     # ------------------------------------------------------------------
     # Public API
@@ -669,11 +677,16 @@ class AutoCleanupEngine:
                 "   💱 %s: liquidating %s qty=%.8f ($%.4f) → USDT",
                 reason, symbol, quantity, size_usd,
             )
-            order = broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                raise RuntimeError("ExecutionPipeline submit helper unavailable")
+
+            order = submit_market_order_via_pipeline(
+                broker=broker,
                 symbol=symbol,
                 side="sell",
                 quantity=quantity,
                 size_type="base",
+                strategy="AutoCleanupEngine",
             )
             if self._is_filled(order):
                 msg = f"Liquidated {symbol} ${size_usd:.4f} → USDT | order={order.get('order_id', '?')}"
@@ -771,11 +784,16 @@ class AutoCleanupEngine:
                 "   🔀 MERGE: closing %s qty=%.8f ($%.4f)",
                 symbol, quantity, size_usd,
             )
-            close_order = broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                raise RuntimeError("ExecutionPipeline submit helper unavailable")
+
+            close_order = submit_market_order_via_pipeline(
+                broker=broker,
                 symbol=symbol,
                 side="sell",
                 quantity=quantity,
                 size_type="base",
+                strategy="AutoCleanupEngine",
             )
             if not self._is_filled(close_order):
                 msg = f"Source close failed: {close_order} – merge aborted for {symbol}"
@@ -790,11 +808,13 @@ class AutoCleanupEngine:
             logger.info(
                 "   🎯 MERGE: buying $%.4f of %s", size_usd, target_symbol
             )
-            buy_order = broker.place_market_order(
+            buy_order = submit_market_order_via_pipeline(
+                broker=broker,
                 symbol=target_symbol,
                 side="buy",
                 quantity=size_usd,
-                size_type="quote",   # Re-invest the USD proceeds from the closed position
+                size_type="quote",
+                strategy="AutoCleanupEngine",
             )
             if self._is_filled(buy_order):
                 msg = (

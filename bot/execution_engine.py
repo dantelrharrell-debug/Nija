@@ -17,6 +17,15 @@ from collections import defaultdict, deque
 
 logger = logging.getLogger("nija")
 
+try:
+    from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+except ImportError:
+    try:
+        from execution_pipeline import get_execution_pipeline, PipelineRequest
+    except ImportError:
+        get_execution_pipeline = None  # type: ignore
+        PipelineRequest = None         # type: ignore
+
 # Import canonical ExecutionResult contract
 try:
     from bot.execution_result import (
@@ -473,6 +482,77 @@ class ExecutionEngine:
                 self.profit_logger = None
         else:
             self.profit_logger = None
+
+    def _submit_market_order_via_pipeline(
+        self,
+        broker_client,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        price_hint_usd: Optional[float] = None,
+        strategy_name: str = "ExecutionEngine",
+    ) -> Dict[str, Any]:
+        """Canonical market-order submit through ExecutionPipeline/ECEL."""
+        if get_execution_pipeline is None or PipelineRequest is None:
+            return {
+                "status": "error",
+                "error": "ExecutionPipeline unavailable",
+                "symbol": symbol,
+                "side": side,
+            }
+
+        preferred_broker = "coinbase"
+        try:
+            btype = getattr(broker_client, "broker_type", None)
+            if btype is not None:
+                if hasattr(btype, "value"):
+                    preferred_broker = str(btype.value).lower()
+                elif isinstance(btype, str) and btype.strip():
+                    preferred_broker = btype.strip().lower()
+            elif isinstance(getattr(broker_client, "NAME", None), str):
+                name = str(getattr(broker_client, "NAME")).strip().lower()
+                if "kraken" in name:
+                    preferred_broker = "kraken"
+                elif "coinbase" in name:
+                    preferred_broker = "coinbase"
+                elif "okx" in name:
+                    preferred_broker = "okx"
+                elif "binance" in name:
+                    preferred_broker = "binance"
+                elif "alpaca" in name:
+                    preferred_broker = "alpaca"
+        except Exception:
+            pass
+
+        res = get_execution_pipeline().execute(
+            PipelineRequest(
+                strategy=strategy_name,
+                symbol=symbol,
+                side=side,
+                size_usd=float(max(0.0, size_usd)),
+                order_type="MARKET",
+                preferred_broker=preferred_broker,
+                price_hint_usd=price_hint_usd,
+            )
+        )
+
+        if not res.success:
+            return {
+                "status": "error",
+                "error": res.error or "ExecutionPipeline rejected order",
+                "symbol": symbol,
+                "side": side,
+            }
+
+        return {
+            "status": "filled",
+            "order_id": "pipeline",
+            "symbol": symbol,
+            "side": side,
+            "filled_price": res.fill_price,
+            "filled_size_usd": res.filled_size_usd,
+            "broker": res.broker,
+        }
 
     def _assert_bootstrap_ready_for_execution_locks(self, strict: bool = False) -> bool:
         """
@@ -1724,10 +1804,12 @@ class ExecutionEngine:
                         _entry_t0 = _time.monotonic()
                         _fallback_exc: Optional[Exception] = None
                         try:
-                            result = self.broker_client.place_market_order(
+                            result = self._submit_market_order_via_pipeline(
+                                broker_client=self.broker_client,
                                 symbol=symbol,
                                 side=order_side,
-                                quantity=position_size
+                                size_usd=position_size,
+                                price_hint_usd=entry_price,
                             )
                         except Exception as _fb_exc:
                             _fallback_exc = _fb_exc
@@ -1815,10 +1897,12 @@ class ExecutionEngine:
                     _entry_t0 = _time.monotonic()
                     _market_exc: Optional[Exception] = None
                     try:
-                        result = self.broker_client.place_market_order(
+                        result = self._submit_market_order_via_pipeline(
+                            broker_client=self.broker_client,
                             symbol=symbol,
                             side=order_side,
-                            quantity=_order_quantity
+                            size_usd=_order_size_usd,
+                            price_hint_usd=entry_price,
                         )
                     except Exception as _mk_exc:
                         _market_exc = _mk_exc
@@ -2243,10 +2327,13 @@ class ExecutionEngine:
                     _exit_t0 = _time.monotonic()
                     _exit_exc: Optional[Exception] = None
                     try:
-                        result = self.broker_client.place_market_order(
+                        result = self._submit_market_order_via_pipeline(
+                            broker_client=self.broker_client,
                             symbol=symbol,
                             side=order_side,
-                            quantity=_exit_quantity
+                            size_usd=exit_size,
+                            price_hint_usd=exit_price,
+                            strategy_name="ExecutionEngineExit",
                         )
                     except Exception as _ex_exc:
                         _exit_exc = _ex_exc
@@ -3088,11 +3175,20 @@ class ExecutionEngine:
             logger.warning(f"   🛡️ PROTECTIVE EXIT MODE — Risk Management Override Active")
 
             # Attempt 1: Direct market sell
-            result = broker_client.place_market_order(
+            _px_hint = 0.0
+            try:
+                if hasattr(broker_client, "get_current_price"):
+                    _px_hint = float(broker_client.get_current_price(symbol) or 0.0)
+            except Exception:
+                _px_hint = 0.0
+
+            result = self._submit_market_order_via_pipeline(
+                broker_client=broker_client,
                 symbol=symbol,
                 side='sell',
-                quantity=quantity,
-                size_type='base'
+                size_usd=quantity * _px_hint,
+                price_hint_usd=_px_hint if _px_hint > 0 else None,
+                strategy_name="ExecutionEngineForcedExit",
             )
 
             # Check if successful
@@ -3111,11 +3207,13 @@ class ExecutionEngine:
                 import time
                 time.sleep(1)  # Brief pause before retry
 
-                result = broker_client.place_market_order(
+                result = self._submit_market_order_via_pipeline(
+                    broker_client=broker_client,
                     symbol=symbol,
                     side='sell',
-                    quantity=quantity,
-                    size_type='base'
+                    size_usd=quantity * _px_hint,
+                    price_hint_usd=_px_hint if _px_hint > 0 else None,
+                    strategy_name="ExecutionEngineForcedExit",
                 )
 
                 if result and self._normalized_order_status(result) not in ['error', 'unfilled', 'skipped', 'rejected']:
@@ -3160,10 +3258,13 @@ class ExecutionEngine:
             if self.broker_client:
                 exit_side = 'sell' if side == 'long' else 'buy'
 
-                result = self.broker_client.place_market_order(
+                result = self._submit_market_order_via_pipeline(
+                    broker_client=self.broker_client,
                     symbol=symbol,
                     side=exit_side,
-                    quantity=position_size
+                    size_usd=position_size,
+                    price_hint_usd=entry_price,
+                    strategy_name="ExecutionEngineImmediateClose",
                 )
 
                 if self._normalized_order_status(result) == 'error':

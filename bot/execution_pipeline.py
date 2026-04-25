@@ -72,8 +72,19 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from contextlib import contextmanager
 
 logger = logging.getLogger("nija.execution_pipeline")
+
+try:
+    from bot.execution_authority_context import execution_authority_scope
+except ImportError:
+    try:
+        from execution_authority_context import execution_authority_scope
+    except ImportError:
+        @contextmanager
+        def execution_authority_scope():
+            yield
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +188,8 @@ class ExecutionPipeline:
         self._lock = threading.Lock()
         self._ecel_refresh_stop = threading.Event()
         self._ecel_refresh_thread: Optional[threading.Thread] = None
+        self._ecel_required = True
+        self._ecel_fail_closed = True
         self._throttler = self._load_throttler()
         self._router = self._load_router()
         self._multi_router = self._load_multi_router()
@@ -188,10 +201,14 @@ class ExecutionPipeline:
         self._last_run: Optional[str] = None
 
         logger.info(
-            "ExecutionPipeline initialised | throttler=%s | router=%s | multi_router=%s",
+            "ExecutionPipeline initialised | throttler=%s | router=%s | multi_router=%s | "
+            "ecel_required=%s | ecel_fail_closed=%s | ecel_loaded=%s",
             self._throttler is not None,
             self._router is not None,
             self._multi_router is not None,
+            self._ecel_required,
+            self._ecel_fail_closed,
+            self._ecel is not None,
         )
 
     # ------------------------------------------------------------------
@@ -215,6 +232,18 @@ class ExecutionPipeline:
         t_start = time.monotonic()
         reservation_id: Optional[str] = None
         effective_request = request
+
+        if self._ecel is None and self._ecel_required:
+            error = "ECEL unavailable: strict execution gate blocks order dispatch"
+            logger.error("ExecutionPipeline: %s", error)
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=error,
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
 
         # ECEL pre-trade compile: schema checks, step-size compiler, reservation.
         if self._ecel is not None:
@@ -244,7 +273,18 @@ class ExecutionPipeline:
                 reservation_id = compiled.reservation_id
                 effective_request = replace(request, size_usd=compiled.compiled_notional_usd)
             except Exception as exc:
-                logger.warning("ExecutionPipeline: ECEL compile failed, using raw request: %s", exc)
+                msg = f"ECEL compile exception: {exc}"
+                if self._ecel_fail_closed or self._ecel_required:
+                    logger.error("ExecutionPipeline: %s", msg)
+                    return PipelineResult(
+                        success=False,
+                        symbol=request.symbol,
+                        side=request.side,
+                        size_usd=request.size_usd,
+                        error=f"ECEL reject: {msg}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+                logger.warning("ExecutionPipeline: %s; using raw request", msg)
 
         # ── Priority-2: Trade Throttler ──────────────────────────────────
         if self._throttler is not None:
@@ -271,7 +311,8 @@ class ExecutionPipeline:
                 logger.warning("ExecutionPipeline: throttler check failed: %s", exc)
 
         # ── Route to execution ───────────────────────────────────────────
-        result = self._dispatch(effective_request, t_start)
+        with execution_authority_scope():
+            result = self._dispatch(effective_request, t_start)
 
         if reservation_id and self._ecel is not None and not result.success:
             self._ecel.release_reservation(reservation_id)
@@ -314,6 +355,8 @@ class ExecutionPipeline:
                     refresh_health = self._ecel.schema.get_refresh_health()
                 status["ecel"] = {
                     "enabled": True,
+                    "required": self._ecel_required,
+                    "fail_closed": self._ecel_fail_closed,
                     "coinbase_rules": len(schema.get("coinbase", {})),
                     "kraken_rules": len(schema.get("kraken", {})),
                     "background_refresh_thread_alive": bool(
@@ -324,7 +367,11 @@ class ExecutionPipeline:
             except Exception:
                 status["ecel"] = {"enabled": True}
         else:
-            status["ecel"] = {"enabled": False}
+            status["ecel"] = {
+                "enabled": False,
+                "required": self._ecel_required,
+                "fail_closed": self._ecel_fail_closed,
+            }
         return status
 
     def stop_background_tasks(self) -> None:
@@ -498,7 +545,10 @@ class ExecutionPipeline:
                 return compiler
             except Exception as exc:
                 logger.debug("ExecutionPipeline: could not load ECEL module %s: %s", mod_name, exc)
-        logger.warning("ExecutionPipeline: ECEL compiler unavailable -- pre-trade compile disabled")
+        logger.warning(
+            "ExecutionPipeline: ECEL compiler unavailable -- %s",
+            "blocking execution (strict mode)" if self._ecel_required else "pre-trade compile disabled",
+        )
         return None
 
     def _start_ecel_background_refresh(self) -> None:

@@ -50,27 +50,36 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.smart_execution")
 
+try:
+    from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+except ImportError:
+    try:
+        from execution_pipeline import get_execution_pipeline, PipelineRequest
+    except ImportError:
+        get_execution_pipeline = None  # type: ignore
+        PipelineRequest = None         # type: ignore
+
 # Try to import existing routing system
 try:
-    from bot.liquidity_routing_system import LiquidityRoutingSystem, RoutedOrderPlan
+    from bot.liquidity_routing_system import LiquidityRoutingSystem
     _ROUTING_AVAILABLE = True
 except ImportError:
     try:
-        from liquidity_routing_system import LiquidityRoutingSystem, RoutedOrderPlan
+        from liquidity_routing_system import LiquidityRoutingSystem
         _ROUTING_AVAILABLE = True
     except ImportError:
         _ROUTING_AVAILABLE = False
         LiquidityRoutingSystem = None   # type: ignore
-        RoutedOrderPlan = None          # type: ignore
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +243,7 @@ class SmartExecutionEngine:
         simulation_mode: bool = True,
     ):
         self._broker = broker_client
-        self._router: Optional[LiquidityRoutingSystem] = routing_system
+        self._router: Optional[Any] = routing_system
         self._on_slice_filled = on_slice_filled
         self.impact_factor = impact_factor
         self.simulation_mode = (broker_client is None) or simulation_mode
@@ -242,6 +251,7 @@ class SmartExecutionEngine:
         self._plans: Dict[str, ExecutionPlan] = {}
         self._lock = threading.Lock()
         self._plan_counter = 0
+        self._pipeline_required = True
 
     # ------------------------------------------------------------------
     # Plan creation
@@ -461,22 +471,46 @@ class SmartExecutionEngine:
             elif _ROUTING_AVAILABLE and self._router:
                 plan_resp = self._router.route_order(symbol, side, sl.size)
                 # LiquidityRoutingSystem returns a RoutedOrderPlan
-                sl.filled_price = getattr(plan_resp, "average_price", arrival_price)
+                sl.filled_price = float(getattr(plan_resp, "average_price", arrival_price) or arrival_price)
                 sl.filled_size  = sl.size
-                sl.cost_usd     = sl.filled_price * sl.filled_size
+                sl.cost_usd     = float(sl.filled_price) * float(sl.filled_size)
                 sl.venue        = "multi_venue"
                 sl.status       = SliceStatus.FILLED
+            elif get_execution_pipeline is not None and PipelineRequest is not None:
+                ref_price = sl.limit_price if sl.limit_price and sl.limit_price > 0 else arrival_price
+                if ref_price <= 0:
+                    raise RuntimeError("SmartExec requires a valid reference price for ECEL compile")
+
+                notional_usd = max(0.0, sl.size * ref_price)
+                req = PipelineRequest(
+                    strategy="SmartExecutionEngine",
+                    symbol=symbol,
+                    side=side.lower(),
+                    size_usd=notional_usd,
+                    order_type="LIMIT" if sl.limit_price else "MARKET",
+                    price_hint_usd=ref_price,
+                )
+                res = get_execution_pipeline().execute(req)
+                if not res.success:
+                    sl.status = SliceStatus.FAILED
+                    sl.error = res.error
+                else:
+                    sl.filled_price = res.fill_price or ref_price
+                    filled_usd = res.filled_size_usd if res.filled_size_usd > 0 else notional_usd
+                    sl.filled_size = filled_usd / max(sl.filled_price, 1e-12)
+                    sl.cost_usd = sl.filled_price * sl.filled_size
+                    sl.venue = res.broker or "execution_pipeline"
+                    sl.status = SliceStatus.FILLED
             elif self._broker:
-                resp = self._broker.place_order(symbol, side, sl.size)
-                sl.filled_price = resp.get("filled_price", arrival_price)
-                sl.filled_size  = resp.get("filled_size", sl.size)
-                sl.cost_usd     = sl.filled_price * sl.filled_size
-                sl.venue        = "direct"
-                sl.status       = SliceStatus.FILLED if resp.get("status") != "ERROR" else SliceStatus.FAILED
-                sl.error        = resp.get("error", "")
+                sl.status = SliceStatus.FAILED
+                sl.error = "ExecutionPipeline unavailable and direct broker bypass blocked"
             else:
                 sl.status = SliceStatus.SKIPPED
-                sl.error  = "No broker or router configured"
+                sl.error  = (
+                    "ExecutionPipeline unavailable and direct broker bypass blocked"
+                    if self._pipeline_required
+                    else "No broker or router configured"
+                )
 
         except Exception as exc:
             sl.status = SliceStatus.FAILED

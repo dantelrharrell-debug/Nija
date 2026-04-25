@@ -20,6 +20,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.continuous_dust_monitor")
 
 # Default dust threshold – positions below this USD value are swept
@@ -320,38 +328,28 @@ class ContinuousDustMonitor:
         Attempt to close a position via the broker API.
 
         Tries (in order):
-        1. ``broker.close_position(symbol)``
-        2. ``broker.place_order(symbol, 'sell', 'market', quantity)``
+        1. ``submit_market_order_via_pipeline(...)``
 
         Returns:
             ``(success, human-readable message)``
         """
-        # Strategy 1 – dedicated close method
-        if hasattr(broker, "close_position"):
-            try:
-                result = broker.close_position(symbol, quantity=quantity)
-                if result and result.get("status") not in ("error", "failed"):
-                    return True, f"close_position succeeded (status={result.get('status')})"
-                return False, f"close_position returned error: {result}"
-            except Exception as exc:
-                logger.debug(f"      close_position raised: {exc}")
+        if submit_market_order_via_pipeline is None:
+            return False, "ExecutionPipeline submit helper unavailable; direct broker fallback blocked"
 
-        # Strategy 2 – market sell order
-        if hasattr(broker, "place_order"):
-            try:
-                result = broker.place_order(
-                    symbol=symbol,
-                    side="sell",
-                    order_type="market",
-                    size=quantity,
-                )
-                if result and result.get("status") not in ("error", "failed"):
-                    return True, f"place_order sell succeeded (status={result.get('status')})"
-                return False, f"place_order returned error: {result}"
-            except Exception as exc:
-                return False, f"place_order raised: {exc}"
-
-        return False, "Broker has no close_position or place_order method"
+        try:
+            result = submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=symbol,
+                side="sell",
+                quantity=quantity,
+                size_type="base",
+                strategy="ContinuousDustMonitor",
+            )
+            if result and result.get("status") not in ("error", "failed"):
+                return True, f"pipeline sell succeeded (status={result.get('status')})"
+            return False, f"pipeline sell returned error: {result}"
+        except Exception as exc:
+            return False, f"pipeline sell raised: {exc}"
 
 
 # ---------------------------------------------------------------------------

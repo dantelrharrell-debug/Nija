@@ -46,6 +46,15 @@ except ImportError:
         def get_circuit_breaker(*args, **kwargs):  # type: ignore[misc]
             return None
 
+try:
+    from bot.execution_authority_context import has_execution_authority
+except ImportError:
+    try:
+        from execution_authority_context import has_execution_authority
+    except ImportError:
+        def has_execution_authority() -> bool:
+            return False
+
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
 # Note: The flag name is specific to clarify we're checking for timeout exception classes,
@@ -521,6 +530,39 @@ except ImportError:
 
 # Configure logger for broker operations (must be before imports that use it)
 logger = logging.getLogger('nija.broker')
+
+
+def _reject_if_unauthorized_order_submit(
+    broker_name: str,
+    symbol: str,
+    side: str,
+    quantity: float,
+) -> Optional[Dict[str, Any]]:
+    """Fail closed when direct broker order submit bypasses ExecutionPipeline."""
+    enforced = True
+    if has_execution_authority():
+        return None
+
+    msg = (
+        "Execution authority violation: broker order submission must originate "
+        "from ExecutionPipeline"
+    )
+    logger.error(
+        "🔒 %s | broker=%s symbol=%s side=%s qty=%s",
+        msg,
+        broker_name,
+        symbol,
+        side,
+        quantity,
+    )
+    return {
+        "status": "error",
+        "error": "EXECUTION_AUTHORITY_REQUIRED",
+        "message": msg,
+        "broker": broker_name,
+        "symbol": symbol,
+        "side": side,
+    }
 
 # ── Optional: entry price store (local truth for entry prices) ─────────────
 try:
@@ -4025,6 +4067,15 @@ class CoinbaseBroker(BaseBroker):
         except ImportError:
             # App Store mode module not available - continue with other checks
             pass
+
+        _auth_block = _reject_if_unauthorized_order_submit(
+            broker_name=self.broker_type.value,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+        )
+        if _auth_block is not None:
+            return _auth_block
         
         try:
             # CRITICAL FIX (Jan 10, 2026): Validate symbol parameter before any API calls
@@ -6029,6 +6080,15 @@ class AlpacaBroker(BaseBroker):
                 )
         except ImportError:
             pass
+
+        _auth_block = _reject_if_unauthorized_order_submit(
+            broker_name=self.broker_type.value,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+        )
+        if _auth_block is not None:
+            return _auth_block
         
         try:
             # 🔒 LAYER 1: BROKER ISOLATION CHECK
@@ -6532,6 +6592,15 @@ class BinanceBroker(BaseBroker):
         Returns:
             dict: Order result with status, order_id, etc.
         """
+        _auth_block = _reject_if_unauthorized_order_submit(
+            broker_name=self.broker_type.value,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+        )
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             # 🔒 LAYER 1: BROKER ISOLATION CHECK
             _iso = _check_broker_isolation(self.broker_type, side)
@@ -9450,6 +9519,15 @@ class KrakenBroker(BaseBroker):
         except ImportError:
             pass
 
+        _auth_block = _reject_if_unauthorized_order_submit(
+            broker_name=self.broker_type.value,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+        )
+        if _auth_block is not None:
+            return _auth_block
+
         # 🔒 LAYER 1: BROKER ISOLATION CHECK (Step 6)
         # Replaces raise RuntimeError("Capital below minimum")
         # With: logger.warning("Kraken isolated mode: non-execution broker")
@@ -11244,6 +11322,15 @@ class OKXBroker(BaseBroker):
         Returns:
             dict: Order result with status, order_id, etc.
         """
+        _auth_block = _reject_if_unauthorized_order_submit(
+            broker_name=self.broker_type.value,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+        )
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             # 🔒 LAYER 1: BROKER ISOLATION CHECK
             _iso = _check_broker_isolation(self.broker_type, side)
@@ -11259,10 +11346,14 @@ class OKXBroker(BaseBroker):
             # Determine order side (buy/sell)
             okx_side = side.lower()
 
+            okx_submit = getattr(self.trade_api, 'place_order', None)
+            if okx_submit is None:
+                return {"status": "error", "error": "OKX trade API missing place_order"}
+
             # Place market order
             # For spot trading: tdMode = 'cash'
             # For margin/futures: tdMode = 'cross' or 'isolated'
-            result = self.trade_api.place_order(
+            result = okx_submit(
                 instId=okx_symbol,
                 tdMode='cash',  # Spot trading mode
                 side=okx_side,
@@ -12529,7 +12620,60 @@ class BrokerManager:
             }
 
         logger.info(f"📤 Routing {side} order for {symbol} to {broker.broker_type.value}")
-        return broker.place_market_order(symbol, side, quantity)
+
+        try:
+            try:
+                from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+            except ImportError:
+                from execution_pipeline import get_execution_pipeline, PipelineRequest  # type: ignore
+
+            price_hint = None
+            try:
+                if hasattr(broker, "get_current_price"):
+                    p = broker.get_current_price(symbol)
+                    if p and p > 0:
+                        price_hint = float(p)
+            except Exception:
+                price_hint = None
+
+            result = get_execution_pipeline().execute(
+                PipelineRequest(
+                    strategy="BrokerManager",
+                    symbol=symbol,
+                    side=side,
+                    size_usd=float(quantity),
+                    order_type="MARKET",
+                    preferred_broker=broker.broker_type.value,
+                    price_hint_usd=price_hint,
+                )
+            )
+            if not result.success:
+                return {
+                    "status": "error",
+                    "error": result.error or "Execution pipeline rejected order",
+                    "symbol": symbol,
+                    "side": side,
+                    "broker": broker.broker_type.value,
+                }
+
+            return {
+                "status": "filled",
+                "symbol": symbol,
+                "side": side,
+                "broker": result.broker or broker.broker_type.value,
+                "filled_price": result.fill_price,
+                "filled_size_usd": result.filled_size_usd,
+                "latency_ms": result.latency_ms,
+                "order_id": "pipeline",
+            }
+        except Exception as exc:
+            return {
+                "status": "error",
+                "error": f"ExecutionPipeline unavailable and direct broker bypass blocked: {exc}",
+                "symbol": symbol,
+                "side": side,
+                "broker": broker.broker_type.value,
+            }
 
     def is_trading_allowed(self) -> bool:
         """

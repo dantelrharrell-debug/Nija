@@ -40,6 +40,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.auto_dust_sweeper")
 
 # ---------------------------------------------------------------------------
@@ -473,11 +481,15 @@ class AutoDustSweeper:
                 "   💱 Selling dust %s qty=%.8f ($%.4f, pnl=%+.2f%%)",
                 symbol, quantity, size_usd, pnl_pct,
             )
-            order = broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                raise RuntimeError("ExecutionPipeline submit helper unavailable")
+            order = submit_market_order_via_pipeline(
+                broker=broker,
                 symbol=symbol,
                 side="sell",
                 quantity=quantity,
                 size_type="base",
+                strategy="AutoDustSweeperSell",
             )
             filled = bool(
                 order and order.get("status") in {"filled", "completed", "success"}
@@ -518,11 +530,15 @@ class AutoDustSweeper:
             logger.info(
                 "   🎯 Buying $%.4f of %s (consolidation)", amount_usd, self.target_asset
             )
-            order = broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                raise RuntimeError("ExecutionPipeline submit helper unavailable")
+            order = submit_market_order_via_pipeline(
+                broker=broker,
                 symbol=self.target_asset,
                 side="buy",
                 quantity=amount_usd,
                 size_type="quote",
+                strategy="AutoDustSweeperBuyTarget",
             )
             filled = bool(
                 order and order.get("status") in {"filled", "completed", "success"}

@@ -11,6 +11,7 @@ from typing import Dict
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'bot'))
 
 from broker_manager import CoinbaseBroker  # type: ignore
+from pipeline_order_submitter import submit_market_order_via_pipeline  # type: ignore
 
 PRECISION_MAP: Dict[str, int] = {
     'BTC': 8, 'ETH': 6, 'SOL': 4, 'XRP': 2, 'DOGE': 2, 'ADA': 2,
@@ -53,32 +54,23 @@ def sell_symbol(broker: CoinbaseBroker, symbol: str, amount: float) -> bool:
     decimals = PRECISION_MAP.get(symbol, 8)
     formatted_amount = f"{amount:.{decimals}f}"
     print(f"🔴 Selling {symbol}: {formatted_amount}")
-    import uuid
-    order_id = str(uuid.uuid4())
     try:
-        broker.client.market_order_sell(
-            client_order_id=order_id,
-            product_id=product_id,
-            base_size=formatted_amount
+        result = submit_market_order_via_pipeline(
+            broker=broker,
+            symbol=product_id,
+            side='sell',
+            quantity=amount,
+            size_type='base',
+            strategy='SellTopHoldings',
         )
-        print(f"   ✅ ORDER PLACED: {symbol}")
-        return True
+        if result and result.get('status') in ('filled', 'completed', 'success'):
+            print(f"   ✅ ORDER PLACED: {symbol}")
+            return True
+        print(f"   ❌ Rejected: {result}")
+        return False
     except Exception as e:
         print(f"   ❌ Error: {e}")
-        # Fallback: sell 99.5%
-        try:
-            adjusted = amount * 0.995
-            adjusted_formatted = f"{adjusted:.{decimals}f}"
-            broker.client.market_order_sell(
-                client_order_id=order_id,
-                product_id=product_id,
-                base_size=adjusted_formatted
-            )
-            print(f"   ✅ ORDER PLACED (adjusted): {symbol}")
-            return True
-        except Exception as e2:
-            print(f"   ❌ Failed again: {e2}")
-            return False
+        return False
 
 
 def main():
@@ -102,6 +94,8 @@ def main():
     time.sleep(3)
     try:
         bal = broker.get_account_balance()
+        if not isinstance(bal, dict):
+            raise TypeError(f"Unexpected balance payload: {type(bal).__name__}")
         print("📊 UPDATED ACCOUNT:")
         print(f"   Cash: ${bal.get('trading_balance', 0.0):.2f}")
     except Exception as e:

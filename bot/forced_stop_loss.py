@@ -36,6 +36,14 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger("nija.stop_loss")
 
 
@@ -221,11 +229,16 @@ class ForcedStopLoss:
             # Use 'base' size type to sell by quantity (not USD amount)
             logger.warning(f"   🛡️ EXECUTING PROTECTIVE MARKET SELL NOW...")
 
-            result = self.broker.place_market_order(
+            if submit_market_order_via_pipeline is None:
+                return False, None, "ExecutionPipeline submit helper unavailable; direct broker fallback blocked"
+
+            result = submit_market_order_via_pipeline(
+                broker=self.broker,
                 symbol=symbol,
                 side='sell',
                 quantity=quantity,
-                size_type='base'  # Sell by base currency quantity
+                size_type='base',
+                strategy='ForcedStopLoss',
             )
 
             # Check result

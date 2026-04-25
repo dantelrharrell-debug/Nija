@@ -37,6 +37,15 @@ import threading
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
+try:
+    from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+except ImportError:
+    try:
+        from execution_pipeline import get_execution_pipeline, PipelineRequest
+    except ImportError:
+        get_execution_pipeline = None  # type: ignore
+        PipelineRequest = None         # type: ignore
+
 logger = logging.getLogger("nija.tradingview_webhook")
 
 # ---------------------------------------------------------------------------
@@ -278,6 +287,66 @@ def process_webhook_signal(
         optional ``error`` fields.
     """
     results: List[Dict[str, Any]] = []
+    pipeline_required = True
+
+    def _preferred_broker_name() -> str:
+        try:
+            btype = getattr(broker, "broker_type", None)
+            if btype is not None:
+                if hasattr(btype, "value"):
+                    return str(btype.value).lower()
+                if isinstance(btype, str) and btype.strip():
+                    return btype.strip().lower()
+
+            name = getattr(broker, "NAME", None)
+            if isinstance(name, str) and name.strip():
+                normalized = name.strip().lower()
+                if "kraken" in normalized:
+                    return "kraken"
+                if "coinbase" in normalized:
+                    return "coinbase"
+                if "okx" in normalized:
+                    return "okx"
+                if "binance" in normalized:
+                    return "binance"
+                if "alpaca" in normalized:
+                    return "alpaca"
+        except Exception:
+            pass
+        return "coinbase"
+
+    def _price_hint(symbol: str) -> Optional[float]:
+        try:
+            if hasattr(broker, "get_current_price"):
+                px = float(broker.get_current_price(symbol) or 0.0)
+                if px > 0:
+                    return px
+        except Exception:
+            return None
+        return None
+
+    def _execute_via_pipeline(symbol: str, side: str, size_usd: float, price_hint_usd: Optional[float]) -> Optional[Dict[str, Any]]:
+        if get_execution_pipeline is None or PipelineRequest is None:
+            return None
+        res = get_execution_pipeline().execute(
+            PipelineRequest(
+                strategy="TradingViewWebhook",
+                symbol=symbol,
+                side=side,
+                size_usd=size_usd,
+                order_type="MARKET",
+                preferred_broker=_preferred_broker_name(),
+                available_balance_usd=available_balance,
+                price_hint_usd=price_hint_usd,
+            )
+        )
+        return {
+            "status": "filled" if res.success else "error",
+            "order_id": "pipeline",
+            "error": res.error,
+            "filled_size_usd": res.filled_size_usd,
+            "fill_price": res.fill_price,
+        }
 
     for order in orders:
         symbol: str = order["symbol"]
@@ -308,9 +377,19 @@ def process_webhook_signal(
                 logger.info(
                     f"[TV Webhook] Executing BUY {symbol} size=${adjusted_size:.2f}"
                 )
-                order_result = broker.place_market_order(
-                    symbol, "buy", adjusted_size, size_type="quote"
+                order_result = _execute_via_pipeline(
+                    symbol=symbol,
+                    side="buy",
+                    size_usd=adjusted_size,
+                    price_hint_usd=_price_hint(symbol),
                 )
+                if order_result is None and pipeline_required:
+                    result["status"] = "failed"
+                    result["error"] = "ExecutionPipeline unavailable and direct broker bypass blocked"
+                    with _lock:
+                        _webhook_stats["total_rejected"] += 1
+                    results.append(result)
+                    continue
                 if order_result and order_result.get("status") not in ("error", "unfilled"):
                     result["status"] = "executed"
                     result["order_id"] = order_result.get("order_id", "")
@@ -347,9 +426,21 @@ def process_webhook_signal(
                 logger.info(
                     f"[TV Webhook] Executing SELL {symbol} qty={quantity:.8f}"
                 )
-                order_result = broker.place_market_order(
-                    symbol, "sell", quantity, size_type="base"
+                px_hint = _price_hint(symbol)
+                sell_notional = quantity * px_hint if px_hint and px_hint > 0 else 0.0
+                order_result = _execute_via_pipeline(
+                    symbol=symbol,
+                    side="sell",
+                    size_usd=sell_notional,
+                    price_hint_usd=px_hint,
                 )
+                if order_result is None and pipeline_required:
+                    result["status"] = "failed"
+                    result["error"] = "ExecutionPipeline unavailable and direct broker bypass blocked"
+                    with _lock:
+                        _webhook_stats["total_rejected"] += 1
+                    results.append(result)
+                    continue
                 if order_result and order_result.get("status") not in ("error", "unfilled"):
                     result["status"] = "executed"
                     result["order_id"] = order_result.get("order_id", "")

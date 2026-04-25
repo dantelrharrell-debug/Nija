@@ -89,7 +89,7 @@ class RetryHandler:
         Usage:
             @retry_handler.retry_on_failure("place_order")
             def place_order():
-                return broker.place_market_order(...)
+                return submit_market_order_via_pipeline(...)
         """
         def decorator(func: Callable) -> Callable:
             @wraps(func)

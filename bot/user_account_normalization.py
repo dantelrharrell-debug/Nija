@@ -19,6 +19,14 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from dataclasses import dataclass
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # Minimum position size threshold
@@ -187,13 +195,16 @@ class UserAccountNormalization:
                 quantity = float(pos.get('quantity', 0))
                 
                 # Place market sell order
-                result = broker.place_market_order(
+                if submit_market_order_via_pipeline is None:
+                    return False, "ExecutionPipeline submit helper unavailable"
+
+                result = submit_market_order_via_pipeline(
+                    broker=broker,
                     symbol=action.symbol,
                     side='sell',
                     quantity=quantity,
                     size_type='base',
-                    force_liquidate=True,
-                    ignore_min_trade=True
+                    strategy='UserAccountNormalization',
                 )
                 
                 if result and result.get('status') in ['filled', 'completed', 'success']:
@@ -221,13 +232,16 @@ class UserAccountNormalization:
                     
                     quantity = float(pos.get('quantity', 0))
                     
-                    result = broker.place_market_order(
+                    if submit_market_order_via_pipeline is None:
+                        return False, "ExecutionPipeline submit helper unavailable"
+
+                    result = submit_market_order_via_pipeline(
+                        broker=broker,
                         symbol=action.symbol,
                         side='sell',
                         quantity=quantity,
                         size_type='base',
-                        force_liquidate=True,
-                        ignore_min_trade=True
+                        strategy='UserAccountNormalization',
                     )
                     
                     if result and result.get('status') in ['filled', 'completed', 'success']:

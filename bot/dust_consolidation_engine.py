@@ -49,10 +49,24 @@ Usage
 
     for rec in report.recommendations:
         if rec.action == ConsolidationAction.CLOSE:
-            broker.close_position(rec.symbol, quantity=rec.quantity)
+            submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=rec.symbol,
+                side="sell",
+                quantity=rec.quantity,
+                size_type="base",
+                strategy="DustConsolidationEngine",
+            )
         elif rec.action == ConsolidationAction.MERGE:
             # Engine returns the target symbol to consolidate into
-            broker.close_position(rec.symbol, quantity=rec.quantity)
+            submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=rec.symbol,
+                side="sell",
+                quantity=rec.quantity,
+                size_type="base",
+                strategy="DustConsolidationEngine",
+            )
 
 Author: NIJA Trading Systems
 Version: 1.0

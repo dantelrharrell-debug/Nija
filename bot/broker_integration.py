@@ -10,7 +10,7 @@ Each broker implements a common interface for unified trading logic.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 import logging
 import threading
@@ -180,6 +180,45 @@ except ImportError:
             pass
 
 logger = logging.getLogger("nija.broker")
+
+try:
+    from bot.execution_authority_context import has_execution_authority
+except ImportError:
+    try:
+        from execution_authority_context import has_execution_authority
+    except ImportError:
+        def has_execution_authority() -> bool:
+            return False
+
+
+def _reject_if_unauthorized_order_submit(
+    broker_name: str,
+    symbol: str,
+    side: str,
+    size: float,
+) -> Optional[Dict[str, Any]]:
+    if has_execution_authority():
+        return None
+    msg = "Execution authority violation: order submission must originate from ExecutionPipeline"
+    logger.error(
+        "🔒 %s | broker=%s symbol=%s side=%s size=%s",
+        msg,
+        broker_name,
+        symbol,
+        side,
+        size,
+    )
+    return {
+        'order_id': None,
+        'symbol': symbol,
+        'side': side,
+        'size': size,
+        'filled_price': 0.0,
+        'status': 'error',
+        'error': 'EXECUTION_AUTHORITY_REQUIRED',
+        'message': msg,
+        'timestamp': datetime.now(),
+    }
 
 # ── Optional: entry price store (local truth for entry prices) ─────────────
 try:
@@ -567,9 +606,18 @@ class CoinbaseBrokerAdapter(BrokerInterface):
         Returns:
             Order response dict, or None on failure.
         """
+        _auth_block = _reject_if_unauthorized_order_submit('coinbase', symbol, side, size)
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             broker = self._get_broker()
-            result = broker.place_market_order(
+            market_submit = getattr(broker, 'place_market_order', None)
+            if market_submit is None:
+                logger.error("Coinbase broker adapter missing place_market_order")
+                return None
+
+            result = market_submit(
                 symbol=symbol,
                 side=side,
                 quantity=size,
@@ -1619,6 +1667,10 @@ class KrakenBrokerAdapter(BrokerInterface):
         - txid confirmation and verification
         - Enhanced error logging
         """
+        _auth_block = _reject_if_unauthorized_order_submit('kraken', symbol, side, size)
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             if not self.api:
                 logger.error("❌ Kraken API not connected")
@@ -2756,15 +2808,24 @@ class OKXBrokerAdapter(BrokerInterface):
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """Place market order on OKX."""
+        _auth_block = _reject_if_unauthorized_order_submit('okx', symbol, side, size)
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             if not self.trade_api:
+                return None
+
+            okx_submit = getattr(self.trade_api, 'place_order', None)
+            if okx_submit is None:
+                logger.error("OKX trade API missing place_order")
                 return None
 
             # Convert symbol format
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
 
             # Place order
-            result = self.trade_api.place_order(
+            result = okx_submit(
                 instId=okx_symbol,
                 tdMode='cash',  # Spot trading
                 side=side.lower(),
@@ -2803,11 +2864,16 @@ class OKXBrokerAdapter(BrokerInterface):
             if not self.trade_api:
                 return None
 
+            okx_submit = getattr(self.trade_api, 'place_order', None)
+            if okx_submit is None:
+                logger.error("OKX trade API missing place_order")
+                return None
+
             # Convert symbol format
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
 
             # Place limit order
-            result = self.trade_api.place_order(
+            result = okx_submit(
                 instId=okx_symbol,
                 tdMode='cash',
                 side=side.lower(),

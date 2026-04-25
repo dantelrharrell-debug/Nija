@@ -8,6 +8,15 @@ from typing import Optional, Dict, Any
 
 from flask import Flask, jsonify, request
 
+try:
+    from bot.execution_pipeline import get_execution_pipeline, PipelineRequest
+except ImportError:
+    try:
+        from execution_pipeline import get_execution_pipeline, PipelineRequest
+    except ImportError:
+        get_execution_pipeline = None  # type: ignore
+        PipelineRequest = None         # type: ignore
+
 # ----------------------------
 # Logging
 # ----------------------------
@@ -160,22 +169,64 @@ def _try_place_order(product_id: str, side: str, size: float, price: Optional[fl
     logger.info("Attempting to place live order: %s", payload)
 
     attempts = []
-    # Only support RESTClient
-    try:
-        if hasattr(client, "market_order_buy"):
-            resp = client.market_order_buy(product_id=product_id, quote_size=str(size))
-            order_id = getattr(resp, "order_id", getattr(resp, "id", resp.get("id") if isinstance(resp, dict) else repr(resp)))
-            entry = {"ok": True, "library": "market_order_buy", "response": resp, "order_id": order_id, "product_id": product_id, "side": side, "size": size, "price": price}
-            _record_trade_log(entry)
-            return entry
-        else:
-            raise RuntimeError("Client does not support market_order_buy; only RESTClient is supported in live mode.")
-    except Exception as e:
-        attempts.append(("rest attempt", str(e)))
-        logger.warning("RESTClient order attempt failed: %s", e)
-        err = RuntimeError(f"Order attempt failed: {e}")
-        _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
-        raise err
+
+    # Canonical path: ExecutionPipeline -> ECEL compile -> router dispatch.
+    if get_execution_pipeline is not None and PipelineRequest is not None:
+        try:
+            price_hint = float(price) if price is not None else None
+            if (price_hint is None or price_hint <= 0) and hasattr(client, "get_best_bid_ask"):
+                try:
+                    ticker = client.get_best_bid_ask(product_ids=[product_id])
+                    pb = (ticker or {}).get("pricebooks", [{}])[0]
+                    bid = float((pb.get("bids") or [{}])[0].get("price", 0) or 0)
+                    ask = float((pb.get("asks") or [{}])[0].get("price", 0) or 0)
+                    mid = (bid + ask) / 2 if bid > 0 and ask > 0 else 0.0
+                    price_hint = mid if mid > 0 else price_hint
+                except Exception:
+                    pass
+
+            p_res = get_execution_pipeline().execute(
+                PipelineRequest(
+                    strategy="LiveBotScript",
+                    symbol=product_id,
+                    side=side,
+                    size_usd=float(size),
+                    order_type="MARKET",
+                    preferred_broker="coinbase",
+                    price_hint_usd=price_hint,
+                )
+            )
+            if p_res.success:
+                entry = {
+                    "ok": True,
+                    "library": "execution_pipeline",
+                    "response": {
+                        "fill_price": p_res.fill_price,
+                        "filled_size_usd": p_res.filled_size_usd,
+                        "broker": p_res.broker,
+                    },
+                    "order_id": "pipeline",
+                    "product_id": product_id,
+                    "side": side,
+                    "size": size,
+                    "price": price,
+                }
+                _record_trade_log(entry)
+                return entry
+
+            attempts.append(("execution_pipeline", p_res.error or "unknown error"))
+            err = RuntimeError(f"Order rejected by ExecutionPipeline: {p_res.error}")
+            _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
+            raise err
+        except Exception as e:
+            attempts.append(("execution_pipeline exception", str(e)))
+            err = RuntimeError(f"ExecutionPipeline failed and direct bypass is blocked: {e}")
+            _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
+            raise err
+
+    err = RuntimeError("ExecutionPipeline unavailable and direct bypass is blocked")
+    _record_failed_order_attempt(product_id, side, size, err, attempts=attempts)
+    raise err
 
 # ----------------------------
 # Trading loop control

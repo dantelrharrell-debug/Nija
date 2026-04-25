@@ -585,7 +585,15 @@ class CapitalOrchestrationEngine:
             if token is None:
                 return  # insufficient capital — skip trade
             try:
-                fill_usd = broker.place_order(token.symbol, token.reserved_usd)
+                # Submit through the canonical execution authority path.
+                fill_usd = submit_market_order_via_pipeline(
+                    broker=broker,
+                    symbol=token.symbol,
+                    side="buy",
+                    quantity=token.reserved_usd,
+                    size_type="quote",
+                    strategy=token.strategy,
+                ).get("filled_size_usd", 0.0)
                 engine.commit_execution(token, fill_usd, post_balance, post_unrealized)
             except Exception:
                 engine.rollback_execution(token)
@@ -845,7 +853,14 @@ def size_trade(*args: object, **kwargs: object) -> None:  # noqa: ANN002
         if token is None:
             return  # capital gate blocked the trade
         try:
-            fill = broker.place_order(token.symbol, token.reserved_usd)
+            fill = submit_market_order_via_pipeline(
+                broker=broker,
+                symbol=token.symbol,
+                side="buy",
+                quantity=token.reserved_usd,
+                size_type="quote",
+                strategy=token.strategy,
+            ).get("filled_size_usd", 0.0)
             engine.commit_execution(token, fill, post_balance, post_unrealized)
         except Exception:
             engine.rollback_execution(token)

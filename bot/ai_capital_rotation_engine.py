@@ -64,7 +64,14 @@ Integration Example
 
     # Act on recommendations
     for pos in result.positions_to_close:
-        broker.close_position(pos["symbol"])
+        submit_market_order_via_pipeline(
+            broker=broker,
+            symbol=pos["symbol"],
+            side="sell",
+            quantity=pos.get("quantity", 0.0),
+            size_type="base",
+            strategy="AICapitalRotationEngine",
+        )
 
     for sig in result.top_signals:
         broker.enter_position(sig["symbol"], sig["recommended_size_usd"])
