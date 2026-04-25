@@ -21,6 +21,19 @@ import signal
 import threading
 import subprocess
 
+# ── Bootstrap Guard — prevent duplicate instances ──────────────────────────
+# Hard-stops if a second bot instance attempts to start.
+try:
+    from bot.bootstrap_guard import acquire_bootstrap_guard as _acquire_bootstrap_guard
+    _BOOTSTRAP_GUARD_AVAILABLE = True
+except ImportError:
+    try:
+        from bootstrap_guard import acquire_bootstrap_guard as _acquire_bootstrap_guard
+        _BOOTSTRAP_GUARD_AVAILABLE = True
+    except ImportError:
+        _BOOTSTRAP_GUARD_AVAILABLE = False
+        _acquire_bootstrap_guard = None  # type: ignore
+
 # ── HF Scalping Mode — import early so cycle interval is available ─────────
 # When HF_SCALP_MODE=1 the cycle interval drops from 150 s → 30 s and all
 # entry filters are tightened.  Falls back silently if the module is absent.
@@ -3916,6 +3929,14 @@ def _run_bot_startup_and_trading():
 
 def main():
     """Main entry point for NIJA trading bot - Railway optimized"""
+    # ═══════════════════════════════════════════════════════════════════════
+    # CRITICAL: BOOTSTRAP GUARD — Prevent duplicate instances
+    # ═══════════════════════════════════════════════════════════════════════
+    # Hard-stop if another bot instance is already running.
+    # This runs FIRST before any other initialization.
+    if _BOOTSTRAP_GUARD_AVAILABLE and _acquire_bootstrap_guard:
+        _acquire_bootstrap_guard()  # 💥 HARD STOP if duplicated
+    
     logger.critical("🧭 MAIN STARTUP PATH ENTERED")
 
     # ═══════════════════════════════════════════════════════════════════════
