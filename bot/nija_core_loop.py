@@ -1777,6 +1777,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     logger.critical("🧵 TRADING LOOP THREAD ALIVE")
 
     global _loop_running, _trading_active
+    global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
 
@@ -2024,7 +2025,6 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 # mabm_brokers_ready) as the subsequent strategy cycle.  Writing to
                 # module-level globals is safe because run_trading_loop runs on a
                 # single thread.
-                global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
                 _current_cycle_snapshot = None  # clear previous cycle's snapshot
                 _current_cycle_id = (
                     f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{cycle:06d}"
