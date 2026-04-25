@@ -1628,6 +1628,13 @@ class MultiAccountBrokerManager:
                 "Kraken broker connected but not registered with capital manager"
             )
             for broker_type, broker in self._platform_brokers.items():
+                _detected_balance = getattr(broker, "_last_known_balance", None)
+                logger.info(
+                    "Detected balance: %s | broker=%s | connected=%s",
+                    _detected_balance,
+                    broker_type.value,
+                    getattr(broker, "connected", None),
+                )
 
                 # ── Bootstrap path: BrokerPayloadFSM-driven eligibility ────────
                 # During startup triggers, the FSM is the sole eligibility gate.

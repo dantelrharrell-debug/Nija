@@ -324,6 +324,17 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
         logger.debug("_capture_cycle_capital_state: aggregation check failed: %s", _agg_err)
         # Default already True — don't block on unexpected errors in the check itself.
 
+    logger.critical(
+        "CYCLE_CAPITAL_SNAPSHOT | ca_hydrated=%s | total=%.8f | valid_brokers=%s | "
+        "mabm_ready=%s | source=%s | aggregation_normalized=%s",
+        result.get("ca_is_hydrated"),
+        float(result.get("ca_total_capital", 0.0) or 0.0),
+        result.get("ca_valid_brokers"),
+        result.get("mabm_brokers_ready"),
+        result.get("snapshot_source"),
+        result.get("aggregation_normalized"),
+    )
+
     return result
 
 

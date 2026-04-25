@@ -70,6 +70,21 @@ except Exception:
 _initialized_state: dict = {}
 _initialized_state_lock = threading.RLock()
 _bootstrap_owner_thread_id = None
+_startup_last_error: str = ""
+_startup_last_error_lock = threading.RLock()
+
+
+def _set_startup_last_error(message: str) -> None:
+    """Persist the last startup-thread error for supervisor diagnostics."""
+    global _startup_last_error
+    with _startup_last_error_lock:
+        _startup_last_error = str(message or "")
+
+
+def _get_startup_last_error() -> str:
+    """Return the last startup-thread error captured by bootstrap kernel."""
+    with _startup_last_error_lock:
+        return _startup_last_error
 
 
 def _set_bootstrap_owner_thread() -> None:
@@ -1919,6 +1934,7 @@ def _run_bot_startup_and_trading_with_retry():
                 # Attempt to start the bot
                 _run_bot_startup_and_trading()
                 # Normal exit — supervisor loop inside returned cleanly
+                _set_startup_last_error("")
                 logger.critical("✅ BOOTSTRAP SUCCESS — setting event")
                 return
 
@@ -1949,6 +1965,9 @@ def _run_bot_startup_and_trading_with_retry():
 
                 # FIX 4: anti-loop kill switch — abort if connection keeps looping
                 if connection_attempts > _MAX_CONNECTION_ATTEMPTS:
+                    _set_startup_last_error(
+                        f"connection_loop_detected_after_{connection_attempts}_attempts"
+                    )
                     logger.critical(
                         "🚨 CONNECTION LOOP DETECTED — FORCING EXIT after %d attempts",
                         connection_attempts,
@@ -1976,6 +1995,9 @@ def _run_bot_startup_and_trading_with_retry():
                 logger.error(
                     "💥 [Startup] Attempt #%d failed: %s — retrying in %ds",
                     attempt, e, delay, exc_info=True,
+                )
+                _set_startup_last_error(
+                    f"attempt_{attempt}_failed: {type(e).__name__}: {e}"
                 )
                 time.sleep(delay)
 
@@ -4440,6 +4462,7 @@ def main():
                     continue  # DO NOT SHUTDOWN — keep the process alive
                 else:
                     # Bootstrap failed: kernel exited before completing.
+                    _startup_err = _get_startup_last_error()
                     logger.critical(
                         "💥 [Supervisor] Bootstrap kernel (BotStartup) thread exited before "
                         "bootstrap completed (RUNNING_SUPERVISED never reached) — "
@@ -4447,6 +4470,11 @@ def main():
                         "Docker restart policy) can restart with a clean state. "
                         "If no external watchdog is configured the process will stay stopped."
                     )
+                    if _startup_err:
+                        logger.critical(
+                            "💥 [Supervisor] Last startup error before thread exit: %s",
+                            _startup_err,
+                        )
                     if _BOOTSTRAP_FSM_AVAILABLE:
                         _bfsm_transition(
                             _BootstrapState.SHUTDOWN,
