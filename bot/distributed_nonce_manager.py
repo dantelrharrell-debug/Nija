@@ -169,7 +169,12 @@ def _env_true(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
-_REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "15000")))
+# The writer lease must outlive ordinary gaps between Kraken private calls.
+# A 15s default was shorter than normal startup/watchdog idle periods, which
+# caused the same process to reacquire a fresh lease version and hard-stop on
+# the next nonce request. Keep the override env var, but default to 2 minutes
+# so routine idle windows do not look like split-brain.
+_REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "120000")))
 _STRICT_REDIS_LEASE = _env_true("NIJA_STRICT_REDIS_LEASE", "1")
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
