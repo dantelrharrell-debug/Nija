@@ -3348,6 +3348,13 @@ class TradingStrategy:
     _startup_completed: bool = False
     _startup_lock = threading.Lock()
 
+    @property
+    def execution_engine(self):
+        """Proxy to self.apex.execution_engine; None if apex not yet initialised."""
+        if self.apex is None:
+            return None
+        return getattr(self.apex, "execution_engine", None)
+
     def __init__(self, broker_results=None, connected_user_brokers=None):
         """Initialize production strategy with multi-broker support.
 
@@ -4560,6 +4567,8 @@ class TradingStrategy:
         # any non-ImportError exception raised inside the try block cannot cause
         # an AttributeError when downstream code accesses self.apex.
         self.apex = None
+        # NOTE: self.execution_engine is a property (see below) that proxies
+        # self.apex.execution_engine — do NOT add an instance attribute here.
 
         try:
             logger.critical("STEP 7: Starting broker manager initialization")

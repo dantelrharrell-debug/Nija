@@ -261,10 +261,16 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
             capital_ready = False
 
     # execution_ready: strategy must have a live execution engine.
-    execution_ready = (
-        strategy is not None
-        and getattr(strategy, "execution_engine", None) is not None
-    )
+    # TradingStrategy exposes execution_engine as a property that proxies
+    # strategy.apex.execution_engine.  Check both paths for safety.
+    _exec_engine = None
+    if strategy is not None:
+        _exec_engine = getattr(strategy, "execution_engine", None)
+        if _exec_engine is None:
+            _apex = getattr(strategy, "apex", None)
+            if _apex is not None:
+                _exec_engine = getattr(_apex, "execution_engine", None)
+    execution_ready = _exec_engine is not None
 
     system_ready = broker_ready and risk_ready and strategy_ready and capital_ready and execution_ready
     return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
