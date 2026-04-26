@@ -4155,9 +4155,17 @@ class MultiAccountBrokerManager:
         }
 
         # Platform balances
-        # 🔥 GUARD 3: Raise error if balance is None (not silent return)
+        # Include brokers that are capital-ready even during connection state transitions.
+        # This prevents bootstrap deadlocks where payload is present but connected=False.
         for broker_type, broker in self._platform_brokers.items():
-            if broker.connected:
+            include_broker = bool(getattr(broker, "connected", False))
+            if not include_broker:
+                try:
+                    include_broker = bool(getattr(broker, "is_ready_for_capital", lambda: False)())
+                except Exception:
+                    include_broker = False
+
+            if include_broker:
                 balance = broker.get_account_balance()
                 if balance is None:
                     raise RuntimeError(
@@ -4192,8 +4200,13 @@ class MultiAccountBrokerManager:
                             )
                         result['users'][user_id][broker_type.value] = balance
                     except Exception as e:
-                        logger.error(f"CRITICAL: Balance fetch failed for {user_id}/{broker_type.value}: {e}")
-                        raise
+                        logger.warning(
+                            "Balance fetch failed for %s/%s during aggregate hydration: %s",
+                            user_id,
+                            broker_type.value,
+                            e,
+                        )
+                        continue
 
         # Also try to get balances from _all_user_brokers (in case some are connected but not in user_brokers)
         for (user_id, broker_type), broker in self._all_user_brokers.items():

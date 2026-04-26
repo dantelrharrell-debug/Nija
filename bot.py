@@ -1412,6 +1412,19 @@ def _bootstrap_hydrate_account_balances() -> dict:
             # 🔥 STEP 3: Check readiness
             if not mabm.is_ready():
                 raise RuntimeError("BrokerManager failed to initialize — not ready for balance fetch")
+
+            # 🔥 STEP 3.5: Ensure platform brokers are created/connected before hydration
+            print("🔌 INITIALIZING PLATFORM BROKERS...")
+            _platform_init = mabm.initialize_platform_brokers()
+            _connected_platforms = [
+                _k for _k, _meta in (_platform_init or {}).items()
+                if bool((_meta or {}).get("connected", False))
+            ]
+            print(
+                "✅ PLATFORM BROKER INIT COMPLETE: "
+                f"connected={len(_connected_platforms)} "
+                f"({', '.join(_connected_platforms) if _connected_platforms else 'none'})"
+            )
             
             print("✅ BROKER MANAGER INITIALIZED — FETCHING BALANCES")
             
