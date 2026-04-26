@@ -49,7 +49,8 @@ def assert_distributed_writer_authority() -> None:
     global _FENCE_LAST_CHECK_TS, _FENCE_LAST_OK, _FENCE_LAST_ERR
 
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
-    strict_required = _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode
+    unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
+    strict_required = (_env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode) and not unsafe_bypass
 
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
     if not token:
@@ -57,7 +58,14 @@ def assert_distributed_writer_authority() -> None:
             raise RuntimeError("distributed writer fencing token missing in strict/live mode")
         return
 
-    verify_ttl_s = max(0.0, float(os.getenv("NIJA_WRITER_RUNTIME_VERIFY_TTL_S", "1.5") or 1.5))
+    try:
+        verify_ttl_s = max(0.0, float(os.getenv("NIJA_WRITER_RUNTIME_VERIFY_TTL_S", "1.5") or 1.5))
+    except (TypeError, ValueError):
+        verify_ttl_s = 1.5
+        logger.warning(
+            "Invalid NIJA_WRITER_RUNTIME_VERIFY_TTL_S value; using default %.1fs",
+            verify_ttl_s,
+        )
     now = time.monotonic()
     with _FENCE_VERIFY_LOCK:
         if verify_ttl_s > 0 and (now - _FENCE_LAST_CHECK_TS) <= verify_ttl_s:
@@ -137,7 +145,8 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
     global _FENCE_LAST_CHECK_TS
 
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
-    strict_required = _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode
+    unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
+    strict_required = (_env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode) and not unsafe_bypass
     redis_url = (os.getenv("NIJA_REDIS_URL", "").strip() or os.getenv("REDIS_URL", "").strip())
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
 
@@ -162,6 +171,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         "ok": bool(ok),
         "error": err,
         "strict_required": bool(strict_required),
+        "unsafe_bypass_enabled": bool(unsafe_bypass),
         "live_mode": bool(live_mode),
         "redis_configured": bool(redis_url),
         "token_present": bool(token),

@@ -155,6 +155,14 @@ NIJA_WRITER_RUNTIME_VERIFY_FAIL_CLOSED=true
 
 When `LIVE_CAPITAL_VERIFIED=true`, NIJA enforces distributed lock availability. If Redis is not configured, startup exits fail-closed to preserve single-writer safety.
 
+Emergency operator override (unsafe):
+
+```bash
+NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true
+```
+
+This allows live startup without Redis lock acquisition. Use only when you can guarantee exactly one running container/process.
+
 ---
 
 

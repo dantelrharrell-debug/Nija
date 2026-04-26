@@ -776,10 +776,21 @@ def _acquire_distributed_process_lock() -> None:
     _truthy = ("1", "true", "yes", "enabled", "on")
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
     _require_lock = os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
+    _unsafe_bypass = os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
     if _live_mode:
         _require_lock = True
+        if _unsafe_bypass:
+            _require_lock = False
+            print("🚨 UNSAFE MODE: NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true in LIVE mode.")
+            print("   Distributed single-writer safety is DISABLED by explicit operator override.")
+            print("   Use only when you are certain exactly one container/process can run.")
 
     _redis_url = os.environ.get("NIJA_REDIS_URL", "").strip() or os.environ.get("REDIS_URL", "").strip()
+    print(
+        "🔐 Writer lock mode | "
+        f"live={_live_mode} required={_require_lock} unsafe_bypass={_unsafe_bypass} "
+        f"redis_configured={bool(_redis_url)}"
+    )
     if not _redis_url:
         _msg = "⚠️ Distributed single-writer lock disabled (NIJA_REDIS_URL/REDIS_URL not set)."
         if _require_lock:
@@ -790,7 +801,11 @@ def _acquire_distributed_process_lock() -> None:
         return
     try:
         import redis  # local import to avoid hard startup dependency when Redis isn't used
-        _ttl_s = max(30, int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "90")))
+        try:
+            _ttl_s = max(30, int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "90")))
+        except (TypeError, ValueError):
+            _ttl_s = 90
+            print("⚠️ Invalid NIJA_WRITER_LOCK_TTL_S value; using default 90s")
         _scope = _writer_lock_scope()
         _lock_key = os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_scope}"
         _fencing_key = os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_scope}"
