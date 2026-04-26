@@ -498,6 +498,10 @@ class CapitalBootstrapStateMachine:
                 f"caller={caller} owner={self._owner_thread_id}"
             )
 
+    def is_owner_thread(self) -> bool:
+        """Return True when called from the thread that owns bootstrap transitions."""
+        return threading.get_ident() == self._owner_thread_id
+
     @property
     def state(self) -> CapitalBootstrapState:
         with self._lock:
@@ -965,6 +969,8 @@ class CapitalRefreshCoordinator:
         open_exposure_usd: float,
     ) -> Optional[CapitalSnapshot]:
 
+        bootstrap_owner_thread = self._boot.is_owner_thread()
+
         self._bus.emit(CapitalEvent(
             event_type=CapitalEventType.REFRESH_STARTED,
             trigger=trigger,
@@ -979,10 +985,17 @@ class CapitalRefreshCoordinator:
         #   FAILED          → REFRESH_REQUESTED  (recovery after capital-zero run)
         # Already-REFRESH_REQUESTED state: transition() is a no-op (invalid from
         # REFRESH_REQUESTED back to REFRESH_REQUESTED per the validation table).
-        self._boot.transition(CapitalBootstrapState.WAIT_PLATFORM, trigger)
-        self._boot.transition(CapitalBootstrapState.INIT_COMPLETE, trigger)
-        self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
-        self._boot.transition(CapitalBootstrapState.REFRESH_IN_FLIGHT, trigger)
+        if bootstrap_owner_thread:
+            self._boot.transition(CapitalBootstrapState.WAIT_PLATFORM, trigger)
+            self._boot.transition(CapitalBootstrapState.INIT_COMPLETE, trigger)
+            self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
+            self._boot.transition(CapitalBootstrapState.REFRESH_IN_FLIGHT, trigger)
+        else:
+            logger.debug(
+                "[Coordinator] trigger=%s running off bootstrap owner thread — "
+                "skipping bootstrap FSM entry transitions",
+                trigger,
+            )
 
         # Late import avoids circular dependencies at module load time.
         try:
@@ -1302,7 +1315,15 @@ class CapitalRefreshCoordinator:
         # _on_ready_callbacks are fired synchronously inside transition() when
         # _boot_target is READY.  They observe a fully-dispatched event queue
         # and a fully-hydrated CSM-v2 (ingested above).
-        self._boot.transition(_boot_target, _boot_reason)
+        if bootstrap_owner_thread:
+            self._boot.transition(_boot_target, _boot_reason)
+        else:
+            logger.debug(
+                "[Coordinator] trigger=%s running off bootstrap owner thread — "
+                "skipping bootstrap FSM terminal transition to %s",
+                trigger,
+                _boot_target.value,
+            )
 
         logger.info(
             "[Coordinator] published  real=$%.2f  confidence=%.3f(%s)  "
