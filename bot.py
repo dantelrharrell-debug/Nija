@@ -1389,9 +1389,16 @@ def _bootstrap_hydrate_account_balances() -> dict:
     """
     Hydrate account balances at startup, BEFORE strategy initialization.
     Sets ACCOUNT_BALANCE, ACCOUNT_EQUITY, ACCOUNT_AVAILABLE env vars.
+    
+    CRITICAL GUARDS:
+    - Exchange balance fetch is MANDATORY
+    - Mock/default balances are BLOCKED in live mode
+    - Fails closed if balance <= 0 in live mode
     """
     try:
         print("💰 BOOTSTRAP BALANCE HYDRATION: STARTING")
+        
+        _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in ("1", "true", "yes", "enabled")
         
         # Try to get balances from multi-account broker manager
         try:
@@ -1401,12 +1408,20 @@ def _bootstrap_hydrate_account_balances() -> dict:
                 balances = mabm.get_all_balances()
                 total_usd = _sum_nested_balances(balances)
                 
+                # 🔥 HARD FAIL GUARD 1: Exchange balance must be > 0
+                if total_usd <= 0:
+                    if _is_live:
+                        raise RuntimeError(
+                            f"CRITICAL: Exchange balance fetch failed — balance is ${total_usd:.2f} (zero/negative not allowed in LIVE mode)"
+                        )
+                    print(f"⚠️  Warning: Exchange balance is ${total_usd:.2f} (non-live mode, continuing)")
+                
                 os.environ["ACCOUNT_BALANCE"] = f"{total_usd:.8f}"
                 os.environ["ACCOUNT_EQUITY"] = f"{total_usd:.8f}"
                 # Available is assumed equal to total at bootstrap time
                 os.environ["ACCOUNT_AVAILABLE"] = f"{total_usd:.8f}"
                 
-                print(f"✅ BOOTSTRAP HYDRATION COMPLETE: balance=${total_usd:.2f}")
+                print(f"✅ BOOTSTRAP HYDRATION COMPLETE: balance=${total_usd:.2f} (source=broker_manager)")
                 return {
                     "total_usd": total_usd,
                     "equity": total_usd,
@@ -1421,9 +1436,18 @@ def _bootstrap_hydrate_account_balances() -> dict:
         if existing_balance:
             try:
                 total_usd = float(existing_balance)
+                
+                # 🔥 HARD FAIL GUARD 2: Mock/default balances blocked in live mode
+                if _is_live:
+                    raise RuntimeError(
+                        "CRITICAL: Mock/cached balance detected in LIVE mode — "
+                        "refusing to trade with non-exchange balance. "
+                        "Exchange connection required for real trading."
+                    )
+                
                 os.environ["ACCOUNT_EQUITY"] = existing_balance
                 os.environ["ACCOUNT_AVAILABLE"] = existing_balance
-                print(f"✅ BOOTSTRAP HYDRATION: using cached balance=${total_usd:.2f}")
+                print(f"✅ BOOTSTRAP HYDRATION: using cached balance=${total_usd:.2f} (source=environment_cache)")
                 return {
                     "total_usd": total_usd,
                     "equity": total_usd,
@@ -1434,11 +1458,11 @@ def _bootstrap_hydrate_account_balances() -> dict:
                 pass
         
         # If live mode and no balance available, fail closed
-        _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in ("1", "true", "yes", "enabled")
         if _is_live:
             raise RuntimeError(
-                "CRITICAL: Balance hydration failed in LIVE mode — "
-                "no balance provider available and no cached balance set"
+                "CRITICAL: Exchange balance fetch failed in LIVE mode — "
+                "no balance provider available and no cached balance set. "
+                "Refusing to start trading without real exchange balance."
             )
         
         # In non-live mode, warn but continue with default
