@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -63,6 +64,13 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.multi_broker_router")
+
+# Keep both import paths bound to the same module object so the execution
+# router registry remains a true process-wide singleton.
+if __name__ == "bot.multi_broker_execution_router":
+    sys.modules.setdefault("multi_broker_execution_router", sys.modules[__name__])
+elif __name__ == "multi_broker_execution_router":
+    sys.modules.setdefault("bot.multi_broker_execution_router", sys.modules[__name__])
 
 # ---------------------------------------------------------------------------
 # Constants

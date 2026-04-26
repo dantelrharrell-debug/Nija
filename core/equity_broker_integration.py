@@ -195,14 +195,21 @@ class AlpacaBroker(BaseEquityBroker):
             return False
 
         try:
-            self.api = self.TradingClient(
+            client = self.TradingClient(
                 api_key=self.api_key,
                 secret_key=self.api_secret,
                 paper=self.paper_trading
             )
 
+            if client is None:
+                logger.error("Alpaca client creation returned None")
+                self.api = None
+                self.authenticated = False
+                return False
+
             # Test authentication by getting account
-            account = self.api.get_account()
+            account = client.get_account()
+            self.api = client
             self.authenticated = True
 
             logger.info(
@@ -212,6 +219,8 @@ class AlpacaBroker(BaseEquityBroker):
             return True
 
         except Exception as e:
+            self.api = None
+            self.authenticated = False
             logger.error(f"Alpaca authentication failed: {e}")
             return False
 

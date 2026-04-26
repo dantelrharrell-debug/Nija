@@ -57,6 +57,13 @@ _PID_LOCK_FAIL_CLOSED = os.environ.get(
     "1", "true", "yes", "on"
 }
 
+# Keep both import paths bound to the same module object so the process only
+# ever has one nonce manager singleton and one bootstrap gate state.
+if __name__ == "bot.global_kraken_nonce":
+    sys.modules.setdefault("global_kraken_nonce", sys.modules[__name__])
+elif __name__ == "global_kraken_nonce":
+    sys.modules.setdefault("bot.global_kraken_nonce", sys.modules[__name__])
+
 
 def _detect_container_id() -> str:
     """Best-effort container/runtime id for duplicate-process fingerprinting."""

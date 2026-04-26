@@ -165,13 +165,21 @@ class AlpacaEquityBrokerAdapter(BrokerAdapter):
             from alpaca.trading.client import TradingClient
             from alpaca.data.historical import StockHistoricalDataClient
 
-            self._client = TradingClient(
+            client = TradingClient(
                 api_key=self._api_key,
                 secret_key=self._api_secret,
                 paper=self._paper,
             )
-            self._data_client = StockHistoricalDataClient(self._api_key, self._api_secret)
-            account = self._client.get_account()
+            data_client = StockHistoricalDataClient(self._api_key, self._api_secret)
+            if client is None:
+                logger.error("[AlpacaEquity] TradingClient construction returned None")
+                self._client = None
+                self._data_client = None
+                self._connected = False
+                return
+            account = client.get_account()
+            self._client = client
+            self._data_client = data_client
             self._connected = True
             logger.info(
                 "[AlpacaEquity] Connected (paper=%s) equity=$%.2f buying_power=$%.2f",
@@ -180,6 +188,9 @@ class AlpacaEquityBrokerAdapter(BrokerAdapter):
         except ImportError:
             logger.warning("[AlpacaEquity] alpaca-py not installed; run: pip install alpaca-py")
         except Exception as exc:
+            self._client = None
+            self._data_client = None
+            self._connected = False
             logger.error("[AlpacaEquity] Connection failed: %s", exc)
 
     # ------------------------------------------------------------------

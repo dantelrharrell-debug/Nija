@@ -157,6 +157,13 @@ except ImportError:
 
 logger = logging.getLogger('nija.multi_account')
 
+# Keep both import paths bound to the same module object so the broker-manager
+# singleton, init guards, and platform registry remain process-wide.
+if __name__ == "bot.multi_account_broker_manager":
+    sys.modules.setdefault("multi_account_broker_manager", sys.modules[__name__])
+elif __name__ == "multi_account_broker_manager":
+    sys.modules.setdefault("bot.multi_account_broker_manager", sys.modules[__name__])
+
 ACCOUNT_USABLE_BALANCE_MIN = float(os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_MIN", "50"))
 ACCOUNT_USABLE_BALANCE_RECOMMENDED = float(
     os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_RECOMMENDED", "100")

@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import re
+import sys
 import time
 import traceback
 import uuid
@@ -187,6 +188,13 @@ _KRAKEN_NONCE_MUTATING_METHODS = {
     "CancelAllOrdersAfter",
     "EditOrder",
 }
+
+# Keep both import paths bound to the same module object so process-wide broker
+# registries and platform-broker guards are not duplicated.
+if __name__ == "bot.broker_manager":
+    sys.modules.setdefault("broker_manager", sys.modules[__name__])
+elif __name__ == "broker_manager":
+    sys.modules.setdefault("bot.broker_manager", sys.modules[__name__])
 
 
 # ── Shared credential-prefix helper ──────────────────────────────────────────
@@ -5982,10 +5990,15 @@ class AlpacaBroker(BaseBroker):
             mode_str = "PAPER" if paper else "LIVE"
             logging.info(f"📊 Attempting to connect Alpaca {cred_label} ({mode_str} mode)...")
 
-            self.api = TradingClient(api_key, api_secret, paper=paper)
-
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
+
+            client = TradingClient(api_key, api_secret, paper=paper)
+            if client is None:
+                logging.warning(f"⚠️  Alpaca {cred_label} client creation returned None")
+                self.api = None
+                self.connected = False
+                return False
 
             # Test connection with retry logic
             # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
@@ -6002,7 +6015,8 @@ class AlpacaBroker(BaseBroker):
                         logging.info(f"🔄 Retrying Alpaca {cred_label} connection in {delay}s (attempt {attempt}/{max_attempts})...")
                         time.sleep(delay)
 
-                    account = self.api.get_account()
+                    account = client.get_account()
+                    self.api = client
                     self.connected = True
 
                     if attempt > 1:
@@ -6035,15 +6049,21 @@ class AlpacaBroker(BaseBroker):
                         logging.warning(f"⚠️  Alpaca {cred_label} connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                         continue
                     else:
+                        self.api = None
+                        self.connected = False
                         logging.warning(f"⚠️  Alpaca {cred_label} connection failed: {e}")
                         return False
 
             # Should never reach here, but just in case
+            self.api = None
+            self.connected = False
             logging.error(f"❌ Failed to connect to Alpaca {cred_label} after maximum retry attempts")
             return False
 
         except ImportError as e:
             # SDK not installed or import failed
+            self.api = None
+            self.connected = False
             logging.error(f"❌ Alpaca connection failed ({self.account_identifier}): SDK import error")
             logging.error(f"   ImportError: {e}")
             logging.error("   The Alpaca SDK (alpaca-py) failed to import")

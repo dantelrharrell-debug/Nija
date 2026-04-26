@@ -30,12 +30,20 @@ import json
 import logging
 import time
 import threading
+import sys
 from enum import Enum
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 
 logger = logging.getLogger("nija.trading_state_machine")
+
+# Keep both import paths bound to the same module object so the process only
+# ever has one TradingStateMachine singleton.
+if __name__ == "bot.trading_state_machine":
+    sys.modules.setdefault("trading_state_machine", sys.modules[__name__])
+elif __name__ == "trading_state_machine":
+    sys.modules.setdefault("bot.trading_state_machine", sys.modules[__name__])
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:

@@ -559,11 +559,45 @@ def _bootstrap_nonce_reset_once() -> None:
     Earlier bootstrap phases (PRE-FLIGHT,
     STARTUP_VALIDATED, etc.) must not trigger nonce operations.
     """
+    if not _is_bootstrap_owner_thread():
+        logger.debug("NONCE_BOOTSTRAP_SKIP non-owner thread attempted bootstrap nonce reset")
+        return
+
+    if os.getenv("NIJA_ENABLE_BOOTSTRAP_NONCE_RESET", "false").lower() not in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }:
+        logger.info(
+            "NONCE_BOOTSTRAP_SKIP bootstrap nonce reset disabled "
+            "(set NIJA_ENABLE_BOOTSTRAP_NONCE_RESET=true to opt in)"
+        )
+        return
+
     _kraken_creds_present = bool(
         (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
         and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
     )
     if not _kraken_creds_present:
+        return
+
+    try:
+        from bot.multi_account_broker_manager import get_broker_manager as _get_broker_manager
+        from bot.broker_manager import BrokerType as _BrokerType
+
+        _kraken_broker = _get_broker_manager().platform_brokers.get(_BrokerType.KRAKEN)
+        if _kraken_broker is None or not getattr(_kraken_broker, "connected", False):
+            logger.info(
+                "NONCE_BOOTSTRAP_SKIP no connected PLATFORM Kraken broker present; "
+                "leaving nonce ownership to the Kraken connect path"
+            )
+            return
+    except Exception as _kraken_scope_err:
+        logger.warning(
+            "NONCE_BOOTSTRAP_SKIP could not confirm connected PLATFORM Kraken broker: %s",
+            _kraken_scope_err,
+        )
         return
 
     _capital_state = _capital_bootstrap_state_value()
