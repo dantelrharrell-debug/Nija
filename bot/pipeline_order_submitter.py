@@ -16,6 +16,15 @@ except ImportError:
         get_execution_pipeline = None  # type: ignore
         PipelineRequest = None  # type: ignore
 
+try:
+    from bot.execution_authority_context import assert_distributed_writer_authority
+except ImportError:
+    try:
+        from execution_authority_context import assert_distributed_writer_authority
+    except ImportError:
+        def assert_distributed_writer_authority() -> None:
+            return
+
 
 def _resolve_preferred_broker(broker: Any) -> str:
     preferred_broker = "coinbase"
@@ -67,6 +76,16 @@ def submit_market_order_via_pipeline(
         return {
             "status": "error",
             "error": "ExecutionPipeline unavailable and direct broker bypass blocked",
+            "symbol": symbol,
+            "side": side,
+        }
+
+    try:
+        assert_distributed_writer_authority()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"DistributedWriterFence reject: {exc}",
             "symbol": symbol,
             "side": side,
         }

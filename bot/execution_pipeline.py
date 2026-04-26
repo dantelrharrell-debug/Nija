@@ -78,14 +78,23 @@ from contextlib import contextmanager
 logger = logging.getLogger("nija.execution_pipeline")
 
 try:
-    from bot.execution_authority_context import execution_authority_scope
+    from bot.execution_authority_context import (
+        execution_authority_scope,
+        assert_distributed_writer_authority,
+    )
 except ImportError:
     try:
-        from execution_authority_context import execution_authority_scope
+        from execution_authority_context import (
+            execution_authority_scope,
+            assert_distributed_writer_authority,
+        )
     except ImportError:
         @contextmanager
         def execution_authority_scope():
             yield
+
+        def assert_distributed_writer_authority() -> None:
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +419,18 @@ class ExecutionPipeline:
                 logger.warning("ExecutionPipeline: throttler check failed: %s", exc)
 
         # ── Route to execution ───────────────────────────────────────────
+        try:
+            assert_distributed_writer_authority()
+        except Exception as exc:
+            return PipelineResult(
+                success=False,
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                size_usd=effective_request.size_usd,
+                error=f"DistributedWriterFence reject: {exc}",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
         with execution_authority_scope():
             result = self._dispatch(effective_request, t_start)
 

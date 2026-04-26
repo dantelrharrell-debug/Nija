@@ -48,13 +48,22 @@ from bot.multi_asset_executor import AssetClass, BrokerAdapter
 logger = logging.getLogger("nija.live_broker_adapters")
 
 try:
-    from bot.execution_authority_context import has_execution_authority
+    from bot.execution_authority_context import (
+        has_execution_authority,
+        assert_distributed_writer_authority,
+    )
 except ImportError:
     try:
-        from execution_authority_context import has_execution_authority
+        from execution_authority_context import (
+            has_execution_authority,
+            assert_distributed_writer_authority,
+        )
     except ImportError:
         def has_execution_authority() -> bool:
             return False
+
+        def assert_distributed_writer_authority() -> None:
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +83,24 @@ def _safe_float(value, default: float = 0.0) -> float:
 
 def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) -> Optional[Dict]:
     enforced = True
+    try:
+        assert_distributed_writer_authority()
+    except Exception as exc:
+        msg = f"Distributed writer fence violation: {exc}"
+        logger.error(
+            "[Authority] distributed-fence blocked broker=%s symbol=%s side=%s size=%s err=%s",
+            broker_name,
+            symbol,
+            side,
+            size,
+            exc,
+        )
+        return {
+            "status": "ERROR",
+            "error": msg,
+            "broker": broker_name,
+        }
+
     if not enforced or has_execution_authority():
         return None
     msg = "Execution authority violation: order must be submitted via ExecutionPipeline"

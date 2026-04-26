@@ -95,6 +95,7 @@ def _reset_startup_events_for_fresh_attempt() -> None:
     or completion signals from the previous attempt.
     """
     _strategy_ready_event.clear()
+    _balance_hydrated_event.clear()
     _bootstrap_complete_flag.clear()
     _bootstrap_completed_event.clear()
     try:
@@ -219,6 +220,10 @@ def _read_initialized_state_snapshot(
 
 def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     """Start trading loop from cached strategy when LIVE mode is already active."""
+    if not _is_balance_hydrated_ready():
+        logger.critical("START_TRADING_LOOP_SKIPPED: balance hydration incomplete (%s)", reason)
+        return False
+
     if any(_t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()):
         logger.critical("TradingLoop already running - skipping duplicate start (%s)", reason)
         return True
@@ -321,6 +326,70 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     system_ready = broker_ready and risk_ready and strategy_ready and capital_ready and execution_ready
     return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
 
+
+def _is_balance_hydrated_ready() -> bool:
+    """True only after startup balance hydration has completed."""
+    if _balance_hydrated_event.is_set():
+        return True
+
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        try:
+            _state_value = getattr(_get_bootstrap_fsm().state, "value", "")
+            return _state_value in {
+                "BALANCE_HYDRATED",
+                "CAPITAL_REFRESHING",
+                "CAPITAL_READY",
+                "INIT_COMPLETE",
+                "THREADS_STARTING",
+                "RUNNING_SUPERVISED",
+            }
+        except Exception:
+            return False
+    return False
+
+
+def _sum_nested_balances(balance_payload) -> float:
+    """Best-effort recursive sum for dict/list/number balance payloads."""
+    if isinstance(balance_payload, dict):
+        return float(sum(_sum_nested_balances(v) for v in balance_payload.values()))
+    if isinstance(balance_payload, (list, tuple, set)):
+        return float(sum(_sum_nested_balances(v) for v in balance_payload))
+    try:
+        return float(balance_payload)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _hydrate_startup_balances(strategy) -> float:
+    """Force a startup balance sync and return the authoritative total USD balance."""
+    global _hydrated_total_balance_usd
+
+    logger.critical("💰 HYDRATION PHASE: STARTING BALANCE SYNC")
+
+    balances = None
+    _mam = getattr(strategy, "multi_account_manager", None)
+    _bm = getattr(strategy, "broker_manager", None)
+
+    if _mam is not None and hasattr(_mam, "get_all_balances"):
+        balances = _mam.get_all_balances()
+    elif _bm is not None and hasattr(_bm, "get_all_balances"):
+        balances = _bm.get_all_balances()
+
+    if balances is None:
+        raise RuntimeError("CRITICAL: Balance hydration failed (no balance provider available)")
+
+    total_balance = _sum_nested_balances(balances)
+    _hydrated_total_balance_usd = float(total_balance)
+    os.environ["ACCOUNT_BALANCE"] = f"{_hydrated_total_balance_usd:.8f}"
+
+    logger.critical("💰 HYDRATION COMPLETE: total_balance=$%.2f", _hydrated_total_balance_usd)
+
+    if _hydrated_total_balance_usd <= 0:
+        raise RuntimeError("CRITICAL: Balance hydration returned $0 in LIVE mode")
+
+    _balance_hydrated_event.set()
+    return _hydrated_total_balance_usd
+
 # Single-owner bootstrap kernel lock.
 # Only one bootstrap execution sequence may run at a time.  The BotStartup
 # thread acquires this non-blocking before entering the retry loop.  If another
@@ -347,6 +416,18 @@ _bootstrap_completed_event = threading.Event()
 # failure.  All three components (BootstrapFSM, supervisor, core loop) should
 # test this event to confirm that the strategy is truly initialised.
 _strategy_ready_event = threading.Event()
+_balance_hydrated_event = threading.Event()
+_hydrated_total_balance_usd = 0.0
+
+# Explicit lifecycle phases used by startup diagnostics.
+BOOTSTRAP_PHASES = [
+    "ENV_VERIFIED",
+    "STARTUP_VALIDATED",
+    "LOCK_ACQUIRED",
+    "HEALTH_BOUND",
+    "BALANCE_HYDRATED",
+    "READY_FOR_TRADING",
+]
 
 # Bootstrap-window nonce flag — set to True the moment the pre-connection nonce
 # jump is executed.  Any attempt to run the same jump after bootstrap is complete
@@ -579,6 +660,8 @@ def _read_pid_file_meta(path: str) -> dict:
 _distributed_writer_lock_client = None
 _distributed_writer_lock_key = ""
 _distributed_writer_lock_token = ""
+_distributed_writer_fencing_key = ""
+_distributed_writer_fencing_token = 0
 _distributed_writer_lock_stop = threading.Event()
 _distributed_writer_lock_thread = None
 
@@ -595,20 +678,32 @@ def _writer_lock_scope() -> str:
 
 def _release_distributed_process_lock() -> None:
     """Release distributed single-writer lock iff this process still owns it."""
-    global _distributed_writer_lock_client, _distributed_writer_lock_key, _distributed_writer_lock_token
-    if not _distributed_writer_lock_client or not _distributed_writer_lock_key or not _distributed_writer_lock_token:
+    global _distributed_writer_lock_client
+    global _distributed_writer_lock_key, _distributed_writer_lock_token
+    global _distributed_writer_fencing_key, _distributed_writer_fencing_token
+    if not _distributed_writer_lock_client or not _distributed_writer_lock_key or not _distributed_writer_fencing_token:
         return
     try:
-        _distributed_writer_lock_client.eval(
+        _client = _distributed_writer_lock_client
+        _client.eval(
             """
-            if redis.call('GET', KEYS[1]) == ARGV[1] then
+            local current = redis.call('GET', KEYS[1])
+            if not current then
+                return 0
+            end
+            local sep = string.find(current, ':', 1, true)
+            local token = current
+            if sep then
+                token = string.sub(current, 1, sep - 1)
+            end
+            if token == ARGV[1] then
                 return redis.call('DEL', KEYS[1])
             end
             return 0
             """,
             1,
             _distributed_writer_lock_key,
-            _distributed_writer_lock_token,
+            str(_distributed_writer_fencing_token),
         )
     except Exception:
         pass
@@ -616,6 +711,8 @@ def _release_distributed_process_lock() -> None:
         _distributed_writer_lock_client = None
         _distributed_writer_lock_key = ""
         _distributed_writer_lock_token = ""
+        _distributed_writer_fencing_key = ""
+        _distributed_writer_fencing_token = 0
 
 
 def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
@@ -624,16 +721,28 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
     _failure_streak = 0
     while not _distributed_writer_lock_stop.wait(_interval):
         try:
+            if _distributed_writer_lock_client is None:
+                raise RuntimeError("distributed writer lock client became None")
+
             _result = _distributed_writer_lock_client.eval(
                 """
-                if redis.call('GET', KEYS[1]) == ARGV[1] then
+                local current = redis.call('GET', KEYS[1])
+                if not current then
+                    return 0
+                end
+                local sep = string.find(current, ':', 1, true)
+                local token = current
+                if sep then
+                    token = string.sub(current, 1, sep - 1)
+                end
+                if token == ARGV[1] then
                     return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
                 end
                 return 0
                 """,
                 1,
                 _distributed_writer_lock_key,
-                _distributed_writer_lock_token,
+                str(_distributed_writer_fencing_token),
                 str(ttl_s),
             )
             if int(_result or 0) != 1:
@@ -658,19 +767,34 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
 
 
 def _acquire_distributed_process_lock() -> None:
-    """Acquire cross-deployment single-writer lock via Redis when configured."""
-    global _distributed_writer_lock_client, _distributed_writer_lock_key, _distributed_writer_lock_token
+    """Acquire cross-deployment fenced single-writer lock via Redis when configured."""
+    global _distributed_writer_lock_client
+    global _distributed_writer_lock_key, _distributed_writer_lock_token
+    global _distributed_writer_fencing_key, _distributed_writer_fencing_token
     global _distributed_writer_lock_thread
+
+    _truthy = ("1", "true", "yes", "enabled", "on")
+    _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
+    _require_lock = os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
+    if _live_mode:
+        _require_lock = True
+
     _redis_url = os.environ.get("NIJA_REDIS_URL", "").strip() or os.environ.get("REDIS_URL", "").strip()
     if not _redis_url:
-        print("⚠️ Distributed single-writer lock disabled (NIJA_REDIS_URL/REDIS_URL not set).")
+        _msg = "⚠️ Distributed single-writer lock disabled (NIJA_REDIS_URL/REDIS_URL not set)."
+        if _require_lock:
+            print(_msg)
+            print("🚫 Distributed single-writer lock is required in LIVE mode. Exiting fail-closed.")
+            sys.exit(1)
+        print(_msg)
         return
     try:
         import redis  # local import to avoid hard startup dependency when Redis isn't used
         _ttl_s = max(30, int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "90")))
         _scope = _writer_lock_scope()
         _lock_key = os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_scope}"
-        _token = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(8)}"
+        _fencing_key = os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_scope}"
+        _owner = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(8)}"
         _client = redis.Redis.from_url(
             _redis_url,
             decode_responses=True,
@@ -683,9 +807,35 @@ def _acquire_distributed_process_lock() -> None:
             raise RuntimeError(
                 f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
             ) from _ping_exc
-        _acquired = _client.set(_lock_key, _token, nx=True, ex=_ttl_s)
-        if not _acquired:
-            _holder = _client.get(_lock_key) or "<unknown-holder>"
+
+        _acquire_result = _client.eval(
+            """
+            if redis.call('EXISTS', KEYS[1]) == 1 then
+                return {0, redis.call('GET', KEYS[1])}
+            end
+            local token = redis.call('INCR', KEYS[2])
+            local value = tostring(token) .. ':' .. ARGV[1]
+            redis.call('SET', KEYS[1], value, 'EX', tonumber(ARGV[2]))
+            return {token, value}
+            """,
+            2,
+            _lock_key,
+            _fencing_key,
+            _owner,
+            str(_ttl_s),
+        )
+
+        _fencing_token = 0
+        _holder = "<unknown-holder>"
+        if isinstance(_acquire_result, (list, tuple)) and len(_acquire_result) >= 1:
+            try:
+                _fencing_token = int(_acquire_result[0] or 0)
+            except (TypeError, ValueError):
+                _fencing_token = 0
+            if len(_acquire_result) >= 2:
+                _holder = str(_acquire_result[1] or _holder)
+
+        if _fencing_token <= 0:
             print("\n" + "┏" + "━" * 78 + "┓")
             print("┃ 🚫 DUPLICATE DEPLOYMENT BLOCKED                                           ┃")
             print("┃ Another NIJA writer already holds the distributed runtime lock.          ┃")
@@ -694,9 +844,13 @@ def _acquire_distributed_process_lock() -> None:
             print(f"┃ Holder:   {_holder[:58]:<58} ┃")
             print("┗" + "━" * 78 + "┛\n")
             sys.exit(1)
+
+        _token = f"{_fencing_token}:{_owner}"
         _distributed_writer_lock_client = _client
         _distributed_writer_lock_key = _lock_key
         _distributed_writer_lock_token = _token
+        _distributed_writer_fencing_key = _fencing_key
+        _distributed_writer_fencing_token = _fencing_token
         _distributed_writer_lock_stop.clear()
         _distributed_writer_lock_thread = threading.Thread(
             target=_distributed_writer_lock_heartbeat,
@@ -705,7 +859,11 @@ def _acquire_distributed_process_lock() -> None:
             name="DistributedWriterLockHeartbeat",
         )
         _distributed_writer_lock_thread.start()
-        print(f"🔒 Distributed writer lock acquired — key={_lock_key}")
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_fencing_token)
+        print(
+            "🔒 Distributed writer lock acquired — "
+            f"key={_lock_key} fencing_token={_fencing_token}"
+        )
     except Exception as _lock_exc:
         print(f"❌ Failed to acquire distributed single-writer lock: {_lock_exc}")
         print("   Exiting fail-closed to preserve one-writer invariant.")
@@ -886,6 +1044,18 @@ def _start_health_server():
                             from bot.health_check import get_health_manager
                             health_manager = get_health_manager()
                             status = health_manager.get_detailed_status()
+                            try:
+                                from bot.execution_authority_context import get_distributed_writer_authority_status
+                            except ImportError:
+                                from execution_authority_context import get_distributed_writer_authority_status  # type: ignore[import]
+
+                            try:
+                                status["writer_lock"] = get_distributed_writer_authority_status(force_refresh=False)
+                            except Exception as lock_err:
+                                status["writer_lock"] = {"ok": False, "error": str(lock_err)}
+
+                            status["writer_lock_ok"] = bool(status.get("writer_lock", {}).get("ok", False))
+
                             self.send_response(200)
                             self.send_header("Content-Type", "application/json")
                             self.end_headers()
@@ -895,7 +1065,20 @@ def _start_health_server():
                             self.send_response(200)
                             self.send_header("Content-Type", "application/json")
                             self.end_headers()
-                            self.wfile.write(json.dumps({"status": "initializing"}, indent=2).encode())
+                            _fallback = {"status": "initializing"}
+                            try:
+                                from bot.execution_authority_context import get_distributed_writer_authority_status
+                            except ImportError:
+                                from execution_authority_context import get_distributed_writer_authority_status  # type: ignore[import]
+
+                            try:
+                                _fallback["writer_lock"] = get_distributed_writer_authority_status(force_refresh=False)
+                            except Exception as lock_err:
+                                _fallback["writer_lock"] = {"ok": False, "error": str(lock_err)}
+
+                            _fallback["writer_lock_ok"] = bool(_fallback.get("writer_lock", {}).get("ok", False))
+
+                            self.wfile.write(json.dumps(_fallback, indent=2).encode())
                     
                     # Prometheus metrics endpoint
                     elif self.path == "/metrics":
@@ -913,6 +1096,28 @@ def _start_health_server():
                             self.send_header("Content-Type", "text/plain; version=0.0.4")
                             self.end_headers()
                             self.wfile.write(b"# Initializing\nnija_up 1\n")
+
+                    # Distributed writer lock authority self-test
+                    elif self.path == "/writer-lock":
+                        try:
+                            from bot.execution_authority_context import get_distributed_writer_authority_status
+                        except ImportError:
+                            from execution_authority_context import get_distributed_writer_authority_status  # type: ignore[import]
+
+                        try:
+                            lock_status = get_distributed_writer_authority_status(force_refresh=True)
+                            http_code = 200
+                            if lock_status.get("strict_required") and not lock_status.get("ok"):
+                                http_code = 503
+                            self.send_response(http_code)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps(lock_status, indent=2).encode())
+                        except Exception as lock_err:
+                            self.send_response(500)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"ok": False, "error": str(lock_err)}).encode())
                     
                     else:
                         self.send_response(404)
@@ -920,7 +1125,7 @@ def _start_health_server():
                         self.end_headers()
                         self.wfile.write(json.dumps({
                             "error": "Not found",
-                            "available_endpoints": ["/health", "/healthz", "/ready", "/readiness", "/status", "/metrics"]
+                            "available_endpoints": ["/health", "/healthz", "/ready", "/readiness", "/status", "/metrics", "/writer-lock"]
                         }).encode())
                 except Exception as e:
                     try:
@@ -1818,6 +2023,9 @@ def _ensure_state_machine_loop_started() -> None:
     global _sm_loop_thread
 
     with _sm_loop_lock:
+        if not _is_balance_hydrated_ready():
+            logger.critical("🚫 FSM BLOCKED: waiting for balance hydration")
+            return
 
         # Only skip if a thread exists AND is actually alive
         if _sm_loop_thread is not None and _sm_loop_thread.is_alive():
@@ -3092,6 +3300,24 @@ def _run_bot_startup_and_trading():
             _bfsm_transition(
                 _BootstrapState.PLATFORM_READY,
                 "TradingStrategy initialized; platform broker(s) connected",
+            )
+
+            _total_balance = _hydrate_startup_balances(strategy)
+            if _BOOTSTRAP_FSM_AVAILABLE:
+                _bfsm_transition(
+                    _BootstrapState.BALANCE_HYDRATED,
+                    f"startup balance hydration complete: ${_total_balance:.2f}",
+                )
+
+            _minimum_trading_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1"))
+            logger.critical(
+                "\n🧠 FINAL PRE-TRADE CHECK\n"
+                "   Total Balance: $%.2f\n"
+                "   Min Required:  %.2f\n"
+                "   Eligible:      %s\n",
+                _total_balance,
+                _minimum_trading_balance,
+                _total_balance >= _minimum_trading_balance,
             )
             # ── B: Phase 1 → 2 (brokers registered; capital brain may begin) ────────
             _advance_phase(_Phase.CAPITAL_BRAIN, reason="TradingStrategy initialised; platform brokers connected")
@@ -4498,6 +4724,26 @@ def main():
     from bot.health_check import get_health_manager
     health_manager = get_health_manager()
     logger.info("✅ Health check manager initialized")
+
+    try:
+        try:
+            from bot.execution_authority_context import get_distributed_writer_authority_status
+        except ImportError:
+            from execution_authority_context import get_distributed_writer_authority_status  # type: ignore[import]
+
+        _writer_lock_status = get_distributed_writer_authority_status(force_refresh=True)
+        logger.critical(
+            "🔐 WRITER LOCK SELF-TEST | ok=%s strict_required=%s live_mode=%s redis_configured=%s token_present=%s",
+            _writer_lock_status.get("ok"),
+            _writer_lock_status.get("strict_required"),
+            _writer_lock_status.get("live_mode"),
+            _writer_lock_status.get("redis_configured"),
+            _writer_lock_status.get("token_present"),
+        )
+        if _writer_lock_status.get("error"):
+            logger.critical("🔐 WRITER LOCK SELF-TEST ERROR: %s", _writer_lock_status.get("error"))
+    except Exception as _writer_lock_status_err:
+        logger.warning("⚠️ Writer lock self-test unavailable: %s", _writer_lock_status_err)
     
     # Start dedicated heartbeat thread for Railway health checks
     # This ensures heartbeat is updated frequently (every 10 seconds)

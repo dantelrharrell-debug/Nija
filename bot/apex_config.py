@@ -819,20 +819,15 @@ def get_active_risk_config():
         try:
             balance_str = os.getenv('ACCOUNT_BALANCE', '').strip()
             if not balance_str:
-                logger.info(
-                    "AUTO mode: ACCOUNT_BALANCE not set yet (pre-hydration) — "
-                    "defaulting to INVESTOR bootstrap tier"
+                raise RuntimeError(
+                    "Balance required before tier calculation: ACCOUNT_BALANCE is not set"
                 )
-                return RISK_CONFIG_INVESTOR
 
             balance = float(balance_str)
             if balance <= 0:
-                logger.info(
-                    "AUTO mode: ACCOUNT_BALANCE is $%.2f during startup "
-                    "(pre-hydration) — defaulting to INVESTOR bootstrap tier",
-                    balance,
+                raise RuntimeError(
+                    f"Balance required before tier calculation: ACCOUNT_BALANCE is {balance:.2f}"
                 )
-                return RISK_CONFIG_INVESTOR
 
             if balance >= 25000:
                 logger.info(f"AUTO mode: Selected BALLER tier (balance: ${balance:.2f})")
@@ -855,10 +850,9 @@ def get_active_risk_config():
             else:
                 logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($5), defaulting to STARTER tier")
                 return RISK_CONFIG_STARTER
-        except (ValueError, TypeError) as e:
-            # Default to INVESTOR if balance unavailable or invalid
-            logger.warning(f"Unable to parse ACCOUNT_BALANCE, defaulting to INVESTOR tier: {e}")
-            return RISK_CONFIG_INVESTOR
+        except (ValueError, TypeError, RuntimeError) as e:
+            logger.error(f"AUTO mode balance hydration guard failed: {e}")
+            raise RuntimeError("Balance required before tier calculation") from e
     else:
         # Default to INVESTOR for unknown profiles
         logger.warning(f"Unknown RISK_PROFILE '{risk_profile}', defaulting to INVESTOR tier")

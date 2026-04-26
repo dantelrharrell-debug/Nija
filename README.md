@@ -118,6 +118,45 @@ If the bot logs `🛑 TRADING NOT ALLOWED`, check:
 
 ---
 
+## Startup Hydration And Writer-Lock Checks
+
+NIJA now enforces a strict startup contract:
+1. Balance hydration must complete before FSM/runtime loops can start.
+2. In live mode, distributed single-writer lock ownership is required.
+3. Runtime order dispatch validates writer-lock ownership continuously.
+
+### Health Endpoints For Operators
+
+Use these endpoints during deploy and incident response:
+
+```bash
+curl -s http://127.0.0.1:${PORT:-8080}/health
+curl -s http://127.0.0.1:${PORT:-8080}/status | jq '.writer_lock_ok, .writer_lock'
+curl -s http://127.0.0.1:${PORT:-8080}/writer-lock
+```
+
+`/status` now includes:
+- `writer_lock_ok`: compact boolean for dashboards/alerts
+- `writer_lock`: detailed ownership diagnostics
+
+`/writer-lock` returns `503` when strict/live mode requires lock ownership and the check fails.
+
+### Runtime Writer-Lock Verification Knobs
+
+```bash
+NIJA_WRITER_RUNTIME_VERIFY_TTL_S=1.5
+NIJA_WRITER_RUNTIME_VERIFY_FAIL_CLOSED=true
+```
+
+- `NIJA_WRITER_RUNTIME_VERIFY_TTL_S`: cache window for runtime lock checks
+- `NIJA_WRITER_RUNTIME_VERIFY_FAIL_CLOSED`: when true, Redis verification issues block execution
+
+### Live Mode Requirement
+
+When `LIVE_CAPITAL_VERIFIED=true`, NIJA enforces distributed lock availability. If Redis is not configured, startup exits fail-closed to preserve single-writer safety.
+
+---
+
 
 
 Every trade passes through **three priority gates** before reaching execution.

@@ -47,13 +47,22 @@ except ImportError:
             return None
 
 try:
-    from bot.execution_authority_context import has_execution_authority
+    from bot.execution_authority_context import (
+        has_execution_authority,
+        assert_distributed_writer_authority,
+    )
 except ImportError:
     try:
-        from execution_authority_context import has_execution_authority
+        from execution_authority_context import (
+            has_execution_authority,
+            assert_distributed_writer_authority,
+        )
     except ImportError:
         def has_execution_authority() -> bool:
             return False
+
+        def assert_distributed_writer_authority() -> None:
+            return
 
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
@@ -539,7 +548,19 @@ def _reject_if_unauthorized_order_submit(
     quantity: float,
 ) -> Optional[Dict[str, Any]]:
     """Fail closed when direct broker order submit bypasses ExecutionPipeline."""
-    enforced = True
+    try:
+        assert_distributed_writer_authority()
+    except Exception as exc:
+        logger.critical(
+            "🔒 Distributed writer fence violation | broker=%s symbol=%s side=%s qty=%s err=%s",
+            broker_name,
+            symbol,
+            side,
+            quantity,
+            exc,
+        )
+        raise RuntimeError(f"FATAL: Distributed writer fence violation: {exc}") from exc
+
     if has_execution_authority():
         return None
 

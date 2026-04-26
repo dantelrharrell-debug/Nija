@@ -17,7 +17,8 @@
 7. [Admin APIs](#admin-apis)
 8. [WebSocket APIs](#websocket-apis)
 9. [Webhook Endpoints](#webhook-endpoints)
-10. [Error Codes](#error-codes)
+10. [Operational Endpoints](#operational-endpoints)
+11. [Error Codes](#error-codes)
 
 ---
 
@@ -94,6 +95,88 @@ Headers returned:
 X-RateLimit-Limit: 100
 X-RateLimit-Remaining: 95
 X-RateLimit-Reset: 1706529720
+```
+
+---
+
+## Operational Endpoints
+
+These endpoints are served by the bot runtime health server and do not use the
+JWT application API authentication scheme.
+
+### Liveness
+
+Always returns `200` when process is alive.
+
+```http
+GET /health
+GET /healthz
+```
+
+Response:
+
+```text
+ok
+```
+
+### Readiness
+
+Returns readiness details and HTTP status based on startup/runtime readiness.
+
+```http
+GET /ready
+GET /readiness
+```
+
+### Status
+
+Returns full runtime status for operators.
+
+```http
+GET /status
+GET /
+```
+
+Writer lock fields included in the status payload:
+- `writer_lock_ok`: compact boolean for dashboards and alerts
+- `writer_lock`: detailed distributed writer-lock diagnostics
+
+### Metrics
+
+Prometheus-compatible metrics endpoint.
+
+```http
+GET /metrics
+```
+
+### Distributed Writer Lock Self-Test
+
+Returns distributed writer-lock ownership diagnostics.
+
+```http
+GET /writer-lock
+```
+
+Behavior:
+- Returns `200` when lock status is healthy.
+- Returns `503` when strict/live mode requires lock ownership and the check fails.
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "strict_required": true,
+  "live_mode": true,
+  "redis_configured": true,
+  "token_present": true,
+  "token_prefix": "12345678",
+  "cache": {
+    "last_check_monotonic": 12345.67,
+    "last_ok": true,
+    "last_error": ""
+  }
+}
 ```
 
 ---

@@ -9,7 +9,7 @@ that advances the boot sequence must call :meth:`BootstrapStateMachine.transitio
 illegal transitions are rejected and logged instead of propagating as silent
 side-effects.
 
-States (16 total)
+States (17 total)
 -----------------
   BOOT_INIT              – initial state when the process starts
   LOCK_ACQUIRED          – process/distributed writer lock held
@@ -19,6 +19,7 @@ States (16 total)
   MODE_GATED             – trading state machine confirmed a legal mode
   PLATFORM_CONNECTING    – platform broker connection(s) in progress
   PLATFORM_READY         – at least one platform broker connected
+    BALANCE_HYDRATED       – startup balance sync completed (authoritative)
   CAPITAL_REFRESHING     – capital authority refresh in progress
   CAPITAL_READY          – capital > 0 confirmed; trading gate open
   INIT_COMPLETE          – all initialization locked; execution logic ready
@@ -37,8 +38,9 @@ Allowed transitions
   ENV_VERIFIED           → STARTUP_VALIDATED | CONFIG_ERROR_KEEPALIVE
   STARTUP_VALIDATED      → MODE_GATED | BOOT_FAILED_RETRY
   MODE_GATED             → PLATFORM_CONNECTING
-  PLATFORM_CONNECTING    → PLATFORM_READY | BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED
-  PLATFORM_READY         → CAPITAL_REFRESHING
+    PLATFORM_CONNECTING    → PLATFORM_READY | BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED
+    PLATFORM_READY         → BALANCE_HYDRATED | BOOT_FAILED_RETRY
+    BALANCE_HYDRATED       → CAPITAL_REFRESHING | BOOT_FAILED_RETRY
   CAPITAL_REFRESHING     → CAPITAL_READY | BOOT_FAILED_RETRY
   CAPITAL_READY          → INIT_COMPLETE
   INIT_COMPLETE          → THREADS_STARTING
@@ -110,6 +112,7 @@ class BootstrapState(str, Enum):
     MODE_GATED = "MODE_GATED"
     PLATFORM_CONNECTING = "PLATFORM_CONNECTING"
     PLATFORM_READY = "PLATFORM_READY"
+    BALANCE_HYDRATED = "BALANCE_HYDRATED"
     CAPITAL_REFRESHING = "CAPITAL_REFRESHING"
     CAPITAL_READY = "CAPITAL_READY"
     INIT_COMPLETE = "INIT_COMPLETE"
@@ -173,6 +176,10 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
         BootstrapState.EXTERNAL_RESTART_REQUIRED,
     ],
     BootstrapState.PLATFORM_READY: [
+        BootstrapState.BALANCE_HYDRATED,
+        BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.BALANCE_HYDRATED: [
         BootstrapState.CAPITAL_REFRESHING,
         BootstrapState.BOOT_FAILED_RETRY,
     ],
@@ -225,6 +232,7 @@ _HAPPY_PATH_TO_CAPITAL_READY: List[BootstrapState] = [
     BootstrapState.MODE_GATED,
     BootstrapState.PLATFORM_CONNECTING,
     BootstrapState.PLATFORM_READY,
+    BootstrapState.BALANCE_HYDRATED,
     BootstrapState.CAPITAL_REFRESHING,
     BootstrapState.CAPITAL_READY,
     BootstrapState.INIT_COMPLETE,
