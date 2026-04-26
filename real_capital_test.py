@@ -299,7 +299,12 @@ def _fetch_kraken_balance(verbose: bool) -> Tuple[Optional[float], str]:
             if resp.get("error"):
                 return None, f"Kraken API error: {resp['error']}"
             result = resp.get("result", {})
-            zusd = float(result.get("ZUSD", 0.0))
+            usd = (
+                result.get("ZUSD") or
+                result.get("USD") or
+                0
+            )
+            zusd = float(usd)
             usdc = float(result.get("USDC", 0.0))
             total = zusd + usdc
             detail = f"ZUSD=${zusd:.2f}  USDC=${usdc:.2f}  total=${total:.2f}"
