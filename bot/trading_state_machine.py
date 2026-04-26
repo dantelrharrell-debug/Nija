@@ -240,6 +240,11 @@ class TradingStateMachine:
                 logger.critical(
                     "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_ACTIVE (bypassed PENDING trap)"
                 )
+                logger.critical(
+                    "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
+                    self._current_state.value,
+                    self._current_state == TradingState.LIVE_ACTIVE,
+                )
 
     def _load_state(self):
         """
