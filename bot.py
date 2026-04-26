@@ -104,6 +104,22 @@ def _is_bootstrap_owner_thread() -> bool:
     return _bootstrap_owner_thread_id == threading.get_ident()
 
 
+def _is_live_trading_active_now() -> bool:
+    """Best-effort probe of LIVE_ACTIVE state without raising."""
+    try:
+        from bot.trading_state_machine import get_state_machine as _get_tsm_live_probe
+    except ImportError:
+        try:
+            from trading_state_machine import get_state_machine as _get_tsm_live_probe  # type: ignore[import]
+        except ImportError:
+            return False
+
+    try:
+        return bool(_get_tsm_live_probe().is_live_trading_active())
+    except Exception:
+        return False
+
+
 def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool:
     """Acquire INIT lock only from bootstrap owner thread.
 
@@ -121,6 +137,11 @@ def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool
             _bootstrap_owner_thread_id,
             threading.get_ident(),
         )
+        return False
+
+    # INIT lock must never re-trigger once LIVE mode is active.
+    if _is_live_trading_active_now():
+        logger.warning("Skipping INIT lock - already in LIVE mode (context=%s)", context)
         return False
 
     print("INIT_LOCK_ATTEMPT", flush=True)
@@ -146,6 +167,10 @@ def _read_initialized_state_snapshot(
         # Non-owner readers get a best-effort snapshot without locking.
         return dict(_initialized_state)
 
+    if _is_live_trading_active_now():
+        # Live path: do not re-acquire INIT lock after activation.
+        return dict(_initialized_state)
+
     for attempt in range(1, max_attempts + 1):
         acquired = _acquire_init_lock_bootstrap_only(
             context=f"read snapshot: {context}",
@@ -168,6 +193,36 @@ def _read_initialized_state_snapshot(
     raise RuntimeError(
         f"INIT_LOCK_TIMEOUT context={context} — lock unavailable after {max_attempts} attempts"
     )
+
+
+def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
+    """Start trading loop from cached strategy when LIVE mode is already active."""
+    if any(_t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()):
+        logger.critical("TradingLoop already running - skipping duplicate start (%s)", reason)
+        return True
+
+    _state_snapshot = dict(_initialized_state)
+    _strategy = _state_snapshot.get("strategy")
+    if _strategy is None:
+        logger.warning(
+            "START_TRADING_LOOP_SKIPPED: strategy unavailable in initialized state (%s)",
+            reason,
+        )
+        return False
+
+    try:
+        try:
+            from bot.nija_core_loop import start_trading_engine as _start_trading_engine, TRADING_ENGINE_READY as _tl_ready
+        except ImportError:
+            from nija_core_loop import start_trading_engine as _start_trading_engine, TRADING_ENGINE_READY as _tl_ready  # type: ignore[import]
+
+        _tl_ready.set()
+        logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT (%s)", reason)
+        _start_trading_engine(_strategy)
+        return True
+    except Exception as _start_loop_err:
+        logger.error("Failed to start trading loop from initialized state (%s): %s", reason, _start_loop_err)
+        return False
 
 # Single-owner bootstrap kernel lock.
 # Only one bootstrap execution sequence may run at a time.  The BotStartup
@@ -1725,6 +1780,14 @@ def _rerun_supervisor_loop(state: dict) -> None:
     use_independent_trading = state["use_independent_trading"]
     health_manager = get_health_manager()
 
+    if _is_live_trading_active_now():
+        logger.critical("LIVE MODE ACTIVE - skipping re-init, entering execution loop")
+        if _start_trading_loop_from_initialized_state(reason="rerun-supervisor live-guard"):
+            return
+        logger.warning(
+            "LIVE mode active during supervisor re-entry but trading loop start was skipped; continuing supervisor path"
+        )
+
     logger.info(
         "♻️  Re-entering supervisor loop — init already completed "
         "(%d active thread(s))",
@@ -2031,6 +2094,12 @@ def _run_bot_startup_and_trading():
     """
     global _initialized_state
 
+    if _is_live_trading_active_now():
+        logger.critical("LIVE MODE ACTIVE - skipping re-init, entering execution loop")
+        if _start_trading_loop_from_initialized_state(reason="startup live-guard"):
+            return
+        logger.warning("LIVE mode active but trading loop could not start from cached state; continuing startup flow")
+
     # ── FAST PATH: init already done — skip straight to supervisor loop ────
     # Requires full state (strategy + active_threads) to be present so that a
     # retry after a partial-init failure falls through and finishes setup instead
@@ -2280,6 +2349,15 @@ def _run_bot_startup_and_trading():
                             "STARTUP THREAD ACTIVATION STATE: %s",
                             getattr(_startup_state, "value", str(_startup_state)),
                         )
+
+                        if _tsm_startup.is_live_trading_active():
+                            logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT")
+                            _bootstrap_complete_flag.set()
+                            _bootstrap_completed_event.set()
+                            if _start_trading_loop_from_initialized_state(
+                                reason="startup-thread capability activation"
+                            ):
+                                return
                     except Exception as _startup_activation_err:
                         logger.warning("Startup-thread LIVE activation attempt failed: %s", _startup_activation_err)
 
@@ -4434,6 +4512,16 @@ def main():
         from bot.nija_core_loop import start_trading_engine
         start_trading_engine(strategy)
         logger.critical("✅ TradingLoop started via start_trading_engine()")
+
+    _trading_loop_alive = any(
+        _t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()
+    )
+    logger.critical(
+        "SUPERVISOR ENTRY ASSERT: live_active=%s tradingloop_alive=%s strategy_present=%s",
+        _is_live_trading_active_now(),
+        _trading_loop_alive,
+        strategy is not None,
+    )
 
     logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0
