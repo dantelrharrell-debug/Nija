@@ -3420,50 +3420,6 @@ class CoinbaseBroker(BaseBroker):
         """
         try:
             balance_data = self._get_account_balance_detailed(verbose=verbose)
-            # HARD DEBUG: compute USD available directly from get_accounts payload.
-            accounts_resp = None
-            if self._accounts_cache and self._is_cache_valid(self._accounts_cache_time):
-                accounts_resp = self._accounts_cache
-            elif hasattr(self.client, 'get_accounts'):
-                accounts_resp = self._api_call_with_retry(
-                    self.client.get_accounts,
-                    max_retries=BALANCE_FETCH_MAX_RETRIES
-                )
-                self._accounts_cache = accounts_resp
-                self._accounts_cache_time = time.time()
-            elif hasattr(self.client, 'list_accounts'):
-                accounts_resp = self._api_call_with_retry(
-                    self.client.list_accounts,
-                    max_retries=BALANCE_FETCH_MAX_RETRIES
-                )
-
-            balances = getattr(accounts_resp, 'accounts', []) or (
-                accounts_resp.get('accounts', []) if isinstance(accounts_resp, dict) else []
-            )
-            usd_balance = 0.0
-            for acc in balances:
-                if isinstance(acc, dict):
-                    currency = acc.get('currency')
-                    available_val = (acc.get('available_balance') or {}).get('value')
-                else:
-                    currency = getattr(acc, 'currency', None)
-                    available_val = getattr(getattr(acc, 'available_balance', None), 'value', None)
-
-                if currency == "USD":
-                    try:
-                        usd_balance += float(available_val or 0.0)
-                    except Exception:
-                        continue
-
-            logger.critical(f"=== RAW BALANCES === {balances}")
-            logger.critical(f"=== USD AVAILABLE === {usd_balance}")
-            if usd_balance < 50.0:
-                logger.critical(
-                    "=== AUTO TIER BLOCK === USD available %.2f is below required minimum $50.00 (check API/account mapping) ===",
-                    usd_balance,
-                )
-            assert usd_balance > 0, "NO USABLE FUNDS DETECTED"
-
             if balance_data is None:
                 # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
                 # API call failed - use last known balance if available
@@ -3493,6 +3449,12 @@ class CoinbaseBroker(BaseBroker):
             trading_balance = float(balance_data.get('trading_balance', 0.0))
             total_held = float(balance_data.get('total_held', 0.0))
 
+            if trading_balance < 50.0:
+                logger.critical(
+                    "=== AUTO TIER BLOCK === Available cash (USD+USDC) %.2f is below required minimum $50.00 ===",
+                    trading_balance,
+                )
+
             if total_held > 0:
                 logger.debug(f"💎 Total Equity: ${result:.2f} (Available: ${trading_balance:.2f} + Locked: ${total_held:.2f})")
             else:
@@ -3512,8 +3474,6 @@ class CoinbaseBroker(BaseBroker):
 
             return result
 
-        except AssertionError:
-            raise
         except Exception as e:
             logger.error(f"❌ Exception fetching Coinbase balance: {e}")
             self._balance_fetch_errors += 1
