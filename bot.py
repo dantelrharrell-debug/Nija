@@ -2248,6 +2248,40 @@ def _run_bot_startup_and_trading():
                 if not capability_ok:
                     logger.warning("⚠️  Trading capability verification found issues")
                     logger.warning("   Bot may not function correctly")
+                else:
+                    # Activation must occur in the bootstrap owner thread.
+                    try:
+                        from bot.trading_state_machine import get_state_machine as _get_tsm_startup, TradingState as _TS_startup
+
+                        logger.critical("FORCING LIVE ACTIVATION FROM STARTUP THREAD")
+                        _tsm_startup = _get_tsm_startup()
+                        _activated = _tsm_startup.transition_to(
+                            _TS_startup.LIVE_ACTIVE,
+                            "startup thread activation after capability verification",
+                        )
+                        if (not _activated) or (_tsm_startup.get_current_state() != _TS_startup.LIVE_ACTIVE):
+                            logger.warning(
+                                "Startup-thread transition_to(LIVE_ACTIVE) did not commit; "
+                                "attempting force_activate_live fallback"
+                            )
+                            _tsm_startup.force_activate_live(
+                                reason="startup thread fallback after capability verification"
+                            )
+                        _startup_state = _tsm_startup.get_current_state()
+                        logger.critical(
+                            "STARTUP THREAD ACTIVATION STATE: %s",
+                            getattr(_startup_state, "value", str(_startup_state)),
+                        )
+                    except Exception as _startup_activation_err:
+                        logger.warning("Startup-thread LIVE activation attempt failed: %s", _startup_activation_err)
+
+                    # Release bootstrap wait condition immediately after capability verification.
+                    try:
+                        _bootstrap_complete_flag.set()
+                        _bootstrap_completed_event.set()
+                        logger.critical("✅ STARTUP THREAD RELEASED bootstrap completion events")
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
@@ -4348,14 +4382,6 @@ def main():
     if not _bootstrap_completed_event.wait(timeout=5):
         raise RuntimeError("❌ DEADLOCK: bootstrap_ready was never set")
     logger.critical("🧭 AFTER bootstrap wait")
-
-    # Fastest proof path: force live activation immediately after startup handoff.
-    try:
-        from bot.trading_state_machine import get_state_machine as _get_tsm_force
-        _get_tsm_force().force_activate_live(reason="post-startup proof")
-        logger.critical("🔥 FORCED LIVE ACTIVATION")
-    except Exception as _forced_live_err:
-        logger.warning("Forced live activation probe failed: %s", _forced_live_err)
 
     # ── Strategy existence gate ─────────────────────────────────────────────
     # Guarantee the strategy object exists AND _strategy_ready_event is set
