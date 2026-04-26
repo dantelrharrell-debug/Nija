@@ -923,121 +923,130 @@ def _acquire_distributed_process_lock() -> None:
                 f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
             ) from _ping_exc
 
-        _acquire_result = _client.eval(
-            """
-            if redis.call('EXISTS', KEYS[1]) == 1 then
-                return {0, redis.call('GET', KEYS[1])}
-            end
-            local token = redis.call('INCR', KEYS[2])
-            local value = tostring(token) .. ':' .. ARGV[1]
-            redis.call('SET', KEYS[1], value, 'EX', tonumber(ARGV[2]))
-            return {token, value}
-            """,
-            2,
-            _lock_key,
-            _fencing_key,
-            _owner,
-            str(_ttl_s),
-        )
+        def _try_acquire_once() -> tuple[int, str, int]:
+            """Try one atomic acquire and return (token, holder, pttl_ms)."""
+            _res = _client.eval(
+                """
+                if redis.call('EXISTS', KEYS[1]) == 1 then
+                    local holder = redis.call('GET', KEYS[1])
+                    local pttl = redis.call('PTTL', KEYS[1])
+                    return {0, holder or '', pttl or -2}
+                end
+                local token = redis.call('INCR', KEYS[2])
+                local value = tostring(token) .. ':' .. ARGV[1]
+                redis.call('SET', KEYS[1], value, 'EX', tonumber(ARGV[2]))
+                local pttl = redis.call('PTTL', KEYS[1])
+                return {token, value, pttl or -2}
+                """,
+                2,
+                _lock_key,
+                _fencing_key,
+                _owner,
+                str(_ttl_s),
+            )
+            _token = 0
+            _holder_local = "<unknown-holder>"
+            _pttl_ms = -2
+            if isinstance(_res, (list, tuple)):
+                if len(_res) >= 1:
+                    try:
+                        _token = int(_res[0] or 0)
+                    except (TypeError, ValueError):
+                        _token = 0
+                if len(_res) >= 2:
+                    _holder_local = str(_res[1] or _holder_local)
+                if len(_res) >= 3:
+                    try:
+                        _pttl_ms = int(_res[2] or -2)
+                    except (TypeError, ValueError):
+                        _pttl_ms = -2
+            return _token, _holder_local, _pttl_ms
 
-        _fencing_token = 0
-        _holder = "<unknown-holder>"
-        if isinstance(_acquire_result, (list, tuple)) and len(_acquire_result) >= 1:
-            try:
-                _fencing_token = int(_acquire_result[0] or 0)
-            except (TypeError, ValueError):
-                _fencing_token = 0
-            if len(_acquire_result) >= 2:
-                _holder = str(_acquire_result[1] or _holder)
+        _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
 
-        # FIX 5: Force lock acquisition after timeout (prevent stale locks from blocking restart)
-        _lock_acquire_deadline = time.time() + 15  # 15-second timeout
-        _lock_retry_interval = 0.5  # seconds
-        
+        # Never spin indefinitely: bounded wait + stale-aware compare-and-delete.
+        try:
+            _wait_s = float(os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "15"))
+        except (TypeError, ValueError):
+            _wait_s = 15.0
+        if _wait_s < 0.5:
+            _wait_s = 0.5
+        _lock_acquire_deadline = time.time() + _wait_s
+        _lock_retry_interval = 0.5
+        _next_wait_log = 0.0
+
         while _fencing_token <= 0:
-            if time.time() > _lock_acquire_deadline:
-                logger.critical(
-                    "⚠️ Distributed lock acquisition timeout — forcing restart after 15s"
+            _now = time.time()
+            if _now >= _next_wait_log:
+                _ttl_s_human = "unknown"
+                if _holder_pttl_ms >= 0:
+                    _ttl_s_human = f"{_holder_pttl_ms / 1000.0:.1f}s"
+                elif _holder_pttl_ms == -1:
+                    _ttl_s_human = "no-expiry"
+                elif _holder_pttl_ms == -2:
+                    _ttl_s_human = "missing"
+                print(
+                    f"⏳ Waiting for distributed lock (retry in {_lock_retry_interval}s, holder_ttl={_ttl_s_human})..."
                 )
+                _next_wait_log = _now + 2.0
+
+            if _now > _lock_acquire_deadline:
                 logger.critical(
-                    "Previous holder: %s (lock may be stale)",
-                    _holder
+                    "Distributed lock acquisition timed out after %.1fs; holder=%s pttl_ms=%s",
+                    _wait_s,
+                    _holder,
+                    _holder_pttl_ms,
                 )
+
+                # Stale lock rescue: only delete when holder matches observed value
+                # and key has expired/no-expiry metadata suggesting stale state.
+                _rescued = 0
+                try:
+                    _rescued = int(
+                        _client.eval(
+                            """
+                            local current = redis.call('GET', KEYS[1])
+                            if not current then
+                                return 0
+                            end
+                            local pttl = redis.call('PTTL', KEYS[1])
+                            if current == ARGV[1] and (pttl == -1 or pttl <= 0) then
+                                return redis.call('DEL', KEYS[1])
+                            end
+                            return 0
+                            """,
+                            1,
+                            _lock_key,
+                            _holder,
+                        )
+                        or 0
+                    )
+                except Exception as _stale_exc:
+                    logger.warning("Stale-lock rescue check failed: %s", _stale_exc)
+
+                if _rescued == 1:
+                    logger.critical("🔓 Cleared stale writer lock key=%s; retrying acquire once", _lock_key)
+                    _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+                    break
+
                 print("\n" + "┏" + "━" * 78 + "┓")
-                print("┃ ⚠️  STALE LOCK TIMEOUT — FORCING ACQUISITION                            ┃")
-                print("┃ Previous holder did not renew lock within timeout window.              ┃")
+                print("┃ 🚫 DISTRIBUTED WRITER LOCK UNAVAILABLE                                    ┃")
+                print("┃ Another writer is active or lock could not be safely recovered.          ┃")
                 print(f"┃ Lock key: {_lock_key[-58:]:<58} ┃")
                 print(f"┃ Holder:   {_holder[:58]:<58} ┃")
-                print("┃ Action:   Force-acquiring lock (stale holder assumed dead)            ┃")
+                _pttl_txt = str(_holder_pttl_ms)
+                print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
+                print("┃ Action:   Exiting fail-closed to preserve one-writer invariant.          ┃")
                 print("┗" + "━" * 78 + "┛\n")
-                
-                # Force acquisition by deleting the stale lock and retrying
-                try:
-                    _client.delete(_lock_key)
-                    logger.critical("🔓 Deleted stale lock key: %s", _lock_key)
-                except Exception as _del_err:
-                    logger.warning("⚠️ Could not delete stale lock: %s", _del_err)
-                
-                # Retry acquisition
-                try:
-                    _acquire_result = _client.eval(
-                        """
-                        if redis.call('EXISTS', KEYS[1]) == 1 then
-                            return {0, redis.call('GET', KEYS[1])}
-                        end
-                        local token = redis.call('INCR', KEYS[2])
-                        local value = tostring(token) .. ':' .. ARGV[1]
-                        redis.call('SET', KEYS[1], value, 'EX', tonumber(ARGV[2]))
-                        return {token, value}
-                        """,
-                        2,
-                        _lock_key,
-                        _fencing_key,
-                        _owner,
-                        str(_ttl_s),
-                    )
-                    if isinstance(_acquire_result, (list, tuple)) and len(_acquire_result) >= 1:
-                        _fencing_token = int(_acquire_result[0] or 0)
-                    if _fencing_token > 0:
-                        logger.critical("✅ Lock acquired after force-deletion")
-                        break
-                except Exception as _force_err:
-                    logger.error("❌ Force acquisition failed: %s", _force_err)
-                    break
-                break
-            
-            if _fencing_token <= 0:
-                print(f"⏳ Waiting for distributed lock (retry in {_lock_retry_interval}s)...")
-                time.sleep(_lock_retry_interval)
-                
-                # Retry acquiring the lock
-                try:
-                    _acquire_result = _client.eval(
-                        """
-                        if redis.call('EXISTS', KEYS[1]) == 1 then
-                            return {0, redis.call('GET', KEYS[1])}
-                        end
-                        local token = redis.call('INCR', KEYS[2])
-                        local value = tostring(token) .. ':' .. ARGV[1]
-                        redis.call('SET', KEYS[1], value, 'EX', tonumber(ARGV[2]))
-                        return {token, value}
-                        """,
-                        2,
-                        _lock_key,
-                        _fencing_key,
-                        _owner,
-                        str(_ttl_s),
-                    )
-                    if isinstance(_acquire_result, (list, tuple)) and len(_acquire_result) >= 1:
-                        try:
-                            _fencing_token = int(_acquire_result[0] or 0)
-                        except (TypeError, ValueError):
-                            _fencing_token = 0
-                        if len(_acquire_result) >= 2:
-                            _holder = str(_acquire_result[1] or _holder)
-                except Exception as _retry_err:
-                    logger.debug("Lock retry attempt failed: %s", _retry_err)
-                    _fencing_token = 0
+                sys.exit(1)
+
+            time.sleep(_lock_retry_interval)
+            try:
+                _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+            except Exception as _retry_err:
+                logger.debug("Lock retry attempt failed: %s", _retry_err)
+                _fencing_token = 0
+                _holder_pttl_ms = -2
         
         if _fencing_token <= 0:
             print("\n" + "┏" + "━" * 78 + "┓")
