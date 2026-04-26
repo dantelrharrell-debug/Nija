@@ -23,6 +23,10 @@ import subprocess
 
 from bot.redis_env import get_redis_env_presence, get_redis_url, get_redis_url_source
 
+# Early bootstrap logger so pre-config startup paths (locking, env checks,
+# nonce init) can log safely before the full logging pipeline is configured.
+logger = logging.getLogger("nija.bootstrap")
+
 # ── Operational override: disable HF scalping mode for now ─────────────────
 # Explicitly force HF flags off before any HF module is initialized.
 os.environ["HF_SCALP_MODE"] = "0"
