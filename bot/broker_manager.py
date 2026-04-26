@@ -3175,7 +3175,7 @@ class CoinbaseBroker(BaseBroker):
                 logging.critical(f"=== USD AVAILABLE === {usd_balance}")
                 if usd_balance < 50.0:
                     logging.critical(
-                        "=== AUTO TIER BLOCK === USD available %.2f is below required minimum $50.00 (check API/account mapping) ===",
+                        "=== COINBASE VENUE CASH LOW === USD available %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
                         usd_balance,
                     )
 
@@ -3374,7 +3374,7 @@ class CoinbaseBroker(BaseBroker):
             logging.critical(f"=== USD AVAILABLE === {usd_balance}")
             if usd_balance < 50.0:
                 logging.critical(
-                    "=== AUTO TIER BLOCK === USD available %.2f is below required minimum $50.00 (check API/account mapping) ===",
+                    "=== COINBASE VENUE CASH LOW === USD available %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
                     usd_balance,
                 )
 
@@ -3459,7 +3459,7 @@ class CoinbaseBroker(BaseBroker):
 
             if trading_balance < 50.0:
                 logger.critical(
-                    "=== AUTO TIER BLOCK === Available cash (USD+USDC) %.2f is below required minimum $50.00 ===",
+                    "=== COINBASE VENUE CASH LOW === Available cash (USD+USDC) %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
                     trading_balance,
                 )
 

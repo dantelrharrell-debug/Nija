@@ -5345,21 +5345,30 @@ class MultiAccountBrokerManager:
                     self.on_broker_ready(key, broker.get_account_balance)
                 except Exception as _exc:
                     logger.warning("[MABM] on_broker_ready call failed for %s: %s", key, _exc)
-                # Event-driven capital refresh: any successful platform connect
-                # immediately revalidates unified capital readiness.
-                _cap = self.resolve_startup_capital_invariant(trigger=f"platform_connect:{key}")
-                if _cap.get("ready", 0.0) > 0.0:
-                    logger.info(
-                        "   ✅ Platform %s connected and capital-ready (total=$%.2f)",
-                        key.upper(), float(_cap.get("total_capital", 0.0)),
-                    )
+                # Event-driven capital refresh: once registration is finalized,
+                # a successful platform connect can synchronously revalidate
+                # unified startup capital. Before that point, defer the blocking
+                # invariant to the post-registration bootstrap contract below.
+                if self._broker_registration_complete.is_set():
+                    _cap = self.resolve_startup_capital_invariant(trigger=f"platform_connect:{key}")
+                    if _cap.get("ready", 0.0) > 0.0:
+                        logger.info(
+                            "   ✅ Platform %s connected and capital-ready (total=$%.2f)",
+                            key.upper(), float(_cap.get("total_capital", 0.0)),
+                        )
+                    else:
+                        logger.warning(
+                            "   ⏳ Platform %s connected; capital not ready yet "
+                            "(valid_brokers=%d total=$%.2f) — waiting for re-evaluation",
+                            key.upper(),
+                            int(_cap.get("valid_brokers", 0.0)),
+                            float(_cap.get("total_capital", 0.0)),
+                        )
                 else:
-                    logger.warning(
-                        "   ⏳ Platform %s connected; capital not ready yet "
-                        "(valid_brokers=%d total=$%.2f) — waiting for re-evaluation",
+                    logger.info(
+                        "   ⏳ Platform %s connected; deferring startup capital invariant "
+                        "until broker registration finalizes",
                         key.upper(),
-                        int(_cap.get("valid_brokers", 0.0)),
-                        float(_cap.get("total_capital", 0.0)),
                     )
             else:
                 self.mark_platform_failed(broker_type)
