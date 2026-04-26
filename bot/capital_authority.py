@@ -401,9 +401,20 @@ class CapitalAuthority:
         # known.  The env var NIJA_CAPITAL_EXPECTED_BROKERS is an advanced override
         # intended for multi-process deployments; in normal operation the value is
         # derived at runtime and this env var should not be needed.
-        self._expected_brokers: int = int(
-            os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "1")
-        )
+        # Default: require at least 2 brokers before signalling ACTIVE_CAPITAL,
+        # preventing a false-positive READY when only one broker has connected.
+        # Override: set NIJA_SINGLE_BROKER_MODE=true (or NIJA_CAPITAL_EXPECTED_BROKERS=1)
+        # to allow a single-broker deployment to reach READY.
+        _single_broker_mode: bool = os.environ.get(
+            "NIJA_SINGLE_BROKER_MODE", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        _explicit_expected: str = os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "").strip()
+        if _explicit_expected:
+            self._expected_brokers: int = int(_explicit_expected)
+        elif _single_broker_mode:
+            self._expected_brokers: int = 1
+        else:
+            self._expected_brokers: int = 2
         # Opportunistic mode: when True, ACTIVE_CAPITAL is reached (and
         # CAPITAL_SYSTEM_READY is set) as soon as ≥1 broker reports a positive
         # balance, without waiting for all expected_brokers to connect.

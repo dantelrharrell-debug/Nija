@@ -6070,6 +6070,14 @@ class AlpacaBroker(BaseBroker):
 
         Returns:
             float: Total equity (cash + positions)
+                try:
+                    if self.api is None:
+                        logger.debug(
+                            "AlpacaBroker.get_account_balance: api client is None "
+                            "(broker not connected or disabled) — returning 0.0"
+                        )
+                        return 0.0
+                    account = self.api.get_account()
         """
         try:
             account = self.api.get_account()

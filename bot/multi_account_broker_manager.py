@@ -454,7 +454,17 @@ class MultiAccountBrokerManager:
         self._bootstrap_seed_done: bool = False
         self._bootstrap_seed_lock: threading.Lock = threading.Lock()
 
-        # CapitalAuthority readiness + watchdog state (fail-safe auto-refresh loop)
+    # ── Platform broker init idempotency guard ─────────────────────────────
+    # Set to True the first time initialize_platform_brokers() completes
+    # (even if brokers failed to connect).  Subsequent calls are no-ops that
+    # return the cached _platform_init_results so multi-entry-point startup
+    # (MABM.initialize → _bootstrap_hydrate, trading_strategy, ai_intelligence_hub)
+    # does not run the full initialisation sequence a second time.
+    self._platform_init_complete: bool = False
+    self._platform_init_results: Dict[str, dict] = {}
+    self._platform_init_lock: threading.Lock = threading.Lock()
+
+    # CapitalAuthority readiness + watchdog state (fail-safe auto-refresh loop)
         self._capital_ready: bool = False
         self._capital_last_valid_brokers: int = 0
         self._capital_last_refresh_ts: float = 0.0
@@ -5176,6 +5186,16 @@ class MultiAccountBrokerManager:
         mirrors the result of ``broker.connect()``.
         """
         # Late import to avoid circular dependency (broker_manager → multi_account_broker_manager)
+            # ── Idempotency guard — return cached results on repeated calls ──────
+            with self._platform_init_lock:
+                if self._platform_init_complete:
+                    logger.info(
+                        "🔒 initialize_platform_brokers() already completed — "
+                        "returning cached results (idempotency guard)"
+                    )
+                    return dict(self._platform_init_results)
+
+            # Late import to avoid circular dependency (broker_manager → multi_account_broker_manager)
         try:
             from bot.broker_manager import BinanceBroker
         except ImportError:
@@ -5467,6 +5487,11 @@ class MultiAccountBrokerManager:
             )
             self._trading_halted_due_to_capital = True
         self._start_capital_watchdog()
+
+        # Mark init complete and cache results for idempotency guard.
+        with self._platform_init_lock:
+            self._platform_init_complete = True
+            self._platform_init_results = dict(results)
 
         return results
 
