@@ -533,6 +533,22 @@ class MultiAccountBrokerManager:
         _IR.run_once("BROKER_FAILURE_MANAGER", self._init_broker_failure_mgr)
         _IR.run_once("MABM_CAPITAL_FSM", self._init_capital_fsm)
 
+        # ── BOOTSTRAP BALANCE HYDRATION (must run before live activation) ───
+        try:
+            self._bootstrap_hydrate_balance_before_activation()
+        except Exception as _bootstrap_balance_err:
+            _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {
+                "1", "true", "yes", "enabled", "on"
+            }
+            if _is_live:
+                raise RuntimeError(
+                    "Startup blocked: exchange balance hydration failed before activation"
+                ) from _bootstrap_balance_err
+            logger.warning(
+                "[MABM.initialize] pre-activation balance hydration failed in non-live mode: %s",
+                _bootstrap_balance_err,
+            )
+
         # ── POST-INITIALIZE: Force activation (BULLETPROOF) ──────────────────
         # This is the TRUE final point — all subsystems have been wired.
         # Explicitly trigger activation now before returning to bootstrap.
@@ -578,6 +594,65 @@ class MultiAccountBrokerManager:
                 "[MABM.initialize] Post-init activation attempt failed: %s",
                 _finalize_activation_err,
             )
+
+    def _bootstrap_hydrate_balance_before_activation(self) -> float:
+        """Hydrate exchange balances before any live activation attempts.
+
+        Startup order contract:
+        1) Exchange clients init/connect
+        2) Balance hydration
+        3) Risk/activation gates
+        """
+        logger.info("[MABM.initialize] pre-activation balance hydration started")
+
+        # Step 1: ensure platform exchange clients are created/connected first.
+        _platform_results = self.initialize_platform_brokers()
+        _connected_platforms = [
+            _name for _name, _meta in (_platform_results or {}).items()
+            if bool((_meta or {}).get("connected", False))
+        ]
+        logger.info(
+            "[MABM.initialize] platform init complete: connected=%d (%s)",
+            len(_connected_platforms),
+            ", ".join(_connected_platforms) if _connected_platforms else "none",
+        )
+
+        # Step 2: hydrate balances from exchanges.
+        _balances = self.get_all_balances()
+        _total_usd = 0.0
+        try:
+            from bot.balance_utils import sum_nested_balances as _sum_nested_balances  # type: ignore[import]
+            _total_usd = float(_sum_nested_balances(_balances))
+        except Exception:
+            # Fallback local recursive sum to avoid import coupling.
+            def _sum_local(payload: Any) -> float:
+                if isinstance(payload, dict):
+                    return float(sum(_sum_local(v) for v in payload.values()))
+                if isinstance(payload, (list, tuple, set)):
+                    return float(sum(_sum_local(v) for v in payload))
+                try:
+                    return float(payload)
+                except (TypeError, ValueError):
+                    return 0.0
+            _total_usd = float(_sum_local(_balances))
+
+        os.environ["ACCOUNT_BALANCE"] = f"{_total_usd:.8f}"
+        os.environ["ACCOUNT_EQUITY"] = f"{_total_usd:.8f}"
+        os.environ["ACCOUNT_AVAILABLE"] = f"{_total_usd:.8f}"
+        self.bootstrap_balance_usd = _total_usd
+
+        # Hard fail in live mode if no real exchange balance is available.
+        _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {
+            "1", "true", "yes", "enabled", "on"
+        }
+        if _is_live and _total_usd <= 0:
+            raise RuntimeError("No exchange balance available")
+
+        logger.info(
+            "[MABM.initialize] pre-activation hydration complete: total_usd=%.2f",
+            _total_usd,
+        )
+        return _total_usd
 
     def _init_portfolio(self) -> None:
         """Initialize portfolio manager (called once via InitRegistry)."""
