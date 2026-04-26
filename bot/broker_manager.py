@@ -2249,6 +2249,9 @@ class CoinbaseBroker(BaseBroker):
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
+        # Event set once the first live balance is successfully fetched.
+        # Trading strategy waits on this before executing entries.
+        self._strategy_ready_event = threading.Event()
 
         # In-memory permanent cache for entry prices fetched from Coinbase fills.
         # Once fetched successfully the price is not re-fetched until the position
@@ -3479,6 +3482,10 @@ class CoinbaseBroker(BaseBroker):
 
             # SUCCESS: Update last known balance and reset error count
             self._last_known_balance = result
+            logger.info(f"ACCOUNT BALANCE HYDRATED: {result}")
+            if not self._strategy_ready_event.is_set():
+                logger.critical("ACCOUNT HYDRATED — UNBLOCKING STRATEGY")
+                self._strategy_ready_event.set()
             self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
             self._balance_fetch_errors = 0
             self._is_available = True
@@ -7017,6 +7024,9 @@ class KrakenBroker(BaseBroker):
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
+        # Event set once the first live balance is successfully fetched.
+        # Trading strategy waits on this before executing entries.
+        self._strategy_ready_event = threading.Event()
         # Fraction of non-USD Kraken assets successfully priced in the most
         # recent compute_total_usd_balance() pass.  Used by the capital
         # confidence scorer (Stage 4 of the deterministic pipeline).
@@ -8309,6 +8319,10 @@ class KrakenBroker(BaseBroker):
                         # This prevents redundant API calls when get_account_balance() is called immediately after connect()
                         # Reduces startup time and prevents potential rate limiting issues
                         self._last_known_balance = total_funds
+                        logger.info(f"ACCOUNT BALANCE HYDRATED: {total_funds}")
+                        if not self._strategy_ready_event.is_set():
+                            logger.critical("ACCOUNT HYDRATED — UNBLOCKING STRATEGY")
+                            self._strategy_ready_event.set()
                         self._balance_last_updated = time.time()
                         self.balance_cache["kraken"] = total_funds
 
@@ -8960,6 +8974,10 @@ class KrakenBroker(BaseBroker):
                 # SUCCESS: Update last known balance and reset error count
                 # 🚑 FIX 4: Store and return total_funds instead of just available
                 self._last_known_balance = total_funds
+                logger.info(f"ACCOUNT BALANCE HYDRATED: {total_funds}")
+                if not self._strategy_ready_event.is_set():
+                    logger.critical("ACCOUNT HYDRATED — UNBLOCKING STRATEGY")
+                    self._strategy_ready_event.set()
                 logger.info(
                     "[DEBUG] setting _last_known_balance=%s for broker=%s",
                     total_funds,
