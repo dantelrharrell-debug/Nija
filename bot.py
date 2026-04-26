@@ -1666,19 +1666,52 @@ def _bootstrap_hydrate_account_balances() -> dict:
                 _k for _k, _meta in (_platform_init or {}).items()
                 if bool((_meta or {}).get("connected", False))
             ]
+            _connected_platform_labels = [str(_p) for _p in _connected_platforms]
             print(
                 "✅ PLATFORM BROKER INIT COMPLETE: "
                 f"connected={len(_connected_platforms)} "
-                f"({', '.join(_connected_platforms) if _connected_platforms else 'none'})"
+                f"({', '.join(_connected_platform_labels) if _connected_platform_labels else 'none'})"
             )
             
             print("✅ BROKER MANAGER INITIALIZED — FETCHING BALANCES")
             print("Fetching Kraken balance...")
             
             # 🔥 STEP 4: Fetch balances (now safe, will raise if balance is None)
-            balances = mabm.get_all_balances()
-            print(f"Balance response: {balances}")
-            total_usd = _sum_nested_balances(balances)
+            balances = None
+            total_usd = 0.0
+            try:
+                balances = mabm.get_all_balances()
+                print(f"Balance response: {balances}")
+                total_usd = _sum_nested_balances(balances)
+            except Exception as _bal_err:
+                print(f"⚠️  Aggregate balance fetch failed: {_bal_err}")
+                balances = {"platform": {}, "users": {}, "error": str(_bal_err)}
+
+            # Live-mode resilience: if aggregate fetch fails/zeros out, try direct
+            # Kraken PLATFORM balance so Kraken can continue trading even if a
+            # secondary broker payload is temporarily unavailable.
+            if _is_live and total_usd <= 0:
+                try:
+                    from bot.broker_manager import BrokerType as _BrokerType
+
+                    _kraken = mabm.platform_brokers.get(_BrokerType.KRAKEN)
+                    if _kraken and getattr(_kraken, "connected", False):
+                        _kraken_balance = _kraken.get_account_balance()
+                        if _kraken_balance is not None:
+                            _kraken_total = _sum_nested_balances({"platform": {"kraken": _kraken_balance}})
+                            if _kraken_total > 0:
+                                total_usd = float(_kraken_total)
+                                balances = {
+                                    "platform": {"kraken": _kraken_balance},
+                                    "users": {},
+                                    "source": "kraken_direct_fallback",
+                                }
+                                print(
+                                    "✅ LIVE fallback: using direct Kraken PLATFORM balance "
+                                    f"(${total_usd:.2f})"
+                                )
+                except Exception as _kraken_bal_err:
+                    print(f"⚠️  Kraken direct-balance fallback failed: {_kraken_bal_err}")
             
             # 🔥 GUARD 1: Exchange balance must be > 0
             if total_usd <= 0:
