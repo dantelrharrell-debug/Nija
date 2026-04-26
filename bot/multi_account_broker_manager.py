@@ -4120,9 +4120,15 @@ class MultiAccountBrokerManager:
         }
         return not reasons, diagnostics, "; ".join(reasons)
 
+    def is_ready(self) -> bool:
+        """Check if broker manager is initialized and ready for use."""
+        return bool(self._fsm_initialized)
+
     def get_all_balances(self) -> Dict:
         """
         Get balances for all accounts.
+        
+        🔥 HARD GATE: Must be called ONLY after initialize() completes.
 
         CRITICAL FIX (Jan 23, 2026): Include ALL configured users and their brokers,
         even if credentials are not configured or connection failed.
@@ -4133,16 +4139,31 @@ class MultiAccountBrokerManager:
                 'platform': {broker_type: balance, ...},
                 'users': {user_id: {broker_type: balance, ...}, ...}
             }
+            
+        Raises:
+            RuntimeError: If broker manager not initialized
         """
+        # 🔥 GUARD 1: Enforce initialization gate
+        if not self._fsm_initialized:
+            raise RuntimeError(
+                "BrokerManager not initialized — call initialize() first before fetching balances"
+            )
+        
         result = {
             'platform': {},
             'users': {}
         }
 
         # Platform balances
+        # 🔥 GUARD 3: Raise error if balance is None (not silent return)
         for broker_type, broker in self._platform_brokers.items():
             if broker.connected:
-                result['platform'][broker_type.value] = broker.get_account_balance()
+                balance = broker.get_account_balance()
+                if balance is None:
+                    raise RuntimeError(
+                        f"Exchange returned null balance for platform {broker_type.value} — aborting"
+                    )
+                result['platform'][broker_type.value] = balance
 
         # User balances - include ALL users from metadata with ALL their brokers
         # CRITICAL FIX: Use metadata as source of truth for which users/brokers should exist
@@ -4157,16 +4178,22 @@ class MultiAccountBrokerManager:
                 result['users'][user_id][broker_name] = 0.0
 
         # Then update with actual balances for connected users
+        # 🔥 GUARD 3: Raise error if balance is None (not silent return)
         for user_id, user_brokers in self.user_brokers.items():
             if user_id not in result['users']:
                 result['users'][user_id] = {}
             for broker_type, broker in user_brokers.items():
                 if broker.connected:
                     try:
-                        result['users'][user_id][broker_type.value] = broker.get_account_balance()
+                        balance = broker.get_account_balance()
+                        if balance is None:
+                            raise RuntimeError(
+                                f"Exchange returned null balance for {user_id}/{broker_type.value} — aborting"
+                            )
+                        result['users'][user_id][broker_type.value] = balance
                     except Exception as e:
-                        logger.debug(f"Could not get balance for {user_id}/{broker_type.value}: {e}")
-                        # Keep the $0.00 default
+                        logger.error(f"CRITICAL: Balance fetch failed for {user_id}/{broker_type.value}: {e}")
+                        raise
 
         # Also try to get balances from _all_user_brokers (in case some are connected but not in user_brokers)
         for (user_id, broker_type), broker in self._all_user_brokers.items():

@@ -1391,7 +1391,7 @@ def _bootstrap_hydrate_account_balances() -> dict:
     Sets ACCOUNT_BALANCE, ACCOUNT_EQUITY, ACCOUNT_AVAILABLE env vars.
     
     CRITICAL GUARDS:
-    - Exchange balance fetch is MANDATORY
+    - Exchange balance fetch is MANDATORY (must initialize broker manager first)
     - Mock/default balances are BLOCKED in live mode
     - Fails closed if balance <= 0 in live mode
     """
@@ -1400,36 +1400,49 @@ def _bootstrap_hydrate_account_balances() -> dict:
         
         _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in ("1", "true", "yes", "enabled")
         
-        # Try to get balances from multi-account broker manager
+        # 🔥 STEP 1: Initialize broker manager BEFORE any balance fetch
         try:
             from bot.multi_account_broker_manager import multi_account_broker_manager
             mabm = multi_account_broker_manager
-            if hasattr(mabm, "get_all_balances") and callable(mabm.get_all_balances):
-                balances = mabm.get_all_balances()
-                total_usd = _sum_nested_balances(balances)
-                
-                # 🔥 HARD FAIL GUARD 1: Exchange balance must be > 0
-                if total_usd <= 0:
-                    if _is_live:
-                        raise RuntimeError(
-                            f"CRITICAL: Exchange balance fetch failed — balance is ${total_usd:.2f} (zero/negative not allowed in LIVE mode)"
-                        )
-                    print(f"⚠️  Warning: Exchange balance is ${total_usd:.2f} (non-live mode, continuing)")
-                
-                os.environ["ACCOUNT_BALANCE"] = f"{total_usd:.8f}"
-                os.environ["ACCOUNT_EQUITY"] = f"{total_usd:.8f}"
-                # Available is assumed equal to total at bootstrap time
-                os.environ["ACCOUNT_AVAILABLE"] = f"{total_usd:.8f}"
-                
-                print(f"✅ BOOTSTRAP HYDRATION COMPLETE: balance=${total_usd:.2f} (source=broker_manager)")
-                return {
-                    "total_usd": total_usd,
-                    "equity": total_usd,
-                    "available": total_usd,
-                    "source": "broker_manager",
-                }
+            
+            # 🔥 STEP 2: Force initialization
+            print("🔧 FORCING BROKER MANAGER INITIALIZATION...")
+            mabm.initialize()
+            
+            # 🔥 STEP 3: Check readiness
+            if not mabm.is_ready():
+                raise RuntimeError("BrokerManager failed to initialize — not ready for balance fetch")
+            
+            print("✅ BROKER MANAGER INITIALIZED — FETCHING BALANCES")
+            
+            # 🔥 STEP 4: Fetch balances (now safe, will raise if balance is None)
+            balances = mabm.get_all_balances()
+            total_usd = _sum_nested_balances(balances)
+            
+            # 🔥 GUARD 1: Exchange balance must be > 0
+            if total_usd <= 0:
+                if _is_live:
+                    raise RuntimeError(
+                        f"CRITICAL: Exchange balance fetch failed — balance is ${total_usd:.2f} (zero/negative not allowed in LIVE mode)"
+                    )
+                print(f"⚠️  Warning: Exchange balance is ${total_usd:.2f} (non-live mode, continuing)")
+            
+            os.environ["ACCOUNT_BALANCE"] = f"{total_usd:.8f}"
+            os.environ["ACCOUNT_EQUITY"] = f"{total_usd:.8f}"
+            # Available is assumed equal to total at bootstrap time
+            os.environ["ACCOUNT_AVAILABLE"] = f"{total_usd:.8f}"
+            
+            print(f"✅ BOOTSTRAP HYDRATION COMPLETE: balance=${total_usd:.2f} (source=broker_manager)")
+            return {
+                "total_usd": total_usd,
+                "equity": total_usd,
+                "available": total_usd,
+                "source": "broker_manager",
+            }
         except Exception as _mabm_err:
             print(f"⚠️  Bootstrap hydration via broker_manager failed: {_mabm_err}")
+            if _is_live:
+                raise RuntimeError(f"CRITICAL: Broker manager initialization failed in LIVE mode: {_mabm_err}") from _mabm_err
         
         # Fallback: use existing hydrated balance if available
         existing_balance = os.environ.get("ACCOUNT_BALANCE", "").strip()
