@@ -101,16 +101,22 @@ _NONCE_LOCK_POLL_INTERVAL_SECONDS: float = 0.5
 # concurrent manager rebuild/init floor loads to prevent writer races.
 _PROBE_WINDOW_COND = threading.Condition(threading.Lock())
 _PROBE_WINDOW_ACTIVE = 0
+_PROBE_WINDOW_LOCAL = threading.local()
 
 
 def _probe_window_begin() -> None:
     global _PROBE_WINDOW_ACTIVE
+    _depth = int(getattr(_PROBE_WINDOW_LOCAL, "depth", 0))
+    _PROBE_WINDOW_LOCAL.depth = _depth + 1
     with _PROBE_WINDOW_COND:
         _PROBE_WINDOW_ACTIVE += 1
 
 
 def _probe_window_end() -> None:
     global _PROBE_WINDOW_ACTIVE
+    _depth = int(getattr(_PROBE_WINDOW_LOCAL, "depth", 0))
+    if _depth > 0:
+        _PROBE_WINDOW_LOCAL.depth = _depth - 1
     with _PROBE_WINDOW_COND:
         if _PROBE_WINDOW_ACTIVE > 0:
             _PROBE_WINDOW_ACTIVE -= 1
@@ -127,6 +133,11 @@ def _wait_for_probe_window(context: str, timeout_s: float | None = None) -> bool
     Returns True when the window closes. If timeout_s is provided and exceeded,
     logs an error and returns False so callers can force progress.
     """
+    # Re-entrant fast path: when the current thread is the one running the
+    # active probe window, do not block waiting for itself.
+    if int(getattr(_PROBE_WINDOW_LOCAL, "depth", 0)) > 0:
+        return True
+
     _start_time = time.time()
     with _PROBE_WINDOW_COND:
         while _PROBE_WINDOW_ACTIVE > 0:
