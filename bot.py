@@ -1380,6 +1380,92 @@ def _verify_env() -> None:
 _verify_env()
 
 
+# =====================================================================
+# BOOTSTRAP PRELOAD LAYER — Balance Hydration Before Strategy Import
+# =====================================================================
+# CRITICAL: Must run BEFORE trading_strategy import so risk config can
+# read ACCOUNT_BALANCE from environment.
+def _bootstrap_hydrate_account_balances() -> dict:
+    """
+    Hydrate account balances at startup, BEFORE strategy initialization.
+    Sets ACCOUNT_BALANCE, ACCOUNT_EQUITY, ACCOUNT_AVAILABLE env vars.
+    """
+    try:
+        print("💰 BOOTSTRAP BALANCE HYDRATION: STARTING")
+        
+        # Try to get balances from multi-account broker manager
+        try:
+            from bot.multi_account_broker_manager import multi_account_broker_manager
+            mabm = multi_account_broker_manager
+            if hasattr(mabm, "get_all_balances") and callable(mabm.get_all_balances):
+                balances = mabm.get_all_balances()
+                total_usd = _sum_nested_balances(balances)
+                
+                os.environ["ACCOUNT_BALANCE"] = f"{total_usd:.8f}"
+                os.environ["ACCOUNT_EQUITY"] = f"{total_usd:.8f}"
+                # Available is assumed equal to total at bootstrap time
+                os.environ["ACCOUNT_AVAILABLE"] = f"{total_usd:.8f}"
+                
+                print(f"✅ BOOTSTRAP HYDRATION COMPLETE: balance=${total_usd:.2f}")
+                return {
+                    "total_usd": total_usd,
+                    "equity": total_usd,
+                    "available": total_usd,
+                    "source": "broker_manager",
+                }
+        except Exception as _mabm_err:
+            print(f"⚠️  Bootstrap hydration via broker_manager failed: {_mabm_err}")
+        
+        # Fallback: use existing hydrated balance if available
+        existing_balance = os.environ.get("ACCOUNT_BALANCE", "").strip()
+        if existing_balance:
+            try:
+                total_usd = float(existing_balance)
+                os.environ["ACCOUNT_EQUITY"] = existing_balance
+                os.environ["ACCOUNT_AVAILABLE"] = existing_balance
+                print(f"✅ BOOTSTRAP HYDRATION: using cached balance=${total_usd:.2f}")
+                return {
+                    "total_usd": total_usd,
+                    "equity": total_usd,
+                    "available": total_usd,
+                    "source": "environment_cache",
+                }
+            except ValueError:
+                pass
+        
+        # If live mode and no balance available, fail closed
+        _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in ("1", "true", "yes", "enabled")
+        if _is_live:
+            raise RuntimeError(
+                "CRITICAL: Balance hydration failed in LIVE mode — "
+                "no balance provider available and no cached balance set"
+            )
+        
+        # In non-live mode, warn but continue with default
+        print("⚠️  BOOTSTRAP HYDRATION: no balance available (non-live mode, continuing)")
+        os.environ.setdefault("ACCOUNT_BALANCE", "0")
+        os.environ.setdefault("ACCOUNT_EQUITY", "0")
+        os.environ.setdefault("ACCOUNT_AVAILABLE", "0")
+        return {
+            "total_usd": 0.0,
+            "equity": 0.0,
+            "available": 0.0,
+            "source": "default",
+        }
+        
+    except Exception as _bootstrap_err:
+        print(f"❌ BOOTSTRAP BALANCE HYDRATION FAILED: {_bootstrap_err}")
+        raise
+
+
+# Run bootstrap balance hydration before strategy import
+try:
+    _bootstrap_balances = _bootstrap_hydrate_account_balances()
+except RuntimeError as _bootstrap_fatal:
+    print(f"🚫 FATAL: Bootstrap balance hydration failed: {_bootstrap_fatal}")
+    sys.exit(1)
+
+
 # Import after path setup
 from trading_strategy import TradingStrategy
 
