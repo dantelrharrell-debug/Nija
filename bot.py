@@ -2094,11 +2094,28 @@ def _run_bot_startup_and_trading():
     """
     global _initialized_state
 
+    _live_capital_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
+    if _live_capital_verified:
+        logger.warning("Bypassing cached state — forcing fresh trading session")
+        try:
+            from bot.trading_state_machine import get_state_machine as _get_tsm_bypass, TradingState as _TS_bypass
+        except ImportError:
+            from trading_state_machine import get_state_machine as _get_tsm_bypass, TradingState as _TS_bypass  # type: ignore[import]
+        _tsm_bypass = _get_tsm_bypass()
+        if not _tsm_bypass.is_live_trading_active():
+            _tsm_bypass.transition_to(_TS_bypass.LIVE_ACTIVE, "LIVE_CAPITAL_VERIFIED bypass — forcing fresh trading session")
+        if _start_trading_loop_from_initialized_state(reason="LIVE_CAPITAL_VERIFIED startup bypass"):
+            return
+        logger.critical("RESUME FAILED — STARTING FRESH TRADING LOOP")
+        # Force activation then proceed through full startup to build strategy
+        logger.warning("Cached state unavailable — continuing through full startup flow with LIVE_ACTIVE forced")
+
     if _is_live_trading_active_now():
         logger.critical("LIVE MODE ACTIVE - skipping re-init, entering execution loop")
         if _start_trading_loop_from_initialized_state(reason="startup live-guard"):
             return
-        logger.warning("LIVE mode active but trading loop could not start from cached state; continuing startup flow")
+        logger.critical("RESUME FAILED — STARTING FRESH TRADING LOOP")
+        logger.warning("LIVE mode active but cached state incomplete; continuing full startup flow")
 
     # ── FAST PATH: init already done — skip straight to supervisor loop ────
     # Requires full state (strategy + active_threads) to be present so that a

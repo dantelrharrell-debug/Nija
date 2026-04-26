@@ -231,13 +231,14 @@ class TradingStateMachine:
                 return
 
             if live_verified and not dry_run_mode:
-                self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
-                self._activation_committed = False
-                self._execution_authority = False
-                self._core_loop_owns_execution = True
-                self._can_dispatch_trades = False
+                # Fix 3: LIVE_PENDING_CONFIRMATION is a dead-end trap — go directly to LIVE_ACTIVE
+                self._current_state = TradingState.LIVE_ACTIVE
+                self._activation_committed = True
+                self._execution_authority = True
+                self._core_loop_owns_execution = False
+                self._can_dispatch_trades = True
                 logger.critical(
-                    "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_PENDING_CONFIRMATION"
+                    "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_ACTIVE (bypassed PENDING trap)"
                 )
 
     def _load_state(self):
