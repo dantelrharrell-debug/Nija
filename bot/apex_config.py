@@ -817,8 +817,23 @@ def get_active_risk_config():
     elif risk_profile == 'AUTO':
         # Auto-select based on account balance (if available)
         try:
-            balance_str = os.getenv('ACCOUNT_BALANCE', '0')
+            balance_str = os.getenv('ACCOUNT_BALANCE', '').strip()
+            if not balance_str:
+                logger.info(
+                    "AUTO mode: ACCOUNT_BALANCE not set yet (pre-hydration) — "
+                    "defaulting to INVESTOR bootstrap tier"
+                )
+                return RISK_CONFIG_INVESTOR
+
             balance = float(balance_str)
+            if balance <= 0:
+                logger.info(
+                    "AUTO mode: ACCOUNT_BALANCE is $%.2f during startup "
+                    "(pre-hydration) — defaulting to INVESTOR bootstrap tier",
+                    balance,
+                )
+                return RISK_CONFIG_INVESTOR
+
             if balance >= 25000:
                 logger.info(f"AUTO mode: Selected BALLER tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_BALLER
