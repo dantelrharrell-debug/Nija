@@ -225,8 +225,11 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         return False
 
 
-def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool]:
-    """Return (system_ready, broker_ready, risk_ready, strategy_ready)."""
+def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
+    """Return (system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready).
+
+    All five sub-conditions must be True before the trading loop may start.
+    """
     strategy = state_snapshot.get("strategy")
     active_threads = state_snapshot.get("active_threads")
 
@@ -244,8 +247,27 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool]
     # explicit risk_ready flag is already persisted in initialized state.
     risk_ready = bool(state_snapshot.get("risk_ready", strategy_ready))
 
-    system_ready = broker_ready and risk_ready and strategy_ready
-    return system_ready, broker_ready, risk_ready, strategy_ready
+    # capital_ready: BootstrapFSM must have reached CAPITAL_READY (or beyond).
+    capital_ready = False
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        try:
+            _bfsm = _get_bootstrap_fsm()
+            _bfsm_state = _bfsm.state
+            _capital_states = {
+                "CAPITAL_READY", "INIT_COMPLETE", "THREADS_STARTING", "RUNNING_SUPERVISED",
+            }
+            capital_ready = getattr(_bfsm_state, "value", str(_bfsm_state)) in _capital_states
+        except Exception:
+            capital_ready = False
+
+    # execution_ready: strategy must have a live execution engine.
+    execution_ready = (
+        strategy is not None
+        and getattr(strategy, "execution_engine", None) is not None
+    )
+
+    system_ready = broker_ready and risk_ready and strategy_ready and capital_ready and execution_ready
+    return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
 
 # Single-owner bootstrap kernel lock.
 # Only one bootstrap execution sequence may run at a time.  The BotStartup
@@ -2406,13 +2428,15 @@ def _run_bot_startup_and_trading():
                     except Exception as _startup_activation_err:
                         logger.warning("Startup-thread LIVE activation attempt failed: %s", _startup_activation_err)
 
-                    # Release bootstrap wait condition immediately after capability verification.
-                    try:
-                        _bootstrap_complete_flag.set()
-                        _bootstrap_completed_event.set()
-                        logger.critical("✅ STARTUP THREAD RELEASED bootstrap completion events")
-                    except Exception:
-                        pass
+                    # Do NOT release bootstrap events here — the startup thread must not
+                    # signal completion before the full system_ready barrier is satisfied
+                    # (strategy_ready + broker_ready + risk_ready + capital_ready +
+                    # execution_ready).  Bootstrap events are set by the normal boot path
+                    # once the FSM reaches RUNNING_SUPERVISED (see finalize_boot / B1→B2).
+                    logger.info(
+                        "Startup-thread capability verification complete — "
+                        "deferring bootstrap event release to RUNNING_SUPERVISED gate"
+                    )
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
@@ -4511,36 +4535,51 @@ def main():
         ]
     )
     
-    # Single source of truth readiness gate.
+    # ── SYSTEM_READY BARRIER ─────────────────────────────────────────────────
+    # Hard gate: ALL five conditions must be True before the trading loop starts.
+    #   strategy_ready   — strategy object fully initialised
+    #   broker_ready     — at least one platform broker connected
+    #   risk_ready       — risk / execution engine present on strategy
+    #   capital_ready    — BootstrapFSM has reached CAPITAL_READY or beyond
+    #   execution_ready  — strategy.execution_engine is not None
+    # ─────────────────────────────────────────────────────────────────────────
     logger.critical("🧭 BEFORE system_ready wait")
     _wait_deadline = time.monotonic() + 180.0
     strategy = None
     while True:
         _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
         strategy = _state_snapshot.get("strategy")
-        system_ready, broker_ready, risk_ready, strategy_ready = _compute_system_ready(_state_snapshot)
+        system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
+            _compute_system_ready(_state_snapshot)
         if system_ready:
             logger.critical(
-                "✅ SYSTEM READY: broker_ready=%s risk_ready=%s strategy_ready=%s",
-                broker_ready,
-                risk_ready,
-                strategy_ready,
+                "✅ SYSTEM READY: broker_ready=%s risk_ready=%s strategy_ready=%s "
+                "capital_ready=%s execution_ready=%s",
+                broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
             )
             break
 
         if time.monotonic() >= _wait_deadline:
             raise RuntimeError(
                 "❌ DEADLOCK: system_ready was never reached "
-                f"(broker_ready={broker_ready} risk_ready={risk_ready} strategy_ready={strategy_ready})"
+                f"(broker_ready={broker_ready} risk_ready={risk_ready} "
+                f"strategy_ready={strategy_ready} capital_ready={capital_ready} "
+                f"execution_ready={execution_ready})"
             )
 
         logger.info(
-            "⏳ Waiting for system_ready: broker_ready=%s risk_ready=%s strategy_ready=%s",
-            broker_ready,
-            risk_ready,
-            strategy_ready,
+            "⏳ Waiting for system_ready: broker_ready=%s risk_ready=%s strategy_ready=%s "
+            "capital_ready=%s execution_ready=%s",
+            broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
         )
         time.sleep(1.0)
+
+    # ── HARD GUARD: never enter trading loop without a valid strategy ─────────
+    if not system_ready or strategy is None:
+        raise RuntimeError(
+            "❌ SYSTEM_READY BARRIER VIOLATED: refusing to start trading loop "
+            f"(system_ready={system_ready} strategy_present={strategy is not None})"
+        )
 
     from bot.nija_core_loop import start_trading_engine
     start_trading_engine(strategy)
