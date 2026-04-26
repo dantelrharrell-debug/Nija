@@ -224,6 +224,26 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         logger.error("Failed to start trading loop from initialized state (%s): %s", reason, _start_loop_err)
         return False
 
+
+def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool]:
+    """Return (system_ready, broker_ready, risk_ready, strategy_ready)."""
+    strategy = state_snapshot.get("strategy")
+    active_threads = state_snapshot.get("active_threads")
+
+    strategy_ready = strategy is not None
+    broker_ready = bool(active_threads) or bool(state_snapshot.get("connection_complete", False))
+
+    risk_ready = False
+    if strategy is not None:
+        risk_ready = (
+            getattr(strategy, "risk_manager", None) is not None
+            or getattr(strategy, "execution_engine", None) is not None
+            or getattr(strategy, "global_risk_engine", None) is not None
+        )
+
+    system_ready = broker_ready and risk_ready and strategy_ready
+    return system_ready, broker_ready, risk_ready, strategy_ready
+
 # Single-owner bootstrap kernel lock.
 # Only one bootstrap execution sequence may run at a time.  The BotStartup
 # thread acquires this non-blocking before entering the retry loop.  If another
@@ -2339,42 +2359,47 @@ def _run_bot_startup_and_trading():
                     try:
                         from bot.trading_state_machine import get_state_machine as _get_tsm_startup, TradingState as _TS_startup
 
-                        logger.critical("FORCING LIVE ACTIVATION FROM STARTUP THREAD")
-                        _tsm_startup = _get_tsm_startup()
-                        _current_state = _tsm_startup.get_current_state()
-                        if _current_state in (_TS_startup.OFF, _TS_startup.READY):
-                            _activated = _tsm_startup.transition_to(
-                                _TS_startup.LIVE_ACTIVE,
-                                "startup thread activation after capability verification",
+                        if _strategy_ready_event.is_set():
+                            logger.critical("FORCING LIVE ACTIVATION FROM STARTUP THREAD")
+                            _tsm_startup = _get_tsm_startup()
+                            _current_state = _tsm_startup.get_current_state()
+                            if _current_state in (_TS_startup.OFF, _TS_startup.READY):
+                                _activated = _tsm_startup.transition_to(
+                                    _TS_startup.LIVE_ACTIVE,
+                                    "startup thread activation after capability verification",
+                                )
+                            else:
+                                _activated = (_current_state == _TS_startup.LIVE_ACTIVE)
+                                logger.info(
+                                    "Startup-thread activation skipped: current state is %s",
+                                    getattr(_current_state, "value", str(_current_state)),
+                                )
+                            if (not _activated) or (_tsm_startup.get_current_state() != _TS_startup.LIVE_ACTIVE):
+                                logger.warning(
+                                    "Startup-thread transition_to(LIVE_ACTIVE) did not commit; "
+                                    "attempting force_activate_live fallback"
+                                )
+                                _tsm_startup.force_activate_live(
+                                    reason="startup thread fallback after capability verification"
+                                )
+                            _startup_state = _tsm_startup.get_current_state()
+                            logger.critical(
+                                "STARTUP THREAD ACTIVATION STATE: %s",
+                                getattr(_startup_state, "value", str(_startup_state)),
                             )
-                        else:
-                            _activated = (_current_state == _TS_startup.LIVE_ACTIVE)
-                            logger.info(
-                                "Startup-thread activation skipped: current state is %s",
-                                getattr(_current_state, "value", str(_current_state)),
-                            )
-                        if (not _activated) or (_tsm_startup.get_current_state() != _TS_startup.LIVE_ACTIVE):
-                            logger.warning(
-                                "Startup-thread transition_to(LIVE_ACTIVE) did not commit; "
-                                "attempting force_activate_live fallback"
-                            )
-                            _tsm_startup.force_activate_live(
-                                reason="startup thread fallback after capability verification"
-                            )
-                        _startup_state = _tsm_startup.get_current_state()
-                        logger.critical(
-                            "STARTUP THREAD ACTIVATION STATE: %s",
-                            getattr(_startup_state, "value", str(_startup_state)),
-                        )
 
-                        if _tsm_startup.is_live_trading_active():
-                            logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT")
-                            _bootstrap_complete_flag.set()
-                            _bootstrap_completed_event.set()
-                            if _start_trading_loop_from_initialized_state(
-                                reason="startup-thread capability activation"
-                            ):
-                                return
+                            if _tsm_startup.is_live_trading_active():
+                                logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT")
+                                _bootstrap_complete_flag.set()
+                                _bootstrap_completed_event.set()
+                                if _start_trading_loop_from_initialized_state(
+                                    reason="startup-thread capability activation"
+                                ):
+                                    return
+                        else:
+                            logger.info(
+                                "Startup-thread forced activation deferred: strategy not fully ready yet"
+                            )
                     except Exception as _startup_activation_err:
                         logger.warning("Startup-thread LIVE activation attempt failed: %s", _startup_activation_err)
 
@@ -2963,6 +2988,10 @@ def _run_bot_startup_and_trading():
                 else:
                     try:
                         _initialized_state["strategy"] = strategy
+                        # Move readiness trigger immediately after strategy init.
+                        if not _strategy_ready_event.is_set():
+                            _strategy_ready_event.set()
+                            logger.critical("STRATEGY READY EVENT SET (post strategy initialization)")
                     finally:
                         _initialized_state_lock.release()
                 logger.critical("🔥 INIT_A5: after TradingStrategy()")
@@ -4478,57 +4507,40 @@ def main():
         ]
     )
     
-    # Wait for initialization to complete, then start the execution loop.
-    # Hard timeout: if the bootstrap-complete event is never released, fail
-    # loudly instead of hanging forever in observer mode.
-    logger.critical("🧭 BEFORE bootstrap wait")
-    if not _bootstrap_completed_event.wait(timeout=5):
-        raise RuntimeError("❌ DEADLOCK: bootstrap_ready was never set")
-    logger.critical("🧭 AFTER bootstrap wait")
+    # Single source of truth readiness gate.
+    logger.critical("🧭 BEFORE system_ready wait")
+    _wait_deadline = time.monotonic() + 180.0
+    strategy = None
+    while True:
+        _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
+        strategy = _state_snapshot.get("strategy")
+        system_ready, broker_ready, risk_ready, strategy_ready = _compute_system_ready(_state_snapshot)
+        if system_ready:
+            logger.critical(
+                "✅ SYSTEM READY: broker_ready=%s risk_ready=%s strategy_ready=%s",
+                broker_ready,
+                risk_ready,
+                strategy_ready,
+            )
+            break
 
-    # ── Strategy existence gate ─────────────────────────────────────────────
-    # Guarantee the strategy object exists AND _strategy_ready_event is set
-    # BEFORE TradingCoreLoop starts.  _strategy_ready_event is the single
-    # source of truth (FIX C): it is set only on the SUCCESS bootstrap path
-    # after _initialized_state is fully populated and all trader threads are
-    # running — never from the finally block on failure.
-    #
-    # _bootstrap_completed_event can also be fired from the finally block when
-    # bootstrap fails, so relying on it alone to guard core-loop startup leads
-    # to the mismatch described in the architecture spec (BootstrapFSM thinks
-    # ready → supervisor checks different flag → core loop checks local var).
-    # Using _strategy_ready_event here collapses all three into ONE check.
-    #
-    # If bootstrap failed (e.g. broker credentials missing, transient network
-    # error) _strategy_ready_event is NOT set, so we skip the core-loop start
-    # here.  The bootstrap retry kernel (_run_bot_startup_and_trading_with_retry)
-    # is still running and will start TradingCoreLoop itself once it succeeds.
-    # Crashing here (via RuntimeError / sys.exit) would kill the process before
-    # the retry has any chance to recover.
-    strategy_ready = _strategy_ready_event.is_set()
-    _state_snapshot = _read_initialized_state_snapshot(context="supervisor strategy probe")
-    strategy = _state_snapshot.get("strategy")
+        if time.monotonic() >= _wait_deadline:
+            raise RuntimeError(
+                "❌ DEADLOCK: system_ready was never reached "
+                f"(broker_ready={broker_ready} risk_ready={risk_ready} strategy_ready={strategy_ready})"
+            )
 
-    if not strategy_ready:
-        logger.critical(
-            "⚠️  [Supervisor] _strategy_ready_event not set after bootstrap — "
-            "skipping TradingCoreLoop start from main(). "
-            "Bootstrap retry kernel will start the loop once strategy is ready."
+        logger.info(
+            "⏳ Waiting for system_ready: broker_ready=%s risk_ready=%s strategy_ready=%s",
+            broker_ready,
+            risk_ready,
+            strategy_ready,
         )
-    elif strategy is None:
-        # This should be impossible: _strategy_ready_event is only set after
-        # _initialized_state["strategy"] is populated in the same code block.
-        # If we arrive here, there is a serious invariant violation — raise
-        # rather than starting the loop with a None strategy.
-        raise RuntimeError(
-            "INVARIANT VIOLATION: _strategy_ready_event is set but "
-            "_initialized_state['strategy'] is None.  "
-            "This indicates a race condition or logic error in bootstrap."
-        )
-    else:
-        from bot.nija_core_loop import start_trading_engine
-        start_trading_engine(strategy)
-        logger.critical("✅ TradingLoop started via start_trading_engine()")
+        time.sleep(1.0)
+
+    from bot.nija_core_loop import start_trading_engine
+    start_trading_engine(strategy)
+    logger.critical("✅ TradingLoop started via start_trading_engine()")
 
     _trading_loop_alive = any(
         _t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()
