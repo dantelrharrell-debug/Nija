@@ -1521,11 +1521,28 @@ class MultiAccountBrokerManager:
         with self._capital_state_lock:
             _cap_ready = self._capital_ready
         if not _cap_ready:
+            _failed_gate_bypassed: List[str] = []
             _not_ready_brokers = [
                 (name, b)
                 for name, b in self._platform_brokers.items()
-                if not is_broker_fully_ready(b)
+                if (
+                    not is_broker_fully_ready(b)
+                    and self._platform_state.get(getattr(name, "value", str(name))) != ConnectionState.FAILED
+                )
             ]
+            for _name, _broker in self._platform_brokers.items():
+                if is_broker_fully_ready(_broker):
+                    continue
+                _state = self._platform_state.get(getattr(_name, "value", str(_name)))
+                if _state == ConnectionState.FAILED:
+                    _failed_gate_bypassed.append(getattr(_name, "value", str(_name)))
+
+            if _failed_gate_bypassed:
+                logger.warning(
+                    "[MABM-GATE] bypassing FAILED broker(s) during bootstrap readiness gate: %s",
+                    ", ".join(sorted(set(_failed_gate_bypassed))),
+                )
+
             if _not_ready_brokers:
                 for _broker_name, _broker in _not_ready_brokers:
                     logger.warning(
