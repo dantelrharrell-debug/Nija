@@ -192,6 +192,10 @@ class ExecutionPipeline:
         self._ecel_refresh_thread: Optional[threading.Thread] = None
         self._ecel_required = True
         self._ecel_fail_closed = True
+        self._pre_trade_risk_engine = self._load_pre_trade_risk_engine()
+        self._exchange_normalizer = self._load_exchange_normalizer()
+        self._allocation_clamp = self._load_allocation_clamp()
+        self._execution_observer = self._load_execution_observer()
         self._throttler = self._load_throttler()
         self._router = self._load_router()
         self._multi_router = self._load_multi_router()
@@ -208,6 +212,10 @@ class ExecutionPipeline:
             self._throttler is not None,
             self._router is not None,
             self._multi_router is not None,
+            self._pre_trade_risk_engine is not None,
+            self._exchange_normalizer is not None,
+            self._allocation_clamp is not None,
+            self._execution_observer is not None,
             self._ecel_required,
             self._ecel_fail_closed,
             self._ecel is not None,
@@ -233,18 +241,94 @@ class ExecutionPipeline:
         """
         t_start = time.monotonic()
         reservation_id: Optional[str] = None
+        working_request = request
         effective_request = request
         order_validated = False
         compiled = None
+
+        if self._execution_observer is not None:
+            try:
+                suppressed, suppression_reason = self._execution_observer.is_strategy_suppressed(request.strategy)
+                if suppressed:
+                    return PipelineResult(
+                        success=False,
+                        symbol=request.symbol,
+                        side=request.side,
+                        size_usd=request.size_usd,
+                        error=f"ExecutionObserver suppress: {suppression_reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: observer suppression check failed: %s", exc)
+
+        if self._execution_observer is not None and self._allocation_clamp is not None:
+            try:
+                allocation_multiplier = self._execution_observer.get_allocation_multiplier(request.strategy)
+                requested_with_feedback = float(request.size_usd) * allocation_multiplier
+                clamp_result = self._allocation_clamp.clamp(
+                    requested_usd=requested_with_feedback,
+                    baseline_usd=float(request.size_usd),
+                )
+                working_request = replace(request, size_usd=clamp_result.clamped_usd)
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: allocation clamp failed: %s", exc)
+
+        if self._exchange_normalizer is not None:
+            try:
+                normalized = self._exchange_normalizer.normalize(
+                    symbol=working_request.symbol,
+                    side=self._normalise_side(working_request.side),
+                    broker=(working_request.preferred_broker or "coinbase"),
+                    size_usd=working_request.size_usd,
+                    price_hint_usd=working_request.price_hint_usd,
+                )
+                if not normalized.accepted:
+                    return PipelineResult(
+                        success=False,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size_usd=working_request.size_usd,
+                        error=f"ExchangeNormalizer reject: {normalized.reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+                working_request = replace(
+                    working_request,
+                    symbol=normalized.symbol,
+                    side=normalized.side,
+                    size_usd=normalized.normalized_notional_usd,
+                    preferred_broker=normalized.broker,
+                )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: exchange normalizer failed: %s", exc)
+
+        if self._pre_trade_risk_engine is not None:
+            try:
+                risk_decision = self._pre_trade_risk_engine.assess(
+                    account_id=working_request.account_id,
+                    symbol=working_request.symbol,
+                    size_usd=working_request.size_usd,
+                    available_balance_usd=working_request.available_balance_usd,
+                )
+                if not risk_decision.approved:
+                    return PipelineResult(
+                        success=False,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size_usd=working_request.size_usd,
+                        error=f"PreTradeRiskEngine reject: {risk_decision.reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: pre-trade risk check failed: %s", exc)
 
         if self._ecel is None and self._ecel_required:
             error = "ECEL unavailable: strict execution gate blocks order dispatch"
             logger.error("ExecutionPipeline: %s", error)
             return PipelineResult(
                 success=False,
-                symbol=request.symbol,
-                side=request.side,
-                size_usd=request.size_usd,
+                symbol=working_request.symbol,
+                side=working_request.side,
+                size_usd=working_request.size_usd,
                 error=error,
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
@@ -255,28 +339,28 @@ class ExecutionPipeline:
                 broker_hint = (request.preferred_broker or "coinbase").lower()
                 compile_req = self._ecel_mod.CompileRequest(  # type: ignore[attr-defined]
                     broker=broker_hint,
-                    symbol=request.symbol,
-                    side=self._normalise_side(request.side),
-                    order_type=(request.order_type or "MARKET").upper(),
-                    desired_notional_usd=request.size_usd,
-                    available_balance_usd=request.available_balance_usd,
-                    price_hint_usd=request.price_hint_usd,
-                    account_id=request.account_id,
+                    symbol=working_request.symbol,
+                    side=self._normalise_side(working_request.side),
+                    order_type=(working_request.order_type or "MARKET").upper(),
+                    desired_notional_usd=working_request.size_usd,
+                    available_balance_usd=working_request.available_balance_usd,
+                    price_hint_usd=working_request.price_hint_usd,
+                    account_id=working_request.account_id,
                 )
                 compiled = self._ecel.compile(compile_req)
                 if not compiled.accepted:
                     return PipelineResult(
                         success=False,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size_usd=working_request.size_usd,
                         error=f"ECEL reject: {compiled.reason}",
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
 
                 reservation_id = compiled.reservation_id
                 effective_request = replace(
-                    request,
+                    working_request,
                     size_usd=compiled.compiled_notional_usd,
                     validated=True,
                 )
@@ -287,9 +371,9 @@ class ExecutionPipeline:
                     logger.error("ExecutionPipeline: %s", msg)
                     return PipelineResult(
                         success=False,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size_usd=working_request.size_usd,
                         error=f"ECEL reject: {msg}",
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
@@ -299,7 +383,7 @@ class ExecutionPipeline:
             assert order_validated is True, "FATAL: Order bypassed ECEL"
             assert effective_request.validated is True, "FATAL: Order bypassed ECEL"
 
-        self._log_ecel_final_order(request=request, compiled=compiled)
+        self._log_ecel_final_order(request=effective_request, compiled=compiled)
 
         # ── Priority-2: Trade Throttler ──────────────────────────────────
         if self._throttler is not None:
@@ -310,14 +394,14 @@ class ExecutionPipeline:
                         self._ecel.release_reservation(reservation_id)
                     logger.warning(
                         "ExecutionPipeline THROTTLED | %s %s $%.2f | %s",
-                        request.side.upper(), request.symbol,
-                        request.size_usd, throttle_reason,
+                        effective_request.side.upper(), effective_request.symbol,
+                        effective_request.size_usd, throttle_reason,
                     )
                     return PipelineResult(
                         success=False,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size_usd=effective_request.size_usd,
                         error=throttle_reason,
                         throttled=True,
                         latency_ms=(time.monotonic() - t_start) * 1000,
@@ -338,9 +422,34 @@ class ExecutionPipeline:
         # Auto-register successful trades with the throttler
         if result.success and self._throttler is not None:
             try:
-                self._throttler.record_trade(symbol=request.symbol)
+                self._throttler.record_trade(symbol=effective_request.symbol)
             except Exception as exc:
                 logger.warning("ExecutionPipeline: throttler.record_trade failed: %s", exc)
+
+        if self._pre_trade_risk_engine is not None:
+            try:
+                self._pre_trade_risk_engine.record_execution(
+                    account_id=effective_request.account_id,
+                    symbol=effective_request.symbol,
+                    side=effective_request.side,
+                    size_usd=effective_request.size_usd,
+                    success=result.success,
+                )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: pre-trade risk execution update failed: %s", exc)
+
+        if self._execution_observer is not None:
+            try:
+                self._execution_observer.observe(
+                    strategy=effective_request.strategy,
+                    symbol=effective_request.symbol,
+                    side=effective_request.side,
+                    size_usd=effective_request.size_usd,
+                    success=result.success,
+                    error=result.error,
+                )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: observer update failed: %s", exc)
 
         return result
 
@@ -602,6 +711,54 @@ class ExecutionPipeline:
                 return r
             except Exception as exc:
                 logger.debug("ExecutionPipeline: could not load %s: %s", mod_name, exc)
+        return None
+
+    @staticmethod
+    def _load_pre_trade_risk_engine():
+        for mod_name in ("bot.pre_trade_risk_engine", "pre_trade_risk_engine"):
+            try:
+                mod = __import__(mod_name, fromlist=["get_pre_trade_risk_engine"])
+                engine = mod.get_pre_trade_risk_engine()
+                logger.info("ExecutionPipeline: PreTradeRiskEngine loaded from %s", mod_name)
+                return engine
+            except Exception as exc:
+                logger.debug("ExecutionPipeline: could not load pre-trade risk engine %s: %s", mod_name, exc)
+        return None
+
+    @staticmethod
+    def _load_exchange_normalizer():
+        for mod_name in ("bot.exchange_normalizer", "exchange_normalizer"):
+            try:
+                mod = __import__(mod_name, fromlist=["get_exchange_normalizer"])
+                normalizer = mod.get_exchange_normalizer()
+                logger.info("ExecutionPipeline: ExchangeNormalizer loaded from %s", mod_name)
+                return normalizer
+            except Exception as exc:
+                logger.debug("ExecutionPipeline: could not load exchange normalizer %s: %s", mod_name, exc)
+        return None
+
+    @staticmethod
+    def _load_allocation_clamp():
+        for mod_name in ("bot.allocation_clamp", "allocation_clamp"):
+            try:
+                mod = __import__(mod_name, fromlist=["get_allocation_clamp"])
+                clamp = mod.get_allocation_clamp()
+                logger.info("ExecutionPipeline: AllocationClamp loaded from %s", mod_name)
+                return clamp
+            except Exception as exc:
+                logger.debug("ExecutionPipeline: could not load allocation clamp %s: %s", mod_name, exc)
+        return None
+
+    @staticmethod
+    def _load_execution_observer():
+        for mod_name in ("bot.execution_observer", "execution_observer"):
+            try:
+                mod = __import__(mod_name, fromlist=["get_execution_observer"])
+                observer = mod.get_execution_observer()
+                logger.info("ExecutionPipeline: ExecutionObserver loaded from %s", mod_name)
+                return observer
+            except Exception as exc:
+                logger.debug("ExecutionPipeline: could not load execution observer %s: %s", mod_name, exc)
         return None
 
     def _load_ecel(self):
