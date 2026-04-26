@@ -87,6 +87,28 @@ def _get_startup_last_error() -> str:
         return _startup_last_error
 
 
+def _reset_startup_events_for_fresh_attempt() -> None:
+    """Clear module-level startup events before a non-fast-path bootstrap attempt.
+
+    These events persist for the lifetime of the process. When a startup attempt
+    fails before full handoff, the next retry must not inherit stale readiness
+    or completion signals from the previous attempt.
+    """
+    _strategy_ready_event.clear()
+    _bootstrap_complete_flag.clear()
+    _bootstrap_completed_event.clear()
+    try:
+        from bot.nija_core_loop import TRADING_ENGINE_READY as _tl_ready
+    except ImportError:
+        try:
+            from nija_core_loop import TRADING_ENGINE_READY as _tl_ready  # type: ignore[import]
+        except ImportError:
+            _tl_ready = None  # type: ignore[assignment]
+    if _tl_ready is not None:
+        _tl_ready.clear()
+    logger.info("🔄 Cleared startup readiness/completion events for fresh bootstrap attempt")
+
+
 def _set_bootstrap_owner_thread() -> None:
     """Mark the current thread as the sole bootstrap lifecycle owner."""
     global _bootstrap_owner_thread_id
@@ -205,13 +227,15 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     _wait_started = time.monotonic()
     _last_wait_log = 0.0
 
-    # Hard requirement: do NOT skip forever when strategy is temporarily absent.
-    # Block here until bootstrap marks strategy ready and the strategy object is
-    # visible in initialized state, then continue with loop start.
-    while _strategy is None:
+    # Hard requirement: do NOT start the trading loop until BOTH conditions hold:
+    #   1. the cached strategy object is present in initialized state
+    #   2. bootstrap has emitted the global strategy-ready event
+    # This prevents a partially persisted strategy object from bypassing the
+    # real startup readiness contract.
+    while _strategy is None or not _strategy_ready_event.is_set():
         _state_snapshot = dict(_initialized_state)
         _strategy = _state_snapshot.get("strategy")
-        if _strategy is not None:
+        if _strategy is not None and _strategy_ready_event.is_set():
             break
 
         _strategy_ready_event.wait(0.5)
@@ -220,7 +244,7 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         if _elapsed - _last_wait_log >= 5.0:
             logger.warning(
                 "WAITING_FOR_STRATEGY_READY: trading-loop start is blocked "
-                "until strategy is initialized (%s, elapsed=%.1fs)",
+                "until strategy is initialized and readiness is signaled (%s, elapsed=%.1fs)",
                 reason,
                 _elapsed,
             )
@@ -255,7 +279,7 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     strategy = state_snapshot.get("strategy")
     active_threads = state_snapshot.get("active_threads")
 
-    strategy_ready = strategy is not None
+    strategy_ready = strategy is not None and _strategy_ready_event.is_set()
     # Broker readiness is true once connection phase completed, runtime threads
     # exist, or bootstrap has already handed off to supervised running state.
     broker_ready = (
@@ -2067,6 +2091,14 @@ def _run_bot_startup_and_trading_with_retry():
         logger.critical("🚧 BOOTSTRAP START")
         while True:
             try:
+                _state_snap = _read_initialized_state_snapshot(context="fresh-attempt event reset")
+                _init_done = (
+                    _state_snap.get("strategy") is not None
+                    and "active_threads" in _state_snap
+                )
+                if not _init_done:
+                    _reset_startup_events_for_fresh_attempt()
+
                 # Attempt to start the bot
                 _run_bot_startup_and_trading()
                 # Normal exit — supervisor loop inside returned cleanly
@@ -2144,8 +2176,11 @@ def _run_bot_startup_and_trading_with_retry():
     finally:
         _clear_bootstrap_owner_thread()
         _BOOTSTRAP_SINGLE_OWNER_LOCK.release()
-        logger.critical("🚨 FORCING bootstrap completion event")
-        _bootstrap_completed_event.set()
+        if _bootstrap_complete_flag.is_set():
+            _bootstrap_completed_event.set()
+            logger.critical("✅ Bootstrap completion event preserved after successful handoff")
+        else:
+            logger.critical("Bootstrap completion event left unset — startup did not reach supervisor handoff")
 
 
 def _run_bot_startup_and_trading():
@@ -2443,11 +2478,11 @@ def _run_bot_startup_and_trading():
 
                             if _tsm_startup.is_live_trading_active():
                                 logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT")
-                                _bootstrap_complete_flag.set()
-                                _bootstrap_completed_event.set()
                                 if _start_trading_loop_from_initialized_state(
                                     reason="startup-thread capability activation"
                                 ):
+                                    _bootstrap_complete_flag.set()
+                                    _bootstrap_completed_event.set()
                                     return
                         else:
                             logger.info(
@@ -3044,10 +3079,9 @@ def _run_bot_startup_and_trading():
                     try:
                         _initialized_state["strategy"] = strategy
                         _initialized_state["risk_ready"] = True
-                        # Move readiness trigger immediately after strategy init.
-                        if not _strategy_ready_event.is_set():
-                            _strategy_ready_event.set()
-                            logger.critical("STRATEGY READY EVENT SET (post strategy initialization)")
+                        logger.critical(
+                            "STRATEGY INITIALIZED — deferring strategy-ready event until hydrated runtime state is persisted"
+                        )
                     finally:
                         _initialized_state_lock.release()
                 logger.critical("🔥 INIT_A5: after TradingStrategy()")
@@ -4134,11 +4168,7 @@ def _run_bot_startup_and_trading():
                 from nija_core_loop import TRADING_ENGINE_READY  # type: ignore[import]
             logger.critical("🚀 EMITTING START SIGNAL TO CORE LOOP")
             TRADING_ENGINE_READY.set()
-            # Signal that bootstrap completed successfully.  The outer supervisor
-            # loop uses this flag so it can distinguish a normal "thread exited
-            # after handing off to trader threads" from a genuine boot failure.
-            _bootstrap_complete_flag.set()
-            logger.info("✅ [Bootstrap] Bootstrap complete — control handed to supervisor")
+            logger.info("✅ [Bootstrap] Core-loop start signal emitted — awaiting final supervisor handoff")
             # ── HARD STARTUP BARRIER ─────────────────────────────────────────────
             # Enforce the startup invariant: _bootstrap_completed_event must only
             # be set AFTER all six conditions hold simultaneously (B1 preflight):
@@ -4313,6 +4343,7 @@ def _run_bot_startup_and_trading():
             if strategy is None:
                 logger.critical("❌ FATAL: Bootstrap completing WITHOUT strategy")
                 raise RuntimeError("Strategy not initialized at bootstrap completion")
+            _bootstrap_complete_flag.set()
             _bootstrap_completed_event.set()
             logger.critical("✅ B1 → B2: _bootstrap_completed_event set — system handed to supervisor loop")
 
@@ -4383,11 +4414,12 @@ def _run_bot_startup_and_trading():
         # after startup completes or fails.  uninstall() is idempotent.
         if _startup_buffer:
             _startup_buffer.uninstall()
-        # B: Unconditionally set the bootstrap completed event so the supervisor
-        # loop's _bootstrap_completed_event.wait() never hangs forever when INIT
-        # exits via an exception.  The supervisor checks is_set() to distinguish
-        # a successful bootstrap from a failed one.
-        _bootstrap_completed_event.set()
+        # B: Preserve bootstrap completion only for the real success path.
+        # The supervisor distinguishes a successful handoff from a failed
+        # startup by reading _bootstrap_completed_event, so do not set it on
+        # exception paths.
+        if _bootstrap_complete_flag.is_set():
+            _bootstrap_completed_event.set()
 
 
 def main():

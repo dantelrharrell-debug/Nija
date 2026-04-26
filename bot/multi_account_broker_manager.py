@@ -219,12 +219,20 @@ MIN_CONNECTION_DELAY = 5.0  # seconds
 
 
 def is_broker_fully_ready(broker: Any) -> bool:
-    """Return ``True`` only when *broker* is connected **and** has a hydrated balance payload.
+    """Return ``True`` only when *broker* can safely contribute startup capital.
 
-    A broker is considered fully ready when both of the following hold:
+    During startup, Kraken platform brokers may legitimately have a balance
+    payload before the transport layer marks them fully connected. In that
+    phase, the correct contract is ``broker.is_ready_for_capital()`` when the
+    broker exposes it. Fall back to the older ``connected + payload`` check for
+    adapters that do not implement the newer contract.
 
-    * ``broker.connected`` is ``True`` — the transport-layer session is live.
-    * A balance payload is available — at least one of the following is true:
+    A broker is considered fully ready when one of the following holds:
+
+    * ``broker.is_ready_for_capital()`` returns ``True``.
+    * ``broker.connected`` is ``True`` and a balance payload is available.
+
+    A balance payload is available when at least one of the following is true:
 
       - ``broker.has_balance_payload_for_capital()`` returns ``True``
       - ``broker.has_balance_payload()`` returns ``True``
@@ -237,6 +245,13 @@ def is_broker_fully_ready(broker: Any) -> bool:
     broker objects in this codebase.  Payload readiness must be detected via the
     methods and attributes listed above.
     """
+    ready_for_capital = getattr(broker, "is_ready_for_capital", None)
+    if callable(ready_for_capital):
+        try:
+            return bool(ready_for_capital())
+        except Exception:
+            pass
+
     if not getattr(broker, "connected", False):
         return False
     has_payload = (
@@ -765,11 +780,12 @@ class MultiAccountBrokerManager:
             broker_items = list(self._platform_brokers.items())
 
         for broker_type, broker in broker_items:
-            if not getattr(broker, "connected", False):
+            if not is_broker_fully_ready(broker):
                 logger.debug(
                     "[MABM] _force_minimal_capital_snapshot: skipping broker=%s "
-                    "(connected=%s last_balance=%s)",
+                    "(capital_ready=%s connected=%s last_balance=%s)",
                     broker_type.value,
+                    is_broker_fully_ready(broker),
                     getattr(broker, "connected", None),
                     getattr(broker, "_last_known_balance", None),
                 )
@@ -835,12 +851,12 @@ class MultiAccountBrokerManager:
         kraken_broker_obj = self._platform_brokers.get(BrokerType.KRAKEN)
         if (
             kraken_broker_obj is not None
-            and getattr(kraken_broker_obj, "connected", False)
+            and is_broker_fully_ready(kraken_broker_obj)
             and "kraken" not in broker_balances
         ):
             broker_balances["kraken"] = 0.0
             logger.info(
-                "[BOOTSTRAP] Kraken connected but no balance payload yet — "
+                "[BOOTSTRAP] Kraken capital-ready but no balance payload yet — "
                 "seeding kraken=0.0 to unblock CA hydration"
             )
 
@@ -852,7 +868,7 @@ class MultiAccountBrokerManager:
             # a completely disconnected system still returns pending=1.0 as expected.
             with self._registry_meta_lock:
                 for _bt, _broker in self._platform_brokers.items():
-                    if getattr(_broker, "connected", False):
+                    if is_broker_fully_ready(_broker):
                         broker_balances[_bt.value] = 0.0
             if not broker_balances:
                 # No connected broker has a balance payload yet — return None so
