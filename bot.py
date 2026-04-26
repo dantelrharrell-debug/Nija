@@ -201,14 +201,36 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         logger.critical("TradingLoop already running - skipping duplicate start (%s)", reason)
         return True
 
-    _state_snapshot = dict(_initialized_state)
-    _strategy = _state_snapshot.get("strategy")
-    if _strategy is None:
-        logger.warning(
-            "START_TRADING_LOOP_SKIPPED: strategy unavailable in initialized state (%s)",
-            reason,
-        )
-        return False
+    _strategy = None
+    _wait_started = time.monotonic()
+    _last_wait_log = 0.0
+
+    # Hard requirement: do NOT skip forever when strategy is temporarily absent.
+    # Block here until bootstrap marks strategy ready and the strategy object is
+    # visible in initialized state, then continue with loop start.
+    while _strategy is None:
+        _state_snapshot = dict(_initialized_state)
+        _strategy = _state_snapshot.get("strategy")
+        if _strategy is not None:
+            break
+
+        _strategy_ready_event.wait(0.5)
+
+        _elapsed = time.monotonic() - _wait_started
+        if _elapsed - _last_wait_log >= 5.0:
+            logger.warning(
+                "WAITING_FOR_STRATEGY_READY: trading-loop start is blocked "
+                "until strategy is initialized (%s, elapsed=%.1fs)",
+                reason,
+                _elapsed,
+            )
+            _last_wait_log = _elapsed
+
+    logger.critical(
+        "STRATEGY READY: proceeding with trading-loop start (%s, wait=%.1fs)",
+        reason,
+        time.monotonic() - _wait_started,
+    )
 
     try:
         try:
