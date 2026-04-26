@@ -176,6 +176,12 @@ def _env_true(name: str, default: str = "0") -> bool:
 # so routine idle windows do not look like split-brain.
 _REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "120000")))
 _STRICT_REDIS_LEASE = _env_true("NIJA_STRICT_REDIS_LEASE", "1")
+_REDIS_LEASE_ACQUIRE_TIMEOUT_S = max(
+    0.0, float(os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "90"))
+)
+_REDIS_LEASE_ACQUIRE_POLL_S = max(
+    0.1, float(os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_POLL_S", "0.5"))
+)
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
 # ── Nonce issuance authorization check (lazy reference) ──────────────────────
@@ -413,20 +419,50 @@ class _PerKeyRedisBackend:
         version_key = self._LEASE_VERSION_PREFIX + key_id
         counter_key = self._LEASE_VERSION_COUNTER_PREFIX + key_id
         fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
-        result = self._lease_script(
-            keys=[owner_key, version_key, counter_key, fingerprint_key],
-            args=[self._owner_id, self._lease_ttl_ms, self._owner_fingerprint],
-        )
-        granted = int(result[0]) == 1
-        lease_version = int(result[1])
-        current_owner = str(result[2])
-        if not granted:
-            raise RuntimeError(
-                "Redis writer lease rejected "
-                f"(key_id={key_id}, owner={current_owner}, lease_version={lease_version})"
-            )
-
         prev = self._lease_by_key.get(key_id)
+
+        def _run_lease_script() -> tuple[bool, int, str]:
+            _result = self._lease_script(
+                keys=[owner_key, version_key, counter_key, fingerprint_key],
+                args=[self._owner_id, self._lease_ttl_ms, self._owner_fingerprint],
+            )
+            _granted = int(_result[0]) == 1
+            _lease_version = int(_result[1])
+            _current_owner = str(_result[2])
+            return _granted, _lease_version, _current_owner
+
+        granted, lease_version, current_owner = _run_lease_script()
+        if not granted:
+            # Startup safety: if this process has not held the lease yet, wait
+            # briefly for the current holder to release/expire before failing.
+            # Runtime safety: if we previously held a lease and lost it, fail
+            # closed immediately to avoid split-brain writes.
+            if prev is None and _REDIS_LEASE_ACQUIRE_TIMEOUT_S > 0.0:
+                deadline = time.monotonic() + _REDIS_LEASE_ACQUIRE_TIMEOUT_S
+                while time.monotonic() < deadline and not granted:
+                    remaining = deadline - time.monotonic()
+                    holder_ttl_ms = -1
+                    try:
+                        holder_ttl_ms = int(self._client.pttl(owner_key))  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    _logger.warning(
+                        "DistributedNonceManager: waiting for Redis writer lease "
+                        "(key=%s owner=%s lease_version=%d holder_ttl_ms=%d remaining=%.1fs)",
+                        key_id,
+                        current_owner,
+                        lease_version,
+                        holder_ttl_ms,
+                        remaining,
+                    )
+                    time.sleep(min(_REDIS_LEASE_ACQUIRE_POLL_S, max(0.05, remaining)))
+                    granted, lease_version, current_owner = _run_lease_script()
+
+            if not granted:
+                raise RuntimeError(
+                    "Redis writer lease rejected "
+                    f"(key_id={key_id}, owner={current_owner}, lease_version={lease_version})"
+                )
         if prev is None:
             self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
             _logger.info(

@@ -8465,6 +8465,7 @@ class KrakenBroker(BaseBroker):
                             )
 
                             _capital_ready = False
+                            _capital_refresh_deferred = False
                             _cap_total = 0.0
                             _valid = 0
                             try:
@@ -8494,12 +8495,31 @@ class KrakenBroker(BaseBroker):
                                             "[BrokerPayloadFSM] broker=kraken → PAYLOAD_READY "
                                             "(balance payload confirmed in connect())"
                                         )
-                                    _cap = _mabm_startup.resolve_startup_capital_invariant(
-                                        trigger="kraken_platform_connect"
-                                    )
-                                    _capital_ready = bool(_cap.get("ready", 0.0))
-                                    _cap_total = float(_cap.get("total_capital", 0.0))
-                                    _valid = int(_cap.get("valid_brokers", 0.0))
+                                    # Do not run the blocking startup invariant until
+                                    # broker registration has been finalized by MABM.
+                                    # Calling it here (inside broker connect) can spin
+                                    # for 30s on "broker registration not complete".
+                                    _registration_finalized = False
+                                    try:
+                                        _registration_finalized = bool(
+                                            _mabm_startup.has_attempted_connections()
+                                        )
+                                    except Exception:
+                                        _registration_finalized = False
+
+                                    if _registration_finalized:
+                                        _cap = _mabm_startup.resolve_startup_capital_invariant(
+                                            trigger="kraken_platform_connect"
+                                        )
+                                        _capital_ready = bool(_cap.get("ready", 0.0))
+                                        _cap_total = float(_cap.get("total_capital", 0.0))
+                                        _valid = int(_cap.get("valid_brokers", 0.0))
+                                    else:
+                                        _capital_refresh_deferred = True
+                                        logger.info(
+                                            "⏳ PLATFORM Kraken connected; deferring startup capital "
+                                            "invariant until broker registration finalizes"
+                                        )
                             except Exception as _cap_err:
                                 logger.warning(
                                     "⚠️ CapitalAuthority startup refresh unavailable: %s",
@@ -8512,6 +8532,11 @@ class KrakenBroker(BaseBroker):
                                     "✅ PLATFORM Kraken connected + capital READY "
                                     "(brokers=%d total=$%.2f) — USER accounts may now connect.",
                                     _valid, _cap_total,
+                                )
+                            elif _capital_refresh_deferred:
+                                logger.info(
+                                    "⏳ PLATFORM Kraken connected; startup capital invariant deferred "
+                                    "until broker registration finalizes"
                                 )
                             else:
                                 logger.warning(
