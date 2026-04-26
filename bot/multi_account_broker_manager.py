@@ -5234,6 +5234,16 @@ class MultiAccountBrokerManager:
                 logger.error("❌ Platform %s connect() raised: %s", key.upper(), exc)
                 connected = False
 
+            # Keep the broker's connection flag consistent with connect() result.
+            # Some broker implementations may return True before setting
+            # `broker.connected`, which blocks readiness gates that depend on it.
+            if connected and not getattr(broker, "connected", False):
+                setattr(broker, "connected", True)
+                logger.warning(
+                    "[MABM] broker=%s connect() returned True but broker.connected was False; forcing connected=True",
+                    key,
+                )
+
             # ── Sync BrokerPayloadFSM immediately after connect() ──────────────
             # If connect() successfully seeded _last_known_balance, advance the
             # FSM to PAYLOAD_READY so the bootstrap resolver does not need to
@@ -5256,7 +5266,34 @@ class MultiAccountBrokerManager:
                     # probe budget rather than continuing from a prior counter.
                     _payload_fsm.reset()
 
+            # Attempt immediate payload hydration after a successful connect.
+            # This removes a startup race where connected brokers are visible but
+            # payload_hydrated remains false until a later refresh cycle.
+            if connected and getattr(broker, "_last_known_balance", None) is None:
+                try:
+                    broker.get_account_balance()
+                except Exception as _bal_err:
+                    logger.warning(
+                        "[MABM] immediate payload hydration failed for %s: %s",
+                        key,
+                        _bal_err,
+                    )
+                else:
+                    if _payload_fsm is not None and getattr(broker, "_last_known_balance", None) is not None:
+                        _payload_fsm.mark_payload_ready()
+                        logger.info(
+                            "[BrokerPayloadFSM] broker=%s PAYLOAD_READY (immediate post-connect balance probe)",
+                            broker_type.value,
+                        )
+
             if connected:
+                # Connectivity state is independent of capital readiness.
+                # Mark platform connection immediately so gates/readiness checks
+                # can proceed to payload + capital hydration phases.
+                with _PLATFORM_BROKER_REGISTRY_LOCK:
+                    _PLATFORM_BROKER_CONNECTED[key] = True
+                self._mark_platform_connected(broker_type)
+
                 # Broker-readiness hook: register the balance feed with CapitalAuthority
                 # exactly once, immediately after connect() succeeds.  This is the single
                 # deterministic seeding point required by the capital-authority contract.
@@ -5270,18 +5307,13 @@ class MultiAccountBrokerManager:
                 # immediately revalidates unified capital readiness.
                 _cap = self.resolve_startup_capital_invariant(trigger=f"platform_connect:{key}")
                 if _cap.get("ready", 0.0) > 0.0:
-                    with _PLATFORM_BROKER_REGISTRY_LOCK:
-                        _PLATFORM_BROKER_CONNECTED[key] = True
-                    self._mark_platform_connected(broker_type)
                     logger.info(
                         "   ✅ Platform %s connected and capital-ready (total=$%.2f)",
                         key.upper(), float(_cap.get("total_capital", 0.0)),
                     )
                 else:
-                    with _PLATFORM_BROKER_REGISTRY_LOCK:
-                        _PLATFORM_BROKER_CONNECTED[key] = False
                     logger.warning(
-                        "   ⏳ Platform %s connected but capital not ready yet "
+                        "   ⏳ Platform %s connected; capital not ready yet "
                         "(valid_brokers=%d total=$%.2f) — waiting for re-evaluation",
                         key.upper(),
                         int(_cap.get("valid_brokers", 0.0)),
@@ -5294,7 +5326,7 @@ class MultiAccountBrokerManager:
                     key.upper(),
                 )
             self._start_capital_watchdog()
-            return connected and (_cap.get("ready", 0.0) > 0.0)
+            return connected
 
         # ── Kraken (PRIMARY) ─────────────────────────────────────────────────
         logger.info("📊 Attempting to connect Kraken Pro (PLATFORM - PRIMARY)…")

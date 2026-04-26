@@ -440,6 +440,33 @@ def _hydrate_startup_balances(strategy) -> float:
         balances = _bm.get_all_balances()
         logger.critical("Balance response: %s", balances)
 
+    # Fallback path: strategy wiring can be temporarily unavailable during
+    # startup transitions. Use the global multi-account broker manager directly
+    # so hydration cannot fail with "no balance provider available".
+    if balances is None:
+        try:
+            try:
+                from bot.multi_account_broker_manager import multi_account_broker_manager as _mabm
+            except ImportError:
+                from multi_account_broker_manager import multi_account_broker_manager as _mabm  # type: ignore[import]
+
+            logger.critical("Hydration fallback: initializing global multi-account broker manager")
+            _mabm.initialize()
+            _platform_init = _mabm.initialize_platform_brokers()
+            _connected_platforms = [
+                _k for _k, _meta in (_platform_init or {}).items()
+                if bool((_meta or {}).get("connected", False))
+            ]
+            logger.critical(
+                "Hydration fallback platform init: connected=%d (%s)",
+                len(_connected_platforms),
+                ", ".join(_connected_platforms) if _connected_platforms else "none",
+            )
+            balances = _mabm.get_all_balances()
+            logger.critical("Hydration fallback balance response: %s", balances)
+        except Exception as _fallback_err:
+            logger.error("Hydration fallback failed: %s", _fallback_err)
+
     if balances is None:
         raise RuntimeError("CRITICAL: Balance hydration failed (no balance provider available)")
 
