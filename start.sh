@@ -190,7 +190,48 @@ if [ -z "$PY" ]; then
     exit 127
 fi
 
+_maybe_force_nonce_resync() {
+    local _truthy="1|true|yes|enabled|on"
+    local _force_raw="${NIJA_FORCE_NONCE_RESYNC:-}"
+    local _force
+    _force=$(printf "%s" "${_force_raw}" | tr '[:upper:]' '[:lower:]')
+    if ! printf "%s" "${_force}" | grep -Eq "^(${_truthy})$"; then
+        return 0
+    fi
+
+    echo ""
+    echo "🔄 NIJA_FORCE_NONCE_RESYNC enabled — clearing nonce state before startup"
+
+    # Local nonce persistence reset (safe if files do not exist).
+    rm -f /app/data/kraken_nonce.state*
+    rm -f /app/bot/../data/kraken_nonce.state*
+    rm -f "${_SCRIPT_DIR}/data/kraken_nonce.state"*
+
+    # Redis nonce key cleanup (best effort).
+    # Supports either NIJA_REDIS_URL or standard REDIS_URL variants.
+    local _redis_url="${NIJA_REDIS_URL:-${REDIS_URL:-${REDIS_PRIVATE_URL:-${REDIS_PUBLIC_URL:-}}}}"
+    if [ -n "${_redis_url}" ] && command -v redis-cli >/dev/null 2>&1; then
+        if redis-cli -u "${_redis_url}" DEL kraken_nonce >/dev/null 2>&1; then
+            echo "   ✅ Redis key reset: kraken_nonce"
+        else
+            echo "   ⚠️  Could not delete Redis key: kraken_nonce"
+        fi
+        if redis-cli -u "${_redis_url}" DEL nonce_lock >/dev/null 2>&1; then
+            echo "   ✅ Redis key reset: nonce_lock"
+        else
+            echo "   ⚠️  Could not delete Redis key: nonce_lock"
+        fi
+    else
+        echo "   ℹ️  Redis key reset skipped (redis-cli not available or Redis URL not set)"
+    fi
+
+    echo "✅ Force nonce resync preflight complete"
+    echo ""
+}
+
 $PY --version 2>&1
+
+_maybe_force_nonce_resync
 
 # Ensure Python version output is flushed
 sleep 0.05
