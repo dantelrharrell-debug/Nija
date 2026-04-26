@@ -14352,6 +14352,21 @@ class TradingStrategy:
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
 
+                                # ── DECISION TRACE LOG — expose where trades die ────────────
+                                logger.info(
+                                    "DECISION_TRACE symbol=%s action=%s score=%.1f "
+                                    "position_size=%.2f reason=%s "
+                                    "rsi9=%s rsi14=%s trend=%s",
+                                    symbol,
+                                    action,
+                                    float(entry_score or 0),
+                                    float(position_size or 0),
+                                    (reason or "none")[:120],
+                                    analysis.get('rsi_9', analysis.get('rsi9', '?')),
+                                    analysis.get('rsi_14', analysis.get('rsi14', '?')),
+                                    analysis.get('trend', analysis.get('direction', '?')),
+                                )
+
                                 # ── First-Trade Observer: SIGNAL_GENERATED checkpoint ──────
                                 if FIRST_TRADE_OBSERVER_AVAILABLE and _get_first_trade_observer and not self._first_trade_executed:
                                     try:
