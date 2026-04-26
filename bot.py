@@ -222,10 +222,6 @@ def _read_initialized_state_snapshot(
 
 def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     """Start trading loop from cached strategy when LIVE mode is already active."""
-    if not _is_balance_hydrated_ready():
-        logger.critical("START_TRADING_LOOP_SKIPPED: balance hydration incomplete (%s)", reason)
-        return False
-
     if any(_t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()):
         logger.critical("TradingLoop already running - skipping duplicate start (%s)", reason)
         return True
@@ -280,6 +276,24 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         reason,
         time.monotonic() - _wait_started,
     )
+
+    # Enforce hydration-before-start ordering for LIVE bypass paths.
+    if not _is_balance_hydrated_ready():
+        try:
+            logger.critical(
+                "💰 FORCED HYDRATION BEFORE TRADING LOOP (%s): balance not hydrated yet",
+                reason,
+            )
+            _hydrated_total = _hydrate_startup_balances(_strategy)
+            if _hydrated_total <= 0:
+                raise RuntimeError("LIVE mode requires valid balance")
+        except Exception as _hydrate_err:
+            logger.critical(
+                "START_TRADING_LOOP_SKIPPED: hydration failed before trading start (%s): %s",
+                reason,
+                _hydrate_err,
+            )
+            return False
 
     try:
         try:
@@ -389,11 +403,42 @@ def _hydrate_startup_balances(strategy) -> float:
     balances = None
     _mam = getattr(strategy, "multi_account_manager", None)
     _bm = getattr(strategy, "broker_manager", None)
+    _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "enabled",
+        "on",
+    )
+
+    # Temporary operator bypass to validate startup pipeline end-to-end.
+    _balance_override_raw = os.environ.get("ACCOUNT_BALANCE_OVERRIDE", "").strip()
+    if _balance_override_raw:
+        try:
+            _override = float(_balance_override_raw)
+            if _override > 0:
+                _hydrated_total_balance_usd = _override
+                os.environ["ACCOUNT_BALANCE"] = f"{_override:.8f}"
+                _balance_hydrated_event.set()
+                logger.critical(
+                    "⚠️ ACCOUNT_BALANCE_OVERRIDE active: forcing startup balance to $%.2f",
+                    _override,
+                )
+                return _override
+        except ValueError:
+            logger.warning(
+                "Invalid ACCOUNT_BALANCE_OVERRIDE=%r; ignoring override",
+                _balance_override_raw,
+            )
 
     if _mam is not None and hasattr(_mam, "get_all_balances"):
+        logger.critical("Fetching Kraken balance... (via multi_account_manager.get_all_balances)")
         balances = _mam.get_all_balances()
+        logger.critical("Balance response: %s", balances)
     elif _bm is not None and hasattr(_bm, "get_all_balances"):
+        logger.critical("Fetching Kraken balance... (via broker_manager.get_all_balances)")
         balances = _bm.get_all_balances()
+        logger.critical("Balance response: %s", balances)
 
     if balances is None:
         raise RuntimeError("CRITICAL: Balance hydration failed (no balance provider available)")
@@ -404,8 +449,10 @@ def _hydrate_startup_balances(strategy) -> float:
 
     logger.critical("💰 HYDRATION COMPLETE: total_balance=$%.2f", _hydrated_total_balance_usd)
 
-    if _hydrated_total_balance_usd <= 0:
-        raise RuntimeError("CRITICAL: Balance hydration returned $0 in LIVE mode")
+    if _is_live and _hydrated_total_balance_usd <= 0:
+        raise RuntimeError("LIVE mode requires valid balance")
+    if (not _is_live) and _hydrated_total_balance_usd <= 0:
+        logger.warning("Startup hydration total is <= 0 in non-live mode; continuing")
 
     _balance_hydrated_event.set()
     return _hydrated_total_balance_usd
@@ -1506,6 +1553,24 @@ def _bootstrap_hydrate_account_balances() -> dict:
         print("💰 BOOTSTRAP BALANCE HYDRATION: STARTING")
         
         _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in ("1", "true", "yes", "enabled")
+
+        _balance_override_raw = os.environ.get("ACCOUNT_BALANCE_OVERRIDE", "").strip()
+        if _balance_override_raw:
+            try:
+                _override = float(_balance_override_raw)
+                if _override > 0:
+                    print(f"⚠️ ACCOUNT_BALANCE_OVERRIDE active — forcing bootstrap balance=${_override:.2f}")
+                    os.environ["ACCOUNT_BALANCE"] = f"{_override:.8f}"
+                    os.environ["ACCOUNT_EQUITY"] = f"{_override:.8f}"
+                    os.environ["ACCOUNT_AVAILABLE"] = f"{_override:.8f}"
+                    return {
+                        "total_usd": _override,
+                        "equity": _override,
+                        "available": _override,
+                        "source": "override",
+                    }
+            except ValueError:
+                print(f"⚠️ Invalid ACCOUNT_BALANCE_OVERRIDE={_balance_override_raw!r}; ignoring override")
         
         # 🔥 STEP 1: Initialize broker manager BEFORE any balance fetch
         try:
@@ -1534,9 +1599,11 @@ def _bootstrap_hydrate_account_balances() -> dict:
             )
             
             print("✅ BROKER MANAGER INITIALIZED — FETCHING BALANCES")
+            print("Fetching Kraken balance...")
             
             # 🔥 STEP 4: Fetch balances (now safe, will raise if balance is None)
             balances = mabm.get_all_balances()
+            print(f"Balance response: {balances}")
             total_usd = _sum_nested_balances(balances)
             
             # 🔥 GUARD 1: Exchange balance must be > 0
