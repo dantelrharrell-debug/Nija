@@ -4898,6 +4898,21 @@ class TradingStrategy:
                                 self.portfolio_manager.update_broker_balance(
                                     _seed_key, _seed_bal
                                 )
+
+                            # Seed SignalBroadcaster with real account balances before
+                            # trading loop entry so fan-out sizing never starts from 0.0.
+                            if SIGNAL_BROADCASTER_AVAILABLE and get_signal_broadcaster:
+                                try:
+                                    _sb = get_signal_broadcaster()
+                                    _acct_label = self._get_broker_name(_seed_broker)
+                                    _sb.register_account(_acct_label, _seed_broker, balance=_seed_bal)
+                                    _sb.update_balance(_acct_label, _seed_bal)
+                                except Exception as _sb_seed_err:
+                                    logger.debug(
+                                        "SignalBroadcaster startup balance seed skipped for %s: %s",
+                                        _seed_bt.value,
+                                        _sb_seed_err,
+                                    )
                         except Exception as _seed_err:
                             logger.debug(
                                 "Could not seed balances for %s: %s",

@@ -172,6 +172,35 @@ class SignalBroadcaster:
         self._retry_config = retry_config or RetryConfig()
         self._lock = threading.Lock()
 
+    def _resolve_live_balance(self, broker: Any, candidate_balance: float) -> float:
+        """Return a non-negative balance, preferring live broker balance when needed."""
+        if candidate_balance > 0.0:
+            return candidate_balance
+
+        live_balance = 0.0
+        try:
+            if broker is not None and hasattr(broker, "get_account_balance"):
+                raw = broker.get_account_balance()
+                if isinstance(raw, dict):
+                    live_balance = float(
+                        raw.get("trading_balance")
+                        or raw.get("available_balance")
+                        or raw.get("balance")
+                        or 0.0
+                    )
+                else:
+                    live_balance = float(raw or 0.0)
+        except Exception as exc:
+            logger.debug("[Broadcaster] live balance fetch failed: %s", exc)
+
+        if live_balance <= 0.0:
+            try:
+                live_balance = float(getattr(broker, "_last_known_balance", 0.0) or 0.0)
+            except Exception:
+                live_balance = 0.0
+
+        return max(0.0, live_balance)
+
     # ── Account registry ─────────────────────────────────────────────────────
 
     def register_account(
@@ -181,28 +210,31 @@ class SignalBroadcaster:
         balance: float = 0.0,
     ) -> None:
         """Register (or update) a broker account for fan-out execution."""
+        resolved_balance = self._resolve_live_balance(broker, balance)
         with self._lock:
             self._accounts[account_id] = AccountRecord(
                 account_id=account_id,
                 broker=broker,
-                balance=max(0.0, balance),
+                balance=resolved_balance,
             )
             # Keep GlobalCapitalManager in sync
             if _GCM_AVAILABLE and get_global_capital_manager:
                 try:
-                    get_global_capital_manager().register_account(account_id, balance)
+                    get_global_capital_manager().register_account(account_id, resolved_balance)
                 except Exception:
                     pass
-        logger.debug("[Broadcaster] registered account %s balance=%.2f", account_id, balance)
+        logger.debug("[Broadcaster] registered account %s balance=%.2f", account_id, resolved_balance)
 
     def update_balance(self, account_id: str, balance: float) -> None:
         """Update the cached balance for an account (call each trading cycle)."""
         with self._lock:
             if account_id in self._accounts:
-                self._accounts[account_id].balance = max(0.0, balance)
+                record = self._accounts[account_id]
+                resolved_balance = self._resolve_live_balance(record.broker, balance)
+                record.balance = resolved_balance
                 if _GCM_AVAILABLE and get_global_capital_manager:
                     try:
-                        get_global_capital_manager().register_account(account_id, balance)
+                        get_global_capital_manager().register_account(account_id, resolved_balance)
                     except Exception:
                         pass
 
