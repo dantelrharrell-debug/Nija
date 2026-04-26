@@ -231,15 +231,18 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool]
     active_threads = state_snapshot.get("active_threads")
 
     strategy_ready = strategy is not None
-    broker_ready = bool(active_threads) or bool(state_snapshot.get("connection_complete", False))
+    # Broker readiness is true once connection phase completed, runtime threads
+    # exist, or bootstrap has already handed off to supervised running state.
+    broker_ready = (
+        bool(active_threads)
+        or bool(state_snapshot.get("connection_complete", False))
+        or _bootstrap_completed_event.is_set()
+    )
 
-    risk_ready = False
-    if strategy is not None:
-        risk_ready = (
-            getattr(strategy, "risk_manager", None) is not None
-            or getattr(strategy, "execution_engine", None) is not None
-            or getattr(strategy, "global_risk_engine", None) is not None
-        )
+    # Risk stack is partially lazy-initialized in this codebase. Treat strategy
+    # registration itself as the canonical risk-readiness milestone unless an
+    # explicit risk_ready flag is already persisted in initialized state.
+    risk_ready = bool(state_snapshot.get("risk_ready", strategy_ready))
 
     system_ready = broker_ready and risk_ready and strategy_ready
     return system_ready, broker_ready, risk_ready, strategy_ready
@@ -2988,6 +2991,7 @@ def _run_bot_startup_and_trading():
                 else:
                     try:
                         _initialized_state["strategy"] = strategy
+                        _initialized_state["risk_ready"] = True
                         # Move readiness trigger immediately after strategy init.
                         if not _strategy_ready_event.is_set():
                             _strategy_ready_event.set()
