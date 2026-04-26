@@ -233,6 +233,7 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     _strategy = None
     _wait_started = time.monotonic()
     _last_wait_log = 0.0
+    _strategy_ready_timeout = 30.0  # FIX 1: MANDATORY timeout
 
     # Hard requirement: do NOT start the trading loop until BOTH conditions hold:
     #   1. the cached strategy object is present in initialized state
@@ -245,15 +246,32 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         if _strategy is not None and _strategy_ready_event.is_set():
             break
 
+        _elapsed = time.monotonic() - _wait_started
+        
+        # FIX 1: Force system_ready after bootstrap timeout
+        if _elapsed >= _strategy_ready_timeout:
+            logger.critical(
+                "⚠️ system_ready timeout (%.0fs) — forcing degraded startup",
+                _strategy_ready_timeout
+            )
+            # Fallback: mark system ready anyway
+            _strategy_ready_event.set()
+            # Optional: mark degraded mode
+            os.environ["DEGRADED_START"] = "1"
+            logger.critical(
+                "🚀 FORCED READY — system proceeding in degraded mode"
+            )
+            break
+        
         _strategy_ready_event.wait(0.5)
 
-        _elapsed = time.monotonic() - _wait_started
         if _elapsed - _last_wait_log >= 5.0:
             logger.warning(
                 "WAITING_FOR_STRATEGY_READY: trading-loop start is blocked "
-                "until strategy is initialized and readiness is signaled (%s, elapsed=%.1fs)",
+                "until strategy is initialized and readiness is signaled (%s, elapsed=%.1fs, timeout=%.0fs)",
                 reason,
                 _elapsed,
+                _strategy_ready_timeout,
             )
             _last_wait_log = _elapsed
 
@@ -3866,7 +3884,11 @@ def _run_bot_startup_and_trading():
                 # is the root cause of the PREFLIGHT→SUPERVISOR stuck loop.
                 _ca_gate_ready = ca and ca.is_ready()
                 _ca_gate_hydrated = ca and ca.is_hydrated
-                if _ca_gate_ready and _ca_gate_hydrated:
+                _ca_gate_core_systems = ca is not None and hasattr(ca, 'is_hydrated')
+                
+                # FIX 3: Decouple system_ready from balance
+                # System is ready when CORE SYSTEMS initialized, not when balance > 0
+                if _ca_gate_core_systems and _ca_gate_hydrated:
                     logger.critical(
                         "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
                     )
@@ -3885,9 +3907,20 @@ def _run_bot_startup_and_trading():
                     )
 
                 if time.time() > _capital_gate_deadline:
-                    raise RuntimeError(
-                        "INIT FAILED: CapitalAuthority never became ready"
+                    logger.warning(
+                        "⚠️ CAPITAL GATE TIMEOUT (%.0fs) — forcing system to proceed in degraded mode",
+                        time.time() - (_capital_gate_deadline - 60),
                     )
+                    logger.critical(
+                        "✅ CAPITAL GATE FORCED (DEGRADED) — core systems initialized"
+                    )
+                    logger.warning("🚀 SYSTEM READY — proceeding with zero or partial balance")
+                    # Bootstrap FSM: capital forced due to timeout
+                    _bfsm_transition(
+                        _BootstrapState.CAPITAL_READY,
+                        "capital gate timeout — proceeding in degraded mode",
+                    )
+                    break
 
                 capital_gate_checks += 1
                 _should_log_gate = (
@@ -4451,6 +4484,7 @@ def _run_bot_startup_and_trading():
             # partially initialised state.  This is the single authoritative
             # "strategy ready" gate used by the supervisor, core loop, and
             # BootstrapFSM (FIX A + FIX C from architecture spec).
+            logger.critical("🚀 SYSTEM READY — entering trading loop")
             _strategy_ready_event.set()
             logger.critical(f"STATE CHECK: {_initialized_state}")
             logger.critical("🧠 STATE STORED — strategy_ready_event SET — entering supervisor mode")
@@ -4585,7 +4619,6 @@ def _run_bot_startup_and_trading():
                 _bce_capital_hydrated = False
                 _bce_aggregation_normalized = False  # fail-closed: False until aggregation is proven normalized or not applicable
                 _bce_nonce_ready = False
-                _bce_deadline = time.monotonic() + 30
                 # Resolve module references once, outside the polling loop.
                 try:
                     from bot.trading_state_machine import get_state_machine as _get_tsm_bce
@@ -4611,6 +4644,11 @@ def _run_bot_startup_and_trading():
                 except Exception as _bce_import_err:
                     logger.warning("[Bootstrap-Barrier] could not import _KRAKEN_STARTUP_FSM: %s", _bce_import_err)
                     _kraken_fsm_bce = None  # type: ignore[assignment]
+                
+                # FIX 2: Probe loop must not block startup
+                _bce_deadline = time.monotonic() + 15  # 15-second probe timeout
+                _bce_start = time.monotonic()
+                
                 while True:
                     try:
                         _bce_first_snap = _get_tsm_bce().get_first_snap_accepted() if _get_tsm_bce is not None else False
