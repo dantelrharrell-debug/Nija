@@ -849,11 +849,11 @@ def get_active_risk_config():
             elif balance >= 100:
                 logger.info(f"AUTO mode: Selected SAVER tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_SAVER
-            elif balance >= 50:
+            elif balance >= 5:
                 logger.info(f"AUTO mode: Selected STARTER tier (balance: ${balance:.2f})")
                 return RISK_CONFIG_STARTER
             else:
-                logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($50), defaulting to STARTER tier")
+                logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($5), defaulting to STARTER tier")
                 return RISK_CONFIG_STARTER
         except (ValueError, TypeError) as e:
             # Default to INVESTOR if balance unavailable or invalid
