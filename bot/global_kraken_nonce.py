@@ -38,6 +38,8 @@ import threading
 import time
 import uuid
 
+from bot.redis_env import get_redis_url
+
 # fcntl is available on Linux/macOS; skip on Windows
 try:
     import fcntl as _fcntl
@@ -423,7 +425,7 @@ _PID_LOCK_FILE = _STATE_FILE + ".pid"
 #                 hot restart so nonces don't replay a previous session's range.
 #                 probe_and_resync() handles the cooldown automatically.
 _NONCE_BACKEND   = os.environ.get("NIJA_NONCE_BACKEND",   "file").strip().lower()
-_REDIS_URL       = os.environ.get("NIJA_REDIS_URL",        "redis://localhost:6379/0")
+_REDIS_URL       = get_redis_url() or "redis://localhost:6379/0"
 _REDIS_NONCE_KEY = os.environ.get("NIJA_REDIS_NONCE_KEY",  "nija:kraken:nonce")
 _NONCE_MODE      = os.environ.get("NIJA_NONCE_MODE",       "file").strip().lower()
 # If enabled, missing process-lifetime PID lock is treated as fatal (raise).

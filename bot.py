@@ -21,6 +21,8 @@ import signal
 import threading
 import subprocess
 
+from bot.redis_env import get_redis_env_presence, get_redis_url, get_redis_url_source
+
 # ── Operational override: disable HF scalping mode for now ─────────────────
 # Explicitly force HF flags off before any HF module is initialized.
 os.environ["HF_SCALP_MODE"] = "0"
@@ -785,14 +787,20 @@ def _acquire_distributed_process_lock() -> None:
             print("   Distributed single-writer safety is DISABLED by explicit operator override.")
             print("   Use only when you are certain exactly one container/process can run.")
 
-    _redis_url = os.environ.get("NIJA_REDIS_URL", "").strip() or os.environ.get("REDIS_URL", "").strip()
+    _redis_url = get_redis_url()
+    _redis_url_source = get_redis_url_source()
+    _redis_env_presence = get_redis_env_presence()
     print(
         "🔐 Writer lock mode | "
         f"live={_live_mode} required={_require_lock} unsafe_bypass={_unsafe_bypass} "
-        f"redis_configured={bool(_redis_url)}"
+        f"redis_configured={bool(_redis_url)} source={_redis_url_source or 'unset'}"
     )
+    print(f"🔐 Redis env presence | {_redis_env_presence}")
     if not _redis_url:
-        _msg = "⚠️ Distributed single-writer lock disabled (NIJA_REDIS_URL/REDIS_URL not set)."
+        _msg = (
+            "⚠️ Distributed single-writer lock disabled "
+            "(checked NIJA_REDIS_URL, REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL)."
+        )
         if _require_lock:
             print(_msg)
             print("🚫 Distributed single-writer lock is required in LIVE mode. Exiting fail-closed.")

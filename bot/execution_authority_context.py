@@ -17,6 +17,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator
 
+from bot.redis_env import get_redis_url
+
 
 _EXECUTION_AUTHORITY_ACTIVE: ContextVar[bool] = ContextVar(
     "nija_execution_authority_active",
@@ -73,7 +75,7 @@ def assert_distributed_writer_authority() -> None:
                 return
             raise RuntimeError(_FENCE_LAST_ERR or "distributed writer fence verification cached failure")
 
-    redis_url = (os.getenv("NIJA_REDIS_URL", "").strip() or os.getenv("REDIS_URL", "").strip())
+    redis_url = get_redis_url()
     scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
     if not scope:
         raw = (
@@ -147,7 +149,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
     unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
     strict_required = (_env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode) and not unsafe_bypass
-    redis_url = (os.getenv("NIJA_REDIS_URL", "").strip() or os.getenv("REDIS_URL", "").strip())
+    redis_url = get_redis_url()
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
 
     if force_refresh:

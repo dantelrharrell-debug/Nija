@@ -159,6 +159,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 
+from bot.redis_env import get_redis_url
+
 _logger = logging.getLogger(__name__)
 
 
@@ -707,8 +709,9 @@ def get_distributed_nonce_manager(
 
     Environment-variable shortcut
     ------------------------------
-    If ``NIJA_REDIS_URL`` is set and ``redis_client`` is not provided, the
-    manager will attempt to construct a Redis client automatically.
+    If a supported Redis URL environment variable is set and ``redis_client``
+    is not provided, the manager will attempt to construct a Redis client
+    automatically.
     """
     global _dnm_instance
     if _dnm_instance is not None:
@@ -718,7 +721,7 @@ def get_distributed_nonce_manager(
             return _dnm_instance
         # Auto-construct Redis client from env if not supplied
         if redis_client is None:
-            redis_url = os.environ.get("NIJA_REDIS_URL", "").strip()
+            redis_url = get_redis_url()
             if redis_url:
                 try:
                     import redis as _redis_lib  # type: ignore[import]
@@ -735,7 +738,7 @@ def get_distributed_nonce_manager(
                 except Exception as exc:
                     _logger.warning(
                         "DistributedNonceManager: could not build Redis client "
-                        "from NIJA_REDIS_URL (%s) — file-lock fallback active",
+                        "from configured Redis URL (%s) — file-lock fallback active",
                         exc,
                     )
         _dnm_instance = DistributedNonceManager(redis_client=redis_client)

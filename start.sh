@@ -13,8 +13,8 @@ echo "=============================="
 # start.sh is invoked a second time while a previous instance is still live.
 #
 # Cross-container / cross-deployment protection is handled separately by the
-# distributed Redis lock inside bot.py (set NIJA_REDIS_URL / REDIS_URL to
-# enable it).
+# distributed Redis lock inside bot.py (set NIJA_REDIS_URL, REDIS_URL,
+# REDIS_PRIVATE_URL, or REDIS_PUBLIC_URL to enable it).
 # ─────────────────────────────────────────────────────────────────────────────
 _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 _PID_FILE="${_SCRIPT_DIR}/data/nija.pid"

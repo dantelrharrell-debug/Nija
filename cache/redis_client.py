@@ -21,6 +21,8 @@ from datetime import timedelta
 import redis
 from redis.connection import ConnectionPool
 
+from bot.redis_env import get_redis_url as get_env_redis_url
+
 logger = logging.getLogger(__name__)
 
 # Global Redis client
@@ -35,7 +37,7 @@ def get_redis_url() -> str:
     Returns:
         Redis connection URL
     """
-    redis_url = os.getenv('REDIS_URL')
+    redis_url = get_env_redis_url()
 
     if not redis_url:
         # Build from individual components
