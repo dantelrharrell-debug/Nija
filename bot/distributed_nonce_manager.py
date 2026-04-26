@@ -184,6 +184,24 @@ _REDIS_LEASE_ACQUIRE_POLL_S = max(
 )
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
+
+def _compute_initial_lease_wait_budget_s(
+    config_timeout_s: float,
+    holder_ttl_ms: int,
+    poll_s: float,
+) -> float:
+    """Return the cold-start lease wait budget in seconds.
+
+    Startup must wait at least as long as the currently observed Redis lease
+    TTL. Otherwise a stale holder can still be counting down when the local
+    acquire timeout expires, producing a false hard-stop even though the lease
+    would naturally become available moments later.
+    """
+    wait_budget_s = max(0.0, float(config_timeout_s))
+    if holder_ttl_ms > 0:
+        wait_budget_s = max(wait_budget_s, (holder_ttl_ms / 1000.0) + max(0.05, float(poll_s)))
+    return wait_budget_s
+
 # ── Nonce issuance authorization check (lazy reference) ──────────────────────
 # Resolved on first use to avoid any import-order issues.  Returns True in
 # degraded / unavailable mode so the gate degrades gracefully.
@@ -434,11 +452,22 @@ class _PerKeyRedisBackend:
         granted, lease_version, current_owner = _run_lease_script()
         if not granted:
             # Startup safety: if this process has not held the lease yet, wait
-            # briefly for the current holder to release/expire before failing.
+            # through the observed holder TTL for the current holder to
+            # release/expire before failing.
             # Runtime safety: if we previously held a lease and lost it, fail
             # closed immediately to avoid split-brain writes.
             if prev is None and _REDIS_LEASE_ACQUIRE_TIMEOUT_S > 0.0:
-                deadline = time.monotonic() + _REDIS_LEASE_ACQUIRE_TIMEOUT_S
+                initial_holder_ttl_ms = -1
+                try:
+                    initial_holder_ttl_ms = int(self._client.pttl(owner_key))  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                wait_budget_s = _compute_initial_lease_wait_budget_s(
+                    _REDIS_LEASE_ACQUIRE_TIMEOUT_S,
+                    initial_holder_ttl_ms,
+                    _REDIS_LEASE_ACQUIRE_POLL_S,
+                )
+                deadline = time.monotonic() + wait_budget_s
                 while time.monotonic() < deadline and not granted:
                     remaining = deadline - time.monotonic()
                     holder_ttl_ms = -1
@@ -448,12 +477,13 @@ class _PerKeyRedisBackend:
                         pass
                     _logger.warning(
                         "DistributedNonceManager: waiting for Redis writer lease "
-                        "(key=%s owner=%s lease_version=%d holder_ttl_ms=%d remaining=%.1fs)",
+                        "(key=%s owner=%s lease_version=%d holder_ttl_ms=%d remaining=%.1fs wait_budget=%.1fs)",
                         key_id,
                         current_owner,
                         lease_version,
                         holder_ttl_ms,
                         remaining,
+                        wait_budget_s,
                     )
                     time.sleep(min(_REDIS_LEASE_ACQUIRE_POLL_S, max(0.05, remaining)))
                     granted, lease_version, current_owner = _run_lease_script()

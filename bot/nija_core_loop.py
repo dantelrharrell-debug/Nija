@@ -387,19 +387,14 @@ def _supervisor_step_state_machine() -> None:
                 logger.warning("Supervisor commit_activation failed: %s", _commit_err)
 
             if not _committed and _sufficient_balance and sm.get_current_state() == _TradingState.OFF:
-                sm.transition_to(
-                    _TradingState.LIVE_ACTIVE,
-                    "core loop activation trigger: LIVE_CAPITAL_VERIFIED + sufficient balance",
-                )
-                if hasattr(sm, "_activation_committed"):
-                    sm._activation_committed = True
-                if hasattr(sm, "_execution_authority"):
-                    sm._execution_authority = True
-                if hasattr(sm, "_core_loop_owns_execution"):
-                    sm._core_loop_owns_execution = False
-                if hasattr(sm, "_can_dispatch_trades"):
-                    sm._can_dispatch_trades = True
-                logger.critical("✅ SUPERVISOR ACTIVATION FALLBACK: OFF -> LIVE_ACTIVE")
+                try:
+                    sm.transition_to(
+                        _TradingState.LIVE_PENDING_CONFIRMATION,
+                        "supervisor arming: LIVE_CAPITAL_VERIFIED + sufficient balance",
+                    )
+                    logger.critical("🟡 SUPERVISOR ARMING: OFF -> LIVE_PENDING_CONFIRMATION")
+                except Exception as _arm_err:
+                    logger.warning("Supervisor arming fallback failed: %s", _arm_err)
         elif _balance > 0.0:
             logger.warning(
                 "⚠️ Supervisor activation blocked: LIVE_CAPITAL_VERIFIED is false while balance is %.2f",
@@ -2007,20 +2002,15 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _live_verified_loop
                         and _current_state_loop == _TradingState.OFF
                     ):
-                        # Explicit OFF exit path (minimal production-safe patch).
-                        # If live capital is verified, force immediate transition
-                        # out of OFF so activation cannot stall silently.
                         try:
-                            logger.critical("🔥 AUTO-TRANSITION OFF → LIVE_ACTIVE")
-                            if hasattr(_sm_loop, "force_activate_live"):
-                                _sm_loop.force_activate_live(
-                                    reason="core loop auto-transition OFF -> LIVE_ACTIVE"
-                                )
-                                _live_now = bool(_sm_loop.is_live_trading_active())
-                                if _live_now:
-                                    logger.critical("✅ OFF EXIT CONFIRMED: LIVE_ACTIVE")
+                            logger.critical("🟡 AUTO-TRANSITION OFF → LIVE_PENDING_CONFIRMATION")
+                            _sm_loop.transition_to(
+                                _TradingState.LIVE_PENDING_CONFIRMATION,
+                                "core loop arming: LIVE_CAPITAL_VERIFIED set",
+                            )
+                            _current_state_loop = _TradingState.LIVE_PENDING_CONFIRMATION
                         except Exception as _off_exit_err:
-                            logger.warning("Core loop OFF->LIVE transition failed: %s", _off_exit_err)
+                            logger.warning("Core loop OFF->ARM transition failed: %s", _off_exit_err)
 
                     # Better lifecycle fallback: OFF -> ARMED-like state
                     # (LIVE_PENDING_CONFIRMATION) -> LIVE_ACTIVE via gate checks.

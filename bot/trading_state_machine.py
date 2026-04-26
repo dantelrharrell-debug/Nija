@@ -223,30 +223,29 @@ class TradingStateMachine:
                     )
                     return
 
-                self._current_state = TradingState.LIVE_ACTIVE
-                self._activation_committed = True
-                self._execution_authority = True
-                self._core_loop_owns_execution = False
-                self._can_dispatch_trades = True
+                self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                self._activation_committed = False
+                self._execution_authority = False
+                self._core_loop_owns_execution = True
+                self._can_dispatch_trades = False
                 if heartbeat_trade:
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE + HEARTBEAT_TRADE=true -> FORCE LIVE_ACTIVE (temporary activation override)"
+                        "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE + HEARTBEAT_TRADE=true -> LIVE_PENDING_CONFIRMATION (awaiting commit_activation gate)"
                     )
                 else:
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE=true -> LIVE_ACTIVE"
+                        "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE=true -> LIVE_PENDING_CONFIRMATION (awaiting commit_activation gate)"
                     )
                 return
 
             if live_verified and not dry_run_mode:
-                # Fix 3: LIVE_PENDING_CONFIRMATION is a dead-end trap — go directly to LIVE_ACTIVE
-                self._current_state = TradingState.LIVE_ACTIVE
-                self._activation_committed = True
-                self._execution_authority = True
-                self._core_loop_owns_execution = False
-                self._can_dispatch_trades = True
+                self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                self._activation_committed = False
+                self._execution_authority = False
+                self._core_loop_owns_execution = True
+                self._can_dispatch_trades = False
                 logger.critical(
-                    "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_ACTIVE (bypassed PENDING trap)"
+                    "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_PENDING_CONFIRMATION (awaiting commit_activation gate)"
                 )
                 logger.critical(
                     "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
