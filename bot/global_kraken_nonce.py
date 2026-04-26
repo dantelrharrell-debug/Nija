@@ -114,14 +114,24 @@ def _probe_window_end() -> None:
         _PROBE_WINDOW_COND.notify_all()
 
 
-def _wait_for_probe_window(context: str) -> None:
+def _wait_for_probe_window(context: str, timeout_s: float | None = None) -> bool:
+    """Wait for active probe window to finish.
+
+    Returns True when the window closes. If timeout_s is provided and exceeded,
+    logs an error and returns False so callers can force progress.
+    """
+    _start_time = time.time()
     with _PROBE_WINDOW_COND:
         while _PROBE_WINDOW_ACTIVE > 0:
+            if timeout_s is not None and (time.time() - _start_time) > float(timeout_s):
+                _logger.error("Probe window timeout — forcing exit to LIVE_ACTIVE")
+                return False
             _logger.info(
                 "%s: waiting for active probe_and_resync window to finish",
                 context,
             )
             _PROBE_WINDOW_COND.wait(timeout=0.25)
+    return True
 
 # ── Nonce tuning constants (milliseconds) ─────────────────────────────────────
 _STARTUP_JUMP_MS: int = int(os.environ.get("NIJA_NONCE_STARTUP_JUMP_MS", "10000"))    # added to persisted nonce on hot restart
@@ -2751,7 +2761,7 @@ def _ensure_live_manager() -> KrakenNonceManager:
     rebuild races and the "four sources of truth" clock-domain oscillation.
     """
     global _nonce_manager
-    _wait_for_probe_window("_ensure_live_manager")
+    _wait_for_probe_window("_ensure_live_manager", timeout_s=30.0)
 
     # ── Hard gate: authorization check ───────────────────────────────────
     if not _NONCE_ISSUANCE_AUTHORIZED:
