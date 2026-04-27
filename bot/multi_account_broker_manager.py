@@ -5434,15 +5434,23 @@ class MultiAccountBrokerManager:
 
         # ── Coinbase ─────────────────────────────────────────────────────────
         _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes")
+        _enable_coinbase_raw = os.environ.get("ENABLE_COINBASE", "").strip().lower()
+        _enable_coinbase_flag = _enable_coinbase_raw not in ("0", "false", "no", "off") if _enable_coinbase_raw else True
         _enable_coinbase_trading = os.environ.get("ENABLE_COINBASE_TRADING", "true").strip().lower() not in (
             "0", "false", "no", "off"
         )
         _primary_exec_venue = os.environ.get("PRIMARY_EXECUTION_VENUE", "").strip().lower()
 
-        if _disable_coinbase or (not _enable_coinbase_trading) or (_primary_exec_venue == "kraken"):
+        if (
+            _disable_coinbase
+            or (not _enable_coinbase_flag)
+            or (not _enable_coinbase_trading)
+            or (_primary_exec_venue == "kraken")
+        ):
             logger.info(
-                "⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s PRIMARY_EXECUTION_VENUE=%s)",
+                "⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s PRIMARY_EXECUTION_VENUE=%s)",
                 _disable_coinbase,
+                _enable_coinbase_flag,
                 _enable_coinbase_trading,
                 _primary_exec_venue or "<unset>",
             )

@@ -1876,8 +1876,29 @@ def _bootstrap_hydrate_account_balances() -> dict:
 try:
     _bootstrap_balances = _bootstrap_hydrate_account_balances()
 except RuntimeError as _bootstrap_fatal:
-    print(f"🚫 FATAL: Bootstrap balance hydration failed: {_bootstrap_fatal}")
-    sys.exit(1)
+    _strict_bootstrap_hydration = os.environ.get(
+        "NIJA_STRICT_BOOTSTRAP_HYDRATION_FAIL_CLOSED", "0"
+    ).strip().lower() in ("1", "true", "yes", "on", "enabled")
+    print(f"🚫 Bootstrap balance hydration failed: {_bootstrap_fatal}")
+    if _strict_bootstrap_hydration:
+        print("🚫 Strict bootstrap hydration fail-closed is enabled; exiting.")
+        sys.exit(1)
+
+    # Degraded startup mode: keep process alive and let runtime capital refresh
+    # recover exchange balances instead of crash-looping the container.
+    print(
+        "⚠️ Continuing in degraded startup mode to avoid restart loops; "
+        "runtime hydration will retry real exchange balances."
+    )
+    _bootstrap_balances = {
+        "total_usd": 0.0,
+        "equity": 0.0,
+        "available": 0.0,
+        "source": "bootstrap_degraded",
+    }
+    os.environ.setdefault("ACCOUNT_BALANCE", "0")
+    os.environ.setdefault("ACCOUNT_EQUITY", "0")
+    os.environ.setdefault("ACCOUNT_AVAILABLE", "0")
 
 
 # Import after path setup
