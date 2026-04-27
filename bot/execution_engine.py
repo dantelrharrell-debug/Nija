@@ -206,7 +206,22 @@ MINIMUM_TRADING_BALANCE: float = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0
 
 # ─── FIX 2: Minimum notional order size ─────────────────────────────────────
 # Hard floor for every order regardless of broker-specific minimums.
-MIN_NOTIONAL_USD: float = float(os.getenv("MIN_NOTIONAL_USD", "5.50"))
+MIN_TRADE_USD: float = float(os.getenv("MIN_TRADE_USD", os.getenv("MIN_NOTIONAL_USD", "3.50")))
+MIN_NOTIONAL_USD: float = MIN_TRADE_USD
+
+# Fee-dominated micro-trade guardrails.
+TAKER_FEE_RATE: float = float(os.getenv("TAKER_FEE_RATE", "0.0026"))
+MIN_EDGE_MULTIPLIER: float = float(os.getenv("MIN_EDGE_MULTIPLIER", "2.0"))
+
+# Keep a cash reserve so rounding/fees don't trigger false insufficient-funds rejects.
+BALANCE_BUFFER_PCT: float = float(os.getenv("BALANCE_BUFFER_PCT", "0.10"))
+
+# One-shot probe controls for end-to-end execution validation.
+FORCE_FIRST_TRADE: bool = os.getenv("FORCE_FIRST_TRADE", "false").lower() in ("1", "true", "yes", "enabled")
+FORCE_TRADE_NOTIONAL: float = float(os.getenv("FORCE_TRADE_NOTIONAL", "3.50"))
+FORCE_TRADE_ON_FIRST_VALID_SIGNAL: bool = os.getenv(
+    "FORCE_TRADE_ON_FIRST_VALID_SIGNAL", "false"
+).lower() in ("1", "true", "yes", "enabled")
 
 # ─── FIX 4: Live mode enforcement ───────────────────────────────────────────
 LIVE_CAPITAL_VERIFIED: bool = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() == "true"
@@ -269,6 +284,20 @@ def calculate_net_edge(
 
     net_profit = gross_profit - fees - slippage - spread
     return net_profit
+
+
+def trade_is_economical(
+    notional_usd: float,
+    expected_edge_pct: float,
+    fee_rate: float = TAKER_FEE_RATE,
+    min_edge_multiplier: float = MIN_EDGE_MULTIPLIER,
+) -> bool:
+    """Return True when expected gross edge is meaningfully above fee drag."""
+    if notional_usd <= 0.0 or expected_edge_pct <= 0.0:
+        return False
+    fees = notional_usd * max(0.0, fee_rate)
+    expected_profit = notional_usd * expected_edge_pct
+    return expected_profit >= (fees * max(1.0, min_edge_multiplier))
 
 # Import fee-aware configuration for profit calculations
 try:
@@ -447,6 +476,7 @@ class ExecutionEngine:
         self.user_id = user_id
         self.positions: Dict[str, Dict] = {}
         self.orders: List[Dict] = []
+        self._force_first_trade_done = False
 
         # FIX #1: Atomic Position Close Lock - Prevent double-sells
         # When a sell is submitted, symbol is added to closing_positions
@@ -546,6 +576,11 @@ class ExecutionEngine:
         except Exception:
             pass
 
+        # Honor explicit execution-venue preference in live incidents.
+        _preferred_env = os.getenv("PRIMARY_EXECUTION_VENUE", "").strip().lower()
+        if _preferred_env in {"kraken", "coinbase", "okx", "binance", "alpaca"}:
+            preferred_broker = _preferred_env
+
         res = get_execution_pipeline().execute(
             PipelineRequest(
                 strategy=strategy_name,
@@ -603,6 +638,7 @@ class ExecutionEngine:
 
         # Fetch available balance for fee-aware sizing
         available_balance: Optional[float] = None
+        spendable_balance: Optional[float] = None
         if broker_client and hasattr(broker_client, "get_account_balance"):
             try:
                 _bal = broker_client.get_account_balance()
@@ -610,6 +646,7 @@ class ExecutionEngine:
                     float(_bal.get("available_balance", _bal.get("total_balance", 0.0)))
                     if isinstance(_bal, dict) else float(_bal)
                 )
+                spendable_balance = max(0.0, available_balance * (1.0 - max(0.0, min(BALANCE_BUFFER_PCT, 0.50))))
             except Exception:
                 pass
 
@@ -621,7 +658,7 @@ class ExecutionEngine:
                 side=side,
                 order_type="LIMIT",
                 desired_notional_usd=size_usd,
-                available_balance_usd=available_balance,
+                available_balance_usd=spendable_balance if spendable_balance is not None else available_balance,
                 price_hint_usd=limit_price,
             )
             result = ecel.compile(req)
@@ -656,7 +693,9 @@ class ExecutionEngine:
                 symbol, side,
                 compiled.price, compiled.qty,
                 float(compiled.qty * compiled.price),
-                f"${available_balance:.4f}" if available_balance is not None else "unknown",
+                f"${spendable_balance:.4f}" if spendable_balance is not None else (
+                    f"${available_balance:.4f}" if available_balance is not None else "unknown"
+                ),
                 float(compiled.qty * compiled.price) * 1.006,
             )
         else:
@@ -1628,7 +1667,7 @@ class ExecutionEngine:
             # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
             _HARD_MIN_BY_BROKER = {
                 'coinbase': 10.0,   # Coinbase operational floor (fee-positive at $10)
-                'kraken':   10.0,   # Kraken exchange minimum
+                'kraken':   MIN_TRADE_USD,
                 'binance':  10.0,   # Binance MIN_NOTIONAL filter (USDT pairs)
                 'okx':      10.0,   # OKX operational floor
                 'alpaca':    1.0,   # Alpaca — commission-free, no practical minimum
@@ -1640,6 +1679,41 @@ class ExecutionEngine:
                     _bt.value if hasattr(_bt, 'value') else str(_bt)
                 ).lower()
             _hard_min = _HARD_MIN_BY_BROKER.get(_hard_broker_key, 10.0)
+
+            # Reserve a spendable cash buffer to avoid precision/fee insufficient-funds rejects.
+            if self.broker_client and hasattr(self.broker_client, "get_account_balance"):
+                try:
+                    _bal_data = self.broker_client.get_account_balance()
+                    _available_usd = (
+                        float(_bal_data.get('available_balance', _bal_data.get('total_balance', 0.0)))
+                        if isinstance(_bal_data, dict)
+                        else float(_bal_data)
+                    )
+                    _spendable_usd = max(
+                        0.0,
+                        _available_usd * (1.0 - max(0.0, min(BALANCE_BUFFER_PCT, 0.50))),
+                    )
+                    if _spendable_usd > 0 and position_size > _spendable_usd:
+                        logger.info(
+                            "🔒 Spendable-balance cap: requested $%.2f -> $%.2f (available=$%.2f, buffer=%.1f%%)",
+                            position_size,
+                            _spendable_usd,
+                            _available_usd,
+                            BALANCE_BUFFER_PCT * 100.0,
+                        )
+                        position_size = _spendable_usd
+                except Exception:
+                    pass
+
+            # Optional one-shot probe trade to validate end-to-end execution plumbing.
+            if FORCE_FIRST_TRADE and FORCE_TRADE_ON_FIRST_VALID_SIGNAL and not self._force_first_trade_done:
+                _probe_size = max(MIN_TRADE_USD, FORCE_TRADE_NOTIONAL)
+                logger.warning(
+                    "🧪 FORCE_FIRST_TRADE armed: overriding order size to $%.2f for first valid signal",
+                    _probe_size,
+                )
+                position_size = _probe_size
+
             if position_size < _hard_min:
                 logger.debug(
                     f"⏭️  Skipping {symbol}: size ${position_size:.2f} < "
@@ -1724,6 +1798,22 @@ class ExecutionEngine:
                     _reward_move = (entry_price - tp1_price) / entry_price
                 else:
                     _reward_move = (tp1_price - entry_price) / entry_price
+
+                if not FORCE_TRADE_MODE and not trade_is_economical(
+                    position_size,
+                    max(0.0, _reward_move),
+                    fee_rate=_fee_rate,
+                    min_edge_multiplier=MIN_EDGE_MULTIPLIER,
+                ):
+                    logger.warning(
+                        "🚫 REJECT_FEE_DOMINATED: %s size=$%.2f expected_edge=%.4f%% fee_rate=%.4f%% multiplier=%.2f",
+                        symbol,
+                        position_size,
+                        max(0.0, _reward_move) * 100.0,
+                        _fee_rate * 100.0,
+                        MIN_EDGE_MULTIPLIER,
+                    )
+                    return None
 
                 _total_cost_rate = (_fee_rate * 2) + _slippage_rate + _spread_rate
                 _gross_win_usd = position_size * _reward_move
@@ -1865,6 +1955,18 @@ class ExecutionEngine:
                 # Log broker being used for this trade
                 broker_name = getattr(self.broker_client, 'broker_type', 'unknown')
                 broker_name_str = broker_name.value if hasattr(broker_name, 'value') else str(broker_name)
+
+                # Allow ops to keep Coinbase connected for data while disabling execution.
+                _coinbase_exec_disabled = os.getenv("ENABLE_COINBASE_TRADING", "true").strip().lower() in (
+                    "0", "false", "no", "off"
+                )
+                if broker_name_str.lower() == "coinbase" and _coinbase_exec_disabled:
+                    logger.warning(
+                        "⏭️ COINBASE_EXECUTION_DISABLED: skipping %s %s on Coinbase",
+                        order_side,
+                        symbol,
+                    )
+                    return None
                 # ─── FIX 6: MANDATORY PRE-EXECUTION LOG ──────────────────────────
                 logger.critical(
                     "🚀 EXECUTING TRADE: %s | side=%s | size=$%.2f | entry=$%.4f | broker=%s",
@@ -2020,6 +2122,27 @@ class ExecutionEngine:
                         _order_size_usd = position_size
                         _order_quantity = position_size / entry_price if entry_price > 0 else 0.0
 
+                        # Explicitly floor quantity to exchange step size before submission
+                        # to avoid precision drift causing false insufficient-funds rejects.
+                        try:
+                            if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc:
+                                _constraints = _eoc.get_constraints(_broker_name, symbol)
+                                _step = float(getattr(_constraints, "step_size", 0.0) or 0.0)
+                                if _step > 0.0:
+                                    _order_quantity = (_order_quantity // _step) * _step
+                                    _order_size_usd = _order_quantity * entry_price
+                        except Exception:
+                            pass
+
+                        if _order_size_usd < MIN_TRADE_USD:
+                            logger.info(
+                                "⏭️  REJECT_BELOW_MIN: %s order_notional=$%.2f < MIN_TRADE_USD=$%.2f",
+                                symbol,
+                                _order_size_usd,
+                                MIN_TRADE_USD,
+                            )
+                            return None
+
                     _entry_t0 = _time.monotonic()
                     _market_exc: Optional[Exception] = None
                     try:
@@ -2106,6 +2229,10 @@ class ExecutionEngine:
                     logger.error("   ⚠️  Order status must be confirmed before recording position")
                     logger.error(LOG_SEPARATOR)
                     return None
+
+                if FORCE_FIRST_TRADE and FORCE_TRADE_ON_FIRST_VALID_SIGNAL and not self._force_first_trade_done:
+                    self._force_first_trade_done = True
+                    logger.warning("✅ FORCE_FIRST_TRADE completed — auto-disabling probe mode for this process")
 
                 # CRITICAL: Validate filled price to prevent accepting immediate losers
                 # Extract actual fill price from order result

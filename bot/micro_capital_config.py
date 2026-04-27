@@ -51,7 +51,16 @@ TRADING_MODE = "independent"  # Independent trading mode (no copy trading)
 # ============================================================================
 
 MIN_BALANCE_TO_TRADE = 1.00  # Minimum account balance to start trading (capital gate)
-MIN_TRADE_SIZE = 5.00  # Minimum trade size in USD
+MIN_TRADE_SIZE = 3.50  # Minimum trade size in USD (small-cap surgical mode)
+
+# Surgical small-cap execution profile for $100–$200 equity.
+SMALL_CAP_PROFILE = {
+    "max_concurrent_positions": 3,
+    "min_seconds_between_trades": 60,
+    "max_trades_per_hour": 8,
+    "confidence_threshold": 0.74,
+    "min_volume_usd_24h": 250_000,
+}
 
 # ============================================================================
 # POSITION MANAGEMENT
@@ -571,6 +580,14 @@ def get_dynamic_config(equity: float) -> Dict:
     # ── Position-size percentage (March 2026 tiers) ────────────────────────
     config['position_size_pct'] = get_position_size_pct(equity)
 
+    # Surgical profile for constrained accounts that still need execution flow.
+    if equity <= 200.0:
+        config['max_positions'] = SMALL_CAP_PROFILE['max_concurrent_positions']
+        config['min_seconds_between_trades'] = SMALL_CAP_PROFILE['min_seconds_between_trades']
+        config['max_trades_per_hour'] = SMALL_CAP_PROFILE['max_trades_per_hour']
+        config['confidence_threshold'] = SMALL_CAP_PROFILE['confidence_threshold']
+        config['min_volume_usd_24h'] = SMALL_CAP_PROFILE['min_volume_usd_24h']
+
     # ── Max-positions auto-unlock (March 2026 tiers) ───────────────────────
     # Delegate to SmartScalingEngine when available; fall back to inline logic.
     try:
@@ -806,6 +823,10 @@ def get_environment_variables(equity: Optional[float] = None) -> Dict[str, str]:
         'MIN_CASH_TO_BUY': str(MIN_TRADE_SIZE),
         
         'MAX_CONCURRENT_POSITIONS': str(dynamic_config.get('max_positions', MAX_POSITIONS)),
+        'MIN_SECONDS_BETWEEN_TRADES': str(dynamic_config.get('min_seconds_between_trades', 60)),
+        'MAX_TRADES_PER_HOUR': str(dynamic_config.get('max_trades_per_hour', 8)),
+        'CONFIDENCE_THRESHOLD': str(dynamic_config.get('confidence_threshold', 0.74)),
+        'MIN_VOLUME_USD_24H': str(dynamic_config.get('min_volume_usd_24h', 250000)),
         'MAX_POSITION_PCT': str(MAX_POSITION_PCT),
         'RISK_PER_TRADE': str(dynamic_config.get('risk_per_trade', RISK_PER_TRADE)),
         'ENABLE_DCA': str(ENABLE_DCA).lower(),  # ADDED: Feb 17, 2026

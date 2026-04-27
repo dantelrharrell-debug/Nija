@@ -5433,8 +5433,19 @@ class MultiAccountBrokerManager:
         time.sleep(2.0)  # Separate Kraken nonce window from next broker
 
         # ── Coinbase ─────────────────────────────────────────────────────────
-        if os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes"):
-            logger.info("⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=true)")
+        _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes")
+        _enable_coinbase_trading = os.environ.get("ENABLE_COINBASE_TRADING", "true").strip().lower() not in (
+            "0", "false", "no", "off"
+        )
+        _primary_exec_venue = os.environ.get("PRIMARY_EXECUTION_VENUE", "").strip().lower()
+
+        if _disable_coinbase or (not _enable_coinbase_trading) or (_primary_exec_venue == "kraken"):
+            logger.info(
+                "⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s PRIMARY_EXECUTION_VENUE=%s)",
+                _disable_coinbase,
+                _enable_coinbase_trading,
+                _primary_exec_venue or "<unset>",
+            )
         else:
             logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)…")
             try:
