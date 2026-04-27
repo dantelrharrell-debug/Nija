@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: NIJA Dashboards
+    folder: NIJA
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
