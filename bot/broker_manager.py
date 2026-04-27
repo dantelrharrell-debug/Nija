@@ -751,7 +751,7 @@ except ImportError:
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
 STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '1'))  # Capital gate: $1.00 minimum (unlocked for all account sizes)
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
-MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', '1.00'))  # Minimum cash required to place a buy order
+MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', os.getenv('MIN_TRADE_USD', '1.00')))  # Minimum cash required to place a buy order
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Broker-specific minimum balance requirements
