@@ -1889,7 +1889,7 @@ class MultiAccountBrokerManager:
                     "has_balance_payload=%s "
                     "has_balance_payload_for_capital=%s "
                     "has_payload=%s",
-                    broker.name,
+                    getattr(broker, 'name', broker_type.value),
                     getattr(broker, "connected", None),
                     getattr(broker, "_last_known_balance", None),
                     broker.has_balance_payload() if hasattr(broker, "has_balance_payload") else None,
