@@ -121,10 +121,12 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     _LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-120000}"
     _LEASE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S:-90}"
     _LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S:-30}"
+    _WRITER_HEARTBEAT_MAX_FAILURES="${NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES:-12}"
     echo "🔒 Strict Redis writer lease enabled (live mode)"
     echo "   Overlapping deploys may wait for active writer lease handoff before Kraken connects"
     echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Acquire timeout: ${_LEASE_TIMEOUT_S} s"
     echo "   Lease wait log interval: ${_LEASE_WAIT_LOG_INTERVAL_S} s"
+    echo "   Writer lock heartbeat max transient failures: ${_WRITER_HEARTBEAT_MAX_FAILURES}"
     echo "   This wait is expected and prevents split-brain nonce issuance"
     echo ""
 fi

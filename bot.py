@@ -874,6 +874,10 @@ def _release_distributed_process_lock() -> None:
 def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
     """Keep the distributed writer lock alive; fail closed if ownership is lost."""
     _interval = max(10, ttl_s // 3)
+    try:
+        _max_failures = max(3, int(os.environ.get("NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES", "12")))
+    except (TypeError, ValueError):
+        _max_failures = 12
     _failure_streak = 0
     while not _distributed_writer_lock_stop.wait(_interval):
         try:
@@ -904,7 +908,8 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
             if int(_result or 0) != 1:
                 print(
                     "\n🚫 Distributed single-writer lock lost; "
-                    "another NIJA writer may be active. Exiting for safety."
+                    "another NIJA writer may be active. Exiting for safety.",
+                    flush=True,
                 )
                 _distributed_writer_lock_stop.set()
                 _release_distributed_process_lock()
@@ -912,10 +917,17 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
             _failure_streak = 0
         except Exception as _hb_exc:
             _failure_streak += 1
-            if _failure_streak >= 3:
+            if _failure_streak == 1 or _failure_streak % 3 == 0:
                 print(
-                    f"\n🚫 Distributed lock heartbeat failed 3x ({_hb_exc}); "
-                    "exiting to preserve single-writer invariant."
+                    "⚠️ Distributed lock heartbeat error "
+                    f"streak={_failure_streak}/{_max_failures} ({_hb_exc})",
+                    flush=True,
+                )
+            if _failure_streak >= _max_failures:
+                print(
+                    f"\n🚫 Distributed lock heartbeat failed {_failure_streak}x ({_hb_exc}); "
+                    "exiting to preserve single-writer invariant.",
+                    flush=True,
                 )
                 _distributed_writer_lock_stop.set()
                 _release_distributed_process_lock()
