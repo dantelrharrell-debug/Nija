@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 
 from bot.redis_env import get_redis_url
 
@@ -79,6 +80,20 @@ def _detect_container_id() -> str:
     except Exception:
         pass
     return "unknown"
+
+
+def _redact_redis_url(redis_url: str) -> str:
+    """Return a log-safe Redis URL with credentials removed."""
+    try:
+        parts = urlsplit(redis_url)
+        if not parts.scheme:
+            return "<configured>"
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+        safe_netloc = f"<redacted>@{host}{port}" if parts.username or parts.password else f"{host}{port}"
+        return urlunsplit((parts.scheme, safe_netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        return "<configured>"
 
 # ── Persistence file ──────────────────────────────────────────────────────────
 _STATE_FILE = os.path.join(
@@ -790,7 +805,7 @@ def _build_redis_backend() -> "_RedisNonceBackend | None":
         _logger.error(
             "RedisNonceBackend: could not connect to %s (%s) — "
             "falling back to file mode",
-            _REDIS_URL, exc,
+            _redact_redis_url(_REDIS_URL), exc,
         )
     return None
 
@@ -3108,7 +3123,7 @@ def get_nonce_backend_info() -> dict:
         "pid_lock_held":  bool(getattr(mgr, "_pid_lock_acquired", False)),
         "pid_lock_file":  mgr._pid_lock_file,
         "state_file":     mgr._state_file,
-        "redis_url":      _REDIS_URL if backend == "redis" else None,
+        "redis_url":      _redact_redis_url(_REDIS_URL) if backend == "redis" else None,
         "redis_key":      _REDIS_NONCE_KEY if backend == "redis" else None,
     }
 

@@ -132,6 +132,36 @@ else
 fi
 echo ""
 
+# Explain expected cold-start behavior when strict Redis writer lease is active.
+# This helps operators distinguish normal lease handoff waits from a hard failure.
+_LIVE_MODE=false
+if [ "${DRY_RUN_MODE:-false}" = "false" ] && [ "${PAPER_MODE:-false}" = "false" ]; then
+    _LIVE_MODE=true
+fi
+
+_REDIS_CONFIGURED=false
+if [ -n "${NIJA_REDIS_URL:-}" ] || [ -n "${REDIS_URL:-}" ] || [ -n "${REDIS_PRIVATE_URL:-}" ] || [ -n "${REDIS_PUBLIC_URL:-}" ]; then
+    _REDIS_CONFIGURED=true
+fi
+
+_STRICT_LEASE=true
+_STRICT_LEASE_RAW=$(printf "%s" "${NIJA_STRICT_REDIS_LEASE:-1}" | tr '[:upper:]' '[:lower:]')
+if [ "${_STRICT_LEASE_RAW}" = "0" ] || [ "${_STRICT_LEASE_RAW}" = "false" ] || [ "${_STRICT_LEASE_RAW}" = "no" ] || [ "${_STRICT_LEASE_RAW}" = "off" ]; then
+    _STRICT_LEASE=false
+fi
+
+if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
+    _LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-120000}"
+    _LEASE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S:-90}"
+    _LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S:-10}"
+    echo "🔒 Strict Redis writer lease enabled (live mode)"
+    echo "   Overlapping deploys may wait for active writer lease handoff before Kraken connects"
+    echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Acquire timeout: ${_LEASE_TIMEOUT_S} s"
+    echo "   Lease wait log interval: ${_LEASE_WAIT_LOG_INTERVAL_S} s"
+    echo "   This wait is expected and prevents split-brain nonce issuance"
+    echo ""
+fi
+
 # Helper function to exit gracefully for configuration errors
 exit_config_error() {
     echo ""

@@ -156,6 +156,7 @@ import socket
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 
@@ -181,6 +182,9 @@ _REDIS_LEASE_ACQUIRE_TIMEOUT_S = max(
 )
 _REDIS_LEASE_ACQUIRE_POLL_S = max(
     0.1, float(os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_POLL_S", "0.5"))
+)
+_REDIS_LEASE_WAIT_LOG_INTERVAL_S = max(
+    0.5, float(os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "10"))
 )
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
@@ -260,6 +264,20 @@ def _build_process_fingerprint() -> str:
     host = socket.gethostname()
     container_id = _detect_container_id()
     return f"pid={pid}|host={host}|container={container_id}|startup={_PROCESS_STARTUP_HASH}"
+
+
+def _redact_redis_url(redis_url: str) -> str:
+    """Return a logging-safe Redis URL with credentials removed."""
+    try:
+        parts = urlsplit(redis_url)
+        if not parts.scheme:
+            return "<configured>"
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+        safe_netloc = f"<redacted>@{host}{port}" if parts.username or parts.password else f"{host}{port}"
+        return urlunsplit((parts.scheme, safe_netloc, parts.path, parts.query, parts.fragment))
+    except Exception:
+        return "<configured>"
 
 # ── Key derivation ─────────────────────────────────────────────────────────────
 
@@ -468,25 +486,48 @@ class _PerKeyRedisBackend:
                     _REDIS_LEASE_ACQUIRE_POLL_S,
                 )
                 deadline = time.monotonic() + wait_budget_s
+                wait_started_at = time.monotonic()
+                next_wait_log_at = wait_started_at
+                _logger.warning(
+                    "DistributedNonceManager: Redis writer lease busy at startup "
+                    "(key=%s owner=%s lease_version=%d initial_holder_ttl_ms=%d wait_budget=%.1fs)",
+                    key_id,
+                    current_owner,
+                    lease_version,
+                    initial_holder_ttl_ms,
+                    wait_budget_s,
+                )
                 while time.monotonic() < deadline and not granted:
-                    remaining = deadline - time.monotonic()
+                    now = time.monotonic()
+                    remaining = deadline - now
                     holder_ttl_ms = -1
                     try:
                         holder_ttl_ms = int(self._client.pttl(owner_key))  # type: ignore[attr-defined]
                     except Exception:
                         pass
-                    _logger.warning(
-                        "DistributedNonceManager: waiting for Redis writer lease "
-                        "(key=%s owner=%s lease_version=%d holder_ttl_ms=%d remaining=%.1fs wait_budget=%.1fs)",
-                        key_id,
-                        current_owner,
-                        lease_version,
-                        holder_ttl_ms,
-                        remaining,
-                        wait_budget_s,
-                    )
+                    if now >= next_wait_log_at or remaining <= (_REDIS_LEASE_ACQUIRE_POLL_S + 0.05):
+                        _logger.warning(
+                            "DistributedNonceManager: waiting for Redis writer lease "
+                            "(key=%s owner=%s lease_version=%d holder_ttl_ms=%d remaining=%.1fs wait_budget=%.1fs)",
+                            key_id,
+                            current_owner,
+                            lease_version,
+                            holder_ttl_ms,
+                            remaining,
+                            wait_budget_s,
+                        )
+                        next_wait_log_at = now + _REDIS_LEASE_WAIT_LOG_INTERVAL_S
                     time.sleep(min(_REDIS_LEASE_ACQUIRE_POLL_S, max(0.05, remaining)))
                     granted, lease_version, current_owner = _run_lease_script()
+
+                if granted:
+                    _logger.info(
+                        "DistributedNonceManager: Redis writer lease became available "
+                        "(key=%s lease_version=%d waited=%.1fs)",
+                        key_id,
+                        lease_version,
+                        max(0.0, time.monotonic() - wait_started_at),
+                    )
 
             if not granted:
                 raise RuntimeError(
@@ -625,10 +666,6 @@ class DistributedNonceManager:
         if self._redis is not None:
             try:
                 nonce = self._redis.next_nonce(api_key_id)
-                _logger.debug(
-                    "DistributedNonceManager[redis]: key=%s nonce=%d",
-                    api_key_id, nonce,
-                )
                 return nonce
             except Exception as exc:
                 if self._strict_redis_lease:
@@ -804,7 +841,7 @@ def get_distributed_nonce_manager(
                     )
                     _logger.info(
                         "DistributedNonceManager: auto-connecting to Redis at %s",
-                        redis_url,
+                        _redact_redis_url(redis_url),
                     )
                 except Exception as exc:
                     _logger.warning(
