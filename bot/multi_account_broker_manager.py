@@ -583,13 +583,15 @@ class MultiAccountBrokerManager:
             )
 
             if capital_fsm_ready and coordinator_ready:
-                if not _tsm_finalize.is_live_trading_active():
+                _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
+                if not _state_live_active:
                     _finalize_activated = _tsm_finalize.maybe_auto_activate()
-                    if _finalize_activated:
+                    _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
+                    if _finalize_activated or _state_live_active:
                         logger.critical(
                             "🚀 POST-INIT ACTIVATION SUCCESS: state=%s is_live=%s",
                             _tsm_finalize.get_current_state().value,
-                            _tsm_finalize.is_live_trading_active(),
+                            _state_live_active,
                         )
                     else:
                         _state_name = _tsm_finalize.get_current_state().value
@@ -606,17 +608,19 @@ class MultiAccountBrokerManager:
                         )
                         _retry_activated = False
                         for _attempt in range(1, _retry_attempts + 1):
-                            if _tsm_finalize.is_live_trading_active():
+                            _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
+                            if _state_live_active:
                                 _retry_activated = True
                                 break
                             _retry_activated = bool(_tsm_finalize.maybe_auto_activate())
-                            if _retry_activated:
+                            _state_live_active = _tsm_finalize.get_current_state().value == "LIVE_ACTIVE"
+                            if _retry_activated or _state_live_active:
                                 logger.critical(
                                     "🚀 POST-INIT ACTIVATION SUCCESS AFTER RETRY %d/%d: state=%s is_live=%s",
                                     _attempt,
                                     _retry_attempts,
                                     _tsm_finalize.get_current_state().value,
-                                    _tsm_finalize.is_live_trading_active(),
+                                    _state_live_active,
                                 )
                                 break
                             if _attempt < _retry_attempts:
@@ -764,16 +768,18 @@ class MultiAccountBrokerManager:
         Logs the attempt for audit trail and forces state to LIVE_ACTIVE.
         """
         try:
-            if not tsm.is_live_trading_active():
+            _state_live_active = tsm.get_current_state().value == "LIVE_ACTIVE"
+            if not _state_live_active:
                 logger.critical(
                     "[MABM] FORCING ACTIVATION FALLBACK: all normal gates failed"
                 )
                 if hasattr(tsm, "_transition_to_live_active"):
                     tsm._transition_to_live_active("enforce_activation_fallback")
+                    _state_live_active = tsm.get_current_state().value == "LIVE_ACTIVE"
                     logger.critical(
                         "[MABM] FORCED ACTIVATION SUCCESS: state=%s is_live=%s",
                         tsm.get_current_state().value,
-                        tsm.is_live_trading_active(),
+                        _state_live_active,
                     )
                 else:
                     logger.warning(
