@@ -64,6 +64,61 @@ def _heartbeat_verified() -> bool:
         return False
 
 
+def _distributed_writer_authority_gate() -> tuple[bool, str]:
+    """Verify this process still owns distributed writer authority.
+
+    Returns
+    -------
+    (ok, error)
+        ok=True when authority is valid or not required by current mode.
+        ok=False with an error string when strict/live mode requires authority
+        and verification fails.
+    """
+    try:
+        try:
+            from bot.execution_authority_context import assert_distributed_writer_authority
+        except ImportError:
+            from execution_authority_context import assert_distributed_writer_authority  # type: ignore[import]
+
+        assert_distributed_writer_authority()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _nonce_writer_lease_gate() -> tuple[bool, str]:
+    """Verify nonce writer lease ownership for the platform Kraken key.
+
+    This prevents LIVE activation when a stale/foreign process still owns the
+    Redis nonce lease for the same API key (split-brain protection).
+    """
+    platform_key = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+    )
+    if not platform_key:
+        # No Kraken platform key configured in this process; nothing to verify.
+        return True, ""
+
+    try:
+        try:
+            from bot.distributed_nonce_manager import (
+                get_distributed_nonce_manager,
+                make_api_key_id,
+            )
+        except ImportError:
+            from distributed_nonce_manager import (  # type: ignore[import]
+                get_distributed_nonce_manager,
+                make_api_key_id,
+            )
+
+        key_id = make_api_key_id(platform_key)
+        get_distributed_nonce_manager().ensure_writer_lock(key_id)
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
 class TradingState(Enum):
     """Trading state enumeration - SINGLE SOURCE OF TRUTH"""
     OFF = "OFF"
@@ -587,6 +642,22 @@ class TradingStateMachine:
             return False
 
         if _force and _lcv_quick and not _dry_run_quick:
+            _force_writer_ok, _force_writer_err = _distributed_writer_authority_gate()
+            if not _force_writer_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_DISTRIBUTED_WRITER_AUTHORITY detail=%s",
+                    _force_writer_err,
+                )
+                return False
+
+            _force_nonce_ok, _force_nonce_err = _nonce_writer_lease_gate()
+            if not _force_nonce_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_NONCE_WRITER_LEASE detail=%s",
+                    _force_nonce_err,
+                )
+                return False
+
             with self._lock:
                 if not self._activation_committed:
                     self._current_state = TradingState.LIVE_ACTIVE
@@ -632,6 +703,28 @@ class TradingStateMachine:
                 return False
         except Exception as _ks_err:
             logger.debug("commit_activation: could not check kill switch: %s", _ks_err)
+
+        # ── Gate 2b: distributed writer authority must be valid ──────────
+        # Prevent split-brain activation when another container/process owns
+        # the Redis writer fence token.
+        _writer_ok, _writer_err = _distributed_writer_authority_gate()
+        if not _writer_ok:
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=DISTRIBUTED_WRITER_AUTHORITY detail=%s",
+                _writer_err,
+            )
+            return False
+
+        # ── Gate 2c: nonce writer lease must be valid ─────────────────────
+        # The distributed process writer lock and nonce-writer lease are
+        # independent Redis invariants. Require both before LIVE activation.
+        _nonce_lease_ok, _nonce_lease_err = _nonce_writer_lease_gate()
+        if not _nonce_lease_ok:
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=NONCE_WRITER_LEASE detail=%s",
+                _nonce_lease_err,
+            )
+            return False
 
         # ── Gate 3: LIVE_CAPITAL_VERIFIED — composite semantic check ──────────
         # Semantics: flag==true AND capital_hydrated==true AND total_balance is not None.
@@ -907,15 +1000,33 @@ class TradingStateMachine:
                 _kill_active = get_kill_switch().is_active()
             except Exception:
                 pass
+
+            # Check distributed writer authority to avoid split-brain force activation.
+            _writer_ok, _writer_err = _distributed_writer_authority_gate()
+            if not _writer_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=DISTRIBUTED_WRITER_AUTHORITY detail=%s",
+                    _writer_err,
+                )
+
+            _nonce_lease_ok, _nonce_lease_err = _nonce_writer_lease_gate()
+            if not _nonce_lease_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=NONCE_WRITER_LEASE detail=%s",
+                    _nonce_lease_err,
+                )
             
             # Force transition if core conditions met
-            if live_verified and _capital_ready and not _kill_active:
+            if live_verified and _capital_ready and not _kill_active and _writer_ok and _nonce_lease_ok:
                 logger.critical(
-                    "🟢 DETERMINISTIC ACTIVATION: state=%s live_verified=%s capital_ready=%s "
+                    "🟢 DETERMINISTIC ACTIVATION: state=%s live_verified=%s capital_ready=%s writer_ok=%s "
+                    "nonce_lease_ok=%s "
                     "→ forcing LIVE_ACTIVE transition",
                     current_state.value,
                     live_verified,
                     _capital_ready,
+                    _writer_ok,
+                    _nonce_lease_ok,
                 )
                 with self._lock:
                     self._current_state = TradingState.LIVE_ACTIVE
