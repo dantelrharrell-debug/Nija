@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import time
+import traceback
 import logging
 import socket
 import secrets
@@ -5714,5 +5715,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
+        # Always print a raw traceback so container logs include the fatal root
+        # cause even if logging handlers are unavailable or misconfigured.
+        traceback.print_exc()
         logger.critical(f"💥 FATAL ERROR — BOT CRASHED: {e}", exc_info=True)
         sys.exit(1)

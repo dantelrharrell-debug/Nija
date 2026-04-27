@@ -374,6 +374,15 @@ if [ -f ./.env ]; then
     set +a
 fi
 
+# Normalize Coinbase disable intent before Python starts so all downstream
+# layers see consistent flags even if only ENABLE_COINBASE is provided.
+_ENABLE_COINBASE_RAW="$(printf "%s" "${ENABLE_COINBASE:-}" | tr '[:upper:]' '[:lower:]')"
+if [ "${_ENABLE_COINBASE_RAW}" = "0" ] || [ "${_ENABLE_COINBASE_RAW}" = "false" ] || [ "${_ENABLE_COINBASE_RAW}" = "no" ] || [ "${_ENABLE_COINBASE_RAW}" = "off" ]; then
+    export ENABLE_COINBASE_TRADING="false"
+    export NIJA_DISABLE_COINBASE="true"
+    echo "⏭️  Coinbase explicitly disabled via ENABLE_COINBASE=${ENABLE_COINBASE}; forcing ENABLE_COINBASE_TRADING=false and NIJA_DISABLE_COINBASE=true"
+fi
+
 # Debug: Show credential status for ALL exchanges
 echo ""
 echo "🔍 EXCHANGE CREDENTIAL STATUS:"
@@ -389,7 +398,9 @@ fi
 
 # Coinbase - Platform (SECONDARY BROKER)
 echo "   📊 COINBASE (Platform) - SECONDARY BROKER:"
-if [ -n "${COINBASE_API_KEY}" ] && [ -n "${COINBASE_API_SECRET}" ]; then
+if [ "${NIJA_DISABLE_COINBASE:-false}" = "true" ] || [ "${ENABLE_COINBASE_TRADING:-true}" = "false" ]; then
+    echo "      ⏭️  Disabled by env (NIJA_DISABLE_COINBASE=${NIJA_DISABLE_COINBASE:-false}, ENABLE_COINBASE_TRADING=${ENABLE_COINBASE_TRADING:-true})"
+elif [ -n "${COINBASE_API_KEY}" ] && [ -n "${COINBASE_API_SECRET}" ]; then
     echo "      ✅ Configured (Key: ${#COINBASE_API_KEY} chars, Secret: ${#COINBASE_API_SECRET} chars)"
 else
     echo "      ⚠️  Not configured (optional secondary broker)"
@@ -649,4 +660,19 @@ if [ "$status" -eq 143 ]; then
 fi
 
 echo "❌ Bot crashed! Exit code: $status"
+
+# Print actionable diagnostics from the rotating runtime log to avoid
+# blind restart loops with only an exit code in Railway logs.
+if [ -f "./nija.log" ]; then
+    echo "----- nija.log tail (last 200 lines) -----"
+    tail -n 200 "./nija.log" || true
+    echo "----- end nija.log tail -----"
+fi
+
+if [ -f "./data/nija.log" ]; then
+    echo "----- data/nija.log tail (last 200 lines) -----"
+    tail -n 200 "./data/nija.log" || true
+    echo "----- end data/nija.log tail -----"
+fi
+
 exit 1

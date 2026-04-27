@@ -5289,6 +5289,34 @@ class MultiAccountBrokerManager:
             ``connect()`` call is skipped and the existing connected state is
             returned immediately (idempotency guard — Step 2).
             """
+            # Defensive hard-stop for Coinbase in case any future path calls
+            # this helper despite startup gating declaring Coinbase disabled.
+            if broker_type == BrokerType.COINBASE:
+                _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                )
+                _enable_coinbase_raw = os.environ.get("ENABLE_COINBASE", "").strip().lower()
+                _enable_coinbase_flag = (
+                    _enable_coinbase_raw not in ("0", "false", "no", "off")
+                    if _enable_coinbase_raw
+                    else True
+                )
+                _enable_coinbase_trading = os.environ.get(
+                    "ENABLE_COINBASE_TRADING",
+                    "true",
+                ).strip().lower() not in ("0", "false", "no", "off")
+                if _disable_coinbase or (not _enable_coinbase_flag) or (not _enable_coinbase_trading):
+                    logger.warning(
+                        "⏭️  Defensive skip: refusing Coinbase connect in _connect_and_register "
+                        "(NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s)",
+                        _disable_coinbase,
+                        _enable_coinbase_flag,
+                        _enable_coinbase_trading,
+                    )
+                    return False
+
             # Idempotency: skip connect() if the lifecycle already ran.
             with _PLATFORM_BROKER_REGISTRY_LOCK:
                 already_connected = _PLATFORM_BROKER_CONNECTED.get(key, False)
