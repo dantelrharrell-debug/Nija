@@ -184,7 +184,7 @@ _REDIS_LEASE_ACQUIRE_POLL_S = max(
     0.1, float(os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_POLL_S", "0.5"))
 )
 _REDIS_LEASE_WAIT_LOG_INTERVAL_S = max(
-    0.5, float(os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "10"))
+    0.5, float(os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "30"))
 )
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
@@ -409,7 +409,23 @@ class _PerKeyRedisBackend:
         self._lease_ttl_ms = lease_ttl_ms
         self._strict_lease = strict_lease
         self._lease_by_key: Dict[str, _PerKeyRedisBackend._LeaseState] = {}
+        self._wait_log_next_at: Dict[str, float] = {}
+        self._wait_log_lock = threading.Lock()
         _logger.info("DistributedNonceManager: Redis backend connected")
+
+    def _should_emit_wait_log(self, key_id: str, now_monotonic: float, *, force: bool = False) -> bool:
+        """Return True when the next wait log for *key_id* should be emitted."""
+        with self._wait_log_lock:
+            next_allowed = self._wait_log_next_at.get(key_id, 0.0)
+            if not force and now_monotonic < next_allowed:
+                return False
+            self._wait_log_next_at[key_id] = now_monotonic + _REDIS_LEASE_WAIT_LOG_INTERVAL_S
+            return True
+
+    def _clear_wait_log_gate(self, key_id: str) -> None:
+        """Clear per-key wait-log gate after successful lease acquisition."""
+        with self._wait_log_lock:
+            self._wait_log_next_at.pop(key_id, None)
 
     def next_nonce(self, key_id: str) -> int:
         """Atomically return the next nonce for *key_id* (>= now_ms, strictly increasing)."""
@@ -487,16 +503,16 @@ class _PerKeyRedisBackend:
                 )
                 deadline = time.monotonic() + wait_budget_s
                 wait_started_at = time.monotonic()
-                next_wait_log_at = wait_started_at
-                _logger.warning(
-                    "DistributedNonceManager: Redis writer lease busy at startup "
-                    "(key=%s owner=%s lease_version=%d initial_holder_ttl_ms=%d wait_budget=%.1fs)",
-                    key_id,
-                    current_owner,
-                    lease_version,
-                    initial_holder_ttl_ms,
-                    wait_budget_s,
-                )
+                if self._should_emit_wait_log(key_id, wait_started_at, force=True):
+                    _logger.warning(
+                        "DistributedNonceManager: Redis writer lease busy at startup "
+                        "(key=%s owner=%s lease_version=%d initial_holder_ttl_ms=%d wait_budget=%.1fs)",
+                        key_id,
+                        current_owner,
+                        lease_version,
+                        initial_holder_ttl_ms,
+                        wait_budget_s,
+                    )
                 while time.monotonic() < deadline and not granted:
                     now = time.monotonic()
                     remaining = deadline - now
@@ -505,8 +521,9 @@ class _PerKeyRedisBackend:
                         holder_ttl_ms = int(self._client.pttl(owner_key))  # type: ignore[attr-defined]
                     except Exception:
                         pass
-                    if now >= next_wait_log_at or remaining <= (_REDIS_LEASE_ACQUIRE_POLL_S + 0.05):
-                        _logger.warning(
+                    force_terminal_log = remaining <= (_REDIS_LEASE_ACQUIRE_POLL_S + 0.05)
+                    if self._should_emit_wait_log(key_id, now, force=force_terminal_log):
+                        _logger.info(
                             "DistributedNonceManager: waiting for Redis writer lease "
                             "(key=%s owner=%s lease_version=%d holder_ttl_ms=%d remaining=%.1fs wait_budget=%.1fs)",
                             key_id,
@@ -516,11 +533,11 @@ class _PerKeyRedisBackend:
                             remaining,
                             wait_budget_s,
                         )
-                        next_wait_log_at = now + _REDIS_LEASE_WAIT_LOG_INTERVAL_S
                     time.sleep(min(_REDIS_LEASE_ACQUIRE_POLL_S, max(0.05, remaining)))
                     granted, lease_version, current_owner = _run_lease_script()
 
                 if granted:
+                    self._clear_wait_log_gate(key_id)
                     _logger.info(
                         "DistributedNonceManager: Redis writer lease became available "
                         "(key=%s lease_version=%d waited=%.1fs)",
