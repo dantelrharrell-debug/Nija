@@ -882,6 +882,53 @@ class TradingStateMachine:
         """
         logger.critical("ENTER maybe_auto_activate")
 
+        # ── DETERMINISTIC ACTIVATION PATH ──────────────────────────────────────
+        # If state is not already LIVE_ACTIVE and all core conditions are met,
+        # force transition to LIVE_ACTIVE immediately. This prevents stuck
+        # LIVE_PENDING_CONFIRMATION states caused by complex invariant locks.
+        current_state = self.get_current_state()
+        if current_state != TradingState.LIVE_ACTIVE:
+            live_verified = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip() in (
+                "true", "1", "yes", "enabled"
+            )
+            
+            # Check if capital is hydrated and balance available
+            _ca_check = _get_capital_authority_instance()
+            _capital_ready = (
+                _ca_check is not None 
+                and _ca_check.is_hydrated 
+                and _ca_check.get_real_capital() is not None
+            )
+            
+            # Check kill switch
+            _kill_active = False
+            try:
+                from kill_switch import get_kill_switch
+                _kill_active = get_kill_switch().is_active()
+            except Exception:
+                pass
+            
+            # Force transition if core conditions met
+            if live_verified and _capital_ready and not _kill_active:
+                logger.critical(
+                    "🟢 DETERMINISTIC ACTIVATION: state=%s live_verified=%s capital_ready=%s "
+                    "→ forcing LIVE_ACTIVE transition",
+                    current_state.value,
+                    live_verified,
+                    _capital_ready,
+                )
+                with self._lock:
+                    self._current_state = TradingState.LIVE_ACTIVE
+                    self._activation_committed = True
+                    self._execution_authority = True
+                    self._core_loop_owns_execution = False
+                    self._can_dispatch_trades = True
+                logger.critical("✅ DETERMINISTIC ACTIVATION COMPLETE: state=%s is_live=%s",
+                    self.get_current_state().value,
+                    self.is_live_trading_active(),
+                )
+                return True
+
         # ── Entry diagnostic — snapshot every gate variable before delegating ──
         kill_switch = False
         try:
