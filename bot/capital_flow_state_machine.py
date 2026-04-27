@@ -77,6 +77,32 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("nija.capital_flow_sm")
 
+try:
+    _SNAPSHOT_TRACE_LOG_INTERVAL_S = max(
+        30.0, float(os.getenv("NIJA_SNAPSHOT_TRACE_LOG_INTERVAL_S", "300"))
+    )
+except (TypeError, ValueError):
+    _SNAPSHOT_TRACE_LOG_INTERVAL_S = 300.0
+_SNAPSHOT_TRACE_NEXT_AT = 0.0
+_SNAPSHOT_TRACE_LOCK = threading.Lock()
+
+
+def _log_snapshot_trace_throttled(balances: Dict[str, float], valid_brokers: int, source: str) -> None:
+    """Emit snapshot trace at most once per configured interval."""
+    global _SNAPSHOT_TRACE_NEXT_AT
+    now = time.time()
+    with _SNAPSHOT_TRACE_LOCK:
+        if now < _SNAPSHOT_TRACE_NEXT_AT:
+            return
+        _SNAPSHOT_TRACE_NEXT_AT = now + _SNAPSHOT_TRACE_LOG_INTERVAL_S
+
+    logger.critical(
+        "SNAPSHOT TRACE | balances=%s | valid_brokers=%d | source=%s",
+        balances,
+        valid_brokers,
+        source,
+    )
+
 # Keep both import paths bound to the same module object.
 # This avoids duplicate process-wide singletons when callers mix
 # `bot.capital_flow_state_machine` and `capital_flow_state_machine`.
@@ -1175,11 +1201,7 @@ class CapitalRefreshCoordinator:
             is_stale=not is_fresh,
         )
 
-        logger.critical(
-            "SNAPSHOT TRACE | "
-            "balances=%s | "
-            "valid_brokers=%d | "
-            "source=%s",
+        _log_snapshot_trace_throttled(
             snapshot.broker_balances,
             snapshot.broker_count,
             "live_exchange" if snapshot.broker_count > 0 else "placeholder",
@@ -1655,7 +1677,7 @@ class BrokerPayloadFSM:
             attempt = self._probe_attempts
 
         # ── Balance fetch (outside the lock so the system stays responsive) ──
-        self._log.info(
+        self._log.debug(
             "[BrokerPayloadFSM] broker=%s probing balance (attempt %d/%d)",
             self.broker_id,
             attempt,
@@ -1697,7 +1719,7 @@ class BrokerPayloadFSM:
                 return False
             # Retries remain — return to REGISTERED so the next call can probe.
             self._transition(BrokerPayloadState.REGISTERED)
-            self._log.info(
+            self._log.debug(
                 "[BrokerPayloadFSM] broker=%s probe %d/%d failed — "
                 "will retry on next bootstrap iteration",
                 self.broker_id,

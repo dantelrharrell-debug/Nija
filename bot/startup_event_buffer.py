@@ -49,6 +49,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from typing import Any, Dict, List, Optional
 
 
@@ -88,6 +89,18 @@ class StartupEventBuffer:
         self._shim: Optional[_BufferingHandler] = None
         self._installed_on: Optional[logging.Logger] = None
         self._phase_count = 0
+        self._max_lines_per_flush = 0
+        self._startup_started_at = time.time()
+
+    def configure(self, *, max_lines_per_flush: int = 0) -> None:
+        """Configure phase flush granularity.
+
+        Args:
+            max_lines_per_flush: Maximum buffered records to emit per burst.
+                ``0`` means emit all records in one burst (default behavior).
+        """
+        with self._lock:
+            self._max_lines_per_flush = max(0, int(max_lines_per_flush))
 
     # ------------------------------------------------------------------
     # Install / uninstall
@@ -149,27 +162,45 @@ class StartupEventBuffer:
         if not records:
             return
 
-        self._phase_count += 1
-        sep_msg = (
-            f"{'─' * 16} phase:{phase_name} "
-            f"({len(records)} lines) {'─' * 16}"
-        )
-        sep_record = logging.LogRecord(
-            name="nija.startup",
-            level=logging.INFO,
-            pathname="",
-            lineno=0,
-            msg=sep_msg,
-            args=(),
-            exc_info=None,
-        )
-        # Timestamp the separator at the moment of the first buffered record
-        sep_record.created = records[0].created
-        sep_record.msecs = records[0].msecs
+        # Snapshot current chunk size so flush semantics are stable for this phase.
+        with self._lock:
+            chunk_size = self._max_lines_per_flush
 
-        self._real.emit(sep_record)
-        for record in records:
-            self._real.emit(record)
+        if chunk_size <= 0:
+            chunks = [records]
+        else:
+            chunks = [records[i:i + chunk_size] for i in range(0, len(records), chunk_size)]
+
+        for idx, chunk in enumerate(chunks, start=1):
+            self._phase_count += 1
+            elapsed_s = max(0.0, float(chunk[0].created) - self._startup_started_at)
+            if len(chunks) == 1:
+                sep_msg = (
+                    f"{'─' * 16} phase:{phase_name} "
+                    f"t+{elapsed_s:.1f}s ({len(chunk)} lines) {'─' * 16}"
+                )
+            else:
+                sep_msg = (
+                    f"{'─' * 12} phase:{phase_name} chunk:{idx}/{len(chunks)} "
+                    f"t+{elapsed_s:.1f}s ({len(chunk)} lines) {'─' * 12}"
+                )
+
+            sep_record = logging.LogRecord(
+                name="nija.startup",
+                level=logging.INFO,
+                pathname="",
+                lineno=0,
+                msg=sep_msg,
+                args=(),
+                exc_info=None,
+            )
+            # Timestamp separator to the first record in the chunk.
+            sep_record.created = chunk[0].created
+            sep_record.msecs = chunk[0].msecs
+
+            self._real.emit(sep_record)
+            for record in chunk:
+                self._real.emit(record)
 
     def buffered_count(self) -> int:
         """Return the number of records currently waiting in the buffer."""

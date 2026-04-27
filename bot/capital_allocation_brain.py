@@ -25,6 +25,7 @@ Date: January 30, 2026
 """
 
 import logging
+import os
 import threading
 import time
 import numpy as np
@@ -37,6 +38,32 @@ from collections import defaultdict
 import json
 
 logger = logging.getLogger("nija.capital_brain")
+
+try:
+    _SNAPSHOT_TRACE_LOG_INTERVAL_S = max(
+        30.0, float(os.getenv("NIJA_SNAPSHOT_TRACE_LOG_INTERVAL_S", "300"))
+    )
+except (TypeError, ValueError):
+    _SNAPSHOT_TRACE_LOG_INTERVAL_S = 300.0
+_SNAPSHOT_TRACE_NEXT_AT = 0.0
+_SNAPSHOT_TRACE_LOCK = threading.Lock()
+
+
+def _log_snapshot_trace_throttled(total_capital: Any, valid_brokers: int, source: str) -> None:
+    """Emit snapshot trace at most once per configured interval."""
+    global _SNAPSHOT_TRACE_NEXT_AT
+    now = time.time()
+    with _SNAPSHOT_TRACE_LOCK:
+        if now < _SNAPSHOT_TRACE_NEXT_AT:
+            return
+        _SNAPSHOT_TRACE_NEXT_AT = now + _SNAPSHOT_TRACE_LOG_INTERVAL_S
+
+    logger.critical(
+        "SNAPSHOT TRACE | balances=%s | valid_brokers=%d | source=%s",
+        total_capital,
+        valid_brokers,
+        source,
+    )
 
 # ---------------------------------------------------------------------------
 # Startup barrier helper — resolved at call-time to handle both direct
@@ -79,12 +106,7 @@ def _notify_state_machine_first_snap_accepted(snapshot: dict) -> None:
     # ── Condition 1: valid_brokers > 0 (balances present) ─────────────────
     _vb = _safe_int(snapshot.get("valid_brokers", 0), 0)
     _src = str(snapshot.get("snapshot_source", ""))
-    logger.critical(
-        "SNAPSHOT TRACE | balances=%s | valid_brokers=%d | source=%s",
-        snapshot.get("total_capital", 0.0),
-        _vb,
-        _src,
-    )
+    _log_snapshot_trace_throttled(snapshot.get("total_capital", 0.0), _vb, _src)
     if _vb <= 0:
         logger.warning(
             "[CAPITAL_BRAIN] _notify_state_machine_first_snap_accepted: "

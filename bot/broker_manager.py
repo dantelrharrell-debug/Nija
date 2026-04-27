@@ -1536,6 +1536,13 @@ class BaseBroker(ABC):
         self.exit_only_mode = False  # Default: not in exit-only mode (can be overridden by subclasses)
         self.mode = "ACTIVE"  # Broker deployment mode: "ACTIVE" = tradable, "PASSIVE" = track-only (balance below deployable threshold)
         self._has_balance_payload = False
+        try:
+            _hydration_interval = float(os.getenv("NIJA_ACCOUNT_HYDRATED_LOG_INTERVAL_S", "300"))
+        except (TypeError, ValueError):
+            _hydration_interval = 300.0
+        self._account_hydrated_log_interval_s = max(30.0, _hydration_interval)
+        self._account_hydrated_log_next_at = 0.0
+        self._account_hydrated_log_lock = threading.Lock()
 
         # ── Quarantine state (broker-instance level) ─────────────────────────
         # Set by clear_kraken_broker_quarantine() / _on_kraken_nonce_quarantine().
@@ -1593,6 +1600,16 @@ class BaseBroker(ABC):
     def has_balance_payload(self) -> bool:
         """Return whether this broker has observed a real balance payload this session."""
         return bool(self._has_balance_payload)
+
+    def _log_account_hydrated_gate(self) -> None:
+        """Emit hydration gate CRITICAL log at most once per configured interval."""
+        now = time.time()
+        with self._account_hydrated_log_lock:
+            if now < self._account_hydrated_log_next_at:
+                return
+            self._account_hydrated_log_next_at = now + self._account_hydrated_log_interval_s
+
+        logger.critical("ACCOUNT HYDRATED — STARTUP CAPITAL GATE CAN NOW ADVANCE")
     def has_balance_payload_for_capital(self) -> bool:
         """
         Return True when a usable balance payload exists for capital accounting.
@@ -3485,7 +3502,7 @@ class CoinbaseBroker(BaseBroker):
             # SUCCESS: Update last known balance and reset error count
             self._last_known_balance = result
             logger.info(f"ACCOUNT BALANCE HYDRATED: {result}")
-            logger.critical("ACCOUNT HYDRATED — STARTUP CAPITAL GATE CAN NOW ADVANCE")
+            self._log_account_hydrated_gate()
             self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
             self._balance_fetch_errors = 0
             self._is_available = True
@@ -8333,7 +8350,7 @@ class KrakenBroker(BaseBroker):
                         # Reduces startup time and prevents potential rate limiting issues
                         self._last_known_balance = total_funds
                         logger.info(f"ACCOUNT BALANCE HYDRATED: {total_funds}")
-                        logger.critical("ACCOUNT HYDRATED — STARTUP CAPITAL GATE CAN NOW ADVANCE")
+                        self._log_account_hydrated_gate()
                         self._balance_last_updated = time.time()
                         self.balance_cache["kraken"] = total_funds
 
@@ -9011,7 +9028,7 @@ class KrakenBroker(BaseBroker):
                 # 🚑 FIX 4: Store and return total_funds instead of just available
                 self._last_known_balance = total_funds
                 logger.info(f"ACCOUNT BALANCE HYDRATED: {total_funds}")
-                logger.critical("ACCOUNT HYDRATED — STARTUP CAPITAL GATE CAN NOW ADVANCE")
+                self._log_account_hydrated_gate()
                 logger.info(
                     "[DEBUG] setting _last_known_balance=%s for broker=%s",
                     total_funds,

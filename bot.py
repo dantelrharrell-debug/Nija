@@ -93,6 +93,30 @@ def _get_startup_last_error() -> str:
         return _startup_last_error
 
 
+def _format_startup_attempt_reason(attempt_index: int) -> str:
+    """Return a compact reason tag for startup attempt logging."""
+    if attempt_index <= 1:
+        return "fresh-start"
+
+    _last = (_get_startup_last_error() or "").replace("\n", " ").strip()
+    if not _last:
+        return "retry"
+    if len(_last) > 120:
+        _last = _last[:117] + "..."
+    return f"retry-after={_last}"
+
+
+def _format_startup_phase_tag() -> str:
+    """Return a compact startup phase tag from the bootstrap FSM state."""
+    try:
+        if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+            _state = _get_bootstrap_fsm().state
+            return f"phase={getattr(_state, 'value', str(_state))}"
+    except Exception:
+        pass
+    return "phase=unknown"
+
+
 def _reset_startup_events_for_fresh_attempt() -> None:
     """Clear module-level startup events before a non-fast-path bootstrap attempt.
 
@@ -1811,8 +1835,36 @@ if root.handlers:
 
 # Get nija logger
 logger = logging.getLogger("nija")
-logger.setLevel(logging.INFO)
 logger.propagate = False  # Prevent propagation to root logger
+
+
+def _resolve_log_profile() -> tuple[str, int]:
+    """Resolve runtime logging profile and effective nija logger level."""
+    profile_raw = os.getenv("NIJA_LOG_PROFILE", "normal").strip().lower()
+    profile = profile_raw if profile_raw in ("normal", "verbose") else "normal"
+
+    # Optional explicit level override (e.g. DEBUG/INFO/WARNING).
+    level_override = os.getenv("NIJA_LOG_LEVEL", "").strip().upper()
+    if level_override:
+        level = getattr(logging, level_override, None)
+        if isinstance(level, int):
+            return profile, level
+
+    if profile == "verbose":
+        return profile, logging.DEBUG
+    return profile, logging.INFO
+
+
+_log_profile, _nija_log_level = _resolve_log_profile()
+logger.setLevel(_nija_log_level)
+
+# Tune key noisy loggers by profile. Keep external SDK chatter limited in normal mode.
+if _log_profile == "verbose":
+    logging.getLogger("nija.capital_flow_sm").setLevel(logging.DEBUG)
+    logging.getLogger("nija.capital_brain").setLevel(logging.DEBUG)
+else:
+    logging.getLogger("nija.capital_flow_sm").setLevel(logging.INFO)
+    logging.getLogger("nija.capital_brain").setLevel(logging.INFO)
 
 # Single formatter with consistent timestamp format
 formatter = logging.Formatter(
@@ -1831,6 +1883,12 @@ if not logger.hasHandlers():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
+logger.info(
+    "🪵 Log profile active: profile=%s level=%s",
+    _log_profile,
+    logging.getLevelName(_nija_log_level),
+)
+
 # ── A. Startup Event Buffer ───────────────────────────────────────────────────
 # Intercepts the console handler during startup so all log records are batched
 # and flushed once per phase.  The file handler keeps writing immediately —
@@ -1844,6 +1902,23 @@ try:
             break
     if _startup_buffer is None:
         print("⚠️  Startup event buffer: no stdout handler found — buffer inactive")
+    else:
+        try:
+            _flush_chunk_env = os.getenv("NIJA_STARTUP_BUFFER_MAX_LINES", "").strip()
+            if _flush_chunk_env:
+                _flush_chunk_size = max(0, int(_flush_chunk_env))
+            elif _log_profile == "verbose":
+                _flush_chunk_size = 25
+            else:
+                _flush_chunk_size = 0
+            _startup_buffer.configure(max_lines_per_flush=_flush_chunk_size)
+            if _flush_chunk_size > 0:
+                logger.info(
+                    "🧵 Startup buffer chunking enabled: max_lines_per_flush=%d",
+                    _flush_chunk_size,
+                )
+        except Exception as _seb_cfg_err:
+            print(f"⚠️  Startup event buffer configuration failed (non-fatal): {_seb_cfg_err}")
 except Exception as _seb_err:
     print(f"⚠️  Startup event buffer unavailable (non-fatal): {_seb_err}")
 
@@ -2130,6 +2205,10 @@ def _is_truthy_env(var_name: str, default: str = "false") -> bool:
     return os.environ.get(var_name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
+_PRE_FLIGHT_PRINT_ONCE_LOCK = threading.Lock()
+_PRE_FLIGHT_PRINTED = False
+
+
 def _run_preflight_check() -> bool:
     """
     Synchronous pre-flight check — runs directly in main(), before any
@@ -2189,8 +2268,14 @@ def _run_preflight_check() -> bool:
             # Only a blocker when Kraken creds are configured and SDK is absent
             blockers.append(f"Kraken SDK unavailable — {detail}")
 
-    # ── 3. Coinbase (only checked when not explicitly disabled) ──────────────
+    # ── 3. Coinbase (optional unless explicitly primary) ────────────────────
     coinbase_disabled = _is_truthy_env("NIJA_DISABLE_COINBASE")
+    coinbase_enabled_for_trading = os.environ.get("ENABLE_COINBASE_TRADING", "true").strip().lower() not in (
+        "0", "false", "no", "off"
+    )
+    primary_execution_venue = os.environ.get("PRIMARY_EXECUTION_VENUE", "").strip().lower()
+    coinbase_required = (not coinbase_disabled) and coinbase_enabled_for_trading and primary_execution_venue == "coinbase"
+
     if coinbase_disabled:
         checks.append(("Coinbase SDK", True, "disabled via NIJA_DISABLE_COINBASE — skipped"))
     else:
@@ -2209,12 +2294,14 @@ def _run_preflight_check() -> bool:
             checks.append(("Coinbase SDK + credentials", True, "SDK present, key and secret present"))
         elif not cb_sdk_ok:
             detail = "coinbase-advanced-py not installed  →  pip install coinbase-advanced-py  OR set NIJA_DISABLE_COINBASE=true"
-            checks.append(("Coinbase SDK + credentials", False, detail))
-            blockers.append(f"Coinbase SDK missing — {detail}")
+            checks.append(("Coinbase SDK + credentials", not coinbase_required, detail))
+            if coinbase_required:
+                blockers.append(f"Coinbase SDK missing — {detail}")
         else:
             detail = "SDK present but credentials missing (COINBASE_API_KEY / COINBASE_API_SECRET)"
-            checks.append(("Coinbase SDK + credentials", False, detail))
-            blockers.append(f"Coinbase credentials missing — {detail}")
+            checks.append(("Coinbase SDK + credentials", not coinbase_required, detail))
+            if coinbase_required:
+                blockers.append(f"Coinbase credentials missing — {detail}")
 
     # ── 4. LIVE_CAPITAL_VERIFIED flag (advisory — not a hard blocker) ────────
     live_capital = _is_truthy_env("LIVE_CAPITAL_VERIFIED")
@@ -2238,32 +2325,47 @@ def _run_preflight_check() -> bool:
         checks.append(("Data directory writable", False, detail))
         blockers.append(f"Data directory not writable — {detail}")
 
-    # ── Print results ────────────────────────────────────────────────────────
-    print("", flush=True)
-    print(SEP, flush=True)
-    print("  🔍  NIJA PRE-FLIGHT CHECK", flush=True)
-    print(SEP, flush=True)
-    for label, passed, detail in checks:
-        icon = "  ✅" if passed else "  ❌"
-        print(f"{icon}  {label}", flush=True)
-        if detail:
-            print(f"       {detail}", flush=True)
-    print(SEP, flush=True)
+    # ── Print results (once per process) ─────────────────────────────────────
+    global _PRE_FLIGHT_PRINTED
+    with _PRE_FLIGHT_PRINT_ONCE_LOCK:
+        emit_full_report = not _PRE_FLIGHT_PRINTED
+        if emit_full_report:
+            _PRE_FLIGHT_PRINTED = True
 
-    if blockers:
-        print("", flush=True)
-        print("  🚫  TRADING CANNOT START — fix the following:", flush=True)
-        for i, reason in enumerate(blockers, 1):
-            print(f"       {i}. {reason}", flush=True)
+    if emit_full_report:
         print("", flush=True)
         print(SEP, flush=True)
-        print("", flush=True)
-        return False
+        print("  🔍  NIJA PRE-FLIGHT CHECK", flush=True)
+        print(SEP, flush=True)
+        for label, passed, detail in checks:
+            icon = "  ✅" if passed else "  ❌"
+            print(f"{icon}  {label}", flush=True)
+            if detail:
+                print(f"       {detail}", flush=True)
+        print(SEP, flush=True)
 
-    print("", flush=True)
-    print("  🚀  ALL CHECKS PASSED — proceeding to start trading", flush=True)
-    print(SEP, flush=True)
-    print("", flush=True)
+        if blockers:
+            print("", flush=True)
+            print("  🚫  TRADING CANNOT START — fix the following:", flush=True)
+            for i, reason in enumerate(blockers, 1):
+                print(f"       {i}. {reason}", flush=True)
+            print("", flush=True)
+            print(SEP, flush=True)
+            print("", flush=True)
+            return False
+
+        print("", flush=True)
+        print("  🚀  ALL CHECKS PASSED — proceeding to start trading", flush=True)
+        print(SEP, flush=True)
+        print("", flush=True)
+        return True
+
+    # Re-checks still execute, but avoid replaying the full pre-flight banner.
+    if blockers:
+        print("🚫 NIJA pre-flight re-check failed — see blocker details below.", flush=True)
+        for i, reason in enumerate(blockers, 1):
+            print(f"   {i}. {reason}", flush=True)
+        return False
     return True
 
 
@@ -2738,6 +2840,13 @@ def _run_bot_startup_and_trading_with_retry():
 
         logger.critical("🚧 BOOTSTRAP START")
         while True:
+            _next_attempt = attempt + 1
+            logger.info(
+                "🔁 [Startup] Bootstrap attempt #%d (%s, %s)",
+                _next_attempt,
+                _format_startup_attempt_reason(_next_attempt),
+                _format_startup_phase_tag(),
+            )
             try:
                 _state_snap = _read_initialized_state_snapshot(context="fresh-attempt event reset")
                 _init_done = (

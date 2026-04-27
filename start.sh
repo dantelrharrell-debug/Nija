@@ -70,40 +70,7 @@ if [ -f "$_PID_FILE" ]; then
         rm -f "$_PID_FILE"
     fi
 fi
-# ─────────────────────────────────────────────────────────────────────────────
-# ── Single-instance guard ────────────────────────────────────────────────────
-# Find and kill any pre-existing NIJA bot.py processes so that only ONE
-# instance ever runs.  This mirrors the manual steps:
-#   ps aux | grep bot.py
-#   kill -9 <PID>
-# Set SKIP_KILL_EXISTING=true to bypass (e.g. during automated test harnesses).
-if [ "${SKIP_KILL_EXISTING:-false}" != "true" ]; then
-    _SELF_PID=$$
-    # Collect PIDs matching "bot.py" that are NOT this shell.
-    _DUP_PIDS=$(pgrep -f "python[0-9.]*.*bot\.py" 2>/dev/null | grep -v "^${_SELF_PID}$" || true)
-    if [ -n "$_DUP_PIDS" ]; then
-        echo ""
-        echo "⚠️  Duplicate NIJA process(es) detected — killing before start:"
-        for _pid in $_DUP_PIDS; do
-            echo "   Killing PID $_pid …"
-            kill -9 "$_pid" 2>/dev/null || true
-        done
-        # Brief pause to let the OS clean up the killed processes.
-        sleep 1
-        echo "✅ Duplicate instance(s) removed."
-        echo ""
-    fi
-    # Remove a stale PID file so the new instance can acquire the lock cleanly.
-    _PID_FILE="data/nija.pid"
-    if [ -f "$_PID_FILE" ]; then
-        _OLD_PID=$(head -n 1 "$_PID_FILE" 2>/dev/null || echo "")
-        if [ -n "$_OLD_PID" ] && ! kill -0 "$_OLD_PID" 2>/dev/null; then
-            echo "🗑️  Removing stale PID file (PID $_OLD_PID no longer running)."
-            rm -f "$_PID_FILE"
-        fi
-    fi
-fi
-# ────────────────────────────────────────────────────────────────────────────
+
 
 # Parse command line arguments
 WAIT_FOR_CONFIG="${WAIT_FOR_CONFIG:-false}"  # Default from environment
@@ -167,6 +134,14 @@ if [ "${_LIVE_MODE}" = "true" ]; then
     echo "💵 Coinbase low-cash alert interval: ${_COINBASE_CASH_LOW_LOG_INTERVAL_S} s"
     echo ""
 fi
+    echo "🪵 Log profile: ${NIJA_LOG_PROFILE:-normal}"
+    if [ -n "${NIJA_LOG_LEVEL:-}" ]; then
+        echo "   Log level override: ${NIJA_LOG_LEVEL}"
+    fi
+    if [ -n "${NIJA_STARTUP_BUFFER_MAX_LINES:-}" ]; then
+        echo "   Startup buffer max lines per flush override: ${NIJA_STARTUP_BUFFER_MAX_LINES}"
+    fi
+    echo ""
 
 # Helper function to exit gracefully for configuration errors
 exit_config_error() {

@@ -1820,7 +1820,7 @@ class MultiAccountBrokerManager:
                             payload_fsm.mark_payload_ready()
 
                     if payload_fsm.is_exhausted:
-                        logger.warning(
+                        logger.info(
                             "[CapitalAuthorityRefresh] trigger=%s skip broker=%s "
                             "reason=payload_fsm_exhausted (probe_attempts=%d/%d)",
                             trigger,
@@ -1842,7 +1842,7 @@ class MultiAccountBrokerManager:
                             # CapitalAuthority.refresh) only runs for brokers that are
                             # already in broker_map.  probe_and_advance() calls
                             # get_account_balance() directly, resolving the deadlock.
-                            logger.info(
+                            logger.debug(
                                 "[CapitalAuthorityRefresh] trigger=%s broker=%s "
                                 "FSM=%s — probing balance to seed payload",
                                 trigger,
@@ -1852,7 +1852,7 @@ class MultiAccountBrokerManager:
                             payload_fsm.probe_and_advance(broker)
 
                     if not payload_fsm.is_payload_ready:
-                        logger.info(
+                        logger.debug(
                             "[CapitalAuthorityRefresh] trigger=%s skip broker=%s "
                             "reason=payload_fsm_not_ready (state=%s attempts=%d/%d)",
                             trigger,
@@ -5457,8 +5457,16 @@ class MultiAccountBrokerManager:
                 results["coinbase"] = {"broker": None, "connected": False, "error": str(exc)}
 
         # ── OKX ──────────────────────────────────────────────────────────────
-        if os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes"):
+        _disable_okx = os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
+        _okx_key = os.environ.get("OKX_API_KEY", "").strip()
+        _okx_secret = os.environ.get("OKX_API_SECRET", "").strip()
+        _okx_passphrase = os.environ.get("OKX_PASSPHRASE", "").strip()
+        _okx_creds_configured = bool(_okx_key and _okx_secret and _okx_passphrase)
+
+        if _disable_okx:
             logger.info("⏭️  OKX PLATFORM skipped (NIJA_DISABLE_OKX=true)")
+        elif not _okx_creds_configured:
+            logger.info("⏭️  OKX PLATFORM skipped (credentials not configured)")
         else:
             logger.info("📊 Attempting to connect OKX (PLATFORM — NON-CRITICAL)…")
             try:
@@ -5472,7 +5480,16 @@ class MultiAccountBrokerManager:
         time.sleep(0.5)
 
         # ── Binance ───────────────────────────────────────────────────────────
-        if BinanceBroker is not None:
+        _disable_binance = os.environ.get("NIJA_DISABLE_BINANCE", "false").strip().lower() in ("1", "true", "yes")
+        _binance_key = os.environ.get("BINANCE_API_KEY", "").strip()
+        _binance_secret = os.environ.get("BINANCE_API_SECRET", "").strip()
+        _binance_creds_configured = bool(_binance_key and _binance_secret)
+
+        if _disable_binance:
+            logger.info("⏭️  Binance PLATFORM skipped (NIJA_DISABLE_BINANCE=true)")
+        elif not _binance_creds_configured:
+            logger.info("⏭️  Binance PLATFORM skipped (credentials not configured)")
+        elif BinanceBroker is not None:
             logger.info("📊 Attempting to connect Binance (PLATFORM)…")
             try:
                 broker = _guarded_create("binance", BinanceBroker)
@@ -5481,18 +5498,30 @@ class MultiAccountBrokerManager:
             except Exception as exc:
                 logger.warning("⚠️  Binance PLATFORM error: %s", exc)
                 results["binance"] = {"broker": None, "connected": False, "error": str(exc)}
+        else:
+            logger.info("⏭️  Binance PLATFORM skipped (broker class unavailable)")
 
         time.sleep(0.5)
 
         # ── Alpaca ────────────────────────────────────────────────────────────
-        logger.info("📊 Attempting to connect Alpaca (PLATFORM - Paper Trading)…")
-        try:
-            broker = _guarded_create("alpaca", AlpacaBroker)
-            connected = _connect_and_register(BrokerType.ALPACA, broker, "alpaca")
-            results["alpaca"] = {"broker": broker, "connected": connected}
-        except Exception as exc:
-            logger.warning("⚠️  Alpaca PLATFORM error: %s", exc)
-            results["alpaca"] = {"broker": None, "connected": False, "error": str(exc)}
+        _enable_alpaca = os.environ.get("ENABLE_ALPACA", "false").strip().lower() in ("1", "true", "yes", "on")
+        _alpaca_key = os.environ.get("ALPACA_API_KEY", "").strip()
+        _alpaca_secret = os.environ.get("ALPACA_API_SECRET", "").strip()
+        _alpaca_creds_configured = bool(_alpaca_key and _alpaca_secret)
+
+        if not _enable_alpaca:
+            logger.info("⏭️  Alpaca PLATFORM skipped (ENABLE_ALPACA=false)")
+        elif not _alpaca_creds_configured:
+            logger.info("⏭️  Alpaca PLATFORM skipped (credentials not configured)")
+        else:
+            logger.info("📊 Attempting to connect Alpaca (PLATFORM - Paper Trading)…")
+            try:
+                broker = _guarded_create("alpaca", AlpacaBroker)
+                connected = _connect_and_register(BrokerType.ALPACA, broker, "alpaca")
+                results["alpaca"] = {"broker": broker, "connected": connected}
+            except Exception as exc:
+                logger.warning("⚠️  Alpaca PLATFORM error: %s", exc)
+                results["alpaca"] = {"broker": None, "connected": False, "error": str(exc)}
 
         # Startup ordering invariant:
         # 1) brokers connect, 2) registration gate lifted, 3) balances fetched,
