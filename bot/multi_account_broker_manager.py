@@ -592,11 +592,43 @@ class MultiAccountBrokerManager:
                             _tsm_finalize.is_live_trading_active(),
                         )
                     else:
+                        _state_name = _tsm_finalize.get_current_state().value
                         logger.critical(
-                            "❌ POST-INIT ACTIVATION BLOCKED — will attempt enforce_activation fallback"
+                            "❌ POST-INIT ACTIVATION BLOCKED (state=%s) — retrying commit_activation gate",
+                            _state_name,
                         )
-                        # Try forced fallback as last resort
-                        self._enforce_trading_activation(_tsm_finalize)
+
+                        # Safe retry window: when bootstrap just completed, capital/health
+                        # gates may turn green a moment later in the same startup.
+                        _retry_attempts = max(1, int(os.getenv("NIJA_POST_INIT_ACTIVATION_RETRIES", "5")))
+                        _retry_sleep_s = max(
+                            0.2, float(os.getenv("NIJA_POST_INIT_ACTIVATION_RETRY_SLEEP_S", "1.0"))
+                        )
+                        _retry_activated = False
+                        for _attempt in range(1, _retry_attempts + 1):
+                            if _tsm_finalize.is_live_trading_active():
+                                _retry_activated = True
+                                break
+                            _retry_activated = bool(_tsm_finalize.maybe_auto_activate())
+                            if _retry_activated:
+                                logger.critical(
+                                    "🚀 POST-INIT ACTIVATION SUCCESS AFTER RETRY %d/%d: state=%s is_live=%s",
+                                    _attempt,
+                                    _retry_attempts,
+                                    _tsm_finalize.get_current_state().value,
+                                    _tsm_finalize.is_live_trading_active(),
+                                )
+                                break
+                            if _attempt < _retry_attempts:
+                                time.sleep(_retry_sleep_s)
+
+                        if not _retry_activated:
+                            logger.critical(
+                                "❌ POST-INIT ACTIVATION STILL BLOCKED AFTER %d RETRIES — attempting enforce_activation fallback",
+                                _retry_attempts,
+                            )
+                            # Last resort path (existing behavior)
+                            self._enforce_trading_activation(_tsm_finalize)
                 else:
                     logger.info("[MABM.initialize] Trading already active — no post-init activation needed")
             else:

@@ -2279,6 +2279,15 @@ class CoinbaseBroker(BaseBroker):
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
 
+        # Throttle repeated low-cash critical alerts so frequent balance polls do not spam logs.
+        try:
+            _cash_low_interval = float(os.getenv("NIJA_COINBASE_CASH_LOW_LOG_INTERVAL_S", "300"))
+        except (TypeError, ValueError):
+            _cash_low_interval = 300.0
+        self._coinbase_cash_low_log_interval_s = max(30.0, _cash_low_interval)
+        self._coinbase_cash_low_next_at = 0.0
+        self._coinbase_cash_low_lock = threading.Lock()
+
         # In-memory permanent cache for entry prices fetched from Coinbase fills.
         # Once fetched successfully the price is not re-fetched until the position
         # changes, eliminating redundant API calls.
@@ -2327,6 +2336,23 @@ class CoinbaseBroker(BaseBroker):
             logging.getLogger(_noisy).setLevel(logging.WARNING)
 
         logging.debug("✅ Coinbase SDK logging filter installed (SDK + urllib3 silenced to WARNING)")
+
+    def _log_coinbase_cash_low(self, available_cash: float, cash_label: str) -> None:
+        """Emit low-cash critical alert at most once per configured interval."""
+        if available_cash >= 50.0:
+            return
+
+        now = time.time()
+        with self._coinbase_cash_low_lock:
+            if now < self._coinbase_cash_low_next_at:
+                return
+            self._coinbase_cash_low_next_at = now + self._coinbase_cash_low_log_interval_s
+
+        logging.critical(
+            "=== COINBASE VENUE CASH LOW === %s %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
+            cash_label,
+            available_cash,
+        )
 
     def _is_cache_valid(self, cache_time) -> bool:
         """
@@ -3173,11 +3199,7 @@ class CoinbaseBroker(BaseBroker):
 
                 logging.critical(f"=== RAW BALANCES === {result}")
                 logging.critical(f"=== USD AVAILABLE === {usd_balance}")
-                if usd_balance < 50.0:
-                    logging.critical(
-                        "=== COINBASE VENUE CASH LOW === USD available %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
-                        usd_balance,
-                    )
+                self._log_coinbase_cash_low(usd_balance, "USD available")
 
                 # Cache the result
                 self._balance_cache = result
@@ -3372,11 +3394,7 @@ class CoinbaseBroker(BaseBroker):
 
             logging.critical(f"=== RAW BALANCES === {result}")
             logging.critical(f"=== USD AVAILABLE === {usd_balance}")
-            if usd_balance < 50.0:
-                logging.critical(
-                    "=== COINBASE VENUE CASH LOW === USD available %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
-                    usd_balance,
-                )
+            self._log_coinbase_cash_low(usd_balance, "USD available")
 
             # Cache the result
             self._balance_cache = result
@@ -3457,11 +3475,7 @@ class CoinbaseBroker(BaseBroker):
             trading_balance = float(balance_data.get('trading_balance', 0.0))
             total_held = float(balance_data.get('total_held', 0.0))
 
-            if trading_balance < 50.0:
-                logger.critical(
-                    "=== COINBASE VENUE CASH LOW === Available cash (USD+USDC) %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
-                    trading_balance,
-                )
+            self._log_coinbase_cash_low(trading_balance, "Available cash (USD+USDC)")
 
             if total_held > 0:
                 logger.debug(f"💎 Total Equity: ${result:.2f} (Available: ${trading_balance:.2f} + Locked: ${total_held:.2f})")

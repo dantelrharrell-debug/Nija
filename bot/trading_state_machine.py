@@ -247,8 +247,8 @@ class TradingStateMachine:
                 logger.critical(
                     "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_PENDING_CONFIRMATION (awaiting commit_activation gate)"
                 )
-                logger.critical(
-                    "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
+                logger.info(
+                    "ACTIVATION ARMED: current_state=%s is_live=%s (awaiting commit_activation)",
                     self._current_state.value,
                     self._current_state == TradingState.LIVE_ACTIVE,
                 )

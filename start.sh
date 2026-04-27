@@ -162,6 +162,12 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     echo ""
 fi
 
+if [ "${_LIVE_MODE}" = "true" ]; then
+    _COINBASE_CASH_LOW_LOG_INTERVAL_S="${NIJA_COINBASE_CASH_LOW_LOG_INTERVAL_S:-300}"
+    echo "💵 Coinbase low-cash alert interval: ${_COINBASE_CASH_LOW_LOG_INTERVAL_S} s"
+    echo ""
+fi
+
 # Helper function to exit gracefully for configuration errors
 exit_config_error() {
     echo ""
