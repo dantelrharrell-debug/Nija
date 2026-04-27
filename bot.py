@@ -62,10 +62,12 @@ if _is_truthy(os.environ.get("ALLOW_SMALL_ORDERS", "false")):
     except (TypeError, ValueError):
         _small_order_floor = 3.50
     _small_order_floor_str = f"{_small_order_floor:.2f}"
+    _min_cash_floor_str = f"{max(1.0, _small_order_floor - 0.5):.2f}"
 
     os.environ.setdefault("MIN_NOTIONAL_OVERRIDE", _small_order_floor_str)
     os.environ.setdefault("MIN_TRADE_USD", _small_order_floor_str)
     os.environ.setdefault("MIN_NOTIONAL_USD", _small_order_floor_str)
+    os.environ.setdefault("MIN_CASH_TO_BUY", _min_cash_floor_str)
     os.environ.setdefault("MINIMUM_TRADING_BALANCE", _small_order_floor_str)
     os.environ.setdefault("COINBASE_MIN_ORDER_USD", _small_order_floor_str)
     os.environ.setdefault("COINBASE_MIN_ORDER", _small_order_floor_str)

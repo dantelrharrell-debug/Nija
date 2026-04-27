@@ -136,6 +136,12 @@ if [ "${_LIVE_MODE}" = "true" ]; then
     echo "💵 Coinbase low-cash alert interval: ${_COINBASE_CASH_LOW_LOG_INTERVAL_S} s"
     echo ""
 fi
+
+# Keep buy-cash gate aligned with trade floor unless operator explicitly overrides.
+if [ -n "${MIN_TRADE_USD:-}" ] && [ -z "${MIN_CASH_TO_BUY:-}" ]; then
+    export MIN_CASH_TO_BUY="$(awk "BEGIN { v=${MIN_TRADE_USD}; c=v-0.5; if (c<1.0) c=1.0; printf \"%.2f\", c }")"
+fi
+
     echo "🪵 Log profile: ${NIJA_LOG_PROFILE:-normal}"
     if [ -n "${NIJA_LOG_LEVEL:-}" ]; then
         echo "   Log level override: ${NIJA_LOG_LEVEL}"
@@ -440,8 +446,9 @@ fi
 echo "   ────────────────────────────────────────────────────────"
 echo ""
 echo "🔧 Trading Guards:"
-echo "   MIN_CASH_TO_BUY=${MIN_CASH_TO_BUY:-5.0}"
-echo "   MINIMUM_TRADING_BALANCE=${MINIMUM_TRADING_BALANCE:-25.0}"
+echo "   MIN_TRADE_USD=${MIN_TRADE_USD:-3.50}"
+echo "   MIN_CASH_TO_BUY=${MIN_CASH_TO_BUY:-3.00}"
+echo "   MINIMUM_TRADING_BALANCE=${MINIMUM_TRADING_BALANCE:-1.00}"
 echo ""
 
 # ═══════════════════════════════════════════════════════════════════════
