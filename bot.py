@@ -299,6 +299,8 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     """Start trading loop from cached strategy when LIVE mode is already active."""
     if any(_t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()):
         logger.critical("TradingLoop already running - skipping duplicate start (%s)", reason)
+        _bootstrap_complete_flag.set()
+        _bootstrap_completed_event.set()
         return True
 
     _strategy = None
@@ -379,6 +381,9 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         _tl_ready.set()
         logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT (%s)", reason)
         _start_trading_engine(_strategy)
+        # Mark bootstrap handoff so supervisor treats startup-thread exit as expected.
+        _bootstrap_complete_flag.set()
+        _bootstrap_completed_event.set()
         return True
     except Exception as _start_loop_err:
         logger.error("Failed to start trading loop from initialized state (%s): %s", reason, _start_loop_err)
