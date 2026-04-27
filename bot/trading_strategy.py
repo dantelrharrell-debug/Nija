@@ -2038,7 +2038,10 @@ if _disabled_layers:
 # Single source of truth referenced by BROKER_MIN_BALANCE, MIN_POSITION_USD,
 # EXCHANGE_MIN_ORDER_SIZE, MIN_KRAKEN_BALANCE, and MIN_POSITION_SIZE below.
 # Defined early so it is available to the import-fallback block.
-GLOBAL_MIN_TRADE: float = 10.0
+try:
+    GLOBAL_MIN_TRADE: float = max(1.0, float(os.getenv("MIN_TRADE_USD", "10.0")))
+except (TypeError, ValueError):
+    GLOBAL_MIN_TRADE = 10.0
 # ============================================================================
 
 # Position adoption safety constants
@@ -2408,10 +2411,10 @@ EXCHANGE_MIN_ORDER_SIZE: float = GLOBAL_MIN_TRADE   # USD — absolute minimum f
 # counted as open (affects position-cap checks, first-trade gate, etc.).
 # Positions below this size are dust: they cannot cover exchange fees and must
 # not inflate the open-position counter or block new entries.
-MIN_TRADABLE_POSITION_USD: float = 5.00  # global floor — SMART FIX: only count positions > $5
+MIN_TRADABLE_POSITION_USD: float = max(1.0, GLOBAL_MIN_TRADE)  # Count open positions only when tradable
 TRADABLE_MIN_POSITION_BY_BROKER: dict = {
     # Exchange-specific floor for EXISTING positions (lower than new-order min).
-    'coinbase': 5.00,
+    'coinbase': max(1.0, float(os.getenv('COINBASE_MIN_ORDER_USD', str(GLOBAL_MIN_TRADE)))),
     'kraken':   5.00,
     'binance':  5.00,
     'okx':      5.00,
@@ -2866,8 +2869,8 @@ POSITION_SIZE_WARNING_THRESHOLD_USD = 10.0  # Warn when position is under this a
 # Values reflect actual exchange minimums; raise per-broker entries for stricter
 # fee-efficiency enforcement on well-funded accounts.
 BROKERAGE_MIN_TRADE_USD: dict = {
-    'coinbase': 5.0,    # Coinbase fee-efficiency floor ($5 minimum)
-    'kraken':   10.5,   # Kraken exchange minimum ($10.50 — enforced to keep trades eligible)
+    'coinbase': max(1.0, float(os.getenv('COINBASE_MIN_ORDER_USD', str(GLOBAL_MIN_TRADE)))),
+    'kraken':   max(10.5, float(os.getenv('KRAKEN_MIN_TRADE_USD', '10.5'))),
     'binance':  1.0,    # Binance actual minimum; was $10
     'okx':      1.0,    # OKX actual minimum; was $10
     'alpaca':   1.0,    # Alpaca minimum (stocks, lower fees)

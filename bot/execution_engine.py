@@ -1657,6 +1657,12 @@ class ExecutionEngine:
 
             # Log entry attempt
             logger.info(f"Executing {side} entry: {symbol} size=${position_size:.2f}")
+            logger.info(
+                "✅ SIGNAL GENERATED: symbol=%s side=%s requested_size=$%.2f",
+                symbol,
+                side,
+                position_size,
+            )
 
             # ── HARD MINIMUM ORDER FILTER ─────────────────────────────────────
             # Unconditional guard: rejects sub-minimum orders before any further
@@ -1666,8 +1672,8 @@ class ExecutionEngine:
             # backstop remains self-contained even if other modules fail to load.
             # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
             _HARD_MIN_BY_BROKER = {
-                'coinbase': 10.0,   # Coinbase operational floor (fee-positive at $10)
-                'kraken':   MIN_TRADE_USD,
+                'coinbase': max(1.0, MIN_TRADE_USD),
+                'kraken':   max(10.5, MIN_TRADE_USD),
                 'binance':  10.0,   # Binance MIN_NOTIONAL filter (USDT pairs)
                 'okx':      10.0,   # OKX operational floor
                 'alpaca':    1.0,   # Alpaca — commission-free, no practical minimum
@@ -1678,7 +1684,7 @@ class ExecutionEngine:
                 _hard_broker_key = (
                     _bt.value if hasattr(_bt, 'value') else str(_bt)
                 ).lower()
-            _hard_min = _HARD_MIN_BY_BROKER.get(_hard_broker_key, 10.0)
+            _hard_min = _HARD_MIN_BY_BROKER.get(_hard_broker_key, max(1.0, MIN_TRADE_USD))
 
             # Reserve a spendable cash buffer to avoid precision/fee insufficient-funds rejects.
             if self.broker_client and hasattr(self.broker_client, "get_account_balance"):
@@ -1721,6 +1727,14 @@ class ExecutionEngine:
                     f"{_hard_broker_key or 'broker'}"
                 )
                 return None
+
+            logger.info(
+                "✅ TRADE APPROVED: symbol=%s side=%s size=$%.2f broker=%s",
+                symbol,
+                side,
+                position_size,
+                (_hard_broker_key or 'unknown').upper(),
+            )
 
             # ✅ ENHANCEMENT #1: MINIMUM NOTIONAL GATE
             # Check if entry size meets minimum notional requirements
@@ -2166,6 +2180,13 @@ class ExecutionEngine:
                     logger.critical(
                         "✅ ORDER SENT SUCCESSFULLY: %s | side=%s | size=$%.2f | status=%s | order_id=%s",
                         symbol, side, position_size,
+                        _result_status_log,
+                        result.get('order_id') or result.get('id', 'N/A'),
+                    )
+                    logger.info(
+                        "✅ ORDER SUBMITTED: symbol=%s side=%s status=%s order_id=%s",
+                        symbol,
+                        side,
                         _result_status_log,
                         result.get('order_id') or result.get('id', 'N/A'),
                     )

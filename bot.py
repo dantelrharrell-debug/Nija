@@ -27,10 +27,55 @@ from bot.redis_env import get_redis_env_presence, get_redis_url, get_redis_url_s
 # nonce init) can log safely before the full logging pipeline is configured.
 logger = logging.getLogger("nija.bootstrap")
 
-# ── Operational override: disable HF scalping mode for now ─────────────────
-# Explicitly force HF flags off before any HF module is initialized.
-os.environ["HF_SCALP_MODE"] = "0"
-os.environ["HF_SCALPING_MODE"] = "0"
+# ── Runtime env normalization (operator-friendly aliases + safe defaults) ──
+_truthy_values = ("1", "true", "yes", "on", "enabled")
+
+
+def _is_truthy(value: str) -> bool:
+    return str(value or "").strip().lower() in _truthy_values
+
+
+# Backward-compatible alias:
+#   ENABLE_COINBASE=false  -> disable Coinbase execution/connect path
+if "ENABLE_COINBASE" in os.environ:
+    _enable_coinbase = _is_truthy(os.environ.get("ENABLE_COINBASE", ""))
+    if not _enable_coinbase:
+        os.environ.setdefault("ENABLE_COINBASE_TRADING", "false")
+        os.environ.setdefault("NIJA_DISABLE_COINBASE", "true")
+    else:
+        os.environ.setdefault("ENABLE_COINBASE_TRADING", "true")
+
+# Small-order mode bridge:
+#   ALLOW_SMALL_ORDERS=true + MIN_NOTIONAL_OVERRIDE=3.50
+# propagates floors used across sizing/execution modules.
+if "MIN_TRADE_USD" in os.environ and "ALLOW_SMALL_ORDERS" not in os.environ:
+    os.environ.setdefault("ALLOW_SMALL_ORDERS", "true")
+
+if _is_truthy(os.environ.get("ALLOW_SMALL_ORDERS", "false")):
+    _override_raw = (
+        os.environ.get("MIN_NOTIONAL_OVERRIDE")
+        or os.environ.get("MIN_TRADE_USD")
+        or "3.50"
+    )
+    try:
+        _small_order_floor = max(1.0, float(_override_raw))
+    except (TypeError, ValueError):
+        _small_order_floor = 3.50
+    _small_order_floor_str = f"{_small_order_floor:.2f}"
+
+    os.environ.setdefault("MIN_NOTIONAL_OVERRIDE", _small_order_floor_str)
+    os.environ.setdefault("MIN_TRADE_USD", _small_order_floor_str)
+    os.environ.setdefault("MIN_NOTIONAL_USD", _small_order_floor_str)
+    os.environ.setdefault("MINIMUM_TRADING_BALANCE", _small_order_floor_str)
+    os.environ.setdefault("COINBASE_MIN_ORDER_USD", _small_order_floor_str)
+    os.environ.setdefault("COINBASE_MIN_ORDER", _small_order_floor_str)
+    os.environ.setdefault("COINBASE_OPERATIONAL_MIN_NOTIONAL_USD", _small_order_floor_str)
+
+# Ensure at least one frequency driver is on unless explicitly configured off.
+# Operator env values always win.
+if "HF_SCALP_MODE" not in os.environ and "HF_FLIP_MODE" not in os.environ:
+    os.environ.setdefault("HF_SCALP_MODE", "1")
+os.environ.setdefault("HF_SCALPING_MODE", os.environ.get("HF_SCALP_MODE", "1"))
 
 # ── Operational profile: low-capital survival mode ($20-$50) ───────────────
 # Enabled by default for now; set NIJA_LOW_CAPITAL_SURVIVAL_MODE=0 to opt out.

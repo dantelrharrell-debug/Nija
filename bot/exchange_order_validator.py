@@ -69,6 +69,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -127,9 +128,39 @@ exchange_rules: Dict[str, Dict] = {
     "DEFAULT": {"step_size": 0.01,      "precision": 2,  "min_volume": 0.01,       "min_notional": 5.0},
 }
 
+
+def _resolve_default_min_notional_usd() -> float:
+    """Resolve runtime min-notional floor from operator env with safe fallback."""
+    candidate = (
+        os.getenv("MIN_NOTIONAL_OVERRIDE")
+        or os.getenv("MIN_TRADE_USD")
+        or os.getenv("MIN_NOTIONAL_USD")
+        or os.getenv("COINBASE_MIN_ORDER_USD")
+        or os.getenv("COINBASE_MIN_ORDER")
+        or "5.0"
+    )
+    try:
+        return max(1.0, float(candidate))
+    except (TypeError, ValueError):
+        return 5.0
+
+
+DEFAULT_MIN_NOTIONAL_USD: float = _resolve_default_min_notional_usd()
+
+# Apply one runtime floor to all symbol rules so validator behaviour stays
+# consistent with operator-configured small-order mode.
+for _symbol_rules in exchange_rules.values():
+    _symbol_rules["min_notional"] = DEFAULT_MIN_NOTIONAL_USD
+
 #: Hard floor for order *value* on Coinbase (USD).
 #: Orders whose notional (qty × price) is below this cannot be filled.
-COINBASE_MIN_NOTIONAL_USD: float = 1.00
+try:
+    COINBASE_MIN_NOTIONAL_USD: float = max(
+        1.0,
+        float(os.getenv("COINBASE_MIN_ORDER_USD", os.getenv("COINBASE_MIN_ORDER", "1.00"))),
+    )
+except (TypeError, ValueError):
+    COINBASE_MIN_NOTIONAL_USD = 1.0
 
 #: USD value below which a SELL position is considered permanently unsellable.
 #: Positions between PERMANENT_UNSELLABLE_USD and COINBASE_MIN_NOTIONAL_USD
@@ -271,7 +302,7 @@ def enforce_min_notional(symbol: str, volume: float, price: float) -> float:
     if price <= 0 or volume <= 0:
         return volume
     rules = _get_rules(symbol)
-    min_notional = rules.get("min_notional", 5.0)
+    min_notional = rules.get("min_notional", DEFAULT_MIN_NOTIONAL_USD)
     if volume * price < min_notional:
         return 0.0
     return volume
@@ -686,7 +717,7 @@ class ExchangeOrderValidator:
             adjustments.append("min_volume")
 
         # ── 2a. Permanently unsellable? ───────────────────────────────────
-        _min_notional_symbol = rules.get("min_notional", 5.0)
+        _min_notional_symbol = rules.get("min_notional", DEFAULT_MIN_NOTIONAL_USD)
         permanently_bad = (
             side_lower == "sell"
             and price > 0

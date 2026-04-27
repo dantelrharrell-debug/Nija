@@ -12,6 +12,7 @@ Created: February 8, 2026
 """
 
 import logging
+import os
 from typing import Tuple, Optional
 from dataclasses import dataclass
 
@@ -22,7 +23,7 @@ logger = logging.getLogger("nija.min_notional_gate")
 class NotionalGateConfig:
     """Configuration for minimum notional gate"""
     enabled: bool = True
-    min_entry_notional_usd: float = 15.0  # $15 minimum entry size (lowered from $50 to allow small accounts)
+    min_entry_notional_usd: float = 3.5
     allow_stop_loss_bypass: bool = True  # Allow stop losses to bypass the gate
     
     # Broker-specific minimum notional values.
@@ -33,14 +34,29 @@ class NotionalGateConfig:
 
     def __post_init__(self):
         """Initialize mutable defaults"""
+        try:
+            env_floor = max(
+                1.0,
+                float(
+                    os.getenv("MIN_NOTIONAL_OVERRIDE")
+                    or os.getenv("MIN_TRADE_USD")
+                    or os.getenv("MIN_NOTIONAL_USD")
+                    or str(self.min_entry_notional_usd)
+                ),
+            )
+        except (TypeError, ValueError):
+            env_floor = self.min_entry_notional_usd
+
+        self.min_entry_notional_usd = env_floor
+
         if self.broker_specific_limits is None:
             self.broker_specific_limits = {
-                'coinbase': 1.0,    # LOCAL: Coinbase exchange minimum ($1). A $5 NANO account
+                'coinbase': max(1.0, env_floor),
                                     # must not be blocked by a $15 global floor.
-                'kraken': 15.0,     # GLOBAL: $10 hard minimum + ~$5 fee/slippage buffer
+                'kraken': max(10.5, env_floor),
                 'binance': 10.0,    # $10 minimum
                 'okx': 10.0,        # $10 minimum
-                'alpaca': 5.0,      # $5 minimum
+                'alpaca': max(1.0, env_floor),
             }
     
     def get_min_notional_for_broker(self, broker_name: str, balance: float = 0.0) -> float:
