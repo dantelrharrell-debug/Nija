@@ -674,6 +674,16 @@ class TradingStateMachine:
         # ── Gate 0: idempotency — read under lock for thread-safety ──────
         with self._lock:
             if self._activation_committed:
+                if self._current_state == TradingState.LIVE_ACTIVE:
+                    # Keep runtime dispatch authority synchronized on idempotent retries.
+                    self._execution_authority = True
+                    self._core_loop_owns_execution = False
+                    self._can_dispatch_trades = True
+                else:
+                    logger.warning(
+                        "ACTIVATION_COMMITTED_STATE_MISMATCH state=%s — retaining committed flag",
+                        self._current_state.value,
+                    )
                 return True
             current = self._current_state
 
