@@ -356,7 +356,10 @@ def _supervisor_step_state_machine() -> None:
         if sm.get_activation_committed():
             return
 
-        if sm.get_current_state() != _TradingState.OFF:
+        if sm.get_current_state() not in (
+            _TradingState.OFF,
+            _TradingState.LIVE_PENDING_CONFIRMATION,
+        ):
             return
 
         _live_verified = os.getenv(
