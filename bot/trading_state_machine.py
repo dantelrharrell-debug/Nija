@@ -677,6 +677,20 @@ class TradingStateMachine:
                 return True
             current = self._current_state
 
+        logger.critical(
+            "ACTIVATION_GATE_SNAPSHOT state=%s committed=%s live_verified=%s dry_run=%s force=%s "
+            "heartbeat_required_first=%s heartbeat_ok=%s heartbeat_trade=%s first_snap=%s",
+            current.value,
+            self._activation_committed,
+            _lcv_quick,
+            _dry_run_quick,
+            _force,
+            _heartbeat_required_first,
+            _heartbeat_ok,
+            _heartbeat_trade,
+            self._first_snap_accepted,
+        )
+
         if current == TradingState.LIVE_ACTIVE:
             # State was set externally (e.g. manual transition); sync the flag.
             with self._lock:
@@ -847,6 +861,9 @@ class TradingStateMachine:
                 with self._lock:
                     self._current_state = TradingState.LIVE_ACTIVE
                     self._activation_committed = True
+                    self._execution_authority = True
+                    self._core_loop_owns_execution = False
+                    self._can_dispatch_trades = True
                 logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
                 logger.critical("LIVE_ACTIVE_CONFIRMED_CONVERGENCE_EDGE")
                 logger.critical(

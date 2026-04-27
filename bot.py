@@ -3323,7 +3323,7 @@ def _run_bot_startup_and_trading():
                             logger.critical("FORCING LIVE ACTIVATION FROM STARTUP THREAD")
                             _tsm_startup = _get_tsm_startup()
                             _current_state = _tsm_startup.get_current_state()
-                            if _current_state in (_TS_startup.OFF, _TS_startup.READY):
+                            if _current_state in (_TS_startup.OFF, _TS_startup.LIVE_PENDING_CONFIRMATION):
                                 _activated = _tsm_startup.transition_to(
                                     _TS_startup.LIVE_ACTIVE,
                                     "startup thread activation after capability verification",
