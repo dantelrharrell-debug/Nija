@@ -2893,9 +2893,21 @@ def _run_bot_startup_and_trading_with_retry():
         _MAX_BACKOFF_EXPONENT = 6   # caps delay at 5 * 2^6 = 320 → clamped to _MAX_DELAY
         _MAX_DELAY = 60             # seconds — keeps retries responsive
         _MAX_CONNECTION_ATTEMPTS = 3  # FIX 4: anti-loop kill switch
+        _truthy = {"1", "true", "yes", "on", "enabled"}
+        _fatal_nonce_restart_enabled = (
+            os.environ.get("NIJA_FATAL_NONCE_EXTERNAL_RESTART", "0").strip().lower() in _truthy
+        )
+        try:
+            _fatal_nonce_restart_threshold = max(
+                1,
+                int(os.environ.get("NIJA_FATAL_NONCE_RESTART_THRESHOLD", "3")),
+            )
+        except (TypeError, ValueError):
+            _fatal_nonce_restart_threshold = 3
 
         attempt = 0
         connection_attempts = 0
+        _fatal_nonce_error_streak = 0
 
         logger.critical("🚧 BOOTSTRAP START")
         while True:
@@ -2929,21 +2941,38 @@ def _run_bot_startup_and_trading_with_retry():
 
             except Exception as e:
                 if _is_fatal_nonce_restart_error(e):
+                    _fatal_nonce_error_streak += 1
                     logger.critical(
-                        "🚨 Fatal nonce authorization/desync error detected: %s",
+                        "🚨 Fatal nonce authorization/desync error detected: %s "
+                        "(streak=%d/%d, external_restart=%s)",
                         e,
+                        _fatal_nonce_error_streak,
+                        _fatal_nonce_restart_threshold,
+                        _fatal_nonce_restart_enabled,
                         exc_info=True,
                     )
-                    logger.critical(
-                        "🚨 Requesting clean process exit so external watchdog can restart service"
+                    if (
+                        _fatal_nonce_restart_enabled
+                        and _fatal_nonce_error_streak >= _fatal_nonce_restart_threshold
+                    ):
+                        logger.critical(
+                            "🚨 Requesting clean process exit so external watchdog can restart service"
+                        )
+                        # Bootstrap FSM: fatal nonce → EXTERNAL_RESTART_REQUIRED (I9)
+                        _bfsm_transition(
+                            _BootstrapState.EXTERNAL_RESTART_REQUIRED,
+                            f"fatal nonce error: {e}",
+                        )
+                        _request_external_watchdog_restart(str(e))
+                        raise
+
+                    logger.warning(
+                        "↩️ Fatal nonce error treated as retryable to avoid crash loops. "
+                        "Set NIJA_FATAL_NONCE_EXTERNAL_RESTART=1 to restore fail-fast restart behavior."
                     )
-                    # Bootstrap FSM: fatal nonce → EXTERNAL_RESTART_REQUIRED (I9)
-                    _bfsm_transition(
-                        _BootstrapState.EXTERNAL_RESTART_REQUIRED,
-                        f"fatal nonce error: {e}",
-                    )
-                    _request_external_watchdog_restart(str(e))
-                    raise
+                else:
+                    _fatal_nonce_error_streak = 0
+
                 attempt += 1
                 connection_attempts += 1  # FIX 4: track connection attempts
 

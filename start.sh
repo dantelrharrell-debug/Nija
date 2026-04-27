@@ -632,8 +632,12 @@ if [ -f bot.py ]; then
 fi
 
 # Start bot.py with full error output (LIVE)
+# `set -e` would terminate the script immediately on non-zero exit, so
+# temporarily disable it to capture and classify the bot exit status.
+set +e
 $PY -u bot.py 2>&1
 status=$?
+set -e
 
 # Treat SIGTERM (143) as graceful to avoid restart loops during platform stop/redeploy
 if [ "$status" -eq 0 ]; then
