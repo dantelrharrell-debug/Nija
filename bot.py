@@ -5534,7 +5534,8 @@ def main():
     #   execution_ready  — strategy.execution_engine is not None
     # ─────────────────────────────────────────────────────────────────────────
     logger.critical("🧭 BEFORE system_ready wait")
-    _wait_deadline = time.monotonic() + 180.0
+    _system_ready_timeout_s = float(os.getenv("SYSTEM_READY_TIMEOUT_SECONDS", "420"))
+    _wait_deadline = time.monotonic() + _system_ready_timeout_s
     strategy = None
     while True:
         _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
@@ -5550,22 +5551,20 @@ def main():
             break
 
         if time.monotonic() >= _wait_deadline:
-            # If capital and broker are ready, proceed in degraded mode rather than crashing.
-            # A crash here causes an infinite restart loop.
-            if capital_ready and broker_ready:
-                logger.critical(
-                    "⚠️ system_ready timeout — capital+broker ready; proceeding in degraded mode "
-                    "(risk_ready=%s strategy_ready=%s execution_ready=%s). "
-                    "Strategy will be None until trading thread initialises.",
-                    risk_ready, strategy_ready, execution_ready,
-                )
-                break
-            raise RuntimeError(
-                "❌ DEADLOCK: system_ready was never reached "
-                f"(broker_ready={broker_ready} risk_ready={risk_ready} "
-                f"strategy_ready={strategy_ready} capital_ready={capital_ready} "
-                f"execution_ready={execution_ready})"
+            # Never hard-crash here. Startup can legitimately exceed this timeout
+            # when Redis writer lease handoff is contended.
+            logger.critical(
+                "⚠️ system_ready timeout after %.0fs; entering degraded startup mode "
+                "(broker_ready=%s risk_ready=%s strategy_ready=%s capital_ready=%s execution_ready=%s)",
+                _system_ready_timeout_s,
+                broker_ready,
+                risk_ready,
+                strategy_ready,
+                capital_ready,
+                execution_ready,
             )
+            os.environ["DEGRADED_START"] = "1"
+            break
 
         logger.info(
             "⏳ Waiting for system_ready: broker_ready=%s risk_ready=%s strategy_ready=%s "
@@ -5575,24 +5574,27 @@ def main():
         time.sleep(1.0)
 
     # ── HARD GUARD: never enter trading loop without a valid strategy ─────────
-    # In degraded-mode (capital+broker ready but strategy not yet initialised),
-    # wait an additional grace period for the startup thread to finish.
+    # In degraded-mode, keep polling until strategy becomes available instead of
+    # crashing or permanently freezing startup.
     if strategy is None:
-        _grace_deadline = time.monotonic() + 60.0
-        logger.warning("⏳ [DEGRADED] Waiting additional 60s for strategy to initialise...")
-        while strategy is None and time.monotonic() < _grace_deadline:
+        logger.warning(
+            "⏳ [DEGRADED] strategy not yet initialized; waiting until startup thread publishes strategy"
+        )
+        _last_strategy_wait_log = 0.0
+        while strategy is None:
             _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait")
             strategy = _state_snapshot.get("strategy")
-            time.sleep(2.0)
+            if strategy is not None:
+                logger.critical("✅ [DEGRADED] strategy became available — continuing startup")
+                break
 
-    if strategy is None:
-        logger.critical(
-            "❌ SYSTEM_READY BARRIER: strategy still None after full grace period — "
-            "supervisor will remain alive for health checks but trading loop cannot start."
-        )
-        # Keep process alive (health server still running) rather than crash-looping
-        while True:
-            time.sleep(30.0)
+            _now = time.monotonic()
+            if _now - _last_strategy_wait_log >= 60.0:
+                logger.warning(
+                    "⏳ [DEGRADED] still waiting for strategy publication (process stays alive; health server remains ready)"
+                )
+                _last_strategy_wait_log = _now
+            time.sleep(2.0)
 
     from bot.nija_core_loop import start_trading_engine
     start_trading_engine(strategy)

@@ -2421,6 +2421,32 @@ class CoinbaseBroker(BaseBroker):
                 # This is intentionally broad to ensure all rate limiting and connection errors are caught
                 error_msg = str(e).lower()
 
+                # Guard against pathological recursion errors observed in requests/cookiejar.
+                # This can occur after malformed/inconsistent response headers in long-running sessions.
+                is_recursion_error = isinstance(e, RecursionError) or "maximum recursion depth exceeded" in error_msg
+                if is_recursion_error:
+                    logging.warning(
+                        "⚠️  API recursion error detected (attempt %s/%s): %s",
+                        attempt + 1,
+                        max_retries,
+                        e,
+                    )
+                    try:
+                        _session = getattr(getattr(self, "client", None), "session", None)
+                        if _session is not None and hasattr(_session, "cookies"):
+                            _session.cookies.clear()
+                            logging.warning("   Cleared Coinbase HTTP session cookies to recover from recursion state")
+                    except Exception as _session_reset_err:
+                        logging.debug("Session cookie reset failed (non-fatal): %s", _session_reset_err)
+
+                    if attempt >= max_retries - 1:
+                        raise
+
+                    delay = min(base_delay * (2 ** attempt), 10.0)
+                    logging.warning("   Waiting %.1fs before retry after recursion guard...", delay)
+                    time.sleep(delay)
+                    continue
+
                 # Check if this is a connection error (network issues, connection reset, etc.)
                 is_connection_error = (
                     'connection' in error_msg or
