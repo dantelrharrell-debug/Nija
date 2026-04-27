@@ -1430,11 +1430,11 @@ class SelfHealingStartup:
             self._step_state_machine()
 
     def _step_state_machine(self) -> None:
-        """Observer-only state check.
+        """Attempt activation if pre-conditions are met.
 
-        Activation is deterministic and event-driven by the bootstrap
-        RUNNING_SUPERVISED start signal. This method must not perform
-        fallback activation retries.
+        Previously observer-only; now calls commit_activation() so the startup
+        path can complete the OFF / LIVE_PENDING_CONFIRMATION → LIVE_ACTIVE
+        transition without waiting for the core loop supervisor.
         """
         logger.critical("STEP_STATE_MACHINE_ENTERED")
 
@@ -1443,10 +1443,35 @@ class SelfHealingStartup:
             raise RuntimeError("No TradingStateMachine available")
 
         logger.critical(
-            "STEP_STATE_MACHINE: observer-only (state=%s, activation_committed=%s)",
+            "STEP_STATE_MACHINE: state=%s activation_committed=%s",
             sm.get_current_state().value,
             sm.get_activation_committed(),
         )
+
+        if sm.get_activation_committed():
+            logger.critical("STEP_STATE_MACHINE: already committed — skipping")
+            return
+
+        if sm.get_current_state() not in (
+            TradingState.OFF,
+            TradingState.LIVE_PENDING_CONFIRMATION,
+        ):
+            logger.critical(
+                "STEP_STATE_MACHINE: state %s is not armable — skipping",
+                sm.get_current_state().value,
+            )
+            return
+
+        try:
+            result = sm.commit_activation()
+            logger.critical(
+                "STEP_STATE_MACHINE: commit_activation result=%s state=%s is_live=%s",
+                result,
+                sm.get_current_state().value,
+                sm.is_live_trading_active(),
+            )
+        except Exception as _exc:
+            logger.warning("STEP_STATE_MACHINE: commit_activation raised: %s", _exc)
 
     def _is_live_active(self) -> bool:
         """Return True if the trading state machine has reached LIVE_ACTIVE."""
