@@ -197,6 +197,7 @@ class HFScalpingMode:
 
     def __init__(self, config: Optional[HFScalpConfig] = None) -> None:
         self.config = config or HFScalpConfig()
+        self._apply_live_safety_floor()
         # Timestamps of recent trades for per-hour rate limiting
         self._trade_timestamps: Deque[float] = deque()
         self._last_trade_ts: float = 0.0
@@ -216,6 +217,56 @@ class HFScalpingMode:
             )
         else:
             logger.info("ℹ️  HF Scalping Mode INACTIVE (set HF_SCALP_MODE=1 to enable)")
+
+    def _apply_live_safety_floor(self) -> None:
+        """Clamp overly aggressive HF settings in live mode.
+
+        This protects production deployments where environment variables may
+        still carry legacy aggressive values. Operators can disable this clamp
+        explicitly via ``HF_SCALP_ENFORCE_SAFETY_FLOOR=false``.
+        """
+        if not self.config.enabled:
+            return
+
+        live_mode = _env_bool("LIVE_CAPITAL_VERIFIED", False) and not _env_bool("DRY_RUN_MODE", False)
+        enforce_floor = _env_bool("HF_SCALP_ENFORCE_SAFETY_FLOOR", True)
+        if not (live_mode and enforce_floor):
+            return
+
+        # Safer baseline for live production with small capital.
+        floors = {
+            "cycle_interval_seconds": 45,
+            "min_confidence": 0.45,
+            "kraken_min_confidence": 0.45,
+            "min_adx": 10,
+            "volume_threshold": 0.05,
+            "volume_min_threshold": 0.002,
+            "min_trend_confirmation": 3,
+            "min_entry_score": 3.0,
+            "profit_target_pct": 0.6,
+            "stop_loss_pct": 0.3,
+            "max_trades_per_hour": 12,
+            "trade_cooldown_seconds": 45.0,
+        }
+
+        # Lower cap for trade frequency, lower bound for all other fields.
+        clamped = []
+        if self.config.max_trades_per_hour > floors["max_trades_per_hour"]:
+            clamped.append(("max_trades_per_hour", self.config.max_trades_per_hour, floors["max_trades_per_hour"]))
+            self.config.max_trades_per_hour = floors["max_trades_per_hour"]
+
+        for key, floor in floors.items():
+            if key == "max_trades_per_hour":
+                continue
+            current = getattr(self.config, key)
+            if current < floor:
+                clamped.append((key, current, floor))
+                setattr(self.config, key, floor)
+
+        if clamped:
+            logger.warning("HF live safety floor enforced (%d adjustments)", len(clamped))
+            for key, old, new in clamped:
+                logger.warning("  • %s: %s -> %s", key, old, new)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 

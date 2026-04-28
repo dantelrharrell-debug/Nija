@@ -22,6 +22,14 @@ _PID_FILE="${_SCRIPT_DIR}/data/nija.pid"
 # Seconds to wait for a graceful shutdown before escalating to SIGKILL.
 _GRACE_PERIOD_SECONDS=10
 
+# Fail-fast singleton mode (default ON): if another NIJA process is active,
+# exit immediately instead of waiting/killing in-place.
+_FAIL_FAST_SINGLETON_RAW=$(printf "%s" "${NIJA_FAIL_FAST_SINGLETON:-true}" | tr '[:upper:]' '[:lower:]')
+_FAIL_FAST_SINGLETON=true
+if [ "${_FAIL_FAST_SINGLETON_RAW}" = "0" ] || [ "${_FAIL_FAST_SINGLETON_RAW}" = "false" ] || [ "${_FAIL_FAST_SINGLETON_RAW}" = "no" ] || [ "${_FAIL_FAST_SINGLETON_RAW}" = "off" ]; then
+    _FAIL_FAST_SINGLETON=false
+fi
+
 # Patterns that identify a running NIJA bot process in /proc/<pid>/cmdline.
 # These match the main entry-points of the bot so we never kill unrelated PIDs
 # that happen to share the same numeric PID after a container restart.
@@ -55,6 +63,10 @@ if [ -f "$_PID_FILE" ]; then
                 _CMDLINE=$(tr '\0' ' ' < "/proc/$_OLD_PID/cmdline" 2>/dev/null || echo "")
             fi
             if echo "$_CMDLINE" | grep -qE "$_NIJA_PROCESS_PATTERN"; then
+                if [ "${_FAIL_FAST_SINGLETON}" = "true" ]; then
+                    echo "❌ Another NIJA instance is active (PID $_OLD_PID) — exiting (fail-fast singleton mode)"
+                    exit 1
+                fi
                 _terminate_duplicate_bot "$_OLD_PID"
                 rm -f "$_PID_FILE"
             else
@@ -99,6 +111,29 @@ else
 fi
 echo ""
 
+# Optional platform replica guard (default expects singleton = 1).
+# When a known replica-count environment variable is available and exceeds
+# NIJA_EXPECTED_REPLICAS, fail fast to avoid overlapping trading instances.
+_EXPECTED_REPLICAS="${NIJA_EXPECTED_REPLICAS:-1}"
+_REPLICA_COUNT_RAW=""
+if [ -n "${RAILWAY_REPLICA_COUNT:-}" ]; then
+    _REPLICA_COUNT_RAW="${RAILWAY_REPLICA_COUNT}"
+elif [ -n "${REPLICA_COUNT:-}" ]; then
+    _REPLICA_COUNT_RAW="${REPLICA_COUNT}"
+fi
+
+if [ -n "${_REPLICA_COUNT_RAW}" ] && echo "${_REPLICA_COUNT_RAW}" | grep -qE '^[0-9]+$'; then
+    if [ "${_REPLICA_COUNT_RAW}" -gt "${_EXPECTED_REPLICAS}" ]; then
+        echo "❌ Replica guard violation: replica_count=${_REPLICA_COUNT_RAW} expected<=${_EXPECTED_REPLICAS}"
+        echo "   Enforce singleton deployment (Replicas=1, autoscaling off) before starting NIJA"
+        exit 1
+    fi
+    echo "✅ Replica guard: replica_count=${_REPLICA_COUNT_RAW} (expected<=${_EXPECTED_REPLICAS})"
+else
+    echo "ℹ️  Replica guard: replica count metadata unavailable; relying on singleton/lock guards"
+fi
+echo ""
+
 # Explain expected cold-start behavior when strict Redis writer lease is active.
 # This helps operators distinguish normal lease handoff waits from a hard failure.
 _LIVE_MODE=false
@@ -118,16 +153,21 @@ if [ "${_STRICT_LEASE_RAW}" = "0" ] || [ "${_STRICT_LEASE_RAW}" = "false" ] || [
 fi
 
 if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
-    _LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-120000}"
-    _LEASE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S:-90}"
-    _LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S:-30}"
+    # Fail-fast defaults for trading safety (override via env if needed).
+    export NIJA_REDIS_LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-30000}"
+    export NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S:-5}"
+    export NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S:-5}"
+
+    _LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS}"
+    _LEASE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}"
+    _LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}"
     _WRITER_HEARTBEAT_MAX_FAILURES="${NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES:-12}"
     echo "🔒 Strict Redis writer lease enabled (live mode)"
-    echo "   Overlapping deploys may wait for active writer lease handoff before Kraken connects"
+    echo "   Fail-fast singleton enabled: duplicate instances exit immediately"
     echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Acquire timeout: ${_LEASE_TIMEOUT_S} s"
     echo "   Lease wait log interval: ${_LEASE_WAIT_LOG_INTERVAL_S} s"
     echo "   Writer lock heartbeat max transient failures: ${_WRITER_HEARTBEAT_MAX_FAILURES}"
-    echo "   This wait is expected and prevents split-brain nonce issuance"
+    echo "   If lock is not acquired quickly, process exits to avoid overlap"
     echo ""
 fi
 
