@@ -328,6 +328,39 @@ class IndependentBrokerTrader:
         """
         return self.multi_account_manager.platform_brokers if self.multi_account_manager else self.broker_manager.brokers
 
+    def should_start_user_independent_thread(self, user_id: str) -> bool:
+        """Return True when a user should run an independent trading thread.
+
+        Behavior:
+        - If user config explicitly enables independent_trading, always True.
+        - If independent_trading is False but legacy copy engine is active,
+          keep using copy path and return False.
+        - If independent_trading is False and copy engine is unavailable/inactive,
+          auto-promote to independent execution so users are not silently stalled.
+        """
+        user_config = None
+        try:
+            if self.multi_account_manager is not None:
+                user_config = self.multi_account_manager.user_configs.get(user_id)
+        except Exception:
+            user_config = None
+
+        if user_config is None:
+            return True
+
+        if bool(getattr(user_config, "independent_trading", False)):
+            return True
+
+        copy_active = bool(self.copy_engine and getattr(self.copy_engine, "active", False))
+        if copy_active:
+            return False
+
+        logger.warning(
+            "AUTO-PROMOTE USER %s TO INDEPENDENT TRADING: independent_trading=false but copy trading is inactive",
+            user_id,
+        )
+        return True
+
     def _retry_coinbase_balance_if_zero(self, broker, broker_name: str) -> float:
         """
         Retry balance fetch for Coinbase if initial result is $0.
@@ -1414,16 +1447,11 @@ class IndependentBrokerTrader:
                 for broker_type, broker in user_brokers.items():
                     broker_name = f"{user_id}_{broker_type.value}"
 
-                    # Check if user has independent_trading enabled in their config
-                    user_config = self.multi_account_manager.user_configs.get(user_id)
-                    if user_config and user_config.independent_trading:
-                        # User has independent_trading enabled - start their thread
-                        pass  # Continue with thread startup below
-                    else:
-                        # User does not have independent_trading enabled - skip
-                        logger.info(f"⏭️  Skipping {broker_name} - independent_trading not enabled")
-                        logger.info(f"   ℹ️  {user_id} will only execute trades via copy trading or other mechanisms")
-                        logger.info(f"   ℹ️  To enable independent trading, set 'independent_trading': true in user config")
+                    # Respect user-mode policy, but auto-promote to independent
+                    # when copy trading is inactive to avoid user-trading stalls.
+                    if not self.should_start_user_independent_thread(user_id):
+                        logger.info(f"⏭️  Skipping {broker_name} - copy trading active and independent_trading not enabled")
+                        logger.info(f"   ℹ️  {user_id} will execute via copy trading")
                         continue
 
                     # Only start threads for funded user brokers
@@ -1771,11 +1799,11 @@ class IndependentBrokerTrader:
                     )
                     continue
 
-                # Check independent_trading flag
-                user_config = self.multi_account_manager.user_configs.get(user_id)
-                if user_config and not user_config.independent_trading:
+                # Respect user-mode policy, but auto-promote to independent
+                # when copy trading is inactive to avoid user-trading stalls.
+                if not self.should_start_user_independent_thread(user_id):
                     logger.debug(
-                        f"   ⏭️  USER {broker_name}: independent_trading not enabled – skipping"
+                        f"   ⏭️  USER {broker_name}: copy trading active and independent_trading not enabled – skipping"
                     )
                     continue
 

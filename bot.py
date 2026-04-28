@@ -4822,11 +4822,11 @@ def _run_bot_startup_and_trading():
                             continue
                         for _ubt, _ubr in _user_brokers.items():
                             _ubname = f"{_uid}_{_ubt.value}"
-                            # Respect per-user independent_trading flag
-                            _ucfg = strategy.multi_account_manager.user_configs.get(_uid)
-                            if not (_ucfg and _ucfg.independent_trading):
+                            # Respect user-mode policy from IndependentBrokerTrader.
+                            # This auto-promotes to independent when copy trading is inactive.
+                            if not strategy.independent_trader.should_start_user_independent_thread(_uid):
                                 logger.info(
-                                    "   ⏭️  %s — independent_trading not enabled", _ubname
+                                    "   ⏭️  %s — copy trading active and independent_trading not enabled", _ubname
                                 )
                                 continue
                             if _ubt.value not in _funded_users.get(_uid, {}):
