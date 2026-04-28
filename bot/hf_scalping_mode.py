@@ -91,18 +91,18 @@ class HFScalpConfig:
     Every field can be overridden at startup via a matching environment variable
     (shown in the comment next to each field).
 
-    Default values are chosen to guarantee trade flow while staying
-    risk-managed:
+    Default values are tuned for safer live operation when no explicit
+    environment overrides are provided:
 
-        MIN_CONFIDENCE    0.50   (was 0.75)
-        volume_threshold  0.05   (was 0.10 – 5 % of 5-candle avg)
-        volume_min_thr    0.001  (was 0.002 – 0.1 % of 20-candle avg)
-        min_adx           8      (was 15)
-        min_trend_conf    2/5    (was 3/5)
-        TAKE_PROFIT       0.4 %
-        STOP_LOSS         0.25 %
-        SCAN_INTERVAL     30 s   (was 150 s)
-        MAX_TRADES/HR     30
+        MIN_CONFIDENCE    0.45
+        volume_threshold  0.05
+        volume_min_thr    0.002
+        min_adx           10
+        min_trend_conf    3/5
+        TAKE_PROFIT       0.6 %
+        STOP_LOSS         0.3 %
+        SCAN_INTERVAL     45 s
+        MAX_TRADES/HR     12
     """
 
     # ── Master switch ──────────────────────────────────────────────────────────
@@ -111,9 +111,9 @@ class HFScalpConfig:
 
     # ── Timing ────────────────────────────────────────────────────────────────
     cycle_interval_seconds: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_CYCLE_SECONDS", 30)
+        default_factory=lambda: _env_int("HF_SCALP_CYCLE_SECONDS", 45)
     )
-    # env: HF_SCALP_CYCLE_SECONDS  (default 30 s vs normal 150 s)
+    # env: HF_SCALP_CYCLE_SECONDS  (default 45 s vs normal 150 s)
 
     candle_cache_ttl: int = field(
         default_factory=lambda: _env_int("HF_SCALP_CACHE_TTL", 25)
@@ -127,59 +127,59 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.30)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.45)
     )
-    # env: HF_SCALP_MIN_CONFIDENCE  (0.30 — relaxed from 0.50 to match user accounts)
+    # env: HF_SCALP_MIN_CONFIDENCE
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.30)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.45)
     )
-    # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE  (0.30 — relaxed from 0.55)
+    # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
 
     min_adx: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 5)
+        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 10)
     )
-    # env: HF_SCALP_MIN_ADX  (5 — relaxed from 8 to match user accounts)
+    # env: HF_SCALP_MIN_ADX
 
     volume_threshold: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.02)
+        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.05)
     )
-    # env: HF_SCALP_VOLUME_THRESHOLD  (0.02 = 2 % of 5-candle avg — relaxed from 5%)
+    # env: HF_SCALP_VOLUME_THRESHOLD
 
     volume_min_threshold: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_VOLUME_MIN_THRESHOLD", 0.001)
+        default_factory=lambda: _env_float("HF_SCALP_VOLUME_MIN_THRESHOLD", 0.002)
     )
-    # env: HF_SCALP_VOLUME_MIN_THRESHOLD  (0.001 vs normal 0.002)
+    # env: HF_SCALP_VOLUME_MIN_THRESHOLD
 
     min_trend_confirmation: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MIN_TREND_CONF", 2)
+        default_factory=lambda: _env_int("HF_SCALP_MIN_TREND_CONF", 3)
     )
-    # env: HF_SCALP_MIN_TREND_CONF  (2/5 vs normal 3/5)
+    # env: HF_SCALP_MIN_TREND_CONF
 
     min_entry_score: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_SCORE", 2.5)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_SCORE", 3.0)
     )
-    # env: HF_SCALP_MIN_SCORE  (2.5 vs normal ~3.0)
+    # env: HF_SCALP_MIN_SCORE
 
     # ── Profit / stop management ───────────────────────────────────────────────
     profit_target_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 0.4)
+        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 0.6)
     )
-    # env: HF_SCALP_PROFIT_TARGET_PCT  (0.4 % quick take-profit)
+    # env: HF_SCALP_PROFIT_TARGET_PCT
 
     stop_loss_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_STOP_LOSS_PCT", 0.25)
+        default_factory=lambda: _env_float("HF_SCALP_STOP_LOSS_PCT", 0.3)
     )
-    # env: HF_SCALP_STOP_LOSS_PCT  (0.25 % tight stop)
+    # env: HF_SCALP_STOP_LOSS_PCT
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     max_trades_per_hour: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MAX_TRADES_PER_HOUR", 30)
+        default_factory=lambda: _env_int("HF_SCALP_MAX_TRADES_PER_HOUR", 12)
     )
     # env: HF_SCALP_MAX_TRADES_PER_HOUR
 
     trade_cooldown_seconds: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_COOLDOWN_SECONDS", 15.0)
+        default_factory=lambda: _env_float("HF_SCALP_COOLDOWN_SECONDS", 45.0)
     )
     # env: HF_SCALP_COOLDOWN_SECONDS  (min gap between consecutive entries)
 
