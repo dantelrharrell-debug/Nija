@@ -14,6 +14,93 @@ The Execution Routing Model is the intelligent trade routing and isolation syste
 6. **Exchange Diversity**: Support for 5+ cryptocurrency exchanges
 7. **Intelligent Routing**: Route trades to best exchange based on liquidity, fees, and latency
 
+## Routing Visibility API
+
+The execution router now exposes a deterministic decision snapshot for operator
+and dashboard use via the enhanced performance API.
+
+### Endpoint
+
+- `GET /api/performance/routing`
+
+### Purpose
+
+- Shows the most recent venue-selection decision.
+- Includes candidate-level eligibility and scoring signals.
+- Exposes rolling router stats and recent route outcomes.
+
+### Response Example
+
+```json
+{
+    "section": "execution_routing",
+    "timestamp": "2026-04-28T21:03:10.219Z",
+    "data": {
+        "available": true,
+        "stats": {
+            "total_routes": 124,
+            "successful_routes": 119,
+            "failed_routes": 5,
+            "success_rate_pct": 95.9677
+        },
+        "last_decision": {
+            "timestamp": "2026-04-28T21:03:09.884421+00:00",
+            "asset_class": "crypto",
+            "side": "buy",
+            "size_usd": 25.0,
+            "selected_broker": "kraken",
+            "reason": "highest_score",
+            "preferred_broker": null,
+            "candidates": [
+                {
+                    "broker": "kraken",
+                    "eligible": true,
+                    "usd_balance": 103.0,
+                    "required_usd": 25.0,
+                    "capital_score": 1.0,
+                    "latency_score": 0.71,
+                    "fee_score": 0.9984,
+                    "health_score": 1.0,
+                    "total_score": 0.9568,
+                    "reason": "eligible"
+                },
+                {
+                    "broker": "coinbase",
+                    "eligible": false,
+                    "usd_balance": 10.0,
+                    "required_usd": 25.0,
+                    "capital_score": 0.4,
+                    "latency_score": 0.76,
+                    "fee_score": 0.9975,
+                    "health_score": 0.25,
+                    "total_score": -1.0,
+                    "reason": "insufficient_usd:$10.00<$25.00"
+                }
+            ]
+        },
+        "recent_routes": [
+            {
+                "symbol": "BTC-USD",
+                "side": "buy",
+                "size_usd": 25.0,
+                "asset_class": "crypto",
+                "broker": "kraken",
+                "success": true,
+                "latency_ms": 84.2,
+                "error": null
+            }
+        ]
+    }
+}
+```
+
+### Operator Notes
+
+- If no broker is execution-eligible, `selected_broker` is `null` and
+    `reason` is `NO_EXECUTION_VENUE_AVAILABLE`.
+- Candidate scores are informational; hard eligibility is always enforced
+    before broker selection.
+
 ## Architecture Overview
 
 ```

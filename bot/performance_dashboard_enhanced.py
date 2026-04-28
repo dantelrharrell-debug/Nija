@@ -4,7 +4,7 @@ NIJA Enhanced Performance Dashboard
 
 Provides real-time performance, risk, and strategy-intelligence endpoints that
 complement the existing ``PerformanceDashboard`` and ``dashboard_server`` with
-three focused view areas:
+four focused view areas:
 
 1. **Risk Engine view** — live capital-protection status, drawdown, exposure,
    and risk-level from ``RiskEngine``.
@@ -15,6 +15,9 @@ three focused view areas:
 3. **KPI / P&L view** — portfolio-wide win rate, Sharpe ratio, daily/weekly
    P&L summary, and top-performing symbols from ``PerformanceDashboard`` and
    ``PerformanceMetricsCalculator``.
+
+4. **Execution Routing view** — latest venue decision, eligibility/scoring
+    context, and rolling routing outcomes from ``MultiBrokerExecutionRouter``.
 
 Flask integration
 -----------------
@@ -30,7 +33,8 @@ Endpoints added
 * ``GET /api/performance/risk``         — risk-engine status snapshot
 * ``GET /api/performance/strategy``     — strategy-intelligence status snapshot
 * ``GET /api/performance/kpi``          — top-level KPI summary
-* ``GET /api/performance/full``         — all three sections combined
+* ``GET /api/performance/routing``      — execution routing status + last decision
+* ``GET /api/performance/full``         — all four sections combined
 * ``GET /performance``                  — human-readable HTML dashboard page
 
 Author: NIJA Trading Systems
@@ -113,6 +117,18 @@ except ImportError:
         PerformanceDashboard = None  # type: ignore
         logger.warning("PerformanceDashboard not available — portfolio summary will be limited")
 
+try:
+    from multi_broker_execution_router import get_multi_broker_router
+    _MBER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.multi_broker_execution_router import get_multi_broker_router
+        _MBER_AVAILABLE = True
+    except ImportError:
+        _MBER_AVAILABLE = False
+        get_multi_broker_router = None  # type: ignore
+        logger.warning("MultiBrokerExecutionRouter not available — routing visibility disabled")
+
 
 # ---------------------------------------------------------------------------
 # Data helpers
@@ -120,7 +136,7 @@ except ImportError:
 
 def _safe_get_risk_status() -> Dict[str, Any]:
     """Return the RiskEngine status dict or a safe stub on error."""
-    if not _RISK_ENGINE_AVAILABLE:
+    if not _RISK_ENGINE_AVAILABLE or get_risk_engine is None:
         return {"available": False, "reason": "RiskEngine module not loaded"}
     try:
         engine = get_risk_engine()
@@ -134,7 +150,7 @@ def _safe_get_risk_status() -> Dict[str, Any]:
 
 def _safe_get_strategy_status() -> Dict[str, Any]:
     """Return the StrategyIntelligenceLayer status dict or a safe stub."""
-    if not _SIL_AVAILABLE:
+    if not _SIL_AVAILABLE or get_strategy_intelligence_layer is None:
         return {"available": False, "reason": "StrategyIntelligenceLayer module not loaded"}
     try:
         layer = get_strategy_intelligence_layer()
@@ -154,7 +170,7 @@ def _safe_get_kpi_summary() -> Dict[str, Any]:
     }
 
     # Portfolio summary from the existing PerformanceDashboard
-    if _PERF_DASHBOARD_AVAILABLE:
+    if _PERF_DASHBOARD_AVAILABLE and PerformanceDashboard is not None:
         try:
             dash = PerformanceDashboard()
             summary = dash.get_portfolio_summary()
@@ -165,10 +181,11 @@ def _safe_get_kpi_summary() -> Dict[str, Any]:
             result["portfolio_summary"] = {"error": str(exc)}
 
     # Detailed metrics from PerformanceMetricsCalculator
-    if _PERF_METRICS_AVAILABLE:
+    if _PERF_METRICS_AVAILABLE and get_performance_calculator is not None:
         try:
             calc = get_performance_calculator()
-            snapshot = calc.get_current_snapshot() if hasattr(calc, "get_current_snapshot") else {}
+            get_snapshot_fn = getattr(calc, "get_current_snapshot", None)
+            snapshot = get_snapshot_fn() if callable(get_snapshot_fn) else {}
             result["metrics_snapshot"] = snapshot if isinstance(snapshot, dict) else {}
             result["available"] = True
         except Exception as exc:
@@ -179,6 +196,41 @@ def _safe_get_kpi_summary() -> Dict[str, Any]:
         result["reason"] = "No performance subsystems loaded"
 
     return result
+
+
+def _safe_get_execution_routing_status() -> Dict[str, Any]:
+    """Return router stats + last decision for operator visibility."""
+    if not _MBER_AVAILABLE or get_multi_broker_router is None:
+        return {
+            "available": False,
+            "reason": "MultiBrokerExecutionRouter module not loaded",
+        }
+
+    try:
+        router = get_multi_broker_router()
+        stats = router.get_stats() if hasattr(router, "get_stats") else {}
+        last_decision = (
+            router.get_last_routing_decision()
+            if hasattr(router, "get_last_routing_decision")
+            else {}
+        )
+        recent_routes = (
+            router.get_recent_routes(10)
+            if hasattr(router, "get_recent_routes")
+            else []
+        )
+        return {
+            "available": True,
+            "stats": stats,
+            "last_decision": last_decision,
+            "recent_routes": recent_routes,
+        }
+    except Exception as exc:
+        logger.debug("MultiBrokerExecutionRouter visibility error: %s", exc)
+        return {
+            "available": False,
+            "reason": str(exc),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +282,16 @@ def create_enhanced_dashboard_blueprint(url_prefix: str = "") -> Blueprint:
             "data": _safe_get_kpi_summary(),
         })
 
+    # ── /api/performance/routing ───────────────────────────────────────
+    @bp.route("/api/performance/routing", methods=["GET"])
+    def api_performance_routing():
+        """Execution router visibility (selection stats + latest decision)."""
+        return jsonify({
+            "section": "execution_routing",
+            "timestamp": datetime.utcnow().isoformat(),
+            "data": _safe_get_execution_routing_status(),
+        })
+
     # ── /api/performance/full ──────────────────────────────────────────
     @bp.route("/api/performance/full", methods=["GET"])
     def api_performance_full():
@@ -241,6 +303,7 @@ def create_enhanced_dashboard_blueprint(url_prefix: str = "") -> Blueprint:
                 "risk_engine": _safe_get_risk_status(),
                 "strategy_intelligence": _safe_get_strategy_status(),
                 "kpi": _safe_get_kpi_summary(),
+                "execution_routing": _safe_get_execution_routing_status(),
             },
         })
 

@@ -54,6 +54,7 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sys
 import threading
@@ -82,6 +83,16 @@ elif __name__ == "multi_broker_execution_router":
 # broker to the top slot.
 MIN_OBSERVATIONS: int = 10
 
+ROUTER_MIN_CASH_USD: float = float(
+    os.environ.get("NIJA_ROUTER_MIN_CASH_USD", "25.0")
+)
+
+_ROUTER_W_CAPITAL: float = 0.55
+_ROUTER_W_HEALTH: float = 0.20
+_ROUTER_W_LATENCY: float = 0.15
+_ROUTER_W_FEE: float = 0.10
+_ROUTER_LATENCY_CEILING_MS: float = 2_000.0
+
 # ---------------------------------------------------------------------------
 # Optional subsystem imports — degrade gracefully when unavailable.
 # ---------------------------------------------------------------------------
@@ -96,6 +107,8 @@ except ImportError:
     except ImportError:
         _INNER_ROUTER_AVAILABLE = False
         get_execution_router = None  # type: ignore
+        OrderRequest = None  # type: ignore
+        ExecutionResult = None  # type: ignore
         logger.warning("ExecutionRouter not available — crypto routing will use stub")
 
 try:
@@ -272,6 +285,21 @@ class BrokerProfile:
     observation_count: int = 0
 
 
+@dataclass
+class BrokerRoutingScore:
+    """Real-time routing score for one broker candidate."""
+    broker: str
+    eligible: bool
+    usd_balance: float
+    capital_required_usd: float
+    capital_score: float
+    latency_score: float
+    fee_score: float
+    health_score: float
+    total_score: float
+    reason: str = ""
+
+
 # ---------------------------------------------------------------------------
 # MultiBrokerExecutionRouter
 # ---------------------------------------------------------------------------
@@ -293,9 +321,11 @@ class MultiBrokerExecutionRouter:
             "successful_routes": 0,
             "failed_routes": 0,
         }
+        self._last_routing_decision: Dict[str, Any] = {}
 
         # Lazy-initialised performance scorer
         self._scorer = None
+        self._broker_manager: Any = None
 
         # Register default broker profiles
         self._register_default_brokers()
@@ -429,10 +459,15 @@ class MultiBrokerExecutionRouter:
         self._pending_request_side = request.side
 
         # 2. Select broker
-        broker = self._select_broker(ac, request.preferred_broker)
+        broker = self._select_broker(
+            ac,
+            request.preferred_broker,
+            request.side,
+            request.size_usd,
+        )
         if broker is None:
             elapsed_ms = (time.monotonic() - t0) * 1000
-            error = f"No available broker for asset_class={ac.value}"
+            error = f"NO_EXECUTION_VENUE_AVAILABLE for asset_class={ac.value}"
             logger.error(error)
             return self._make_result(request, ac, "NONE", False, 0.0, 0.0,
                                      elapsed_ms, error)
@@ -570,7 +605,7 @@ class MultiBrokerExecutionRouter:
 
     def _get_scorer(self):
         """Return the BrokerPerformanceScorer singleton (lazy init)."""
-        if self._scorer is None and _BPS_AVAILABLE:
+        if self._scorer is None and _BPS_AVAILABLE and get_broker_performance_scorer is not None:
             try:
                 self._scorer = get_broker_performance_scorer()
             except Exception:
@@ -579,15 +614,184 @@ class MultiBrokerExecutionRouter:
 
     def _get_execution_quality_filter(self):
         """Return the ExecutionQualityFilter singleton (lazy init)."""
-        if not _EQF_AVAILABLE:
+        if not _EQF_AVAILABLE or get_execution_quality_filter is None:
             return None
         try:
             return get_execution_quality_filter()
         except Exception:
             return None
 
+    def _get_broker_manager(self):
+        """Return the live BrokerManager singleton when available."""
+        if self._broker_manager is not None:
+            return self._broker_manager
+
+        for mod_name in ("bot.broker_manager", "broker_manager"):
+            try:
+                mod = __import__(mod_name, fromlist=["broker_manager"])
+                manager = getattr(mod, "broker_manager", None)
+                if manager is not None:
+                    self._broker_manager = manager
+                    return manager
+            except Exception as exc:
+                logger.debug("BrokerManager unavailable from %s: %s", mod_name, exc)
+
+        return None
+
+    @staticmethod
+    def _requires_buying_power(side: str) -> bool:
+        return side.lower() in ("buy", "long")
+
+    def _score_broker_candidate(
+        self,
+        profile: BrokerProfile,
+        asset_class: AssetClass,
+        side: str,
+        size_usd: Optional[float],
+    ) -> BrokerRoutingScore:
+        """Score one broker using live eligibility, capital, fee, and latency data."""
+        required_cash = max(
+            profile.min_notional_usd,
+            ROUTER_MIN_CASH_USD,
+            float(size_usd or 0.0) if self._requires_buying_power(side) else 0.0,
+        )
+        usd_balance = 0.0
+        latency_score = 0.5
+        fee_score = max(0.0, min(1.0, 1.0 - (profile.fee_bps / 10_000.0)))
+        health_score = 0.5 if profile.available else 0.0
+        reason = "static_profile_available" if profile.available else "profile_unavailable"
+        eligible = profile.available
+
+        scorer = self._get_scorer()
+        if scorer is not None:
+            try:
+                snapshot = scorer.get_snapshot(profile.name)
+                if snapshot.available_capital_usd > 0:
+                    usd_balance = max(usd_balance, float(snapshot.available_capital_usd))
+                if snapshot.latency_p95_ms > 0:
+                    latency_score = max(
+                        0.0,
+                        min(1.0, 1.0 - (snapshot.latency_p95_ms / _ROUTER_LATENCY_CEILING_MS)),
+                    )
+                if snapshot.num_observations > 0:
+                    health_score = max(health_score, float(snapshot.connectivity_rate))
+            except Exception as exc:
+                logger.debug("Routing scorer snapshot unavailable for %s: %s", profile.name, exc)
+
+        broker_manager = self._get_broker_manager()
+        if broker_manager is not None:
+            try:
+                live_broker = None
+                for broker in broker_manager.get_all_brokers().values():
+                    if getattr(getattr(broker, "broker_type", None), "value", "") == profile.name:
+                        live_broker = broker
+                        break
+
+                if live_broker is None:
+                    eligible = False
+                    health_score = 0.0
+                    reason = "broker_not_registered"
+                else:
+                    if hasattr(live_broker, "supports_asset_class"):
+                        supports_asset_class = bool(live_broker.supports_asset_class(asset_class.value))
+                    else:
+                        supports_asset_class = True
+
+                    try:
+                        raw_balance = live_broker.get_account_balance()
+                        usd_balance = max(usd_balance, float(raw_balance or 0.0))
+                    except Exception as exc:
+                        logger.debug("Balance fetch failed for %s: %s", profile.name, exc)
+
+                    execution_eligible = bool(broker_manager.is_execution_eligible(live_broker))
+                    eligible = profile.available and supports_asset_class and execution_eligible
+                    if not supports_asset_class:
+                        health_score = 0.0
+                        reason = f"unsupported_asset_class:{asset_class.value}"
+                    elif not execution_eligible:
+                        health_score = 0.0
+                        eligibility = broker_manager.get_broker_eligibility(live_broker)
+                        reason = str(getattr(eligibility, "value", eligibility)).lower()
+                    elif self._requires_buying_power(side) and usd_balance < required_cash:
+                        eligible = False
+                        health_score = min(health_score, 0.25)
+                        reason = f"insufficient_usd:${usd_balance:.2f}<${required_cash:.2f}"
+                    else:
+                        health_score = max(health_score, 1.0)
+                        reason = "eligible"
+            except Exception as exc:
+                logger.debug("BrokerManager routing check failed for %s: %s", profile.name, exc)
+
+        capital_score = 1.0
+        if self._requires_buying_power(side):
+            if required_cash > 0:
+                capital_score = max(0.0, min(usd_balance / required_cash, 1.0))
+            else:
+                capital_score = 0.0
+
+        total_score = -1.0
+        if eligible:
+            total_score = (
+                _ROUTER_W_CAPITAL * capital_score
+                + _ROUTER_W_HEALTH * health_score
+                + _ROUTER_W_LATENCY * latency_score
+                + _ROUTER_W_FEE * fee_score
+            )
+
+        return BrokerRoutingScore(
+            broker=profile.name,
+            eligible=eligible,
+            usd_balance=usd_balance,
+            capital_required_usd=required_cash,
+            capital_score=capital_score,
+            latency_score=latency_score,
+            fee_score=fee_score,
+            health_score=health_score,
+            total_score=total_score,
+            reason=reason,
+        )
+
+    def _get_ranked_candidates(
+        self,
+        asset_class: AssetClass,
+        side: str,
+        size_usd: Optional[float],
+    ) -> List[Tuple[BrokerProfile, BrokerRoutingScore]]:
+        """Return all broker candidates with live routing scores, best first."""
+        with self._lock:
+            candidates = [
+                b for b in self._brokers.values()
+                if asset_class in b.asset_classes and b.available
+            ]
+
+        ranked: List[Tuple[BrokerProfile, BrokerRoutingScore]] = []
+        for profile in candidates:
+            score = self._score_broker_candidate(profile, asset_class, side, size_usd)
+            logger.info(
+                "🎯 ROUTING CANDIDATE → %s | USD=$%.2f | eligible=%s | capital=%.2f | "
+                "latency=%.2f | fee=%.2f | health=%.2f | reason=%s",
+                profile.name,
+                score.usd_balance,
+                score.eligible,
+                score.capital_score,
+                score.latency_score,
+                score.fee_score,
+                score.health_score,
+                score.reason,
+            )
+            ranked.append((profile, score))
+
+        ranked.sort(
+            key=lambda item: (-item[1].total_score, -item[1].capital_score, item[0].priority)
+        )
+        return ranked
+
     def _select_broker(
-        self, asset_class: AssetClass, preferred: Optional[str]
+        self,
+        asset_class: AssetClass,
+        preferred: Optional[str],
+        side: str,
+        size_usd: Optional[float],
     ) -> Optional[BrokerProfile]:
         """Select the best available broker for the asset class.
 
@@ -612,79 +816,112 @@ class MultiBrokerExecutionRouter:
            and return the highest-scoring one.  Ties are broken by the
            static ``priority`` field (lower = higher priority).
         """
-        with self._lock:
-            candidates = [
-                b for b in self._brokers.values()
-                if asset_class in b.asset_classes and b.available
-            ]
-
-        if not candidates:
+        ranked = self._get_ranked_candidates(asset_class, side, size_usd)
+        if not ranked:
             return None
 
-        # If a specific broker is requested, use it if available
+        candidate_snapshot = [
+            {
+                "broker": profile.name,
+                "eligible": score.eligible,
+                "usd_balance": round(score.usd_balance, 4),
+                "required_usd": round(score.capital_required_usd, 4),
+                "capital_score": round(score.capital_score, 4),
+                "latency_score": round(score.latency_score, 4),
+                "fee_score": round(score.fee_score, 4),
+                "health_score": round(score.health_score, 4),
+                "total_score": round(score.total_score, 4),
+                "reason": score.reason,
+            }
+            for profile, score in ranked
+        ]
+
+        eligible_ranked = [item for item in ranked if item[1].eligible]
+        if not eligible_ranked:
+            with self._lock:
+                self._last_routing_decision = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "asset_class": asset_class.value,
+                    "side": side,
+                    "size_usd": float(size_usd or 0.0),
+                    "selected_broker": None,
+                    "reason": "NO_EXECUTION_VENUE_AVAILABLE",
+                    "preferred_broker": preferred,
+                    "candidates": candidate_snapshot,
+                }
+            logger.error(
+                "NO_EXECUTION_VENUE_AVAILABLE | asset_class=%s | side=%s | size_usd=%.2f",
+                asset_class.value,
+                side,
+                float(size_usd or 0.0),
+            )
+            return None
+
+        # If a specific broker is requested, use it only when it survives hard filters.
         if preferred:
-            for b in candidates:
-                if b.name == preferred:
-                    return b
+            for profile, score in eligible_ranked:
+                if profile.name == preferred:
+                    with self._lock:
+                        self._last_routing_decision = {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "asset_class": asset_class.value,
+                            "side": side,
+                            "size_usd": float(size_usd or 0.0),
+                            "selected_broker": profile.name,
+                            "reason": "preferred",
+                            "preferred_broker": preferred,
+                            "candidates": candidate_snapshot,
+                        }
+                    logger.info(
+                        "🎯 ROUTING DECISION → %s | USD=$%.2f | eligible=%s | reason=preferred | "
+                        "capital=%.2f | latency=%.2f | fee=%.2f | health=%.2f",
+                        profile.name,
+                        score.usd_balance,
+                        score.eligible,
+                        score.capital_score,
+                        score.latency_score,
+                        score.fee_score,
+                        score.health_score,
+                    )
+                    return profile
+            for profile, score in ranked:
+                if profile.name == preferred:
+                    logger.warning(
+                        "Preferred broker '%s' rejected by execution router: %s",
+                        preferred,
+                        score.reason,
+                    )
+                    break
             logger.warning(
                 "Preferred broker '%s' not available for %s — falling back",
                 preferred, asset_class.value,
             )
 
-        # Score-aware selection via BrokerPerformanceScorer
-        scorer = self._get_scorer()
-        if scorer is not None:
-            candidate_names = [b.name for b in candidates]
-            best_name = scorer.get_best_broker(candidate_names)
-            if best_name is not None:
-                for b in candidates:
-                    if b.name == best_name:
-                        logger.debug(
-                            "Score-based routing: selected '%s' for %s (score=%.1f)",
-                            best_name, asset_class.value, scorer.get_score(best_name),
-                        )
-                        return b
-
-        # Best-execution override via ArbBestExecutionRouter — uses live bid/ask
-        # prices + fees + latency to pick the genuinely cheapest venue.
-        if _ABE_AVAILABLE and get_arb_best_execution_router is not None:
-            try:
-                _abe = get_arb_best_execution_router()
-                _abe_side = getattr(self, "_pending_request_side", None) or "buy"
-                _abe_symbol = getattr(self, "_pending_request_symbol", None) or ""
-                if _abe_symbol:
-                    _abe_best = _abe.get_best_broker(_abe_symbol, _abe_side)
-                    if _abe_best is not None:
-                        for b in candidates:
-                            if b.name == _abe_best:
-                                logger.debug(
-                                    "BestExec routing: selected '%s' for %s %s",
-                                    _abe_best, _abe_side.upper(), _abe_symbol,
-                                )
-                                return b
-            except Exception as _abe_err:
-                logger.debug("ArbBestExecutionRouter skipped: %s", _abe_err)
-
-        # Fallback: sort by priority (ascending = highest priority first)
-        candidates.sort(key=lambda b: b.priority)
-
-        # The static fallback: always the highest-priority (lowest number) broker.
-        # It is returned whenever no candidate has sufficient observations.
-        fallback_priority_broker = candidates[0]
-
-        # Only trust brokers that have enough observations to produce a reliable
-        # ranking.  Skip under-observed brokers and return the static fallback.
-        qualified = [b for b in candidates if b.observation_count >= MIN_OBSERVATIONS]
-
-        if not qualified:
-            logger.debug(
-                "No broker has reached MIN_OBSERVATIONS=%d for asset_class=%s "
-                "— using static-priority fallback '%s'",
-                MIN_OBSERVATIONS, asset_class.value, fallback_priority_broker.name,
-            )
-            return fallback_priority_broker
-
-        return qualified[0]
+        selected_profile, selected_score = eligible_ranked[0]
+        with self._lock:
+            self._last_routing_decision = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "asset_class": asset_class.value,
+                "side": side,
+                "size_usd": float(size_usd or 0.0),
+                "selected_broker": selected_profile.name,
+                "reason": "highest_score",
+                "preferred_broker": preferred,
+                "candidates": candidate_snapshot,
+            }
+        logger.info(
+            "🎯 ROUTING DECISION → %s | USD=$%.2f | eligible=%s | capital=%.2f | "
+            "latency=%.2f | fee=%.2f | health=%.2f | total=%.2f",
+            selected_profile.name,
+            selected_score.usd_balance,
+            selected_score.eligible,
+            selected_score.capital_score,
+            selected_score.latency_score,
+            selected_score.fee_score,
+            selected_score.health_score,
+            selected_score.total_score,
+        )
+        return selected_profile
 
     def _dispatch(
         self,
@@ -755,7 +992,11 @@ class MultiBrokerExecutionRouter:
 
         Falls back to a simulated fill when the inner router is unavailable.
         """
-        if _INNER_ROUTER_AVAILABLE and get_execution_router is not None:
+        if (
+            _INNER_ROUTER_AVAILABLE
+            and get_execution_router is not None
+            and OrderRequest is not None
+        ):
             inner = get_execution_router()
             req = OrderRequest(
                 strategy="MultiBrokerRouter",
@@ -765,7 +1006,7 @@ class MultiBrokerExecutionRouter:
                 order_type=order_type,
                 venue=broker_name,
             )
-            res: ExecutionResult = inner.execute(req)
+            res = inner.execute(req)
             if res.success:
                 return res.fill_price, res.filled_size_usd
             raise RuntimeError(res.error or "Inner router returned failure")
@@ -851,16 +1092,14 @@ class MultiBrokerExecutionRouter:
     # ------------------------------------------------------------------
 
     def _select_all_brokers(
-        self, asset_class: AssetClass
+        self,
+        asset_class: AssetClass,
+        side: str = "buy",
+        size_usd: Optional[float] = None,
     ) -> List[BrokerProfile]:
-        """Return all available brokers for *asset_class*, sorted by priority."""
-        with self._lock:
-            candidates = [
-                b for b in self._brokers.values()
-                if asset_class in b.asset_classes and b.available
-            ]
-        candidates.sort(key=lambda b: b.priority)
-        return candidates
+        """Return all execution-eligible brokers for *asset_class*, best first."""
+        ranked = self._get_ranked_candidates(asset_class, side, size_usd)
+        return [profile for profile, score in ranked if score.eligible]
 
     def route_all(self, request: RouteRequest) -> List[RouteResult]:
         """
@@ -890,7 +1129,7 @@ class MultiBrokerExecutionRouter:
         else:
             ac = detect_asset_class(request.symbol)
 
-        brokers = self._select_all_brokers(ac)
+        brokers = self._select_all_brokers(ac, request.side, request.size_usd)
         if not brokers:
             logger.warning(
                 "route_all: no available brokers for asset_class=%s", ac.value
@@ -1144,7 +1383,7 @@ class MultiBrokerExecutionRouter:
         else:
             ac = detect_asset_class(request.symbol)
 
-        brokers = self._select_all_brokers(ac)
+        brokers = self._select_all_brokers(ac, request.side)
         if not brokers:
             logger.warning(
                 "route_split: no available brokers for asset_class=%s", ac.value
@@ -1187,7 +1426,7 @@ class MultiBrokerExecutionRouter:
     def get_stats(self) -> Dict[str, Any]:
         """Return routing statistics."""
         with self._lock:
-            stats = dict(self._stats)
+            stats: Dict[str, Any] = dict(self._stats)
             stats["success_rate_pct"] = (
                 (stats["successful_routes"] / stats["total_routes"] * 100)
                 if stats["total_routes"] > 0 else 0.0
@@ -1198,6 +1437,11 @@ class MultiBrokerExecutionRouter:
         """Return the *n* most recent routing events."""
         with self._lock:
             return list(self._route_log[-n:])
+
+    def get_last_routing_decision(self) -> Dict[str, Any]:
+        """Return the most recent router venue-selection decision snapshot."""
+        with self._lock:
+            return dict(self._last_routing_decision)
 
     def get_report(self) -> str:
         """Generate a human-readable routing report."""
