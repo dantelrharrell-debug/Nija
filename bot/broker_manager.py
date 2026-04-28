@@ -548,6 +548,26 @@ except ImportError:
 # Configure logger for broker operations (must be before imports that use it)
 logger = logging.getLogger('nija.broker')
 
+# Process-wide critical-log dedupe registry.
+_GLOBAL_CRITICAL_LOG_NEXT_AT: Dict[str, float] = {}
+_GLOBAL_CRITICAL_LOG_LOCK = threading.Lock()
+
+
+def _should_emit_critical_log(key: str, interval_s: float) -> bool:
+    """Return True when a deduped critical log key can be emitted now."""
+    now = time.time()
+    with _GLOBAL_CRITICAL_LOG_LOCK:
+        next_at = _GLOBAL_CRITICAL_LOG_NEXT_AT.get(key, 0.0)
+        if now < next_at:
+            return False
+        _GLOBAL_CRITICAL_LOG_NEXT_AT[key] = now + max(1.0, float(interval_s))
+    return True
+
+# Process-wide Coinbase low-cash warning throttle. This survives per-instance
+# broker recreation and prevents warning bursts during reconnect churn.
+_GLOBAL_COINBASE_CASH_LOW_NEXT_AT: Dict[str, float] = {}
+_GLOBAL_COINBASE_CASH_LOW_LOCK = threading.Lock()
+
 
 def _log_balance_snapshot(
     account_label: str,
@@ -1662,6 +1682,10 @@ class BaseBroker(ABC):
                 return
             self._account_hydrated_log_next_at = now + self._account_hydrated_log_interval_s
 
+        account_key = f"hydrated:{getattr(self, 'account_identifier', getattr(self, 'account_type', 'PLATFORM'))}"
+        if not _should_emit_critical_log(account_key, self._account_hydrated_log_interval_s):
+            return
+
         logger.critical("ACCOUNT HYDRATED — STARTUP CAPITAL GATE CAN NOW ADVANCE")
     def has_balance_payload_for_capital(self) -> bool:
         """
@@ -2167,11 +2191,13 @@ class BaseBroker(ABC):
                 exchange_min_notional = _NOTIONAL_GATE_CONFIG.get_min_notional_for_broker(broker_name)
                 order_value = quantity
                 if order_value < exchange_min_notional:
-                    logger.critical("🛑 ORDER BLOCKED: BELOW MIN NOTIONAL")
-                    logger.critical(
-                        "   order_value=$%.2f < exchange_min_notional=$%.2f (%s)",
-                        order_value, exchange_min_notional, broker_title,
-                    )
+                    dedupe_key = f"min_notional:{broker_name}:{symbol}"
+                    if _should_emit_critical_log(dedupe_key, 60.0):
+                        logger.critical("🛑 ORDER BLOCKED: BELOW MIN NOTIONAL")
+                        logger.critical(
+                            "   order_value=$%.2f < exchange_min_notional=$%.2f (%s)",
+                            order_value, exchange_min_notional, broker_title,
+                        )
                     return {
                         "status": "unfilled",
                         "error": "BELOW_MIN_NOTIONAL",
@@ -2408,7 +2434,11 @@ class CoinbaseBroker(BaseBroker):
         logging.debug("✅ Coinbase SDK logging filter installed (SDK + urllib3 silenced to WARNING)")
 
     def _log_coinbase_cash_low(self, available_cash: float, cash_label: str) -> None:
-        """Emit low-cash critical alert at most once per configured interval."""
+        """Emit low-cash critical alert at most once per interval.
+
+        The throttle is enforced both per-instance and process-wide (per account
+        label) so reconnects do not reset the warning cadence.
+        """
         if available_cash >= 50.0:
             return
 
@@ -2417,6 +2447,15 @@ class CoinbaseBroker(BaseBroker):
             if now < self._coinbase_cash_low_next_at:
                 return
             self._coinbase_cash_low_next_at = now + self._coinbase_cash_low_log_interval_s
+
+        account_key = f"coinbase:{getattr(self, 'account_identifier', getattr(self, 'account_type', 'PLATFORM'))}"
+        with _GLOBAL_COINBASE_CASH_LOW_LOCK:
+            next_at = _GLOBAL_COINBASE_CASH_LOW_NEXT_AT.get(account_key, 0.0)
+            if now < next_at:
+                return
+            _GLOBAL_COINBASE_CASH_LOW_NEXT_AT[account_key] = (
+                now + self._coinbase_cash_low_log_interval_s
+            )
 
         logging.critical(
             "=== COINBASE VENUE CASH LOW === %s %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
@@ -2679,7 +2718,7 @@ class CoinbaseBroker(BaseBroker):
                     # If total equity < $75, disable Coinbase and route to Kraken
                     # This prevents Coinbase fees from eating small accounts
                     try:
-                        balance_data = self._get_account_balance_detailed()
+                        balance_data = self._get_account_balance_detailed(verbose=True)
                         if balance_data is None:
                             # Balance fetch failed - this is critical for small account check
                             # We MUST know account size before allowing connection
@@ -3104,7 +3143,7 @@ class CoinbaseBroker(BaseBroker):
             logging.error(f"🔥 Error fetching all products: {e}")
             return []
 
-    def _get_account_balance_detailed(self, verbose: bool = True):
+    def _get_account_balance_detailed(self, verbose: bool = False):
         """Return ONLY tradable Advanced Trade USD/USDC balances (detailed version).
 
         Coinbase frequently shows Consumer wallet balances that **cannot** be used
@@ -3119,7 +3158,7 @@ class CoinbaseBroker(BaseBroker):
         4. Caching - reuses accounts data from connect() to avoid redundant API calls
 
         Args:
-            verbose: If True, logs detailed balance breakdown (default: True)
+            verbose: If True, logs detailed balance breakdown (default: False)
 
         Returns dict with: {"usdc", "usd", "trading_balance", "crypto", "consumer_*"}
         """
@@ -3290,7 +3329,7 @@ class CoinbaseBroker(BaseBroker):
                     secondary_held=usdc_held,
                     raw_balances=result,
                     emit_info=verbose,
-                    emit_critical=True,
+                    emit_critical=verbose,
                 )
                 self._log_coinbase_cash_low(usd_balance, "USD available")
 
@@ -3486,7 +3525,7 @@ class CoinbaseBroker(BaseBroker):
                 secondary_held=usdc_held,
                 raw_balances=result,
                 emit_info=verbose,
-                emit_critical=True,
+                emit_critical=verbose,
             )
             self._log_coinbase_cash_low(usd_balance, "USD available")
 
@@ -3519,7 +3558,7 @@ class CoinbaseBroker(BaseBroker):
                 "consumer_usdc": consumer_usdc,
             }
 
-    def get_account_balance(self, verbose: bool = True) -> float:
+    def get_account_balance(self, verbose: bool = False) -> float:
         """Get USD trading balance with fail-closed behavior (conforms to BaseBroker interface).
 
         🚑 FIX 4: BALANCE MUST INCLUDE LOCKED FUNDS
@@ -3532,7 +3571,7 @@ class CoinbaseBroker(BaseBroker):
         - Distinguish API errors from actual zero balance
 
         Args:
-            verbose: If True, logs detailed balance breakdown (default: True)
+            verbose: If True, logs detailed balance breakdown (default: False)
 
         Returns:
             float: TOTAL EQUITY (cash + positions) not just available cash
@@ -3606,14 +3645,14 @@ class CoinbaseBroker(BaseBroker):
 
             return 0.0
 
-    def get_account_balance_detailed(self, verbose: bool = True) -> dict:
+    def get_account_balance_detailed(self, verbose: bool = False) -> dict:
         """Get detailed account balance information including crypto holdings.
 
         This is a public wrapper around _get_account_balance_detailed() for
         callers that need the full balance breakdown (crypto holdings, consumer wallets, etc).
 
         Args:
-            verbose: If True, logs detailed balance breakdown (default: True)
+            verbose: If True, logs detailed balance breakdown (default: False)
 
         Returns:
             dict: Detailed balance info with keys: usdc, usd, trading_balance, crypto, consumer_usd, consumer_usdc
@@ -9821,11 +9860,13 @@ class KrakenBroker(BaseBroker):
             if (side.lower() == 'buy'
                     and NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
                     and not getattr(self, "_capital_gate_runtime_warned", False)):
-                logger.critical(
-                    "🧪 CAPITAL GATE OVERRIDE ACTIVE: NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1 "
-                    "permits Kraken BUY attempts below configured minimum balance. "
-                    "Use for controlled testing only."
-                )
+                dedupe_key = f"kraken_capital_gate_override:{getattr(self, 'account_identifier', 'platform')}"
+                if _should_emit_critical_log(dedupe_key, 300.0):
+                    logger.critical(
+                        "🧪 CAPITAL GATE OVERRIDE ACTIVE: NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1 "
+                        "permits Kraken BUY attempts below configured minimum balance. "
+                        "Use for controlled testing only."
+                    )
                 self._capital_gate_runtime_warned = True
             if (side.lower() == 'buy'
                     and getattr(self, 'exit_only_mode', False)
@@ -9850,11 +9891,13 @@ class KrakenBroker(BaseBroker):
                     and self.account_type == AccountType.PLATFORM
                     and not force_liquidate
                     and not NIJA_FORCE_KRAKEN_ONLY_TEST):
-                logger.critical(
-                    "🚫 BUY order BLOCKED: Kraken broker is QUARANTINED due to confirmed nonce "
-                    "poisoning.  FASTEST recovery: rotate API key (delete old, create new, "
-                    "update .env/store_user_api_key, restart)."
-                )
+                dedupe_key = f"kraken_quarantine_buy_block:{getattr(self, 'account_identifier', 'platform')}"
+                if _should_emit_critical_log(dedupe_key, 120.0):
+                    logger.critical(
+                        "🚫 BUY order BLOCKED: Kraken broker is QUARANTINED due to confirmed nonce "
+                        "poisoning.  FASTEST recovery: rotate API key (delete old, create new, "
+                        "update .env/store_user_api_key, restart)."
+                    )
                 return {
                     "status": "unfilled",
                     "error": "BROKER_QUARANTINED",
