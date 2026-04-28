@@ -2114,6 +2114,11 @@ def _get_thread_status():
 def _handle_signal(sig, frame):
     """Handle shutdown signals (SIGTERM, SIGINT) with visual logging."""
     _release_process_lock()
+    # Stop the heartbeat first so it doesn't renew the lock after we release it,
+    # then release the Redis distributed writer lock so the next deployment can
+    # acquire it immediately instead of waiting for the TTL to expire.
+    _distributed_writer_lock_stop.set()
+    _release_distributed_process_lock()
     _bfsm_transition(_BootstrapState.SHUTDOWN, f"signal {sig} received") if _BOOTSTRAP_FSM_AVAILABLE else None
     signal_name = signal.Signals(sig).name if hasattr(signal, 'Signals') else str(sig)
     _log_exit_point(
