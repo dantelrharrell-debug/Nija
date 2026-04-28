@@ -1,4 +1,4 @@
-"""
+monified: 
 Alembic migration environment for NIJA database
 
 This module configures Alembic to work with NIJA's database models.
