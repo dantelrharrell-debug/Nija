@@ -2383,6 +2383,10 @@ class CoinbaseBroker(BaseBroker):
         self._coinbase_cash_low_log_interval_s = max(30.0, _cash_low_interval)
         self._coinbase_cash_low_next_at = 0.0
         self._coinbase_cash_low_lock = threading.Lock()
+        try:
+            self._coinbase_cash_low_threshold = float(os.getenv("NIJA_COINBASE_CASH_LOW_THRESHOLD", "50.0"))
+        except (TypeError, ValueError):
+            self._coinbase_cash_low_threshold = 50.0
 
         # In-memory permanent cache for entry prices fetched from Coinbase fills.
         # Once fetched successfully the price is not re-fetched until the position
@@ -2439,7 +2443,7 @@ class CoinbaseBroker(BaseBroker):
         The throttle is enforced both per-instance and process-wide (per account
         label) so reconnects do not reset the warning cadence.
         """
-        if available_cash >= 50.0:
+        if available_cash >= self._coinbase_cash_low_threshold:
             return
 
         now = time.time()
@@ -2458,9 +2462,10 @@ class CoinbaseBroker(BaseBroker):
             )
 
         logging.critical(
-            "=== COINBASE VENUE CASH LOW === %s %.2f is below the Coinbase venue threshold $50.00; aggregate platform capital may still satisfy startup ===",
+            "=== COINBASE VENUE CASH LOW === %s %.2f is below the Coinbase venue threshold $%.2f; aggregate platform capital may still satisfy startup ===",
             cash_label,
             available_cash,
+            self._coinbase_cash_low_threshold,
         )
 
     def _is_cache_valid(self, cache_time) -> bool:
