@@ -28,6 +28,11 @@ from bot.redis_env import get_redis_env_presence, get_redis_url, get_redis_url_s
 # nonce init) can log safely before the full logging pipeline is configured.
 logger = logging.getLogger("nija.bootstrap")
 
+# Reserved process exit code used when startup is blocked by an active
+# distributed writer lock holder. This is an expected fail-closed condition
+# in singleton deployments, not an application crash.
+LOCK_CONTENTION_EXIT_CODE = 42
+
 # ── Runtime env normalization (operator-friendly aliases + safe defaults) ──
 _truthy_values = ("1", "true", "yes", "on", "enabled")
 
@@ -1186,7 +1191,7 @@ def _acquire_distributed_process_lock() -> None:
                 print("┃ Action:   Exiting fail-closed to preserve one-writer invariant.          ┃")
                 print("┗" + "━" * 78 + "┛\n")
                 logger.critical("Another instance is active — exiting immediately")
-                os._exit(1)
+                os._exit(LOCK_CONTENTION_EXIT_CODE)
 
             time.sleep(_lock_retry_interval)
             try:
@@ -1205,7 +1210,7 @@ def _acquire_distributed_process_lock() -> None:
             print(f"┃ Holder:   {_holder[:58]:<58} ┃")
             print("┗" + "━" * 78 + "┛\n")
             logger.critical("Another instance is active — exiting immediately")
-            os._exit(1)
+            os._exit(LOCK_CONTENTION_EXIT_CODE)
 
         _token = f"{_fencing_token}:{_owner}"
         _distributed_writer_lock_client = _client
