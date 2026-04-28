@@ -45,7 +45,11 @@ Date: March 2026
 from __future__ import annotations
 
 import logging
+import json
+import os
+from collections import Counter, deque
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from flask import Blueprint, jsonify
@@ -233,6 +237,67 @@ def _safe_get_execution_routing_status() -> Dict[str, Any]:
         }
 
 
+def _safe_get_trade_decision_status() -> Dict[str, Any]:
+    """Return live not-taken reasons and recent decision events."""
+    decision_path = Path(
+        os.getenv("NIJA_DECISION_FEED_FILE", "./data/audit_logs/trade_decisions.jsonl")
+    )
+    if not decision_path.exists():
+        return {
+            "available": False,
+            "reason": f"Decision feed not found: {decision_path}",
+            "path": str(decision_path),
+        }
+
+    reason_counts: Counter[str] = Counter()
+    recent_events = deque(maxlen=50)
+    now = datetime.utcnow()
+    not_taken_5m = 0
+
+    try:
+        with decision_path.open("r", encoding="utf-8") as handle:
+            rows = handle.readlines()[-500:]
+
+        for raw in rows:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+
+            action = str(event.get("action") or "")
+            reason_code = str(event.get("reason_code") or "unknown")
+            timestamp = str(event.get("timestamp") or "")
+
+            if action in {"vetoed", "rejected", "skipped"}:
+                reason_counts[reason_code] += 1
+                recent_events.append(event)
+                try:
+                    ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    delta = (now - ts.replace(tzinfo=None)).total_seconds()
+                    if 0 <= delta <= 300:
+                        not_taken_5m += 1
+                except Exception:
+                    pass
+
+        return {
+            "available": True,
+            "path": str(decision_path),
+            "not_taken_last_5m": not_taken_5m,
+            "top_not_taken_reasons": dict(reason_counts.most_common(10)),
+            "recent_not_taken": list(recent_events),
+        }
+    except Exception as exc:
+        logger.debug("trade decision status error: %s", exc)
+        return {
+            "available": False,
+            "reason": str(exc),
+            "path": str(decision_path),
+        }
+
+
 # ---------------------------------------------------------------------------
 # Blueprint factory
 # ---------------------------------------------------------------------------
@@ -304,7 +369,18 @@ def create_enhanced_dashboard_blueprint(url_prefix: str = "") -> Blueprint:
                 "strategy_intelligence": _safe_get_strategy_status(),
                 "kpi": _safe_get_kpi_summary(),
                 "execution_routing": _safe_get_execution_routing_status(),
+                "trade_decisions": _safe_get_trade_decision_status(),
             },
+        })
+
+    # ── /api/performance/decisions ─────────────────────────────────────
+    @bp.route("/api/performance/decisions", methods=["GET"])
+    def api_performance_decisions():
+        """Live summary of why trades were not taken."""
+        return jsonify({
+            "section": "trade_decisions",
+            "timestamp": datetime.utcnow().isoformat(),
+            "data": _safe_get_trade_decision_status(),
         })
 
     # ── /performance (HTML page) ───────────────────────────────────────
@@ -434,6 +510,7 @@ def create_enhanced_dashboard_blueprint(url_prefix: str = "") -> Blueprint:
       <a href="/api/performance/risk">/api/performance/risk</a>
       <a href="/api/performance/strategy">/api/performance/strategy</a>
       <a href="/api/performance/kpi">/api/performance/kpi</a>
+            <a href="/api/performance/decisions">/api/performance/decisions</a>
       <a href="/api/performance/full">/api/performance/full</a>
     </div>
     <p style="margin-top:8px">Auto-refreshes every 15 s &nbsp;|&nbsp; NIJA Trading Systems</p>

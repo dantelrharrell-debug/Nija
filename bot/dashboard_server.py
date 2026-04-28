@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from collections import Counter, deque
 from datetime import datetime, timedelta
 import psutil
 import signal as sig
@@ -180,6 +181,77 @@ def _get_account_manager():
     except Exception as e:
         logger.debug(f"Could not get account manager: {e}")
         return None
+
+
+def _get_not_taken_decision_summary(limit: int = 300, window_seconds: int = 300) -> dict:
+    """Aggregate recent trade-not-taken reasons from decision feed."""
+    decision_path = Path(
+        os.getenv("NIJA_DECISION_FEED_FILE", "./data/audit_logs/trade_decisions.jsonl")
+    )
+    if not decision_path.exists():
+        return {
+            "available": False,
+            "path": str(decision_path),
+            "reason": "decision_feed_missing",
+            "top_reasons": [],
+            "recent_not_taken": [],
+            "not_taken_last_window": 0,
+        }
+
+    reason_counts: Counter[str] = Counter()
+    recent_not_taken = deque(maxlen=20)
+    not_taken_last_window = 0
+    now = datetime.now()
+
+    try:
+        with decision_path.open("r", encoding="utf-8") as handle:
+            lines = handle.readlines()[-max(50, limit):]
+
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+
+            action = str(event.get("action") or "")
+            if action not in {"vetoed", "rejected", "skipped"}:
+                continue
+
+            reason_code = str(event.get("reason_code") or "unknown")
+            reason_counts[reason_code] += 1
+            recent_not_taken.append(event)
+
+            ts_raw = str(event.get("timestamp") or "")
+            try:
+                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).replace(tzinfo=None)
+                if 0 <= (now - ts).total_seconds() <= window_seconds:
+                    not_taken_last_window += 1
+            except Exception:
+                pass
+
+        return {
+            "available": True,
+            "path": str(decision_path),
+            "not_taken_last_window": not_taken_last_window,
+            "top_reasons": [
+                {"reason": reason, "count": count}
+                for reason, count in reason_counts.most_common(10)
+            ],
+            "recent_not_taken": list(recent_not_taken),
+        }
+    except Exception as exc:
+        logger.debug("Decision summary unavailable: %s", exc)
+        return {
+            "available": False,
+            "path": str(decision_path),
+            "reason": str(exc),
+            "top_reasons": [],
+            "recent_not_taken": [],
+            "not_taken_last_window": 0,
+        }
 
 
 def _get_live_strategy_context():
@@ -1020,6 +1092,44 @@ def human_readable_status():
             html += "</div>"
 
         # User details (if available)
+
+        decision_summary = _get_not_taken_decision_summary(limit=300, window_seconds=300)
+
+        html += """
+        <h2 style="margin-top: 30px; color: #1d9bf0;">🚫 Trade Not Taken (Last 5m)</h2>
+        <div class="status-box" style="padding: 20px;">
+            <div class="info-grid" style="margin-top: 0;">
+                <div class="info-card">
+                    <div class="info-label">Not Taken Count</div>
+                    <div class="info-value">""" + str(decision_summary.get('not_taken_last_window', 0)) + """</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">Decision Feed</div>
+                    <div class="info-value" style="font-size: 14px;">""" + (
+                        "ONLINE" if decision_summary.get('available') else "OFFLINE"
+                    ) + """</div>
+                </div>
+            </div>
+            <div style="margin-top: 14px; font-size: 13px; color: #e7e9ea;">
+                <strong>Top reasons:</strong>
+                <ul style="margin: 8px 0 0 18px;">
+        """
+
+        top_reasons = decision_summary.get('top_reasons', [])
+        if top_reasons:
+            for item in top_reasons[:6]:
+                html += "<li>" + str(item.get('reason', 'unknown')) + ": " + str(item.get('count', 0)) + "</li>"
+        else:
+            html += "<li>No not-taken decisions recorded yet</li>"
+
+        html += """
+                </ul>
+                <div style="margin-top: 10px; font-size: 12px; color: #71767b;">
+                    API: <a href="/api/decisions/not-taken" style="color: #1d9bf0;">/api/decisions/not-taken</a>
+                </div>
+            </div>
+        </div>
+        """
         if data.get('users') and len(data.get('users', [])) > 0:
             html += """
         <h2 style="margin-top: 30px; color: #1d9bf0;">👥 User Accounts & Trading Activity</h2>"""
@@ -1306,6 +1416,19 @@ def create_dashboard_html():
             <div id="alerts-container" class="loading">Loading alerts...</div>
         </div>
 
+        <!-- Trade Not Taken Reasons -->
+        <div class="card" style="margin-bottom: 20px;">
+            <h2>🚫 Trade Not Taken (Live)</h2>
+            <div class="metric" style="margin-bottom: 14px;">
+                <div class="metric-label">Last 5 minutes</div>
+                <div class="metric-value" id="not-taken-count">0</div>
+            </div>
+            <div id="not-taken-container" class="loading">Loading not-taken reasons...</div>
+            <div style="margin-top: 10px; font-size: 12px; color: #71767b;">
+                API: <a href="/api/decisions/not-taken" style="color:#1d9bf0;">/api/decisions/not-taken</a>
+            </div>
+        </div>
+
         <!-- Recent Trades -->
         <div class="card">
             <h2>📈 Recent Trades</h2>
@@ -1432,16 +1555,56 @@ def create_dashboard_html():
             `;
         }
 
+        function updateNotTaken(summary) {
+            const container = document.getElementById('not-taken-container');
+            const countEl = document.getElementById('not-taken-count');
+
+            if (!summary || summary.error) {
+                countEl.textContent = '0';
+                container.innerHTML = '<div style="padding: 12px; color: #71767b;">Decision summary unavailable</div>';
+                return;
+            }
+
+            countEl.textContent = summary.not_taken_last_window || 0;
+            const reasons = summary.top_reasons || [];
+
+            if (!reasons.length) {
+                container.innerHTML = '<div style="padding: 12px; color: #71767b;">No veto reasons recorded yet</div>';
+                return;
+            }
+
+            container.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Reason</th>
+                            <th>Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${reasons.slice(0, 8).map(item => `
+                            <tr>
+                                <td>${item.reason || 'unknown'}</td>
+                                <td>${item.count || 0}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
         async function refreshAll() {
-            const [status, alerts, trades] = await Promise.all([
+            const [status, alerts, trades, notTaken] = await Promise.all([
                 fetchData('status'),
                 fetchData('alerts'),
-                fetchData('trades')
+                fetchData('trades'),
+                fetchData('decisions/not-taken')
             ]);
 
             updateStatus(status);
             updateAlerts(alerts);
             updateTrades(trades);
+            updateNotTaken(notTaken);
 
             lastUpdate = Date.now();
             document.getElementById('refresh-status').textContent =
@@ -1928,6 +2091,20 @@ def get_rejection_reasons():
     except Exception as e:
         logger.error(f"Error getting rejection reasons: {e}")
         return jsonify({'error': 'Failed to retrieve rejection reasons'}), 500
+
+
+@app.route('/api/decisions/not-taken')
+def get_not_taken_decisions():
+    """Get live reasons why trades were not taken from decision telemetry."""
+    try:
+        window_seconds = request.args.get('window_seconds', default=300, type=int)
+        limit = request.args.get('limit', default=300, type=int)
+        summary = _get_not_taken_decision_summary(limit=limit, window_seconds=window_seconds)
+        summary['timestamp'] = datetime.now().isoformat()
+        return jsonify(summary)
+    except Exception as e:
+        logger.error(f"Error getting not-taken decisions: {e}")
+        return jsonify({'error': 'Failed to retrieve not-taken decision summary'}), 500
 
 
 @app.route('/api/positions/live')

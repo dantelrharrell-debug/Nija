@@ -37,6 +37,7 @@ class DashboardState:
     platform: Dict[str, Any] = field(default_factory=dict)
     users: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     signals: Dict[str, Any] = field(default_factory=dict)
+    decisions: Dict[str, Any] = field(default_factory=dict)
     recency_events: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=200))
     errors: List[str] = field(default_factory=list)
 
@@ -102,6 +103,7 @@ class RealtimeDashboardCollector:
                 platform=dict(self._state.platform),
                 users={k: dict(v) for k, v in self._state.users.items()},
                 signals=dict(self._state.signals),
+                decisions=dict(self._state.decisions),
                 recency_events=deque(self._state.recency_events, maxlen=200),
                 errors=list(self._state.errors),
             )
@@ -138,6 +140,7 @@ class RealtimeDashboardCollector:
             errors.append("bot_status_unavailable")
 
         users, signals, events = self._load_user_and_signal_telemetry()
+        decisions = self._load_trade_decisions_telemetry()
         platform = self._build_platform_summary(users, bot_metrics, bot_status)
 
         self._g_platform_balance.set(float(platform.get("balance_usd", 0.0)))
@@ -152,8 +155,45 @@ class RealtimeDashboardCollector:
             self._state.platform = platform
             self._state.users = users
             self._state.signals = signals
+            self._state.decisions = decisions
             self._state.recency_events = events
             self._state.errors = errors
+
+    def _load_trade_decisions_telemetry(self) -> Dict[str, Any]:
+        decisions_path = self.data_root / "audit_logs" / "trade_decisions.jsonl"
+        decision_events = list(self._load_json_lines(decisions_path))
+        if len(decision_events) > 300:
+            decision_events = decision_events[-300:]
+
+        reason_counts: Counter[str] = Counter()
+        recent_not_taken: Deque[Dict[str, Any]] = deque(maxlen=50)
+        recent_candidates: Deque[Dict[str, Any]] = deque(maxlen=50)
+        now = datetime.now(timezone.utc)
+        not_taken_5m = 0
+
+        for event in decision_events:
+            action = str(event.get("action") or "")
+            reason_code = str(event.get("reason_code") or "unknown")
+            ts_raw = str(event.get("timestamp") or "")
+
+            if action in {"vetoed", "skipped", "rejected"}:
+                reason_counts[reason_code] += 1
+                recent_not_taken.append(event)
+                try:
+                    event_ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    if (now - event_ts).total_seconds() <= 300:
+                        not_taken_5m += 1
+                except Exception:
+                    pass
+            elif action == "evaluated":
+                recent_candidates.append(event)
+
+        return {
+            "not_taken_last_5m": not_taken_5m,
+            "top_not_taken_reasons": dict(reason_counts.most_common(8)),
+            "recent_not_taken": list(recent_not_taken),
+            "recent_candidates": list(recent_candidates),
+        }
 
     def _try_fetch_prometheus(self, url: str) -> Tuple[bool, Dict[str, float]]:
         try:
@@ -377,6 +417,7 @@ def overview() -> Dict[str, Any]:
     return {
         "platform": state.platform,
         "signals": state.signals,
+        "decisions": state.decisions,
         "users": state.users,
         "last_refresh_utc": state.last_refresh_utc,
         "errors": state.errors,
@@ -398,6 +439,7 @@ def signals() -> Dict[str, Any]:
     state = collector.snapshot()
     return {
         "signals": state.signals,
+        "decisions": state.decisions,
         "recent_events": list(state.recency_events),
         "last_refresh_utc": state.last_refresh_utc,
     }
@@ -423,6 +465,7 @@ def stream() -> StreamingResponse:
             payload = {
                 "platform": state.platform,
                 "signals": state.signals,
+                "decisions": state.decisions,
                 "users": state.users,
                 "last_refresh_utc": state.last_refresh_utc,
             }
@@ -451,9 +494,99 @@ def root() -> JSONResponse:
                 "/api/v1/users/{user_id}",
                 "/api/v1/signals",
                 "/api/v1/stream",
+                                "/dashboard/live",
             ],
         }
     )
+
+
+@app.get("/dashboard/live")
+def live_dashboard() -> PlainTextResponse:
+        html = """<!doctype html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"utf-8\" />
+    <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+    <title>NIJA Live Signal Dashboard</title>
+    <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+        .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(250px,1fr)); gap: 12px; }
+        .card { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 12px; }
+        h1 { font-size: 1.2rem; margin: 0 0 10px 0; }
+        h2 { font-size: 0.95rem; margin: 0 0 8px 0; color: #93c5fd; }
+        .muted { color: #94a3b8; font-size: 0.85rem; }
+        ul { margin: 0; padding-left: 16px; }
+        li { margin: 4px 0; font-size: 0.86rem; }
+        .ok { color: #22c55e; }
+        .warn { color: #f59e0b; }
+        .bad { color: #ef4444; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+</head>
+<body>
+    <div class=\"wrap\">
+        <h1>NIJA Live Signals and Trade Decisions</h1>
+        <div class=\"muted\" id=\"stamp\">Waiting for stream...</div>
+        <div class=\"grid\" style=\"margin-top:12px\">
+            <div class=\"card\"><h2>Platform</h2><div id=\"platform\"></div></div>
+            <div class=\"card\"><h2>Signals</h2><div id=\"signals\"></div></div>
+            <div class=\"card\"><h2>Trade Not Taken (5m)</h2><div id=\"notTaken\"></div></div>
+        </div>
+        <div class=\"grid\" style=\"margin-top:12px\">
+            <div class=\"card\"><h2>Top Not-Taken Reasons</h2><ul id=\"reasonList\"></ul></div>
+            <div class=\"card\"><h2>Recent Candidates</h2><ul id=\"candidateList\"></ul></div>
+            <div class=\"card\"><h2>Recent Vetoes</h2><ul id=\"vetoList\"></ul></div>
+        </div>
+    </div>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const stream = new EventSource('/api/v1/stream');
+        const fmt = (v) => (typeof v === 'number' ? v.toFixed(2) : v ?? '-');
+        const listInto = (el, items) => {
+            el.innerHTML = '';
+            if (!items || !items.length) {
+                el.innerHTML = '<li class="muted">No data yet</li>';
+                return;
+            }
+            items.slice(-12).reverse().forEach((it) => {
+                const li = document.createElement('li');
+                li.innerHTML = it;
+                el.appendChild(li);
+            });
+        };
+
+        stream.onmessage = (evt) => {
+            const data = JSON.parse(evt.data);
+            const p = data.platform || {};
+            const s = data.signals || {};
+            const d = data.decisions || {};
+
+            $('stamp').textContent = `Last refresh: ${data.last_refresh_utc || 'unknown'}`;
+            $('platform').innerHTML = `<div>Balance: <span class=\"mono\">$${fmt(p.balance_usd)}</span></div>
+                <div>Active positions: <span class=\"mono\">${p.active_positions ?? 0}</span></div>
+                <div>Bot ready: <span class=\"${p.bot_ready ? 'ok' : 'bad'}\">${p.bot_ready ? 'yes' : 'no'}</span></div>`;
+            $('signals').innerHTML = `<div>Signals total: <span class=\"mono\">${s.signals_total ?? 0}</span></div>
+                <div>Signals last 5m: <span class=\"mono\">${s.signals_last_5m ?? 0}</span></div>
+                <div>Position rejections: <span class=\"mono\">${s.position_rejections_total ?? 0}</span></div>`;
+            $('notTaken').innerHTML = `<div class=\"bad mono\">${d.not_taken_last_5m ?? 0}</div>`;
+
+            const reasons = Object.entries(d.top_not_taken_reasons || {}).map(([k,v]) => `<span class=\"mono\">${k}</span>: ${v}`);
+            listInto($('reasonList'), reasons);
+            const candidates = (d.recent_candidates || []).map((e) => `<span class=\"mono\">${e.symbol || '?'}</span> ${e.signal || '?'} score=${fmt(e.confidence)} (${e.reason_code || 'candidate'})`);
+            listInto($('candidateList'), candidates);
+            const vetoes = (d.recent_not_taken || []).map((e) => `<span class=\"mono\">${e.symbol || '?'}</span> ${e.reason_code || 'unknown'} - ${(e.reason_detail || '').slice(0,80)}`);
+            listInto($('vetoList'), vetoes);
+        };
+
+        stream.onerror = () => {
+            $('stamp').textContent = 'Stream disconnected. Retrying...';
+        };
+    </script>
+</body>
+</html>
+"""
+        return PlainTextResponse(html, media_type="text/html")
 
 
 if __name__ == "__main__":

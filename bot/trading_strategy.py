@@ -3404,6 +3404,17 @@ class TradingStrategy:
             'rsi_14': None
         }
 
+        # Live decision feed for dashboards (recent in-memory + JSONL append-only).
+        self._recent_trade_decisions = collections.deque(maxlen=250)
+        self._decision_feed_lock = threading.Lock()
+        self._decision_feed_file = Path(
+            os.getenv("NIJA_DECISION_FEED_FILE", "./data/audit_logs/trade_decisions.jsonl")
+        )
+        try:
+            self._decision_feed_file.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as _decision_feed_dir_err:
+            logger.debug("Decision feed directory init skipped: %s", _decision_feed_dir_err)
+
         # Initialize safety controller (App Store compliance)
         try:
             from safety_controller import get_safety_controller, TradingMode
@@ -7183,6 +7194,64 @@ class TradingStrategy:
             'rsi_9': rsi_9,
             'rsi_14': rsi_14
         }
+
+    def _record_trade_decision_event(
+        self,
+        symbol: str,
+        signal: str,
+        action: str,
+        reason_code: str,
+        reason_detail: str = "",
+        confidence: float = None,
+        position_size: float = None,
+        broker: str = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record one trade decision event for real-time operator visibility."""
+        event = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "symbol": symbol,
+            "signal": signal,
+            "action": action,
+            "reason_code": reason_code,
+            "reason_detail": reason_detail,
+            "confidence": confidence,
+            "position_size": position_size,
+            "broker": broker,
+        }
+        if extra:
+            event["extra"] = extra
+
+        self._recent_trade_decisions.append(event)
+
+        try:
+            with self._decision_feed_lock:
+                with self._decision_feed_file.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+        except Exception as _decision_feed_err:
+            logger.debug("Decision feed append skipped: %s", _decision_feed_err)
+
+        veto_reasons = []
+        if action in ("vetoed", "skipped", "rejected"):
+            if reason_detail:
+                veto_reasons = [f"{reason_code}: {reason_detail}"]
+            else:
+                veto_reasons = [reason_code]
+        self._update_last_evaluated_trade(
+            symbol=symbol,
+            signal=signal,
+            action=action,
+            veto_reasons=veto_reasons,
+            position_size=position_size,
+            broker=broker,
+            confidence=confidence,
+        )
+
+    def get_recent_trade_decisions(self, limit: int = 50) -> list:
+        """Return recent trade decision events for operator dashboards."""
+        safe_limit = max(1, min(int(limit or 50), 250))
+        events = list(self._recent_trade_decisions)
+        return events[-safe_limit:]
 
     def _init_advanced_features(self, total_capital: float = 0.0):
         """Initialize progressive targets, exchange risk profiles, and capital allocation.
@@ -14257,6 +14326,21 @@ class TradingStrategy:
                             # Track why we didn't trade — use filter_stage from analyze_market
                             # for precise per-stage counting; fall back to reason-string matching.
                             if action == 'hold':
+                                self._record_trade_decision_event(
+                                    symbol=symbol,
+                                    signal='BUY',
+                                    action='vetoed',
+                                    reason_code='no_entry',
+                                    reason_detail=(reason or _filter_stage or 'no_entry_signal')[:180],
+                                    confidence=analysis.get('score'),
+                                    extra={'filter_stage': _filter_stage or 'unknown'},
+                                )
+                                logger.info(
+                                    "TRADE_NOT_TAKEN symbol=%s reason_code=no_entry filter_stage=%s detail=%s",
+                                    symbol,
+                                    _filter_stage or 'unknown',
+                                    (reason or 'no_entry_signal')[:120],
+                                )
                                 if 'Insufficient data' in reason or 'candles' in reason:
                                     filter_stats['insufficient_data'] += 1
                                 elif _filter_stage == 'smart_filter':
@@ -14327,6 +14411,20 @@ class TradingStrategy:
                                     if not _hf_ok:
                                         filter_stats['no_entry_signal'] += 1
                                         logger.info("   ⏱️  [HF-SCALP] %s blocked — %s", symbol, _hf_reason)
+                                        self._record_trade_decision_event(
+                                            symbol=symbol,
+                                            signal='BUY' if action == 'enter_long' else 'SELL',
+                                            action='vetoed',
+                                            reason_code='hf_scalp_rate_limit',
+                                            reason_detail=str(_hf_reason)[:180],
+                                            confidence=analysis.get('score'),
+                                            position_size=analysis.get('position_size'),
+                                        )
+                                        logger.info(
+                                            "TRADE_NOT_TAKEN symbol=%s reason_code=hf_scalp_rate_limit detail=%s",
+                                            symbol,
+                                            str(_hf_reason)[:120],
+                                        )
                                         continue
 
                                 # SPOT_ONLY / INCUBATION_MODE: block short entries
@@ -14335,6 +14433,19 @@ class TradingStrategy:
                                     logger.debug(
                                         f"   {symbol}: Blocked – SPOT_ONLY mode active "
                                         f"(short positions not permitted)"
+                                    )
+                                    self._record_trade_decision_event(
+                                        symbol=symbol,
+                                        signal='SELL',
+                                        action='vetoed',
+                                        reason_code='spot_only_short_blocked',
+                                        reason_detail='SPOT_ONLY mode active',
+                                        confidence=analysis.get('score'),
+                                        position_size=analysis.get('position_size'),
+                                    )
+                                    logger.info(
+                                        "TRADE_NOT_TAKEN symbol=%s reason_code=spot_only_short_blocked detail=SPOT_ONLY",
+                                        symbol,
                                     )
                                     continue
 
@@ -14368,6 +14479,23 @@ class TradingStrategy:
                                                 f"> {MAX_SECTOR_ALLOCATION:.0%} limit — signal skipped"
                                             )
                                             filter_stats['sector_cap'] += 1
+                                            self._record_trade_decision_event(
+                                                symbol=symbol,
+                                                signal='BUY' if action == 'enter_long' else 'SELL',
+                                                action='vetoed',
+                                                reason_code='sector_cap',
+                                                reason_detail=(
+                                                    f"{_sector_name}={_sector_alloc_usd / broker_balance:.1%} "
+                                                    f"> {MAX_SECTOR_ALLOCATION:.0%}"
+                                                ),
+                                                confidence=analysis.get('score'),
+                                                position_size=analysis.get('position_size'),
+                                            )
+                                            logger.info(
+                                                "TRADE_NOT_TAKEN symbol=%s reason_code=sector_cap detail=%s",
+                                                symbol,
+                                                f"{_sector_name}={_sector_alloc_usd / broker_balance:.1%}",
+                                            )
                                             continue
                                     except Exception as _sector_err:
                                         logger.debug(
@@ -14392,6 +14520,15 @@ class TradingStrategy:
                                     analysis.get('rsi_9', analysis.get('rsi9', '?')),
                                     analysis.get('rsi_14', analysis.get('rsi14', '?')),
                                     analysis.get('trend', analysis.get('direction', '?')),
+                                )
+                                self._record_trade_decision_event(
+                                    symbol=symbol,
+                                    signal='BUY' if action == 'enter_long' else 'SELL',
+                                    action='evaluated',
+                                    reason_code='signal_candidate',
+                                    reason_detail=(reason or 'candidate')[:180],
+                                    confidence=float(entry_score or 0),
+                                    position_size=float(position_size or 0),
                                 )
 
                                 # ── First-Trade Observer: SIGNAL_GENERATED checkpoint ──────
@@ -14458,6 +14595,20 @@ class TradingStrategy:
                                                     symbol, _sel_decision.reason,
                                                 )
                                                 filter_stats['market_filter'] += 1
+                                                self._record_trade_decision_event(
+                                                    symbol=symbol,
+                                                    signal='BUY' if action == 'enter_long' else 'SELL',
+                                                    action='vetoed',
+                                                    reason_code='smart_execution_skip',
+                                                    reason_detail=str(_sel_decision.reason)[:180],
+                                                    confidence=float(entry_score or 0),
+                                                    position_size=float(position_size or 0),
+                                                )
+                                                logger.info(
+                                                    "TRADE_NOT_TAKEN symbol=%s reason_code=smart_execution_skip detail=%s",
+                                                    symbol,
+                                                    str(_sel_decision.reason)[:120],
+                                                )
                                                 continue
 
                                         if _sel_decision.forced:
@@ -14507,6 +14658,24 @@ class TradingStrategy:
                                         f"   🚫 MINIMUM ENTRY SIZE GATE: {symbol} rejected — "
                                         f"order_size_usd ${position_size:.2f} < "
                                         f"EXCHANGE_MIN_ORDER_SIZE ${EXCHANGE_MIN_ORDER_SIZE:.2f}"
+                                    )
+                                    self._record_trade_decision_event(
+                                        symbol=symbol,
+                                        signal='BUY' if action == 'enter_long' else 'SELL',
+                                        action='vetoed',
+                                        reason_code='position_too_small',
+                                        reason_detail=(
+                                            f"order_size_usd={position_size:.2f} < "
+                                            f"exchange_min={EXCHANGE_MIN_ORDER_SIZE:.2f}"
+                                        ),
+                                        confidence=float(entry_score or 0),
+                                        position_size=float(position_size or 0),
+                                    )
+                                    logger.info(
+                                        "TRADE_NOT_TAKEN symbol=%s reason_code=position_too_small detail=%.2f<%.2f",
+                                        symbol,
+                                        float(position_size or 0),
+                                        float(EXCHANGE_MIN_ORDER_SIZE or 0),
                                     )
                                     continue
 

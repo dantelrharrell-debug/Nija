@@ -94,15 +94,15 @@ class HFScalpConfig:
     Default values are tuned for safer live operation when no explicit
     environment overrides are provided:
 
-        MIN_CONFIDENCE    0.45
+        MIN_CONFIDENCE    0.42
         volume_threshold  0.05
         volume_min_thr    0.002
         min_adx           10
         min_trend_conf    3/5
         TAKE_PROFIT       0.6 %
         STOP_LOSS         0.3 %
-        SCAN_INTERVAL     45 s
-        MAX_TRADES/HR     12
+        SCAN_INTERVAL     30 s
+        MAX_TRADES/HR     20
     """
 
     # ── Master switch ──────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ class HFScalpConfig:
 
     # ── Timing ────────────────────────────────────────────────────────────────
     cycle_interval_seconds: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_CYCLE_SECONDS", 45)
+        default_factory=lambda: _env_int("HF_SCALP_CYCLE_SECONDS", 30)
     )
     # env: HF_SCALP_CYCLE_SECONDS  (default 45 s vs normal 150 s)
 
@@ -127,12 +127,12 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.45)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.42)
     )
     # env: HF_SCALP_MIN_CONFIDENCE
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.45)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.42)
     )
     # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
 
@@ -152,7 +152,7 @@ class HFScalpConfig:
     # env: HF_SCALP_VOLUME_MIN_THRESHOLD
 
     min_trend_confirmation: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MIN_TREND_CONF", 3)
+        default_factory=lambda: _env_int("HF_SCALP_MIN_TREND_CONF", 2)
     )
     # env: HF_SCALP_MIN_TREND_CONF
 
@@ -174,12 +174,12 @@ class HFScalpConfig:
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     max_trades_per_hour: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MAX_TRADES_PER_HOUR", 12)
+        default_factory=lambda: _env_int("HF_SCALP_MAX_TRADES_PER_HOUR", 20)
     )
     # env: HF_SCALP_MAX_TRADES_PER_HOUR
 
     trade_cooldown_seconds: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_COOLDOWN_SECONDS", 45.0)
+        default_factory=lambda: _env_float("HF_SCALP_COOLDOWN_SECONDS", 30.0)
     )
     # env: HF_SCALP_COOLDOWN_SECONDS  (min gap between consecutive entries)
 
@@ -235,18 +235,18 @@ class HFScalpingMode:
 
         # Safer baseline for live production with small capital.
         floors = {
-            "cycle_interval_seconds": 45,
-            "min_confidence": 0.45,
-            "kraken_min_confidence": 0.45,
+            "cycle_interval_seconds": 30,
+            "min_confidence": 0.42,
+            "kraken_min_confidence": 0.42,
             "min_adx": 10,
             "volume_threshold": 0.05,
             "volume_min_threshold": 0.002,
-            "min_trend_confirmation": 3,
+            "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
             "profit_target_pct": 0.6,
             "stop_loss_pct": 0.3,
-            "max_trades_per_hour": 12,
-            "trade_cooldown_seconds": 45.0,
+            "max_trades_per_hour": 20,
+            "trade_cooldown_seconds": 30.0,
         }
 
         # Lower cap for trade frequency, lower bound for all other fields.
