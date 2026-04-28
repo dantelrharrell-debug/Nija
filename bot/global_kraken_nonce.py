@@ -1036,23 +1036,26 @@ class KrakenNonceManager:
         """
         _wait_for_probe_window("KrakenNonceManager.__new__")
         if not key_id:
-            # ── Platform singleton (original behaviour) ───────────────────
-            if cls._instance is None:
-                with cls._instance_lock:
-                    if cls._instance is None:
-                        instance = super().__new__(cls)
-                        instance._key_id = ""
-                        instance._init()
-                        cls._instance = instance
+            # ── Platform singleton (hard guard) ───────────────────────────
+            with cls._instance_lock:
+                if cls._instance is not None:
+                    raise RuntimeError("KrakenNonceManager already initialized in this process")
+                instance = super().__new__(cls)
+                instance._key_id = ""
+                instance._init()
+                cls._instance = instance
             return cls._instance
         else:
             # ── Per-key registry ──────────────────────────────────────────
             with _KEY_REGISTRY_LOCK:
-                if key_id not in _KEY_REGISTRY:
-                    instance = super().__new__(cls)
-                    instance._key_id = key_id
-                    instance._init()
-                    _KEY_REGISTRY[key_id] = instance
+                if key_id in _KEY_REGISTRY:
+                    raise RuntimeError(
+                        f"KrakenNonceManager already initialized in this process for key '{key_id}'"
+                    )
+                instance = super().__new__(cls)
+                instance._key_id = key_id
+                instance._init()
+                _KEY_REGISTRY[key_id] = instance
             return _KEY_REGISTRY[key_id]
 
     def _init(self) -> None:

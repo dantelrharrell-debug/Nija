@@ -1099,14 +1099,16 @@ def _acquire_distributed_process_lock() -> None:
 
         _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
 
-        # Never spin indefinitely: bounded wait + stale-aware compare-and-delete.
+        # Hard singleton guard: in LIVE mode we fail fast after 5s.
         _wait_s_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
         if not _wait_s_raw:
             _wait_s_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_s = float(_wait_s_raw) if _wait_s_raw else 15.0
+            _wait_s = float(_wait_s_raw) if _wait_s_raw else (5.0 if _live_mode else 15.0)
         except (TypeError, ValueError):
-            _wait_s = 15.0
+            _wait_s = 5.0 if _live_mode else 15.0
+        if _live_mode:
+            _wait_s = 5.0
         if _wait_s < 0.5:
             _wait_s = 0.5
         _lock_acquire_deadline = time.time() + _wait_s
@@ -1183,7 +1185,8 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
                 print("┃ Action:   Exiting fail-closed to preserve one-writer invariant.          ┃")
                 print("┗" + "━" * 78 + "┛\n")
-                sys.exit(1)
+                logger.critical("Another instance is active — exiting immediately")
+                os._exit(1)
 
             time.sleep(_lock_retry_interval)
             try:
@@ -1201,7 +1204,8 @@ def _acquire_distributed_process_lock() -> None:
             print(f"┃ Lock key: {_lock_key[-58:]:<58} ┃")
             print(f"┃ Holder:   {_holder[:58]:<58} ┃")
             print("┗" + "━" * 78 + "┛\n")
-            sys.exit(1)
+            logger.critical("Another instance is active — exiting immediately")
+            os._exit(1)
 
         _token = f"{_fencing_token}:{_owner}"
         _distributed_writer_lock_client = _client

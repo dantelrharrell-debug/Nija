@@ -549,6 +549,47 @@ except ImportError:
 logger = logging.getLogger('nija.broker')
 
 
+def _log_balance_snapshot(
+    account_label: str,
+    source: str,
+    usd_available: float,
+    secondary_available: float = 0.0,
+    secondary_label: str = "USDC",
+    usd_held: float = 0.0,
+    secondary_held: float = 0.0,
+    raw_balances: Optional[Dict[str, Any]] = None,
+    emit_info: bool = True,
+    emit_critical: bool = True,
+) -> None:
+    """Emit a normalized balance snapshot for all brokers/users/platforms."""
+    trading_balance = float(usd_available) + float(secondary_available)
+    total_held = float(usd_held) + float(secondary_held)
+    total_funds = trading_balance + total_held
+
+    if emit_info:
+        logging.info("-" * 70)
+        logging.info(f"💼 Balance Snapshot: {account_label}")
+        logging.info(f"   💰 Available USD (portfolio):  ${float(usd_available):.2f}")
+        logging.info(
+            f"   💰 Available {secondary_label} (portfolio): ${float(secondary_available):.2f}"
+        )
+        logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
+        if total_held > 0:
+            logging.info(f"   🔒 Held USD:  ${float(usd_held):.2f} (in open orders/positions)")
+            logging.info(
+                f"   🔒 Held {secondary_label}: ${float(secondary_held):.2f} "
+                "(in open orders/positions)"
+            )
+            logging.info(f"   🔒 Total Held: ${total_held:.2f}")
+            logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
+        logging.info(f"   (Source: {source})")
+        logging.info("-" * 70)
+
+    if emit_critical and raw_balances is not None:
+        logging.critical(f"=== RAW BALANCES [{account_label}] === {raw_balances}")
+        logging.critical(f"=== USD AVAILABLE [{account_label}] === {float(usd_available)}")
+
+
 def _reject_if_unauthorized_order_submit(
     broker_name: str,
     symbol: str,
@@ -898,7 +939,19 @@ def _feed_capital_authority(broker_key: str, balance: float, timestamp=None) -> 
             from bot.capital_authority import get_capital_authority as _get_ca
         except ImportError:
             from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
-        _get_ca().feed_broker_balance(broker_key, balance, timestamp=timestamp)
+        _ca = _get_ca()
+        _is_registered = getattr(_ca, "is_registered", None)
+        _wait_until_registered = getattr(_ca, "wait_until_registered", None)
+        if callable(_wait_until_registered):
+            if not _wait_until_registered(broker_key, timeout_s=5.0):
+                raise RuntimeError(
+                    f"CapitalAuthority source not registered for broker={broker_key} within 5s"
+                )
+        if callable(_is_registered):
+            assert _is_registered(broker_key), (
+                f"CapitalAuthority source must be registered before feed for broker={broker_key}"
+            )
+        _ca.feed_broker_balance(broker_key, balance, timestamp=timestamp)
         # Collapse eventual-consistency delay: signal the capital manager so it
         # can refresh synchronously on the feed event rather than waiting for
         # the next scheduled scan cycle.
@@ -3214,19 +3267,6 @@ class CoinbaseBroker(BaseBroker):
                 total_held = usd_held + usdc_held
                 total_funds = trading_balance + total_held
 
-                if verbose:
-                    logging.info("-" * 70)
-                    logging.info(f"   💰 Available USD (portfolio):  ${usd_balance:.2f}")
-                    logging.info(f"   💰 Available USDC (portfolio): ${usdc_balance:.2f}")
-                    logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
-                    if total_held > 0:
-                        logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
-                        logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
-                        logging.info(f"   🔒 Total Held: ${total_held:.2f}")
-                        logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
-                    logging.info("   (Source: get_portfolio_breakdown)")
-                    logging.info("-" * 70)
-
                 result = {
                     "usdc": usdc_balance,
                     "usd": usd_balance,
@@ -3240,8 +3280,18 @@ class CoinbaseBroker(BaseBroker):
                     "consumer_usdc": consumer_usdc,
                 }
 
-                logging.critical(f"=== RAW BALANCES === {result}")
-                logging.critical(f"=== USD AVAILABLE === {usd_balance}")
+                _log_balance_snapshot(
+                    account_label=f"coinbase:{self.account_identifier}",
+                    source="get_portfolio_breakdown",
+                    usd_available=usd_balance,
+                    secondary_available=usdc_balance,
+                    secondary_label="USDC",
+                    usd_held=usd_held,
+                    secondary_held=usdc_held,
+                    raw_balances=result,
+                    emit_info=verbose,
+                    emit_critical=True,
+                )
                 self._log_coinbase_cash_low(usd_balance, "USD available")
 
                 # Cache the result
@@ -3387,15 +3437,6 @@ class CoinbaseBroker(BaseBroker):
             total_funds = trading_balance + total_held
 
             if verbose:
-                logging.info("-" * 70)
-                logging.info(f"   💰 Available USD:  ${usd_balance:.2f}")
-                logging.info(f"   💰 Available USDC: ${usdc_balance:.2f}")
-                logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
-                if total_held > 0:
-                    logging.info(f"   🔒 Held USD:  ${usd_held:.2f} (in open orders/positions)")
-                    logging.info(f"   🔒 Held USDC: ${usdc_held:.2f} (in open orders/positions)")
-                    logging.info(f"   🔒 Total Held: ${total_held:.2f}")
-                    logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
                 logging.info(f"   🪙 Crypto Holdings: {len(crypto_holdings)} assets")
 
             # IMPROVEMENT #1: Enhanced consumer wallet detection and diagnosis
@@ -3435,8 +3476,18 @@ class CoinbaseBroker(BaseBroker):
                 "consumer_usdc": consumer_usdc,
             }
 
-            logging.critical(f"=== RAW BALANCES === {result}")
-            logging.critical(f"=== USD AVAILABLE === {usd_balance}")
+            _log_balance_snapshot(
+                account_label=f"coinbase:{self.account_identifier}",
+                source="get_accounts",
+                usd_available=usd_balance,
+                secondary_available=usdc_balance,
+                secondary_label="USDC",
+                usd_held=usd_held,
+                secondary_held=usdc_held,
+                raw_balances=result,
+                emit_info=verbose,
+                emit_critical=True,
+            )
             self._log_coinbase_cash_low(usd_balance, "USD available")
 
             # Cache the result
@@ -6165,16 +6216,27 @@ class AlpacaBroker(BaseBroker):
 
             # Enhanced logging to show breakdown (only if verbose=True)
             if verbose:
-                logger.info("=" * 70)
-                logger.info(f"💰 Alpaca Balance ({self.account_identifier}):")
-                logger.info(f"   ✅ Cash: ${cash:.2f}")
-                if position_value > 0:
-                    logger.info(f"   📊 Position Value: ${position_value:.2f}")
-                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f}")
-                else:
-                    logger.info(f"   💎 TOTAL EQUITY: ${equity:.2f} (no positions)")
-                logger.info("=" * 70)
+                alpaca_raw = {
+                    "usd": cash,
+                    "usdc": 0.0,
+                    "trading_balance": cash,
+                    "usd_held": max(0.0, position_value),
+                    "usdc_held": 0.0,
+                    "total_held": max(0.0, position_value),
+                    "total_funds": equity,
+                }
+                _log_balance_snapshot(
+                    account_label=f"alpaca:{self.account_identifier}",
+                    source="alpaca.get_account",
+                    usd_available=cash,
+                    secondary_available=0.0,
+                    secondary_label="USDC",
+                    usd_held=max(0.0, position_value),
+                    secondary_held=0.0,
+                    raw_balances=alpaca_raw,
+                    emit_info=True,
+                    emit_critical=True,
+                )
             else:
                 # Minimal logging when verbose=False
                 logger.debug(f"Alpaca balance ({self.account_identifier}): ${equity:.2f}")
@@ -6686,7 +6748,27 @@ class BinanceBroker(BaseBroker):
                 if balance['asset'] == 'USDT':
                     available = float(balance.get('free', 0))
                     if verbose:
-                        logging.info(f"💰 Binance USDT Balance: ${available:.2f}")
+                        binance_raw = {
+                            "usd": 0.0,
+                            "usdt": available,
+                            "trading_balance": available,
+                            "usd_held": 0.0,
+                            "usdt_held": 0.0,
+                            "total_held": 0.0,
+                            "total_funds": available,
+                        }
+                        _log_balance_snapshot(
+                            account_label=f"binance:{self.account_identifier}",
+                            source="binance.get_account",
+                            usd_available=0.0,
+                            secondary_available=available,
+                            secondary_label="USDT",
+                            usd_held=0.0,
+                            secondary_held=0.0,
+                            raw_balances=binance_raw,
+                            emit_info=True,
+                            emit_critical=True,
+                        )
                     else:
                         logging.debug(f"Binance USDT Balance: ${available:.2f}")
                     return available
@@ -8385,13 +8467,27 @@ class KrakenBroker(BaseBroker):
                         # starved of its first source on the success path.
                         _feed_capital_authority("kraken", total_funds)
 
-                        logger.info(f"   Account: {self.account_identifier}")
-                        logger.info(f"   USD Balance: ${usd_balance:.2f}")
-                        logger.info(f"   USDT Balance: ${usdt_balance:.2f}")
-                        logger.info(f"   Total Available: ${total:.2f}")
-                        if held_amount > 0:
-                            logger.info(f"   Held in Orders: ${held_amount:.2f}")
-                            logger.info(f"   Total Funds: ${total_funds:.2f}")
+                        kraken_connect_raw = {
+                            "usd": usd_balance,
+                            "usdt": usdt_balance,
+                            "trading_balance": total,
+                            "usd_held": held_amount,
+                            "usdt_held": 0.0,
+                            "total_held": held_amount,
+                            "total_funds": total_funds,
+                        }
+                        _log_balance_snapshot(
+                            account_label=f"kraken:{self.account_identifier}",
+                            source="connect:Balance+TradeBalance",
+                            usd_available=usd_balance,
+                            secondary_available=usdt_balance,
+                            secondary_label="USDT",
+                            usd_held=held_amount,
+                            secondary_held=0.0,
+                            raw_balances=kraken_connect_raw,
+                            emit_info=True,
+                            emit_critical=True,
+                        )
                         if (NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
                                 and not getattr(self, "_capital_gate_override_logged", False)):
                             logger.warning(
@@ -9007,14 +9103,6 @@ class KrakenBroker(BaseBroker):
 
                 # Enhanced balance logging with clear breakdown (Jan 19, 2026)
                 # Only log detailed breakdown if verbose is True
-                if verbose:
-                    logger.info("=" * 70)
-                    logger.info(f"💰 Kraken Balance ({self.account_identifier}):")
-                    logger.info(f"   ✅ Available USD:  ${usd_balance:.2f}")
-                    logger.info(f"   ✅ Available USDT: ${usdt_balance:.2f}")
-                    logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    logger.info(f"   💵 Total Available: ${total:.2f}")
-
                 # 🚑 FIX 4: Calculate total_funds (available + locked) for Kraken.
                 # Use the larger of:
                 #   1) local valuation (cash + held + priced non-USD assets), and
@@ -9037,13 +9125,28 @@ class KrakenBroker(BaseBroker):
                     total_funds,
                 )
 
+                kraken_raw = {
+                    "usd": usd_balance,
+                    "usdt": usdt_balance,
+                    "trading_balance": total,
+                    "usd_held": held_amount,
+                    "usdt_held": 0.0,
+                    "total_held": held_amount,
+                    "total_funds": total_funds,
+                }
+                _log_balance_snapshot(
+                    account_label=f"kraken:{self.account_identifier}",
+                    source="Balance+TradeBalance",
+                    usd_available=usd_balance,
+                    secondary_available=usdt_balance,
+                    secondary_label="USDT",
+                    usd_held=held_amount,
+                    secondary_held=0.0,
+                    raw_balances=kraken_raw,
+                    emit_info=verbose,
+                    emit_critical=True,
+                )
                 if verbose:
-                    if held_amount > 0:
-                        logger.info(f"   🔒 Held in open orders: ${held_amount:.2f}")
-                        logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                        logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
-                    logger.info("=" * 70)
-
                     # FIX #3 (Jan 20, 2026): Confirmation log for Kraken balance fetch
                     logger.info(f"✅ KRAKEN balance fetched: ${total_funds:.2f}")
                 else:
@@ -11378,16 +11481,27 @@ class OKXBroker(BaseBroker):
 
                     # Enhanced logging (only if verbose=True)
                     if verbose:
-                        logger.info("=" * 70)
-                        logger.info(f"💰 OKX Balance:")
-                        logger.info(f"   ✅ Available USDT: ${available:.2f}")
-                        if position_value > 0:
-                            logger.info(f"   📊 Position Value: ${position_value:.2f}")
-                            logger.info(f"   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                            logger.info(f"   💎 TOTAL EQUITY (Available + Positions): ${total_equity:.2f}")
-                        else:
-                            logger.info(f"   💎 TOTAL EQUITY: ${total_equity:.2f} (no positions)")
-                        logger.info("=" * 70)
+                        okx_raw = {
+                            "usd": 0.0,
+                            "usdt": available,
+                            "trading_balance": available,
+                            "usd_held": 0.0,
+                            "usdt_held": max(0.0, position_value),
+                            "total_held": max(0.0, position_value),
+                            "total_funds": total_equity,
+                        }
+                        _log_balance_snapshot(
+                            account_label=f"okx:{self.account_identifier}",
+                            source="okx.get_balance+positions",
+                            usd_available=0.0,
+                            secondary_available=available,
+                            secondary_label="USDT",
+                            usd_held=0.0,
+                            secondary_held=max(0.0, position_value),
+                            raw_balances=okx_raw,
+                            emit_info=True,
+                            emit_critical=True,
+                        )
                     else:
                         # Minimal logging when verbose=False
                         logger.debug(f"OKX balance: ${total_equity:.2f}")

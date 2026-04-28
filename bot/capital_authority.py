@@ -449,9 +449,9 @@ class CapitalAuthority:
         # ── Broker registration hard gate ─────────────────────────────────────
         # Mirrors the event on MultiAccountBrokerManager.  Set exactly once via
         # finalize_broker_registration() (called by MABM.finalize_broker_registration).
-        # feed_broker_balance() queues incoming feeds in _pending_feeds until
-        # the gate is open; they are flushed when finalize_broker_registration()
-        # is called.
+        # feed_broker_balance() is hard-gated and requires both:
+        #   1) broker registration complete event is set
+        #   2) broker_key was registered via register_source()
         self._broker_registration_complete: threading.Event = threading.Event()
         # ── Global startup lock — "NO EVALUATION BEFORE READY" ────────────────
         # References the module-level STARTUP_LOCK event.  Set exactly once via
@@ -460,8 +460,8 @@ class CapitalAuthority:
         # processed, FSM initialized.  Nothing is allowed to evaluate capital
         # (trigger refreshes, produce allocation plans) until this is set.
         self._startup_lock: threading.Event = STARTUP_LOCK
-        # Queue of (broker_key, balance, timestamp) tuples received before the
-        # registration gate was lifted.  Flushed by finalize_broker_registration().
+        # Legacy queue retained only for backward-compatibility with callers
+        # that inspect the field. New flow is hard-gated (no pre-registration queue).
         self._pending_feeds: List[Tuple[str, float, datetime]] = []
         # ── CSM v3 — warm-start flag ───────────────────────────────────────────
         # True when this instance was pre-populated from the on-disk state cache
@@ -766,36 +766,39 @@ class CapitalAuthority:
     # ------------------------------------------------------------------
 
     def finalize_broker_registration(self) -> None:
-        """Lift the broker-registration gate and flush any queued feeds.
+        """Lift the broker-registration gate.
 
         Called automatically by
         :meth:`~bot.multi_account_broker_manager.MultiAccountBrokerManager.finalize_broker_registration`
         once all platform and user brokers have been registered.  May also be
         called directly in test scenarios.
 
-        After this method returns:
-        * :meth:`feed_broker_balance` accepts live feeds immediately.
-        * Any feeds that arrived before the gate was lifted are replayed in
-          arrival order so no balance data is silently dropped.
+                After this method returns, :meth:`feed_broker_balance` accepts live
+                feeds only for sources already registered via :meth:`register_source`.
         """
         if self._broker_registration_complete.is_set():
             logger.debug("[CapitalAuthority] finalize_broker_registration: already complete — no-op")
             return
         self._broker_registration_complete.set()
         with self._lock:
-            pending = list(self._pending_feeds)
-            _pending_count = len(pending)
             self._pending_feeds.clear()
-        logger.info("[CapitalAuthority] Broker registration gate lifted — flushing %d pending feed(s)", _pending_count)
-        for broker_key, balance, ts in pending:
-            try:
-                self.feed_broker_balance(broker_key, balance, ts)
-            except Exception as _exc:
-                logger.warning(
-                    "[CapitalAuthority] Error replaying pending feed for broker=%s: %s",
-                    broker_key,
-                    _exc,
-                )
+        logger.info("[CapitalAuthority] Broker registration gate lifted")
+
+    def is_registered(self, broker_id: str) -> bool:
+        """Return True when *broker_id* has been registered via register_source()."""
+        key = str(broker_id)
+        with self._lock:
+            return key in self._balance_feeds
+
+    def wait_until_registered(self, broker_id: str, timeout_s: float = 5.0) -> bool:
+        """Wait briefly for broker registration to complete and include *broker_id*."""
+        key = str(broker_id)
+        deadline = time.monotonic() + max(0.1, float(timeout_s))
+        while time.monotonic() < deadline:
+            if self._broker_registration_complete.is_set() and self.is_registered(key):
+                return True
+            time.sleep(0.05)
+        return self._broker_registration_complete.is_set() and self.is_registered(key)
 
     # ------------------------------------------------------------------
     # Global startup lock — full system sync gate
@@ -1213,22 +1216,15 @@ class CapitalAuthority:
             ts = datetime.now(timezone.utc)
 
         # ── Broker registration hard gate ─────────────────────────────────────
-        # If the gate is not yet open (finalize_broker_registration() has not
-        # been called) queue this feed so it is not silently dropped.  Feeds
-        # queued here are replayed in order when the gate is lifted, preserving
-        # the full balance picture rather than losing early observations.
+        # Feed order is strict: register_source() must happen first.
         if not self._broker_registration_complete.is_set():
-            with self._lock:
-                self._pending_feeds.append((key, balance, ts))
-                _pending_count = len(self._pending_feeds)
-            logger.warning(
-                "[CapitalAuthority] feed_broker_balance QUEUED broker=%s balance=$%.2f "
-                "— broker registration not yet complete (%d pending)",
-                key,
-                balance,
-                _pending_count,
+            raise RuntimeError(
+                f"CapitalAuthority feed rejected for broker={key}: broker registration gate not complete"
             )
-            return
+        if not self.is_registered(key):
+            raise RuntimeError(
+                f"CapitalAuthority feed rejected for broker={key}: source not registered"
+            )
 
         with self._lock:
             existing_ts = self._broker_feed_timestamps.get(key)
@@ -1359,6 +1355,7 @@ class CapitalAuthority:
         key = str(broker_id)
         with self._lock:
             self._balance_feeds[key] = balance_feed
+        assert self.is_registered(key), f"CapitalAuthority source registration failed for broker={key}"
         logger.info("[CapitalAuthority] register_source: broker=%s feed registered", key)
 
         # Seed the initial balance immediately so downstream gates do not wait
@@ -1376,17 +1373,25 @@ class CapitalAuthority:
                 balance = float(raw)
             else:
                 balance = 0.0
-            # FIX 3: seed even for zero balance — zero confirms balance was fetched.
-            # The previous guard (if balance > 0) incorrectly blocked hydration
-            # for accounts that are genuinely empty at startup.
-            self.feed_broker_balance(key, balance)
-            if balance > 0.0:
+            seeded_now = False
+            if self._broker_registration_complete.is_set():
+                # FIX 3: seed even for zero balance — zero confirms balance was fetched.
+                # The previous guard (if balance > 0) incorrectly blocked hydration
+                # for accounts that are genuinely empty at startup.
+                self.feed_broker_balance(key, balance)
+                seeded_now = True
+            else:
+                logger.info(
+                    "[CapitalAuthority] register_source: broker=%s registered; seed deferred until registration gate opens",
+                    key,
+                )
+            if seeded_now and balance > 0.0:
                 logger.info(
                     "[CapitalAuthority] register_source: broker=%s seeded balance=$%.2f",
                     key,
                     balance,
                 )
-            else:
+            elif seeded_now:
                 logger.info(
                     "[CapitalAuthority] register_source: broker=%s seeded with zero balance "
                     "(confirmed fetch — account empty at registration time)",
