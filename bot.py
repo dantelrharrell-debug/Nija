@@ -418,7 +418,9 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     # explicit risk_ready flag is already persisted in initialized state.
     risk_ready = bool(state_snapshot.get("risk_ready", strategy_ready))
 
-    # capital_ready: BootstrapFSM must have reached CAPITAL_READY (or beyond).
+    # capital_ready: Prefer BootstrapFSM state, but fall back to CapitalAuthority
+    # readiness gates to avoid a false-negative race when FSM lag/availability
+    # does not reflect already-open capital authority gates.
     capital_ready = False
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
         try:
@@ -430,6 +432,38 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
             capital_ready = getattr(_bfsm_state, "value", str(_bfsm_state)) in _capital_states
         except Exception:
             capital_ready = False
+
+    if not capital_ready:
+        try:
+            try:
+                from bot.capital_authority import (
+                    get_capital_authority as _get_capital_authority,
+                    get_capital_hydrated_gate as _get_capital_hydrated_gate,
+                    get_startup_lock as _get_startup_lock,
+                )
+            except ImportError:
+                from capital_authority import (  # type: ignore[import]
+                    get_capital_authority as _get_capital_authority,
+                    get_capital_hydrated_gate as _get_capital_hydrated_gate,
+                    get_startup_lock as _get_startup_lock,
+                )
+
+            _ca = _get_capital_authority()
+            _startup_lock_open = bool(_get_startup_lock().is_set())
+            _hydrated_gate_open = bool(_get_capital_hydrated_gate().is_set())
+            _ca_hydrated = bool(getattr(_ca, "is_hydrated", False))
+
+            _ca_ready_method = getattr(_ca, "is_ready", None)
+            _ca_ready = bool(_ca_ready_method()) if callable(_ca_ready_method) else False
+
+            # Canonical authority gate: startup lock released and at least one
+            # hydration/ready signal present.
+            capital_ready = _startup_lock_open and (
+                _ca_hydrated or _hydrated_gate_open or _ca_ready
+            )
+        except Exception:
+            # Keep default False if authority introspection is unavailable.
+            pass
 
     # execution_ready: strategy must have a live execution engine.
     # TradingStrategy exposes execution_engine as a property that proxies
