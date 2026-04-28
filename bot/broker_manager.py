@@ -2384,9 +2384,9 @@ class CoinbaseBroker(BaseBroker):
         self._coinbase_cash_low_next_at = 0.0
         self._coinbase_cash_low_lock = threading.Lock()
         try:
-            self._coinbase_cash_low_threshold = float(os.getenv("NIJA_COINBASE_CASH_LOW_THRESHOLD", "50.0"))
+            self._coinbase_cash_low_threshold = float(os.getenv("NIJA_COINBASE_CASH_LOW_THRESHOLD", "10.0"))
         except (TypeError, ValueError):
-            self._coinbase_cash_low_threshold = 50.0
+            self._coinbase_cash_low_threshold = 10.0
 
         # In-memory permanent cache for entry prices fetched from Coinbase fills.
         # Once fetched successfully the price is not re-fetched until the position
