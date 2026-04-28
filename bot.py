@@ -1028,11 +1028,19 @@ def _acquire_distributed_process_lock() -> None:
         return
     try:
         import redis  # local import to avoid hard startup dependency when Redis isn't used
+        _ttl_s_raw = os.environ.get("NIJA_WRITER_LOCK_TTL_S", "").strip()
+        _lease_ttl_ms_raw = os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "").strip()
         try:
-            _ttl_s = max(30, int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "90")))
+            if _ttl_s_raw:
+                _ttl_s = max(30, int(_ttl_s_raw))
+            elif _lease_ttl_ms_raw:
+                _lease_ttl_ms = int(_lease_ttl_ms_raw)
+                _ttl_s = max(30, int((_lease_ttl_ms + 999) // 1000))
+            else:
+                _ttl_s = 90
         except (TypeError, ValueError):
             _ttl_s = 90
-            print("⚠️ Invalid NIJA_WRITER_LOCK_TTL_S value; using default 90s")
+            print("⚠️ Invalid lock TTL env value; using default 90s")
         _scope = _writer_lock_scope()
         _lock_key = os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_scope}"
         _fencing_key = os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_scope}"
@@ -1092,14 +1100,24 @@ def _acquire_distributed_process_lock() -> None:
         _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
 
         # Never spin indefinitely: bounded wait + stale-aware compare-and-delete.
+        _wait_s_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
+        if not _wait_s_raw:
+            _wait_s_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_s = float(os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "15"))
+            _wait_s = float(_wait_s_raw) if _wait_s_raw else 15.0
         except (TypeError, ValueError):
             _wait_s = 15.0
         if _wait_s < 0.5:
             _wait_s = 0.5
         _lock_acquire_deadline = time.time() + _wait_s
         _lock_retry_interval = 0.5
+        _wait_log_interval_raw = os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "").strip()
+        try:
+            _wait_log_interval_s = float(_wait_log_interval_raw) if _wait_log_interval_raw else 2.0
+        except (TypeError, ValueError):
+            _wait_log_interval_s = 2.0
+        if _wait_log_interval_s < 0.5:
+            _wait_log_interval_s = 0.5
         _next_wait_log = 0.0
 
         while _fencing_token <= 0:
@@ -1115,7 +1133,7 @@ def _acquire_distributed_process_lock() -> None:
                 print(
                     f"⏳ Waiting for distributed lock (retry in {_lock_retry_interval}s, holder_ttl={_ttl_s_human})..."
                 )
-                _next_wait_log = _now + 2.0
+                _next_wait_log = _now + _wait_log_interval_s
 
             if _now > _lock_acquire_deadline:
                 logger.critical(

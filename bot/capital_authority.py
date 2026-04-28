@@ -52,6 +52,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Mapping
@@ -572,10 +573,26 @@ class CapitalAuthority:
                 "expected_brokers": expected,
                 "saved_at": datetime.now(timezone.utc).isoformat(),
             }
-            tmp_file = _STATE_FILE.with_suffix(".tmp")
-            with open(tmp_file, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=2)
-            tmp_file.replace(_STATE_FILE)
+            # Use a unique temp file per save call to avoid cross-thread races
+            # when multiple snapshots are persisted in quick succession.
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(_STATE_DIR),
+                prefix="capital_authority_state.",
+                suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, indent=2)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp_path, _STATE_FILE)
+            finally:
+                # If replace() failed, remove the temp file best-effort.
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
             logger.debug(
                 "[CapitalAuthority] CSM v3 state saved — brokers=%s real=$%.2f",
                 sorted(balances.keys()),
