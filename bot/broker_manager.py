@@ -3281,7 +3281,7 @@ class CoinbaseBroker(BaseBroker):
                 }
 
                 _log_balance_snapshot(
-                    account_label=f"coinbase:{self.account_identifier}",
+                    account_label=f"coinbase:{getattr(self, 'account_identifier', getattr(self, 'account_type', 'PLATFORM'))}",
                     source="get_portfolio_breakdown",
                     usd_available=usd_balance,
                     secondary_available=usdc_balance,
@@ -3477,7 +3477,7 @@ class CoinbaseBroker(BaseBroker):
             }
 
             _log_balance_snapshot(
-                account_label=f"coinbase:{self.account_identifier}",
+                account_label=f"coinbase:{getattr(self, 'account_identifier', getattr(self, 'account_type', 'PLATFORM'))}",
                 source="get_accounts",
                 usd_available=usd_balance,
                 secondary_available=usdc_balance,
