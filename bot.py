@@ -926,7 +926,7 @@ def _release_distributed_process_lock() -> None:
 
 def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
     """Keep the distributed writer lock alive; fail closed if ownership is lost."""
-    _interval = max(10, ttl_s // 3)
+    _interval = max(3, ttl_s // 3)
     try:
         _max_failures = max(3, int(os.environ.get("NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES", "12")))
     except (TypeError, ValueError):
@@ -1032,15 +1032,15 @@ def _acquire_distributed_process_lock() -> None:
         _lease_ttl_ms_raw = os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "").strip()
         try:
             if _ttl_s_raw:
-                _ttl_s = max(30, int(_ttl_s_raw))
+                _ttl_s = max(15, int(_ttl_s_raw))
             elif _lease_ttl_ms_raw:
                 _lease_ttl_ms = int(_lease_ttl_ms_raw)
-                _ttl_s = max(30, int((_lease_ttl_ms + 999) // 1000))
+                _ttl_s = max(15, int((_lease_ttl_ms + 999) // 1000))
             else:
-                _ttl_s = 90
+                _ttl_s = 15
         except (TypeError, ValueError):
-            _ttl_s = 90
-            print("⚠️ Invalid lock TTL env value; using default 90s")
+            _ttl_s = 15
+            print("⚠️ Invalid lock TTL env value; using default 15s")
         _scope = _writer_lock_scope()
         _lock_key = os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_scope}"
         _fencing_key = os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_scope}"
@@ -1104,11 +1104,11 @@ def _acquire_distributed_process_lock() -> None:
         if not _wait_s_raw:
             _wait_s_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_s = float(_wait_s_raw) if _wait_s_raw else (5.0 if _live_mode else 15.0)
+            _wait_s = float(_wait_s_raw) if _wait_s_raw else (20.0 if _live_mode else 30.0)
         except (TypeError, ValueError):
-            _wait_s = 5.0 if _live_mode else 15.0
+            _wait_s = 20.0 if _live_mode else 30.0
         if _live_mode:
-            _wait_s = 5.0
+            _wait_s = 20.0
         if _wait_s < 0.5:
             _wait_s = 0.5
         _lock_acquire_deadline = time.time() + _wait_s
