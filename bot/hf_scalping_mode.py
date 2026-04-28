@@ -94,8 +94,8 @@ class HFScalpConfig:
     Default values are tuned for safer live operation when no explicit
     environment overrides are provided:
 
-        MIN_CONFIDENCE    0.42
-        volume_threshold  0.05
+        MIN_CONFIDENCE    0.38
+        volume_threshold  0.03
         volume_min_thr    0.002
         min_adx           10
         min_trend_conf    3/5
@@ -127,12 +127,12 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.42)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.38)
     )
     # env: HF_SCALP_MIN_CONFIDENCE
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.42)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.38)
     )
     # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
 
@@ -142,7 +142,7 @@ class HFScalpConfig:
     # env: HF_SCALP_MIN_ADX
 
     volume_threshold: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.05)
+        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.03)
     )
     # env: HF_SCALP_VOLUME_THRESHOLD
 
@@ -215,6 +215,18 @@ class HFScalpingMode:
                 self.config.stop_loss_pct,
                 self.config.max_trades_per_hour,
             )
+            _live_mode = _env_bool("LIVE_CAPITAL_VERIFIED", False) and not _env_bool("DRY_RUN_MODE", False)
+            _floor_enforced = _env_bool("HF_SCALP_ENFORCE_SAFETY_FLOOR", True) and _live_mode
+            _min_conf_source = "env" if os.environ.get("HF_SCALP_MIN_CONFIDENCE") is not None else "default"
+            _vol_source = "env" if os.environ.get("HF_SCALP_VOLUME_THRESHOLD") is not None else "default"
+            logger.info(
+                "HF effective gates — min_conf=%.2f (%s)  vol=%.0f%% (%s)  safety_floor=%s",
+                self.config.min_confidence,
+                _min_conf_source,
+                self.config.volume_threshold * 100,
+                _vol_source,
+                "on" if _floor_enforced else "off",
+            )
         else:
             logger.info("ℹ️  HF Scalping Mode INACTIVE (set HF_SCALP_MODE=1 to enable)")
 
@@ -236,10 +248,10 @@ class HFScalpingMode:
         # Safer baseline for live production with small capital.
         floors = {
             "cycle_interval_seconds": 30,
-            "min_confidence": 0.42,
-            "kraken_min_confidence": 0.42,
+            "min_confidence": 0.38,
+            "kraken_min_confidence": 0.38,
             "min_adx": 10,
-            "volume_threshold": 0.05,
+            "volume_threshold": 0.03,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
