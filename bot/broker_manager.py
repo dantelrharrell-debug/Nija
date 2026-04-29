@@ -955,15 +955,30 @@ def _feed_capital_authority(broker_key: str, balance: float, timestamp=None) -> 
     if balance <= 0:
         return
     try:
+        import time
         try:
             from bot.capital_authority import get_capital_authority as _get_ca
         except ImportError:
             from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
         _ca = _get_ca()
         _is_registered = getattr(_ca, "is_registered", None)
-        _wait_until_registered = getattr(_ca, "wait_until_registered", None)
-        if callable(_wait_until_registered):
-            if not _wait_until_registered(broker_key, timeout_s=5.0):
+        _registration_gate = getattr(_ca, "_broker_registration_complete", None)
+        if callable(_is_registered):
+            _deadline = time.monotonic() + 5.0
+            while time.monotonic() < _deadline:
+                if _is_registered(broker_key):
+                    break
+                if _registration_gate is not None and not _registration_gate.is_set():
+                    time.sleep(0.05)
+                    continue
+                time.sleep(0.05)
+            if not _is_registered(broker_key):
+                if _registration_gate is not None and not _registration_gate.is_set():
+                    logger.info(
+                        "[CapitalHook] feed deferred broker=%s: source registration still pending before startup gate opens",
+                        broker_key,
+                    )
+                    return
                 raise RuntimeError(
                     f"CapitalAuthority source not registered for broker={broker_key} within 5s"
                 )
@@ -971,6 +986,12 @@ def _feed_capital_authority(broker_key: str, balance: float, timestamp=None) -> 
             assert _is_registered(broker_key), (
                 f"CapitalAuthority source must be registered before feed for broker={broker_key}"
             )
+        if _registration_gate is not None and not _registration_gate.is_set():
+            logger.info(
+                "[CapitalHook] feed deferred broker=%s: broker registration gate not complete yet",
+                broker_key,
+            )
+            return
         _ca.feed_broker_balance(broker_key, balance, timestamp=timestamp)
         # Collapse eventual-consistency delay: signal the capital manager so it
         # can refresh synchronously on the feed event rather than waiting for
