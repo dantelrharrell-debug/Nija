@@ -160,6 +160,20 @@ if [ "${_STRICT_LEASE_RAW}" = "0" ] || [ "${_STRICT_LEASE_RAW}" = "false" ] || [
     _STRICT_LEASE=false
 fi
 
+_UNSAFE_BYPASS=false
+_UNSAFE_BYPASS_RAW=$(printf "%s" "${NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK:-0}" | tr '[:upper:]' '[:lower:]')
+if [ "${_UNSAFE_BYPASS_RAW}" = "1" ] || [ "${_UNSAFE_BYPASS_RAW}" = "true" ] || [ "${_UNSAFE_BYPASS_RAW}" = "yes" ] || [ "${_UNSAFE_BYPASS_RAW}" = "on" ]; then
+    _UNSAFE_BYPASS=true
+fi
+
+# Operator explicitly enabled unsafe writer-lock bypass. Keep nonce authority
+# behavior consistent by relaxing strict Redis lease as well.
+if [ "${_UNSAFE_BYPASS}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
+    export NIJA_STRICT_REDIS_LEASE=0
+    _STRICT_LEASE=false
+    echo "⚠️  Unsafe distributed-lock bypass enabled; disabling strict Redis nonce lease (NIJA_STRICT_REDIS_LEASE=0)."
+fi
+
 if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
     # Fail-fast defaults for trading safety (override via env if needed).
     export NIJA_REDIS_LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-30000}"

@@ -176,7 +176,10 @@ def _env_true(name: str, default: str = "0") -> bool:
 # the next nonce request. Keep the override env var, but default to 2 minutes
 # so routine idle windows do not look like split-brain.
 _REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "120000")))
-_STRICT_REDIS_LEASE = _env_true("NIJA_STRICT_REDIS_LEASE", "1")
+_STRICT_REDIS_LEASE = (
+    _env_true("NIJA_STRICT_REDIS_LEASE", "1")
+    and not _env_true("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "0")
+)
 _REDIS_LEASE_ACQUIRE_TIMEOUT_S = max(
     0.0, float(os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "90"))
 )
