@@ -1139,17 +1139,27 @@ def _acquire_distributed_process_lock() -> None:
             _client.ping()
         except Exception as _ping_exc:
             # Primary URL failed — try remaining configured URLs in priority order
+            # First, log host details for all configured URLs (credentials redacted) to aid diagnosis
+            def _redact_url(u: str) -> str:
+                try:
+                    from urllib.parse import urlparse
+                    _p = urlparse(u)
+                    return f"{_p.scheme}://***@{_p.hostname}:{_p.port}"
+                except Exception:
+                    return "<unparseable>"
+
             _all_urls = get_all_redis_urls()
+            print(f"⚠️ Redis primary URL ({_redis_url_source}) unreachable: {_ping_exc}")
+            print("  Configured Redis URLs (hosts only):")
+            for _src, _u in _all_urls:
+                print(f"    {_src}: {_redact_url(_u)}")
             _fallback_tried: list[str] = []
             _client_resolved = False
             for _fb_source, _fb_url in _all_urls:
                 if _fb_url == _redis_url:
                     continue  # already tried
                 _fallback_tried.append(_fb_source)
-                print(
-                    f"⚠️ Primary Redis URL ({_redis_url_source or 'unknown'}) unreachable: {_ping_exc}. "
-                    f"Trying fallback: {_fb_source}"
-                )
+                print(f"  Trying fallback: {_fb_source} ({_redact_url(_fb_url)})")
                 try:
                     _fb_client = redis.Redis.from_url(
                         _fb_url,
@@ -1167,13 +1177,27 @@ def _acquire_distributed_process_lock() -> None:
                 except Exception as _fb_exc:
                     print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
+                # Check if all URLs point to Railway internal networking
+                _internal_hosts = [
+                    _src for _src, _u in _all_urls
+                    if ".railway.internal" in _u
+                ]
+                _railway_hint = ""
+                if _internal_hosts:
+                    _railway_hint = (
+                        f"\n  ⚠️  ALL configured Redis URLs use Railway internal networking "
+                        f"({', '.join(_internal_hosts)}).\n"
+                        f"     Internal hostnames only work within the same Railway project with private networking.\n"
+                        f"     FIX: Go to Railway → Redis service → Connect tab → copy the PUBLIC proxy URL\n"
+                        f"     (format: redis://default:PASSWORD@maglev.proxy.rlwy.net:PORT)\n"
+                        f"     Set it as NIJA_REDIS_URL in the bot service Variables and redeploy."
+                    )
                 _ping_err_msg = (
-                    f"Redis connectivity check failed for distributed writer lock: {_ping_exc}\n"
+                    f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
+                    f"{_railway_hint}\n"
                     f"  Primary source: {_redis_url_source or 'unset'}\n"
                     f"  Fallbacks tried: {_fallback_tried or 'none'}\n"
-                    f"  Redis env presence: {_redis_env_presence}\n"
-                    f"  Hint: Go to Railway → Redis service → Connect tab and copy the full connection URL "
-                    f"(format: redis://default:PASSWORD@HOST:PORT). Set it as NIJA_REDIS_URL on the bot service."
+                    f"  Redis env presence: {_redis_env_presence}"
                 )
                 if _require_lock:
                     raise RuntimeError(_ping_err_msg) from _ping_exc
