@@ -298,6 +298,12 @@ _resolve_redis_url_source() {
 }
 
 _validate_redis_url_or_exit() {
+    # Skip Redis URL validation when the distributed-lock bypass is active;
+    # Redis is not required in that mode so an invalid/missing URL is harmless.
+    if [ "${_UNSAFE_BYPASS:-false}" = "true" ]; then
+        return 0
+    fi
+
     local _redis_url
     local _redis_source
     _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
