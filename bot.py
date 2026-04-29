@@ -21,7 +21,7 @@ import signal
 import threading
 import subprocess
 
-from bot.redis_env import get_redis_env_presence, get_redis_url, get_redis_url_source
+from bot.redis_env import get_all_redis_urls, get_redis_env_presence, get_redis_url, get_redis_url_source
 from bot.instance_identity import (
     current_instance_identity,
     format_instance_identity,
@@ -1138,9 +1138,49 @@ def _acquire_distributed_process_lock() -> None:
         try:
             _client.ping()
         except Exception as _ping_exc:
-            raise RuntimeError(
-                f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
-            ) from _ping_exc
+            # Primary URL failed — try remaining configured URLs in priority order
+            _all_urls = get_all_redis_urls()
+            _fallback_tried: list[str] = []
+            _client_resolved = False
+            for _fb_source, _fb_url in _all_urls:
+                if _fb_url == _redis_url:
+                    continue  # already tried
+                _fallback_tried.append(_fb_source)
+                print(
+                    f"⚠️ Primary Redis URL ({_redis_url_source or 'unknown'}) unreachable: {_ping_exc}. "
+                    f"Trying fallback: {_fb_source}"
+                )
+                try:
+                    _fb_client = redis.Redis.from_url(
+                        _fb_url,
+                        decode_responses=True,
+                        socket_connect_timeout=3,
+                        socket_timeout=3,
+                    )
+                    _fb_client.ping()
+                    _client = _fb_client
+                    _redis_url = _fb_url
+                    _redis_url_source = _fb_source
+                    print(f"✅ Redis fallback connected via {_fb_source}")
+                    _client_resolved = True
+                    break
+                except Exception as _fb_exc:
+                    print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
+            if not _client_resolved:
+                _ping_err_msg = (
+                    f"Redis connectivity check failed for distributed writer lock: {_ping_exc}\n"
+                    f"  Primary source: {_redis_url_source or 'unset'}\n"
+                    f"  Fallbacks tried: {_fallback_tried or 'none'}\n"
+                    f"  Redis env presence: {_redis_env_presence}\n"
+                    f"  Hint: Go to Railway → Redis service → Connect tab and copy the full connection URL "
+                    f"(format: redis://default:PASSWORD@HOST:PORT). Set it as NIJA_REDIS_URL on the bot service."
+                )
+                if _require_lock:
+                    raise RuntimeError(_ping_err_msg) from _ping_exc
+                print(f"⚠️ {_ping_err_msg}")
+                print("⚠️ Distributed writer lock SKIPPED (Redis unreachable and lock not required in this mode).")
+                print("   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 or LIVE_CAPITAL_VERIFIED=1 to enforce fail-closed behaviour.")
+                return
 
         def _try_acquire_once() -> tuple[int, str, int]:
             """Try one atomic acquire and return (token, holder, pttl_ms)."""

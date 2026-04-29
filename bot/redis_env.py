@@ -34,3 +34,13 @@ def get_redis_url_source() -> str:
 def get_redis_env_presence() -> dict[str, bool]:
     """Return whether each supported Redis URL environment variable is set."""
     return {name: bool(os.getenv(name, "").strip()) for name in _REDIS_URL_ENV_NAMES}
+
+
+def get_all_redis_urls() -> list[tuple[str, str]]:
+    """Return all configured Redis URLs as (source_env_name, url) in priority order."""
+    result = []
+    for name in _REDIS_URL_ENV_NAMES:
+        value = os.getenv(name, "").strip()
+        if value:
+            result.append((name, value))
+    return result
