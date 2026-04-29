@@ -21,7 +21,7 @@
 
 > **NIJA defaults to DISABLED mode (safe state) until credentials and the live-trading flag are set.**
 
-### 3-Step Setup
+### 4-Step Setup
 
 ```bash
 # Step 1: Copy the example env file
@@ -249,7 +249,7 @@ if signal.approved:
 
 
 
-## 🔒 CURRENT SUCCESS REFERENCE POINT — March 9, 2026 (v7.4.0)
+## 🔒 CURRENT SUCCESS REFERENCE POINT — March 26, 2026 (v7.6.0)
 
 > **Use this section to get back to the current working state at any time.**
 
@@ -257,6 +257,15 @@ if signal.approved:
 
 | Component | Status | Key Setting |
 |-----------|--------|-------------|
+| **Trading Enablement Guard** | ✅ Active | `LIVE_CAPITAL_VERIFIED=true` required for live entries; no credentials = `DISABLED` mode |
+| **Profit Compounding Engine** | ✅ Active | Closed trades feed `profit_compounding_engine.record_trade()`; multiplier capped at `2x` by default |
+| **Auto Reinvest Engine** | ✅ Active | Reinvests profits after each trade; module-level import path verified in v7.6.0 |
+| **Startup Hydration Gate** | ✅ Active | Balance hydration must complete before FSM/runtime loops start |
+| **Distributed Writer Lock** | ✅ Active | Live mode requires writer-lock ownership; fails closed when strict lock checks fail |
+| **Runtime Writer-Lock Verification** | ✅ Active | `NIJA_WRITER_RUNTIME_VERIFY_TTL_S=1.5`, fail-closed support via `NIJA_WRITER_RUNTIME_VERIFY_FAIL_CLOSED=true` |
+| **VolatilityGuard** | ✅ Active | Priority-1 gate; EXTREME volatility blocks entries, SEVERE/MODERATE scale size |
+| **TradeThrottler** | ✅ Active | Priority-2 gate; 3/min, 20/hr, 50/day, 5 s minimum gap |
+| **StrategyVoter** | ✅ Active | Priority-3 gate; requires 2+ agreeing strategies with at least 55% confidence |
 | **Coinbase Profit Targets** | ✅ Active | 5.0% → 3.5% → 2.5% → 2.0% → 1.6% (fractional format) |
 | **Stop-Loss — Coinbase** | ✅ Active | Primary -3% to -4% band (STOP_LOSS_PRIMARY_COINBASE = -3%) |
 | **Stop-Loss — Noise Floor** | ✅ Active | Exit on any loss > -0.05% (MIN_LOSS_FLOOR = -0.0005) |
@@ -275,6 +284,16 @@ if signal.approved:
 | **AI Regime Engine** | ✅ Active | Leading-indicator regime forecaster with early-warning rules and Markov matrix |
 | **Global Portfolio Engine** | ✅ Active | Regime-aware capital allocator across named strategies; routes entries through PortfolioMasterEngine |
 | **Execution Router** | ✅ Active | Venue selection, order-type picker (MARKET / LIMIT / TWAP), retry + fallback, ExchangeKillSwitch integration |
+
+### Release Summary For This Reference Point
+
+| Release | Verified Outcome |
+|---------|------------------|
+| **v7.6.0** | Reliability pass complete; post-trade recording imports promoted; profit compounding and trading flow verified end-to-end |
+| **v7.5.0** | Priority gate stack fully wired; both broken files repaired; 110 tests pass |
+| **v7.4.0** | Portfolio intelligence suite landed and degrades gracefully when optional subsystems are unavailable |
+| **v7.3.1** | Extreme-move P&L asserts removed; 17 core smoke tests pass |
+| **v7.3.0** | Bare exception cleanup complete; stop-loss logging corrected |
 
 ### Verified Bug Fixes in v7.3.1 (March 6, 2026 — Patch 1)
 
@@ -304,7 +323,7 @@ if signal.approved:
 
 ```bash
 # 1. Find this reference commit
-git log --oneline | grep "v7.3\|March 2026\|deep-clean"
+git log --oneline | grep "v7.6\|v7.5\|March 2026\|reliability\|compounding"
 
 # 2. Hard reset to it (DANGER: discards local changes)
 git reset --hard <commit-hash>
@@ -313,6 +332,8 @@ git reset --hard <commit-hash>
 python -m py_compile bot/trading_strategy.py && echo "✅ Syntax OK"
 python3 check_profit_status.py    # Comprehensive profit/loss report
 python3 diagnose_trading_logic.py # Verify buy/sell logic is not inverted
+curl -s http://127.0.0.1:${PORT:-8080}/health
+curl -s http://127.0.0.1:${PORT:-8080}/writer-lock
 
 # 4. Restart the bot
 bash start.sh
@@ -325,6 +346,7 @@ python3 check_profit_status.py     # Comprehensive P&L report (Kraken + Coinbase
 python3 diagnose_trading_logic.py  # Verify buy/sell logic mapping
 python3 analyze_profitability.py   # Full profitability analysis
 python3 smoke_test_core_fixes.py   # 17-test smoke suite (all must pass)
+curl -s http://127.0.0.1:${PORT:-8080}/status | jq '.writer_lock_ok, .writer_lock'
 ```
 
 ---
@@ -2235,9 +2257,9 @@ python3 check_platform_credentials.py
 **🚀 New to NIJA?** Quick activation in 10 minutes: **[User Trading Activation Quick Reference Card](USER_TRADING_ACTIVATION_QUICK_REF.md)** ⚡  
 **📖 Complete setup:** [Getting Started Guide](GETTING_STARTED.md)
 
-## 💎 Kraken Trading - Fully Enabled & Profit-Taking Verified
+## 💎 Kraken Trading - Supported & Profit-Taking Verified
 
-**Status**: ✅ **KRAKEN IS FULLY OPERATIONAL** - Independent Trading VERIFIED ✅
+**Status**: ✅ **KRAKEN SUPPORT IS IMPLEMENTED** - Independent trading and profit-taking paths are verified in code; live operation depends on valid Kraken credentials and deployment configuration
 
 | Component | Status | Details |
 |-----------|--------|---------|
@@ -2245,7 +2267,7 @@ python3 check_platform_credentials.py
 | **Independent Trading** | ✅ Enabled | All accounts trade independently using same logic |
 | **Profit-Taking** | ✅ VERIFIED | Platform + all users taking profits successfully |
 | **SDK Libraries** | ✅ Installed | krakenex + pykrakenapi in requirements.txt |
-| **Multi-Account** | ✅ Active | 3 accounts (platform + 2 users) trading live |
+| **Multi-Account** | ✅ Active | Supports 3 accounts (platform + 2 users) with independent trading when configured |
 
 ### 🚀 Quick Start - Enable Kraken
 
@@ -2307,7 +2329,7 @@ KRAKEN_PLATFORM_API_SECRET=your-private-key-here
 **Why Three Layers?**
 - **Kraken** = Legal proof of execution (what happened)
 - **Activity Feed** = Decision transparency (why it happened)
-- **Position Mirror** = Live tracking (current state)
+- **Position Mirror** = Live runtime tracking
 
 **Learn More**:
 - 📚 [THREE_LAYER_VISIBILITY.md](THREE_LAYER_VISIBILITY.md) - Complete visibility system guide
@@ -2527,25 +2549,24 @@ NIJA now features a secure, multi-user architecture with three distinct layers:
     - 🔧 [KRAKEN_CREDENTIAL_TROUBLESHOOTING.md](KRAKEN_CREDENTIAL_TROUBLESHOOTING.md) - Troubleshooting
     - ⚡ [RAILWAY_KRAKEN_SETUP.md](RAILWAY_KRAKEN_SETUP.md) - Railway deployment guide
 
-  **Status Summary**: ✅ **KRAKEN IS FULLY OPERATIONAL** - All 3 accounts will trade when bot starts
+   **Status Summary**: ⚠️ **KRAKEN IS NOT CURRENTLY CONFIGURED IN THIS ENVIRONMENT** - Trading remains disabled for Kraken until valid credentials are added and the deployment is restarted
 
 - **Check all brokers**: `python3 check_broker_status.py`
 - **Multi-Broker Guide**: [MULTI_BROKER_STATUS.md](MULTI_BROKER_STATUS.md)
 
 ---
 
-⚠️ **CRITICAL REFERENCE POINT**: This README documents the **v7.2 Profitability Upgrade** deployed December 23, 2025 with **Filter Optimization Fix** deployed December 27, 2025 and **P&L Tracking Fix** deployed December 28, 2025. See [RECOVERY_GUIDE.md](#recovery-guide-v72-profitability-locked) below to restore to this exact state if needed.
+ℹ️ **LEGACY REFERENCE POINT**: The section below preserves the historical **v7.2 Profitability Upgrade** context from December 2025. The active current-state recovery target is the **v7.6.0 reference point at the top of this README**.
 
 See Emergency Procedures: [EMERGENCY_PROCEDURES.md](EMERGENCY_PROCEDURES.md)
 
-**Version**: APEX v7.2 - PROFITABILITY UPGRADE + FILTER OPTIMIZATION + P&L TRACKING ✅ **LIVE & READY**
-**Status**: ✅ OPTIMIZED – Trading filters balanced, P&L tracking active, ready to make profitable trades
-**Last Updated**: December 28, 2025 - 02:30 UTC - P&L Tracking Fix Applied
-**Strategy Mode**: Balanced Profitability Mode (optimized filters, stepped exits, capital reserves, P&L tracking)
-**API Status**: ✅ Connected (Coinbase Advanced Trade); SDK compatibility verified working
-**Current Balance**: $34.54 (position sizing: ~$20.72 per trade at 60%)
-**Goal**: Consistent daily profitability with 8+ profitable trades/day achieving +16.8% daily growth
-**Git Commit**: All changes committed to branch — ready for deployment
+**Historical Version**: APEX v7.2 - Profitability Upgrade + Filter Optimization + P&L Tracking
+**Historical Status**: Legacy milestone preserved for rollback and audit context; superseded by the current v7.6.0 operating reference
+**Historical Updated Date**: December 28, 2025 - 02:30 UTC - P&L Tracking Fix Applied
+**Historical Strategy Mode**: Balanced Profitability Mode (optimized filters, stepped exits, capital reserves, P&L tracking)
+**Historical API Status**: Coinbase Advanced Trade connectivity verified during the v7.2 rollout
+**Historical Goal**: Restore consistent daily profitability after the December 2025 filter and tracking fixes
+**Recovery Guidance**: Use the v7.6.0 reference section at the top for current-state recovery; use this block only when intentionally investigating or restoring the December 2025 profitability baseline
 
 ---
 
@@ -2620,12 +2641,12 @@ NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic
 >   - **Timeline to $1000/day**: ~69 days on Binance (0.2% fees) vs 1000+ days on Coinbase (1.4% fees)
 > - 🎯 **Profitability Status**: YES - Now capable of finding and executing profitable trades
 > - 📝 **Documentation**: [PROFITABILITY_FIX_SUMMARY.md](PROFITABILITY_FIX_SUMMARY.md)
-> - ⏰ **Status**: FILTER OPTIMIZATION COMPLETE - Ready for deployment - Dec 27, 14:00 UTC
+> - ⏰ **Historical Status**: Filter optimization complete and marked ready for deployment on Dec 27, 14:00 UTC
 
 > **🔍 PROFITABILITY DIAGNOSTIC TOOLS - December 27, 2025 - ✅ ADDED**:
 > - 📊 **System Verification**: Comprehensive diagnostic tools to verify profitable trading capability
 > - ✅ **5/5 Checks Pass**: Profit targets, stop loss, position tracker, broker integration, fee-aware sizing
-> - 🎯 **Answer**: YES - NIJA is FULLY CONFIGURED for profitable trades and profit exits
+> - 🎯 **Historical Answer**: YES - the v7.2 profitability stack was fully configured for profitable trades and profit exits at that milestone
 > - 💡 **How It Works**:
 >   - Tracks entry prices in positions.json
 >   - Monitors P&L every 2.5 minutes
@@ -3142,13 +3163,13 @@ NIJA is configured for SUSTAINABLE GROWTH with smart capital management.
 - ❌ Only $5.05 cash (below $15 minimum)
 - ❌ Bot couldn't start
 
-**After Emergency (Now)**:
+**After Emergency (Historical Result)**:
 - ✅ 8 concurrent positions (3x capacity increase)
 - ✅ Equal capital allocation ($15 per position)
 - ✅ $120+ freed from liquidation
 - ✅ 1.5% stop loss (NO BLEEDING)
 - ✅ 2% profit lock + 98% trailing protection
-- ✅ Bot actively trading every 15 seconds
+- ✅ Bot was actively trading every 15 seconds at that point
 
 ### What Changed Your Timeline
 
@@ -3350,7 +3371,7 @@ python3 check_broker_status.py
 ./check_brokers.sh
 ```
 
-Expected output:
+Example output when trading is active:
 ```
 ✅ 1 BROKER(S) CONNECTED AND READY TO TRADE:
    🟦 Kraken Pro [PRIMARY] - $34.54
@@ -3368,7 +3389,7 @@ python3 check_active_trading_per_broker.py
 ./check_active_trading.sh
 ```
 
-Expected output:
+Example output:
 ```
 ✅ BROKERS ACTIVELY TRADING (1):
    🟦 Kraken Pro [PRIMARY]
@@ -3398,7 +3419,7 @@ This comprehensive check verifies:
 - ✅ 24/7 operational readiness (deployment configs, monitoring)
 - ✅ Current trading status
 
-Expected output:
+Example output:
 ```
 Overall Health Score: 85.7% (6/7 checks passed)
 
@@ -3439,7 +3460,7 @@ For detailed restart documentation, see [RESTART_GUIDE.md](RESTART_GUIDE.md).
 python verify_rebalance.py
 ```
 
-Expected output:
+Example output:
 ```
 💰 USD Balance: $16.40
 📊 Holdings Count: 8
@@ -3474,7 +3495,7 @@ WEB_CONCURRENCY=1
 python test_v2_balance.py
 ```
 
-Expected output:
+Example output:
 ```
 ✅ Connected!
 💰 BALANCES:
@@ -4271,7 +4292,7 @@ Trading Balance: $93.28
 🎯 RECENT ORDERS (last 60 minutes):
 🟢 1m ago - BUY BTC-USD (FILLED)
 
-✅ YES! NIJA IS ACTIVELY TRADING NOW!
+✅ YES! NIJA WAS ACTIVELY TRADING AT THAT VERIFICATION TIME
 ```
 
 #### Files Modified in This Fix
@@ -4291,12 +4312,12 @@ python3 -c "from bot.broker_manager import CoinbaseBroker; b=CoinbaseBroker(); b
 # {'usd': 35.74, 'usdc': 57.54, 'trading_balance': 93.28, ...}
 ```
 
-#### Last Known Working State
+#### Historical Working Snapshot
 
-**Commit**: Latest on main branch (Dec 20, 2025)
-**Balance**: $93.28 ($35.74 USD + $57.54 USDC)
-**Crypto**: BTC ($61.45), ETH ($0.91), ATOM ($0.60)
-**Status**: ACTIVELY TRADING (BTC-USD buy 1min ago)
+**Historical Commit**: Latest on main branch at that time (Dec 20, 2025)
+**Historical Balance**: $93.28 ($35.74 USD + $57.54 USDC)
+**Historical Crypto Snapshot**: BTC ($61.45), ETH ($0.91), ATOM ($0.60)
+**Historical Status**: Actively trading at verification time (BTC-USD buy 1 min earlier)
 **Verified**: December 20, 2025 16:25 UTC
 
 ---
@@ -4305,14 +4326,14 @@ python3 -c "from bot.broker_manager import CoinbaseBroker; b=CoinbaseBroker(); b
 
 ### If New Fix Breaks, Restore to Pre-Balance-Fix State
 
-This section will restore NIJA to the **last known working state** (December 16, 2025 - Trading successfully with $47.31 balance).
+This section will restore NIJA to the **historical working state** from December 16, 2025, when the bot was trading successfully with a $47.31 balance.
 
 #### Recovery Point Information
 
-**✅ VERIFIED WORKING STATE (UPGRADED):**
+**✅ HISTORICAL VERIFIED WORKING STATE (UPGRADED):**
 - **Commit**: `a9c19fd` (98% Profit Lock + Position Management)
 - **Date**: December 16, 2025 (UPGRADED)
-- **Status**: Trading live on Railway, zero errors, position management active
+- **Status**: Historical snapshot - the bot was trading live on Railway with zero errors and position management active at that recovery point
 - **Balance**: $47.31 USDC
 - **Timeline**: ~16 days to $5,000 (45% faster than before!)
 - **Features**:
@@ -4493,25 +4514,25 @@ cat KRAKEN_NO_TRADES_FIX.md
 - `bot/adaptive_growth_manager.py` - Growth stage management
 - `nija.log` - Bot logs
 
-### Key Metrics (Working State)
+### Key Metrics (Historical v7.2 Snapshot)
 
-- **Current Balance**: $47.31 USDC
-- **Target Balance**: $5,000 (in 15-24 days)
+- **Historical Balance Snapshot**: $47.31 USDC
+- **Historical Target Balance**: $5,000 (period projection from the v7.2 rollout)
 - **Daily Profit Goal**: $16-24/day initially, $1,000+/day at $5,000
 - **Position Size**: 5-25% adaptive (ULTRA AGGRESSIVE → AGGRESSIVE)
 - **Markets**: 5 default pairs (BTC, ETH, SOL, AVAX, XRP), 732+ available
-- **Status**: LIVE on Railway ✅ - Trading successfully
+- **Status**: Historical deployment snapshot from the v7.2 profitability period
 
 ---
 
-## 🔒 RECOVERY GUIDE: v7.2 Profitability Locked (December 27, 2025)
+## 🔒 LEGACY RECOVERY GUIDE: v7.2 Profitability Locked (December 27, 2025)
 
-**THIS IS THE CORRECTION POINT. LOCK THIS DOWN.**
+**This is a historical correction point for the December 2025 profitability upgrade, not the primary current-state recovery target.**
 
-### Critical Reference Point - December 27, 2025
+### Historical Reference Point - December 27, 2025
 
-**Last Known Good State**: Git commit `3a8a7f5` on branch `copilot/check-nija-profitability-trades`
-**Profitability Status**: ✅ FULLY CONFIGURED - All 5 components verified
+**Historical Last Known Good State**: Git commit `3a8a7f5` on branch `copilot/check-nija-profitability-trades`
+**Historical Profitability Status**: ✅ FULLY CONFIGURED - All 5 components verified at that point in time
 **Diagnostic Tools**: ✅ AVAILABLE - Run `python3 check_profit_status.py`
 
 ### Why This Is Important
@@ -4672,7 +4693,7 @@ python3 check_profit_status.py
 ✅ **Git Status**:
 - All changes committed to `main` branch
 - Pushed to GitHub repository
-- Ready for deployment
+- Historically marked ready for deployment
 
 ### Expected Behavior After Restart
 
@@ -5049,9 +5070,9 @@ python3 full_status_check.py             # Overall bot status
 
 ---
 
-**NIJA v7.3.0 — March 6, 2026**
-*Deep-Clean Complete. All Exception Handlers Fixed. Stop-Loss Logging Accurate. Reference Point Locked.*
+**NIJA v7.6.0 — March 26, 2026**
+*Reliability pass complete. Profit compounding verified end-to-end. Writer-lock and startup hydration protections documented. Reference point locked.*
 
-🔒 **This Is the Reference Point**: All v7.3.0 changes committed. Recover to this exact state using the "Current Success Reference Point" section at the top of this README.
+🔒 **This Is the Reference Point**: All v7.6.0 changes committed. Recover to this exact state using the "Current Success Reference Point" section at the top of this README.
 
 🚀 Bot is LIVE and monitoring markets 24/7
