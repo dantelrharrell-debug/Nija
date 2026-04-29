@@ -119,7 +119,7 @@ class MarketReadinessGate:
     # Thresholds for AGGRESSIVE mode (all must be true)
     # RELAXED (Apr 2026): Lowered to allow entries in more market conditions
     AGGRESSIVE_ATR_MIN = 0.0015       # 0.15% — lower volatility requirement for more entry opportunities
-    AGGRESSIVE_ADX_MIN = 10.0         # 10 — lower trend-strength requirement
+    AGGRESSIVE_ADX_MIN = 9.0          # 9 — requested 8-10 trend-strength band
     AGGRESSIVE_VOLUME_PERCENTILE_MIN = 20.0  # 20% — lower volume requirement
     AGGRESSIVE_SPREAD_MAX = 0.0015    # 0.15%
     AGGRESSIVE_WIN_RATE_MIN = 0.40    # 40%
@@ -128,7 +128,7 @@ class MarketReadinessGate:
     # RELAXED (Apr 2026): Expanded ATR range, lowered ADX/volume requirements
     CAUTIOUS_ATR_MIN = 0.001          # 0.1% (was 0.4%) — very low ATR still qualifies
     CAUTIOUS_ATR_MAX = 0.05           # 5.0% (was 0.6%) — high volatility still qualifies
-    CAUTIOUS_ADX_MIN = 5.0            # 5.0 (was 18) — any measurable trend qualifies
+    CAUTIOUS_ADX_MIN = 8.0            # 8.0 — requested lower bound of target ADX band
     CAUTIOUS_ADX_MAX = 100.0          # remove upper ADX limit (was 25)
     CAUTIOUS_VOLUME_PERCENTILE_MIN = 10.0   # 10% (was 40%) — sparse volume still qualifies
     

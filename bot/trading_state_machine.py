@@ -51,6 +51,25 @@ def _env_truthy(name: str, default: str = "false") -> bool:
     return os.environ.get(name, default).lower().strip() in ("true", "1", "yes", "enabled")
 
 
+def _is_transient_redis_error(err_text: str) -> bool:
+    """Best-effort detection for transient Redis/network failures."""
+    _e = (err_text or "").lower()
+    transient_markers = (
+        "timeout",
+        "timed out",
+        "connection reset",
+        "connection refused",
+        "temporarily unavailable",
+        "try again",
+        "redis",
+        "socket",
+        "network is unreachable",
+        "broken pipe",
+        "max retries",
+    )
+    return any(m in _e for m in transient_markers)
+
+
 def _heartbeat_marker_path() -> str:
     """Path of persisted heartbeat verification marker."""
     return os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
@@ -74,16 +93,40 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
         ok=False with an error string when strict/live mode requires authority
         and verification fails.
     """
-    try:
-        try:
-            from bot.execution_authority_context import assert_distributed_writer_authority
-        except ImportError:
-            from execution_authority_context import assert_distributed_writer_authority  # type: ignore[import]
-
-        assert_distributed_writer_authority()
+    # Allow operators to disable strict Redis writer lock enforcement in
+    # controlled single-writer deployments.
+    if not _env_truthy("NIJA_ENFORCE_REDIS_WRITER_LOCK", "true"):
         return True, ""
-    except Exception as exc:
-        return False, str(exc)
+
+    retries = max(1, int(os.environ.get("NIJA_REDIS_LOCK_RETRIES", "3") or "3"))
+    retry_delay_s = max(0.0, float(os.environ.get("NIJA_REDIS_LOCK_RETRY_DELAY_S", "0.20") or "0.20"))
+    last_err = ""
+
+    for attempt in range(retries):
+        try:
+            try:
+                from bot.execution_authority_context import assert_distributed_writer_authority
+            except ImportError:
+                from execution_authority_context import assert_distributed_writer_authority  # type: ignore[import]
+
+            assert_distributed_writer_authority()
+            return True, ""
+        except Exception as exc:
+            last_err = str(exc)
+            if attempt < retries - 1 and retry_delay_s > 0:
+                time.sleep(retry_delay_s)
+
+    # Stability fallback: fail-open only for transient Redis/network outages.
+    # Split-brain protection remains enforced for definitive authority failures.
+    if _env_truthy("NIJA_REDIS_LOCK_FAIL_OPEN_TRANSIENT", "true") and _is_transient_redis_error(last_err):
+        logger.warning(
+            "[REDIS LOCK DEGRADED] distributed writer authority check failed transiently; "
+            "continuing with fail-open mode: %s",
+            last_err,
+        )
+        return True, ""
+
+    return False, last_err
 
 
 def _nonce_writer_lease_gate() -> tuple[bool, str]:
@@ -92,6 +135,9 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
     This prevents LIVE activation when a stale/foreign process still owns the
     Redis nonce lease for the same API key (split-brain protection).
     """
+    if not _env_truthy("NIJA_ENFORCE_NONCE_WRITER_LEASE", "true"):
+        return True, ""
+
     platform_key = (
         os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
         or os.environ.get("KRAKEN_API_KEY", "").strip()
@@ -100,23 +146,40 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
         # No Kraken platform key configured in this process; nothing to verify.
         return True, ""
 
-    try:
-        try:
-            from bot.distributed_nonce_manager import (
-                get_distributed_nonce_manager,
-                make_api_key_id,
-            )
-        except ImportError:
-            from distributed_nonce_manager import (  # type: ignore[import]
-                get_distributed_nonce_manager,
-                make_api_key_id,
-            )
+    retries = max(1, int(os.environ.get("NIJA_NONCE_LEASE_RETRIES", "3") or "3"))
+    retry_delay_s = max(0.0, float(os.environ.get("NIJA_NONCE_LEASE_RETRY_DELAY_S", "0.20") or "0.20"))
+    last_err = ""
 
-        key_id = make_api_key_id(platform_key)
-        get_distributed_nonce_manager().ensure_writer_lock(key_id)
+    for attempt in range(retries):
+        try:
+            try:
+                from bot.distributed_nonce_manager import (
+                    get_distributed_nonce_manager,
+                    make_api_key_id,
+                )
+            except ImportError:
+                from distributed_nonce_manager import (  # type: ignore[import]
+                    get_distributed_nonce_manager,
+                    make_api_key_id,
+                )
+
+            key_id = make_api_key_id(platform_key)
+            get_distributed_nonce_manager().ensure_writer_lock(key_id)
+            return True, ""
+        except Exception as exc:
+            last_err = str(exc)
+            if attempt < retries - 1 and retry_delay_s > 0:
+                time.sleep(retry_delay_s)
+
+    if _env_truthy("NIJA_NONCE_LEASE_FAIL_OPEN_TRANSIENT", "true") and _is_transient_redis_error(last_err):
+        logger.warning(
+            "[REDIS LOCK DEGRADED] nonce writer lease check failed transiently; "
+            "continuing with fail-open mode: %s",
+            last_err,
+        )
         return True, ""
-    except Exception as exc:
-        return False, str(exc)
+
+    return False, last_err
 
 
 class TradingState(Enum):

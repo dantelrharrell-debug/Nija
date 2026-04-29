@@ -52,13 +52,13 @@ KRAKEN_EXECUTION_DISABLED: bool = (
 #: Minimum USD balance required for Coinbase to open new positions.
 #: COINBASE_MIN_ORDER_USD is accepted as an alias (Step 5).
 COINBASE_MIN_CAPITAL: float = float(
-    os.getenv("COINBASE_MIN_CAPITAL", "1.0")
+    os.getenv("COINBASE_MIN_CAPITAL", "30.0")
 )
 
 #: Minimum USD order size allowed on Coinbase.
 #: COINBASE_MIN_ORDER_USD takes precedence when set (Step 5).
 COINBASE_MIN_ORDER: float = float(
-    os.getenv("COINBASE_MIN_ORDER_USD", os.getenv("COINBASE_MIN_ORDER", "1.0"))
+    os.getenv("COINBASE_MIN_ORDER_USD", os.getenv("COINBASE_MIN_ORDER", "30.0"))
 )
 
 #: Minimum USD balance required for Kraken to open new positions.

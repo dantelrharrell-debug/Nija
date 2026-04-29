@@ -696,7 +696,7 @@ class BrokerFallbackController:
 
         # Respect the NIJA_DISABLE_COINBASE flag — if Coinbase is explicitly
         # disabled, treat it the same as having no fallback configured.
-        _coinbase_disabled = os.getenv("NIJA_DISABLE_COINBASE", "false").strip().lower() in (
+        _coinbase_disabled = os.getenv("NIJA_DISABLE_COINBASE", "true").strip().lower() in (
             "1", "true", "yes"
         )
         if _coinbase_disabled:

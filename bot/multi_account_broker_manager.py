@@ -5292,7 +5292,7 @@ class MultiAccountBrokerManager:
             # Defensive hard-stop for Coinbase in case any future path calls
             # this helper despite startup gating declaring Coinbase disabled.
             if broker_type == BrokerType.COINBASE:
-                _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in (
+                _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "true").strip().lower() in (
                     "1",
                     "true",
                     "yes",
@@ -5305,7 +5305,7 @@ class MultiAccountBrokerManager:
                 )
                 _enable_coinbase_trading = os.environ.get(
                     "ENABLE_COINBASE_TRADING",
-                    "true",
+                    "false",
                 ).strip().lower() not in ("0", "false", "no", "off")
                 if _disable_coinbase or (not _enable_coinbase_flag) or (not _enable_coinbase_trading):
                     logger.warning(
@@ -5461,10 +5461,10 @@ class MultiAccountBrokerManager:
         time.sleep(2.0)  # Separate Kraken nonce window from next broker
 
         # ── Coinbase ─────────────────────────────────────────────────────────
-        _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes")
+        _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "true").strip().lower() in ("1", "true", "yes")
         _enable_coinbase_raw = os.environ.get("ENABLE_COINBASE", "").strip().lower()
         _enable_coinbase_flag = _enable_coinbase_raw not in ("0", "false", "no", "off") if _enable_coinbase_raw else True
-        _enable_coinbase_trading = os.environ.get("ENABLE_COINBASE_TRADING", "true").strip().lower() not in (
+        _enable_coinbase_trading = os.environ.get("ENABLE_COINBASE_TRADING", "false").strip().lower() not in (
             "0", "false", "no", "off"
         )
         _primary_exec_venue = os.environ.get("PRIMARY_EXECUTION_VENUE", "").strip().lower()

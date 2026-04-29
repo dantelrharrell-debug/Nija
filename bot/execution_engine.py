@@ -1971,7 +1971,7 @@ class ExecutionEngine:
                 broker_name_str = broker_name.value if hasattr(broker_name, 'value') else str(broker_name)
 
                 # Allow ops to keep Coinbase connected for data while disabling execution.
-                _coinbase_exec_disabled = os.getenv("ENABLE_COINBASE_TRADING", "true").strip().lower() in (
+                _coinbase_exec_disabled = os.getenv("ENABLE_COINBASE_TRADING", "false").strip().lower() in (
                     "0", "false", "no", "off"
                 )
                 if broker_name_str.lower() == "coinbase" and _coinbase_exec_disabled:

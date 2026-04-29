@@ -106,28 +106,28 @@ LIMIT_ORDER_MIN_PROFIT_TARGET = 0.025   # 2.5% minimum target (was 2.0%, increas
 TRAILING_ACTIVATION_MIN = LIMIT_ORDER_MIN_PROFIT_TARGET  # 2.5%
 
 # Take profit levels (scaled above fee threshold)
-TP1_TARGET = 0.030  # 3.0% - covers fees + small profit
-TP2_TARGET = 0.050  # 5.0% - meaningful profit
-TP3_TARGET = 0.080  # 8.0% - excellent trade
+TP1_TARGET = 0.008  # 0.8% - requested base target
+TP2_TARGET = 0.012  # 1.2% - extension target
+TP3_TARGET = 0.016  # 1.6% - stretch target
 
 # ============================================================================
 # STOP LOSS (Tighter to preserve capital)
 # ============================================================================
 # PROFITABILITY FIX: December 28, 2025 - Tightened stops to -1%
 # With small capital, can't afford even 1.5% losses
-MAX_LOSS_SMALL_BALANCE = 0.010   # 1.0% max loss for balances < $100 (TIGHTENED from 1.5%)
-MAX_LOSS_NORMAL_BALANCE = 0.010  # 1.0% max loss for all balances (TIGHTENED from 2%)
+MAX_LOSS_SMALL_BALANCE = 0.004   # 0.4% max loss for balances < $100
+MAX_LOSS_NORMAL_BALANCE = 0.004  # 0.4% max loss for all balances
 
 # Stop loss placement (as % below entry for longs, above for shorts)
-STOP_LOSS_SMALL_BALANCE = 0.01   # 1% stop for small accounts (TIGHTENED from 2%)
-STOP_LOSS_NORMAL = 0.01          # 1% stop for all accounts (TIGHTENED from 2.5%)
+STOP_LOSS_SMALL_BALANCE = 0.004  # 0.4% stop for small accounts
+STOP_LOSS_NORMAL = 0.004         # 0.4% stop for all accounts
 
 # ============================================================================
 # TRADE FREQUENCY (Reduce to minimize fees)
 # ============================================================================
 # Don't overtrade - each trade costs fees
-MIN_SECONDS_BETWEEN_TRADES = 300  # 5 minutes minimum between trades
-MAX_TRADES_PER_HOUR = 6           # Maximum 6 trades/hour (vs unlimited before)
+MIN_SECONDS_BETWEEN_TRADES = 180  # 3 minutes minimum between trades
+MAX_TRADES_PER_HOUR = 20          # Maximum 20 trades/hour
 MAX_TRADES_PER_DAY = 30           # Maximum 30 trades/day (vs 100+ before)
 
 # SIGNAL QUALITY FILTERS (Only high-probability trades)
@@ -135,8 +135,8 @@ MAX_TRADES_PER_DAY = 30           # Maximum 30 trades/day (vs 100+ before)
 # PROFITABILITY FIX: December 28, 2025 - Raised to 5/5 for maximum quality
 # Only perfect setups with ALL conditions met to maximize win rate
 MIN_SIGNAL_STRENGTH = 5           # Require 5/5 strength (RAISED from 4/5 for profitability)
-MIN_ADX_SMALL_BALANCE = 20        # Industry standard for crypto trending
-MIN_ADX_NORMAL = 20               # Same ADX threshold for consistency
+MIN_ADX_SMALL_BALANCE = 9         # requested ADX band 8-10
+MIN_ADX_NORMAL = 9                # requested ADX band 8-10
 
 # RSI tighter ranges for better entries
 RSI_OVERSOLD_BUY = 35             # Buy when RSI > 35 (vs 30 before)

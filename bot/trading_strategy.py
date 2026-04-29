@@ -2039,9 +2039,9 @@ if _disabled_layers:
 # EXCHANGE_MIN_ORDER_SIZE, MIN_KRAKEN_BALANCE, and MIN_POSITION_SIZE below.
 # Defined early so it is available to the import-fallback block.
 try:
-    GLOBAL_MIN_TRADE: float = max(1.0, float(os.getenv("MIN_TRADE_USD", "10.0")))
+    GLOBAL_MIN_TRADE: float = max(1.0, float(os.getenv("MIN_TRADE_USD", "30.0")))
 except (TypeError, ValueError):
-    GLOBAL_MIN_TRADE = 10.0
+    GLOBAL_MIN_TRADE = 30.0
 # ============================================================================
 
 # Position adoption safety constants
@@ -3087,7 +3087,7 @@ def is_low_capital_mode(balance: float) -> bool:
 #   • inflate (or deflate) the AI hub's portfolio_value
 # Configurable so ops can raise the threshold if Coinbase grows.
 COINBASE_ISOLATION_THRESHOLD: float = float(
-    os.getenv("COINBASE_ISOLATION_THRESHOLD", "25.0")
+    os.getenv("COINBASE_ISOLATION_THRESHOLD", "50.0")
 )
 # Coinbase-local deployable minimum ($1 — the actual Coinbase exchange floor).
 # Distinct from MIN_DEPLOYABLE_BALANCE ($25) which applies to Kraken/primary.
@@ -14506,6 +14506,47 @@ class TradingStrategy:
                                 filter_stats['signals_found'] += 1
                                 position_size = analysis.get('position_size', 0)
                                 entry_score = analysis.get('score', 0)  # Get entry score from analysis
+
+                                # ── HF SIZE BAND ($30-$50) ─────────────────────────────
+                                # User target: keep per-entry notional in a practical
+                                # micro-scalp band for daily cashflow consistency.
+                                if (
+                                    hasattr(self, 'hf_scalping_mode')
+                                    and self.hf_scalping_mode is not None
+                                    and getattr(self.hf_scalping_mode, 'enabled', False)
+                                    and position_size > 0
+                                ):
+                                    _hf_min_size = float(os.getenv("HF_SCALP_MIN_POSITION_USD", "30.0"))
+                                    _hf_max_size = float(os.getenv("HF_SCALP_MAX_POSITION_USD", "50.0"))
+                                    if _hf_max_size < _hf_min_size:
+                                        _hf_max_size = _hf_min_size
+
+                                    # Never request more than a near-full balance cap.
+                                    _affordable_cap = (
+                                        max(EXCHANGE_MIN_ORDER_SIZE, float(account_balance) * 0.95)
+                                        if account_balance and account_balance > 0
+                                        else _hf_max_size
+                                    )
+                                    _effective_max = min(_hf_max_size, _affordable_cap)
+                                    _effective_min = min(_hf_min_size, _effective_max)
+
+                                    _prev_ps = float(position_size)
+                                    if _prev_ps < _effective_min:
+                                        position_size = _effective_min
+                                    elif _prev_ps > _effective_max:
+                                        position_size = _effective_max
+
+                                    if float(position_size) != _prev_ps:
+                                        logger.info(
+                                            "   📏 %s: HF size band clamp $%.2f → $%.2f "
+                                            "(band=$%.2f-$%.2f, balance=$%.2f)",
+                                            symbol,
+                                            _prev_ps,
+                                            float(position_size),
+                                            _hf_min_size,
+                                            _hf_max_size,
+                                            float(account_balance or 0.0),
+                                        )
 
                                 # ── DECISION TRACE LOG — expose where trades die ────────────
                                 logger.info(

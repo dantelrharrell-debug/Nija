@@ -127,22 +127,22 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.38)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.34)
     )
     # env: HF_SCALP_MIN_CONFIDENCE
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.38)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.34)
     )
     # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
 
     min_adx: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 10)
+        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 9)
     )
     # env: HF_SCALP_MIN_ADX
 
     volume_threshold: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.03)
+        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.025)
     )
     # env: HF_SCALP_VOLUME_THRESHOLD
 
@@ -163,12 +163,12 @@ class HFScalpConfig:
 
     # ── Profit / stop management ───────────────────────────────────────────────
     profit_target_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 0.6)
+        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 0.8)
     )
     # env: HF_SCALP_PROFIT_TARGET_PCT
 
     stop_loss_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_STOP_LOSS_PCT", 0.3)
+        default_factory=lambda: _env_float("HF_SCALP_STOP_LOSS_PCT", 0.4)
     )
     # env: HF_SCALP_STOP_LOSS_PCT
 
@@ -248,18 +248,38 @@ class HFScalpingMode:
         # Safer baseline for live production with small capital.
         floors = {
             "cycle_interval_seconds": 30,
-            "min_confidence": 0.38,
-            "kraken_min_confidence": 0.38,
-            "min_adx": 10,
-            "volume_threshold": 0.03,
+            "min_confidence": 0.34,
+            "kraken_min_confidence": 0.34,
+            "min_adx": 9,
+            "volume_threshold": 0.025,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
-            "profit_target_pct": 0.6,
-            "stop_loss_pct": 0.3,
-            "max_trades_per_hour": 20,
+            "profit_target_pct": 0.8,
+            "stop_loss_pct": 0.4,
+            "max_trades_per_hour": 25,
             "trade_cooldown_seconds": 30.0,
         }
+
+        # Optional hard profile lock for operator-requested settings.
+        # Enabled by default to prevent drift from ad-hoc env overrides.
+        lock_profile = _env_bool("HF_SCALP_LOCK_PROFILE", True)
+        if lock_profile:
+            self.config.min_confidence = 0.34
+            self.config.kraken_min_confidence = 0.34
+            self.config.min_adx = 9
+            self.config.volume_threshold = 0.025
+            self.config.profit_target_pct = 0.8
+            self.config.stop_loss_pct = 0.4
+            # Keep within requested 15–25 trades/hr band.
+            if self.config.max_trades_per_hour < 15:
+                self.config.max_trades_per_hour = 15
+            elif self.config.max_trades_per_hour > 25:
+                self.config.max_trades_per_hour = 25
+            logger.info(
+                "HF profile lock active — conf=0.34 adx=9 vol=2.5%% tp=0.8%% sl=0.4%% trades/hr=%d",
+                self.config.max_trades_per_hour,
+            )
 
         # Lower cap for trade frequency, lower bound for all other fields.
         clamped = []
