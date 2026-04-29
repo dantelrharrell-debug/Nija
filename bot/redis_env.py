@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 _REDIS_URL_ENV_NAMES = (
@@ -12,6 +12,30 @@ _REDIS_URL_ENV_NAMES = (
     "REDIS_PRIVATE_URL",
     "REDIS_PUBLIC_URL",
 )
+
+
+def _is_railway_proxy_host(hostname: str) -> bool:
+    """Return True when the hostname matches Railway's public TCP proxy."""
+    return bool(hostname) and hostname.endswith(".proxy.rlwy.net")
+
+
+def _normalize_redis_url(source: str, url: str) -> tuple[str, str]:
+    """Normalize operator-provided Redis URLs when provider quirks are known.
+
+    Railway's public TCP proxy speaks plain Redis behind the proxy endpoint.
+    Operators sometimes paste the proxy URL as ``rediss://`` which makes redis-py
+    attempt a TLS handshake and fail with EOF / connection-reset errors.
+    """
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return source, url
+
+    if parsed.scheme != "rediss" or not _is_railway_proxy_host(parsed.hostname or ""):
+        return source, url
+
+    normalized_url = urlunsplit(("redis", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+    return f"{source} [normalized Railway proxy scheme]", normalized_url
 
 
 def _first_nonempty(*names: str) -> str:
@@ -61,10 +85,12 @@ def get_redis_url() -> str:
     for name in _REDIS_URL_ENV_NAMES:
         value = os.getenv(name, "").strip()
         if value:
-            return value
+            _normalized_source, _normalized_value = _normalize_redis_url(name, value)
+            return _normalized_value
     _source, _component_url = _build_component_redis_url()
     if _component_url:
-        return _component_url
+        _normalized_source, _normalized_value = _normalize_redis_url(_source, _component_url)
+        return _normalized_value
     return ""
 
 
@@ -73,10 +99,12 @@ def get_redis_url_source() -> str:
     for name in _REDIS_URL_ENV_NAMES:
         value = os.getenv(name, "").strip()
         if value:
-            return name
+            _normalized_source, _normalized_value = _normalize_redis_url(name, value)
+            return _normalized_source
     _source, _component_url = _build_component_redis_url()
     if _component_url:
-        return _source
+        _normalized_source, _normalized_value = _normalize_redis_url(_source, _component_url)
+        return _normalized_source
     return ""
 
 
@@ -92,9 +120,13 @@ def get_all_redis_urls() -> list[tuple[str, str]]:
     for name in _REDIS_URL_ENV_NAMES:
         value = os.getenv(name, "").strip()
         if value:
-            seen_urls.add(value)
-            result.append((name, value))
+            normalized_source, normalized_value = _normalize_redis_url(name, value)
+            if normalized_value not in seen_urls:
+                seen_urls.add(normalized_value)
+                result.append((normalized_source, normalized_value))
     component_source, component_url = _build_component_redis_url()
-    if component_url and component_url not in seen_urls:
-        result.append((component_source, component_url))
+    if component_url:
+        normalized_source, normalized_value = _normalize_redis_url(component_source, component_url)
+        if normalized_value not in seen_urls:
+            result.append((normalized_source, normalized_value))
     return result
