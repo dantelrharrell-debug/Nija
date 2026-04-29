@@ -1102,7 +1102,9 @@ class TradingStateMachine:
             except ImportError:
                 from execution_router import get_execution_router as _get_er  # type: ignore[import]
             _er = _get_er()
-            _st = _er.get_status()
+            _get_status = getattr(_er, "get_status", None)
+            _st_raw = _get_status() if callable(_get_status) else {}
+            _st = _st_raw if isinstance(_st_raw, dict) else {}
             _reg = _st.get("registered_venues", 1)
             _failed = len(_st.get("session_failed_venues", []))
             EXECUTION_PIPELINE_HEALTHY = not (_reg > 0 and _failed >= _reg)
@@ -1588,8 +1590,14 @@ def activation_invariant(
     # MABM's viable broker count (all broker balances propagated to CA).
     # Defaults to True so unknown state never permanently blocks activation.
     aggregation_normalized = bool(cycle_capital.get("aggregation_normalized", True))
+    # Accept either a previously latched first-snapshot signal or a valid
+    # current-cycle live snapshot. This avoids a startup deadlock where
+    # activation can never progress because the latch has not yet been set.
+    snapshot_ready = sm._first_snap_accepted or (
+        valid_brokers > 0 and snap_source == "live_exchange"
+    )
     return all((
-        sm._first_snap_accepted,
+        snapshot_ready,
         ca_hydrated,
         ca_not_stale,
         brokers_ready,

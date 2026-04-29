@@ -2034,6 +2034,16 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         except Exception as _arm_err:
                             logger.warning("Core loop arm transition failed: %s", _arm_err)
 
+                # Capture a fresh frozen capital snapshot BEFORE activation so
+                # activation gates never evaluate stale previous-cycle values.
+                _next_cycle = cycle + 1
+                _current_cycle_snapshot = None  # clear previous cycle's snapshot
+                _current_cycle_id = (
+                    f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{_next_cycle:06d}"
+                )
+                _current_cycle_capital = _capture_cycle_capital_state()
+                _cycle_balance = _current_cycle_capital.get("ca_total_capital", 0.0)
+
                 if _sm_loop is not None and not _live_now:
                     logger.critical("⚡ TRYING TO ACTIVATE")
                     logger.critical("⚡ ATTEMPTING AUTO-ACTIVATION")
@@ -2106,23 +2116,47 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             _lcv_val,
                         )
 
-                # ── Shared-cycle snapshot: capture capital state ONCE ─────────────
-                # Must happen BEFORE activation so the state machine uses the same
-                # frozen capital view (ca_is_hydrated, total_capital,
-                # mabm_brokers_ready) as the subsequent strategy cycle.  Writing to
-                # module-level globals is safe because run_trading_loop runs on a
-                # single thread.
-                _current_cycle_snapshot = None  # clear previous cycle's snapshot
-                _current_cycle_id = (
-                    f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{cycle:06d}"
-                )
-                _current_cycle_capital = _capture_cycle_capital_state()
-                _cycle_balance = _current_cycle_capital.get("ca_total_capital", 0.0)
+                # Shared-cycle snapshot is captured before activation attempts.
                 logger.critical("💰 AVAILABLE CAPITAL: %.2f", _cycle_balance)
 
                 # Trigger live-state activation checks using this cycle's frozen
                 # capital snapshot before any strategy execution starts.
                 _supervisor_step_state_machine()
+
+                # Single-line blocked diagnostic so operators can immediately
+                # see why the loop is monitoring but not fully executing.
+                try:
+                    if _sm_loop is not None:
+                        _state_now = _sm_loop.get_current_state()
+                        _committed = bool(_sm_loop.get_activation_committed())
+                        _can_dispatch = bool(_sm_loop.can_dispatch_trades())
+                        _first_snap = bool(_sm_loop.get_first_snap_accepted())
+                        _live_verified_now = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in (
+                            "true", "1", "yes", "enabled"
+                        )
+                        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+                        _balance_ok = float(_cycle_balance or 0.0) >= _min_balance
+
+                        if (not _committed) or (not _can_dispatch):
+                            _reasons = []
+                            if not _live_verified_now:
+                                _reasons.append("LIVE_CAPITAL_VERIFIED=false")
+                            if not _first_snap:
+                                _reasons.append("first_snap_accepted=false")
+                            if not _balance_ok:
+                                _reasons.append(f"capital_below_min(${float(_cycle_balance or 0.0):.2f}<{_min_balance:.2f})")
+                            if _state_now != _TradingState.LIVE_ACTIVE:
+                                _reasons.append(f"state={_state_now.value}")
+
+                            logger.critical(
+                                "⛔ EXECUTION BLOCKED | committed=%s dispatch=%s live=%s reasons=%s",
+                                _committed,
+                                _can_dispatch,
+                                _live_now,
+                                ", ".join(_reasons) if _reasons else "activation gates not converged",
+                            )
+                except Exception as _block_diag_err:
+                    logger.debug("execution-blocked diagnostic skipped: %s", _block_diag_err)
 
                 # ── Capital pipeline diagnostic block ─────────────────────────
                 try:
