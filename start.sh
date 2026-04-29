@@ -306,10 +306,40 @@ _validate_redis_url_or_exit() {
 
     local _redis_url
     local _redis_source
+    local _has_proxy_fallback=false
     _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
     _redis_source="$(_resolve_redis_url_source 2>/dev/null || true)"
     if [ -z "${_redis_url}" ]; then
         return 0
+    fi
+
+    if [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] && [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; then
+        _has_proxy_fallback=true
+    elif [ -n "${REDIS_PUBLIC_URL:-}" ] && ! printf "%s" "${REDIS_PUBLIC_URL}" | grep -q "\.railway\.internal"; then
+        _has_proxy_fallback=true
+    elif [ -n "${REDIS_HOST:-${REDISHOST:-}}" ] && [ -n "${REDIS_PORT:-${REDISPORT:-}}" ] \
+        && ! printf "%s" "${REDIS_HOST:-${REDISHOST:-}}" | grep -q "\.railway\.internal"; then
+        _has_proxy_fallback=true
+    fi
+
+    if printf "%s" "${_redis_url}" | grep -q "\.railway\.internal" && [ "${_has_proxy_fallback}" != "true" ]; then
+        echo ""
+        echo "❌ CRITICAL: ${_redis_source:-Redis URL} points to Railway internal networking only"
+        echo ""
+        echo "Detected: ${_redis_source:-Redis URL}=***@*.railway.internal"
+        echo "No public Redis proxy fallback is configured."
+        echo ""
+        echo "Internal Railway hostnames work only within compatible private networking contexts."
+        echo "In this deployment, the distributed writer lock cannot reach Redis and will fail-closed."
+        echo ""
+        echo "🔧 SOLUTION:"
+        echo "   1. Railway → Redis service → Connect"
+        echo "   2. Copy the PUBLIC proxy URL (maglev.proxy.rlwy.net:PORT)"
+        echo "   3. Set NIJA_REDIS_URL to that public URL"
+        echo "      OR set RAILWAY_TCP_PROXY_DOMAIN + RAILWAY_TCP_PROXY_PORT + REDIS_PASSWORD"
+        echo "   4. Redeploy"
+        echo ""
+        exit_config_error
     fi
 
     case "${_redis_url}" in
@@ -363,6 +393,57 @@ PY
     fi
 }
 
+_log_redis_lock_source_hint() {
+    local _redis_url
+    local _redis_source
+    local _component_host
+    local _component_port
+    local _component_source
+    local _endpoint
+
+    _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
+    _redis_source="$(_resolve_redis_url_source 2>/dev/null || true)"
+
+    if [ -n "${_redis_url}" ]; then
+        _endpoint=$("$PY" - "${_redis_url}" <<'PY' 2>/dev/null
+import sys
+from urllib.parse import urlparse
+
+raw = sys.argv[1].strip()
+parsed = urlparse(raw)
+host = parsed.hostname or "<unknown-host>"
+port = parsed.port
+if port is None:
+    print(host)
+else:
+    print(f"{host}:{port}")
+PY
+)
+        if [ -z "${_endpoint}" ]; then
+            _endpoint="<unparseable-endpoint>"
+        fi
+        echo "🔐 Writer-lock Redis source: ${_redis_source:-unknown} (${_endpoint})"
+        return 0
+    fi
+
+    _component_host="${RAILWAY_TCP_PROXY_DOMAIN:-${REDIS_HOST:-${REDISHOST:-}}}"
+    _component_port="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"
+    _component_source=""
+
+    if [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] && [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; then
+        _component_source="RAILWAY_TCP_PROXY_DOMAIN+RAILWAY_TCP_PROXY_PORT"
+    elif [ -n "${REDIS_HOST:-${REDISHOST:-}}" ] && [ -n "${REDIS_PORT:-${REDISPORT:-}}" ]; then
+        _component_source="REDIS_HOST+REDIS_PORT"
+    fi
+
+    if [ -n "${_component_source}" ]; then
+        echo "🔐 Writer-lock Redis source: ${_component_source} (${_component_host}:${_component_port})"
+        echo "   Runtime will synthesize Redis URL from component variables if URL vars are unset."
+    else
+        echo "🔐 Writer-lock Redis source: none configured"
+    fi
+}
+
 # Prefer workspace venv Python, fallback to system python3
 PY=""
 if [ -x ./.venv/bin/python ]; then
@@ -378,6 +459,7 @@ if [ -z "$PY" ]; then
 fi
 
 _validate_redis_url_or_exit
+_log_redis_lock_source_hint
 
 _maybe_force_nonce_resync() {
     local _truthy="1|true|yes|enabled|on"
