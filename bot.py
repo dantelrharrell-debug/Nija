@@ -13,7 +13,6 @@ import time
 import traceback
 import logging
 import socket
-import secrets
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +22,13 @@ import threading
 import subprocess
 
 from bot.redis_env import get_redis_env_presence, get_redis_url, get_redis_url_source
+from bot.instance_identity import (
+    current_instance_identity,
+    format_instance_identity,
+    inspect_lock_holder,
+    parse_distributed_lock_holder,
+    parse_writer_lock_metadata,
+)
 
 # Early bootstrap logger so pre-config startup paths (locking, env checks,
 # nonce init) can log safely before the full logging pipeline is configured.
@@ -907,6 +913,7 @@ def _read_pid_file_meta(path: str) -> dict:
     return {}
 _distributed_writer_lock_client = None
 _distributed_writer_lock_key = ""
+_distributed_writer_lock_meta_key = ""
 _distributed_writer_lock_token = ""
 _distributed_writer_fencing_key = ""
 _distributed_writer_fencing_token = 0
@@ -927,7 +934,7 @@ def _writer_lock_scope() -> str:
 def _release_distributed_process_lock() -> None:
     """Release distributed single-writer lock iff this process still owns it."""
     global _distributed_writer_lock_client
-    global _distributed_writer_lock_key, _distributed_writer_lock_token
+    global _distributed_writer_lock_key, _distributed_writer_lock_meta_key, _distributed_writer_lock_token
     global _distributed_writer_fencing_key, _distributed_writer_fencing_token
     if not _distributed_writer_lock_client or not _distributed_writer_lock_key or not _distributed_writer_fencing_token:
         return
@@ -945,12 +952,17 @@ def _release_distributed_process_lock() -> None:
                 token = string.sub(current, 1, sep - 1)
             end
             if token == ARGV[1] then
-                return redis.call('DEL', KEYS[1])
+                local deleted = redis.call('DEL', KEYS[1])
+                if KEYS[2] and KEYS[2] ~= '' then
+                    redis.call('DEL', KEYS[2])
+                end
+                return deleted
             end
             return 0
             """,
-            1,
+            2,
             _distributed_writer_lock_key,
+            _distributed_writer_lock_meta_key,
             str(_distributed_writer_fencing_token),
         )
     except Exception:
@@ -958,9 +970,29 @@ def _release_distributed_process_lock() -> None:
     finally:
         _distributed_writer_lock_client = None
         _distributed_writer_lock_key = ""
+        _distributed_writer_lock_meta_key = ""
         _distributed_writer_lock_token = ""
         _distributed_writer_fencing_key = ""
         _distributed_writer_fencing_token = 0
+
+
+def _build_writer_lock_meta_payload(
+    fencing_token: int,
+    instance_identity: dict[str, str],
+    *,
+    acquired_at: float,
+    heartbeat_at: float,
+) -> str:
+    """Return JSON metadata mirrored beside the distributed writer lock."""
+    return json.dumps(
+        {
+            "token": str(fencing_token),
+            "instance": instance_identity,
+            "acquired_at": acquired_at,
+            "heartbeat_at": heartbeat_at,
+        },
+        sort_keys=True,
+    )
 
 
 def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
@@ -988,14 +1020,25 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                     token = string.sub(current, 1, sep - 1)
                 end
                 if token == ARGV[1] then
-                    return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+                    local lock_refreshed = redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+                    if KEYS[2] and KEYS[2] ~= '' then
+                        redis.call('SET', KEYS[2], ARGV[3], 'EX', tonumber(ARGV[2]))
+                    end
+                    return lock_refreshed
                 end
                 return 0
                 """,
-                1,
+                2,
                 _distributed_writer_lock_key,
+                _distributed_writer_lock_meta_key,
                 str(_distributed_writer_fencing_token),
                 str(ttl_s),
+                _build_writer_lock_meta_payload(
+                    _distributed_writer_fencing_token,
+                    current_instance_identity(),
+                    acquired_at=float(os.environ.get("NIJA_WRITER_LOCK_ACQUIRED_AT", "0") or 0.0),
+                    heartbeat_at=time.time(),
+                ),
             )
             if int(_result or 0) != 1:
                 print(
@@ -1082,8 +1125,10 @@ def _acquire_distributed_process_lock() -> None:
             print("⚠️ Invalid lock TTL env value; using default 15s")
         _scope = _writer_lock_scope()
         _lock_key = os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_scope}"
+        _meta_key = os.environ.get("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{_scope}"
         _fencing_key = os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_scope}"
-        _owner = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(8)}"
+        _instance_identity = current_instance_identity()
+        _owner = format_instance_identity(_instance_identity)
         _client = redis.Redis.from_url(
             _redis_url,
             decode_responses=True,
@@ -1136,6 +1181,12 @@ def _acquire_distributed_process_lock() -> None:
                         _pttl_ms = -2
             return _token, _holder_local, _pttl_ms
 
+        def _read_lock_meta() -> dict[str, object]:
+            try:
+                return parse_writer_lock_metadata(str(_client.get(_meta_key) or ""))
+            except Exception as _meta_exc:
+                return {"present": False, "error": str(_meta_exc), "display": "<meta-read-failed>"}
+
         _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
 
         # Hard singleton guard: in LIVE mode we fail fast after 5s.
@@ -1160,6 +1211,41 @@ def _acquire_distributed_process_lock() -> None:
         if _wait_log_interval_s < 0.5:
             _wait_log_interval_s = 0.5
         _next_wait_log = 0.0
+        _holder_info = parse_distributed_lock_holder(_holder)
+        _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
+        _holder_meta = _read_lock_meta()
+
+        try:
+            _stale_heartbeat_timeout_s = max(
+                float(_ttl_s * 2),
+                float(os.environ.get("NIJA_STALE_RAILWAY_LOCK_HEARTBEAT_TIMEOUT_S", "90") or 90.0),
+            )
+        except (TypeError, ValueError):
+            _stale_heartbeat_timeout_s = max(float(_ttl_s * 2), 90.0)
+
+        _auto_clear_stale_railway = os.environ.get("NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+            "enabled",
+        }
+
+        print(f"🔐 Writer instance | {format_instance_identity(_instance_identity)}")
+        if _fencing_token <= 0:
+            print(
+                "🔎 Writer lock inspector | "
+                f"{_holder_inspection.get('summary', 'holder inspection unavailable')}"
+            )
+            if _holder_meta.get("present"):
+                _heartbeat_age = _holder_meta.get("heartbeat_age_s")
+                _heartbeat_age_txt = (
+                    f"{float(_heartbeat_age):.1f}s" if isinstance(_heartbeat_age, (int, float)) else "unknown"
+                )
+                print(
+                    "🔎 Writer lock heartbeat | "
+                    f"holder_meta={_holder_meta.get('display', '<missing-meta>')} age={_heartbeat_age_txt}"
+                )
 
         while _fencing_token <= 0:
             _now = time.time()
@@ -1172,22 +1258,49 @@ def _acquire_distributed_process_lock() -> None:
                 elif _holder_pttl_ms == -2:
                     _ttl_s_human = "missing"
                 print(
-                    f"⏳ Waiting for distributed lock (retry in {_lock_retry_interval}s, holder_ttl={_ttl_s_human})..."
+                    "⏳ Waiting for distributed lock "
+                    f"(retry in {_lock_retry_interval}s, holder_ttl={_ttl_s_human}, "
+                    f"holder={_holder_info.get('display', _holder)}, "
+                    f"relationship={_holder_inspection.get('relationship', 'unknown')}, "
+                    f"heartbeat_age={_holder_meta.get('heartbeat_age_s', 'unknown')})..."
                 )
                 _next_wait_log = _now + _wait_log_interval_s
 
             if _now > _lock_acquire_deadline:
                 logger.critical(
-                    "Distributed lock acquisition timed out after %.1fs; holder=%s pttl_ms=%s",
+                    "Distributed lock acquisition timed out after %.1fs; holder=%s parsed_holder=%s holder_inspection=%s holder_meta=%s pttl_ms=%s",
                     _wait_s,
                     _holder,
+                    _holder_info,
+                    _holder_inspection,
+                    _holder_meta,
                     _holder_pttl_ms,
                 )
 
                 # Stale lock rescue: only delete when holder matches observed value
                 # and key has expired/no-expiry metadata suggesting stale state.
                 _rescued = 0
+                _allow_railway_rescue = False
+                _heartbeat_age_seconds = None
                 try:
+                    _holder_token = str(_holder_info.get("token", "") or "")
+                    _holder_deployment = str(_holder_info.get("deployment_id", "") or "")
+                    _current_deployment = str(_instance_identity.get("deployment_id", "") or "")
+                    _meta_token = str(_holder_meta.get("token", "") or "")
+                    _heartbeat_age = _holder_meta.get("heartbeat_age_s")
+                    if isinstance(_heartbeat_age, (int, float)):
+                        _heartbeat_age_seconds = float(_heartbeat_age)
+                    _heartbeat_is_stale = isinstance(_heartbeat_age, (int, float)) and float(_heartbeat_age) >= _stale_heartbeat_timeout_s
+                    _cross_deployment = bool(
+                        _current_deployment and _holder_deployment and _current_deployment != _holder_deployment
+                    )
+                    _allow_railway_rescue = bool(
+                        _auto_clear_stale_railway
+                        and _cross_deployment
+                        and _holder_token
+                        and _meta_token == _holder_token
+                        and _heartbeat_is_stale
+                    )
                     _rescued = int(
                         _client.eval(
                             """
@@ -1196,14 +1309,25 @@ def _acquire_distributed_process_lock() -> None:
                                 return 0
                             end
                             local pttl = redis.call('PTTL', KEYS[1])
-                            if current == ARGV[1] and (pttl == -1 or pttl <= 0) then
-                                return redis.call('DEL', KEYS[1])
+                            if current ~= ARGV[1] then
+                                return 0
+                            end
+                            local stale_by_ttl = (pttl == -1 or pttl <= 0)
+                            local stale_by_heartbeat = (ARGV[2] == '1')
+                            if stale_by_ttl or stale_by_heartbeat then
+                                local deleted = redis.call('DEL', KEYS[1])
+                                if KEYS[2] and KEYS[2] ~= '' then
+                                    redis.call('DEL', KEYS[2])
+                                end
+                                return deleted
                             end
                             return 0
                             """,
-                            1,
+                            2,
                             _lock_key,
+                            _meta_key,
                             _holder,
+                            "1" if _allow_railway_rescue else "0",
                         )
                         or 0
                     )
@@ -1211,29 +1335,53 @@ def _acquire_distributed_process_lock() -> None:
                     logger.warning("Stale-lock rescue check failed: %s", _stale_exc)
 
                 if _rescued == 1:
-                    logger.critical("🔓 Cleared stale writer lock key=%s; retrying acquire once", _lock_key)
+                    _rescue_reason = "expired/no-expiry TTL"
+                    if _allow_railway_rescue:
+                        _rescue_reason = (
+                            "stale cross-deployment Railway holder "
+                            f"heartbeat_age={_heartbeat_age_seconds:.1f}s threshold={_stale_heartbeat_timeout_s:.1f}s"
+                        )
+                    logger.critical(
+                        "🔓 Cleared stale writer lock key=%s; reason=%s; retrying acquire once",
+                        _lock_key,
+                        _rescue_reason,
+                    )
                     _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+                    _holder_info = parse_distributed_lock_holder(_holder)
+                    _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
+                    _holder_meta = _read_lock_meta()
                     break
 
                 print("\n" + "┏" + "━" * 78 + "┓")
                 print("┃ 🚫 DISTRIBUTED WRITER LOCK UNAVAILABLE                                    ┃")
                 print("┃ Another writer is active or lock could not be safely recovered.          ┃")
                 print(f"┃ Lock key: {_lock_key[-58:]:<58} ┃")
-                print(f"┃ Holder:   {_holder[:58]:<58} ┃")
+                print(f"┃ Holder:   {_holder_info.get('display', _holder)[:58]:<58} ┃")
                 _pttl_txt = str(_holder_pttl_ms)
                 print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
                 print("┃ Action:   Exiting fail-closed to preserve one-writer invariant.          ┃")
                 print("┗" + "━" * 78 + "┛\n")
+                print(f"   Current instance: {format_instance_identity(_instance_identity)}")
+                print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
+                print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
+                print(f"   Lock holder raw:  {_holder}")
                 logger.critical("Another instance is active — exiting immediately")
                 os._exit(LOCK_CONTENTION_EXIT_CODE)
 
             time.sleep(_lock_retry_interval)
             try:
                 _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+                _holder_info = parse_distributed_lock_holder(_holder)
+                _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
+                _holder_meta = _read_lock_meta()
             except Exception as _retry_err:
                 logger.debug("Lock retry attempt failed: %s", _retry_err)
                 _fencing_token = 0
                 _holder_pttl_ms = -2
+                _holder = ""
+                _holder_info = parse_distributed_lock_holder("")
+                _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
+                _holder_meta = {"present": False, "display": "<missing-meta>"}
         
         if _fencing_token <= 0:
             print("\n" + "┏" + "━" * 78 + "┓")
@@ -1241,18 +1389,34 @@ def _acquire_distributed_process_lock() -> None:
             print("┃ Another NIJA writer already holds the distributed runtime lock.          ┃")
             print("┃ Single-writer invariant violated by deployment topology.                 ┃")
             print(f"┃ Lock key: {_lock_key[-58:]:<58} ┃")
-            print(f"┃ Holder:   {_holder[:58]:<58} ┃")
+            print(f"┃ Holder:   {_holder_info.get('display', _holder)[:58]:<58} ┃")
             print("┗" + "━" * 78 + "┛\n")
+            print(f"   Current instance: {format_instance_identity(_instance_identity)}")
+            print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
+            print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
+            print(f"   Lock holder raw:  {_holder}")
             logger.critical("Another instance is active — exiting immediately")
             os._exit(LOCK_CONTENTION_EXIT_CODE)
 
         _token = f"{_fencing_token}:{_owner}"
         _distributed_writer_lock_client = _client
         _distributed_writer_lock_key = _lock_key
+        _distributed_writer_lock_meta_key = _meta_key
         _distributed_writer_lock_token = _token
         _distributed_writer_fencing_key = _fencing_key
         _distributed_writer_fencing_token = _fencing_token
         _distributed_writer_lock_stop.clear()
+        _acquired_at = time.time()
+        os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(_acquired_at)
+        try:
+            _client.set(_meta_key, _build_writer_lock_meta_payload(
+                _fencing_token,
+                _instance_identity,
+                acquired_at=_acquired_at,
+                heartbeat_at=_acquired_at,
+            ), ex=_ttl_s)
+        except Exception as _meta_write_exc:
+            logger.warning("Unable to write distributed lock metadata key=%s: %s", _meta_key, _meta_write_exc)
         _distributed_writer_lock_thread = threading.Thread(
             target=_distributed_writer_lock_heartbeat,
             args=(_ttl_s,),
@@ -1261,9 +1425,12 @@ def _acquire_distributed_process_lock() -> None:
         )
         _distributed_writer_lock_thread.start()
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_fencing_token)
+        os.environ["NIJA_WRITER_LOCK_KEY"] = _lock_key
+        os.environ["NIJA_WRITER_LOCK_META_KEY"] = _meta_key
+        os.environ["NIJA_WRITER_LOCK_SCOPE"] = _scope
         print(
             "🔒 Distributed writer lock acquired — "
-            f"key={_lock_key} fencing_token={_fencing_token}"
+            f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
         )
     except Exception as _lock_exc:
         print(f"❌ Failed to acquire distributed single-writer lock: {_lock_exc}")

@@ -5,6 +5,14 @@ echo "=============================="
 echo "    STARTING NIJA TRADING BOT"
 echo "=============================="
 
+_INSTANCE_HOSTNAME="${HOSTNAME:-$(hostname 2>/dev/null || echo unknown-host)}"
+_INSTANCE_DEPLOYMENT_ID="${RAILWAY_DEPLOYMENT_ID:-}"
+_INSTANCE_REPLICA_ID="${RAILWAY_REPLICA_ID:-${RAILWAY_REPLICA_NAME:-}}"
+_INSTANCE_SERVICE_ID="${RAILWAY_SERVICE_ID:-}"
+_INSTANCE_ID="${_INSTANCE_DEPLOYMENT_ID:-${_INSTANCE_REPLICA_ID:-${_INSTANCE_HOSTNAME}}}"
+echo "🆔 Instance: instance=${_INSTANCE_ID} host=${_INSTANCE_HOSTNAME} pid=$$ container=${HOSTNAME:-unknown} deployment=${_INSTANCE_DEPLOYMENT_ID:-n/a} replica=${_INSTANCE_REPLICA_ID:-n/a} service=${_INSTANCE_SERVICE_ID:-n/a}"
+echo ""
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SINGLE-INSTANCE GUARD (shell level)
 #
@@ -235,6 +243,106 @@ exit_config_error() {
     fi
 }
 
+_resolve_redis_url() {
+    if [ -n "${NIJA_REDIS_URL:-}" ]; then
+        printf "%s" "${NIJA_REDIS_URL}"
+        return 0
+    fi
+    if [ -n "${REDIS_URL:-}" ]; then
+        printf "%s" "${REDIS_URL}"
+        return 0
+    fi
+    if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
+        printf "%s" "${REDIS_PRIVATE_URL}"
+        return 0
+    fi
+    if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
+        printf "%s" "${REDIS_PUBLIC_URL}"
+        return 0
+    fi
+    return 1
+}
+
+_resolve_redis_url_source() {
+    if [ -n "${NIJA_REDIS_URL:-}" ]; then
+        printf "%s" "NIJA_REDIS_URL"
+        return 0
+    fi
+    if [ -n "${REDIS_URL:-}" ]; then
+        printf "%s" "REDIS_URL"
+        return 0
+    fi
+    if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
+        printf "%s" "REDIS_PRIVATE_URL"
+        return 0
+    fi
+    if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
+        printf "%s" "REDIS_PUBLIC_URL"
+        return 0
+    fi
+    return 1
+}
+
+_validate_redis_url_or_exit() {
+    local _redis_url
+    local _redis_source
+    _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
+    _redis_source="$(_resolve_redis_url_source 2>/dev/null || true)"
+    if [ -z "${_redis_url}" ]; then
+        return 0
+    fi
+
+    case "${_redis_url}" in
+        *YOUR_REDIS_*|*YOUR_REDIS_PORT*|*YOUR_REDIS_HOST*|*YOUR_REDIS_PASSWORD*|*example.com*|*changeme*)
+            echo ""
+            echo "❌ CRITICAL: ${_redis_source:-Redis URL} contains placeholder values"
+            echo ""
+            echo "Distributed writer lock is enabled, but the Redis URL is still a template."
+            echo ""
+            echo "🔧 SOLUTION:"
+            echo "   1. Open Railway → Service → Variables"
+            echo "   2. Replace ${_redis_source:-the Redis URL variable} with the real Railway Redis connection URL"
+            echo "   3. Remove any placeholder text such as YOUR_REDIS_PORT"
+            echo "   4. Redeploy the service"
+            echo ""
+            exit_config_error
+            ;;
+    esac
+
+    if ! "$PY" - "${_redis_url}" <<'PY' >/dev/null 2>&1
+import sys
+from urllib.parse import urlparse
+
+raw = sys.argv[1].strip()
+parsed = urlparse(raw)
+if parsed.scheme not in {"redis", "rediss"}:
+    raise SystemExit(1)
+if not parsed.hostname:
+    raise SystemExit(1)
+try:
+    port = parsed.port
+except ValueError:
+    raise SystemExit(1)
+if port is None or port <= 0:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+    then
+        echo ""
+        echo "❌ CRITICAL: ${_redis_source:-Redis URL} is not a valid Redis connection URL"
+        echo ""
+        echo "Expected format: redis://:<password>@<host>:<port> or redis://default:<password>@<host>:<port>"
+        echo ""
+        echo "🔧 SOLUTION:"
+        echo "   1. Open Railway → Redis service → Connect"
+        echo "   2. Copy the full Redis URL"
+        echo "   3. Paste that value into ${_redis_source:-NIJA_REDIS_URL}"
+        echo "   4. Redeploy the service"
+        echo ""
+        exit_config_error
+    fi
+}
+
 # Prefer workspace venv Python, fallback to system python3
 PY=""
 if [ -x ./.venv/bin/python ]; then
@@ -248,6 +356,8 @@ if [ -z "$PY" ]; then
     echo "   Ensure .venv exists or install python3"
     exit 127
 fi
+
+_validate_redis_url_or_exit
 
 _maybe_force_nonce_resync() {
     local _truthy="1|true|yes|enabled|on"

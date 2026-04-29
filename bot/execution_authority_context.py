@@ -17,6 +17,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator
 
+from bot.instance_identity import (
+    current_instance_identity,
+    inspect_lock_holder,
+    parse_distributed_lock_holder,
+    parse_writer_lock_metadata,
+)
 from bot.redis_env import get_redis_url
 
 
@@ -88,6 +94,7 @@ def assert_distributed_writer_authority() -> None:
         scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
+    meta_key = os.getenv("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{scope}"
 
     fail_closed_verify = _env_truthy("NIJA_WRITER_RUNTIME_VERIFY_FAIL_CLOSED") or strict_required
     if not redis_url:
@@ -151,6 +158,17 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
     strict_required = (_env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode) and not unsafe_bypass
     redis_url = get_redis_url()
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
+    if not scope:
+        raw = (
+            os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+            or os.environ.get("KRAKEN_API_KEY", "").strip()
+            or "default"
+        )
+        import hashlib
+        scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
+    meta_key = os.getenv("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{scope}"
 
     if force_refresh:
         with _FENCE_VERIFY_LOCK:
@@ -169,6 +187,37 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         last_ok = _FENCE_LAST_OK
         last_err = _FENCE_LAST_ERR
 
+    current_holder_raw = ""
+    current_holder = parse_distributed_lock_holder("")
+    current_holder_meta = parse_writer_lock_metadata("")
+    current_instance = current_instance_identity()
+    holder_inspection = inspect_lock_holder(current_instance, current_holder)
+    if redis_url:
+        try:
+            redis_mod = importlib.import_module("redis")
+            client = redis_mod.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+            current_holder_raw = str(client.get(lock_key) or "")
+            current_holder_meta = parse_writer_lock_metadata(str(client.get(meta_key) or ""))
+            current_holder = parse_distributed_lock_holder(current_holder_raw)
+            holder_inspection = inspect_lock_holder(current_instance, current_holder)
+        except Exception as exc:
+            current_holder = {
+                "raw": current_holder_raw,
+                "display": "<unavailable>",
+                "error": str(exc),
+            }
+            current_holder_meta = {
+                "raw": "",
+                "display": "<unavailable>",
+                "error": str(exc),
+            }
+            holder_inspection = inspect_lock_holder(current_instance, current_holder)
+
     return {
         "ok": bool(ok),
         "error": err,
@@ -178,6 +227,12 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         "redis_configured": bool(redis_url),
         "token_present": bool(token),
         "token_prefix": token[:8] if token else "",
+        "lock_key": lock_key,
+        "meta_key": meta_key,
+        "current_instance": current_instance,
+        "current_holder": current_holder,
+        "current_holder_meta": current_holder_meta,
+        "holder_inspection": holder_inspection,
         "cache": {
             "last_check_monotonic": float(last_check_ts),
             "last_ok": bool(last_ok),
