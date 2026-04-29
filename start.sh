@@ -152,6 +152,9 @@ fi
 _REDIS_CONFIGURED=false
 if [ -n "${NIJA_REDIS_URL:-}" ] || [ -n "${REDIS_URL:-}" ] || [ -n "${REDIS_PRIVATE_URL:-}" ] || [ -n "${REDIS_PUBLIC_URL:-}" ]; then
     _REDIS_CONFIGURED=true
+elif { [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] && [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; } \
+    || { [ -n "${REDIS_HOST:-${REDISHOST:-}}" ] && [ -n "${REDIS_PORT:-${REDISPORT:-}}" ]; }; then
+    _REDIS_CONFIGURED=true
 fi
 
 _STRICT_LEASE=true
@@ -269,21 +272,58 @@ exit_config_error() {
 }
 
 _resolve_redis_url() {
+    _strip_wrapping_quotes() {
+        # Remove one level of wrapping single/double quotes from full values.
+        local _raw="${1:-}"
+        if [ "${#_raw}" -ge 2 ] && [ "${_raw#\"}" != "${_raw}" ] && [ "${_raw%\"}" != "${_raw}" ]; then
+            _raw="${_raw#\"}"
+            _raw="${_raw%\"}"
+        elif [ "${#_raw}" -ge 2 ] && [ "${_raw#\'}" != "${_raw}" ] && [ "${_raw%\'}" != "${_raw}" ]; then
+            _raw="${_raw#\'}"
+            _raw="${_raw%\'}"
+        fi
+        printf "%s" "${_raw}"
+    }
+
     if [ -n "${NIJA_REDIS_URL:-}" ]; then
-        printf "%s" "${NIJA_REDIS_URL}"
+        _strip_wrapping_quotes "${NIJA_REDIS_URL}"
         return 0
     fi
     if [ -n "${REDIS_URL:-}" ]; then
-        printf "%s" "${REDIS_URL}"
+        _strip_wrapping_quotes "${REDIS_URL}"
         return 0
     fi
     if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
-        printf "%s" "${REDIS_PRIVATE_URL}"
+        _strip_wrapping_quotes "${REDIS_PRIVATE_URL}"
         return 0
     fi
     if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
-        printf "%s" "${REDIS_PUBLIC_URL}"
+        _strip_wrapping_quotes "${REDIS_PUBLIC_URL}"
         return 0
+    fi
+
+    # Component fallback: synthesize URL similarly to runtime resolver.
+    local _host _port _password _db
+    _host="${RAILWAY_TCP_PROXY_DOMAIN:-${REDIS_HOST:-${REDISHOST:-}}}"
+    _port="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"
+    _password="${REDIS_PASSWORD:-${REDISPASSWORD:-${REDIS_TOKEN:-}}}"
+    _db="${REDIS_DB:-${REDIS_DATABASE:-0}}"
+
+    _host="$(_strip_wrapping_quotes "${_host}")"
+    _port="$(_strip_wrapping_quotes "${_port}")"
+    _password="$(_strip_wrapping_quotes "${_password}")"
+    _db="$(_strip_wrapping_quotes "${_db}")"
+
+    if [ -n "${_host}" ] && [ -n "${_port}" ]; then
+        if printf "%s" "${_port}" | grep -Eq '^[0-9]+$'; then
+            if [ -n "${_password}" ]; then
+                printf "%s" "redis://default:${_password}@${_host}:${_port}/${_db}"
+            else
+                printf "%s" "redis://${_host}:${_port}/${_db}"
+            fi
+            return 0
+        fi
+        return 1
     fi
     return 1
 }
@@ -303,6 +343,14 @@ _resolve_redis_url_source() {
     fi
     if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
         printf "%s" "REDIS_PUBLIC_URL"
+        return 0
+    fi
+    if [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] && [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; then
+        printf "%s" "RAILWAY_TCP_PROXY_DOMAIN+RAILWAY_TCP_PROXY_PORT"
+        return 0
+    fi
+    if [ -n "${REDIS_HOST:-${REDISHOST:-}}" ] && [ -n "${REDIS_PORT:-${REDISPORT:-}}" ]; then
+        printf "%s" "REDIS_HOST+REDIS_PORT"
         return 0
     fi
     return 1
@@ -392,7 +440,8 @@ PY
         echo ""
         echo "❌ CRITICAL: ${_redis_source:-Redis URL} is not a valid Redis connection URL"
         echo ""
-        echo "Expected format: redis://:<password>@<host>:<port> or redis://default:<password>@<host>:<port>"
+        echo "Expected format: redis://[default:<password>@]<host>:<port>[/db] or rediss://[default:<password>@]<host>:<port>[/db]"
+        echo "Tip: remove wrapping quotes if present, e.g. NIJA_REDIS_URL=redis://default:<password>@<host>:<port>/0"
         echo ""
         echo "🔧 SOLUTION:"
         echo "   1. Open Railway → Redis service → Connect"
