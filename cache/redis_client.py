@@ -40,16 +40,28 @@ def get_redis_url() -> str:
     redis_url = get_env_redis_url()
 
     if not redis_url:
-        # Build from individual components
-        redis_host = os.getenv('REDIS_HOST', 'localhost')
-        redis_port = os.getenv('REDIS_PORT', '6379')
-        redis_db = os.getenv('REDIS_DB', '0')
-        redis_password = os.getenv('REDIS_PASSWORD', '')
+        # Check for Railway TCP proxy setup (preferred for production)
+        railway_domain = os.getenv('RAILWAY_TCP_PROXY_DOMAIN', '').strip()
+        railway_port = os.getenv('RAILWAY_TCP_PROXY_PORT', '').strip()
+        redis_password = os.getenv('REDIS_PASSWORD', '').strip()
 
-        if redis_password:
-            redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}/{redis_db}"
+        if railway_domain and railway_port:
+            # Railway TCP proxy format: redis://default:PASSWORD@domain:port/db
+            redis_db = os.getenv('REDIS_DB', '0')
+            if redis_password:
+                redis_url = f"redis://default:{redis_password}@{railway_domain}:{railway_port}/{redis_db}"
+            else:
+                redis_url = f"redis://default@{railway_domain}:{railway_port}/{redis_db}"
         else:
-            redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
+            # Fall back to individual component construction
+            redis_host = os.getenv('REDIS_HOST', 'localhost')
+            redis_port = os.getenv('REDIS_PORT', '6379')
+            redis_db = os.getenv('REDIS_DB', '0')
+
+            if redis_password:
+                redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}/{redis_db}"
+            else:
+                redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
 
     return redis_url
 
