@@ -216,7 +216,14 @@ fi
 # Helper function to exit gracefully for configuration errors
 exit_config_error() {
     echo ""
-    if [ "$WAIT_FOR_CONFIG" = "true" ]; then
+    local _hold_on_config_error=true
+    local _hold_raw
+    _hold_raw=$(printf "%s" "${NIJA_HOLD_ON_CONFIG_ERROR:-true}" | tr '[:upper:]' '[:lower:]')
+    if [ "${_hold_raw}" = "0" ] || [ "${_hold_raw}" = "false" ] || [ "${_hold_raw}" = "no" ] || [ "${_hold_raw}" = "off" ]; then
+        _hold_on_config_error=false
+    fi
+
+    if [ "$WAIT_FOR_CONFIG" = "true" ] || [ "${_hold_on_config_error}" = "true" ]; then
         echo "⏸️  Configuration incomplete - entering wait mode"
         echo ""
         echo "   🎯 This prevents restart loops while waiting for configuration"
@@ -229,6 +236,10 @@ exit_config_error() {
         echo "   Query the health endpoint:"
         echo "     curl http://localhost:\${PORT:-8080}/healthz"
         echo ""
+        if [ "$WAIT_FOR_CONFIG" != "true" ]; then
+            echo "   Override behaviour with NIJA_HOLD_ON_CONFIG_ERROR=false to exit immediately instead."
+            echo ""
+        fi
         echo "   Expected response:"
         echo "     {"
         echo "       \"status\": \"blocked\","
