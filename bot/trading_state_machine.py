@@ -605,8 +605,12 @@ class TradingStateMachine:
           Gate 1. Current state is OFF (or already LIVE_ACTIVE — see above)
           Gate 2. Kill switch is inactive
           Gate 3. LIVE_CAPITAL_VERIFIED env var is truthy (operator master switch)
-          Gate 4. CapitalAuthority ready + ExecutionPipeline healthy
-          Gate 5. ``activation_invariant()`` — all subsystems simultaneously valid
+          Gate 4. Single global activation barrier
+              - capital snapshot ready
+              - broker registration/snapshot invariant valid
+              - execution pipeline healthy
+              - normalized venue thresholds valid
+          Gate 5. Final invariant edge confirmation for transition commit
 
         Parameters
         ----------
@@ -800,20 +804,24 @@ class TradingStateMachine:
             )
             return False
 
-        # ── Gate 4: CA_READY + EXECUTION_PIPELINE_HEALTHY ────────────────
-        ready, reason = _capital_readiness_gate()
-        if not ready:
+        # ── Gate 4: single global activation barrier ──────────────────────
+        _mabm_gate = _get_mabm_instance()
+        _ca_gate = _get_capital_authority_instance()
+        _snap = cycle_capital if cycle_capital else {}
+        _barrier_ready, _barrier_reason, _cap_ready, _exec_ready, _venue_ready, _inv_ready = _global_activation_barrier(
+            _snap,
+            _ca_gate,
+            _mabm_gate,
+            self,
+        )
+        if not _barrier_ready:
             logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=CAPITAL_NOT_READY detail=%s", reason
+                "[AUTO_ACTIVATE BLOCKED] reason=GLOBAL_ACTIVATION_BARRIER detail=%s",
+                _barrier_reason,
             )
             return False
 
         # ── Gate 5: activation_invariant — all subsystems simultaneously valid
-        _mabm_gate = _get_mabm_instance()
-        _ca_gate = _get_capital_authority_instance()
-        _snap = cycle_capital if cycle_capital else {}
-
-        _inv_ready = activation_invariant(_snap, _ca_gate, _mabm_gate, self)
 
         logger.critical(
             "COMMIT_ACTIVATION_INVARIANT "
@@ -845,7 +853,9 @@ class TradingStateMachine:
         _live_verified_bool = lcv in ("true", "1", "yes", "enabled")
         commit_activation(
             kill=kill_state,
-            capital_ready=ready,
+            capital_ready=_cap_ready,
+            execution_ready=_exec_ready,
+            venue_ready=_venue_ready,
             live_verified=_live_verified_bool,
             invariant=_inv_ready,
             snapshot_ready=self._first_snap_accepted,
@@ -1428,38 +1438,103 @@ def _capital_readiness_gate() -> tuple:
             f"({type(exc).__name__}: {exc})"
         )
 
-    # ── b. EXECUTION_PIPELINE_HEALTHY ──────────────────────────────────────
+    if failures:
+        return False, "; ".join(failures)
+    return True, "ok"
+
+
+def _execution_readiness_gate() -> tuple:
+    """Check execution pipeline health independently from capital readiness."""
     try:
         try:
             from bot.execution_router import get_execution_router
         except ImportError:
             from execution_router import get_execution_router  # type: ignore[import]
         router = get_execution_router()
-        # If all registered venues have failed this session, the pipeline is broken.
-        status = router.get_status()
-        registered = status.get("registered_venues", 1)
+        status = getattr(router, "get_status", lambda: {})()
+        registered = int(status.get("registered_venues", 0) or 0)
         failed = len(status.get("session_failed_venues", []))
+        healthy = max(0, registered - failed)
         logger.info(
-            "[TradingStateMachine] _capital_readiness_gate: Execution pipeline - "
-            "registered_venues=%d, session_failed_venues=%d",
-            registered, failed
+            "[TradingStateMachine] _execution_readiness_gate: "
+            "registered_venues=%d session_failed_venues=%d healthy_venues=%d",
+            registered,
+            failed,
+            healthy,
         )
-        if registered > 0 and failed >= registered:
-            failures.append(
-                f"EXECUTION_PIPELINE_HEALTHY=false: all {registered} venue(s) "
-                f"have failed this session ({failed} failed)"
-            )
-        else:
-            logger.debug(
-                "_capital_readiness_gate: EXECUTION_PIPELINE_HEALTHY ✅ "
-                "venues=%d failed=%d", registered, failed
+        if registered > 0 and healthy <= 0:
+            return False, (
+                "EXECUTION_READY=false: all registered venues are session-failed "
+                f"(registered={registered} failed={failed})"
             )
     except (ImportError, AttributeError, Exception) as exc:
-        logger.debug("_capital_readiness_gate: ExecutionRouter unavailable (%s) — skipping", exc)
-
-    if failures:
-        return False, "; ".join(failures)
+        logger.debug("_execution_readiness_gate: ExecutionRouter unavailable (%s) — skipping", exc)
     return True, "ok"
+
+
+def _venue_thresholds_gate(cycle_capital: Optional[Dict[str, Any]], ca: Any) -> tuple:
+    """Validate aggregate venue thresholds without blocking on a single venue warning."""
+    try:
+        minimum_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+    except Exception:
+        minimum_balance = 1.0
+
+    total_capital = 0.0
+    if cycle_capital:
+        try:
+            total_capital = float(cycle_capital.get("ca_total_capital", 0.0) or 0.0)
+        except Exception:
+            total_capital = 0.0
+
+    if total_capital <= 0.0 and ca is not None:
+        try:
+            total_capital = float(ca.get_real_capital() or 0.0)
+        except Exception:
+            total_capital = 0.0
+
+    if total_capital < minimum_balance:
+        return False, (
+            "VENUE_THRESHOLDS=false: aggregate capital below MINIMUM_TRADING_BALANCE "
+            f"(total={total_capital:.2f} min={minimum_balance:.2f})"
+        )
+
+    return True, "ok"
+
+
+def _global_activation_barrier(
+    cycle_capital: Optional[Dict[str, Any]],
+    ca: Any,
+    mabm: Any,
+    sm: "TradingStateMachine",
+) -> tuple:
+    """Single global barrier required before LIVE_ACTIVE transition."""
+    cap_ready, cap_reason = _capital_readiness_gate()
+    exec_ready, exec_reason = _execution_readiness_gate()
+    venue_ready, venue_reason = _venue_thresholds_gate(cycle_capital, ca)
+    invariant_ready = activation_invariant(cycle_capital or {}, ca, mabm, sm)
+
+    reasons = []
+    if not cap_ready:
+        reasons.append(cap_reason)
+    if not exec_ready:
+        reasons.append(exec_reason)
+    if not venue_ready:
+        reasons.append(venue_reason)
+    if not invariant_ready:
+        reasons.append("INVARIANT=false: snapshot/registration/aggregation requirements not met")
+
+    barrier_ready = cap_ready and exec_ready and venue_ready and invariant_ready
+    detail = "ok" if barrier_ready else "; ".join(reasons)
+    logger.critical(
+        "GLOBAL_ACTIVATION_BARRIER | ready=%s capital=%s execution=%s venue=%s invariant=%s detail=%s",
+        barrier_ready,
+        cap_ready,
+        exec_ready,
+        venue_ready,
+        invariant_ready,
+        detail,
+    )
+    return barrier_ready, detail, cap_ready, exec_ready, venue_ready, invariant_ready
 
 
 # ---------------------------------------------------------------------------
@@ -1532,6 +1607,8 @@ def activation_invariant(
 def commit_activation(
     kill: bool,
     capital_ready: bool,
+    execution_ready: bool,
+    venue_ready: bool,
     live_verified: bool,
     invariant: bool,
     snapshot_ready: bool,
@@ -1547,8 +1624,13 @@ def commit_activation(
     kill:
         ``True`` when the emergency kill switch is active (blocks activation).
     capital_ready:
-        ``True`` when the capital-readiness gate (CA_READY +
-        EXECUTION_PIPELINE_HEALTHY) passes.
+        ``True`` when the capital-readiness gate (CA_READY) passes.
+    execution_ready:
+        ``True`` when execution pipeline readiness passes (at least one
+        registered venue is healthy for dispatch).
+    venue_ready:
+        ``True`` when normalized venue threshold validation passes using
+        aggregate capital semantics.
     live_verified:
         ``True`` when the ``LIVE_CAPITAL_VERIFIED`` environment variable is set
         to a truthy value (operator master switch).
@@ -1563,6 +1645,8 @@ def commit_activation(
         "ACTIVATION GATES | "
         f"kill={kill} | "
         f"capital={capital_ready} | "
+        f"execution={execution_ready} | "
+        f"venue={venue_ready} | "
         f"live_capital={live_verified} | "
         f"invariant={invariant} | "
         f"snap={snapshot_ready}"
@@ -1577,7 +1661,15 @@ def commit_activation(
         return False
 
     if not capital_ready:
-        logger.critical("ACTIVATION BLOCKED: capital readiness gate failed (CA_READY or EXECUTION_PIPELINE_HEALTHY is false)")
+        logger.critical("ACTIVATION BLOCKED: capital readiness gate failed")
+        return False
+
+    if not execution_ready:
+        logger.critical("ACTIVATION BLOCKED: execution readiness gate failed")
+        return False
+
+    if not venue_ready:
+        logger.critical("ACTIVATION BLOCKED: normalized venue threshold gate failed")
         return False
 
     if not snapshot_ready:
