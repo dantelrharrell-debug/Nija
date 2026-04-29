@@ -38,6 +38,29 @@ def _normalize_redis_url(source: str, url: str) -> tuple[str, str]:
     return f"{source} [normalized Railway proxy scheme]", normalized_url
 
 
+def _alternate_railway_proxy_scheme(source: str, url: str) -> tuple[str, str] | None:
+    """Return a synthetic fallback URL using the opposite Redis URL scheme.
+
+    Some Railway proxy setups behave differently across environments; probing both
+    redis:// and rediss:// improves startup resilience while still preserving
+    fail-closed semantics when neither endpoint responds.
+    """
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+
+    host = parsed.hostname or ""
+    if not _is_railway_proxy_host(host):
+        return None
+    if parsed.scheme not in {"redis", "rediss"}:
+        return None
+
+    alt_scheme = "rediss" if parsed.scheme == "redis" else "redis"
+    alt_url = urlunsplit((alt_scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+    return f"{source} [alternate Railway proxy scheme]", alt_url
+
+
 def _first_nonempty(*names: str) -> str:
     """Return first non-empty environment variable value from names."""
     for name in names:
@@ -124,9 +147,21 @@ def get_all_redis_urls() -> list[tuple[str, str]]:
             if normalized_value not in seen_urls:
                 seen_urls.add(normalized_value)
                 result.append((normalized_source, normalized_value))
+            alternate = _alternate_railway_proxy_scheme(normalized_source, normalized_value)
+            if alternate:
+                alt_source, alt_value = alternate
+                if alt_value not in seen_urls:
+                    seen_urls.add(alt_value)
+                    result.append((alt_source, alt_value))
     component_source, component_url = _build_component_redis_url()
     if component_url:
         normalized_source, normalized_value = _normalize_redis_url(component_source, component_url)
         if normalized_value not in seen_urls:
             result.append((normalized_source, normalized_value))
+            seen_urls.add(normalized_value)
+        alternate = _alternate_railway_proxy_scheme(normalized_source, normalized_value)
+        if alternate:
+            alt_source, alt_value = alternate
+            if alt_value not in seen_urls:
+                result.append((alt_source, alt_value))
     return result
