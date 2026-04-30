@@ -1225,7 +1225,10 @@ def _acquire_distributed_process_lock() -> None:
                     for substr in ["connection refused", "connection reset", "timeout", "unreachable", 
                                    "no route to host", "network unreachable", "host unreachable"]
                 )
-                _auto_degraded = _is_transient_error and not _allow_degraded
+                # Never auto-degrade when distributed lock is required (LIVE/strict mode).
+                # In strict mode we must fail closed so activation cannot proceed without
+                # an acquired writer lock and fencing token.
+                _auto_degraded = _is_transient_error and not _allow_degraded and not _require_lock
                 
                 if _auto_degraded:
                     _allow_degraded = True
