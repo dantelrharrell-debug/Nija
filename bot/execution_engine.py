@@ -1721,10 +1721,9 @@ class ExecutionEngine:
                 position_size = _probe_size
 
             if position_size < _hard_min:
-                logger.debug(
-                    f"⏭️  Skipping {symbol}: size ${position_size:.2f} < "
-                    f"${_hard_min:.2f} minimum for "
-                    f"{_hard_broker_key or 'broker'}"
+                logger.warning(
+                    f"Trade skipped: size ${position_size:.2f} < min ${_hard_min:.2f} "
+                    f"for {symbol} ({_hard_broker_key or 'broker'})"
                 )
                 return None
 
