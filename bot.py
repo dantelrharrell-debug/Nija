@@ -1087,6 +1087,7 @@ def _acquire_distributed_process_lock() -> None:
 
     def _enter_fail_closed_standby(_reason: str) -> None:
         """Block startup safely and retry lock acquisition instead of crash-looping."""
+        nonlocal _standby_retry_count
         _retry_enabled = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
         ).strip().lower() in _truthy
@@ -1116,7 +1117,8 @@ def _acquire_distributed_process_lock() -> None:
 
         while True:
             time.sleep(_retry_sleep_s)
-            _next_retry_count = _standby_retry_count + 1
+            _standby_retry_count += 1
+            _next_retry_count = _standby_retry_count
             os.environ["NIJA_STANDBY_RETRY_COUNT"] = str(_next_retry_count)
             print("🔁 Retrying distributed writer lock acquisition...")
             try:
@@ -1209,11 +1211,13 @@ def _acquire_distributed_process_lock() -> None:
         for _attempt in range(_max_retries):
             try:
                 _client.ping()
+                _ping_exc = None
                 break
             except Exception as _exc:
                 _ping_exc = _exc
                 if _attempt < _max_retries - 1:
-                    _delay = _retry_delays[_attempt]
+                    _delay_idx = min(_attempt, len(_retry_delays) - 1)
+                    _delay = _retry_delays[_delay_idx]
                     print(f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: {_exc}. Retrying in {_delay}s...")
                     time.sleep(_delay)
                 else:
