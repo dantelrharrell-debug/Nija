@@ -1274,6 +1274,10 @@ def _acquire_distributed_process_lock() -> None:
                     _src for _src, _u in _all_urls
                     if ".railway.internal" in _u
                 ]
+                _proxy_hosts = [
+                    _src for _src, _u in _all_urls
+                    if ".proxy.rlwy.net" in _u
+                ]
                 _railway_hint = ""
                 if _internal_hosts:
                     _railway_hint = (
@@ -1283,6 +1287,19 @@ def _acquire_distributed_process_lock() -> None:
                         f"     FIX: Go to Railway → Redis service → Connect tab → copy the PUBLIC proxy URL\n"
                         f"     (format: redis://default:PASSWORD@maglev.proxy.rlwy.net:PORT)\n"
                         f"     Set it as NIJA_REDIS_URL in the bot service Variables and redeploy."
+                    )
+                elif _proxy_hosts and "connection reset" in str(_ping_exc).lower():
+                    _railway_hint = (
+                        f"\n  ⚠️  Railway public proxy returned 'Connection reset by peer' "
+                        f"({', '.join(_proxy_hosts)}).\n"
+                        f"     This means the Railway Redis service is down, restarting, or was re-provisioned.\n"
+                        f"     Steps to fix:\n"
+                        f"       1. Go to Railway → Redis service → verify the service is Running\n"
+                        f"       2. If re-provisioned, copy the new PUBLIC proxy URL from the Connect tab\n"
+                        f"          (format: redis://default:NEW_PASSWORD@maglev.proxy.rlwy.net:NEW_PORT)\n"
+                        f"       3. Update NIJA_REDIS_URL in the bot service Variables and redeploy\n"
+                        f"       4. To bypass the lock while Redis recovers (UNSAFE, single-instance only):\n"
+                        f"          set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true and redeploy"
                     )
                 if _standby_retry_active and not _verbose_standby:
                     _ping_err_msg = (
