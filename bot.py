@@ -1079,6 +1079,48 @@ def _acquire_distributed_process_lock() -> None:
     global _running_in_degraded_mode
 
     _truthy = ("1", "true", "yes", "enabled", "on")
+
+    def _enter_fail_closed_standby(_reason: str) -> None:
+        """Block startup safely and retry lock acquisition instead of crash-looping."""
+        _retry_enabled = os.environ.get(
+            "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
+        ).strip().lower() in _truthy
+        if not _retry_enabled:
+            print(f"❌ Failed to acquire distributed single-writer lock: {_reason}")
+            print("   Exiting fail-closed to preserve one-writer invariant.")
+            sys.exit(1)
+
+        _retry_sleep_raw = os.environ.get(
+            "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S", "15"
+        ).strip()
+        try:
+            _retry_sleep_s = max(5.0, float(_retry_sleep_raw or "15"))
+        except (TypeError, ValueError):
+            _retry_sleep_s = 15.0
+
+        print(f"❌ Failed to acquire distributed single-writer lock: {_reason}")
+        print(
+            "🛑 FAIL-CLOSED STANDBY ACTIVE: trading remains blocked until writer lock is acquired."
+        )
+        print(
+            f"   Retrying distributed lock acquisition every {_retry_sleep_s:.0f}s "
+            "(set NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=false to exit instead)."
+        )
+
+        while True:
+            time.sleep(_retry_sleep_s)
+            print("🔁 Retrying distributed writer lock acquisition...")
+            try:
+                _acquire_distributed_process_lock()
+                print("✅ Distributed writer lock recovered; leaving fail-closed standby.")
+                return
+            except SystemExit as _standby_exit:
+                if str(getattr(_standby_exit, "code", "1")) == "1":
+                    continue
+                raise
+            except Exception as _standby_exc:
+                print(f"⚠️ Retry failed: {_standby_exc}")
+
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
     _require_lock = os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
     _unsafe_bypass = os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
@@ -1106,8 +1148,10 @@ def _acquire_distributed_process_lock() -> None:
         )
         if _require_lock:
             print(_msg)
-            print("🚫 Distributed single-writer lock is required in LIVE mode. Exiting fail-closed.")
-            sys.exit(1)
+            _enter_fail_closed_standby(
+                "Redis URL not configured while distributed single-writer lock is required"
+            )
+            return
         print(_msg)
         return
     try:
@@ -1541,9 +1585,7 @@ def _acquire_distributed_process_lock() -> None:
             f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
         )
     except Exception as _lock_exc:
-        print(f"❌ Failed to acquire distributed single-writer lock: {_lock_exc}")
-        print("   Exiting fail-closed to preserve one-writer invariant.")
-        sys.exit(1)
+        _enter_fail_closed_standby(str(_lock_exc))
 
 
 def _acquire_process_lock() -> None:
