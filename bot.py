@@ -1237,6 +1237,8 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"⚠️ {_ping_err_msg}")
                 if _allow_degraded:
                     _running_in_degraded_mode = True
+                    os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+                    os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
                     print("⚠️  DEGRADED MODE ACTIVE: Distributed writer lock DISABLED")
                     print("   ⚠️  RUNNING WITHOUT SINGLE-WRITER SAFETY — DO NOT RUN MULTIPLE INSTANCES")
                     print("   Once Redis is restored, restart the bot to re-enable distributed locking.")

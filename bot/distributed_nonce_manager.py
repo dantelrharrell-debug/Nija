@@ -192,6 +192,29 @@ _REDIS_LEASE_WAIT_LOG_INTERVAL_S = max(
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
 
+def _runtime_strict_redis_lease() -> bool:
+    """Resolve strict lease mode using current runtime env flags.
+
+    This is evaluated at manager construction time (not import time) so a
+    startup degraded-mode decision can be propagated safely.
+    """
+    _strict_requested = (
+        _env_true("NIJA_STRICT_REDIS_LEASE", "1")
+        and not _env_true("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "0")
+    )
+    _allow_degraded = (
+        _env_true("NIJA_ALLOW_REDIS_DEGRADED", "0")
+        or _env_true("NIJA_RUNTIME_DEGRADED_MODE", "0")
+    )
+    if _strict_requested and _allow_degraded:
+        _logger.warning(
+            "DistributedNonceManager: degraded mode requested; disabling strict Redis lease enforcement "
+            "for this process startup"
+        )
+        return False
+    return _strict_requested
+
+
 def _compute_initial_lease_wait_budget_s(
     config_timeout_s: float,
     holder_ttl_ms: int,
@@ -619,7 +642,7 @@ class DistributedNonceManager:
         self._redis: Optional[_PerKeyRedisBackend] = None
         self._owner_id = str(uuid.uuid4())
         self._owner_fingerprint = _build_process_fingerprint()
-        self._strict_redis_lease = _STRICT_REDIS_LEASE
+        self._strict_redis_lease = _runtime_strict_redis_lease()
 
         if redis_client is not None:
             try:

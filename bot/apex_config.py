@@ -797,6 +797,19 @@ def get_active_risk_config():
     """
     import os
 
+    _truthy = {"1", "true", "yes", "on", "enabled"}
+
+    def _degraded_startup_mode() -> bool:
+        """Return True when startup is intentionally running without full capital hydration.
+
+        In this mode we must avoid import-time hard crashes and use conservative
+        defaults until broker balances are hydrated.
+        """
+        return (
+            os.getenv('NIJA_RUNTIME_DEGRADED_MODE', '').strip().lower() in _truthy
+            or os.getenv('NIJA_ALLOW_REDIS_DEGRADED', '').strip().lower() in _truthy
+        )
+
     risk_profile = os.getenv('RISK_PROFILE', 'AUTO').upper()
 
     if risk_profile == 'STARTER':
@@ -819,12 +832,25 @@ def get_active_risk_config():
         try:
             balance_str = os.getenv('ACCOUNT_BALANCE', '').strip()
             if not balance_str:
+                if _degraded_startup_mode():
+                    logger.warning(
+                        "AUTO mode: ACCOUNT_BALANCE unavailable during degraded startup; "
+                        "using STARTER tier until hydration completes"
+                    )
+                    return RISK_CONFIG_STARTER
                 raise RuntimeError(
                     "Balance required before tier calculation: ACCOUNT_BALANCE is not set"
                 )
 
             balance = float(balance_str)
             if balance <= 0:
+                if _degraded_startup_mode():
+                    logger.warning(
+                        "AUTO mode: ACCOUNT_BALANCE=%.2f during degraded startup; "
+                        "using STARTER tier until hydration completes",
+                        balance,
+                    )
+                    return RISK_CONFIG_STARTER
                 raise RuntimeError(
                     f"Balance required before tier calculation: ACCOUNT_BALANCE is {balance:.2f}"
                 )
@@ -851,6 +877,13 @@ def get_active_risk_config():
                 logger.warning(f"AUTO mode: Balance ${balance:.2f} below minimum ($5), defaulting to STARTER tier")
                 return RISK_CONFIG_STARTER
         except (ValueError, TypeError, RuntimeError) as e:
+            if _degraded_startup_mode():
+                logger.warning(
+                    "AUTO mode balance hydration guard failed in degraded startup (%s); "
+                    "using STARTER tier until hydration completes",
+                    e,
+                )
+                return RISK_CONFIG_STARTER
             logger.error(f"AUTO mode balance hydration guard failed: {e}")
             raise RuntimeError("Balance required before tier calculation") from e
     else:
