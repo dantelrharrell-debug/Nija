@@ -919,6 +919,7 @@ _distributed_writer_fencing_key = ""
 _distributed_writer_fencing_token = 0
 _distributed_writer_lock_stop = threading.Event()
 _distributed_writer_lock_thread = None
+_running_in_degraded_mode = False  # True if bot runs without Redis distributed lock safety
 
 
 def _writer_lock_scope() -> str:
@@ -1075,6 +1076,7 @@ def _acquire_distributed_process_lock() -> None:
     global _distributed_writer_lock_key, _distributed_writer_lock_token
     global _distributed_writer_fencing_key, _distributed_writer_fencing_token
     global _distributed_writer_lock_thread
+    global _running_in_degraded_mode
 
     _truthy = ("1", "true", "yes", "enabled", "on")
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
@@ -1135,9 +1137,24 @@ def _acquire_distributed_process_lock() -> None:
             socket_connect_timeout=3,
             socket_timeout=3,
         )
-        try:
-            _client.ping()
-        except Exception as _ping_exc:
+        # Retry logic for transient connection failures
+        _max_retries = 3
+        _retry_delays = [0.5, 1.0, 2.0]  # exponential backoff
+        _ping_exc = None
+        for _attempt in range(_max_retries):
+            try:
+                _client.ping()
+                break
+            except Exception as _exc:
+                _ping_exc = _exc
+                if _attempt < _max_retries - 1:
+                    _delay = _retry_delays[_attempt]
+                    print(f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: {_exc}. Retrying in {_delay}s...")
+                    time.sleep(_delay)
+                else:
+                    print(f"❌ Redis connection failed after {_max_retries} attempts")
+        
+        if _ping_exc:
             # Primary URL failed — try remaining configured URLs in priority order
             # First, log host details for all configured URLs (credentials redacted) to aid diagnosis
             def _redact_url(u: str) -> str:
@@ -1199,9 +1216,31 @@ def _acquire_distributed_process_lock() -> None:
                     f"  Fallbacks tried: {_fallback_tried or 'none'}\n"
                     f"  Redis env presence: {_redis_env_presence}"
                 )
-                if _require_lock:
+                # Check if degraded mode is allowed (e.g., for temporary Redis outages)
+                _allow_degraded = os.environ.get("NIJA_ALLOW_REDIS_DEGRADED", "").strip().lower() in _truthy
+                
+                # Auto-enable degraded mode for transient connection errors (not config errors)
+                _is_transient_error = any(
+                    substr in str(_ping_exc).lower()
+                    for substr in ["connection refused", "connection reset", "timeout", "unreachable", 
+                                   "no route to host", "network unreachable", "host unreachable"]
+                )
+                _auto_degraded = _is_transient_error and not _allow_degraded
+                
+                if _auto_degraded:
+                    _allow_degraded = True
+                    print("⚠️  TRANSIENT NETWORK ERROR DETECTED — AUTO-ENABLING DEGRADED MODE")
+                    print("     This appears to be a temporary connectivity issue, not a configuration error.")
+                
+                if _require_lock and not _allow_degraded:
                     raise RuntimeError(_ping_err_msg) from _ping_exc
                 print(f"⚠️ {_ping_err_msg}")
+                if _allow_degraded:
+                    _running_in_degraded_mode = True
+                    print("⚠️  DEGRADED MODE ACTIVE: Distributed writer lock DISABLED")
+                    print("   ⚠️  RUNNING WITHOUT SINGLE-WRITER SAFETY — DO NOT RUN MULTIPLE INSTANCES")
+                    print("   Once Redis is restored, restart the bot to re-enable distributed locking.")
+                    return
                 print("⚠️ Distributed writer lock SKIPPED (Redis unreachable and lock not required in this mode).")
                 print("   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 or LIVE_CAPITAL_VERIFIED=1 to enforce fail-closed behaviour.")
                 return
