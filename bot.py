@@ -685,7 +685,7 @@ def _bootstrap_nonce_reset_once() -> None:
         logger.debug("NONCE_BOOTSTRAP_SKIP non-owner thread attempted bootstrap nonce reset")
         return
 
-    if os.getenv("NIJA_ENABLE_BOOTSTRAP_NONCE_RESET", "false").lower() not in {
+    if os.getenv("NIJA_ENABLE_BOOTSTRAP_NONCE_RESET", "true").lower() not in {
         "true",
         "1",
         "yes",
@@ -693,7 +693,7 @@ def _bootstrap_nonce_reset_once() -> None:
     }:
         logger.info(
             "NONCE_BOOTSTRAP_SKIP bootstrap nonce reset disabled "
-            "(set NIJA_ENABLE_BOOTSTRAP_NONCE_RESET=true to opt in)"
+            "(set NIJA_ENABLE_BOOTSTRAP_NONCE_RESET=false to disable)"
         )
         return
 
@@ -3839,7 +3839,18 @@ def _run_bot_startup_and_trading():
                 )
 
             _coinbase_disabled = _is_truthy_env("NIJA_DISABLE_COINBASE", "false")
-            if not _coinbase_disabled and not _coinbase_sdk_available:
+            _coinbase_enabled_for_trading = os.environ.get(
+                "ENABLE_COINBASE_TRADING", "true"
+            ).strip().lower() not in ("0", "false", "no", "off")
+            _primary_execution_venue = os.environ.get(
+                "PRIMARY_EXECUTION_VENUE", ""
+            ).strip().lower()
+            _coinbase_required = (
+                not _coinbase_disabled
+                and _coinbase_enabled_for_trading
+                and _primary_execution_venue == "coinbase"
+            )
+            if _coinbase_required and not _coinbase_sdk_available:
                 _startup_blockers.append(
                     "Missing modules: Coinbase SDK not installed while Coinbase is enabled "
                     "(install coinbase-advanced-py or set NIJA_DISABLE_COINBASE=true)."
@@ -5761,6 +5772,13 @@ def main():
             _writer_lock_status.get("live_mode"),
             _writer_lock_status.get("redis_configured"),
             _writer_lock_status.get("token_present"),
+        )
+        _holder_inspection = _writer_lock_status.get("holder_inspection") or {}
+        _current_holder = (_writer_lock_status.get("current_holder") or {}).get("display", "<unknown>")
+        logger.critical(
+            "🔐 WRITER LOCK HOLDER | relationship=%s holder=%s",
+            _holder_inspection.get("relationship", "unknown"),
+            _current_holder,
         )
         if _writer_lock_status.get("error"):
             logger.critical("🔐 WRITER LOCK SELF-TEST ERROR: %s", _writer_lock_status.get("error"))
