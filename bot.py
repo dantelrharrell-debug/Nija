@@ -1079,6 +1079,7 @@ def _acquire_distributed_process_lock() -> None:
     global _running_in_degraded_mode
 
     _truthy = ("1", "true", "yes", "enabled", "on")
+    _standby_retry_active = os.environ.get("NIJA_STANDBY_RETRY_ACTIVE", "0").strip() == "1"
 
     def _enter_fail_closed_standby(_reason: str) -> None:
         """Block startup safely and retry lock acquisition instead of crash-looping."""
@@ -1107,11 +1108,14 @@ def _acquire_distributed_process_lock() -> None:
             "(set NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=false to exit instead)."
         )
 
+        os.environ["NIJA_STANDBY_RETRY_ACTIVE"] = "1"
+
         while True:
             time.sleep(_retry_sleep_s)
             print("🔁 Retrying distributed writer lock acquisition...")
             try:
                 _acquire_distributed_process_lock()
+                os.environ.pop("NIJA_STANDBY_RETRY_ACTIVE", None)
                 print("✅ Distributed writer lock recovered; leaving fail-closed standby.")
                 return
             except SystemExit as _standby_exit:
@@ -1147,6 +1151,10 @@ def _acquire_distributed_process_lock() -> None:
             "(checked NIJA_REDIS_URL, REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL)."
         )
         if _require_lock:
+            if _standby_retry_active:
+                raise RuntimeError(
+                    "Redis URL not configured while distributed single-writer lock is required"
+                )
             print(_msg)
             _enter_fail_closed_standby(
                 "Redis URL not configured while distributed single-writer lock is required"
@@ -1585,6 +1593,8 @@ def _acquire_distributed_process_lock() -> None:
             f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
         )
     except Exception as _lock_exc:
+        if _standby_retry_active:
+            raise RuntimeError(str(_lock_exc))
         _enter_fail_closed_standby(str(_lock_exc))
 
 
