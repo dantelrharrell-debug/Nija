@@ -1080,6 +1080,10 @@ def _acquire_distributed_process_lock() -> None:
 
     _truthy = ("1", "true", "yes", "enabled", "on")
     _standby_retry_active = os.environ.get("NIJA_STANDBY_RETRY_ACTIVE", "0").strip() == "1"
+    try:
+        _standby_retry_count = int(os.environ.get("NIJA_STANDBY_RETRY_COUNT", "0") or "0")
+    except (TypeError, ValueError):
+        _standby_retry_count = 0
 
     def _enter_fail_closed_standby(_reason: str) -> None:
         """Block startup safely and retry lock acquisition instead of crash-looping."""
@@ -1112,10 +1116,13 @@ def _acquire_distributed_process_lock() -> None:
 
         while True:
             time.sleep(_retry_sleep_s)
+            _next_retry_count = _standby_retry_count + 1
+            os.environ["NIJA_STANDBY_RETRY_COUNT"] = str(_next_retry_count)
             print("🔁 Retrying distributed writer lock acquisition...")
             try:
                 _acquire_distributed_process_lock()
                 os.environ.pop("NIJA_STANDBY_RETRY_ACTIVE", None)
+                os.environ.pop("NIJA_STANDBY_RETRY_COUNT", None)
                 print("✅ Distributed writer lock recovered; leaving fail-closed standby.")
                 return
             except SystemExit as _standby_exit:
@@ -1123,7 +1130,8 @@ def _acquire_distributed_process_lock() -> None:
                     continue
                 raise
             except Exception as _standby_exc:
-                print(f"⚠️ Retry failed: {_standby_exc}")
+                _msg = str(_standby_exc).splitlines()[0] if str(_standby_exc) else type(_standby_exc).__name__
+                print(f"⚠️ Retry failed: {_msg}")
 
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
     _require_lock = os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
@@ -1191,6 +1199,11 @@ def _acquire_distributed_process_lock() -> None:
         )
         # Retry logic for transient connection failures
         _max_retries = 3
+        if _standby_retry_active:
+            try:
+                _max_retries = max(1, int(os.environ.get("NIJA_STANDBY_CONNECT_RETRIES", "1") or "1"))
+            except (TypeError, ValueError):
+                _max_retries = 1
         _retry_delays = [0.5, 1.0, 2.0]  # exponential backoff
         _ping_exc = None
         for _attempt in range(_max_retries):
@@ -1218,17 +1231,26 @@ def _acquire_distributed_process_lock() -> None:
                     return "<unparseable>"
 
             _all_urls = get_all_redis_urls()
-            print(f"⚠️ Redis primary URL ({_redis_url_source}) unreachable: {_ping_exc}")
-            print("  Configured Redis URLs (hosts only):")
-            for _src, _u in _all_urls:
-                print(f"    {_src}: {_redact_url(_u)}")
+            _standby_log_every_raw = os.environ.get("NIJA_STANDBY_LOG_EVERY", "8").strip()
+            try:
+                _standby_log_every = max(1, int(_standby_log_every_raw or "8"))
+            except (TypeError, ValueError):
+                _standby_log_every = 8
+            _verbose_standby = (not _standby_retry_active) or (_standby_retry_count % _standby_log_every == 0)
+
+            if _verbose_standby:
+                print(f"⚠️ Redis primary URL ({_redis_url_source}) unreachable: {_ping_exc}")
+                print("  Configured Redis URLs (hosts only):")
+                for _src, _u in _all_urls:
+                    print(f"    {_src}: {_redact_url(_u)}")
             _fallback_tried: list[str] = []
             _client_resolved = False
             for _fb_source, _fb_url in _all_urls:
                 if _fb_url == _redis_url:
                     continue  # already tried
                 _fallback_tried.append(_fb_source)
-                print(f"  Trying fallback: {_fb_source} ({_redact_url(_fb_url)})")
+                if _verbose_standby:
+                    print(f"  Trying fallback: {_fb_source} ({_redact_url(_fb_url)})")
                 try:
                     _fb_client = redis.Redis.from_url(
                         _fb_url,
@@ -1244,7 +1266,8 @@ def _acquire_distributed_process_lock() -> None:
                     _client_resolved = True
                     break
                 except Exception as _fb_exc:
-                    print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
+                    if _verbose_standby:
+                        print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
                 # Check if all URLs point to Railway internal networking
                 _internal_hosts = [
@@ -1261,13 +1284,19 @@ def _acquire_distributed_process_lock() -> None:
                         f"     (format: redis://default:PASSWORD@maglev.proxy.rlwy.net:PORT)\n"
                         f"     Set it as NIJA_REDIS_URL in the bot service Variables and redeploy."
                     )
-                _ping_err_msg = (
-                    f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
-                    f"{_railway_hint}\n"
-                    f"  Primary source: {_redis_url_source or 'unset'}\n"
-                    f"  Fallbacks tried: {_fallback_tried or 'none'}\n"
-                    f"  Redis env presence: {_redis_env_presence}"
-                )
+                if _standby_retry_active and not _verbose_standby:
+                    _ping_err_msg = (
+                        "Redis connectivity check failed for distributed writer lock: "
+                        f"{_ping_exc}"
+                    )
+                else:
+                    _ping_err_msg = (
+                        f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
+                        f"{_railway_hint}\n"
+                        f"  Primary source: {_redis_url_source or 'unset'}\n"
+                        f"  Fallbacks tried: {_fallback_tried or 'none'}\n"
+                        f"  Redis env presence: {_redis_env_presence}"
+                    )
                 # Check if degraded mode is allowed (e.g., for temporary Redis outages)
                 _allow_degraded = os.environ.get("NIJA_ALLOW_REDIS_DEGRADED", "").strip().lower() in _truthy
                 
