@@ -551,6 +551,20 @@ _maybe_force_nonce_resync() {
         else
             echo "   ⚠️  Could not delete Redis key: nonce_lock"
         fi
+        local _scanned_nonce_keys
+        _scanned_nonce_keys=$(redis-cli -u "${_redis_url}" --scan --pattern 'kraken_nonce*' 2>/dev/null || true)
+        if [ -n "${_scanned_nonce_keys}" ]; then
+            while IFS= read -r _nonce_key; do
+                [ -z "${_nonce_key}" ] && continue
+                if redis-cli -u "${_redis_url}" DEL "${_nonce_key}" >/dev/null 2>&1; then
+                    echo "   ✅ Redis key reset: ${_nonce_key}"
+                fi
+            done <<EOF
+${_scanned_nonce_keys}
+EOF
+        fi
+        echo "   ℹ️  Writer-lock keys (nija:writer_lock*) are NOT auto-deleted during resync."
+        echo "      Clear them manually only after confirming no live writer instance exists."
     else
         echo "   ℹ️  Redis key reset skipped (redis-cli not available or Redis URL not set)"
     fi
