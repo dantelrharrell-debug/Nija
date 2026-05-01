@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e  # Exit on error
 
+echo "🔥 PYTHON ENTRYPOINT HIT (start.sh)"
+
 echo "=============================="
 echo "    STARTING NIJA TRADING BOT"
 echo "=============================="
@@ -262,11 +264,11 @@ exit_config_error() {
         # If health server exits, exit with 0 to prevent restart loop
         exit 0
     else
-        echo "⚠️  Configuration error - exiting without restart (exit code 0)"
+        echo "⚠️  Configuration error - exiting with failure (exit code 1)"
         echo "    The container will not restart automatically."
         echo "    Please configure credentials and manually restart the deployment."
         echo ""
-        exit 0
+        exit 1
     fi
 }
 
@@ -1035,6 +1037,12 @@ echo "🔄 Starting live trading bot..."
 echo "Working directory: $(pwd)"
 echo "Bot file exists: $(test -f ./bot.py && echo 'YES' || echo 'NO')"
 
+if [ ! -f "./bot.py" ]; then
+    echo "❌ Entrypoint file missing: ./bot.py"
+    echo "   Verify Railway start command and repository working directory."
+    exit 1
+fi
+
 # Sleep briefly to ensure all bash output is flushed before Python starts
 # This prevents log message interleaving between bash and Python stdout
 sleep 0.1
@@ -1062,7 +1070,20 @@ fi
 # `set -e` would terminate the script immediately on non-zero exit, so
 # temporarily disable it to capture and classify the bot exit status.
 set +e
-$PY -u bot.py 2>&1
+$PY -u - <<'PY'
+import runpy
+import traceback
+
+print("🔥 BOOT START", flush=True)
+
+try:
+    runpy.run_path("bot.py", run_name="__main__")
+except SystemExit:
+    raise
+except BaseException:
+    traceback.print_exc()
+    raise
+PY
 status=$?
 set -e
 
