@@ -345,18 +345,17 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
             _last_wait_log = _elapsed
 
     _state_snapshot = _read_initialized_state_snapshot(context="strict supervised trading-loop start")
-    system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
-        _compute_system_ready(_state_snapshot)
-    if not system_ready:
+    try:
+        system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
+            _require_startup_ready_or_raise(
+                context="cached trading-loop start",
+                state_snapshot=_state_snapshot,
+            )
+    except RuntimeError as _startup_guard_err:
         logger.critical(
-            "START_TRADING_LOOP_BLOCKED: strict readiness not satisfied (%s) "
-            "broker_ready=%s risk_ready=%s strategy_ready=%s capital_ready=%s execution_ready=%s",
+            "START_TRADING_LOOP_BLOCKED: %s (%s)",
+            _startup_guard_err,
             reason,
-            broker_ready,
-            risk_ready,
-            strategy_ready,
-            capital_ready,
-            execution_ready,
         )
         return False
 
@@ -515,6 +514,27 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
 
     system_ready = broker_ready and strategy_ready and capital_ready and execution_ready
     return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
+
+
+def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
+    """Fail closed unless the startup readiness contract is fully satisfied."""
+    system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
+        _compute_system_ready(state_snapshot)
+    if not all([broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready]):
+        raise RuntimeError(
+            f"BLOCKED: System not fully initialized ({context}) "
+            f"broker_ready={broker_ready} risk_ready={risk_ready} "
+            f"strategy_ready={strategy_ready} capital_ready={capital_ready} "
+            f"execution_ready={execution_ready}"
+        )
+    return (
+        system_ready,
+        broker_ready,
+        risk_ready,
+        strategy_ready,
+        capital_ready,
+        execution_ready,
+    )
 
 
 def _is_balance_hydrated_ready() -> bool:
@@ -5102,8 +5122,10 @@ def _run_bot_startup_and_trading():
                 _prelaunch_strategy_ready,
                 _prelaunch_capital_ready,
                 _prelaunch_execution_ready,
-            ) = _compute_system_ready(_prelaunch_state_snapshot)
-            _prelaunch_strategy_ready = strategy is not None
+            ) = _require_startup_ready_or_raise(
+                context="pre-thread launch",
+                state_snapshot=_prelaunch_state_snapshot,
+            )
             _prelaunch_balance_ready = _is_balance_hydrated_ready()
             try:
                 from bot.broker_manager import _KRAKEN_STARTUP_FSM as _prelaunch_kraken_fsm
@@ -5116,6 +5138,7 @@ def _run_bot_startup_and_trading():
                 _prelaunch_broker_ready,
                 _prelaunch_balance_ready,
                 _prelaunch_capital_ready,
+                _prelaunch_risk_ready,
                 _prelaunch_strategy_ready,
                 _prelaunch_execution_ready,
             ]):
@@ -5125,6 +5148,7 @@ def _run_bot_startup_and_trading():
                     f"broker_ready={_prelaunch_broker_ready} "
                     f"balance_ready={_prelaunch_balance_ready} "
                     f"capital_ready={_prelaunch_capital_ready} "
+                    f"risk_ready={_prelaunch_risk_ready} "
                     f"strategy_ready={_prelaunch_strategy_ready} "
                     f"execution_ready={_prelaunch_execution_ready}"
                 )
