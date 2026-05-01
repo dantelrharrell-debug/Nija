@@ -520,6 +520,18 @@ fi
 _validate_redis_url_or_exit
 _log_redis_lock_source_hint
 
+_disable_nonce_ceiling_jump() {
+    local _truthy="1|true|yes|enabled|on"
+    local _jump_raw="${NIJA_NONCE_CEILING_JUMP:-}"
+    local _jump
+    _jump=$(printf "%s" "${_jump_raw}" | tr '[:upper:]' '[:lower:]')
+    if printf "%s" "${_jump}" | grep -Eq "^(${_truthy})$"; then
+        echo "⚠️  NIJA_NONCE_CEILING_JUMP=${NIJA_NONCE_CEILING_JUMP} detected — forcing NIJA_NONCE_CEILING_JUMP=0"
+        echo "   Ceiling jumps are disabled to prevent irreversible nonce drift."
+        export NIJA_NONCE_CEILING_JUMP=0
+    fi
+}
+
 _maybe_force_nonce_resync() {
     local _truthy="1|true|yes|enabled|on"
     local _force_raw="${NIJA_FORCE_NONCE_RESYNC:-}"
@@ -551,16 +563,93 @@ _maybe_force_nonce_resync() {
         else
             echo "   ⚠️  Could not delete Redis key: nonce_lock"
         fi
+        if redis-cli -u "${_redis_url}" DEL nija:kraken:nonce >/dev/null 2>&1; then
+            echo "   ✅ Redis key reset: nija:kraken:nonce"
+        fi
         local _scanned_nonce_keys
-        _scanned_nonce_keys=$(redis-cli -u "${_redis_url}" --scan --pattern 'kraken_nonce*' 2>/dev/null || true)
-        if [ -n "${_scanned_nonce_keys}" ]; then
-            while IFS= read -r _nonce_key; do
-                [ -z "${_nonce_key}" ] && continue
-                if redis-cli -u "${_redis_url}" DEL "${_nonce_key}" >/dev/null 2>&1; then
-                    echo "   ✅ Redis key reset: ${_nonce_key}"
-                fi
-            done <<EOF
+        for _nonce_pattern in \
+            'kraken_nonce*' \
+            'nija:kraken:nonce*' \
+            'nija:kraken:writer:owner:*' \
+            'nija:kraken:writer:lease_version:*' \
+            'nija:kraken:writer:version_counter:*' \
+            'nija:kraken:writer:fingerprint:*'; do
+            _scanned_nonce_keys=$(redis-cli -u "${_redis_url}" --scan --pattern "${_nonce_pattern}" 2>/dev/null || true)
+            if [ -n "${_scanned_nonce_keys}" ]; then
+                while IFS= read -r _nonce_key; do
+                    [ -z "${_nonce_key}" ] && continue
+                    if redis-cli -u "${_redis_url}" DEL "${_nonce_key}" >/dev/null 2>&1; then
+                        echo "   ✅ Redis key reset: ${_nonce_key}"
+                    fi
+                done <<EOF
 ${_scanned_nonce_keys}
+EOF
+            fi
+        done
+        echo "   ℹ️  Writer-lock keys (nija:writer_lock*) are NOT auto-deleted during resync."
+        echo "      Clear them manually only after confirming no live writer instance exists."
+    elif [ -n "${_redis_url}" ]; then
+        # Railway images may not include redis-cli; use Python Redis client as fallback.
+        local _py_output
+        _py_output=$(REDIS_URL="${_redis_url}" "${PY}" - <<'PY'
+import os
+
+url = os.environ.get("REDIS_URL", "").strip()
+if not url:
+    print("SKIP|Redis URL missing")
+    raise SystemExit(0)
+
+try:
+    import redis
+except Exception as exc:  # pragma: no cover
+    print(f"SKIP|python-redis unavailable: {exc}")
+    raise SystemExit(0)
+
+client = redis.Redis.from_url(url, decode_responses=True)
+patterns = [
+    "kraken_nonce*",
+    "nija:kraken:nonce*",
+    "nija:kraken:writer:owner:*",
+    "nija:kraken:writer:lease_version:*",
+    "nija:kraken:writer:version_counter:*",
+    "nija:kraken:writer:fingerprint:*",
+]
+explicit_keys = {"kraken_nonce", "nonce_lock", "nija:kraken:nonce"}
+for pattern in patterns:
+    for key in client.scan_iter(match=pattern):
+        explicit_keys.add(key)
+
+deleted = 0
+for key in sorted(explicit_keys):
+    try:
+        if client.delete(key):
+            deleted += 1
+            print(f"DEL|{key}")
+    except Exception:
+        continue
+
+print(f"SUMMARY|deleted={deleted}")
+PY
+)
+        if [ -n "${_py_output}" ]; then
+            while IFS= read -r _line; do
+                [ -z "${_line}" ] && continue
+                case "${_line}" in
+                    DEL\|*)
+                        echo "   ✅ Redis key reset: ${_line#DEL|}"
+                        ;;
+                    SUMMARY\|*)
+                        echo "   ℹ️  Python nonce-key cleanup: ${_line#SUMMARY|}"
+                        ;;
+                    SKIP\|*)
+                        echo "   ℹ️  Redis key reset skipped: ${_line#SKIP|}"
+                        ;;
+                    *)
+                        echo "   ℹ️  ${_line}"
+                        ;;
+                esac
+            done <<EOF
+${_py_output}
 EOF
         fi
         echo "   ℹ️  Writer-lock keys (nija:writer_lock*) are NOT auto-deleted during resync."
@@ -572,6 +661,8 @@ EOF
     echo "✅ Force nonce resync preflight complete"
     echo ""
 }
+
+_disable_nonce_ceiling_jump
 
 $PY --version 2>&1
 
