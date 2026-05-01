@@ -13,6 +13,7 @@ If you need to adjust, change all three instances:
 """
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -894,7 +895,28 @@ def get_active_risk_config():
 # Active configuration (backward compatibility)
 # Note: This is evaluated at module import time. To change profiles at runtime,
 # call get_active_risk_config() directly or reload the module.
-RISK_CONFIG = get_active_risk_config()
+def _load_import_time_risk_config() -> dict:
+    """Load risk config safely during module import.
+
+    Import-time hard failures can crash startup before degraded-mode recovery
+    paths are established. Fall back to STARTER unless strict mode is enabled.
+    """
+    try:
+        return get_active_risk_config()
+    except RuntimeError as exc:
+        strict_env = os.getenv('NIJA_STRICT_RISK_CONFIG_INIT', '').strip().lower()
+        if strict_env in {'1', 'true', 'yes', 'on', 'enabled'}:
+            raise
+
+        logger.critical(
+            "Import-time risk config initialization failed (%s); "
+            "using STARTER tier fallback to keep startup alive",
+            exc,
+        )
+        return RISK_CONFIG_STARTER
+
+
+RISK_CONFIG = _load_import_time_risk_config()
 
 # ═══════════════════════════════════════════════════════════════════
 # POSITION SIZING
