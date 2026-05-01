@@ -1066,24 +1066,11 @@ if [ -f bot.py ]; then
     fi
 fi
 
-# Start bot.py with full error output (LIVE)
+# Start the canonical Python entrypoint with unbuffered output.
 # `set -e` would terminate the script immediately on non-zero exit, so
 # temporarily disable it to capture and classify the bot exit status.
 set +e
-$PY -u - <<'PY'
-import runpy
-import traceback
-
-print("🔥 BOOT START", flush=True)
-
-try:
-    runpy.run_path("bot.py", run_name="__main__")
-except SystemExit:
-    raise
-except BaseException:
-    traceback.print_exc()
-    raise
-PY
+$PY -u main.py
 status=$?
 set -e
 
