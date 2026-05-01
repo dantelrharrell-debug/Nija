@@ -5951,6 +5951,7 @@ def main():
     logger.info("Health server remains responsive during initialization")
     logger.info("=" * 70)
     
+    print("STEP 4: initializing broker / spawning startup thread...", flush=True)
     startup_thread = threading.Thread(
         target=_run_bot_startup_and_trading_with_retry,  # single-owner kernel, always with retry
         daemon=False,  # NOT daemon - we want this to keep running
@@ -6007,6 +6008,7 @@ def main():
         system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
             _compute_system_ready(_state_snapshot)
         if system_ready:
+            print("STEP 5: strategy initialized — system_ready", flush=True)
             logger.critical(
                 "✅ SYSTEM READY: broker_ready=%s risk_ready=%s strategy_ready=%s "
                 "capital_ready=%s execution_ready=%s",
@@ -6045,6 +6047,7 @@ def main():
                 _last_strategy_wait_log = _now
             time.sleep(2.0)
 
+    print("STEP 6: entering main trading loop...", flush=True)
     from bot.nija_core_loop import start_trading_engine
     start_trading_engine(strategy)
     logger.critical("✅ TradingLoop started via start_trading_engine()")
@@ -6181,6 +6184,7 @@ def main():
             logger.warning("Recovering from supervisor loop error...")
             time.sleep(10)
     
+    print("✅ Main supervisor exiting gracefully", flush=True)
     logger.info("✅ Main supervisor exiting gracefully")
     sys.exit(0)
 
