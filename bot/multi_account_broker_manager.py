@@ -628,10 +628,10 @@ class MultiAccountBrokerManager:
 
                         if not _retry_activated:
                             logger.critical(
-                                "❌ POST-INIT ACTIVATION STILL BLOCKED AFTER %d RETRIES — attempting enforce_activation fallback",
+                                "❌ POST-INIT ACTIVATION STILL BLOCKED AFTER %d RETRIES — "
+                                "leaving startup blocked (no forced activation override)",
                                 _retry_attempts,
                             )
-                            # Last resort path (existing behavior)
                             self._enforce_trading_activation(_tsm_finalize)
                 else:
                     logger.info("[MABM.initialize] Trading already active — no post-init activation needed")
@@ -762,36 +762,20 @@ class MultiAccountBrokerManager:
             logger.warning("[MABM-M3] _CAPITAL_FSM_AVAILABLE=False — capital FSM not wired")
 
     def _enforce_trading_activation(self, tsm: Any) -> None:
-        """Bulletproof fallback: force activation if all gates remain blocked.
+        """Fail-closed activation guard.
 
-        This is a last-resort trigger - called when maybe_auto_activate() fails.
-        Logs the attempt for audit trail and forces state to LIVE_ACTIVE.
+        Forced activation overrides are disabled. When normal readiness gates do
+        not permit activation, startup must remain blocked until the BootstrapFSM
+        reaches the proper READY -> RUNNING handoff.
         """
         try:
-            _state_live_active = tsm.get_current_state().value == "LIVE_ACTIVE"
-            if not _state_live_active:
-                logger.critical(
-                    "[MABM] FORCING ACTIVATION FALLBACK: all normal gates failed"
-                )
-                if hasattr(tsm, "_transition_to_live_active"):
-                    tsm._transition_to_live_active("enforce_activation_fallback")
-                    _state_live_active = tsm.get_current_state().value == "LIVE_ACTIVE"
-                    logger.critical(
-                        "[MABM] FORCED ACTIVATION SUCCESS: state=%s is_live=%s",
-                        tsm.get_current_state().value,
-                        _state_live_active,
-                    )
-                else:
-                    logger.warning(
-                        "[MABM] _transition_to_live_active not available - cannot force activation"
-                    )
-            else:
-                logger.info("[MABM._enforce_trading_activation] Already live - no force needed")
-        except Exception as _enforce_err:
             logger.error(
-                "[MABM._enforce_trading_activation] Force activation failed: %s",
-                _enforce_err,
+                "[MABM] activation remains blocked: forced activation fallback disabled "
+                "(state=%s)",
+                tsm.get_current_state().value,
             )
+        except Exception as _enforce_err:
+            logger.error("[MABM._enforce_trading_activation] blocked activation status probe failed: %s", _enforce_err)
 
     @property
     def platform_brokers(self) -> Dict[BrokerType, BaseBroker]:
@@ -1127,7 +1111,7 @@ class MultiAccountBrokerManager:
         # and the coordinator is ready:
         #   1. Monotonic snapshot progression (patched in capital_authority.py)
         #   2. Guaranteed CA hydration loop   (retries execute_refresh until hydrated)
-        #   3. Forced activation fallback timer (forces all gates open if CA stalls)
+        #   3. Fail-closed activation monitor (does not force gates open)
         try:
             _install = None
             for _mod_name in ("bot.no_failure_activation_contract", "no_failure_activation_contract"):

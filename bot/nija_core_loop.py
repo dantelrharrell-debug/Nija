@@ -2082,16 +2082,12 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 else:
                     _activation_idle_since = None
 
-                    # Temporary hard bypass for runtime proof. Enable explicitly via env.
                     if os.getenv("NIJA_FORCE_LIVE_BYPASS", "false").lower() in (
                         "true", "1", "yes", "enabled"
                     ):
-                        try:
-                            if hasattr(_sm_loop, "force_activate_live"):
-                                _sm_loop.force_activate_live(reason="core loop hard bypass")
-                                logger.critical("🔥 FORCED LIVE ACTIVATION")
-                        except Exception as _force_live_err:
-                            logger.warning("force_activate_live failed: %s", _force_live_err)
+                        logger.error(
+                            "NIJA_FORCE_LIVE_BYPASS requested but ignored: forced activation bypass is disabled"
+                        )
 
                 # FIX 5: assert we are executing on the correct named thread.
                 assert threading.current_thread().name == "TradingLoop", (

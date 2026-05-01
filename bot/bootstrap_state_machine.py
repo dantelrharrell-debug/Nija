@@ -487,10 +487,11 @@ class BootstrapStateMachine:
         )
 
     def finalize_boot(self, reason: str = "runtime handoff") -> bool:
-        """Force runtime bootstrap completion and grant execution authority.
+        """Commit the final READY -> RUNNING handoff and grant execution authority.
 
-        This is a deterministic handoff helper used when startup validation has
-        completed and the runtime core loop is being launched.
+        Strict startup contract: the bootstrap FSM is the single authority for
+        runtime activation, and the final handoff is legal only from
+        ``THREADS_STARTING`` after all prerequisite phases have completed.
         """
         with self._lock:
             _pre_env_states = {
@@ -515,17 +516,23 @@ class BootstrapStateMachine:
                 )
                 return False
 
-            _from_state = self._state
-            if self._state != BootstrapState.RUNNING_SUPERVISED:
-                self._state = BootstrapState.RUNNING_SUPERVISED
-                self._history.append(
-                    {
-                        "from": _from_state.value,
-                        "to": BootstrapState.RUNNING_SUPERVISED.value,
-                        "reason": f"finalize_boot: {reason}",
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                    }
+            if self._state != BootstrapState.THREADS_STARTING:
+                logger.error(
+                    "❌ [BootstrapFSM] finalize_boot blocked: state=%s is not THREADS_STARTING",
+                    self._state.value,
                 )
+                return False
+
+            _from_state = self._state
+            self._state = BootstrapState.RUNNING_SUPERVISED
+            self._history.append(
+                {
+                    "from": _from_state.value,
+                    "to": BootstrapState.RUNNING_SUPERVISED.value,
+                    "reason": f"finalize_boot: {reason}",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+            )
 
             self._boot_complete = True
             self._execution_authority = True
@@ -541,11 +548,13 @@ class BootstrapStateMachine:
         return True
 
     def force_start(self, reason: str = "manual force start") -> bool:
-        """Compatibility alias for minimal unblock workflows.
-
-        Runs the same deterministic runtime handoff as finalize_boot().
-        """
-        return self.finalize_boot(reason=reason)
+        """Compatibility wrapper that preserves strict FSM-only activation."""
+        logger.error(
+            "❌ [BootstrapFSM] force_start rejected: forced startup overrides are disabled "
+            "(reason=%s)",
+            reason,
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Convenience: fast-forward to CAPITAL_READY

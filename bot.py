@@ -308,7 +308,7 @@ def _read_initialized_state_snapshot(
 
 
 def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
-    """Start trading loop from cached strategy when LIVE mode is already active."""
+    """Start trading loop from cached state only after strict supervised readiness."""
     if any(_t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()):
         logger.critical("TradingLoop already running - skipping duplicate start (%s)", reason)
         _bootstrap_complete_flag.set()
@@ -318,13 +318,13 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     _strategy = None
     _wait_started = time.monotonic()
     _last_wait_log = 0.0
-    _strategy_ready_timeout = 30.0  # FIX 1: MANDATORY timeout
 
     # Hard requirement: do NOT start the trading loop until BOTH conditions hold:
     #   1. the cached strategy object is present in initialized state
     #   2. bootstrap has emitted the global strategy-ready event
     # This prevents a partially persisted strategy object from bypassing the
-    # real startup readiness contract.
+    # real startup readiness contract. This wait is intentionally unbounded:
+    # startup must fail closed rather than degrade into a forced-ready bypass.
     while _strategy is None or not _strategy_ready_event.is_set():
         _state_snapshot = dict(_initialized_state)
         _strategy = _state_snapshot.get("strategy")
@@ -332,57 +332,60 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
             break
 
         _elapsed = time.monotonic() - _wait_started
-        
-        # FIX 1: Force system_ready after bootstrap timeout
-        if _elapsed >= _strategy_ready_timeout:
-            logger.critical(
-                "⚠️ system_ready timeout (%.0fs) — forcing degraded startup",
-                _strategy_ready_timeout
-            )
-            # Fallback: mark system ready anyway
-            _strategy_ready_event.set()
-            # Optional: mark degraded mode
-            os.environ["DEGRADED_START"] = "1"
-            logger.critical(
-                "🚀 FORCED READY — system proceeding in degraded mode"
-            )
-            break
-        
+
         _strategy_ready_event.wait(0.5)
 
         if _elapsed - _last_wait_log >= 5.0:
             logger.warning(
-                "WAITING_FOR_STRATEGY_READY: trading-loop start is blocked "
-                "until strategy is initialized and readiness is signaled (%s, elapsed=%.1fs, timeout=%.0fs)",
+                "WAITING_FOR_STRATEGY_READY: trading-loop start remains blocked "
+                "until strategy is initialized and readiness is signaled (%s, elapsed=%.1fs)",
                 reason,
                 _elapsed,
-                _strategy_ready_timeout,
             )
             _last_wait_log = _elapsed
 
+    _state_snapshot = _read_initialized_state_snapshot(context="strict supervised trading-loop start")
+    system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
+        _compute_system_ready(_state_snapshot)
+    if not system_ready:
+        logger.critical(
+            "START_TRADING_LOOP_BLOCKED: strict readiness not satisfied (%s) "
+            "broker_ready=%s risk_ready=%s strategy_ready=%s capital_ready=%s execution_ready=%s",
+            reason,
+            broker_ready,
+            risk_ready,
+            strategy_ready,
+            capital_ready,
+            execution_ready,
+        )
+        return False
+
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        try:
+            _bootstrap_state = getattr(_get_bootstrap_fsm().state, "value", "")
+        except Exception:
+            _bootstrap_state = ""
+        if _bootstrap_state != "RUNNING_SUPERVISED":
+            logger.critical(
+                "START_TRADING_LOOP_BLOCKED: BootstrapFSM must already be RUNNING_SUPERVISED "
+                "before the cached trading loop may start (%s, state=%s)",
+                reason,
+                _bootstrap_state or "unknown",
+            )
+            return False
+
     logger.critical(
-        "STRATEGY READY: proceeding with trading-loop start (%s, wait=%.1fs)",
+        "STRICT STARTUP READY: proceeding with supervised trading-loop start (%s, wait=%.1fs)",
         reason,
         time.monotonic() - _wait_started,
     )
 
-    # Enforce hydration-before-start ordering for LIVE bypass paths.
     if not _is_balance_hydrated_ready():
-        try:
-            logger.critical(
-                "💰 FORCED HYDRATION BEFORE TRADING LOOP (%s): balance not hydrated yet",
-                reason,
-            )
-            _hydrated_total = _hydrate_startup_balances(_strategy)
-            if _hydrated_total <= 0:
-                raise RuntimeError("LIVE mode requires valid balance")
-        except Exception as _hydrate_err:
-            logger.critical(
-                "START_TRADING_LOOP_SKIPPED: hydration failed before trading start (%s): %s",
-                reason,
-                _hydrate_err,
-            )
-            return False
+        logger.critical(
+            "START_TRADING_LOOP_BLOCKED: balance hydration not complete (%s)",
+            reason,
+        )
+        return False
 
     try:
         try:
@@ -391,7 +394,7 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
             from nija_core_loop import start_trading_engine as _start_trading_engine, TRADING_ENGINE_READY as _tl_ready  # type: ignore[import]
 
         _tl_ready.set()
-        logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT (%s)", reason)
+        logger.critical("STARTING TRADING LOOP FROM SUPERVISED STATE (%s)", reason)
         _start_trading_engine(_strategy)
         # Mark bootstrap handoff so supervisor treats startup-thread exit as expected.
         _bootstrap_complete_flag.set()
@@ -405,19 +408,46 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
 def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
     """Return (system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready).
 
-    All five sub-conditions must be True before the trading loop may start.
+    All required readiness gates must be true before the trading loop may start.
+
+    Broker readiness is strict and fail-closed:
+    - Kraken startup FSM must report CONNECTED when Kraken is configured.
+    - At least one connected broker must exist.
+    - At least one execution-eligible broker must exist.
     """
     strategy = state_snapshot.get("strategy")
-    active_threads = state_snapshot.get("active_threads")
 
     strategy_ready = strategy is not None and _strategy_ready_event.is_set()
-    # Broker readiness is true once connection phase completed, runtime threads
-    # exist, or bootstrap has already handed off to supervised running state.
-    broker_ready = (
-        bool(active_threads)
-        or bool(state_snapshot.get("connection_complete", False))
-        or _bootstrap_completed_event.is_set()
-    )
+    connected_brokers = 0
+    eligible_brokers = 0
+    kraken_connected = True
+    try:
+        try:
+            from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm
+        except ImportError:
+            from broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm  # type: ignore[import]
+        if _kraken_startup_fsm is not None:
+            kraken_connected = bool(_kraken_startup_fsm.is_connected)
+    except Exception:
+        kraken_connected = False
+
+    try:
+        _manager = getattr(strategy, "multi_account_manager", None) if strategy is not None else None
+        if _manager is not None:
+            _brokers = list(getattr(_manager, "brokers", {}).values())
+            connected_brokers = sum(1 for _broker in _brokers if getattr(_broker, "connected", False))
+            _eligible = getattr(_manager, "get_eligible_brokers", None)
+            if callable(_eligible):
+                _eligible_snapshot = _eligible()
+                if isinstance(_eligible_snapshot, (dict, list, tuple, set, frozenset)):
+                    eligible_brokers = len(_eligible_snapshot)
+                else:
+                    eligible_brokers = 0
+    except Exception:
+        connected_brokers = 0
+        eligible_brokers = 0
+
+    broker_ready = kraken_connected and connected_brokers >= 1 and eligible_brokers >= 1
 
     # Risk stack is partially lazy-initialized in this codebase. Treat strategy
     # registration itself as the canonical risk-readiness milestone unless an
@@ -483,7 +513,7 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                 _exec_engine = getattr(_apex, "execution_engine", None)
     execution_ready = _exec_engine is not None
 
-    system_ready = broker_ready and risk_ready and strategy_ready and capital_ready and execution_ready
+    system_ready = broker_ready and strategy_ready and capital_ready and execution_ready
     return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
 
 
@@ -2320,29 +2350,9 @@ def _bootstrap_hydrate_account_balances() -> dict:
 try:
     _bootstrap_balances = _bootstrap_hydrate_account_balances()
 except RuntimeError as _bootstrap_fatal:
-    _strict_bootstrap_hydration = os.environ.get(
-        "NIJA_STRICT_BOOTSTRAP_HYDRATION_FAIL_CLOSED", "0"
-    ).strip().lower() in ("1", "true", "yes", "on", "enabled")
     print(f"🚫 Bootstrap balance hydration failed: {_bootstrap_fatal}")
-    if _strict_bootstrap_hydration:
-        print("🚫 Strict bootstrap hydration fail-closed is enabled; exiting.")
-        sys.exit(1)
-
-    # Degraded startup mode: keep process alive and let runtime capital refresh
-    # recover exchange balances instead of crash-looping the container.
-    print(
-        "⚠️ Continuing in degraded startup mode to avoid restart loops; "
-        "runtime hydration will retry real exchange balances."
-    )
-    _bootstrap_balances = {
-        "total_usd": 0.0,
-        "equity": 0.0,
-        "available": 0.0,
-        "source": "bootstrap_degraded",
-    }
-    os.environ.setdefault("ACCOUNT_BALANCE", "0")
-    os.environ.setdefault("ACCOUNT_EQUITY", "0")
-    os.environ.setdefault("ACCOUNT_AVAILABLE", "0")
+    print("🚫 Bootstrap hydration is fail-closed; exiting.")
+    sys.exit(1)
 
 
 # Import after path setup
@@ -3519,26 +3529,15 @@ def _run_bot_startup_and_trading():
 
     _live_capital_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
     if _live_capital_verified:
-        logger.warning("Bypassing cached state — forcing fresh trading session")
-        try:
-            from bot.trading_state_machine import get_state_machine as _get_tsm_bypass, TradingState as _TS_bypass
-        except ImportError:
-            from trading_state_machine import get_state_machine as _get_tsm_bypass, TradingState as _TS_bypass  # type: ignore[import]
-        _tsm_bypass = _get_tsm_bypass()
-        if not _tsm_bypass.is_live_trading_active():
-            _tsm_bypass.transition_to(_TS_bypass.LIVE_ACTIVE, "LIVE_CAPITAL_VERIFIED bypass — forcing fresh trading session")
-        if _start_trading_loop_from_initialized_state(reason="LIVE_CAPITAL_VERIFIED startup bypass"):
-            return
-        logger.critical("RESUME FAILED — STARTING FRESH TRADING LOOP")
-        # Force activation then proceed through full startup to build strategy
-        logger.warning("Cached state unavailable — continuing through full startup flow with LIVE_ACTIVE forced")
+        logger.warning(
+            "LIVE_CAPITAL_VERIFIED startup bypass disabled — continuing through strict bootstrap flow"
+        )
 
     if _is_live_trading_active_now():
-        logger.critical("LIVE MODE ACTIVE - skipping re-init, entering execution loop")
-        if _start_trading_loop_from_initialized_state(reason="startup live-guard"):
-            return
-        logger.critical("RESUME FAILED — STARTING FRESH TRADING LOOP")
-        logger.warning("LIVE mode active but cached state incomplete; continuing full startup flow")
+        logger.warning(
+            "LIVE mode detected before bootstrap completion; startup bypass disabled until "
+            "RUNNING_SUPERVISED is reached"
+        )
 
     # ── FAST PATH: init already done — skip straight to supervisor loop ────
     # Requires full state (strategy + active_threads) to be present so that a
@@ -3763,48 +3762,19 @@ def _run_bot_startup_and_trading():
                         from bot.trading_state_machine import get_state_machine as _get_tsm_startup, TradingState as _TS_startup
 
                         if _strategy_ready_event.is_set():
-                            logger.critical("FORCING LIVE ACTIVATION FROM STARTUP THREAD")
                             _tsm_startup = _get_tsm_startup()
-                            _current_state = _tsm_startup.get_current_state()
-                            if _current_state in (_TS_startup.OFF, _TS_startup.LIVE_PENDING_CONFIRMATION):
-                                _activated = _tsm_startup.transition_to(
-                                    _TS_startup.LIVE_ACTIVE,
-                                    "startup thread activation after capability verification",
-                                )
-                            else:
-                                _activated = (_current_state == _TS_startup.LIVE_ACTIVE)
-                                logger.info(
-                                    "Startup-thread activation skipped: current state is %s",
-                                    getattr(_current_state, "value", str(_current_state)),
-                                )
-                            if (not _activated) or (_tsm_startup.get_current_state() != _TS_startup.LIVE_ACTIVE):
-                                logger.warning(
-                                    "Startup-thread transition_to(LIVE_ACTIVE) did not commit; "
-                                    "attempting force_activate_live fallback"
-                                )
-                                _tsm_startup.force_activate_live(
-                                    reason="startup thread fallback after capability verification"
-                                )
                             _startup_state = _tsm_startup.get_current_state()
-                            logger.critical(
-                                "STARTUP THREAD ACTIVATION STATE: %s",
+                            logger.info(
+                                "Startup-thread activation bypass disabled: state=%s; waiting for "
+                                "BootstrapFSM READY -> RUNNING handoff",
                                 getattr(_startup_state, "value", str(_startup_state)),
                             )
-
-                            if _tsm_startup.is_live_trading_active():
-                                logger.critical("STARTING TRADING LOOP - BYPASSING SUPERVISOR/INIT")
-                                if _start_trading_loop_from_initialized_state(
-                                    reason="startup-thread capability activation"
-                                ):
-                                    _bootstrap_complete_flag.set()
-                                    _bootstrap_completed_event.set()
-                                    return
                         else:
                             logger.info(
-                                "Startup-thread forced activation deferred: strategy not fully ready yet"
+                                "Startup-thread activation bypass disabled: strategy not fully ready yet"
                             )
                     except Exception as _startup_activation_err:
-                        logger.warning("Startup-thread LIVE activation attempt failed: %s", _startup_activation_err)
+                        logger.warning("Startup-thread activation status probe failed: %s", _startup_activation_err)
 
                     # Do NOT release bootstrap events here — the startup thread must not
                     # signal completion before the full system_ready barrier is satisfied
@@ -4285,74 +4255,10 @@ def _run_bot_startup_and_trading():
                             _cap_init_complete_err,
                         )
 
-                    # ── POST-INIT_COMPLETE: Force activation attempt ────────────────────
-                    # Explicitly trigger activation now that:
-                    #   • bootstrap is complete (INIT_COMPLETE transitioned)
-                    #   • capital authority has been initialized (broker connections done)
-                    #   • nonce readiness is owned by KrakenStartupFSM.mark_nonce_ready()
-                    # This prevents the silent-blocker scenario where maybe_auto_activate()
-                    # is never called before the core loop and activation never happens.
-                    try:
-                        from bot.trading_state_machine import (
-                            TradingState as _TSMBootState,
-                            get_state_machine as _get_tsm_boot,
-                        )
-                        _tsm_boot = _get_tsm_boot()
-                        _live_verified_boot = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in (
-                            "true", "1", "yes", "enabled"
-                        )
-                        if not _tsm_boot.is_live_trading_active():
-                            _boot_activation_ok = _tsm_boot.maybe_auto_activate()
-                            if _boot_activation_ok:
-                                logger.critical(
-                                    "🚀 AUTO-ACTIVATION SUCCESS: state=%s is_live=%s",
-                                    _tsm_boot.get_current_state().value,
-                                    _tsm_boot.is_live_trading_active(),
-                                )
-                            else:
-                                logger.critical(
-                                    "❌ AUTO-ACTIVATION FAILED — CHECK GATES "
-                                    "(state=%s is_live=%s)",
-                                    _tsm_boot.get_current_state().value,
-                                    _tsm_boot.is_live_trading_active(),
-                                )
-
-                        # Direct fail-safe path: when operator explicitly enabled live mode,
-                        # force activation if normal gates still leave us non-live.
-                        if _live_verified_boot and not _tsm_boot.is_live_trading_active():
-                            _forced_live = False
-                            if hasattr(_tsm_boot, "activate_live_trading"):
-                                _forced_live = bool(
-                                    _tsm_boot.activate_live_trading(
-                                        reason="post-preflight fail-safe activation"
-                                    )
-                                )
-                            if (not _forced_live) and _tsm_boot.get_current_state() == _TSMBootState.OFF:
-                                _tsm_boot.transition_to(
-                                    _TSMBootState.LIVE_ACTIVE,
-                                    "post-preflight hard fail-safe activation",
-                                )
-                                _forced_live = True
-                            logger.critical(
-                                "POST-PREFLIGHT FAIL-SAFE ACTIVATION: forced=%s state=%s is_live=%s",
-                                _forced_live,
-                                _tsm_boot.get_current_state().value,
-                                _tsm_boot.is_live_trading_active(),
-                            )
-
-                        # Hard assertion required by operator: fail fast if live mode was
-                        # explicitly requested but activation is still not active.
-                        if _live_verified_boot:
-                            assert _tsm_boot.is_live_trading_active(), "LIVE MODE NOT ACTIVE"
-
-                        # Hard confirmation log — always emitted regardless of result.
-                        logger.critical(
-                            "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
-                            _tsm_boot.get_current_state().value,
-                            _tsm_boot.is_live_trading_active(),
-                        )
-                    except Exception as _boot_activation_err:
-                        logger.warning("[Bootstrap] post-INIT_COMPLETE activation attempt failed: %s", _boot_activation_err)
+                    logger.info(
+                        "[Bootstrap] post-INIT_COMPLETE activation bypass disabled — "
+                        "continuing strict startup sequence"
+                    )
 
                     logger.critical("PREFLIGHT: KRAKEN SESSION INIT END")
                     logger.info(
@@ -5188,6 +5094,41 @@ def _run_bot_startup_and_trading():
             # and before RUN loop thread launch.
             _bootstrap_nonce_reset_once()
 
+            _prelaunch_state_snapshot = {"strategy": strategy}
+            (
+                _prelaunch_system_ready,
+                _prelaunch_broker_ready,
+                _prelaunch_risk_ready,
+                _prelaunch_strategy_ready,
+                _prelaunch_capital_ready,
+                _prelaunch_execution_ready,
+            ) = _compute_system_ready(_prelaunch_state_snapshot)
+            _prelaunch_strategy_ready = strategy is not None
+            _prelaunch_balance_ready = _is_balance_hydrated_ready()
+            try:
+                from bot.broker_manager import _KRAKEN_STARTUP_FSM as _prelaunch_kraken_fsm
+            except Exception:
+                _prelaunch_kraken_fsm = None  # type: ignore[assignment]
+            _prelaunch_nonce_ready = bool(_prelaunch_kraken_fsm.is_nonce_ready()) if _prelaunch_kraken_fsm is not None else True
+
+            if not all([
+                _prelaunch_nonce_ready,
+                _prelaunch_broker_ready,
+                _prelaunch_balance_ready,
+                _prelaunch_capital_ready,
+                _prelaunch_strategy_ready,
+                _prelaunch_execution_ready,
+            ]):
+                raise RuntimeError(
+                    "STARTUP_ORDER_BLOCKED before THREADS_STARTING: "
+                    f"nonce_ready={_prelaunch_nonce_ready} "
+                    f"broker_ready={_prelaunch_broker_ready} "
+                    f"balance_ready={_prelaunch_balance_ready} "
+                    f"capital_ready={_prelaunch_capital_ready} "
+                    f"strategy_ready={_prelaunch_strategy_ready} "
+                    f"execution_ready={_prelaunch_execution_ready}"
+                )
+
             # Advance bootstrap FSM to THREADS_STARTING only after LIVE_ACTIVE is
             # confirmed so that any failure above leaves the FSM at INIT_COMPLETE
             # (from which reset_for_retry can reach BOOT_FAILED_RETRY).
@@ -5673,22 +5614,13 @@ def _run_bot_startup_and_trading():
                             "CRITICAL B1 RESULT: FAIL (timeout) — "
                             "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
                             "capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s — "
-                            "proceeding to B2 as fail-safe to avoid deadlock",
+                            "failing closed and retrying bootstrap",
                             _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
                             _bce_capital_hydrated, _bce_aggregation_normalized, _bce_nonce_ready,
                         )
-                        logger.critical(
-                            "❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE after 30s — "
-                            "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
-                            "capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s — "
-                            "proceeding to B2 as fail-safe to avoid deadlock",
-                            _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
-                            _bce_capital_hydrated, _bce_aggregation_normalized, _bce_nonce_ready,
+                        raise RuntimeError(
+                            "B1 preflight timed out before nonce sync / broker readiness / capital hydration completed"
                         )
-                        # Deterministic startup contract: no fallback activation rescue.
-                        # Activation is released only by TRADING_ENGINE_READY after
-                        # RUNNING_SUPERVISED is reached.
-                        break
                     logger.warning(
                         "⏳ [Bootstrap] Waiting for B1 preflight — "
                         "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
@@ -5995,9 +5927,8 @@ def main():
     #   execution_ready  — strategy.execution_engine is not None
     # ─────────────────────────────────────────────────────────────────────────
     logger.critical("🧭 BEFORE system_ready wait")
-    _system_ready_timeout_s = float(os.getenv("SYSTEM_READY_TIMEOUT_SECONDS", "420"))
-    _wait_deadline = time.monotonic() + _system_ready_timeout_s
     strategy = None
+    _last_system_ready_log = 0.0
     while True:
         _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
         strategy = _state_snapshot.get("strategy")
@@ -6011,48 +5942,33 @@ def main():
             )
             break
 
-        if time.monotonic() >= _wait_deadline:
-            # Never hard-crash here. Startup can legitimately exceed this timeout
-            # when Redis writer lease handoff is contended.
-            logger.critical(
-                "⚠️ system_ready timeout after %.0fs; entering degraded startup mode "
-                "(broker_ready=%s risk_ready=%s strategy_ready=%s capital_ready=%s execution_ready=%s)",
-                _system_ready_timeout_s,
-                broker_ready,
-                risk_ready,
-                strategy_ready,
-                capital_ready,
-                execution_ready,
+        _now = time.monotonic()
+        if _now - _last_system_ready_log >= 5.0:
+            logger.info(
+                "⏳ Waiting for strict system_ready: broker_ready=%s risk_ready=%s strategy_ready=%s "
+                "capital_ready=%s execution_ready=%s",
+                broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
             )
-            os.environ["DEGRADED_START"] = "1"
-            break
-
-        logger.info(
-            "⏳ Waiting for system_ready: broker_ready=%s risk_ready=%s strategy_ready=%s "
-            "capital_ready=%s execution_ready=%s",
-            broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
-        )
+            _last_system_ready_log = _now
         time.sleep(1.0)
 
     # ── HARD GUARD: never enter trading loop without a valid strategy ─────────
-    # In degraded-mode, keep polling until strategy becomes available instead of
-    # crashing or permanently freezing startup.
     if strategy is None:
         logger.warning(
-            "⏳ [DEGRADED] strategy not yet initialized; waiting until startup thread publishes strategy"
+            "⏳ strategy not yet initialized; waiting until startup thread publishes strategy"
         )
         _last_strategy_wait_log = 0.0
         while strategy is None:
             _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait")
             strategy = _state_snapshot.get("strategy")
             if strategy is not None:
-                logger.critical("✅ [DEGRADED] strategy became available — continuing startup")
+                logger.critical("✅ strategy became available — continuing startup")
                 break
 
             _now = time.monotonic()
             if _now - _last_strategy_wait_log >= 60.0:
                 logger.warning(
-                    "⏳ [DEGRADED] still waiting for strategy publication (process stays alive; health server remains ready)"
+                    "⏳ still waiting for strategy publication (process stays alive; health server remains ready)"
                 )
                 _last_strategy_wait_log = _now
             time.sleep(2.0)

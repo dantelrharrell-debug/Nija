@@ -551,12 +551,12 @@ class TradingStateMachine:
             return False
 
     def force_activate_live(self, reason: str = "forced bypass") -> bool:
-        """Compatibility wrapper for explicit forced activation requests.
-
-        This method exists to support direct "force live" probes in runtime
-        diagnostics and minimal repro flows.
-        """
-        return self.activate_live_trading(reason=reason)
+        """Compatibility wrapper that preserves strict FSM-only activation."""
+        logger.error(
+            "[FORCE_ACTIVATE REJECTED] forced live activation is disabled reason=%s",
+            reason,
+        )
+        return False
 
     def transition_to(self, new_state: TradingState, reason: str = "") -> bool:
         """
