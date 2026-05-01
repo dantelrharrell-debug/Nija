@@ -1809,6 +1809,25 @@ def _release_process_lock() -> None:
         pass
 
 
+def _apply_startup_debug_env_aliases() -> None:
+    """Apply operator-friendly debug env aliases before lock acquisition."""
+    _fail_fast_singleton = os.environ.get("FAIL_FAST_SINGLETON", "").strip().lower()
+    if _fail_fast_singleton in ("0", "false", "no", "off"):
+        if "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE" not in os.environ:
+            os.environ["NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE"] = "true"
+        print(
+            "⚠️  Debug override: FAIL_FAST_SINGLETON=false -> "
+            "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=true",
+            flush=True,
+        )
+
+
+def _emit_boot_trace(stage: str, detail: str) -> None:
+    """Print an always-flushed boot marker for early startup debugging."""
+    print(f"{stage}: {detail}", flush=True)
+
+
+_apply_startup_debug_env_aliases()
 _acquire_process_lock()
 
 
@@ -2790,6 +2809,23 @@ def _run_preflight_check() -> bool:
     checks = []   # list of (label, passed: bool, detail: str)
     blockers = []  # human-readable reasons trading cannot start
 
+    _debug_env_keys = sorted(os.environ.keys())
+    _debug_presence = {
+        "NIJA_REDIS_URL": bool(os.getenv("NIJA_REDIS_URL")),
+        "REDIS_URL": bool(os.getenv("REDIS_URL")),
+        "COINBASE_API_KEY": bool(os.getenv("COINBASE_API_KEY")),
+        "COINBASE_API_SECRET": bool(os.getenv("COINBASE_API_SECRET")),
+        "KRAKEN_PLATFORM_API_KEY": bool(os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY")),
+        "KRAKEN_PLATFORM_API_SECRET": bool(os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET")),
+        "LIVE_CAPITAL_VERIFIED": bool(os.getenv("LIVE_CAPITAL_VERIFIED")),
+    }
+    print("ENV CHECK:", _debug_env_keys, flush=True)
+    print(
+        "ENV PRESENCE:",
+        ", ".join(f"{name}={'yes' if present else 'no'}" for name, present in _debug_presence.items()),
+        flush=True,
+    )
+
     # ── 1. Kraken credentials ────────────────────────────────────────────────
     kraken_key = (
         os.getenv("KRAKEN_PLATFORM_API_KEY")
@@ -2905,6 +2941,8 @@ def _run_preflight_check() -> bool:
         print(SEP, flush=True)
 
         if blockers:
+            print("CONFIG LOADED:", False, flush=True)
+            print("CONFIG BLOCKERS:", blockers, flush=True)
             print("", flush=True)
             print("  🚫  TRADING CANNOT START — fix the following:", flush=True)
             for i, reason in enumerate(blockers, 1):
@@ -2915,6 +2953,7 @@ def _run_preflight_check() -> bool:
             return False
 
         print("", flush=True)
+        print("CONFIG LOADED:", True, flush=True)
         print("  🚀  ALL CHECKS PASSED — proceeding to start trading", flush=True)
         print(SEP, flush=True)
         print("", flush=True)
@@ -2922,10 +2961,13 @@ def _run_preflight_check() -> bool:
 
     # Re-checks still execute, but avoid replaying the full pre-flight banner.
     if blockers:
+        print("CONFIG LOADED:", False, flush=True)
+        print("CONFIG BLOCKERS:", blockers, flush=True)
         print("🚫 NIJA pre-flight re-check failed — see blocker details below.", flush=True)
         for i, reason in enumerate(blockers, 1):
             print(f"   {i}. {reason}", flush=True)
         return False
+    print("CONFIG LOADED:", True, flush=True)
     return True
 
 
@@ -5745,6 +5787,8 @@ def _run_bot_startup_and_trading():
 
 def main():
     """Main entry point for NIJA trading bot - Railway optimized"""
+    _emit_boot_trace("BOOT 1", "main() entered")
+
     # ═══════════════════════════════════════════════════════════════════════
     # CRITICAL: BOOTSTRAP GUARD — Prevent duplicate instances
     # ═══════════════════════════════════════════════════════════════════════
@@ -5773,6 +5817,7 @@ def main():
     print("✅ Health server started - Railway will not kill this container")
     print("=" * 70)
     print("")
+    _emit_boot_trace("BOOT 2", "health server started")
 
     # Advance bootstrap FSM: BOOT_INIT → LOCK_ACQUIRED → HEALTH_BOUND
     # (process lock was acquired at module import; health server is now bound)
@@ -5790,9 +5835,11 @@ def main():
     # trading.  If any critical requirement is missing the bot prints exactly
     # what is wrong and exits immediately.
     # ═══════════════════════════════════════════════════════════════════════
+    _emit_boot_trace("BOOT 3", "running synchronous preflight checks")
     if not _run_preflight_check():
         _release_process_lock()
         sys.exit(1)
+    _emit_boot_trace("BOOT 4", "preflight passed; launching startup pipeline")
 
     # Now setup logging (after health server is running)
     # Log process startup
