@@ -1143,6 +1143,7 @@ def _acquire_distributed_process_lock() -> None:
             "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
         ).strip().lower() in _truthy
         if not _retry_enabled:
+            print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
             print(f"❌ Failed to acquire distributed single-writer lock: {_reason}")
             print("   Exiting fail-closed to preserve one-writer invariant.")
             sys.exit(1)
@@ -1155,6 +1156,7 @@ def _acquire_distributed_process_lock() -> None:
         except (TypeError, ValueError):
             _retry_sleep_s = 15.0
 
+        print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
         print(f"❌ Failed to acquire distributed single-writer lock: {_reason}")
         print(
             "🛑 FAIL-CLOSED STANDBY ACTIVE: trading remains blocked until writer lock is acquired."
@@ -1188,11 +1190,17 @@ def _acquire_distributed_process_lock() -> None:
 
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
     _require_lock = os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
-    _unsafe_bypass = os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
+    _disable_writer_lock_alias = os.environ.get("NIJA_DISABLE_WRITER_LOCK", "").strip().lower() in _truthy
+    _unsafe_bypass = (
+        os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
+        or _disable_writer_lock_alias
+    )
     if _live_mode:
         _require_lock = True
         if _unsafe_bypass:
             _require_lock = False
+            if _disable_writer_lock_alias:
+                print("🚨 UNSAFE MODE: NIJA_DISABLE_WRITER_LOCK=1 alias enabled.")
             print("🚨 UNSAFE MODE: NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true in LIVE mode.")
             print("   Distributed single-writer safety is DISABLED by explicit operator override.")
             print("   Use only when you are certain exactly one container/process can run.")
@@ -1626,8 +1634,9 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
                 print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
                 print(f"   Lock holder raw:  {_holder}")
+                print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
                 logger.critical("Another instance is active — exiting immediately")
-                os._exit(LOCK_CONTENTION_EXIT_CODE)
+                sys.exit(1)
 
             time.sleep(_lock_retry_interval)
             try:
@@ -1656,8 +1665,9 @@ def _acquire_distributed_process_lock() -> None:
             print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
             print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
             print(f"   Lock holder raw:  {_holder}")
+            print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
             logger.critical("Another instance is active — exiting immediately")
-            os._exit(LOCK_CONTENTION_EXIT_CODE)
+            sys.exit(1)
 
         _token = f"{_fencing_token}:{_owner}"
         _distributed_writer_lock_client = _client
@@ -1689,6 +1699,7 @@ def _acquire_distributed_process_lock() -> None:
         os.environ["NIJA_WRITER_LOCK_KEY"] = _lock_key
         os.environ["NIJA_WRITER_LOCK_META_KEY"] = _meta_key
         os.environ["NIJA_WRITER_LOCK_SCOPE"] = _scope
+        print("✅ WRITER LOCK ACQUIRED", flush=True)
         print(
             "🔒 Distributed writer lock acquired — "
             f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"

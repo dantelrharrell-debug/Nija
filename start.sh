@@ -171,6 +171,13 @@ if [ "${_UNSAFE_BYPASS_RAW}" = "1" ] || [ "${_UNSAFE_BYPASS_RAW}" = "true" ] || 
     _UNSAFE_BYPASS=true
 fi
 
+_DISABLE_WRITER_LOCK_RAW=$(printf "%s" "${NIJA_DISABLE_WRITER_LOCK:-0}" | tr '[:upper:]' '[:lower:]')
+if [ "${_DISABLE_WRITER_LOCK_RAW}" = "1" ] || [ "${_DISABLE_WRITER_LOCK_RAW}" = "true" ] || [ "${_DISABLE_WRITER_LOCK_RAW}" = "yes" ] || [ "${_DISABLE_WRITER_LOCK_RAW}" = "on" ]; then
+    _UNSAFE_BYPASS=true
+    export NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true
+    echo "⚠️  NIJA_DISABLE_WRITER_LOCK is enabled (alias) — forcing NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true"
+fi
+
 # Operator explicitly enabled unsafe writer-lock bypass. Keep nonce authority
 # behavior consistent by relaxing strict Redis lease as well.
 if [ "${_UNSAFE_BYPASS}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
@@ -665,6 +672,91 @@ EOF
 }
 
 _disable_nonce_ceiling_jump
+
+_maybe_force_clear_writer_lock() {
+    local _truthy="1|true|yes|enabled|on"
+    local _force_raw="${NIJA_FORCE_CLEAR_WRITER_LOCK:-}"
+    local _force
+    _force=$(printf "%s" "${_force_raw}" | tr '[:upper:]' '[:lower:]')
+    if ! printf "%s" "${_force}" | grep -Eq "^(${_truthy})$"; then
+        return 0
+    fi
+
+    echo ""
+    echo "🧹 NIJA_FORCE_CLEAR_WRITER_LOCK enabled — clearing stale writer lock keys before startup"
+
+    local _redis_url
+    _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
+    if [ -z "${_redis_url}" ]; then
+        echo "   ⚠️  Redis URL not configured; cannot clear writer lock keys"
+        return 0
+    fi
+
+    local _py_output
+    _py_output=$(REDIS_URL="${_redis_url}" "${PY}" - <<'PY'
+import os
+
+url = os.environ.get("REDIS_URL", "").strip()
+if not url:
+    print("SKIP|Redis URL missing")
+    raise SystemExit(0)
+
+try:
+    import redis
+except Exception as exc:
+    print(f"SKIP|python-redis unavailable: {exc}")
+    raise SystemExit(0)
+
+client = redis.Redis.from_url(url, decode_responses=True)
+patterns = [
+    "nija:writer_lock*",
+    "nija:writer_lock_meta*",
+    "nija:writer_fence*",
+]
+explicit_keys = {"nija:writer_lock"}
+for pattern in patterns:
+    for key in client.scan_iter(match=pattern):
+        explicit_keys.add(key)
+
+deleted = 0
+for key in sorted(explicit_keys):
+    try:
+        if client.delete(key):
+            deleted += 1
+            print(f"DEL|{key}")
+    except Exception:
+        continue
+
+print(f"SUMMARY|deleted={deleted}")
+PY
+)
+
+    if [ -n "${_py_output}" ]; then
+        while IFS= read -r _line; do
+            [ -z "${_line}" ] && continue
+            case "${_line}" in
+                DEL\|*)
+                    echo "   ✅ Redis key reset: ${_line#DEL|}"
+                    ;;
+                SUMMARY\|*)
+                    echo "   ℹ️  Writer-lock cleanup: ${_line#SUMMARY|}"
+                    ;;
+                SKIP\|*)
+                    echo "   ℹ️  Writer-lock cleanup skipped: ${_line#SKIP|}"
+                    ;;
+                *)
+                    echo "   ℹ️  ${_line}"
+                    ;;
+            esac
+        done <<EOF
+${_py_output}
+EOF
+    fi
+    echo "✅ Writer lock cleanup preflight complete"
+    echo ""
+}
+
+_maybe_force_clear_writer_lock
 
 $PY --version 2>&1
 
