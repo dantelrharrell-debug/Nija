@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+print("🔥 BOT ENTRY STARTED", flush=True)
 """
 NIJA Trading Bot - Main Entry Point
 Runs the complete APEX v7.1 strategy with Coinbase Advanced Trade API
