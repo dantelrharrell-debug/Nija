@@ -34,45 +34,21 @@ def _is_railway_internal_host(hostname: str) -> bool:
 
 
 def _normalize_redis_url(source: str, url: str) -> tuple[str, str]:
-    """Normalize operator-provided Redis URLs when provider quirks are known.
+    """Return provided URL unchanged.
 
-    Railway's public TCP proxy speaks plain Redis behind the proxy endpoint.
-    Operators sometimes paste the proxy URL as ``rediss://`` which makes redis-py
-    attempt a TLS handshake and fail with EOF / connection-reset errors.
+    Redis scheme handling is now explicit in call sites to avoid silently
+    rewriting operator-provided connection settings.
     """
-    try:
-        parsed = urlsplit(url)
-    except ValueError:
-        return source, url
-
-    if parsed.scheme != "rediss" or not _is_railway_proxy_host(parsed.hostname or ""):
-        return source, url
-
-    normalized_url = urlunsplit(("redis", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
-    return f"{source} [normalized Railway proxy scheme]", normalized_url
+    return source, url
 
 
 def _alternate_railway_proxy_scheme(source: str, url: str) -> tuple[str, str] | None:
-    """Return a synthetic fallback URL using the opposite Redis URL scheme.
+    """Do not synthesize alternate scheme URLs.
 
-    Some Railway proxy setups behave differently across environments; probing both
-    redis:// and rediss:// improves startup resilience while still preserving
-    fail-closed semantics when neither endpoint responds.
+    Runtime should use the configured URL explicitly instead of probing implicit
+    alternatives.
     """
-    try:
-        parsed = urlsplit(url)
-    except ValueError:
-        return None
-
-    host = parsed.hostname or ""
-    if not _is_railway_proxy_host(host):
-        return None
-    if parsed.scheme not in {"redis", "rediss"}:
-        return None
-
-    alt_scheme = "rediss" if parsed.scheme == "redis" else "redis"
-    alt_url = urlunsplit((alt_scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
-    return f"{source} [alternate Railway proxy scheme]", alt_url
+    return None
 
 
 def _prefer_component_public_proxy_over_internal(source: str, url: str) -> tuple[str, str]:

@@ -18,6 +18,7 @@ import json
 import pickle
 from typing import Optional, Any, Dict, List, Tuple
 from datetime import timedelta
+from urllib.parse import urlparse
 import redis
 from redis.connection import ConnectionPool
 
@@ -28,6 +29,73 @@ logger = logging.getLogger(__name__)
 # Global Redis client
 _redis_client: Optional[redis.Redis] = None
 _connection_pool: Optional[ConnectionPool] = None
+
+
+def _redact_redis_url(url: str) -> str:
+    """Redact credentials when logging Redis URLs."""
+    try:
+        parsed = urlparse(url or "")
+        host = parsed.hostname or "<unknown-host>"
+        port = parsed.port or "<unknown-port>"
+        return f"{parsed.scheme}://***@{host}:{port}"
+    except Exception:
+        return "<invalid-redis-url>"
+
+
+def _build_strict_redis_client(
+    redis_url: str,
+    decode_responses: bool,
+    socket_timeout: int,
+    socket_connect_timeout: int,
+) -> redis.Redis:
+    """Build a Redis client from explicit parsed URL components.
+
+    Railway production requires TLS and permissive cert validation for some
+    managed proxy configurations.
+    """
+    raw_value = (redis_url or "").strip()
+    if not raw_value:
+        raise ValueError("NIJA_REDIS_URL is required")
+
+    parsed = urlparse(raw_value)
+    if parsed.scheme != "rediss":
+        raise ValueError(
+            "NIJA_REDIS_URL must start with rediss:// for Railway managed Redis"
+        )
+    if not parsed.hostname or not parsed.port:
+        raise ValueError("NIJA_REDIS_URL must include hostname and port")
+    if not parsed.password:
+        raise ValueError("NIJA_REDIS_URL must include a password")
+
+    username = parsed.username or "default"
+    db = 0
+    try:
+        db = int((parsed.path or "/0").lstrip("/") or "0")
+    except (TypeError, ValueError):
+        db = 0
+
+    return redis.Redis(
+        host=parsed.hostname,
+        port=parsed.port,
+        username=username,
+        password=parsed.password,
+        db=db,
+        ssl=True,
+        ssl_cert_reqs=None,
+        decode_responses=decode_responses,
+        socket_timeout=socket_timeout,
+        socket_connect_timeout=socket_connect_timeout,
+    )
+
+
+def safe_redis_call(fn, default: Any = None, context: str = "") -> Any:
+    """Execute Redis operation safely and return default on failure."""
+    try:
+        return fn()
+    except Exception as exc:
+        _ctx = f" for {context}" if context else ""
+        logger.error(f"Redis operation failed{_ctx}: {exc}")
+        return default
 
 
 def get_redis_url() -> str:
@@ -94,20 +162,30 @@ def init_redis(
         redis_url = get_redis_url()
 
     try:
-        # Create connection pool
-        _connection_pool = ConnectionPool.from_url(
-            redis_url,
-            max_connections=max_connections,
+        _connection_pool = None
+        _redis_client = _build_strict_redis_client(
+            redis_url=redis_url,
             decode_responses=decode_responses,
             socket_timeout=socket_timeout,
-            socket_connect_timeout=socket_connect_timeout
+            socket_connect_timeout=socket_connect_timeout,
         )
 
-        # Create Redis client
-        _redis_client = redis.Redis(connection_pool=_connection_pool)
+        logger.info(f"Redis URL source (redacted): {_redact_redis_url(redis_url)}")
 
-        # Test connection
-        _redis_client.ping()
+        ping_error: Optional[Exception] = None
+        for attempt in range(5):
+            try:
+                _redis_client.ping()
+                ping_error = None
+                break
+            except Exception as exc:
+                ping_error = exc
+                logger.warning(f"Redis not ready (attempt {attempt + 1}/5): {exc}")
+                if attempt < 4:
+                    import time
+                    time.sleep(2)
+        if ping_error is not None:
+            raise RuntimeError("Redis never connected") from ping_error
 
         logger.info("✅ Redis client initialized successfully")
         logger.info(f"   Max connections: {max_connections}")
@@ -328,9 +406,17 @@ def cache_clear_namespace(namespace: str) -> int:
         client = get_redis_client()
         pattern = f"{namespace}*"
 
-        # Use scan_iter instead of keys() for better performance
+        # Guard startup/connection races and avoid hard failure on scan.
+        scan_keys = safe_redis_call(
+            lambda: list(client.scan_iter(match=pattern, count=100)),
+            default=None,
+            context=f"namespace scan ({namespace})",
+        )
+        if scan_keys is None:
+            return 0
+
         keys_to_delete = []
-        for key in client.scan_iter(match=pattern, count=100):
+        for key in scan_keys:
             keys_to_delete.append(key)
             # Delete in batches of 1000 to avoid memory issues
             if len(keys_to_delete) >= 1000:

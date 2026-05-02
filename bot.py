@@ -21,6 +21,7 @@ from logging.handlers import RotatingFileHandler
 import signal
 import threading
 import subprocess
+from urllib.parse import urlparse
 
 from bot.redis_env import get_all_redis_urls, get_redis_env_presence, get_redis_url, get_redis_url_source
 from bot.instance_identity import (
@@ -1252,20 +1253,50 @@ def _acquire_distributed_process_lock() -> None:
         _fencing_key = os.environ.get("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_scope}"
         _instance_identity = current_instance_identity()
         _owner = format_instance_identity(_instance_identity)
-        _client = redis.Redis.from_url(
-            _redis_url,
-            decode_responses=True,
-            socket_connect_timeout=3,
-            socket_timeout=3,
-        )
-        # Retry logic for transient connection failures
-        _max_retries = 3
-        if _standby_retry_active:
+        def _validate_nija_redis_env() -> None:
+            _raw_env_value = os.environ.get("NIJA_REDIS_URL")
+            if not _raw_env_value:
+                return
+            if _raw_env_value != _raw_env_value.strip():
+                raise RuntimeError("NIJA_REDIS_URL contains leading or trailing whitespace")
+            _trimmed = _raw_env_value.strip()
+            if len(_trimmed) >= 2 and _trimmed[0] == _trimmed[-1] and _trimmed[0] in {'"', "'"}:
+                raise RuntimeError("NIJA_REDIS_URL must not include wrapping quotes")
+
+        def _build_strict_redis_client(_url: str):
+            _parsed = urlparse(_url)
+            if _parsed.scheme != "rediss":
+                raise RuntimeError(
+                    "NIJA_REDIS_URL must start with rediss:// for Railway managed Redis"
+                )
+            if not _parsed.hostname or not _parsed.port:
+                raise RuntimeError("NIJA_REDIS_URL must include host and port")
+            if not _parsed.password:
+                raise RuntimeError("NIJA_REDIS_URL must include password")
+            _username = _parsed.username or "default"
+            _db = 0
             try:
-                _max_retries = max(1, int(os.environ.get("NIJA_STANDBY_CONNECT_RETRIES", "1") or "1"))
+                _db = int((_parsed.path or "/0").lstrip("/") or "0")
             except (TypeError, ValueError):
-                _max_retries = 1
-        _retry_delays = [0.5, 1.0, 2.0]  # exponential backoff
+                _db = 0
+            return redis.Redis(
+                host=_parsed.hostname,
+                port=_parsed.port,
+                username=_username,
+                password=_parsed.password,
+                db=_db,
+                ssl=True,
+                ssl_cert_reqs=None,
+                decode_responses=True,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+            )
+
+        _validate_nija_redis_env()
+        _client = _build_strict_redis_client(_redis_url)
+
+        # Retry logic before any lock operations use Redis.
+        _max_retries = 5
         _ping_exc = None
         for _attempt in range(_max_retries):
             try:
@@ -1275,10 +1306,8 @@ def _acquire_distributed_process_lock() -> None:
             except Exception as _exc:
                 _ping_exc = _exc
                 if _attempt < _max_retries - 1:
-                    _delay_idx = min(_attempt, len(_retry_delays) - 1)
-                    _delay = _retry_delays[_delay_idx]
-                    print(f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: {_exc}. Retrying in {_delay}s...")
-                    time.sleep(_delay)
+                    print(f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: {_exc}. Retrying in 2s...")
+                    time.sleep(2)
                 else:
                     print(f"❌ Redis connection failed after {_max_retries} attempts")
         
@@ -1315,12 +1344,7 @@ def _acquire_distributed_process_lock() -> None:
                 if _verbose_standby:
                     print(f"  Trying fallback: {_fb_source} ({_redact_url(_fb_url)})")
                 try:
-                    _fb_client = redis.Redis.from_url(
-                        _fb_url,
-                        decode_responses=True,
-                        socket_connect_timeout=3,
-                        socket_timeout=3,
-                    )
+                    _fb_client = _build_strict_redis_client(_fb_url)
                     _fb_client.ping()
                     _client = _fb_client
                     _redis_url = _fb_url
