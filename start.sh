@@ -602,7 +602,8 @@ EOF
         local _py_output
         _py_output=$(REDIS_URL="${_redis_url}" "${PY}" - <<'PY'
 import os
-import sys
+import time
+from urllib.parse import urlparse
 
 url = os.environ.get("REDIS_URL", "").strip()
 if not url:
@@ -610,42 +611,95 @@ if not url:
     raise SystemExit(0)
 
 try:
-    from bot.redis_runtime import connect_redis_with_fallback, clear_nonce_state_safe
+    import redis
 except Exception as exc:
-    print(f"SKIP|redis runtime helper unavailable: {exc}")
+    print(f"SKIP|python-redis unavailable: {exc}")
     raise SystemExit(0)
 
+parsed = urlparse(url)
+if not parsed.hostname or not parsed.port:
+    print("SKIP|REDIS_URL missing host/port")
+    raise SystemExit(0)
+
+r = redis.Redis(
+    host=parsed.hostname,
+    port=parsed.port,
+    username=parsed.username or "default",
+    password=parsed.password,
+    ssl=True,
+    ssl_cert_reqs=None,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    retry_on_timeout=True,
+    health_check_interval=30,
+)
+
+
+def safe_scan(redis_client):
+    cursor = 0
+    for _ in range(10):
+        cursor, keys = redis_client.scan(cursor=cursor, count=100)
+        for key in keys:
+            yield key
+        if cursor == 0:
+            break
+
+
+def clear_nonce_state_safe(redis_client):
+    print("CLEAR NONCE START")
+    start = time.time()
+    patterns = [
+        "kraken_nonce*",
+        "nija:kraken:nonce*",
+        "nija:kraken:writer:owner:*",
+        "nija:kraken:writer:lease_version:*",
+        "nija:kraken:writer:version_counter:*",
+        "nija:kraken:writer:fingerprint:*",
+    ]
+    explicit_keys = {"kraken_nonce", "nonce_lock", "nija:kraken:nonce"}
+    deleted = 0
+
+    for pattern in patterns:
+        prefix = pattern.rstrip("*")
+        for key in safe_scan(redis_client):
+            if time.time() - start > 5:
+                print("Nonce reset timeout - aborting")
+                print("CLEAR NONCE DONE")
+                return deleted
+            if prefix and not str(key).startswith(prefix):
+                continue
+            explicit_keys.add(key)
+
+    for key in sorted(explicit_keys):
+        if time.time() - start > 5:
+            print("Nonce reset timeout - aborting")
+            break
+        try:
+            if redis_client.delete(key):
+                deleted += 1
+                print(f"DEL|{key}")
+        except Exception as exc:
+            print(f"Delete failed: {exc}")
+
+    print("CLEAR NONCE DONE")
+    return deleted
+
+
+print("PINGING REDIS FIRST")
 try:
-    client, _effective_url = connect_redis_with_fallback(
-        url=url,
-        decode_responses=True,
-        socket_timeout=5,
-        socket_connect_timeout=5,
-        retries=5,
-        delay_s=2.0,
-        log=lambda msg: print(f"INFO|{msg}"),
-    )
+    r.ping()
+    print("REDIS OK - CONTINUING")
 except Exception as exc:
     print(f"SKIP|Redis preflight ping failed: {exc}")
     raise SystemExit(0)
 
-
-patterns = [
-    "kraken_nonce*",
-    "nija:kraken:nonce*",
-    "nija:kraken:writer:owner:*",
-    "nija:kraken:writer:lease_version:*",
-    "nija:kraken:writer:version_counter:*",
-    "nija:kraken:writer:fingerprint:*",
-]
-explicit_keys = {"kraken_nonce", "nonce_lock", "nija:kraken:nonce"}
-deleted = clear_nonce_state_safe(
-    client,
-    patterns=patterns,
-    explicit_keys=explicit_keys,
-    timeout_s=5,
-    log=lambda msg: print(f"INFO|{msg}"),
-)
+print("BEFORE NONCE RESET")
+try:
+    deleted = clear_nonce_state_safe(r)
+    print("AFTER NONCE RESET")
+except Exception as exc:
+    print(f"NONCE RESET FAILED: {exc}")
+    deleted = 0
 
 print(f"SUMMARY|deleted={deleted}")
 PY
@@ -780,12 +834,15 @@ _maybe_force_clear_writer_lock
 $PY --version 2>&1
 
 # Temporary kill-switch for nonce reset while diagnosing startup blocks.
-if [ "${NIJA_SKIP_NONCE_RESET:-0}" = "1" ]; then
-    echo "SKIPPING NONCE RESET"
+if [ "${NIJA_SKIP_NONCE_RESET_DEBUG:-1}" = "1" ]; then
+    echo "SKIPPING NONCE RESET FOR DEBUG"
 else
     echo "BEFORE NONCE RESET"
-    _maybe_force_nonce_resync
-    echo "AFTER NONCE RESET"
+    if _maybe_force_nonce_resync; then
+        echo "AFTER NONCE RESET"
+    else
+        echo "NONCE RESET FAILED: _maybe_force_nonce_resync exited non-zero"
+    fi
 fi
 
 if [ "${NIJA_STARTUP_DRY_RUN:-0}" = "1" ]; then
