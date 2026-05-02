@@ -1265,9 +1265,9 @@ def _acquire_distributed_process_lock() -> None:
 
         def _build_strict_redis_client(_url: str):
             _parsed = urlparse(_url)
-            if _parsed.scheme != "rediss":
+            if _parsed.scheme not in {"redis", "rediss"}:
                 raise RuntimeError(
-                    "NIJA_REDIS_URL must start with rediss:// for Railway managed Redis"
+                    "NIJA_REDIS_URL must start with redis:// or rediss://"
                 )
             if not _parsed.hostname or not _parsed.port:
                 raise RuntimeError("NIJA_REDIS_URL must include host and port")
@@ -1285,12 +1285,35 @@ def _acquire_distributed_process_lock() -> None:
                 username=_username,
                 password=_parsed.password,
                 db=_db,
-                ssl=True,
-                ssl_cert_reqs=None,
+                ssl=_parsed.scheme == "rediss",
+                ssl_cert_reqs=None if _parsed.scheme == "rediss" else None,
                 decode_responses=True,
                 socket_connect_timeout=3,
                 socket_timeout=3,
             )
+
+        def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
+            _parsed = urlparse(_url)
+            _host = (_parsed.hostname or "").lower()
+            if _parsed.scheme != "rediss" or not _host.endswith(".proxy.rlwy.net"):
+                return None
+            _msg = str(_exc).lower()
+            if "timeout" not in _msg and "handshake" not in _msg and "ssl" not in _msg:
+                return None
+
+            _plain_url = _url.replace("rediss://", "redis://", 1)
+            print(
+                "⚠️ Redis TLS handshake timed out against Railway proxy; "
+                "trying plain redis:// fallback for the same endpoint..."
+            )
+            try:
+                _plain_client = _build_strict_redis_client(_plain_url)
+                _plain_client.ping()
+                print("✅ Redis Railway proxy reachable via plain redis:// fallback")
+                return _plain_client, _plain_url
+            except Exception as _plain_exc:
+                print(f"⚠️ Plain redis:// fallback also failed: {_plain_exc}")
+                return None
 
         _validate_nija_redis_env()
         _client = _build_strict_redis_client(_redis_url)
@@ -1310,6 +1333,13 @@ def _acquire_distributed_process_lock() -> None:
                     time.sleep(2)
                 else:
                     print(f"❌ Redis connection failed after {_max_retries} attempts")
+
+        if _ping_exc:
+            _fallback_client = _try_plain_railway_proxy_fallback(_redis_url, _ping_exc)
+            if _fallback_client is not None:
+                _client, _redis_url = _fallback_client
+                _redis_url_source = f"{_redis_url_source} [plain Railway proxy fallback]"
+                _ping_exc = None
         
         if _ping_exc:
             # Primary URL failed — try remaining configured URLs in priority order
@@ -1353,6 +1383,12 @@ def _acquire_distributed_process_lock() -> None:
                     _client_resolved = True
                     break
                 except Exception as _fb_exc:
+                    _plain_fb = _try_plain_railway_proxy_fallback(_fb_url, _fb_exc)
+                    if _plain_fb is not None:
+                        _client, _redis_url = _plain_fb
+                        _redis_url_source = f"{_fb_source} [plain Railway proxy fallback]"
+                        _client_resolved = True
+                        break
                     if _verbose_standby:
                         print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:

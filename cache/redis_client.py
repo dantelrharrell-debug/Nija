@@ -58,9 +58,9 @@ def _build_strict_redis_client(
         raise ValueError("NIJA_REDIS_URL is required")
 
     parsed = urlparse(raw_value)
-    if parsed.scheme != "rediss":
+    if parsed.scheme not in {"redis", "rediss"}:
         raise ValueError(
-            "NIJA_REDIS_URL must start with rediss:// for Railway managed Redis"
+            "NIJA_REDIS_URL must start with redis:// or rediss://"
         )
     if not parsed.hostname or not parsed.port:
         raise ValueError("NIJA_REDIS_URL must include hostname and port")
@@ -80,12 +80,43 @@ def _build_strict_redis_client(
         username=username,
         password=parsed.password,
         db=db,
-        ssl=True,
-        ssl_cert_reqs=None,
+        ssl=parsed.scheme == "rediss",
+        ssl_cert_reqs=None if parsed.scheme == "rediss" else None,
         decode_responses=decode_responses,
         socket_timeout=socket_timeout,
         socket_connect_timeout=socket_connect_timeout,
     )
+
+
+def _try_plain_railway_proxy_fallback(
+    redis_url: str,
+    exc: Exception,
+    decode_responses: bool,
+    socket_timeout: int,
+    socket_connect_timeout: int,
+) -> tuple[redis.Redis, str] | None:
+    """Try plain redis:// against Railway proxy after TLS timeout/handshake failure."""
+    parsed = urlparse(redis_url or "")
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "rediss" or not host.endswith(".proxy.rlwy.net"):
+        return None
+
+    message = str(exc).lower()
+    if "timeout" not in message and "handshake" not in message and "ssl" not in message:
+        return None
+
+    plain_url = redis_url.replace("rediss://", "redis://", 1)
+    logger.warning(
+        "Redis TLS handshake timed out against Railway proxy; trying plain redis:// fallback"
+    )
+    plain_client = _build_strict_redis_client(
+        redis_url=plain_url,
+        decode_responses=decode_responses,
+        socket_timeout=socket_timeout,
+        socket_connect_timeout=socket_connect_timeout,
+    )
+    plain_client.ping()
+    return plain_client, plain_url
 
 
 def safe_redis_call(fn, default: Any = None, context: str = "") -> Any:
@@ -184,6 +215,17 @@ def init_redis(
                 if attempt < 4:
                     import time
                     time.sleep(2)
+        if ping_error is not None:
+            fallback = _try_plain_railway_proxy_fallback(
+                redis_url=redis_url,
+                exc=ping_error,
+                decode_responses=decode_responses,
+                socket_timeout=socket_timeout,
+                socket_connect_timeout=socket_connect_timeout,
+            )
+            if fallback is not None:
+                _redis_client, redis_url = fallback
+                ping_error = None
         if ping_error is not None:
             raise RuntimeError("Redis never connected") from ping_error
 
