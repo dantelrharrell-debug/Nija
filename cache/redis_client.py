@@ -23,6 +23,7 @@ import redis
 from redis.connection import ConnectionPool
 
 from bot.redis_env import get_redis_url as get_env_redis_url
+from bot.redis_runtime import connect_redis_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -194,40 +195,17 @@ def init_redis(
 
     try:
         _connection_pool = None
-        _redis_client = _build_strict_redis_client(
-            redis_url=redis_url,
+        _redis_client, redis_url = connect_redis_with_fallback(
+            url=redis_url,
             decode_responses=decode_responses,
             socket_timeout=socket_timeout,
             socket_connect_timeout=socket_connect_timeout,
+            retries=5,
+            delay_s=2.0,
+            log=lambda msg: logger.warning(msg),
         )
 
         logger.info(f"Redis URL source (redacted): {_redact_redis_url(redis_url)}")
-
-        ping_error: Optional[Exception] = None
-        for attempt in range(5):
-            try:
-                _redis_client.ping()
-                ping_error = None
-                break
-            except Exception as exc:
-                ping_error = exc
-                logger.warning(f"Redis not ready (attempt {attempt + 1}/5): {exc}")
-                if attempt < 4:
-                    import time
-                    time.sleep(2)
-        if ping_error is not None:
-            fallback = _try_plain_railway_proxy_fallback(
-                redis_url=redis_url,
-                exc=ping_error,
-                decode_responses=decode_responses,
-                socket_timeout=socket_timeout,
-                socket_connect_timeout=socket_connect_timeout,
-            )
-            if fallback is not None:
-                _redis_client, redis_url = fallback
-                ping_error = None
-        if ping_error is not None:
-            raise RuntimeError("Redis never connected") from ping_error
 
         logger.info("✅ Redis client initialized successfully")
         logger.info(f"   Max connections: {max_connections}")
