@@ -602,6 +602,7 @@ EOF
         local _py_output
         _py_output=$(REDIS_URL="${_redis_url}" "${PY}" - <<'PY'
 import os
+from urllib.parse import urlparse
 
 url = os.environ.get("REDIS_URL", "").strip()
 if not url:
@@ -614,7 +615,41 @@ except Exception as exc:  # pragma: no cover
     print(f"SKIP|python-redis unavailable: {exc}")
     raise SystemExit(0)
 
-client = redis.Redis.from_url(url, decode_responses=True)
+parsed = urlparse(url)
+if parsed.scheme != "rediss":
+    print("SKIP|REDIS_URL must start with rediss://")
+    raise SystemExit(0)
+if not parsed.hostname or not parsed.port:
+    print("SKIP|REDIS_URL missing host/port")
+    raise SystemExit(0)
+
+client = redis.Redis(
+    host=parsed.hostname,
+    port=parsed.port,
+    username=parsed.username or "default",
+    password=parsed.password,
+    ssl=True,
+    ssl_cert_reqs=None,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    decode_responses=True,
+)
+
+print("PINGING REDIS FIRST")
+client.ping()
+print("REDIS OK - CONTINUING")
+
+
+def safe_scan(redis_client):
+    cursor = 0
+    for _ in range(10):
+        cursor, keys = redis_client.scan(cursor=cursor, count=100)
+        for key in keys:
+            yield key
+        if cursor == 0:
+            break
+
+
 patterns = [
     "kraken_nonce*",
     "nija:kraken:nonce*",
@@ -625,7 +660,9 @@ patterns = [
 ]
 explicit_keys = {"kraken_nonce", "nonce_lock", "nija:kraken:nonce"}
 for pattern in patterns:
-    for key in client.scan_iter(match=pattern):
+    for key in safe_scan(client):
+        if not key.startswith(pattern.rstrip("*")):
+            continue
         explicit_keys.add(key)
 
 deleted = 0
@@ -695,6 +732,7 @@ _maybe_force_clear_writer_lock() {
     local _py_output
     _py_output=$(REDIS_URL="${_redis_url}" "${PY}" - <<'PY'
 import os
+from urllib.parse import urlparse
 
 url = os.environ.get("REDIS_URL", "").strip()
 if not url:
@@ -707,7 +745,41 @@ except Exception as exc:
     print(f"SKIP|python-redis unavailable: {exc}")
     raise SystemExit(0)
 
-client = redis.Redis.from_url(url, decode_responses=True)
+parsed = urlparse(url)
+if parsed.scheme != "rediss":
+    print("SKIP|REDIS_URL must start with rediss://")
+    raise SystemExit(0)
+if not parsed.hostname or not parsed.port:
+    print("SKIP|REDIS_URL missing host/port")
+    raise SystemExit(0)
+
+client = redis.Redis(
+    host=parsed.hostname,
+    port=parsed.port,
+    username=parsed.username or "default",
+    password=parsed.password,
+    ssl=True,
+    ssl_cert_reqs=None,
+    socket_timeout=5,
+    socket_connect_timeout=5,
+    decode_responses=True,
+)
+
+print("PINGING REDIS FIRST")
+client.ping()
+print("REDIS OK - CONTINUING")
+
+
+def safe_scan(redis_client):
+    cursor = 0
+    for _ in range(10):
+        cursor, keys = redis_client.scan(cursor=cursor, count=100)
+        for key in keys:
+            yield key
+        if cursor == 0:
+            break
+
+
 patterns = [
     "nija:writer_lock*",
     "nija:writer_lock_meta*",
@@ -715,7 +787,9 @@ patterns = [
 ]
 explicit_keys = {"nija:writer_lock"}
 for pattern in patterns:
-    for key in client.scan_iter(match=pattern):
+    for key in safe_scan(client):
+        if not key.startswith(pattern.rstrip("*")):
+            continue
         explicit_keys.add(key)
 
 deleted = 0
@@ -760,7 +834,19 @@ _maybe_force_clear_writer_lock
 
 $PY --version 2>&1
 
-_maybe_force_nonce_resync
+# Temporary kill-switch for nonce reset while diagnosing startup blocks.
+if [ "${NIJA_SKIP_NONCE_RESET:-0}" = "1" ]; then
+    echo "SKIPPING NONCE RESET"
+else
+    echo "BEFORE NONCE RESET"
+    _maybe_force_nonce_resync
+    echo "AFTER NONCE RESET"
+fi
+
+if [ "${NIJA_STARTUP_DRY_RUN:-0}" = "1" ]; then
+    echo "DRY RUN: startup nonce/redis checks complete; exiting before broker initialization"
+    exit 0
+fi
 
 # Ensure Python version output is flushed
 sleep 0.05
