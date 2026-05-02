@@ -876,15 +876,58 @@ def get_distributed_nonce_manager(
             if redis_url:
                 try:
                     import redis as _redis_lib  # type: ignore[import]
-                    redis_client = _redis_lib.from_url(
-                        redis_url,
-                        decode_responses=True,
-                        socket_timeout=2.0,
-                        socket_connect_timeout=2.0,
-                    )
+
+                    def _build_client(_url: str):
+                        _parsed = urlsplit(_url)
+                        if _parsed.scheme not in {"redis", "rediss"}:
+                            raise RuntimeError("Redis URL must start with redis:// or rediss://")
+                        if not _parsed.hostname or not _parsed.port:
+                            raise RuntimeError("Redis URL must include host and port")
+                        return _redis_lib.Redis(
+                            host=_parsed.hostname,
+                            port=_parsed.port,
+                            username=_parsed.username or "default",
+                            password=_parsed.password,
+                            db=int((_parsed.path or "/0").lstrip("/") or "0"),
+                            ssl=_parsed.scheme == "rediss",
+                            ssl_cert_reqs=None,
+                            decode_responses=True,
+                            socket_timeout=2.0,
+                            socket_connect_timeout=2.0,
+                        )
+
+                    _candidate_url = redis_url
+                    _client = _build_client(_candidate_url)
+                    try:
+                        _client.ping()
+                    except Exception as _redis_exc:
+                        _parsed = urlsplit(redis_url)
+                        _host = (_parsed.hostname or "").lower()
+                        _msg = str(_redis_exc).lower()
+                        _can_plain_fallback = (
+                            _parsed.scheme == "rediss"
+                            and _host.endswith(".proxy.rlwy.net")
+                            and (
+                                "timeout" in _msg
+                                or "handshake" in _msg
+                                or "ssl" in _msg
+                            )
+                        )
+                        if _can_plain_fallback:
+                            _candidate_url = redis_url.replace("rediss://", "redis://", 1)
+                            _logger.warning(
+                                "DistributedNonceManager: Redis TLS handshake timed out against Railway proxy; "
+                                "trying plain redis:// fallback"
+                            )
+                            _client = _build_client(_candidate_url)
+                            _client.ping()
+                        else:
+                            raise
+
+                    redis_client = _client
                     _logger.info(
                         "DistributedNonceManager: auto-connecting to Redis at %s",
-                        _redact_redis_url(redis_url),
+                        _redact_redis_url(_candidate_url),
                     )
                 except Exception as exc:
                     _logger.warning(
