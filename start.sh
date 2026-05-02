@@ -636,7 +636,11 @@ client = redis.Redis(
 )
 
 print("PINGING REDIS FIRST")
-client.ping()
+try:
+    client.ping()
+except Exception as exc:
+    print(f"SKIP|Redis preflight ping failed: {exc}")
+    raise SystemExit(0)
 print("REDIS OK - CONTINUING")
 
 
@@ -659,11 +663,15 @@ patterns = [
     "nija:kraken:writer:fingerprint:*",
 ]
 explicit_keys = {"kraken_nonce", "nonce_lock", "nija:kraken:nonce"}
-for pattern in patterns:
-    for key in safe_scan(client):
-        if not key.startswith(pattern.rstrip("*")):
-            continue
-        explicit_keys.add(key)
+try:
+    for pattern in patterns:
+        for key in safe_scan(client):
+            if not key.startswith(pattern.rstrip("*")):
+                continue
+            explicit_keys.add(key)
+except Exception as exc:
+    print(f"SKIP|Redis nonce scan failed: {exc}")
+    raise SystemExit(0)
 
 deleted = 0
 for key in sorted(explicit_keys):
@@ -766,7 +774,11 @@ client = redis.Redis(
 )
 
 print("PINGING REDIS FIRST")
-client.ping()
+try:
+    client.ping()
+except Exception as exc:
+    print(f"SKIP|Redis preflight ping failed: {exc}")
+    raise SystemExit(0)
 print("REDIS OK - CONTINUING")
 
 
@@ -786,11 +798,15 @@ patterns = [
     "nija:writer_fence*",
 ]
 explicit_keys = {"nija:writer_lock"}
-for pattern in patterns:
-    for key in safe_scan(client):
-        if not key.startswith(pattern.rstrip("*")):
-            continue
-        explicit_keys.add(key)
+try:
+    for pattern in patterns:
+        for key in safe_scan(client):
+            if not key.startswith(pattern.rstrip("*")):
+                continue
+            explicit_keys.add(key)
+except Exception as exc:
+    print(f"SKIP|Redis writer-lock scan failed: {exc}")
+    raise SystemExit(0)
 
 deleted = 0
 for key in sorted(explicit_keys):
