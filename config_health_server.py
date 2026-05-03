@@ -150,7 +150,7 @@ class ConfigHealthHandler(BaseHTTPRequestHandler):
                 message = "Redis URL uses Railway internal hostname without public proxy fallback"
                 action = "Set NIJA_REDIS_URL to Railway public proxy URL and redeploy"
                 required = {
-                    "NIJA_REDIS_URL": "Railway public proxy URL (redis://default:PASSWORD@maglev.proxy.rlwy.net:PORT/0)",
+                    "NIJA_REDIS_URL": "Railway public proxy URL (rediss://default:PASSWORD@maglev.proxy.rlwy.net:PORT/0)",
                     "ALTERNATIVE": "Set RAILWAY_TCP_PROXY_DOMAIN + RAILWAY_TCP_PROXY_PORT + REDIS_PASSWORD"
                 }
             else:

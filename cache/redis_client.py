@@ -144,14 +144,18 @@ def get_redis_url() -> str:
         railway_domain = os.getenv('RAILWAY_TCP_PROXY_DOMAIN', '').strip()
         railway_port = os.getenv('RAILWAY_TCP_PROXY_PORT', '').strip()
         redis_password = os.getenv('REDIS_PASSWORD', '').strip()
+        force_tls = os.getenv('NIJA_REDIS_FORCE_TLS', 'true').strip().lower() in {
+            '1', 'true', 'yes', 'on', 'enabled'
+        }
 
         if railway_domain and railway_port:
-            # Railway TCP proxy format: redis://default:PASSWORD@domain:port/db
+            # Railway public proxy requires TLS when NIJA_REDIS_FORCE_TLS is enabled.
             redis_db = os.getenv('REDIS_DB', '0')
+            scheme = 'rediss' if force_tls and railway_domain.lower().endswith('.proxy.rlwy.net') else 'redis'
             if redis_password:
-                redis_url = f"redis://default:{redis_password}@{railway_domain}:{railway_port}/{redis_db}"
+                redis_url = f"{scheme}://default:{redis_password}@{railway_domain}:{railway_port}/{redis_db}"
             else:
-                redis_url = f"redis://default@{railway_domain}:{railway_port}/{redis_db}"
+                redis_url = f"{scheme}://default@{railway_domain}:{railway_port}/{redis_db}"
         else:
             # Fall back to individual component construction
             redis_host = os.getenv('REDIS_HOST', 'localhost')

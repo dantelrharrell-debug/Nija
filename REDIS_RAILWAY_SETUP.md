@@ -38,12 +38,12 @@ REDIS_PASSWORD=your_redis_password_here
 REDIS_DB=0
 ```
 
-**Alternative: Use NIJA_REDIS_URL directly**
+### Alternative: Use NIJA_REDIS_URL directly
 
 If you prefer to set a single variable, construct the URL and set:
 
 ```bash
-NIJA_REDIS_URL=redis://default:your_redis_password_here@maglev.proxy.rlwy.net:12345/0
+NIJA_REDIS_URL=rediss://default:your_redis_password_here@maglev.proxy.rlwy.net:12345/0
 ```
 
 ### Step 4: Restart NIJA Service
@@ -71,36 +71,43 @@ print('✅ Redis connection successful!')
 ## ❌ What NOT to Do
 
 **❌ Do NOT use:** `redis://nija.railway.internal:6379`
+
 - This is Railway's internal network, only accessible within the same private network
 - External connections will fail
 - Bot will hang or crash with lock contention errors
 
 **❌ Do NOT use:** Insufficient Redis allocations
+
 - Minimum: 256MB Redis instance
 - Recommended: 512MB or 1GB for production
 
 **❌ Do NOT disable** the distributed writer lock without understanding the consequences
+
 - Only disable if you're running a single bot instance
 - Multi-instance deployments REQUIRE Redis lock
 
 ## 🆘 Troubleshooting
 
 ### Error: "Redis connection timeout"
+
 - Check that RAILWAY_TCP_PROXY_DOMAIN and RAILWAY_TCP_PROXY_PORT are correct
 - Verify the Redis service is running and has public networking enabled
 - Check Railway firewall rules allow outbound connections
 
 ### Error: "Redis WRONGPASS or invalid user"
+
 - Verify REDIS_PASSWORD matches exactly
 - Make sure there are no extra spaces or special characters
 - The username should be `default` (not your account name)
 
 ### Error: "Lock contention" or "Writer lock held by another process"
+
 - Check that only one NIJA instance is running
 - Restart both the NIJA service and Redis service
 - Clear Redis cache (dangerous—wipes all data): `FLUSHALL`
 
 ### Bot hangs with no trades executing
+
 - This usually means Redis lock is stuck
 - Check logs for `EXECUTION BLOCKED | ...committed=false`
 - Restart the NIJA service to reset the lock
@@ -116,18 +123,20 @@ NIJA checks for Redis URLs in this order:
 5. Individual components: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`
 
 If **Railway proxy environment variables are set first**, they're used to construct the URL automatically:
-- `RAILWAY_TCP_PROXY_DOMAIN` + `RAILWAY_TCP_PROXY_PORT` + `REDIS_PASSWORD` → `redis://default:PASSWORD@DOMAIN:PORT/DB`
+
+- `RAILWAY_TCP_PROXY_DOMAIN` + `RAILWAY_TCP_PROXY_PORT` + `REDIS_PASSWORD` → `rediss://default:PASSWORD@DOMAIN:PORT/DB`
 
 ## 🔧 Advanced: Manual URL Construction
 
 If Railway proxy variables aren't available, manually construct and set NIJA_REDIS_URL:
 
 ```bash
-# Format: redis://USERNAME:PASSWORD@HOST:PORT/DATABASE
-NIJA_REDIS_URL=redis://default:YourPasswordHere@maglev.proxy.rlwy.net:12345/0
+# Format: rediss://USERNAME:PASSWORD@HOST:PORT/DATABASE
+NIJA_REDIS_URL=rediss://default:YourPasswordHere@maglev.proxy.rlwy.net:12345/0
 ```
 
 Replace:
+
 - `YourPasswordHere` → actual Redis password
 - `maglev.proxy.rlwy.net` → your Railway TCP proxy domain
 - `12345` → your Railway TCP proxy port

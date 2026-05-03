@@ -311,11 +311,12 @@ _resolve_redis_url() {
     fi
 
     # Component fallback: synthesize URL similarly to runtime resolver.
-    local _host _port _password _db
+    local _host _port _password _db _scheme _force_tls
     _host="${RAILWAY_TCP_PROXY_DOMAIN:-${REDIS_HOST:-${REDISHOST:-}}}"
     _port="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"
     _password="${REDIS_PASSWORD:-${REDISPASSWORD:-${REDIS_TOKEN:-}}}"
     _db="${REDIS_DB:-${REDIS_DATABASE:-0}}"
+    _force_tls="${NIJA_REDIS_FORCE_TLS:-true}"
 
     _host="$(_strip_wrapping_quotes "${_host}")"
     _port="$(_strip_wrapping_quotes "${_port}")"
@@ -324,10 +325,15 @@ _resolve_redis_url() {
 
     if [ -n "${_host}" ] && [ -n "${_port}" ]; then
         if printf "%s" "${_port}" | grep -Eq '^[0-9]+$'; then
+            _scheme="redis"
+            if printf "%s" "${_host}" | grep -Eiq '\.proxy\.rlwy\.net$' \
+                && printf "%s" "${_force_tls}" | grep -Eiq '^(1|true|yes|on|enabled)$'; then
+                _scheme="rediss"
+            fi
             if [ -n "${_password}" ]; then
-                printf "%s" "redis://default:${_password}@${_host}:${_port}/${_db}"
+                printf "%s" "${_scheme}://default:${_password}@${_host}:${_port}/${_db}"
             else
-                printf "%s" "redis://${_host}:${_port}/${_db}"
+                printf "%s" "${_scheme}://${_host}:${_port}/${_db}"
             fi
             return 0
         fi
@@ -449,7 +455,7 @@ PY
         echo "❌ CRITICAL: ${_redis_source:-Redis URL} is not a valid Redis connection URL"
         echo ""
         echo "Expected format: redis://[default:<password>@]<host>:<port>[/db] or rediss://[default:<password>@]<host>:<port>[/db]"
-        echo "Tip: remove wrapping quotes if present, e.g. NIJA_REDIS_URL=redis://default:<password>@<host>:<port>/0"
+        echo "Tip: use rediss:// for Railway proxy URLs and remove wrapping quotes if present, e.g. NIJA_REDIS_URL=rediss://default:<password>@<host>:<port>/0"
         echo ""
         echo "🔧 SOLUTION:"
         echo "   1. Open Railway → Redis service → Connect"

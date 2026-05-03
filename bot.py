@@ -1466,7 +1466,7 @@ def _acquire_distributed_process_lock() -> None:
                         f"({', '.join(_internal_hosts)}).\n"
                         f"     Internal hostnames only work within the same Railway project with private networking.\n"
                         f"     FIX: Go to Railway → Redis service → Connect tab → copy the PUBLIC proxy URL\n"
-                        f"     (format: redis://default:PASSWORD@maglev.proxy.rlwy.net:PORT)\n"
+                        f"     (format: rediss://default:PASSWORD@maglev.proxy.rlwy.net:PORT)\n"
                         f"     Set it as NIJA_REDIS_URL in the bot service Variables and redeploy."
                     )
                 elif _proxy_hosts and "connection reset" in str(_ping_exc).lower():
@@ -1477,7 +1477,7 @@ def _acquire_distributed_process_lock() -> None:
                         f"     Steps to fix:\n"
                         f"       1. Go to Railway → Redis service → verify the service is Running\n"
                         f"       2. If re-provisioned, copy the new PUBLIC proxy URL from the Connect tab\n"
-                        f"          (format: redis://default:NEW_PASSWORD@maglev.proxy.rlwy.net:NEW_PORT)\n"
+                        f"          (format: rediss://default:NEW_PASSWORD@maglev.proxy.rlwy.net:NEW_PORT)\n"
                         f"       3. Update NIJA_REDIS_URL in the bot service Variables and redeploy\n"
                         f"       4. To bypass the lock while Redis recovers (UNSAFE, single-instance only):\n"
                         f"          set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true and redeploy"
