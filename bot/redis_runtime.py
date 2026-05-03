@@ -83,14 +83,18 @@ def connect_redis_with_fallback(
     delay_s: float = 2.0,
     log: Callable[[str], None] = print,
 ) -> tuple[redis.Redis, str]:
-    """Connect to Redis and fallback to plain Railway proxy URL on TLS timeout."""
+    """Connect to Redis with optional plain Railway fallback when explicitly enabled."""
     primary_url = (url or os.getenv("NIJA_REDIS_URL", "")).strip()
     if not primary_url:
         raise RuntimeError("NIJA_REDIS_URL is missing")
 
     candidates = [primary_url]
+    allow_plain_fallback = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in {
+        "1", "true", "yes", "on", "enabled"
+    }
     parsed = urlparse(primary_url)
     if (
+        allow_plain_fallback
         parsed.scheme == "rediss"
         and (parsed.hostname or "").lower().endswith(".proxy.rlwy.net")
     ):

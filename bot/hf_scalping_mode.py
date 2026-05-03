@@ -163,7 +163,7 @@ class HFScalpConfig:
 
     # ── Profit / stop management ───────────────────────────────────────────────
     profit_target_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 0.8)
+        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 2.0)
     )
     # env: HF_SCALP_PROFIT_TARGET_PCT
 
@@ -255,7 +255,7 @@ class HFScalpingMode:
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
-            "profit_target_pct": 0.8,
+            "profit_target_pct": 2.0,
             "stop_loss_pct": 0.4,
             "max_trades_per_hour": 25,
             "trade_cooldown_seconds": 30.0,
@@ -269,7 +269,7 @@ class HFScalpingMode:
             self.config.kraken_min_confidence = 0.34
             self.config.min_adx = 9
             self.config.volume_threshold = 0.025
-            self.config.profit_target_pct = 0.8
+            self.config.profit_target_pct = 2.0
             self.config.stop_loss_pct = 0.4
             # Keep within requested 15–25 trades/hr band.
             if self.config.max_trades_per_hour < 15:
@@ -277,7 +277,7 @@ class HFScalpingMode:
             elif self.config.max_trades_per_hour > 25:
                 self.config.max_trades_per_hour = 25
             logger.info(
-                "HF profile lock active — conf=0.34 adx=9 vol=2.5%% tp=0.8%% sl=0.4%% trades/hr=%d",
+                "HF profile lock active — conf=0.34 adx=9 vol=2.5%% tp=2.0%% sl=0.4%% trades/hr=%d",
                 self.config.max_trades_per_hour,
             )
 

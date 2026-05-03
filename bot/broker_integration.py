@@ -1746,10 +1746,20 @@ class KrakenBrokerAdapter(BrokerInterface):
                 # Calculate order cost in USD
                 if size_type == 'quote':
                     order_cost_usd = size
+                    try:
+                        _buy_headroom_pct = float(os.environ.get("NIJA_KRAKEN_BUY_HEADROOM_PCT", "0.005"))
+                    except (TypeError, ValueError):
+                        _buy_headroom_pct = 0.005
+                    _buy_headroom_pct = min(max(_buy_headroom_pct, 0.0), 0.05)
+                    _effective_quote_usd = order_cost_usd * (1.0 - _buy_headroom_pct)
+                    if order_cost_usd >= KRAKEN_MIN_ORDER_COST and _effective_quote_usd < KRAKEN_MIN_ORDER_COST:
+                        _effective_quote_usd = order_cost_usd
                     # Convert to base currency volume for validation
-                    volume_to_validate = size / current_price
+                    volume_to_validate = _effective_quote_usd / current_price
                     logger.info(f"📊 USD to Volume Conversion:")
                     logger.info(f"   USD amount: ${size:.2f}")
+                    logger.info(f"   Fee/slippage headroom: {_buy_headroom_pct * 100:.2f}%")
+                    logger.info(f"   Effective USD for volume: ${_effective_quote_usd:.2f}")
                     logger.info(f"   Price: ${current_price:.8f}")
                     logger.info(f"   Volume (base): {volume_to_validate:.8f}")
                 else:  # base

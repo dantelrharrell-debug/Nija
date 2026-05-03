@@ -10237,10 +10237,24 @@ class KrakenBroker(BaseBroker):
                         "message": error_msg
                     }
 
+                # Reserve small quote headroom to absorb fee/slippage drift.
+                # Guard near-minimum orders so we do not fall below Kraken min.
+                try:
+                    _buy_headroom_pct = float(os.environ.get("NIJA_KRAKEN_BUY_HEADROOM_PCT", "0.005"))
+                except (TypeError, ValueError):
+                    _buy_headroom_pct = 0.005
+                _buy_headroom_pct = min(max(_buy_headroom_pct, 0.0), 0.05)
+                _min_quote = float(KRAKEN_MINIMUM_ORDER_USD or 10.00)
+                _quote_after_headroom = quantity * (1.0 - _buy_headroom_pct)
+                if quantity >= _min_quote and _quote_after_headroom < _min_quote:
+                    _quote_after_headroom = quantity
+
                 # Convert USD to base currency volume
-                volume_for_order = quantity / current_price
+                volume_for_order = _quote_after_headroom / current_price
                 logging.info(f"📊 USD to Volume Conversion:")
                 logging.info(f"   USD amount: ${quantity:.2f}")
+                logging.info(f"   Fee/slippage headroom: {_buy_headroom_pct * 100:.2f}%")
+                logging.info(f"   Effective USD for volume: ${_quote_after_headroom:.2f}")
                 logging.info(f"   Price: ${current_price:.8f}")
                 logging.info(f"   Volume (base): {volume_for_order:.8f}")
 

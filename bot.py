@@ -1209,12 +1209,32 @@ def _acquire_distributed_process_lock() -> None:
     _redis_url = get_redis_url()
     _redis_url_source = get_redis_url_source()
     _redis_env_presence = get_redis_env_presence()
+    _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
+    _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
+    _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
+    _kraken_buy_buffer_pct_raw = os.environ.get("KRAKEN_BUY_BUFFER_PCT", "0.004").strip() or "0.004"
+    _kraken_buy_headroom_pct_raw = os.environ.get("NIJA_KRAKEN_BUY_HEADROOM_PCT", "0.005").strip() or "0.005"
+    try:
+        _kraken_buy_buffer_pct = min(max(float(_kraken_buy_buffer_pct_raw), 0.0), 0.05)
+    except (TypeError, ValueError):
+        _kraken_buy_buffer_pct = 0.004
+    try:
+        _kraken_buy_headroom_pct = min(max(float(_kraken_buy_headroom_pct_raw), 0.0), 0.05)
+    except (TypeError, ValueError):
+        _kraken_buy_headroom_pct = 0.005
     print(
         "🔐 Writer lock mode | "
         f"live={_live_mode} required={_require_lock} unsafe_bypass={_unsafe_bypass} "
-        f"redis_configured={bool(_redis_url)} source={_redis_url_source or 'unset'}"
+        f"redis_configured={bool(_redis_url)} source={_redis_url_source or 'unset'} "
+        f"strict_single_url={_strict_single_redis} plain_fallback={_allow_plain_redis_fallback}"
     )
     print(f"🔐 Redis env presence | {_redis_env_presence}")
+    print(
+        "🛡️ Hardening config | "
+        f"redis_force_tls={_force_redis_tls} "
+        f"kraken_buy_buffer={_kraken_buy_buffer_pct * 100:.2f}% "
+        f"kraken_buy_headroom={_kraken_buy_headroom_pct * 100:.2f}%"
+    )
     if not _redis_url:
         _msg = (
             "⚠️ Distributed single-writer lock disabled "
@@ -1293,6 +1313,8 @@ def _acquire_distributed_process_lock() -> None:
             )
 
         def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
+            if not _allow_plain_redis_fallback:
+                return None
             _parsed = urlparse(_url)
             _host = (_parsed.hostname or "").lower()
             if _parsed.scheme != "rediss" or not _host.endswith(".proxy.rlwy.net"):
@@ -1342,6 +1364,10 @@ def _acquire_distributed_process_lock() -> None:
                 _ping_exc = None
         
         if _ping_exc:
+            if _strict_single_redis:
+                raise RuntimeError(
+                    f"Strict Redis URL mode active: {_redis_url_source} unreachable ({_ping_exc})"
+                )
             # Primary URL failed — try remaining configured URLs in priority order
             # First, log host details for all configured URLs (credentials redacted) to aid diagnosis
             def _redact_url(u: str) -> str:

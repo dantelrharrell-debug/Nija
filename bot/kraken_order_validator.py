@@ -11,6 +11,7 @@ Also provides utilities for verifying per-API key execution.
 """
 
 import logging
+import os
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger("nija.kraken_validator")
@@ -53,6 +54,16 @@ KRAKEN_MINIMUMS = {
 # Higher volume traders may have lower fees. Update these values as needed.
 KRAKEN_TAKER_FEE = 0.0016  # 0.16% (volume tier 0-50k)
 KRAKEN_MAKER_FEE = 0.0010  # 0.10% (volume tier 0-50k)
+
+
+def _resolve_buy_buffer_pct() -> float:
+    """Return extra buy-side headroom beyond exchange fee for quote affordability."""
+    raw = os.getenv("KRAKEN_BUY_BUFFER_PCT", "0.004")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0.004
+    return min(max(value, 0.0), 0.05)
 
 # Exchange-specific minimum order values (USD)
 # Operational floors — above exchange hard minimums to ensure fee-positive trades.
@@ -164,9 +175,11 @@ def adjust_size_for_fees(volume: float, price: float, side: str,
 
     if side.lower() == 'buy':
         # For buys, we need to ensure we can afford the fee
-        # Reduce volume slightly to account for fee
-        # Example: Want to buy $100 worth, but need to reserve $0.16 for fee
-        return volume * (1 - fee_rate)
+        # Reserve extra quote headroom to absorb fee + minor slippage/rounding
+        # and reduce insufficient-funds rejections on small accounts.
+        buy_buffer_pct = _resolve_buy_buffer_pct()
+        reserve_pct = fee_rate + buy_buffer_pct
+        return volume * max(0.0, 1 - reserve_pct)
     else:
         # For sells, volume stays the same (fee comes from proceeds)
         return volume

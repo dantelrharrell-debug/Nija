@@ -1352,7 +1352,9 @@ class KrakenNonceManager:
             if time.time() - _lock_start > _NONCE_LOCK_TIMEOUT_SECONDS:
                 raise RuntimeError("NONCE LOCK TIMEOUT — forcing recovery")
             _lock_acquired = _LOCK.acquire(timeout=_NONCE_LOCK_POLL_INTERVAL_SECONDS)
-        _logger.critical("NONCE_LOCK_ACQUIRED — EXCLUSIVE ACCESS GRANTED")
+        _logger.critical(
+            "NONCE_LOCK_ACQUIRED — EXCLUSIVE ACCESS GRANTED relationship=self"
+        )
         try:
             with _CrossProcessLock(self._lock_file):
                 self._last_nonce = self._load_last_nonce()

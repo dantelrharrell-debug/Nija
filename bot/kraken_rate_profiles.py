@@ -298,7 +298,7 @@ KRAKEN_RATE_PROFILES = {
         'micro_cap_rules': {
             'max_concurrent_positions': 1,   # Only 1 position at a time
             'position_size_usd': 40.0,       # Fixed $40 position size (target band: $30-$50)
-            'profit_target_pct': 0.8,        # 0.8% take-profit
+            'profit_target_pct': 2.0,        # 2.0% take-profit (fee-positive micro-cap baseline)
             'stop_loss_pct': 0.4,            # 0.4% stop-loss (2:1 reward:risk)
             'allow_dca': False,              # No adding to positions
             'stale_order_timeout_seconds': 120,  # Cancel orders after 2 minutes

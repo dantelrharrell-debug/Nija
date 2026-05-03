@@ -34,11 +34,20 @@ def _is_railway_internal_host(hostname: str) -> bool:
 
 
 def _normalize_redis_url(source: str, url: str) -> tuple[str, str]:
-    """Return provided URL unchanged.
+    """Normalize Redis URL with TLS-first policy for Railway proxy hosts."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return source, url
 
-    Redis scheme handling is now explicit in call sites to avoid silently
-    rewriting operator-provided connection settings.
-    """
+    force_tls = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
+        "1", "true", "yes", "on", "enabled"
+    }
+    host = (parsed.hostname or "").strip().lower()
+    if force_tls and parsed.scheme == "redis" and _is_railway_proxy_host(host):
+        normalized = urlunsplit(("rediss", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
+        return f"{source} [tls-upgrade]", normalized
+
     return source, url
 
 
@@ -141,7 +150,11 @@ def _build_component_redis_url() -> tuple[str, str]:
     else:
         source = "REDIS_HOST+REDIS_PORT"
 
-    return source, f"redis://{auth}{host}:{port}/{db}"
+    force_tls = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
+        "1", "true", "yes", "on", "enabled"
+    }
+    scheme = "rediss" if force_tls and _is_railway_proxy_host(host.lower()) else "redis"
+    return source, f"{scheme}://{auth}{host}:{port}/{db}"
 
 
 def get_redis_url() -> str:
