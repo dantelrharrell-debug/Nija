@@ -84,7 +84,7 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-MIN_CONFIDENCE = 0.30  # Reverted from 0.35 (over-tightened Apr 2026) — 0.30 balances quality vs frequency for small-account growth
+MIN_CONFIDENCE = 0.20  # DEBUG TEMP: relaxed confidence floor to force pipeline visibility
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Volume gate for entry confirmation in check_long/short_entry.
@@ -588,8 +588,8 @@ class NIJAApexStrategyV71:
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = self.config.get('min_adx', 5)  # TUNED: 5 — further relaxed from 7 to allow Platform to enter trades
-        self.volume_threshold = self.config.get('volume_threshold', 0.02)  # TUNED: 2% — further relaxed from 5% to match user account behaviour
+        self.min_adx = min(self.config.get('min_adx', 5), 5)  # DEBUG TEMP: cap ADX threshold at 5 to force trade flow
+        self.volume_threshold = min(self.config.get('volume_threshold', 0.005), 0.005)  # DEBUG TEMP: MIN_VOLATILITY 0.5% equivalent for easier entries
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 1)  # TUNED: Lowered from 2 → 1 (Apr 2026) so a single confirmed condition (e.g. VWAP or MACD) is enough to attempt an entry; the AI scoring layers downstream still gate quality
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
@@ -2173,6 +2173,7 @@ class NIJAApexStrategyV71:
             Dictionary with analysis results and recommended action
         """
         try:
+            print("📊 Evaluating market conditions...")
             # Require minimum data
             if len(df) < 100:
                 logger.debug(f"   {symbol}: Insufficient data ({len(df)} candles)")
@@ -2333,6 +2334,7 @@ class NIJAApexStrategyV71:
                         daily_loss_limit_pct=_drc_daily_loss_pct,
                     )
                     self._risk_envelope_multiplier = _risk_result.position_multiplier
+                    print(f"⏱ Trade allowed: {_risk_result.can_trade}")
                     if not _risk_result.can_trade:
                         logger.debug(
                             "   🛡️  %s: Risk envelope blocked — %s",

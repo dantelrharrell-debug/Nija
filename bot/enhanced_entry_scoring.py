@@ -171,6 +171,7 @@ class EnhancedEntryScorer:
         }
 
         total = float(np.clip(sum(scores.values()), 0.0, 100.0))
+        print(f"🎯 Score: {total}")
 
         breakdown = {
             **scores,

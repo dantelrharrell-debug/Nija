@@ -1048,6 +1048,8 @@ class NijaCoreLoop:
                 daily_pnl_usd=snapshot.daily_pnl_usd,
                 regime=snapshot.current_regime,
             )
+            can_trade = bool(result.can_trade)
+            print(f"⏱ Trade allowed: {can_trade}")
             if not result.can_trade:
                 return False, result.reason
             return True, "ok"
@@ -1978,6 +1980,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             try:
                 # FIX 4: emit every cycle so a silent dead-bot is immediately visible.
                 logger.critical("🟢 LIVE LOOP TICK")
+                print("🚀 MAIN LOOP TICK")
 
                 _live_now = False
                 _sm_loop = None
