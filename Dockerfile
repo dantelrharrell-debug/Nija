@@ -1,8 +1,8 @@
 # Use Python 3.11 slim image (platform flag avoids IPv6 Docker Hub resolution failures on Railway)
 FROM --platform=linux/amd64 python:3.11-slim
 
-# Install git for metadata injection
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Install git and redis-cli for runtime diagnostics
+RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
