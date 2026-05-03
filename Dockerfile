@@ -1,5 +1,5 @@
-# Use Python 3.11 slim image (platform flag avoids IPv6 Docker Hub resolution failures on Railway)
-FROM --platform=linux/amd64 python:3.11-slim
+# Use Python 3.11 slim image
+FROM python:3.11-slim
 
 # Install git and redis-cli for runtime diagnostics
 RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/lists/*
