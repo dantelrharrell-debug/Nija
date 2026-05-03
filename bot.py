@@ -1166,6 +1166,14 @@ def _acquire_distributed_process_lock() -> None:
             f"   Retrying distributed lock acquisition every {_retry_sleep_s:.0f}s "
             "(set NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=false to exit instead)."
         )
+        print(
+            "   DIAGNOSTIC STEPS:"
+            "\n     1. Verify Redis URL scheme:  rediss:// for Railway proxy, redis:// for local"
+            "\n     2. Test connectivity:         redis-cli -u $NIJA_REDIS_URL ping  → expect PONG"
+            "\n     3. Check Railway service:     Redis service must show Running in Railway dashboard"
+            "\n     4. Check for conflicting env: REDIS_URL / REDIS_PRIVATE_URL / REDIS_TLS_URL"
+            "\n     5. Single-instance bypass:    set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true (UNSAFE)"
+        )
 
         os.environ["NIJA_STANDBY_RETRY_ACTIVE"] = "1"
 
@@ -1282,6 +1290,30 @@ def _acquire_distributed_process_lock() -> None:
             _trimmed = _raw_env_value.strip()
             if len(_trimmed) >= 2 and _trimmed[0] == _trimmed[-1] and _trimmed[0] in {'"', "'"}:
                 raise RuntimeError("NIJA_REDIS_URL must not include wrapping quotes")
+            # Warn when redis:// (non-TLS) is used against a Railway public proxy
+            # while TLS forcing is active.  The bot auto-upgrades the scheme, but
+            # an explicit warning helps operators fix the root-cause config.
+            try:
+                _parsed_check = urlparse(_trimmed)
+                _host_check = (_parsed_check.hostname or "").lower()
+                _force_tls_check = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
+                    "1", "true", "yes", "on", "enabled"
+                }
+                if (
+                    _parsed_check.scheme == "redis"
+                    and _force_tls_check
+                    and _host_check.endswith(".proxy.rlwy.net")
+                ):
+                    print(
+                        "⚠️  CONFIG WARNING: NIJA_REDIS_URL uses redis:// (plain) against a Railway "
+                        "public proxy endpoint while NIJA_REDIS_FORCE_TLS=true. "
+                        "The scheme will be upgraded to rediss:// automatically, but you should "
+                        "set rediss:// explicitly to avoid ambiguity: "
+                        f"  NIJA_REDIS_URL=rediss://{_parsed_check.netloc}{_parsed_check.path}",
+                        flush=True,
+                    )
+            except Exception:
+                pass
 
         def _build_strict_redis_client(_url: str):
             _parsed = urlparse(_url)
