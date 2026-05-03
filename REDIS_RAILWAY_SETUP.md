@@ -80,6 +80,11 @@ NIJA startup now runs this preflight automatically when Redis is configured.
 - Default: `NIJA_REDIS_STARTUP_CHECK=true`
 - Temporary bypass (not recommended): `NIJA_REDIS_STARTUP_CHECK=false`
 
+Live-mode safety override:
+
+- When `LIVE_CAPITAL_VERIFIED=true`, Redis is configured, and distributed lock protection is active, NIJA forces startup preflight back on even if `NIJA_REDIS_STARTUP_CHECK=false`.
+- Reason: live trading cannot safely continue with a bypassed Redis lock preflight.
+
 Strictness for Railway service/linkage checks:
 
 - Default: `NIJA_REDIS_STRICT_CHECKS=true` (fails preflight if Railway status/linkage checks fail)

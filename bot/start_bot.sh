@@ -1,7 +1,7 @@
 #!/bin/bash
-# Make sure this script is executable: chmod +x start_bot.sh
+set -e
 
-# Run the Coinbase trading loop
-python3 /app/bot/bot.py
-#!/bin/bash
-python bot.py
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+exec "${REPO_ROOT}/start.sh" "$@"

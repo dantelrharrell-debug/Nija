@@ -380,8 +380,14 @@ _validate_redis_url_or_exit() {
     local _redis_url
     local _redis_source
     local _has_proxy_fallback=false
+    local _strict_single_redis=true
+    local _strict_single_redis_raw
     _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
     _redis_source="$(_resolve_redis_url_source 2>/dev/null || true)"
+    _strict_single_redis_raw=$(printf "%s" "${NIJA_STRICT_SINGLE_REDIS_URL:-true}" | tr '[:upper:]' '[:lower:]')
+    if [ "${_strict_single_redis_raw}" = "0" ] || [ "${_strict_single_redis_raw}" = "false" ] || [ "${_strict_single_redis_raw}" = "no" ] || [ "${_strict_single_redis_raw}" = "off" ]; then
+        _strict_single_redis=false
+    fi
     if [ -z "${_redis_url}" ]; then
         return 0
     fi
@@ -393,6 +399,28 @@ _validate_redis_url_or_exit() {
     elif [ -n "${REDIS_HOST:-${REDISHOST:-}}" ] && [ -n "${REDIS_PORT:-${REDISPORT:-}}" ] \
         && ! printf "%s" "${REDIS_HOST:-${REDISHOST:-}}" | grep -q "\.railway\.internal"; then
         _has_proxy_fallback=true
+    fi
+
+    if printf "%s" "${_redis_url}" | grep -q "\.railway\.internal" \
+        && [ "${_redis_source}" = "NIJA_REDIS_URL" ] \
+        && [ "${_strict_single_redis}" = "true" ]; then
+        echo ""
+        echo "❌ CRITICAL: NIJA_REDIS_URL points to Railway internal networking while strict single-URL mode is enabled"
+        echo ""
+        echo "Detected: NIJA_REDIS_URL=***@*.railway.internal"
+        echo "Runtime is configured to require that exact URL and will not fall back to alternate Redis endpoints."
+        echo "This causes repeated writer-lock retries and eventual crash if the internal network path is unreachable."
+        echo ""
+        echo "🔧 SOLUTION:"
+        echo "   1. Railway → Redis service → Connect"
+        echo "   2. Copy the PUBLIC proxy URL (maglev.proxy.rlwy.net:PORT)"
+        echo "   3. Set NIJA_REDIS_URL to that public URL"
+        echo "      OR unset NIJA_REDIS_URL and use RAILWAY_TCP_PROXY_DOMAIN + RAILWAY_TCP_PROXY_PORT + REDIS_PASSWORD"
+        echo "   4. Redeploy"
+        echo ""
+        echo "   Temporary alternative: set NIJA_STRICT_SINGLE_REDIS_URL=false so fallback Redis vars may be used"
+        echo ""
+        exit_config_error
     fi
 
     if printf "%s" "${_redis_url}" | grep -q "\.railway\.internal" && [ "${_has_proxy_fallback}" != "true" ]; then
@@ -1216,6 +1244,11 @@ _REDIS_STARTUP_CHECK_RAW=$(printf "%s" "${NIJA_REDIS_STARTUP_CHECK:-true}" | tr 
 _REDIS_STARTUP_CHECK=true
 if [ "${_REDIS_STARTUP_CHECK_RAW}" = "0" ] || [ "${_REDIS_STARTUP_CHECK_RAW}" = "false" ] || [ "${_REDIS_STARTUP_CHECK_RAW}" = "no" ] || [ "${_REDIS_STARTUP_CHECK_RAW}" = "off" ]; then
     _REDIS_STARTUP_CHECK=false
+fi
+
+if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_UNSAFE_BYPASS}" != "true" ] && [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then
+    _REDIS_STARTUP_CHECK=true
+    echo "⚠️  Redis startup preflight cannot be disabled in live mode while distributed lock protection is active."
 fi
 
 if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_UNSAFE_BYPASS}" != "true" ]; then

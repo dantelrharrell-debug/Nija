@@ -1,6 +1,11 @@
 #!/bin/bash
 # Run NIJA in LIVE Trading Mode (Real Money)
 
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 echo "💰 Starting NIJA in LIVE TRADING mode (REAL MONEY)"
 echo "=================================================="
 echo ""
@@ -15,4 +20,6 @@ if [ "$confirmation" != "YES" ]; then
 fi
 
 export PAPER_MODE=false
-python3 bot.py
+export LIVE_CAPITAL_VERIFIED=true
+
+exec "${REPO_ROOT}/start.sh" "$@"
