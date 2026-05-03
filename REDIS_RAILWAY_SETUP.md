@@ -58,15 +58,110 @@ Run this test command to verify Redis connection:
 
 ```bash
 # In NIJA container or locally:
-python -c "
-from cache.redis_client import init_redis
-import os
-
-client = init_redis()
-client.ping()
-print('✅ Redis connection successful!')
-"
+bash scripts/redis_connectivity_check.sh
 ```
+
+The script now runs a 5-point verification sequence:
+
+1. Confirm Redis URL parsing and TLS scheme sanity
+2. Confirm Redis service status in Railway (best effort when Railway CLI is available)
+3. Verify same-project/network linkage expectations
+4. Run `nc` TCP reachability test against host:port
+5. Run Redis `PING` with explicit TLS flags for `rediss://`
+
+Optional: load env values from a file before checks:
+
+```bash
+bash scripts/redis_connectivity_check.sh --env-file .env
+```
+
+NIJA startup now runs this preflight automatically when Redis is configured.
+
+- Default: `NIJA_REDIS_STARTUP_CHECK=true`
+- Temporary bypass (not recommended): `NIJA_REDIS_STARTUP_CHECK=false`
+
+Strictness for Railway service/linkage checks:
+
+- Default: `NIJA_REDIS_STRICT_CHECKS=true` (fails preflight if Railway status/linkage checks fail)
+- Relaxed mode: `NIJA_REDIS_STRICT_CHECKS=false` (logs warnings but continues)
+
+## 🧭 Operator Runbook: Expected Output
+
+Use this when validating Redis during incident response or fresh deploys.
+
+Command:
+
+```bash
+bash scripts/redis_connectivity_check.sh
+```
+
+### Check 1/5: Redis URL + TLS sanity
+
+Expected pass indicators:
+
+- `Redis URL: rediss://***@<host>:<port>`
+- No `ERROR:` lines
+
+Expected fail indicators:
+
+- `ERROR: Redis URL is empty`
+- `ERROR: NIJA_REDIS_URL uses redis:// on Railway proxy while NIJA_REDIS_FORCE_TLS=true`
+
+### Check 2/5: Railway service status
+
+Expected pass indicators:
+
+- `Railway status includes a Redis service entry`
+- `Railway reports at least one active deployment state`
+
+Expected fail indicators (strict mode):
+
+- `ERROR: Railway service status check failed`
+- `WARN: Railway status did not mention a Redis service`
+
+### Check 3/5: Project/network linkage
+
+Expected pass indicators:
+
+- For internal host: `Using Railway internal Redis hostname: ...` with runtime context confirmation
+- For public proxy: `Using Railway public TCP proxy hostname: ...`
+
+Expected fail indicators (strict mode):
+
+- `ERROR: Railway project/network linkage check failed`
+- `WARN: Internal Railway host requires NIJA and Redis services in same Railway project/environment`
+
+### Check 4/5: TCP reachability (`nc`)
+
+Expected pass indicators:
+
+- `nc reachability test passed`
+- Or `socket reachability test passed` (fallback path)
+
+Expected fail indicators:
+
+- `ERROR: nc reachability test failed for <host>:<port>`
+- `ERROR: socket reachability test failed: ...`
+
+### Check 5/5: Redis PING with explicit TLS
+
+Expected pass indicators:
+
+- `PONG`
+- `Connectivity check completed`
+
+Expected fail indicators:
+
+- `ERROR: Redis connectivity check failed: ...`
+
+### Exit code quick map
+
+- `1`: Redis ping/connectivity failure
+- `2`: Python redis module unavailable in fallback path
+- `3`: TLS scheme mismatch (`redis://` used with forced TLS on proxy host)
+- `4`: URL/host/port resolution failure
+- `5`: Railway service status check failed (strict mode)
+- `6`: Railway project/network linkage check failed (strict mode)
 
 ## ❌ What NOT to Do
 

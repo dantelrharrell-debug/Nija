@@ -1210,6 +1210,33 @@ fi
 # Enforce live mode explicitly
 export PAPER_MODE=false
 
+# Optional Redis startup preflight (default ON when Redis is configured).
+# This catches Railway service/linkage/reachability/TLS issues before main.py boot.
+_REDIS_STARTUP_CHECK_RAW=$(printf "%s" "${NIJA_REDIS_STARTUP_CHECK:-true}" | tr '[:upper:]' '[:lower:]')
+_REDIS_STARTUP_CHECK=true
+if [ "${_REDIS_STARTUP_CHECK_RAW}" = "0" ] || [ "${_REDIS_STARTUP_CHECK_RAW}" = "false" ] || [ "${_REDIS_STARTUP_CHECK_RAW}" = "no" ] || [ "${_REDIS_STARTUP_CHECK_RAW}" = "off" ]; then
+    _REDIS_STARTUP_CHECK=false
+fi
+
+if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_UNSAFE_BYPASS}" != "true" ]; then
+    echo ""
+    echo "🔎 Running Redis startup preflight check..."
+    if ! _redis_check_output=$(bash scripts/redis_connectivity_check.sh 2>&1); then
+        _redis_check_status=$?
+        echo "${_redis_check_output}"
+        echo ""
+        echo "❌ Redis startup preflight failed (exit ${_redis_check_status})"
+        echo "   Fix Redis service status/network/TLS and redeploy."
+        echo "   To bypass temporarily (not recommended): NIJA_REDIS_STARTUP_CHECK=false"
+        echo ""
+        exit_config_error
+    fi
+    echo "${_redis_check_output}"
+    echo "✅ Redis startup preflight passed"
+elif [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then
+    echo "ℹ️  Redis startup preflight disabled (NIJA_REDIS_STARTUP_CHECK=${NIJA_REDIS_STARTUP_CHECK:-false})"
+fi
+
 # Log monitoring guidance — watch for execution errors and trade rejections
 echo ""
 echo "📋 LOG MONITORING: Logs stream to stdout and nija.log"

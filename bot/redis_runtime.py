@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import ssl
 import threading
 import time
 from types import FrameType
@@ -11,6 +12,35 @@ from typing import Any, Callable, Iterable, Optional
 from urllib.parse import urlparse
 
 import redis  # type: ignore[import]
+
+
+def _redis_tls_kwargs(parsed) -> dict[str, Any]:
+    """Return explicit TLS kwargs when using rediss:// URLs."""
+    if parsed.scheme != "rediss":
+        return {"ssl": False}
+
+    cert_reqs_env = os.getenv("NIJA_REDIS_TLS_CERT_REQS", "none").strip().lower()
+    cert_reqs_map = {
+        "none": ssl.CERT_NONE,
+        "optional": ssl.CERT_OPTIONAL,
+        "required": ssl.CERT_REQUIRED,
+    }
+    cert_reqs = cert_reqs_map.get(cert_reqs_env, ssl.CERT_NONE)
+    check_hostname = os.getenv("NIJA_REDIS_TLS_CHECK_HOSTNAME", "false").strip().lower() in {
+        "1", "true", "yes", "on", "enabled"
+    }
+
+    tls_kwargs: dict[str, Any] = {
+        "ssl": True,
+        "ssl_cert_reqs": cert_reqs,
+        "ssl_check_hostname": check_hostname,
+    }
+
+    ca_certs = os.getenv("NIJA_REDIS_TLS_CA_CERTS", "").strip()
+    if ca_certs:
+        tls_kwargs["ssl_ca_certs"] = ca_certs
+
+    return tls_kwargs
 
 
 def create_redis(
@@ -43,11 +73,10 @@ def create_redis(
         username=parsed.username or "default",
         password=parsed.password,
         db=db,
-        ssl=parsed.scheme == "rediss",
-        ssl_cert_reqs=None,
         socket_timeout=socket_timeout,
         socket_connect_timeout=socket_connect_timeout,
         decode_responses=decode_responses,
+        **_redis_tls_kwargs(parsed),
     )
 
 
@@ -95,7 +124,7 @@ def connect_redis_with_fallback(
     parsed = urlparse(primary_url)
     if (
         allow_plain_fallback
-        parsed.scheme == "rediss"
+        and parsed.scheme == "rediss"
         and (parsed.hostname or "").lower().endswith(".proxy.rlwy.net")
     ):
         candidates.append(primary_url.replace("rediss://", "redis://", 1))

@@ -28,6 +28,111 @@ if [ -n "${env_file}" ]; then
 fi
 
 force_tls="${NIJA_REDIS_FORCE_TLS:-true}"
+strict_checks="${NIJA_REDIS_STRICT_CHECKS:-true}"
+
+is_truthy() {
+  printf "%s" "${1:-}" | grep -Eiq '^(1|true|yes|on|enabled)$'
+}
+
+railway_best_effort_status() {
+  if ! command -v railway >/dev/null 2>&1; then
+    echo "INFO: Railway CLI not installed; skipping direct service status check"
+    return 0
+  fi
+
+  local status_output status_lower
+  if ! status_output="$(railway status 2>/dev/null || true)"; then
+    echo "WARN: Could not read Railway status"
+    return 0
+  fi
+
+  if [ -z "${status_output}" ]; then
+    echo "WARN: Railway status output is empty (CLI may not be linked/login may be required)"
+    if is_truthy "${strict_checks}"; then
+      return 1
+    fi
+    return 0
+  fi
+
+  status_lower="$(printf "%s" "${status_output}" | tr '[:upper:]' '[:lower:]')"
+  if printf "%s" "${status_lower}" | grep -Eq 'redis'; then
+    echo "Railway status includes a Redis service entry"
+  else
+    echo "WARN: Railway status did not mention a Redis service"
+    if is_truthy "${strict_checks}"; then
+      return 1
+    fi
+  fi
+
+  if printf "%s" "${status_lower}" | grep -Eq 'deployed|success|running|active|healthy'; then
+    echo "Railway reports at least one active deployment state"
+  else
+    echo "WARN: Railway status does not clearly indicate an active deployment"
+    if is_truthy "${strict_checks}"; then
+      return 1
+    fi
+  fi
+}
+
+verify_network_linkage() {
+  local host="$1"
+  if printf "%s" "${host}" | grep -Eiq '\.railway\.internal$'; then
+    echo "Using Railway internal Redis hostname: ${host}"
+    if [ -n "${RAILWAY_PROJECT_ID:-}" ] && [ -n "${RAILWAY_ENVIRONMENT_ID:-}" ]; then
+      echo "Railway runtime context present (RAILWAY_PROJECT_ID + RAILWAY_ENVIRONMENT_ID)"
+      echo "Assuming same-project private network linkage for internal hostname"
+    else
+      echo "WARN: Internal Railway host requires NIJA and Redis services in same Railway project/environment"
+      echo "      Missing runtime linkage vars (RAILWAY_PROJECT_ID and/or RAILWAY_ENVIRONMENT_ID) in this shell"
+      if is_truthy "${strict_checks}"; then
+        return 1
+      fi
+    fi
+    return 0
+  fi
+
+  if printf "%s" "${host}" | grep -Eiq '\.proxy\.rlwy\.net$'; then
+    echo "Using Railway public TCP proxy hostname: ${host}"
+    echo "Public proxy does not require private same-project networking"
+    return 0
+  fi
+
+  echo "INFO: Host does not match Railway internal/proxy patterns; skipping Railway linkage checks"
+}
+
+run_port_reachability_test() {
+  local host="$1"
+  local port="$2"
+
+  echo "Testing TCP reachability to ${host}:${port}"
+  if command -v nc >/dev/null 2>&1; then
+    if nc -z -w 5 "${host}" "${port}"; then
+      echo "nc reachability test passed"
+      return 0
+    fi
+    echo "ERROR: nc reachability test failed for ${host}:${port}"
+    return 1
+  fi
+
+  echo "nc not found; using Python socket fallback"
+  python3 - <<'PY' "${host}" "${port}"
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.settimeout(5)
+try:
+    sock.connect((host, port))
+    print("socket reachability test passed")
+except Exception as exc:
+    print(f"ERROR: socket reachability test failed: {exc}")
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
 
 resolve_redis_url() {
   if [ -n "${NIJA_REDIS_URL:-}" ]; then
@@ -108,6 +213,27 @@ PY
 echo "Redis URL: ${safe_url}"
 echo "NIJA_REDIS_FORCE_TLS=${force_tls}"
 
+host_and_port="$(python3 - <<'PY' "${url}"
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname or ""
+port = parsed.port or ""
+scheme = parsed.scheme or ""
+print(f"{host}|{port}|{scheme}")
+PY
+)"
+redis_host="${host_and_port%%|*}"
+remaining="${host_and_port#*|}"
+redis_port="${remaining%%|*}"
+redis_scheme="${remaining##*|}"
+
+if [ -z "${redis_host}" ] || [ -z "${redis_port}" ]; then
+  echo "ERROR: Could not parse Redis host/port from URL"
+  exit 4
+fi
+
 if python3 - <<'PY' "${url}" "${force_tls}"
 import sys
 from urllib.parse import urlparse
@@ -128,19 +254,39 @@ else
   exit 3
 fi
 
-echo "[2/4] Selecting connectivity backend"
+echo "[2/5] Confirming Redis service status in Railway (best effort)"
+if ! railway_best_effort_status; then
+  echo "ERROR: Railway service status check failed"
+  echo "Hint: ensure railway CLI is linked/logged in and Redis is deployed/running"
+  exit 5
+fi
+
+echo "[3/5] Verifying project/network linkage"
+if ! verify_network_linkage "${redis_host}"; then
+  echo "ERROR: Railway project/network linkage check failed"
+  echo "Hint: for *.railway.internal hosts, NIJA and Redis must be in same Railway project/environment"
+  exit 6
+fi
+
+echo "[4/5] Running nc port reachability test"
+run_port_reachability_test "${redis_host}" "${redis_port}"
+
+echo "[5/5] Running Redis ping with explicit TLS support"
 if command -v redis-cli >/dev/null 2>&1; then
   echo "Using redis-cli for connectivity check..."
-  echo "[3/4] Running ping"
-  redis-cli -u "${url}" ping
-  echo "[4/4] Connectivity check completed"
+  if [ "${redis_scheme}" = "rediss" ]; then
+    redis-cli --tls -u "${url}" ping
+  else
+    redis-cli -u "${url}" ping
+  fi
+  echo "Connectivity check completed"
   exit $?
 fi
 
 echo "redis-cli not found; using Python redis client fallback..."
-echo "[3/4] Running ping"
-python3 - <<'PY' "${url}"
+python3 - <<'PY' "${url}" "${redis_scheme}"
 import sys
+import ssl
 try:
   import redis
 except Exception as exc:
@@ -148,11 +294,26 @@ except Exception as exc:
   raise SystemExit(2)
 
 url = sys.argv[1]
+scheme = sys.argv[2].strip().lower()
 try:
-  client = redis.from_url(url, socket_connect_timeout=5, socket_timeout=5, decode_responses=True)
+  kwargs = {
+      "socket_connect_timeout": 5,
+      "socket_timeout": 5,
+      "decode_responses": True,
+  }
+  if scheme == "rediss":
+      kwargs.update(
+          {
+              "ssl": True,
+              "ssl_cert_reqs": ssl.CERT_NONE,
+              "ssl_check_hostname": False,
+          }
+      )
+
+  client = redis.from_url(url, **kwargs)
   print("PONG" if client.ping() else "ERROR")
 except Exception as exc:
   print(f"ERROR: Redis connectivity check failed: {exc}")
   raise SystemExit(1)
 PY
-echo "[4/4] Connectivity check completed"
+echo "Connectivity check completed"
