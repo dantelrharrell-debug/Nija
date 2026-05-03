@@ -25,6 +25,32 @@ import pandas as pd
 # Initialize logger early to avoid NameError in import fallback handlers
 logger = logging.getLogger("nija")
 
+# Import execution visibility module for comprehensive logging
+try:
+    from execution_visibility import (
+        ExecutionVisibility,
+        get_execution_visibility,
+        LoopState,
+        ExecutionPhase
+    )
+    EXECUTION_VISIBILITY_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.execution_visibility import (
+            ExecutionVisibility,
+            get_execution_visibility,
+            LoopState,
+            ExecutionPhase
+        )
+        EXECUTION_VISIBILITY_AVAILABLE = True
+    except ImportError:
+        EXECUTION_VISIBILITY_AVAILABLE = False
+        ExecutionVisibility = None  # type: ignore
+        get_execution_visibility = None  # type: ignore
+        LoopState = None  # type: ignore
+        ExecutionPhase = None  # type: ignore
+        logger.warning("⚠️ Execution Visibility module not available - limited logging")
+
 # Import entry guardrails (correlation, liquidity, latency)
 try:
     from entry_guardrails import (
@@ -3473,6 +3499,28 @@ class TradingStrategy:
         except ImportError:
             logger.warning("⚠️ Portfolio state manager not available - falling back to cash-based sizing")
             self.portfolio_manager = None
+
+        # ── EXECUTION VISIBILITY MODULE ─────────────────────────────────────
+        # Provides throttled balance logging, execution visibility, and
+        # broker-aware order size validation (especially for Kraken $5-$10 mins).
+        if EXECUTION_VISIBILITY_AVAILABLE and get_execution_visibility is not None:
+            try:
+                # Determine primary broker for visibility module
+                _primary_broker = "kraken"  # Default to Kraken
+                if hasattr(self, 'broker') and self.broker:
+                    _broker_name = getattr(self.broker, 'name', 'kraken').lower()
+                    if 'coinbase' in _broker_name:
+                        _primary_broker = 'coinbase'
+                    elif 'kraken' in _broker_name:
+                        _primary_broker = 'kraken'
+                
+                self.visibility = get_execution_visibility(broker_name=_primary_broker)
+                logger.info(f"✅ Execution Visibility initialized (broker={_primary_broker})")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize Execution Visibility: {e}")
+                self.visibility = None
+        else:
+            self.visibility = None
 
         # Initialize Market Readiness Gate for entry quality control
         if MarketReadinessGate is not None:
@@ -8783,6 +8831,15 @@ class TradingStrategy:
                 try:
                     current_balance = BalanceService.get(_broker_key(active_broker))
                     if current_balance > 0:
+                        # ── THROTTLED BALANCE LOGGING ──────────────────────────
+                        # Only logs on balance change (≥$1) or every 60 seconds
+                        if self.visibility:
+                            broker_name = self._get_broker_name(active_broker)
+                            self.visibility.log_balance(
+                                current_balance=current_balance,
+                                label=f"{broker_name.upper()} Trading Balance"
+                            )
+                        
                         # Count current positions
                         position_count = len(self.execution_engine.positions) if self.execution_engine else 0
 
@@ -12270,10 +12327,24 @@ class TradingStrategy:
                     logger.info("   ⏭️  RESULT: Skipping market scan (signals from copy trade engine)")
                     logger.info("   ℹ️  USER accounts execute copied trades only")
                     logger.info("   ℹ️  USER accounts do not scan markets independently")
+                    
+                    # Log state for visibility
+                    if self.visibility and LoopState is not None:
+                        self.visibility.log_state(
+                            LoopState.POSITION_MANAGEMENT,
+                            reason="user_mode: position management only"
+                        )
                 else:
                     # PLATFORM account with entries blocked by safety checks
                     logger.info("   ⚠️  Mode: PLATFORM (entries blocked by safety checks)")
                     logger.info("   ⏭️  RESULT: Skipping market scan until safety conditions clear")
+                    
+                    # Log state for visibility
+                    if self.visibility and LoopState is not None:
+                        self.visibility.log_state(
+                            LoopState.POSITION_MANAGEMENT,
+                            reason="safety checks blocked entries"
+                        )
                 logger.info("═" * 80)
                 logger.info("")
             else:
@@ -12283,6 +12354,13 @@ class TradingStrategy:
                 logger.info(f"   💵 Minimum to trade: ${MIN_BALANCE_TO_TRADE_USD:.2f}")
                 logger.info(f"   🚫 Entries blocked: {entries_blocked}")
                 logger.info("")
+                
+                # Log state for visibility
+                if self.visibility and LoopState is not None:
+                    self.visibility.log_state(
+                        LoopState.WAITING_FOR_SIGNAL,
+                        reason="scanning for trading opportunities"
+                    )
 
                 # Check each condition individually
                 can_enter = True
@@ -13403,6 +13481,29 @@ class TradingStrategy:
                                     analysis.get('score', 'n/a'),
                                     analysis.get('reason', ''),
                                 )
+                                
+                                # ── EXECUTION VISIBILITY: SIGNAL ANALYSIS ──────────────
+                                # Log signal analysis for transparency (except HOLD signals)
+                                if self.visibility and LoopState is not None:
+                                    try:
+                                        action = analysis.get('action', 'hold')
+                                        if action in ('enter_long', 'enter_short'):
+                                            signal_type = "BUY" if action == "enter_long" else "SELL"
+                                            confidence = float(analysis.get('confidence') or 0)
+                                            
+                                            self.visibility.log_signal_analysis(
+                                                symbol=symbol,
+                                                rsi_9=0.0,  # Not always available in analysis
+                                                rsi_14=0.0,
+                                                signal=signal_type,
+                                                confidence=confidence,
+                                                extra_info={
+                                                    "entry_score": analysis.get('score', 'n/a'),
+                                                    "reason": analysis.get('reason', '')
+                                                }
+                                            )
+                                    except Exception as vis_err:
+                                        logger.debug(f"Signal visibility logging skipped: {vis_err}")
 
                                 # ═══════════════════════════════════════════════════════
                                 # LAYER 2: TRADE QUALITY GATE
@@ -17264,6 +17365,50 @@ class TradingStrategy:
                             _ps_position_size = _sig_data['position_size']
                             _ps_action = _sig_data['action']
 
+                            # ── EXECUTION VISIBILITY: ORDER SIZE VALIDATION ──────────
+                            # Validate position size against broker minimum (critical for micro accounts)
+                            if self.visibility:
+                                validation = self.visibility.validate_order_size(
+                                    symbol=_ps_symbol,
+                                    proposed_size_usd=_ps_position_size
+                                )
+                                
+                                if not validation.valid:
+                                    logger.warning(
+                                        f"⚠️  Skipping {_ps_symbol}: order size ${_ps_position_size:.2f} "
+                                        f"below minimum ${validation.broker_min_usd:.2f}"
+                                    )
+                                    logger.info(
+                                        "[CYCLE_TRACE] ENTRY_VETOED(reason=order_size_too_small, symbol=%s)",
+                                        _ps_symbol,
+                                    )
+                                    filter_stats['order_size_minimum'] = (
+                                        filter_stats.get('order_size_minimum', 0) + 1
+                                    )
+                                    continue
+                            
+                            # ── EXECUTION VISIBILITY: EXECUTION READINESS CHECKLIST ──
+                            if self.visibility:
+                                min_order_size = self.visibility.get_minimum_order_size(_ps_symbol)
+                                self.visibility.log_execution_readiness(
+                                    symbol=_ps_symbol,
+                                    strategy_ready=True,
+                                    signal="BUY" if _ps_action == "enter_long" else "SELL",
+                                    can_trade=True,
+                                    reason="All conditions passed",
+                                    extra_checks={
+                                        'balance_ok': broker_balance >= MIN_BALANCE_TO_TRADE_USD,
+                                        'position_limit_ok': (len(current_positions) + _trades_executed_this_cycle) < effective_max_positions,
+                                        'order_size_ok': _ps_position_size >= min_order_size,
+                                        'broker_eligible': active_broker is not None,
+                                    }
+                                )
+                                # Log state transition to executing
+                                self.visibility.log_state(
+                                    LoopState.EXECUTING_ORDER,
+                                    reason=f"placing order for {_ps_symbol}"
+                                )
+
                             # ── First-Trade Observer: GATES_PASSED + SIZE_COMPUTED ──
                             if FIRST_TRADE_OBSERVER_AVAILABLE and _get_first_trade_observer and not self._first_trade_executed:
                                 try:
@@ -17341,6 +17486,14 @@ class TradingStrategy:
                                     "(execution_engine.execute_entry reached)",
                                     _ps_symbol,
                                 )
+                                
+                                # Log state transition to order complete
+                                if self.visibility and LoopState is not None:
+                                    self.visibility.log_state(
+                                        LoopState.ORDER_COMPLETE,
+                                        reason=f"order placed successfully for {_ps_symbol}"
+                                    )
+                                
                                 # Store entry reason for PatternWinTracker lookup on close
                                 if not hasattr(self, '_last_entry_reason'):
                                     self._last_entry_reason = {}
@@ -17604,6 +17757,13 @@ class TradingStrategy:
                                     f"(broker rejection, nonce pause, or filter block) "
                                     f"→ skipping, next scan will retry"
                                 )
+                                
+                                # Log state transition to error
+                                if self.visibility and LoopState is not None:
+                                    self.visibility.log_state(
+                                        LoopState.ERROR,
+                                        reason=f"order execution failed for {_ps_symbol}"
+                                    )
 
                         logger.info(
                             f"   📊 Priority execution complete: "
@@ -17954,6 +18114,14 @@ class TradingStrategy:
 
             # Increment cycle counter for warmup tracking
             self.cycle_count += 1
+
+            # ── EXECUTION VISIBILITY: LOG STATISTICS (periodic) ─────────────────
+            # Log execution statistics every 100 cycles to monitor performance
+            if self.visibility and self.cycle_count % 100 == 0:
+                try:
+                    self.visibility.log_stats()
+                except Exception as vis_stats_err:
+                    logger.debug(f"Visibility stats logging skipped: {vis_stats_err}")
 
             # 📊 PERFORMANCE TRACKER — log stats every PERF_LOG_CYCLE_INTERVAL cycles
             if (PERFORMANCE_TRACKER_AVAILABLE
