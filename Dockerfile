@@ -19,9 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Ensure operational scripts are present and executable in the image
-COPY scripts/ /app/scripts/
-RUN chmod +x /app/scripts/*.sh
+# Make scripts executable when present in build context
+RUN if [ -d /app/scripts ]; then chmod +x /app/scripts/*.sh || true; fi
 
 # Build arguments for Git metadata (defaults reflect latest release; override via --build-arg at build time)
 ARG GIT_BRANCH=main
