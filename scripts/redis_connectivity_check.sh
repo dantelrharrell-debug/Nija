@@ -226,7 +226,11 @@ password = parsed.password or ""
 db_raw = (parsed.path or "").lstrip("/")
 db = "0"
 if db_raw.isdigit():
-    db = db_raw
+    db_int = int(db_raw)
+    if 0 <= db_int <= 16383:
+        db = db_raw
+    else:
+        print(f"WARN: Redis DB value '{db_raw}' is out of range; defaulting to 0", file=sys.stderr)
 elif db_raw:
     print(f"WARN: Redis DB value '{db_raw}' is invalid; defaulting to 0", file=sys.stderr)
 print(host)
@@ -237,9 +241,20 @@ print(password)
 print(db)
 PY
 )"
-IFS=$'\n' read -r redis_host redis_port redis_scheme redis_user redis_password redis_db <<EOF
+mapfile -t redis_parts_lines <<EOF
 ${redis_parts}
 EOF
+if [ "${#redis_parts_lines[@]}" -lt 6 ]; then
+  echo "ERROR: Could not parse Redis URL components"
+  exit 4
+fi
+
+redis_host="${redis_parts_lines[0]}"
+redis_port="${redis_parts_lines[1]}"
+redis_scheme="${redis_parts_lines[2]}"
+redis_user="${redis_parts_lines[3]}"
+redis_password="${redis_parts_lines[4]}"
+redis_db="${redis_parts_lines[5]}"
 
 if [ -z "${redis_host}" ] || [ -z "${redis_port}" ] || [ -z "${redis_scheme}" ]; then
   echo "ERROR: Could not parse Redis host/port/scheme from URL"
