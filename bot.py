@@ -1584,22 +1584,24 @@ def _acquire_distributed_process_lock() -> None:
 
         # Hard singleton guard: retry with a generous wait interval for lock contention.
         # The interval drives periodic warning/rescue checks; it is not a hard stop.
-        _wait_s_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
-        if not _wait_s_raw:
-            _wait_s_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
+        _wait_interval_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
+        if not _wait_interval_raw:
+            _wait_interval_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_s = float(_wait_s_raw) if _wait_s_raw else (30.0 if _live_mode else 30.0)
+            _wait_checkpoint_interval_s = (
+                float(_wait_interval_raw) if _wait_interval_raw else (30.0 if _live_mode else 30.0)
+            )
         except (TypeError, ValueError):
-            _wait_s = 30.0 if _live_mode else 30.0
+            _wait_checkpoint_interval_s = 30.0 if _live_mode else 30.0
         # Ensure minimum of 20s for live, 30s for standby
-        if _live_mode and _wait_s < 20.0:
-            _wait_s = 25.0
-        elif not _live_mode and _wait_s < 30.0:
-            _wait_s = 30.0
-        if _wait_s < 0.5:
-            _wait_s = 0.5
-        # Next warning/rescue checkpoint for continuous waiting loop.
-        _next_wait_checkpoint = time.time() + _wait_s
+        if _live_mode and _wait_checkpoint_interval_s < 20.0:
+            _wait_checkpoint_interval_s = 25.0
+        elif not _live_mode and _wait_checkpoint_interval_s < 30.0:
+            _wait_checkpoint_interval_s = 30.0
+        if _wait_checkpoint_interval_s < 0.5:
+            _wait_checkpoint_interval_s = 0.5
+        # Next warning + stale-lock rescue checkpoint for continuous waiting loop.
+        _next_wait_checkpoint = time.time() + _wait_checkpoint_interval_s
         _lock_retry_interval = 0.5
         _wait_log_interval_raw = os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "").strip()
         try:
@@ -1612,6 +1614,7 @@ def _acquire_distributed_process_lock() -> None:
         _holder_info = parse_distributed_lock_holder(_holder)
         _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
         _holder_meta = _read_lock_meta()
+        _wait_started_at = time.time()
 
         try:
             _stale_heartbeat_timeout_s = max(
@@ -1665,10 +1668,12 @@ def _acquire_distributed_process_lock() -> None:
                 _next_wait_log = _now + _wait_log_interval_s
 
             if _now > _next_wait_checkpoint:
+                total_wait_s = _now - _wait_started_at
                 logger.warning(
-                    "Distributed lock still unavailable after %.1fs; continuing to wait. "
+                    "Distributed lock still unavailable after %.1fs (total_wait=%.1fs); continuing to wait. "
                     "holder=%s parsed_holder=%s holder_inspection=%s holder_meta=%s pttl_ms=%s",
-                    _wait_s,
+                    _wait_checkpoint_interval_s,
+                    total_wait_s,
                     _holder,
                     _holder_info,
                     _holder_inspection,
@@ -1758,11 +1763,11 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"┃ Holder:   {_holder_info.get('display', _holder)[:58]:<58} ┃")
                 _pttl_txt = str(_holder_pttl_ms)
                 print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
-                print(f"┃ Waited:   {_wait_s:.0f}s without acquiring the lock                       ┃")
+                print(f"┃ Waited:   {total_wait_s:.0f}s without acquiring the lock                  ┃")
                 print("┃ Action:   Continuing to wait for a safe single-writer handoff.           ┃")
                 print("┗" + "━" * 78 + "┛\n")
                 print(f"   Redis URL source: {_redis_url_source or 'unset'}")
-                print(f"   Lock acquire check interval: {_wait_s:.0f}s")
+                print(f"   Lock wait checkpoint interval: {_wait_checkpoint_interval_s:.0f}s")
                 print(f"   Current instance: {format_instance_identity(_instance_identity)}")
                 print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
                 print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
@@ -1775,12 +1780,12 @@ def _acquire_distributed_process_lock() -> None:
                 print("❌ FAILED TO ACQUIRE WRITER LOCK (waiting)", flush=True)
                 logger.warning(
                     "Lock still held after %.1fs | holder=%s | redis_source=%s | deployment=%s",
-                    _wait_s,
+                    total_wait_s,
                     _holder_info.get('display', _holder),
                     _redis_url_source,
                     _instance_identity.get('deployment_id', 'unknown')
                 )
-                _next_wait_checkpoint = time.time() + _wait_s
+                _next_wait_checkpoint = time.time() + _wait_checkpoint_interval_s
                 continue
 
             time.sleep(_lock_retry_interval)

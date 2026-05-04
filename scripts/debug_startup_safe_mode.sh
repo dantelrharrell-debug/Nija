@@ -32,6 +32,7 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
+REDIS_CLI_TIMEOUT_S = 5
 raw = sys.argv[1]
 parsed = urlparse(raw)
 host = parsed.hostname or ""
@@ -55,10 +56,10 @@ if use_tls:
 cmd.append("ping")
 
 try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S)
 except subprocess.TimeoutExpired:
     print("STDOUT: (empty)")
-    print("STDERR: redis-cli timed out after 5s")
+    print(f"STDERR: redis-cli timed out after {REDIS_CLI_TIMEOUT_S}s")
     print("RETURN CODE: 124")
     print("❌ REDIS PREFLIGHT FAILED")
     raise SystemExit(1)

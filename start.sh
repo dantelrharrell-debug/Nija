@@ -198,10 +198,10 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     _WRITER_HEARTBEAT_MAX_FAILURES="${NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES:-12}"
     echo "🔒 Strict Redis writer lease enabled (live mode)"
     echo "   Single-writer protection enforced: duplicate instances blocked"
-    echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Acquire check interval: ${_LEASE_TIMEOUT_S} s"
+    echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Wait checkpoint interval: ${_LEASE_TIMEOUT_S} s"
     echo "   Lease wait log interval: ${_LEASE_WAIT_LOG_INTERVAL_S} s"
     echo "   Writer lock heartbeat max transient failures: ${_WRITER_HEARTBEAT_MAX_FAILURES}"
-    echo "   If lock is not acquired quickly, process keeps retrying until available (no upper bound)"
+    echo "   If lock is not acquired quickly, process retries indefinitely until available (may block deployment if lock never releases)"
     echo ""
 fi
 
@@ -382,12 +382,13 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
+REDIS_CLI_TIMEOUT_S = 5
 raw = sys.argv[1]
 extra_args = sys.argv[2:]
 try:
     parsed = urlparse(raw)
 except Exception as exc:
-    safe = re.sub(r"(://)[^@]*@", r"\\1***@", raw)
+    safe = re.sub(r"(://)[^@]*@", r"\1***@", raw)
     sys.stderr.write(f"redis-cli parse error: invalid Redis URL ({safe})\n")
     sys.stderr.write(f"redis-cli parse error detail: {exc}\n")
     raise SystemExit(1)
@@ -400,7 +401,7 @@ password = parsed.password or ""
 db_raw = (parsed.path or "").lstrip("/")
 db = db_raw if db_raw.isdigit() else "0"
 if not host or not port:
-    safe = re.sub(r"(://)[^@]*@", r"\\1***@", raw)
+    safe = re.sub(r"(://)[^@]*@", r"\1***@", raw)
     sys.stderr.write(f"redis-cli parse error: missing host/port ({safe})\n")
     raise SystemExit(1)
 
@@ -417,9 +418,9 @@ if use_tls:
 cmd.extend(extra_args)
 
 try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S)
 except subprocess.TimeoutExpired:
-    sys.stderr.write("redis-cli timed out after 5s\n")
+    sys.stderr.write(f"redis-cli timed out after {REDIS_CLI_TIMEOUT_S}s\n")
     raise SystemExit(124)
 except FileNotFoundError:
     sys.stderr.write("redis-cli not found\n")
@@ -442,6 +443,7 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
+REDIS_CLI_TIMEOUT_S = 5
 raw = sys.argv[1]
 try:
     parsed = urlparse(raw)
@@ -475,10 +477,10 @@ if use_tls:
 cmd.append("ping")
 
 try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S)
 except subprocess.TimeoutExpired:
     print("STDOUT: (empty)")
-    print("STDERR: redis-cli timed out after 5s")
+    print(f"STDERR: redis-cli timed out after {REDIS_CLI_TIMEOUT_S}s")
     print("RETURN CODE: 124")
     print("❌ REDIS PREFLIGHT FAILED")
     raise SystemExit(1)

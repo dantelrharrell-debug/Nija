@@ -119,6 +119,7 @@ run_port_reachability_test() {
 import socket
 import sys
 
+REDIS_CLI_TIMEOUT_S = 5
 host = sys.argv[1]
 port = int(sys.argv[2])
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -321,10 +322,10 @@ if use_tls:
 cmd.append("ping")
 
 try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S)
 except subprocess.TimeoutExpired:
     print("STDOUT: (empty)")
-    print("STDERR: redis-cli timed out after 5s")
+    print(f"STDERR: redis-cli timed out after {REDIS_CLI_TIMEOUT_S}s")
     print("RETURN CODE: 124")
     print("❌ REDIS PREFLIGHT FAILED")
     raise SystemExit(1)
