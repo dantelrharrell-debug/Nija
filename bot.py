@@ -1582,8 +1582,8 @@ def _acquire_distributed_process_lock() -> None:
         acquired = _fencing_token > 0
         print(f"=== LOCK ACQUIRED: {acquired} ===", flush=True)
 
-        # Hard singleton guard: retry with a generous wait interval for lock contention
-        # This interval is used for periodic stale-lock rescue checks (not a hard stop).
+        # Hard singleton guard: retry with a generous wait interval for lock contention.
+        # The interval drives periodic warning/rescue checks; it is not a hard stop.
         _wait_s_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
         if not _wait_s_raw:
             _wait_s_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
@@ -1598,6 +1598,7 @@ def _acquire_distributed_process_lock() -> None:
             _wait_s = 30.0
         if _wait_s < 0.5:
             _wait_s = 0.5
+        # Next warning/rescue checkpoint for continuous waiting loop.
         _lock_acquire_deadline = time.time() + _wait_s
         _lock_retry_interval = 0.5
         _wait_log_interval_raw = os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "").strip()

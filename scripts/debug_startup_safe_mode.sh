@@ -28,7 +28,6 @@ else
   if command -v redis-cli >/dev/null 2>&1; then
     set +e
     python3 - <<'PY' "${redis_url}"
-import os
 import subprocess
 import sys
 from urllib.parse import urlparse

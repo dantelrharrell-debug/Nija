@@ -377,7 +377,6 @@ _redis_cli_run() {
         return 1
     fi
     python3 - <<'PY' "${_redis_url}" "$@"
-import os
 import subprocess
 import sys
 from urllib.parse import urlparse
@@ -434,7 +433,6 @@ _redis_cli_ping_safe() {
         return 1
     fi
     python3 - <<'PY' "${_redis_url}"
-import os
 import re
 import subprocess
 import sys
