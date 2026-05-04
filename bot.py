@@ -1150,12 +1150,12 @@ def _acquire_distributed_process_lock() -> None:
             sys.exit(1)
 
         _retry_sleep_raw = os.environ.get(
-            "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S", "15"
+            "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S", "5"
         ).strip()
         try:
-            _retry_sleep_s = max(5.0, float(_retry_sleep_raw or "15"))
+            _retry_sleep_s = max(5.0, float(_retry_sleep_raw or "5"))
         except (TypeError, ValueError):
-            _retry_sleep_s = 15.0
+            _retry_sleep_s = 5.0
         _max_retry_failures_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_MAX_REDIS_FAILURES", "5"
         ).strip()
@@ -1186,14 +1186,7 @@ def _acquire_distributed_process_lock() -> None:
         os.environ["NIJA_STANDBY_RETRY_ACTIVE"] = "1"
 
         while True:
-            if _standby_retry_count >= _max_retry_failures:
-                print("❌ REDIS UNAVAILABLE - CANNOT ENTER LIVE TRADING MODE", flush=True)
-                print(
-                    "   Reached maximum fail-closed Redis retries "
-                    f"({_standby_retry_count}/{_max_retry_failures})."
-                )
-                print("   Crashing instead of remaining in mandatory Redis dependency loop.")
-                sys.exit(1)
+            print("⏳ Waiting for Redis lock...", flush=True)
             time.sleep(_retry_sleep_s)
             _standby_retry_count += 1
             _next_retry_count = _standby_retry_count
@@ -1208,10 +1201,8 @@ def _acquire_distributed_process_lock() -> None:
                 os.environ.pop("NIJA_STANDBY_RETRY_COUNT", None)
                 print("✅ Distributed writer lock recovered; leaving fail-closed standby.")
                 return
-            except SystemExit as _standby_exit:
-                if str(getattr(_standby_exit, "code", "1")) == "1":
-                    continue
-                raise
+            except SystemExit:
+                continue
             except Exception as _standby_exc:
                 _msg = str(_standby_exc).splitlines()[0] if str(_standby_exc) else type(_standby_exc).__name__
                 print(f"⚠️ Retry failed: {_msg}")
@@ -6232,6 +6223,7 @@ def main():
                 _last_strategy_wait_log = _now
             time.sleep(2.0)
 
+    print("🚀 ENTERING MAIN TRADING LOOP", flush=True)
     print("STEP 6: entering main trading loop...", flush=True)
     from bot.nija_core_loop import start_trading_engine
     start_trading_engine(strategy)
@@ -6265,6 +6257,7 @@ def main():
     logger.critical("✅ Trading engine initialized")
     logger.critical("✅ Supervisor loop ready to manage threads")
     logger.critical("=" * 70 + "\n")
+    print("🔥 BOT FULLY INITIALIZED — SHOULD NEVER EXIT AFTER THIS", flush=True)
 
     logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0
