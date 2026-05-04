@@ -282,7 +282,7 @@ if command -v redis-cli >/dev/null 2>&1; then
     redis-cli -u "${url}" ping
     _rc=$?
   fi
-  if [ $_rc -eq 0 ]; then
+  if [ "$_rc" -eq 0 ]; then
     echo "✅ REDIS PREFLIGHT PASSED"
   fi
   echo "Connectivity check completed"
