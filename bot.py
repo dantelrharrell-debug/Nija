@@ -1171,7 +1171,6 @@ def _acquire_distributed_process_lock() -> None:
         )
         print(
             f"   Retrying distributed lock acquisition every {_retry_sleep_s:.0f}s "
-            f"up to {_max_retry_failures} times "
             "(set NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=false to exit instead)."
         )
         print(
@@ -1193,7 +1192,7 @@ def _acquire_distributed_process_lock() -> None:
             os.environ["NIJA_STANDBY_RETRY_COUNT"] = str(_next_retry_count)
             print(
                 "🔁 Retrying distributed writer lock acquisition... "
-                f"({_next_retry_count}/{_max_retry_failures})"
+                f"(attempt {_next_retry_count})"
             )
             try:
                 _acquire_distributed_process_lock()
@@ -1201,8 +1200,10 @@ def _acquire_distributed_process_lock() -> None:
                 os.environ.pop("NIJA_STANDBY_RETRY_COUNT", None)
                 print("✅ Distributed writer lock recovered; leaving fail-closed standby.")
                 return
-            except SystemExit:
-                continue
+            except SystemExit as _standby_exit:
+                if str(getattr(_standby_exit, "code", "1")) == "1":
+                    continue
+                raise
             except Exception as _standby_exc:
                 _msg = str(_standby_exc).splitlines()[0] if str(_standby_exc) else type(_standby_exc).__name__
                 print(f"⚠️ Retry failed: {_msg}")
