@@ -370,6 +370,58 @@ _resolve_redis_url_source() {
     return 1
 }
 
+_redis_cli_ping_safe() {
+    local _redis_url="$1"
+    if [ -z "${_redis_url}" ]; then
+        return 1
+    fi
+
+    local _redis_parts
+    _redis_parts="$(python3 - <<'PY' "${_redis_url}"
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname or ""
+port = parsed.port or ""
+scheme = parsed.scheme or ""
+user = parsed.username or ""
+password = parsed.password or ""
+db = (parsed.path or "").lstrip("/")
+db = db if db.isdigit() else "0"
+print(host)
+print(port)
+print(scheme)
+print(user)
+print(password)
+print(db)
+PY
+)"
+
+    local _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db
+    IFS=$'\n' read -r _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db <<EOF
+${_redis_parts}
+EOF
+
+    if [ -z "${_redis_host}" ] || [ -z "${_redis_port}" ]; then
+        return 1
+    fi
+
+    local _redis_cli_args=("-h" "${_redis_host}" "-p" "${_redis_port}" "-n" "${_redis_db:-0}")
+    if [ -n "${_redis_user}" ]; then
+        _redis_cli_args+=("--user" "${_redis_user}")
+    fi
+    if [ "${_redis_scheme}" = "rediss" ]; then
+        _redis_cli_args+=("--tls")
+    fi
+
+    if [ -n "${_redis_password}" ]; then
+        REDISCLI_AUTH="${_redis_password}" redis-cli "${_redis_cli_args[@]}" ping
+    else
+        redis-cli "${_redis_cli_args[@]}" ping
+    fi
+}
+
 _validate_redis_url_or_exit() {
     # Skip Redis URL validation when the distributed-lock bypass is active;
     # Redis is not required in that mode so an invalid/missing URL is harmless.
@@ -1250,7 +1302,8 @@ if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ]
 
     echo "=== TESTING REDIS DIRECTLY ==="
 
-    redis-cli -u "$NIJA_REDIS_URL" ping
+    _redis_url_for_ping="$(_resolve_redis_url 2>/dev/null || true)"
+    _redis_cli_ping_safe "${_redis_url_for_ping}"
 
     echo "Redis CLI exit code: $?"
 elif [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then

@@ -221,13 +221,21 @@ parsed = urlparse(sys.argv[1])
 host = parsed.hostname or ""
 port = parsed.port or ""
 scheme = parsed.scheme or ""
-print(f"{host}|{port}|{scheme}")
+user = parsed.username or ""
+password = parsed.password or ""
+db = (parsed.path or "").lstrip("/")
+db = db if db.isdigit() else "0"
+print(host)
+print(port)
+print(scheme)
+print(user)
+print(password)
+print(db)
 PY
 )"
-redis_host="${host_and_port%%|*}"
-remaining="${host_and_port#*|}"
-redis_port="${remaining%%|*}"
-redis_scheme="${remaining##*|}"
+IFS=$'\n' read -r redis_host redis_port redis_scheme redis_user redis_password redis_db <<EOF
+${host_and_port}
+EOF
 
 if [ -z "${redis_host}" ] || [ -z "${redis_port}" ]; then
   echo "ERROR: Could not parse Redis host/port from URL"
@@ -275,11 +283,18 @@ echo "[5/5] Running Redis ping with explicit TLS support"
 if command -v redis-cli >/dev/null 2>&1; then
   echo "Using redis-cli for connectivity check..."
   _rc=0
+  redis_cli_args=("-h" "${redis_host}" "-p" "${redis_port}" "-n" "${redis_db:-0}")
+  if [ -n "${redis_user:-}" ]; then
+    redis_cli_args+=("--user" "${redis_user}")
+  fi
   if [ "${redis_scheme}" = "rediss" ]; then
-    redis-cli --tls -u "${url}" ping
+    redis_cli_args+=("--tls")
+  fi
+  if [ -n "${redis_password:-}" ]; then
+    REDISCLI_AUTH="${redis_password}" redis-cli "${redis_cli_args[@]}" ping
     _rc=$?
   else
-    redis-cli -u "${url}" ping
+    redis-cli "${redis_cli_args[@]}" ping
     _rc=$?
   fi
   if [ "$_rc" -eq 0 ]; then
