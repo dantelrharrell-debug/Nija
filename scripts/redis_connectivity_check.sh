@@ -226,11 +226,7 @@ password = parsed.password or ""
 db_raw = (parsed.path or "").lstrip("/")
 db = "0"
 if db_raw.isdigit():
-    db_int = int(db_raw)
-    if 0 <= db_int <= 16383:
-        db = db_raw
-    else:
-        print(f"WARN: Redis DB value '{db_raw}' is out of range; defaulting to 0", file=sys.stderr)
+    db = db_raw
 elif db_raw:
     print(f"WARN: Redis DB value '{db_raw}' is invalid; defaulting to 0", file=sys.stderr)
 print(host)
