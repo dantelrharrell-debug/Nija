@@ -2953,6 +2953,17 @@ def _run_preflight_check() -> bool:
     """
     import importlib.util as _iutil
 
+    # ── Production pre-flight: Redis PING, lock logging, single-instance,
+    #    stale-lock clearance, live-mode verification ─────────────────────
+    try:
+        from bot.production_preflight import run_preflight as _run_production_preflight
+        _run_production_preflight()
+    except SystemExit:
+        raise  # propagate hard failures (Redis down, wrong mode, etc.)
+    except Exception as _pf_exc:
+        print(f"⚠️  production_preflight raised unexpectedly: {_pf_exc}", flush=True)
+        # Non-fatal: allow existing checks below to continue
+
     SEP = "═" * 70
     checks = []   # list of (label, passed: bool, detail: str)
     blockers = []  # human-readable reasons trading cannot start

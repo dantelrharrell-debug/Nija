@@ -7,6 +7,19 @@ from trading_strategy import TradingStrategy
 
 # Main trading logic and bot initialization goes here...
 def run_live_trading():
+    # ── Production pre-flight (Redis PING, lock logging, single-instance,
+    #    stale-lock clearance, live-mode verification) ─────────────────────
+    try:
+        from bot.production_preflight import run_preflight
+        run_preflight()
+    except SystemExit:
+        raise  # propagate clean exit from pre-flight failures
+    except Exception as _pf_exc:
+        logging.getLogger("nija").critical(
+            "Pre-flight check raised unexpectedly: %s", _pf_exc, exc_info=True
+        )
+        sys.exit(1)
+
     # Setup logging
     LOG_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'nija.log'))
     logger = logging.getLogger("nija")
@@ -46,7 +59,7 @@ def run_live_trading():
     while True:
         try:
             start = time.perf_counter()
-            strategy.run_trading_cycle()
+            strategy.run_cycle()
             duration = time.perf_counter() - start
             logger.info(f"Scan cycle: {duration:.4f}s")
             _cycle_error_count = 0  # reset on success
