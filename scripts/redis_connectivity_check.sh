@@ -290,7 +290,7 @@ try:
   import redis
 except Exception as exc:
   print("Redis failed:", exc)
-  raise SystemExit(0)
+  raise SystemExit(2)
 
 url = sys.argv[1]
 try:
@@ -299,5 +299,6 @@ try:
   print("Redis OK")
 except Exception as e:
   print("Redis failed:", e)
+  raise SystemExit(1)
 PY
 echo "Connectivity check completed"

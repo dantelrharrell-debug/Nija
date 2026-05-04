@@ -104,6 +104,7 @@ test_state.json
 # Scripts not needed at runtime
 scripts/*
 !scripts/redis_connectivity_check.sh
+!scripts/debug_startup_safe_mode.sh
 check_*.py
 verify_*.py
 validate_*.py

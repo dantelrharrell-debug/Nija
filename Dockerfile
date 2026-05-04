@@ -16,10 +16,18 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Explicitly copy Redis connectivity preflight script into the image.
+# This prevents accidental exclusion and makes startup diagnostics reliable.
+COPY scripts/ scripts/
+
 # Copy application code
 COPY . .
 
-# Make scripts executable when present in build context
+# Ensure Redis connectivity preflight script is present and executable.
+RUN test -f /app/scripts/redis_connectivity_check.sh && chmod +x /app/scripts/redis_connectivity_check.sh && \
+    if [ -f /app/scripts/debug_startup_safe_mode.sh ]; then chmod +x /app/scripts/debug_startup_safe_mode.sh; fi
+
+# Make other scripts executable when present in build context
 RUN if [ -d /app/scripts ]; then chmod +x /app/scripts/*.sh || true; fi
 
 # Build arguments for Git metadata (defaults reflect latest release; override via --build-arg at build time)
