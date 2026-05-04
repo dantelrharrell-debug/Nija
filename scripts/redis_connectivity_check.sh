@@ -243,10 +243,6 @@ if [ -n "${redis_db_raw}" ] && [ -z "${redis_db}" ]; then
 elif [ -z "${redis_db}" ]; then
   redis_db="0"
 fi
-if ! printf "%s" "${redis_db}" | grep -Eq '^[0-9]+$'; then
-  echo "WARN: Redis DB value '${redis_db}' is invalid; defaulting to 0"
-  redis_db="0"
-fi
 
 if [ -z "${redis_host}" ] || [ -z "${redis_port}" ]; then
   echo "ERROR: Could not parse Redis host/port from URL"

@@ -418,10 +418,6 @@ EOF
     elif [ -z "${_redis_db}" ]; then
         _redis_db="0"
     fi
-    if ! printf "%s" "${_redis_db}" | grep -Eq '^[0-9]+$'; then
-        echo "⚠️  Redis DB value '${_redis_db}' is invalid; defaulting to 0"
-        _redis_db="0"
-    fi
 
     local _redis_cli_args=("-h" "${_redis_host}" "-p" "${_redis_port}" "-n" "${_redis_db}")
     if [ -n "${_redis_user}" ]; then
