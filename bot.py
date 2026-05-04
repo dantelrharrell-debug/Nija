@@ -1794,7 +1794,8 @@ def _acquire_distributed_process_lock() -> None:
                     _redis_url_source,
                     _instance_identity.get('deployment_id', 'unknown')
                 )
-                sys.exit(1)
+                _enter_fail_closed_standby(f"Lock acquisition timed out after {_wait_s:.0f}s")
+                return
 
             time.sleep(_lock_retry_interval)
             try:
@@ -1827,8 +1828,9 @@ def _acquire_distributed_process_lock() -> None:
             print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
             print(f"   Lock holder raw:  {_holder}")
             print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
-            logger.critical("Another instance is active — exiting immediately")
-            sys.exit(1)
+            logger.critical("Another instance is active — entering fail-closed standby")
+            _enter_fail_closed_standby("Duplicate deployment detected — another writer already holds the lock")
+            return
 
         _token = f"{_fencing_token}:{_owner}"
         _distributed_writer_lock_client = _client
@@ -6244,6 +6246,25 @@ def main():
         _trading_loop_alive,
         strategy is not None,
     )
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # ✅ STARTUP COMPLETION - PRINT DISTINCTIVE MARKER
+    # ═══════════════════════════════════════════════════════════════════════
+    # This message marks that the bot is FULLY INITIALIZED and entering
+    # the main supervised loop. Critical for:
+    # - Railway startup detection (can detect hard exits after this marker)
+    # - Operator visibility (when is the bot ready?)
+    # - Debugging (can distinguish startup phase from live trading phase)
+    # ═══════════════════════════════════════════════════════════════════════
+    print("\n🚀 BOT FULLY STARTED - ENTERING MAIN LOOP", flush=True)
+    logger.critical("\n" + "=" * 70)
+    logger.critical("🚀 BOT FULLY STARTED - ENTERING MAIN LOOP")
+    logger.critical("=" * 70)
+    logger.critical("✅ All bootstrap phases complete")
+    logger.critical("✅ Health server responsive")
+    logger.critical("✅ Trading engine initialized")
+    logger.critical("✅ Supervisor loop ready to manage threads")
+    logger.critical("=" * 70 + "\n")
 
     logger.critical("🧠 ENTERING SUPERVISOR LOOP")
     supervisor_cycle = 0
