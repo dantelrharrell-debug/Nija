@@ -1595,16 +1595,20 @@ def _acquire_distributed_process_lock() -> None:
 
         _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
 
-        # Hard singleton guard: in LIVE mode we fail fast after 5s.
+        # Hard singleton guard: acquire with generous timeout for lock contention
+        # CRITICAL FIX: Increase lock timeout from 5s to 20-30s for better resilience
         _wait_s_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
         if not _wait_s_raw:
             _wait_s_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_s = float(_wait_s_raw) if _wait_s_raw else (20.0 if _live_mode else 30.0)
+            _wait_s = float(_wait_s_raw) if _wait_s_raw else (30.0 if _live_mode else 30.0)
         except (TypeError, ValueError):
-            _wait_s = 20.0 if _live_mode else 30.0
-        if _live_mode:
-            _wait_s = 20.0
+            _wait_s = 30.0 if _live_mode else 30.0
+        # Ensure minimum of 20s for live, 30s for standby
+        if _live_mode and _wait_s < 20.0:
+            _wait_s = 25.0
+        elif not _live_mode and _wait_s < 30.0:
+            _wait_s = 30.0
         if _wait_s < 0.5:
             _wait_s = 0.5
         _lock_acquire_deadline = time.time() + _wait_s
@@ -1765,14 +1769,28 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"┃ Holder:   {_holder_info.get('display', _holder)[:58]:<58} ┃")
                 _pttl_txt = str(_holder_pttl_ms)
                 print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
+                print(f"┃ Timeout:  {_wait_s:.0f}s elapsed after attempting for {_wait_s:.0f}s        ┃")
                 print("┃ Action:   Exiting fail-closed to preserve one-writer invariant.          ┃")
                 print("┗" + "━" * 78 + "┛\n")
+                print(f"   Redis URL source: {_redis_url_source or 'unset'}")
+                print(f"   Lock acquire timeout: {_wait_s:.0f}s")
                 print(f"   Current instance: {format_instance_identity(_instance_identity)}")
                 print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
                 print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
                 print(f"   Lock holder raw:  {_holder}")
+                print("\n   💡 TROUBLESHOOTING:")
+                print("      1. Check Redis connectivity: redis-cli -u $NIJA_REDIS_URL ping")
+                print("      2. List active locks: redis-cli -u $NIJA_REDIS_URL KEYS '*lock*'")
+                print("      3. Delete stale lock: redis-cli -u $NIJA_REDIS_URL DEL <lock-key>")
+                print("      4. Verify Redis URL format: should be rediss:// for Railway public proxy")
                 print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
-                logger.critical("Another instance is active — exiting immediately")
+                logger.critical(
+                    "Lock timeout after %.1fs | holder=%s | redis_source=%s | deployment=%s",
+                    _wait_s,
+                    _holder_info.get('display', _holder),
+                    _redis_url_source,
+                    _instance_identity.get('deployment_id', 'unknown')
+                )
                 sys.exit(1)
 
             time.sleep(_lock_retry_interval)

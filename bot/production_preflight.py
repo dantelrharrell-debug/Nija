@@ -98,30 +98,56 @@ def _step1_redis_ping() -> "redis.Redis":  # type: ignore[name-defined]
     except Exception:
         log.info("Redis URL        : <redacted>")
 
-    try:
-        client, used_url = connect_redis_with_fallback(
-            url=url,
-            retries=5,
-            delay_s=2.0,
-            log=log.info,
-        )
-    except Exception as exc:
-        _fail(f"Redis connection failed: {exc}")
-        sys.exit(1)
-
-    try:
-        pong = client.ping()
-    except Exception as exc:
-        _fail(f"Redis PING raised an exception: {exc}")
-        sys.exit(1)
-
-    if pong:
-        _ok("Redis responded PONG — connection healthy")
-    else:
-        _fail("Redis PING returned a falsy response — aborting")
-        sys.exit(1)
-
-    return client
+    # CRITICAL FIX: Implement aggressive retry loop with exponential backoff
+    max_retries = 10
+    base_delay = 1.0
+    last_exc = None
+    
+    for attempt in range(max_retries):
+        try:
+            client, used_url = connect_redis_with_fallback(
+                url=url,
+                retries=3,
+                delay_s=1.0,
+                log=log.info,
+            )
+            
+            # Test PING
+            try:
+                pong = client.ping()
+                if pong:
+                    _ok("✅ Redis responded PONG — connection healthy")
+                    return client
+                else:
+                    raise RuntimeError("PING returned falsy response")
+            except Exception as ping_exc:
+                last_exc = ping_exc
+                if attempt < max_retries - 1:
+                    delay = min(base_delay * (2 ** attempt), 10.0)
+                    log.warning(
+                        "PING attempt %d/%d failed: %s. Retrying in %.1fs...",
+                        attempt + 1, max_retries, ping_exc, delay
+                    )
+                    time.sleep(delay)
+                else:
+                    log.error("PING failed after %d attempts", max_retries)
+                    raise
+                    
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries - 1:
+                delay = min(base_delay * (2 ** attempt), 10.0)
+                log.warning(
+                    "Redis connection attempt %d/%d failed: %s. Retrying in %.1fs...",
+                    attempt + 1, max_retries, exc, delay
+                )
+                time.sleep(delay)
+            else:
+                log.error("Redis connection failed after %d attempts", max_retries)
+    
+    # All retries exhausted
+    _fail(f"❌ Redis connection failed after {max_retries} attempts: {last_exc}")
+    sys.exit(1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -193,24 +219,33 @@ def _step4_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: igno
     lock_patterns = [lock_key, nonce_key]
 
     cleared = 0
+    # CRITICAL FIX: Aggressively clear lock keys to prevent contention
     for key in lock_patterns:
-        try:
-            ttl = redis_client.pttl(key)
-            if ttl == -2:
-                log.info("Key '%s' absent — nothing to clear", key)
-                continue
-            if ttl == -1:
-                # Key exists but has no expiry — treat as stale
-                deleted = redis_client.delete(key)
-                if deleted:
-                    log.warning("Cleared stale (no-TTL) key: %s", key)
-                    cleared += 1
+        for attempt in range(3):
+            try:
+                ttl = redis_client.pttl(key)
+                if ttl == -2:
+                    log.info("Key '%s' absent — nothing to clear", key)
+                    break
+                if ttl == -1:
+                    # Key exists but has no expiry — treat as stale
+                    deleted = redis_client.delete(key)
+                    if deleted:
+                        log.warning("🗑️  Cleared stale (no-TTL) key: %s", key)
+                        cleared += 1
+                        break
+                    else:
+                        log.info("Key '%s' vanished before delete (race) — OK", key)
+                        break
                 else:
-                    log.info("Key '%s' vanished before delete (race) — OK", key)
-            else:
-                log.info("Key '%s' is active (TTL %d ms) — leaving untouched", key, ttl)
-        except Exception as exc:
-            log.warning("Could not inspect key '%s': %s", key, exc)
+                    log.info("Key '%s' is active (TTL %d ms) — leaving untouched", key, ttl)
+                    break
+            except Exception as exc:
+                if attempt < 2:
+                    log.warning("Clear attempt %d failed for '%s': %s. Retrying...", attempt + 1, key, exc)
+                    time.sleep(1)
+                else:
+                    log.warning("Could not inspect key '%s' after 3 attempts: %s", key, exc)
 
     # Additionally scan for any nija:* keys with no expiry using bounded scan
     stale_pattern = "nija:*"
@@ -223,15 +258,15 @@ def _step4_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: igno
                 t = redis_client.pttl(k)
                 if t == -1:
                     redis_client.delete(k)
-                    log.warning("Cleared stale no-TTL key discovered via scan: %s", k)
+                    log.warning("🗑️  Cleared stale no-TTL key discovered via scan: %s", k)
                     cleared += 1
-            except Exception:
-                pass
+            except Exception as scan_exc:
+                log.debug("Could not clear scanned key '%s': %s", k, scan_exc)
     except Exception as exc:
         log.warning("Bounded scan for stale keys failed: %s", exc)
 
     log.info("Stale lock scan complete — scanned %d key(s), cleared %d", scanned, cleared)
-    _ok("Stale lock clearance complete")
+    _ok("✅ Stale lock clearance complete (%d keys cleared)" % cleared)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
