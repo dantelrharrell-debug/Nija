@@ -301,6 +301,8 @@ if command -v redis-cli >/dev/null 2>&1; then
 import subprocess
 import sys
 
+REDIS_CLI_TIMEOUT_S = 5
+
 host = sys.argv[1]
 port = sys.argv[2]
 db = sys.argv[3]

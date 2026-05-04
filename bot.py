@@ -1584,18 +1584,21 @@ def _acquire_distributed_process_lock() -> None:
 
         # Hard singleton guard: retry with a generous wait interval for lock contention.
         # The interval drives periodic warning/rescue checks; it is not a hard stop.
+        _default_wait_checkpoint_s = 30.0
         _wait_interval_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
         if not _wait_interval_raw:
             _wait_interval_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_checkpoint_interval_s = float(_wait_interval_raw) if _wait_interval_raw else 30.0
+            _wait_checkpoint_interval_s = (
+                float(_wait_interval_raw) if _wait_interval_raw else _default_wait_checkpoint_s
+            )
         except (TypeError, ValueError):
-            _wait_checkpoint_interval_s = 30.0 if _live_mode else 30.0
+            _wait_checkpoint_interval_s = _default_wait_checkpoint_s
         # Ensure minimum of 20s for live, 30s for standby
         if _live_mode and _wait_checkpoint_interval_s < 20.0:
             _wait_checkpoint_interval_s = 25.0
-        elif not _live_mode and _wait_checkpoint_interval_s < 30.0:
-            _wait_checkpoint_interval_s = 30.0
+        elif not _live_mode and _wait_checkpoint_interval_s < _default_wait_checkpoint_s:
+            _wait_checkpoint_interval_s = _default_wait_checkpoint_s
         if _wait_checkpoint_interval_s < 0.5:
             _wait_checkpoint_interval_s = 0.5
         # Next warning + stale-lock rescue checkpoint for continuous waiting loop.
@@ -1762,7 +1765,7 @@ def _acquire_distributed_process_lock() -> None:
                 _pttl_txt = str(_holder_pttl_ms)
                 print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
                 print(f"┃ Waited:   {total_wait_s:.0f}s without acquiring the lock                  ┃")
-                print("┃ Action:   Continuing to wait for a safe single-writer handoff.           ┃")
+                print("┃ Action:   Continuing to wait for a safe single-writer hand-off.          ┃")
                 print("┗" + "━" * 78 + "┛\n")
                 print(f"   Redis URL source: {_redis_url_source or 'unset'}")
                 print(f"   Lock wait checkpoint interval: {_wait_checkpoint_interval_s:.0f}s")
