@@ -408,7 +408,7 @@ PY
 ${_redis_parts}
 EOF
 
-    if [ -z "${_redis_host}" ] || [ -z "${_redis_port}" ]; then
+    if [ -z "${_redis_host}" ] || [ -z "${_redis_port}" ] || [ -z "${_redis_scheme}" ]; then
         return 1
     fi
 

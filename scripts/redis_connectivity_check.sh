@@ -244,8 +244,8 @@ elif [ -z "${redis_db}" ]; then
   redis_db="0"
 fi
 
-if [ -z "${redis_host}" ] || [ -z "${redis_port}" ]; then
-  echo "ERROR: Could not parse Redis host/port from URL"
+if [ -z "${redis_host}" ] || [ -z "${redis_port}" ] || [ -z "${redis_scheme}" ]; then
+  echo "ERROR: Could not parse Redis host/port/scheme from URL"
   exit 4
 fi
 
