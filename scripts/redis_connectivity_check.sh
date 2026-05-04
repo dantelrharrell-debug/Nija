@@ -241,7 +241,7 @@ mapfile -t redis_parts_lines <<EOF
 ${redis_parts}
 EOF
 if [ "${#redis_parts_lines[@]}" -lt 6 ]; then
-  echo "ERROR: Could not parse Redis URL components"
+  echo "ERROR: Could not parse Redis URL components (expected 6, got ${#redis_parts_lines[@]})"
   exit 4
 fi
 

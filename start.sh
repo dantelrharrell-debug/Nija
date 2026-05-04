@@ -402,7 +402,9 @@ print(db)
 PY
 )"
     if [ -z "${_redis_parts}" ]; then
-        echo "WARN: Redis URL parse failed for CLI ping"
+        local _safe_redis_url
+        _safe_redis_url="$(printf "%s" "${_redis_url}" | sed -E 's#(://)[^@]*@#\\1***@#')"
+        echo "WARN: Redis URL parse failed for CLI ping (url=${_safe_redis_url})"
         return 1
     fi
 
