@@ -1156,14 +1156,6 @@ def _acquire_distributed_process_lock() -> None:
             _retry_sleep_s = max(5.0, float(_retry_sleep_raw or "5"))
         except (TypeError, ValueError):
             _retry_sleep_s = 5.0
-        _max_retry_failures_raw = os.environ.get(
-            "NIJA_FAIL_CLOSED_MAX_REDIS_FAILURES", "5"
-        ).strip()
-        try:
-            _max_retry_failures = max(1, int(_max_retry_failures_raw or "5"))
-        except (TypeError, ValueError):
-            _max_retry_failures = 5
-
         print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
         print(f"❌ Failed to acquire distributed single-writer lock: {_reason}")
         print(
@@ -1171,7 +1163,7 @@ def _acquire_distributed_process_lock() -> None:
         )
         print(
             f"   Retrying distributed lock acquisition every {_retry_sleep_s:.0f}s "
-            "(set NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=false to exit instead)."
+            "until acquired (set NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=false to exit instead)."
         )
         print(
             "   DIAGNOSTIC STEPS:"
