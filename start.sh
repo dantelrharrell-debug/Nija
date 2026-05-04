@@ -201,7 +201,7 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Acquire check interval: ${_LEASE_TIMEOUT_S} s"
     echo "   Lease wait log interval: ${_LEASE_WAIT_LOG_INTERVAL_S} s"
     echo "   Writer lock heartbeat max transient failures: ${_WRITER_HEARTBEAT_MAX_FAILURES}"
-    echo "   If lock is not acquired quickly, process keeps retrying until available"
+    echo "   If lock is not acquired quickly, process keeps retrying until available (no upper bound)"
     echo ""
 fi
 
@@ -377,6 +377,7 @@ _redis_cli_run() {
         return 1
     fi
     python3 - <<'PY' "${_redis_url}" "$@"
+import re
 import subprocess
 import sys
 from urllib.parse import urlparse
@@ -385,8 +386,10 @@ raw = sys.argv[1]
 extra_args = sys.argv[2:]
 try:
     parsed = urlparse(raw)
-except Exception:
-    sys.stderr.write("redis-cli parse error: invalid Redis URL\n")
+except Exception as exc:
+    safe = re.sub(r"(://)[^@]*@", r"\\1***@", raw)
+    sys.stderr.write(f"redis-cli parse error: invalid Redis URL ({safe})\n")
+    sys.stderr.write(f"redis-cli parse error detail: {exc}\n")
     raise SystemExit(1)
 
 host = parsed.hostname or ""
@@ -397,7 +400,8 @@ password = parsed.password or ""
 db_raw = (parsed.path or "").lstrip("/")
 db = db_raw if db_raw.isdigit() else "0"
 if not host or not port:
-    sys.stderr.write("redis-cli parse error: missing host/port\n")
+    safe = re.sub(r"(://)[^@]*@", r"\\1***@", raw)
+    sys.stderr.write(f"redis-cli parse error: missing host/port ({safe})\n")
     raise SystemExit(1)
 
 is_proxy = host.lower().endswith(".proxy.rlwy.net")
@@ -473,13 +477,13 @@ cmd.append("ping")
 try:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
 except subprocess.TimeoutExpired:
-    print("STDOUT: ")
+    print("STDOUT: (empty)")
     print("STDERR: redis-cli timed out after 5s")
     print("RETURN CODE: 124")
     print("❌ REDIS PREFLIGHT FAILED")
     raise SystemExit(1)
 except FileNotFoundError:
-    print("STDOUT: ")
+    print("STDOUT: (empty)")
     print("STDERR: redis-cli not found")
     print("RETURN CODE: 127")
     print("❌ REDIS PREFLIGHT FAILED")
@@ -487,8 +491,8 @@ except FileNotFoundError:
 
 stdout = (result.stdout or "").strip()
 stderr = (result.stderr or "").strip()
-print(f"STDOUT: {stdout}")
-print(f"STDERR: {stderr}")
+print(f"STDOUT: {stdout if stdout else '(empty)'}")
+print(f"STDERR: {stderr if stderr else '(empty)'}")
 print(f"RETURN CODE: {result.returncode}")
 
 if "PONG" in result.stdout:

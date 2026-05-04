@@ -57,7 +57,7 @@ cmd.append("ping")
 try:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
 except subprocess.TimeoutExpired:
-    print("STDOUT: ")
+    print("STDOUT: (empty)")
     print("STDERR: redis-cli timed out after 5s")
     print("RETURN CODE: 124")
     print("❌ REDIS PREFLIGHT FAILED")
@@ -65,8 +65,8 @@ except subprocess.TimeoutExpired:
 
 stdout = (result.stdout or "").strip()
 stderr = (result.stderr or "").strip()
-print(f"STDOUT: {stdout}")
-print(f"STDERR: {stderr}")
+print(f"STDOUT: {stdout if stdout else '(empty)'}")
+print(f"STDERR: {stderr if stderr else '(empty)'}")
 print(f"RETURN CODE: {result.returncode}")
 
 if "PONG" in result.stdout:

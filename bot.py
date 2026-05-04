@@ -1599,7 +1599,7 @@ def _acquire_distributed_process_lock() -> None:
         if _wait_s < 0.5:
             _wait_s = 0.5
         # Next warning/rescue checkpoint for continuous waiting loop.
-        _lock_acquire_deadline = time.time() + _wait_s
+        _next_wait_checkpoint = time.time() + _wait_s
         _lock_retry_interval = 0.5
         _wait_log_interval_raw = os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "").strip()
         try:
@@ -1664,7 +1664,7 @@ def _acquire_distributed_process_lock() -> None:
                 )
                 _next_wait_log = _now + _wait_log_interval_s
 
-            if _now > _lock_acquire_deadline:
+            if _now > _next_wait_checkpoint:
                 logger.warning(
                     "Distributed lock still unavailable after %.1fs; continuing to wait. "
                     "holder=%s parsed_holder=%s holder_inspection=%s holder_meta=%s pttl_ms=%s",
@@ -1780,7 +1780,7 @@ def _acquire_distributed_process_lock() -> None:
                     _redis_url_source,
                     _instance_identity.get('deployment_id', 'unknown')
                 )
-                _lock_acquire_deadline = time.time() + _wait_s
+                _next_wait_checkpoint = time.time() + _wait_s
                 continue
 
             time.sleep(_lock_retry_interval)
