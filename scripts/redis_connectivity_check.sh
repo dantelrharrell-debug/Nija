@@ -213,7 +213,7 @@ PY
 echo "Redis URL: ${safe_url}"
 echo "NIJA_REDIS_FORCE_TLS=${force_tls}"
 
-host_and_port="$(python3 - <<'PY' "${url}"
+redis_parts="$(python3 - <<'PY' "${url}"
 import sys
 from urllib.parse import urlparse
 
@@ -221,16 +221,39 @@ parsed = urlparse(sys.argv[1])
 host = parsed.hostname or ""
 port = parsed.port or ""
 scheme = parsed.scheme or ""
-print(f"{host}|{port}|{scheme}")
+user = parsed.username or ""
+password = parsed.password or ""
+db_raw = (parsed.path or "").lstrip("/")
+db = "0"
+if db_raw.isdigit():
+    db = db_raw
+elif db_raw:
+    print(f"WARN: Redis DB value '{db_raw}' is invalid; defaulting to 0", file=sys.stderr)
+print(host)
+print(port)
+print(scheme)
+print(user)
+print(password)
+print(db)
 PY
 )"
-redis_host="${host_and_port%%|*}"
-remaining="${host_and_port#*|}"
-redis_port="${remaining%%|*}"
-redis_scheme="${remaining##*|}"
+mapfile -t redis_parts_lines <<EOF
+${redis_parts}
+EOF
+if [ "${#redis_parts_lines[@]}" -lt 6 ]; then
+  echo "ERROR: Could not parse Redis URL components (expected 6, got ${#redis_parts_lines[@]})"
+  exit 4
+fi
 
-if [ -z "${redis_host}" ] || [ -z "${redis_port}" ]; then
-  echo "ERROR: Could not parse Redis host/port from URL"
+redis_host="${redis_parts_lines[0]}"
+redis_port="${redis_parts_lines[1]}"
+redis_scheme="${redis_parts_lines[2]}"
+redis_user="${redis_parts_lines[3]}"
+redis_password="${redis_parts_lines[4]}"
+redis_db="${redis_parts_lines[5]}"
+
+if [ -z "${redis_host}" ] || [ -z "${redis_port}" ] || [ -z "${redis_scheme}" ]; then
+  echo "ERROR: Could not parse Redis host/port/scheme from URL"
   exit 4
 fi
 
@@ -275,11 +298,18 @@ echo "[5/5] Running Redis ping with explicit TLS support"
 if command -v redis-cli >/dev/null 2>&1; then
   echo "Using redis-cli for connectivity check..."
   _rc=0
+  redis_cli_args=("-h" "${redis_host}" "-p" "${redis_port}" "-n" "${redis_db}")
+  if [ -n "${redis_user:-}" ]; then
+    redis_cli_args+=("--user" "${redis_user}")
+  fi
   if [ "${redis_scheme}" = "rediss" ]; then
-    redis-cli --tls -u "${url}" ping
+    redis_cli_args+=("--tls")
+  fi
+  if [ -n "${redis_password:-}" ]; then
+    REDISCLI_AUTH="${redis_password}" redis-cli "${redis_cli_args[@]}" ping
     _rc=$?
   else
-    redis-cli -u "${url}" ping
+    redis-cli "${redis_cli_args[@]}" ping
     _rc=$?
   fi
   if [ "$_rc" -eq 0 ]; then
