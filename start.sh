@@ -387,13 +387,14 @@ port = parsed.port or ""
 scheme = parsed.scheme or ""
 user = parsed.username or ""
 password = parsed.password or ""
-db = (parsed.path or "").lstrip("/")
-db = db if db.isdigit() else "0"
+db_raw = (parsed.path or "").lstrip("/")
+db = db_raw if db_raw.isdigit() else ""
 print(host)
 print(port)
 print(scheme)
 print(user)
 print(password)
+print(db_raw)
 print(db)
 PY
 )"
@@ -402,13 +403,24 @@ PY
         return 1
     fi
 
-    local _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db
-    IFS=$'\n' read -r _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db <<EOF
+    local _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db_raw _redis_db
+    IFS=$'\n' read -r _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db_raw _redis_db <<EOF
 ${_redis_parts}
 EOF
 
     if [ -z "${_redis_host}" ] || [ -z "${_redis_port}" ]; then
         return 1
+    fi
+
+    if [ -n "${_redis_db_raw}" ] && [ -z "${_redis_db}" ]; then
+        echo "⚠️  Redis DB value '${_redis_db_raw}' is invalid; defaulting to 0"
+        _redis_db="0"
+    elif [ -z "${_redis_db}" ]; then
+        _redis_db="0"
+    fi
+    if ! printf "%s" "${_redis_db}" | grep -Eq '^[0-9]+$'; then
+        echo "⚠️  Redis DB value '${_redis_db}' is invalid; defaulting to 0"
+        _redis_db="0"
     fi
 
     local _redis_cli_args=("-h" "${_redis_host}" "-p" "${_redis_port}" "-n" "${_redis_db}")
