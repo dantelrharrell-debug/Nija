@@ -21,7 +21,7 @@ python scripts/clear_redis_locks.py --clear || {
   echo "   This is likely a connection issue. Check:"
   echo "   1. Is NIJA_REDIS_URL set correctly?"
   echo "   2. Does it start with rediss:// (not redis://)?  "
-  echo "   3. Can you reach Redis? redis-cli -u \$NIJA_REDIS_URL PING"
+  echo "   3. Can you reach Redis? redis-cli -h <host> -p <port> -a \"\$REDIS_PASSWORD\" --tls --insecure ping"
   exit 1
 }
 

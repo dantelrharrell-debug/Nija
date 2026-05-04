@@ -297,24 +297,59 @@ run_port_reachability_test "${redis_host}" "${redis_port}"
 echo "[5/5] Running Redis ping with explicit TLS support"
 if command -v redis-cli >/dev/null 2>&1; then
   echo "Using redis-cli for connectivity check..."
-  _rc=0
-  redis_cli_args=("-h" "${redis_host}" "-p" "${redis_port}" "-n" "${redis_db}")
-  if [ -n "${redis_user:-}" ]; then
-    redis_cli_args+=("--user" "${redis_user}")
-  fi
-  if [ "${redis_scheme}" = "rediss" ]; then
-    redis_cli_args+=("--tls")
-  fi
-  if [ -n "${redis_password:-}" ]; then
-    REDISCLI_AUTH="${redis_password}" redis-cli "${redis_cli_args[@]}" ping
-    _rc=$?
-  else
-    redis-cli "${redis_cli_args[@]}" ping
-    _rc=$?
-  fi
-  if [ "$_rc" -eq 0 ]; then
-    echo "✅ REDIS PREFLIGHT PASSED"
-  fi
+  set +e
+  python3 - <<'PY' "${redis_host}" "${redis_port}" "${redis_db}" "${redis_user:-}" "${redis_password:-}" "${redis_scheme}"
+import subprocess
+import sys
+
+host = sys.argv[1]
+port = sys.argv[2]
+db = sys.argv[3]
+user = sys.argv[4]
+password = sys.argv[5]
+scheme = sys.argv[6]
+is_proxy = host.lower().endswith(".proxy.rlwy.net")
+use_tls = scheme == "rediss" or is_proxy
+
+cmd = ["redis-cli", "-h", host, "-p", port, "-n", db]
+if user:
+    cmd.extend(["--user", user])
+if password:
+    cmd.extend(["-a", password])
+if use_tls:
+    cmd.extend(["--tls", "--insecure"])
+cmd.append("ping")
+
+try:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+except subprocess.TimeoutExpired:
+    print("STDOUT: ")
+    print("STDERR: redis-cli timed out after 5s")
+    print("RETURN CODE: 124")
+    print("❌ REDIS PREFLIGHT FAILED")
+    raise SystemExit(1)
+except FileNotFoundError:
+    print("STDOUT: ")
+    print("STDERR: redis-cli not found")
+    print("RETURN CODE: 127")
+    print("❌ REDIS PREFLIGHT FAILED")
+    raise SystemExit(127)
+
+stdout = (result.stdout or "").strip()
+stderr = (result.stderr or "").strip()
+print(f"STDOUT: {stdout}")
+print(f"STDERR: {stderr}")
+print(f"RETURN CODE: {result.returncode}")
+
+if "PONG" in result.stdout:
+    print("✅ REDIS PREFLIGHT SUCCESS")
+    raise SystemExit(0)
+
+print("❌ REDIS PREFLIGHT FAILED")
+raise SystemExit(result.returncode or 1)
+PY
+  _rc=$?
+  set -e
   echo "Connectivity check completed"
   exit $_rc
 fi

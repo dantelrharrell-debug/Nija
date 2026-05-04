@@ -197,11 +197,11 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     _LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}"
     _WRITER_HEARTBEAT_MAX_FAILURES="${NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES:-12}"
     echo "🔒 Strict Redis writer lease enabled (live mode)"
-    echo "   Fail-fast singleton enabled: duplicate instances exit immediately"
-    echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Acquire timeout: ${_LEASE_TIMEOUT_S} s"
+    echo "   Single-writer protection enforced: duplicate instances blocked"
+    echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Acquire check interval: ${_LEASE_TIMEOUT_S} s"
     echo "   Lease wait log interval: ${_LEASE_WAIT_LOG_INTERVAL_S} s"
     echo "   Writer lock heartbeat max transient failures: ${_WRITER_HEARTBEAT_MAX_FAILURES}"
-    echo "   If lock is not acquired quickly, process exits to avoid overlap"
+    echo "   If lock is not acquired quickly, process keeps retrying until available"
     echo ""
 fi
 
@@ -370,77 +370,136 @@ _resolve_redis_url_source() {
     return 1
 }
 
+_redis_cli_run() {
+    local _redis_url="$1"
+    shift
+    if [ -z "${_redis_url}" ]; then
+        return 1
+    fi
+    python3 - <<'PY' "${_redis_url}" "$@"
+import os
+import subprocess
+import sys
+from urllib.parse import urlparse
+
+raw = sys.argv[1]
+extra_args = sys.argv[2:]
+try:
+    parsed = urlparse(raw)
+except Exception:
+    sys.stderr.write("redis-cli parse error: invalid Redis URL\n")
+    raise SystemExit(1)
+
+host = parsed.hostname or ""
+port = parsed.port or ""
+scheme = (parsed.scheme or "").lower()
+user = parsed.username or ""
+password = parsed.password or ""
+db_raw = (parsed.path or "").lstrip("/")
+db = db_raw if db_raw.isdigit() else "0"
+if not host or not port:
+    sys.stderr.write("redis-cli parse error: missing host/port\n")
+    raise SystemExit(1)
+
+is_proxy = host.lower().endswith(".proxy.rlwy.net")
+use_tls = scheme == "rediss" or is_proxy
+
+cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", str(db)]
+if user:
+    cmd.extend(["--user", user])
+if password:
+    cmd.extend(["-a", password])
+if use_tls:
+    cmd.extend(["--tls", "--insecure"])
+cmd.extend(extra_args)
+
+try:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+except subprocess.TimeoutExpired:
+    sys.stderr.write("redis-cli timed out after 5s\n")
+    raise SystemExit(124)
+except FileNotFoundError:
+    sys.stderr.write("redis-cli not found\n")
+    raise SystemExit(127)
+
+sys.stdout.write(result.stdout or "")
+sys.stderr.write(result.stderr or "")
+raise SystemExit(result.returncode)
+PY
+}
+
 _redis_cli_ping_safe() {
     local _redis_url="$1"
     if [ -z "${_redis_url}" ]; then
         return 1
     fi
-
-    local _redis_parts
-    _redis_parts="$(python3 - <<'PY' "${_redis_url}"
+    python3 - <<'PY' "${_redis_url}"
+import os
+import re
+import subprocess
 import sys
 from urllib.parse import urlparse
 
-parsed = urlparse(sys.argv[1])
+raw = sys.argv[1]
+try:
+    parsed = urlparse(raw)
+except Exception:
+    safe = re.sub(r"(://)[^@]*@", r"\\1***@", raw)
+    print(f"WARN: Redis URL parse failed for CLI ping (url={safe})", file=sys.stderr)
+    raise SystemExit(1)
+
 host = parsed.hostname or ""
 port = parsed.port or ""
-scheme = parsed.scheme or ""
+scheme = (parsed.scheme or "").lower()
 user = parsed.username or ""
 password = parsed.password or ""
 db_raw = (parsed.path or "").lstrip("/")
-db = "0"
-if db_raw.isdigit():
-    db = db_raw
-elif db_raw:
-    print(f"WARN: Redis DB value '{db_raw}' is invalid; defaulting to 0", file=sys.stderr)
-print(host)
-print(port)
-print(scheme)
-print(user)
-print(password)
-print(db)
+db = db_raw if db_raw.isdigit() else "0"
+
+if not host or not port:
+    print("WARN: Redis URL missing host or port for CLI ping", file=sys.stderr)
+    raise SystemExit(1)
+
+is_proxy = host.lower().endswith(".proxy.rlwy.net")
+use_tls = scheme == "rediss" or is_proxy
+
+cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", str(db)]
+if user:
+    cmd.extend(["--user", user])
+if password:
+    cmd.extend(["-a", password])
+if use_tls:
+    cmd.extend(["--tls", "--insecure"])
+cmd.append("ping")
+
+try:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+except subprocess.TimeoutExpired:
+    print("STDOUT: ")
+    print("STDERR: redis-cli timed out after 5s")
+    print("RETURN CODE: 124")
+    print("❌ REDIS PREFLIGHT FAILED")
+    raise SystemExit(1)
+except FileNotFoundError:
+    print("STDOUT: ")
+    print("STDERR: redis-cli not found")
+    print("RETURN CODE: 127")
+    print("❌ REDIS PREFLIGHT FAILED")
+    raise SystemExit(127)
+
+stdout = (result.stdout or "").strip()
+stderr = (result.stderr or "").strip()
+print(f"STDOUT: {stdout}")
+print(f"STDERR: {stderr}")
+print(f"RETURN CODE: {result.returncode}")
+
+if "PONG" in result.stdout:
+    print("✅ REDIS PREFLIGHT SUCCESS")
+    raise SystemExit(0)
+
+print("❌ REDIS PREFLIGHT FAILED")
+raise SystemExit(result.returncode or 1)
 PY
-)"
-    if [ -z "${_redis_parts}" ]; then
-        local _safe_redis_url
-        _safe_redis_url="$(printf "%s" "${_redis_url}" | sed -E 's#(://)[^@]*@#\\1***@#')"
-        echo "WARN: Redis URL parse failed for CLI ping (url=${_safe_redis_url})"
-        return 1
-    fi
-
-    local _redis_parts_lines=()
-    mapfile -t _redis_parts_lines <<EOF
-${_redis_parts}
-EOF
-    if [ "${#_redis_parts_lines[@]}" -lt 6 ]; then
-        return 1
-    fi
-
-    local _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db
-    _redis_host="${_redis_parts_lines[0]}"
-    _redis_port="${_redis_parts_lines[1]}"
-    _redis_scheme="${_redis_parts_lines[2]}"
-    _redis_user="${_redis_parts_lines[3]}"
-    _redis_password="${_redis_parts_lines[4]}"
-    _redis_db="${_redis_parts_lines[5]}"
-
-    if [ -z "${_redis_host}" ] || [ -z "${_redis_port}" ] || [ -z "${_redis_scheme}" ]; then
-        return 1
-    fi
-
-    local _redis_cli_args=("-h" "${_redis_host}" "-p" "${_redis_port}" "-n" "${_redis_db}")
-    if [ -n "${_redis_user}" ]; then
-        _redis_cli_args+=("--user" "${_redis_user}")
-    fi
-    if [ "${_redis_scheme}" = "rediss" ]; then
-        _redis_cli_args+=("--tls")
-    fi
-
-    if [ -n "${_redis_password}" ]; then
-        REDISCLI_AUTH="${_redis_password}" redis-cli "${_redis_cli_args[@]}" ping
-    else
-        redis-cli "${_redis_cli_args[@]}" ping
-    fi
 }
 
 _validate_redis_url_or_exit() {
@@ -669,17 +728,17 @@ _maybe_force_nonce_resync() {
     # Supports either NIJA_REDIS_URL or standard REDIS_URL variants.
     local _redis_url="${NIJA_REDIS_URL:-${REDIS_URL:-${REDIS_PRIVATE_URL:-${REDIS_PUBLIC_URL:-}}}}"
     if [ -n "${_redis_url}" ] && command -v redis-cli >/dev/null 2>&1; then
-        if redis-cli -u "${_redis_url}" DEL kraken_nonce >/dev/null 2>&1; then
+        if _redis_cli_run "${_redis_url}" DEL kraken_nonce >/dev/null 2>&1; then
             echo "   ✅ Redis key reset: kraken_nonce"
         else
             echo "   ⚠️  Could not delete Redis key: kraken_nonce"
         fi
-        if redis-cli -u "${_redis_url}" DEL nonce_lock >/dev/null 2>&1; then
+        if _redis_cli_run "${_redis_url}" DEL nonce_lock >/dev/null 2>&1; then
             echo "   ✅ Redis key reset: nonce_lock"
         else
             echo "   ⚠️  Could not delete Redis key: nonce_lock"
         fi
-        if redis-cli -u "${_redis_url}" DEL nija:kraken:nonce >/dev/null 2>&1; then
+        if _redis_cli_run "${_redis_url}" DEL nija:kraken:nonce >/dev/null 2>&1; then
             echo "   ✅ Redis key reset: nija:kraken:nonce"
         fi
         local _scanned_nonce_keys
@@ -690,11 +749,11 @@ _maybe_force_nonce_resync() {
             'nija:kraken:writer:lease_version:*' \
             'nija:kraken:writer:version_counter:*' \
             'nija:kraken:writer:fingerprint:*'; do
-            _scanned_nonce_keys=$(redis-cli -u "${_redis_url}" --scan --pattern "${_nonce_pattern}" 2>/dev/null || true)
+            _scanned_nonce_keys=$(_redis_cli_run "${_redis_url}" --scan --pattern "${_nonce_pattern}" 2>/dev/null || true)
             if [ -n "${_scanned_nonce_keys}" ]; then
                 while IFS= read -r _nonce_key; do
                     [ -z "${_nonce_key}" ] && continue
-                    if redis-cli -u "${_redis_url}" DEL "${_nonce_key}" >/dev/null 2>&1; then
+                    if _redis_cli_run "${_redis_url}" DEL "${_nonce_key}" >/dev/null 2>&1; then
                         echo "   ✅ Redis key reset: ${_nonce_key}"
                     fi
                 done <<EOF

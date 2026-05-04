@@ -26,19 +26,61 @@ if [ -z "${redis_url}" ]; then
 else
   echo "Testing Redis URL from current environment..."
   if command -v redis-cli >/dev/null 2>&1; then
-    if printf "%s" "${redis_url}" | grep -Eiq '^rediss://'; then
-      redis_cmd=(redis-cli --tls -u "${redis_url}" ping)
-    else
-      redis_cmd=(redis-cli -u "${redis_url}" ping)
-    fi
-
     set +e
-    redis_out="$(${redis_cmd[@]} 2>&1)"
+    python3 - <<'PY' "${redis_url}"
+import os
+import subprocess
+import sys
+from urllib.parse import urlparse
+
+raw = sys.argv[1]
+parsed = urlparse(raw)
+host = parsed.hostname or ""
+port = parsed.port or ""
+scheme = (parsed.scheme or "").lower()
+user = parsed.username or ""
+password = parsed.password or ""
+db_raw = (parsed.path or "").lstrip("/")
+db = db_raw if db_raw.isdigit() else "0"
+
+is_proxy = host.lower().endswith(".proxy.rlwy.net")
+use_tls = scheme == "rediss" or is_proxy
+
+cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", str(db)]
+if user:
+    cmd.extend(["--user", user])
+if password:
+    cmd.extend(["-a", password])
+if use_tls:
+    cmd.extend(["--tls", "--insecure"])
+cmd.append("ping")
+
+try:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+except subprocess.TimeoutExpired:
+    print("STDOUT: ")
+    print("STDERR: redis-cli timed out after 5s")
+    print("RETURN CODE: 124")
+    print("❌ REDIS PREFLIGHT FAILED")
+    raise SystemExit(1)
+
+stdout = (result.stdout or "").strip()
+stderr = (result.stderr or "").strip()
+print(f"STDOUT: {stdout}")
+print(f"STDERR: {stderr}")
+print(f"RETURN CODE: {result.returncode}")
+
+if "PONG" in result.stdout:
+    print("✅ REDIS PREFLIGHT SUCCESS")
+    raise SystemExit(0)
+
+print("❌ REDIS PREFLIGHT FAILED")
+raise SystemExit(result.returncode or 1)
+PY
     redis_status=$?
     set -e
 
-    echo "redis-cli output: ${redis_out}"
-    if [ ${redis_status} -eq 0 ] && printf "%s" "${redis_out}" | grep -q "PONG"; then
+    if [ ${redis_status} -eq 0 ]; then
       echo "Redis reachable"
     else
       echo "Redis unreachable"
