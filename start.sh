@@ -637,7 +637,6 @@ EOF
         _py_output=$(REDIS_URL="${_redis_url}" "${PY}" - <<'PY'
 import os
 import time
-from urllib.parse import urlparse
 
 url = os.environ.get("REDIS_URL", "").strip()
 if not url:
@@ -647,26 +646,16 @@ if not url:
 try:
     import redis
 except Exception as exc:
-    print(f"SKIP|python-redis unavailable: {exc}")
+    print("Redis failed:", exc)
     raise SystemExit(0)
 
-parsed = urlparse(url)
-if not parsed.hostname or not parsed.port:
-    print("SKIP|REDIS_URL missing host/port")
+try:
+    r = redis.from_url(url, socket_timeout=3)
+    r.ping()
+    print("Redis OK")
+except Exception as e:
+    print("Redis failed:", e)
     raise SystemExit(0)
-
-r = redis.Redis(
-    host=parsed.hostname,
-    port=parsed.port,
-    username=parsed.username or "default",
-    password=parsed.password,
-    ssl=True,
-    ssl_cert_reqs=None,
-    socket_timeout=5,
-    socket_connect_timeout=5,
-    retry_on_timeout=True,
-    health_check_interval=30,
-)
 
 
 def safe_scan(redis_client):
@@ -718,14 +707,6 @@ def clear_nonce_state_safe(redis_client):
     print("CLEAR NONCE DONE")
     return deleted
 
-
-print("PINGING REDIS FIRST")
-try:
-    r.ping()
-    print("REDIS OK - CONTINUING")
-except Exception as exc:
-    print(f"SKIP|Redis preflight ping failed: {exc}")
-    raise SystemExit(0)
 
 print("BEFORE NONCE RESET")
 try:
@@ -816,7 +797,7 @@ try:
         log=lambda msg: print(f"INFO|{msg}"),
     )
 except Exception as exc:
-    print(f"SKIP|Redis preflight ping failed: {exc}")
+    print("Redis failed:", exc)
     raise SystemExit(0)
 
 

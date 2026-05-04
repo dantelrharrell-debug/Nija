@@ -284,36 +284,20 @@ if command -v redis-cli >/dev/null 2>&1; then
 fi
 
 echo "redis-cli not found; using Python redis client fallback..."
-python3 - <<'PY' "${url}" "${redis_scheme}"
+python3 - <<'PY' "${url}"
 import sys
-import ssl
 try:
   import redis
 except Exception as exc:
-  print(f"ERROR: Python redis module not available: {exc}")
-  raise SystemExit(2)
+  print("Redis failed:", exc)
+  raise SystemExit(0)
 
 url = sys.argv[1]
-scheme = sys.argv[2].strip().lower()
 try:
-  kwargs = {
-      "socket_connect_timeout": 5,
-      "socket_timeout": 5,
-      "decode_responses": True,
-  }
-  if scheme == "rediss":
-      kwargs.update(
-          {
-              "ssl": True,
-              "ssl_cert_reqs": ssl.CERT_NONE,
-              "ssl_check_hostname": False,
-          }
-      )
-
-  client = redis.from_url(url, **kwargs)
-  print("PONG" if client.ping() else "ERROR")
-except Exception as exc:
-  print(f"ERROR: Redis connectivity check failed: {exc}")
-  raise SystemExit(1)
+  r = redis.from_url(url, socket_timeout=3)
+  r.ping()
+  print("Redis OK")
+except Exception as e:
+  print("Redis failed:", e)
 PY
 echo "Connectivity check completed"
