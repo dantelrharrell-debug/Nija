@@ -274,13 +274,19 @@ run_port_reachability_test "${redis_host}" "${redis_port}"
 echo "[5/5] Running Redis ping with explicit TLS support"
 if command -v redis-cli >/dev/null 2>&1; then
   echo "Using redis-cli for connectivity check..."
+  _rc=0
   if [ "${redis_scheme}" = "rediss" ]; then
     redis-cli --tls -u "${url}" ping
+    _rc=$?
   else
     redis-cli -u "${url}" ping
+    _rc=$?
+  fi
+  if [ "$_rc" -eq 0 ]; then
+    echo "✅ REDIS PREFLIGHT PASSED"
   fi
   echo "Connectivity check completed"
-  exit $?
+  exit $_rc
 fi
 
 echo "redis-cli not found; using Python redis client fallback..."
