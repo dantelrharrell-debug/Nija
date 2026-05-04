@@ -65,7 +65,7 @@ Phase 0 — Prerequisites (no bot changes)
        Docker:   docker run -d -p 6379:6379 redis:7-alpine
        Managed:  Redis Cloud free tier, Upstash, etc.
   2. Note the connection URL (``redis://:<password>@<host>:6379/0``).
-  3. Confirm Redis is running:  ``redis-cli -u $URL ping`` → PONG.
+  3. Confirm Redis is running:  ``redis-cli -h <host> -p <port> -a "$REDIS_PASSWORD" --tls --insecure ping`` → PONG.
 
 Phase 1 — Seed Redis with current nonce high-water marks (live, zero-downtime)
   Run once while the bot is running (it can keep trading):

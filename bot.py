@@ -1168,7 +1168,7 @@ def _acquire_distributed_process_lock() -> None:
         print(
             "   DIAGNOSTIC STEPS:"
             "\n     1. Verify Redis URL scheme:  rediss:// for Railway proxy, redis:// for local"
-            "\n     2. Test connectivity:         redis-cli -u $NIJA_REDIS_URL ping  → expect PONG"
+            "\n     2. Test connectivity:         redis-cli -h <host> -p <port> -a \"$REDIS_PASSWORD\" --tls --insecure ping"
             "\n     3. Check Railway service:     Redis service must show Running in Railway dashboard"
             "\n     4. Check for conflicting env: REDIS_URL / REDIS_PRIVATE_URL / REDIS_TLS_URL"
             "\n     5. Single-instance bypass:    set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true (UNSAFE)"
@@ -1582,23 +1582,27 @@ def _acquire_distributed_process_lock() -> None:
         acquired = _fencing_token > 0
         print(f"=== LOCK ACQUIRED: {acquired} ===", flush=True)
 
-        # Hard singleton guard: acquire with generous timeout for lock contention
-        # CRITICAL FIX: Increase lock timeout from 5s to 20-30s for better resilience
-        _wait_s_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
-        if not _wait_s_raw:
-            _wait_s_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
+        # Hard singleton guard: retry with a generous wait interval for lock contention.
+        # The interval drives periodic warning/rescue checks; it is not a hard stop.
+        _default_wait_checkpoint_s = 30.0
+        _wait_interval_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
+        if not _wait_interval_raw:
+            _wait_interval_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_s = float(_wait_s_raw) if _wait_s_raw else (30.0 if _live_mode else 30.0)
+            _wait_checkpoint_interval_s = (
+                float(_wait_interval_raw) if _wait_interval_raw else _default_wait_checkpoint_s
+            )
         except (TypeError, ValueError):
-            _wait_s = 30.0 if _live_mode else 30.0
+            _wait_checkpoint_interval_s = _default_wait_checkpoint_s
         # Ensure minimum of 20s for live, 30s for standby
-        if _live_mode and _wait_s < 20.0:
-            _wait_s = 25.0
-        elif not _live_mode and _wait_s < 30.0:
-            _wait_s = 30.0
-        if _wait_s < 0.5:
-            _wait_s = 0.5
-        _lock_acquire_deadline = time.time() + _wait_s
+        if _live_mode and _wait_checkpoint_interval_s < 20.0:
+            _wait_checkpoint_interval_s = 25.0
+        elif not _live_mode and _wait_checkpoint_interval_s < _default_wait_checkpoint_s:
+            _wait_checkpoint_interval_s = _default_wait_checkpoint_s
+        if _wait_checkpoint_interval_s < 0.5:
+            _wait_checkpoint_interval_s = 0.5
+        # Next warning + stale-lock rescue checkpoint for continuous waiting loop.
+        _next_wait_checkpoint = time.time() + _wait_checkpoint_interval_s
         _lock_retry_interval = 0.5
         _wait_log_interval_raw = os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "").strip()
         try:
@@ -1611,6 +1615,7 @@ def _acquire_distributed_process_lock() -> None:
         _holder_info = parse_distributed_lock_holder(_holder)
         _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
         _holder_meta = _read_lock_meta()
+        _wait_started_at = time.time()
 
         try:
             _stale_heartbeat_timeout_s = max(
@@ -1663,10 +1668,13 @@ def _acquire_distributed_process_lock() -> None:
                 )
                 _next_wait_log = _now + _wait_log_interval_s
 
-            if _now > _lock_acquire_deadline:
-                logger.critical(
-                    "Distributed lock acquisition timed out after %.1fs; holder=%s parsed_holder=%s holder_inspection=%s holder_meta=%s pttl_ms=%s",
-                    _wait_s,
+            if _now > _next_wait_checkpoint:
+                total_wait_s = _now - _wait_started_at
+                logger.warning(
+                    "Distributed lock still unavailable (checkpoint_interval=%.1fs, total_wait=%.1fs); continuing to wait. "
+                    "holder=%s parsed_holder=%s holder_inspection=%s holder_meta=%s pttl_ms=%s",
+                    _wait_checkpoint_interval_s,
+                    total_wait_s,
                     _holder,
                     _holder_info,
                     _holder_inspection,
@@ -1756,30 +1764,30 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"┃ Holder:   {_holder_info.get('display', _holder)[:58]:<58} ┃")
                 _pttl_txt = str(_holder_pttl_ms)
                 print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
-                print(f"┃ Timeout:  {_wait_s:.0f}s elapsed after attempting for {_wait_s:.0f}s        ┃")
-                print("┃ Action:   Exiting fail-closed to preserve one-writer invariant.          ┃")
+                print(f"┃ Waited:   {total_wait_s:.0f}s without acquiring the lock                  ┃")
+                print("┃ Action:   Continuing to wait for a safe single-writer hand-off.          ┃")
                 print("┗" + "━" * 78 + "┛\n")
                 print(f"   Redis URL source: {_redis_url_source or 'unset'}")
-                print(f"   Lock acquire timeout: {_wait_s:.0f}s")
+                print(f"   Lock wait checkpoint interval: {_wait_checkpoint_interval_s:.0f}s")
                 print(f"   Current instance: {format_instance_identity(_instance_identity)}")
                 print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
                 print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
                 print(f"   Lock holder raw:  {_holder}")
                 print("\n   💡 TROUBLESHOOTING:")
-                print("      1. Check Redis connectivity: redis-cli -u $NIJA_REDIS_URL ping")
-                print("      2. List active locks: redis-cli -u $NIJA_REDIS_URL KEYS '*lock*'")
-                print("      3. Delete stale lock: redis-cli -u $NIJA_REDIS_URL DEL <lock-key>")
+                print("      1. Check Redis connectivity: redis-cli -h <host> -p <port> -a \"$REDIS_PASSWORD\" --tls --insecure ping")
+                print("      2. List active locks: redis-cli -h <host> -p <port> -a \"$REDIS_PASSWORD\" --tls --insecure KEYS '*lock*'")
+                print("      3. Delete stale lock: redis-cli -h <host> -p <port> -a \"$REDIS_PASSWORD\" --tls --insecure DEL <lock-key>")
                 print("      4. Verify Redis URL format: should be rediss:// for Railway public proxy")
-                print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
-                logger.critical(
-                    "Lock timeout after %.1fs | holder=%s | redis_source=%s | deployment=%s",
-                    _wait_s,
+                print("❌ FAILED TO ACQUIRE WRITER LOCK (waiting)", flush=True)
+                logger.warning(
+                    "Lock still held after %.1fs | holder=%s | redis_source=%s | deployment=%s",
+                    total_wait_s,
                     _holder_info.get('display', _holder),
                     _redis_url_source,
                     _instance_identity.get('deployment_id', 'unknown')
                 )
-                _enter_fail_closed_standby(f"Lock acquisition timed out after {_wait_s:.0f}s")
-                return
+                _next_wait_checkpoint = time.time() + _wait_checkpoint_interval_s
+                continue
 
             time.sleep(_lock_retry_interval)
             try:
