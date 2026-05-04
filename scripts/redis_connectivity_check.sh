@@ -118,8 +118,6 @@ run_port_reachability_test() {
   python3 - <<'PY' "${host}" "${port}"
 import socket
 import sys
-
-REDIS_CLI_TIMEOUT_S = 5
 host = sys.argv[1]
 port = int(sys.argv[2])
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

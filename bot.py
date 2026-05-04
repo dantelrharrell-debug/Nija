@@ -1588,9 +1588,7 @@ def _acquire_distributed_process_lock() -> None:
         if not _wait_interval_raw:
             _wait_interval_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_checkpoint_interval_s = (
-                float(_wait_interval_raw) if _wait_interval_raw else (30.0 if _live_mode else 30.0)
-            )
+            _wait_checkpoint_interval_s = float(_wait_interval_raw) if _wait_interval_raw else 30.0
         except (TypeError, ValueError):
             _wait_checkpoint_interval_s = 30.0 if _live_mode else 30.0
         # Ensure minimum of 20s for live, 30s for standby
@@ -1670,7 +1668,7 @@ def _acquire_distributed_process_lock() -> None:
             if _now > _next_wait_checkpoint:
                 total_wait_s = _now - _wait_started_at
                 logger.warning(
-                    "Distributed lock still unavailable after %.1fs (total_wait=%.1fs); continuing to wait. "
+                    "Distributed lock still unavailable (checkpoint_interval=%.1fs, total_wait=%.1fs); continuing to wait. "
                     "holder=%s parsed_holder=%s holder_inspection=%s holder_meta=%s pttl_ms=%s",
                     _wait_checkpoint_interval_s,
                     total_wait_s,
