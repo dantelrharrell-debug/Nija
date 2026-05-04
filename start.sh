@@ -388,13 +388,16 @@ scheme = parsed.scheme or ""
 user = parsed.username or ""
 password = parsed.password or ""
 db_raw = (parsed.path or "").lstrip("/")
-db = db_raw if db_raw.isdigit() else ""
+db = "0"
+if db_raw.isdigit():
+    db = db_raw
+elif db_raw:
+    print(f"⚠️  Redis DB value '{db_raw}' is invalid; defaulting to 0", file=sys.stderr)
 print(host)
 print(port)
 print(scheme)
 print(user)
 print(password)
-print(db_raw)
 print(db)
 PY
 )"
@@ -403,8 +406,8 @@ PY
         return 1
     fi
 
-    local _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db_raw _redis_db
-    IFS=$'\n' read -r _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db_raw _redis_db <<EOF
+    local _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db
+    IFS=$'\n' read -r _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db <<EOF
 ${_redis_parts}
 EOF
 
@@ -412,10 +415,7 @@ EOF
         return 1
     fi
 
-    if [ -n "${_redis_db_raw}" ] && [ -z "${_redis_db}" ]; then
-        echo "⚠️  Redis DB value '${_redis_db_raw}' is invalid; defaulting to 0"
-        _redis_db="0"
-    elif [ -z "${_redis_db}" ]; then
+    if [ -z "${_redis_db}" ]; then
         _redis_db="0"
     fi
 

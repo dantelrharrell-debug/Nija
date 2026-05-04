@@ -224,25 +224,22 @@ scheme = parsed.scheme or ""
 user = parsed.username or ""
 password = parsed.password or ""
 db_raw = (parsed.path or "").lstrip("/")
-db = db_raw if db_raw.isdigit() else ""
+db = "0"
+if db_raw.isdigit():
+    db = db_raw
+elif db_raw:
+    print(f"WARN: Redis DB value '{db_raw}' is invalid; defaulting to 0", file=sys.stderr)
 print(host)
 print(port)
 print(scheme)
 print(user)
 print(password)
-print(db_raw)
 print(db)
 PY
 )"
-IFS=$'\n' read -r redis_host redis_port redis_scheme redis_user redis_password redis_db_raw redis_db <<EOF
+IFS=$'\n' read -r redis_host redis_port redis_scheme redis_user redis_password redis_db <<EOF
 ${redis_parts}
 EOF
-if [ -n "${redis_db_raw}" ] && [ -z "${redis_db}" ]; then
-  echo "WARN: Redis DB value '${redis_db_raw}' is invalid; defaulting to 0"
-  redis_db="0"
-elif [ -z "${redis_db}" ]; then
-  redis_db="0"
-fi
 
 if [ -z "${redis_host}" ] || [ -z "${redis_port}" ] || [ -z "${redis_scheme}" ]; then
   echo "ERROR: Could not parse Redis host/port/scheme from URL"
