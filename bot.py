@@ -1593,7 +1593,10 @@ def _acquire_distributed_process_lock() -> None:
             except Exception as _meta_exc:
                 return {"present": False, "error": str(_meta_exc), "display": "<meta-read-failed>"}
 
+        print("=== ATTEMPTING REDIS LOCK ===", flush=True)
         _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+        acquired = _fencing_token > 0
+        print(f"=== LOCK ACQUIRED: {acquired} ===", flush=True)
 
         # Hard singleton guard: acquire with generous timeout for lock contention
         # CRITICAL FIX: Increase lock timeout from 5s to 20-30s for better resilience
@@ -1795,7 +1798,10 @@ def _acquire_distributed_process_lock() -> None:
 
             time.sleep(_lock_retry_interval)
             try:
+                print("=== ATTEMPTING REDIS LOCK ===", flush=True)
                 _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+                acquired = _fencing_token > 0
+                print(f"=== LOCK ACQUIRED: {acquired} ===", flush=True)
                 _holder_info = parse_distributed_lock_holder(_holder)
                 _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
                 _holder_meta = _read_lock_meta()

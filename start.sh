@@ -1234,19 +1234,25 @@ fi
 
 if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_UNSAFE_BYPASS}" != "true" ]; then
     echo ""
-    echo "🔎 Running Redis startup preflight check..."
-    if ! _redis_check_output=$(bash scripts/redis_connectivity_check.sh 2>&1); then
-        _redis_check_status=$?
-        echo "${_redis_check_output}"
-        echo ""
-        echo "❌ Redis startup preflight failed (exit ${_redis_check_status})"
-        echo "   Fix Redis service status/network/TLS and redeploy."
-        echo "   To bypass temporarily (not recommended): NIJA_REDIS_STARTUP_CHECK=false"
-        echo ""
-        exit_config_error
+    echo "=== REDIS PREFLIGHT START ==="
+
+    bash scripts/redis_connectivity_check.sh
+    RC=$?
+
+    echo "=== REDIS PREFLIGHT EXIT CODE: $RC ==="
+
+    if [ $RC -ne 0 ]; then
+      echo "❌ Redis preflight failed"
+      exit 1
     fi
-    echo "${_redis_check_output}"
-    echo "✅ Redis startup preflight passed"
+
+    echo "✅ Redis preflight passed"
+
+    echo "=== TESTING REDIS DIRECTLY ==="
+
+    redis-cli -u "$NIJA_REDIS_URL" ping
+
+    echo "Redis CLI exit code: $?"
 elif [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then
     echo "ℹ️  Redis startup preflight disabled (NIJA_REDIS_STARTUP_CHECK=${NIJA_REDIS_STARTUP_CHECK:-false})"
 fi
