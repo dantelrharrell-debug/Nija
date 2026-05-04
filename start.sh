@@ -397,6 +397,10 @@ print(password)
 print(db)
 PY
 )"
+    if [ -z "${_redis_parts}" ]; then
+        echo "⚠️  Redis URL parse failed for CLI ping"
+        return 1
+    fi
 
     local _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db
     IFS=$'\n' read -r _redis_host _redis_port _redis_scheme _redis_user _redis_password _redis_db <<EOF
@@ -407,7 +411,7 @@ EOF
         return 1
     fi
 
-    local _redis_cli_args=("-h" "${_redis_host}" "-p" "${_redis_port}" "-n" "${_redis_db:-0}")
+    local _redis_cli_args=("-h" "${_redis_host}" "-p" "${_redis_port}" "-n" "${_redis_db}")
     if [ -n "${_redis_user}" ]; then
         _redis_cli_args+=("--user" "${_redis_user}")
     fi

@@ -213,7 +213,7 @@ PY
 echo "Redis URL: ${safe_url}"
 echo "NIJA_REDIS_FORCE_TLS=${force_tls}"
 
-host_and_port="$(python3 - <<'PY' "${url}"
+redis_parts="$(python3 - <<'PY' "${url}"
 import sys
 from urllib.parse import urlparse
 
@@ -234,7 +234,7 @@ print(db)
 PY
 )"
 IFS=$'\n' read -r redis_host redis_port redis_scheme redis_user redis_password redis_db <<EOF
-${host_and_port}
+${redis_parts}
 EOF
 
 if [ -z "${redis_host}" ] || [ -z "${redis_port}" ]; then
@@ -283,7 +283,7 @@ echo "[5/5] Running Redis ping with explicit TLS support"
 if command -v redis-cli >/dev/null 2>&1; then
   echo "Using redis-cli for connectivity check..."
   _rc=0
-  redis_cli_args=("-h" "${redis_host}" "-p" "${redis_port}" "-n" "${redis_db:-0}")
+  redis_cli_args=("-h" "${redis_host}" "-p" "${redis_port}" "-n" "${redis_db}")
   if [ -n "${redis_user:-}" ]; then
     redis_cli_args+=("--user" "${redis_user}")
   fi
