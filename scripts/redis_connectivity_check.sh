@@ -293,6 +293,32 @@ fi
 echo "[4/5] Running nc port reachability test"
 run_port_reachability_test "${redis_host}" "${redis_port}"
 
+python_redis_ping_check() {
+  python3 - <<'PY' "${url}"
+import sys
+
+try:
+    import redis
+except Exception as exc:
+    print("Redis failed: python redis package unavailable:", exc)
+    raise SystemExit(2)
+
+redis_url = sys.argv[1]
+try:
+    client = redis.from_url(
+        redis_url,
+        socket_connect_timeout=5,
+        socket_timeout=5,
+        retry_on_timeout=False,
+    )
+    client.ping()
+    print("Redis OK (python client)")
+except Exception as exc:
+    print("Redis failed (python client):", exc)
+    raise SystemExit(1)
+PY
+}
+
 echo "[5/5] Running Redis ping with explicit TLS support"
 if command -v redis-cli >/dev/null 2>&1; then
   echo "Using redis-cli for connectivity check..."
@@ -351,26 +377,23 @@ raise SystemExit(result.returncode or 1)
 PY
   _rc=$?
   set -e
+
+  if [ "$_rc" -eq 0 ]; then
+    echo "Connectivity check completed"
+    exit 0
+  fi
+
+  echo "WARN: redis-cli ping failed with rc=${_rc}; retrying with python redis client fallback"
+  if python_redis_ping_check; then
+    echo "✅ REDIS PREFLIGHT PASSED (python fallback)"
+    echo "Connectivity check completed"
+    exit 0
+  fi
+
   echo "Connectivity check completed"
-  exit $_rc
+  exit "${_rc}"
 fi
 
 echo "redis-cli not found; using Python redis client fallback..."
-python3 - <<'PY' "${url}"
-import sys
-try:
-  import redis
-except Exception as exc:
-  print("Redis failed:", exc)
-  raise SystemExit(2)
-
-url = sys.argv[1]
-try:
-  r = redis.from_url(url, socket_timeout=3)
-  r.ping()
-  print("Redis OK")
-except Exception as e:
-  print("Redis failed:", e)
-  raise SystemExit(1)
-PY
+python_redis_ping_check
 echo "Connectivity check completed"

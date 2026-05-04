@@ -1372,24 +1372,54 @@ if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ]
     echo ""
     echo "=== REDIS PREFLIGHT START ==="
 
+    _redis_url_for_ping="$(_resolve_redis_url 2>/dev/null || true)"
+
+    set +e
     bash scripts/redis_connectivity_check.sh
     RC=$?
+    set -e
 
     echo "=== REDIS PREFLIGHT EXIT CODE: $RC ==="
 
     if [ $RC -ne 0 ]; then
-      echo "❌ Redis preflight failed"
-      exit 1
+        echo "⚠️  Redis preflight script failed (rc=$RC); attempting Python fallback ping"
+        if [ -n "${_redis_url_for_ping}" ] && "$PY" - <<'PY' "${_redis_url_for_ping}"
+import sys
+
+try:
+    import redis
+except Exception as exc:
+    print(f"Python fallback unavailable: {exc}")
+    raise SystemExit(2)
+
+url = sys.argv[1]
+try:
+    client = redis.from_url(url, socket_connect_timeout=5, socket_timeout=5, retry_on_timeout=False)
+    client.ping()
+    print("✅ Python Redis ping fallback passed")
+except Exception as exc:
+    print(f"❌ Python Redis ping fallback failed: {exc}")
+    raise SystemExit(1)
+PY
+        then
+            echo "✅ Continuing startup after successful Python Redis fallback"
+        else
+            echo "❌ Redis preflight failed"
+            exit 1
+        fi
     fi
 
     echo "✅ Redis preflight passed"
 
     echo "=== TESTING REDIS DIRECTLY ==="
-
-    _redis_url_for_ping="$(_resolve_redis_url 2>/dev/null || true)"
+    set +e
     _redis_cli_ping_safe "${_redis_url_for_ping}"
-
-    echo "Redis CLI exit code: $?"
+    _redis_cli_direct_rc=$?
+    set -e
+    echo "Redis CLI exit code: ${_redis_cli_direct_rc}"
+    if [ "${_redis_cli_direct_rc}" -ne 0 ]; then
+        echo "⚠️  Direct redis-cli test failed, but preflight already validated connectivity. Continuing startup."
+    fi
 elif [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then
     echo "ℹ️  Redis startup preflight disabled (NIJA_REDIS_STARTUP_CHECK=${NIJA_REDIS_STARTUP_CHECK:-false})"
 fi
