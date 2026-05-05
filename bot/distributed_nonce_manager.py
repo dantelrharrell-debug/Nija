@@ -443,10 +443,15 @@ class _PerKeyRedisBackend:
         if current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
+                redis.call('SETNX', counter_key, 0)
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
                 if not set_ok then
-                    redis.call('PEXPIRE', version_key, ttl)
+                    local existing_version = tonumber(redis.call('GET', version_key))
+                    if existing_version then
+                        version = existing_version
+                        redis.call('PEXPIRE', version_key, ttl)
+                    end
                 end
             else
                 redis.call('PEXPIRE', version_key, ttl)
@@ -456,7 +461,10 @@ class _PerKeyRedisBackend:
             else
                 local fp_set = redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
                 if not fp_set then
-                    redis.call('PEXPIRE', fingerprint_key, ttl)
+                    local existing_fp = redis.call('GET', fingerprint_key)
+                    if existing_fp == fingerprint then
+                        redis.call('PEXPIRE', fingerprint_key, ttl)
+                    end
                 end
             end
             redis.call('PEXPIRE', owner_key, ttl)
@@ -484,6 +492,7 @@ class _PerKeyRedisBackend:
         redis.call('DEL', fingerprint_key)
         return 1
     """
+    # Keep renewal semantics mirrored with _LEASE_LUA for consistency.
     _LEASE_FORCE_LUA = """
         local owner_key = KEYS[1]
         local version_key = KEYS[2]
@@ -498,10 +507,15 @@ class _PerKeyRedisBackend:
         if current_owner and current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
+                redis.call('SETNX', counter_key, 0)
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
                 if not set_ok then
-                    redis.call('PEXPIRE', version_key, ttl)
+                    local existing_version = tonumber(redis.call('GET', version_key))
+                    if existing_version then
+                        version = existing_version
+                        redis.call('PEXPIRE', version_key, ttl)
+                    end
                 end
             else
                 redis.call('PEXPIRE', version_key, ttl)
@@ -511,7 +525,10 @@ class _PerKeyRedisBackend:
             else
                 local fp_set = redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
                 if not fp_set then
-                    redis.call('PEXPIRE', fingerprint_key, ttl)
+                    local existing_fp = redis.call('GET', fingerprint_key)
+                    if existing_fp == fingerprint then
+                        redis.call('PEXPIRE', fingerprint_key, ttl)
+                    end
                 end
             end
             redis.call('PEXPIRE', owner_key, ttl)
@@ -938,8 +955,8 @@ class _PerKeyRedisBackend:
         # Fencing rule: once a process has a lease version, any version rotation
         # means lease continuity was lost (TTL expiry / partition / failover).
         if prev.version != lease_version:
-            # Same-owner version changes can happen during safe renewal; avoid self-fencing
-            # and preserve stable_since to maintain continuity tracking.
+            # Same-owner version changes can happen during Redis repairs or renewals that
+            # refresh metadata; avoid self-fencing and preserve stable_since continuity.
             if current_owner == self._owner_id:
                 self._lease_by_key[key_id] = self._LeaseState(
                     version=lease_version,
