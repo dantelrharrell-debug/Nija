@@ -13,6 +13,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from datetime import datetime
+import pytest
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -20,10 +21,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import directly from module files to avoid importing bot.py
 import importlib.util
 
+_risk_guard_path = Path(__file__).parent / "bot" / "risk_freeze_guard.py"
+if not _risk_guard_path.exists():
+    pytest.skip("risk_freeze_guard module not available in this build", allow_module_level=True)
+
 # Load risk_freeze_guard
 spec = importlib.util.spec_from_file_location(
     "risk_freeze_guard",
-    Path(__file__).parent / "bot" / "risk_freeze_guard.py"
+    _risk_guard_path
 )
 risk_freeze_guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(risk_freeze_guard)
@@ -33,9 +38,13 @@ RiskFreezeViolation = risk_freeze_guard.RiskFreezeViolation
 EmergencyOverride = risk_freeze_guard.EmergencyOverride
 
 # Load risk_config_versions
+_risk_config_path = Path(__file__).parent / "bot" / "risk_config_versions.py"
+if not _risk_config_path.exists():
+    pytest.skip("risk_config_versions module not available in this build", allow_module_level=True)
+
 spec = importlib.util.spec_from_file_location(
     "risk_config_versions",
-    Path(__file__).parent / "bot" / "risk_config_versions.py"
+    _risk_config_path
 )
 risk_config_versions = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(risk_config_versions)

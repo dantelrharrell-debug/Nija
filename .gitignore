@@ -391,6 +391,7 @@ test_*.py
 !bot/tests/test_*.py  # Keep bot/tests directory tests
 !bot/tests/test_delisted_asset_registry.py
 !scripts/chaos/test_*.py  # Keep chaos testing scripts
+!bot/tests/test_safety_gates.py
 
 # Temporary text/config files
 *.txt.bak

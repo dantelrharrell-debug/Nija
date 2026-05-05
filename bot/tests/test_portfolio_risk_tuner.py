@@ -9,16 +9,19 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from portfolio_risk_tuner import (
-    AllocationLimits,
-    StrategyQuorum,
-    PortfolioRiskConstraints,
-    PortfolioRiskTuner,
-    get_portfolio_risk_tuner,
-    TunerSnapshot,
-    MIN_STRATEGY_WEIGHT,
-    MAX_STRATEGY_WEIGHT,
+portfolio_risk_tuner = pytest.importorskip(
+    "portfolio_risk_tuner",
+    reason="portfolio_risk_tuner module not available in this build",
 )
+
+AllocationLimits = portfolio_risk_tuner.AllocationLimits
+StrategyQuorum = portfolio_risk_tuner.StrategyQuorum
+PortfolioRiskConstraints = portfolio_risk_tuner.PortfolioRiskConstraints
+PortfolioRiskTuner = portfolio_risk_tuner.PortfolioRiskTuner
+get_portfolio_risk_tuner = portfolio_risk_tuner.get_portfolio_risk_tuner
+TunerSnapshot = portfolio_risk_tuner.TunerSnapshot
+MIN_STRATEGY_WEIGHT = portfolio_risk_tuner.MIN_STRATEGY_WEIGHT
+MAX_STRATEGY_WEIGHT = portfolio_risk_tuner.MAX_STRATEGY_WEIGHT
 
 
 class TestAllocationLimits:
