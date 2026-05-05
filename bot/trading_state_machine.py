@@ -233,7 +233,7 @@ def _strategy_ready_gate() -> tuple[bool, str]:
         except ImportError:
             from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
     except ImportError:
-        return True, "startup_readiness_gate_unavailable"
+        return False, "startup_readiness_gate_module_missing"
 
     try:
         gate = get_startup_readiness_gate()
@@ -336,7 +336,12 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
 
     # Fail-fast gate only for reconciliation/nonce/lease conflicts per safety contract.
     if not (recon_ok and nonce_ok and lease_ok):
-        logger.critical("🚫 EXECUTION BLOCKED — SAFETY GATE FAILURE")
+        logger.critical(
+            "🚫 EXECUTION BLOCKED — SAFETY GATE FAILURE (reconciliation=%s nonce_sync=%s lease_owner=%s)",
+            "OK" if recon_ok else "FAIL",
+            "OK" if nonce_ok else "FAIL",
+            "OK" if lease_ok else "FAIL",
+        )
 
 
 def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) -> tuple[bool, str]:
