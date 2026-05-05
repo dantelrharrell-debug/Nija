@@ -35,7 +35,7 @@ CRYPTOCURRENCY TRADING INVOLVES SUBSTANTIAL RISK OF LOSS
    • NIJA is an independent trading tool - NOT investment advice
    • You make all decisions about when and what to trade
    • This software executes trades based on YOUR configuration
-   • System optimizations are technical in nature and do not imply improved financial outcomes
+   • System optimizations are technical in nature and do not imply improved financial outcomes.
    • NO GUARANTEES of profit or performance are made
 
 📊 INDEPENDENT TRADING MODEL:

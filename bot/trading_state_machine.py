@@ -1621,7 +1621,7 @@ def _capital_readiness_gate() -> tuple:
     return True, "ok"
 
 
-def _strategy_readiness_gate() -> tuple:
+def _strategy_readiness_gate() -> tuple[bool, str]:
     """Check that core strategy modules are loaded and available."""
     if not _env_truthy("NIJA_REQUIRE_STRATEGY_READY", "true"):
         return True, ""
@@ -1640,7 +1640,7 @@ def _strategy_readiness_gate() -> tuple:
         return False, f"STRATEGY_READY=false: {exc}"
 
 
-def _execution_readiness_gate() -> tuple:
+def _execution_readiness_gate() -> tuple[bool, str]:
     """Check execution pipeline health independently from capital readiness."""
     try:
         try:

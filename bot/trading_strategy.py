@@ -3265,7 +3265,7 @@ BROKER_MIN_BALANCE = {
 # - API credentials are valid
 # Useful for verification after deployment or to monitor exchange health
 HEARTBEAT_TRADE_ENABLED = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
-HEARTBEAT_TRADE_SIZE_USD = float(os.getenv('HEARTBEAT_TRADE_SIZE', '5.50'))  # Requested trade size
+HEARTBEAT_TRADE_SIZE_USD = float(os.getenv('HEARTBEAT_TRADE_SIZE', '5.00'))  # Requested trade size
 HEARTBEAT_TRADE_MAX_USD = float(os.getenv('HEARTBEAT_TRADE_MAX_USD', '5.00'))  # Hard cap for safety
 HEARTBEAT_TRADE_INTERVAL_SECONDS = int(os.getenv('HEARTBEAT_TRADE_INTERVAL', '600'))  # 10 minutes default
 HEARTBEAT_REQUIRED_FIRST_ACTIVATION = os.getenv('HEARTBEAT_REQUIRED_FIRST_ACTIVATION', 'false').lower() in ('true', '1', 'yes')
@@ -8428,7 +8428,7 @@ class TradingStrategy:
         """
         Execute a tiny heartbeat trade to verify exchange connectivity.
         
-        Heartbeat trades are minimal size ($5.50) test trades that:
+        Heartbeat trades are minimal size ($5.00) test trades that:
         - Verify API credentials are working
         - Confirm order execution is functional
         - Monitor exchange connectivity health
@@ -18049,7 +18049,7 @@ class TradingStrategy:
                         # ── GUARANTEE MINIMAL TRADE PATH ──────────────────────
                         # When no signals pass all filters, attempt a heartbeat trade
                         # to prove the execution layer can physically reach the exchange.
-                        # Heartbeat trades are micro-size ($5.50) connectivity checks —
+                        # Heartbeat trades are micro-size ($5.00) connectivity checks —
                         # NOT strategy trades.  Enable with HEARTBEAT_TRADE=true.
                         # If the heartbeat fires here, the pipeline is silent but the
                         # exchange connection is healthy — investigate strategy filters.

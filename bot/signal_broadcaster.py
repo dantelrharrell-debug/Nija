@@ -65,6 +65,21 @@ logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
 
+
+def _get_env_float(name: str, default: float) -> float:
+    """Read a float environment variable with safe fallback."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = str(raw).strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Retry configuration
 # ---------------------------------------------------------------------------
@@ -174,9 +189,9 @@ class SignalBroadcaster:
         self._risk_fraction = risk_fraction
         self._retry_config = retry_config or RetryConfig()
         self._lock = threading.Lock()
-        self._execution_jitter_ms = float(os.getenv("NIJA_ACCOUNT_EXECUTION_JITTER_MS", "250") or 250.0)
-        self._cooldown_base_s = float(os.getenv("NIJA_ACCOUNT_COOLDOWN_BASE_S", "0.0") or 0.0)
-        self._cooldown_jitter_s = float(os.getenv("NIJA_ACCOUNT_COOLDOWN_JITTER_S", "0.25") or 0.25)
+        self._execution_jitter_ms = _get_env_float("NIJA_ACCOUNT_EXECUTION_JITTER_MS", 250.0)
+        self._cooldown_base_s = _get_env_float("NIJA_ACCOUNT_COOLDOWN_BASE_S", 0.0)
+        self._cooldown_jitter_s = _get_env_float("NIJA_ACCOUNT_COOLDOWN_JITTER_S", 0.25)
         self._account_cooldown_offsets: Dict[str, float] = {}
         self._account_last_exec_ts: Dict[str, float] = {}
 
@@ -461,10 +476,14 @@ class SignalBroadcaster:
     def _seed_for_account(self, account_id: str) -> int:
         """Return a deterministic integer seed for an account."""
         digest = hashlib.sha256(account_id.encode("utf-8")).hexdigest()
-        return int(digest[:8], 16)
+        return int(digest[:16], 16)
 
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
-        """Apply per-account cooldown and jitter to diversify execution timing."""
+        """Apply per-account cooldown and jitter to diversify execution timing.
+
+        Jitter uses a per-second seed to introduce small, repeatable timing
+        variance without synchronizing accounts.
+        """
         cooldown_offset = self._account_cooldown_offsets.get(account_id)
         if cooldown_offset is None:
             cooldown_offset = self._compute_account_cooldown_offset(account_id)

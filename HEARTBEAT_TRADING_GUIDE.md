@@ -16,7 +16,7 @@ LIVE_CAPITAL_VERIFIED=true
 
 # REQUIRED: Heartbeat Verification (enable temporarily)
 HEARTBEAT_TRADE=true
-HEARTBEAT_TRADE_SIZE=5.50
+HEARTBEAT_TRADE_SIZE=5.00
 HEARTBEAT_TRADE_MAX_USD=5.00
 HEARTBEAT_TRADE_INTERVAL=600
 HEARTBEAT_ONESHOT_ENABLED=true
@@ -26,7 +26,7 @@ HEARTBEAT_ONESHOT_ENABLED=true
 
 Watch for heartbeat execution (~10 minutes):
 ```
-❤️  HEARTBEAT TRADE ENABLED: request=$5.50 cap=$5.00 every 600s
+❤️  HEARTBEAT TRADE ENABLED: request=$5.00 cap=$5.00 every 600s
 ...
 ❤️  HEARTBEAT TRADE EXECUTION
    ✅ Heartbeat trade #1 EXECUTED
@@ -74,8 +74,8 @@ Add to `.env` or set as environment variables:
 # Enable heartbeat trading
 HEARTBEAT_TRADE=true
 
-# Trade size in USD (default: $5.50 - minimum viable)
-HEARTBEAT_TRADE_SIZE=5.50
+# Trade size in USD (default: $5.00 - minimum viable)
+HEARTBEAT_TRADE_SIZE=5.00
 
 # Hard safety cap (default: $5.00)
 HEARTBEAT_TRADE_MAX_USD=5.00
@@ -105,7 +105,7 @@ HEARTBEAT_TRADE=true
 
 **Step 2: Deploy and Monitor Logs**
 ```
-❤️  HEARTBEAT TRADE ENABLED: request=$5.50 cap=$5.00 every 600s
+❤️  HEARTBEAT TRADE ENABLED: request=$5.00 cap=$5.00 every 600s
 ...
 ❤️  HEARTBEAT TRADE EXECUTION
    Symbol: BTC-USD
@@ -245,7 +245,7 @@ In Railway dashboard, add:
 KRAKEN_PLATFORM_API_KEY=<your-api-key>
 KRAKEN_PLATFORM_API_SECRET=<your-api-secret>
 HEARTBEAT_TRADE=true
-HEARTBEAT_TRADE_SIZE=5.50
+HEARTBEAT_TRADE_SIZE=5.00
 HEARTBEAT_TRADE_MAX_USD=5.00
 HEARTBEAT_TRADE_INTERVAL=600
 HEARTBEAT_ONESHOT_ENABLED=true
@@ -268,7 +268,7 @@ Watch Railway logs for:
 ✅ KRAKEN (Platform) - PRIMARY BROKER:
    ✅ Configured (Key: 64 chars, Secret: 88 chars)
 
-❤️  HEARTBEAT TRADE ENABLED: request=$5.50 cap=$5.00 every 600s
+❤️  HEARTBEAT TRADE ENABLED: request=$5.00 cap=$5.00 every 600s
 
 📊 USER STATUS BANNER
    💰 KRAKEN Balance: $150.00

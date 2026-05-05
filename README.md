@@ -1380,7 +1380,7 @@ Execute tiny test trades to verify exchange connectivity:
 ```bash
 # Enable for deployment verification
 HEARTBEAT_TRADE=true
-HEARTBEAT_TRADE_SIZE=5.50  # Requested trade size
+HEARTBEAT_TRADE_SIZE=5.00  # Requested trade size
 HEARTBEAT_TRADE_MAX_USD=5.00  # Hard safety cap
 HEARTBEAT_TRADE_INTERVAL=600  # 10 minutes
 HEARTBEAT_ONESHOT_ENABLED=true  # Prevent repeat trades on restart
@@ -1391,7 +1391,7 @@ HEARTBEAT_TRADE=false
 
 **What Happens:**
 ```
-❤️  HEARTBEAT TRADE ENABLED: $5.50 every 600s
+❤️  HEARTBEAT TRADE ENABLED: request=$5.00 cap=$5.00 every 600s
 ...
 ❤️  HEARTBEAT TRADE EXECUTION
    Symbol: BTC-USD
