@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
-SEED_HEX_LENGTH = 16  # 64-bit seed; stable across accounts and compatible with random.Random()
+SEED_HEX_LENGTH = 16  # 16 hex chars (64-bit seed) for jitter randomization
 JITTER_BUCKET_SECONDS = 60
 
 
@@ -478,7 +478,10 @@ class SignalBroadcaster:
         return rng.uniform(0.0, self._cooldown_jitter_s)
 
     def _seed_for_account(self, account_id: str) -> int:
-        """Return a deterministic integer seed for an account."""
+        """Return a deterministic integer seed for an account.
+
+        64-bit seeds are sufficient for timing jitter (not crypto/security use).
+        """
         cached = self._account_seed_cache.get(account_id)
         if cached is not None:
             return cached
@@ -495,8 +498,8 @@ class SignalBroadcaster:
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
         """Apply per-account cooldown and jitter to diversify execution timing.
 
-        Jitter uses a per-minute seed bucket to introduce small timing variance
-        without synchronizing accounts.
+        Jitter uses a per-minute seed bucket based on monotonic time to avoid
+        wall-clock adjustments and reduce synchronization across instances.
         """
         cooldown_offset = self._account_cooldown_offsets.get(account_id)
         if cooldown_offset is None:

@@ -513,6 +513,7 @@ class HealthCheckManager:
         readiness, _ = self.get_readiness_status()
         critical = self.get_critical_status()
         emergency_stop_active = os.path.exists("EMERGENCY_STOP")
+        # Defaults ensure all expected keys are present even if gate checks fail.
         execution_gate = {
             "execution_eligible": False,
             "state_machine": None,
