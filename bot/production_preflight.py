@@ -666,7 +666,7 @@ def _step7_adversarial_validation() -> None:
         log.warning("⚠️  Skipping failure injection: strict distributed lock not required")
         return
 
-    invalid_token = f"invalid-{uuid.uuid4().hex[:12]}"
+    invalid_token = uuid.uuid4().hex
     os.environ["NIJA_WRITER_FENCING_TOKEN"] = invalid_token
     try:
         try:
