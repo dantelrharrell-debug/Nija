@@ -1821,6 +1821,13 @@ def _acquire_distributed_process_lock() -> None:
             print(f"   Lock holder raw:  {_holder}")
             print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
             logger.critical("Another instance is active — entering fail-closed standby")
+            if _live_mode and _require_lock and not _unsafe_bypass:
+                print(
+                    "🚫 LIVE MODE: duplicate distributed writer lock detected. "
+                    "Exiting immediately to prevent split-brain trading.",
+                    flush=True,
+                )
+                sys.exit(1)
             _enter_fail_closed_standby("Duplicate deployment detected — another writer already holds the lock")
             return
 

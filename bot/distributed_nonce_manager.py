@@ -172,11 +172,11 @@ def _env_true(name: str, default: str = "0") -> bool:
 
 
 # The writer lease must outlive ordinary gaps between Kraken private calls.
-# A 15s default was shorter than normal startup/watchdog idle periods, which
-# caused the same process to reacquire a fresh lease version and hard-stop on
-# the next nonce request. Keep the override env var, but default to 2 minutes
+# Prior short defaults could expire during normal startup/watchdog idle periods,
+# causing the same process to reacquire a fresh lease version and hard-stop on
+# the next nonce request. Keep the override env var, but default to 10 minutes
 # so routine idle windows do not look like split-brain.
-_REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "120000")))
+_REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "600000")))
 _STRICT_REDIS_LEASE = (
     _env_true("NIJA_STRICT_REDIS_LEASE", "1")
     and not _env_true("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "0")
@@ -591,6 +591,25 @@ class _PerKeyRedisBackend:
         # Fencing rule: once a process has a lease version, any version rotation
         # means lease continuity was lost (TTL expiry / partition / failover).
         if prev.version != lease_version:
+            if lease_version < prev.version:
+                reset_msg = (
+                    "Redis reset detected: writer lease version decreased "
+                    f"(key_id={key_id}, prev={prev.version}, new={lease_version})."
+                )
+                if self._strict_lease:
+                    policy = os.environ.get("NIJA_REDIS_RESET_POLICY", "require_confirmation").strip().lower()
+                    ack = _env_true("NIJA_REDIS_RESET_ACK", "0")
+                    if policy not in {"auto_reinit", "require_confirmation"}:
+                        policy = "require_confirmation"
+                    if policy != "auto_reinit" and not ack:
+                        raise RuntimeError(
+                            f"{reset_msg} Set NIJA_REDIS_RESET_ACK=true to proceed after verifying persistence."
+                        )
+                    _logger.critical("%s Recovery acknowledged; continuing.", reset_msg)
+                else:
+                    _logger.critical(reset_msg)
+                self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
+                return lease_version
             msg = (
                 "Redis writer lease fencing token changed "
                 f"(key_id={key_id}, prev={prev.version}, new={lease_version}). "
