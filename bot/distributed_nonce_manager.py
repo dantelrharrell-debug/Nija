@@ -228,6 +228,7 @@ try:
     )
 except (TypeError, ValueError):
     _REDIS_LEASE_RENEWAL_FRACTION = 0.333
+# TTL/3 default minimizes expiry risk; override via env if load concerns require a slower cadence.
 if _REDIS_LEASE_RENEWAL_FRACTION < 0.0:
     _REDIS_LEASE_RENEWAL_FRACTION = 0.0
 elif _REDIS_LEASE_RENEWAL_FRACTION > 0.9:
@@ -443,6 +444,7 @@ class _PerKeyRedisBackend:
         if current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
+                -- Lua script runs atomically; SETNX/GET/SET is safe from interleaving.
                 redis.call('SETNX', counter_key, 0)
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
@@ -507,6 +509,7 @@ class _PerKeyRedisBackend:
         if current_owner and current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
+                -- Lua script runs atomically; SETNX/GET/SET is safe from interleaving.
                 redis.call('SETNX', counter_key, 0)
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
@@ -958,6 +961,13 @@ class _PerKeyRedisBackend:
             # Same-owner version changes can happen during Redis repairs or renewals that
             # refresh metadata; avoid self-fencing and preserve stable_since continuity.
             if current_owner == self._owner_id:
+                _logger.warning(
+                    "DistributedNonceManager: same-owner lease version change; preserving continuity "
+                    "(key=%s prev=%d new=%d)",
+                    key_id,
+                    prev.version,
+                    lease_version,
+                )
                 self._lease_by_key[key_id] = self._LeaseState(
                     version=lease_version,
                     owner_id=self._owner_id,
