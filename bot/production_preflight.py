@@ -254,7 +254,12 @@ def _step2_lock_logging(redis_client: "redis.Redis") -> None:  # type: ignore[na
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[name-defined]
-    """Validate Redis persistence, writer lock ownership, and nonce continuity."""
+    """Validate Redis persistence, writer lock ownership, and nonce continuity.
+
+    This gate fail-closes live-mode startup when persistence cannot be verified,
+    when writer fencing ownership is missing, or when a reset is detected without
+    explicit operator acknowledgement. It prevents split-brain trading.
+    """
     _step(3, "Redis persistence + fencing health")
 
     dry_run = _env_truthy("DRY_RUN_MODE", "false")
@@ -380,6 +385,10 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
         ack = _env_truthy("NIJA_REDIS_RESET_ACK", "false")
         message = "; ".join(reset_reasons)
         if policy not in {"auto_reinit", "require_confirmation"}:
+            log.warning(
+                "Invalid NIJA_REDIS_RESET_POLICY=%r; defaulting to require_confirmation",
+                policy,
+            )
             policy = "require_confirmation"
         if policy == "auto_reinit":
             log.critical("Redis reset detected (%s) — auto-reinit policy enabled", message)
