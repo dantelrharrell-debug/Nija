@@ -50,7 +50,7 @@ log = logging.getLogger("nija.preflight")
 
 SEPARATOR = "=" * 72
 _TRUTHY = {"1", "true", "yes", "on", "enabled"}
-_RECOMMENDED_LEASE_TTL_MS = 8000  # Aligns with clamped 5-10s lease TTL and ~1/3 renewal cadence.
+_RECOMMENDED_LEASE_TTL_MS = 8000  # Aligns with clamped 5-10s lease TTL range (8s default) and ~1/3 renewal cadence.
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:

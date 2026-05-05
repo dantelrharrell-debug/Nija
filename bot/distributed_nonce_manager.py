@@ -421,6 +421,7 @@ class _PerKeyRedisBackend:
     _LEASE_VERSION_COUNTER_PREFIX = "nija:kraken:writer:version_counter:"
     _LEASE_FINGERPRINT_PREFIX = "nija:kraken:writer:fingerprint:"
 
+    # Renewal logic is duplicated across lease scripts to keep each Lua script self-contained.
     _LEASE_LUA = """
         local owner_key = KEYS[1]
         local version_key = KEYS[2]
@@ -941,7 +942,8 @@ class _PerKeyRedisBackend:
         # Fencing rule: once a process has a lease version, any version rotation
         # means lease continuity was lost (TTL expiry / partition / failover).
         if prev.version != lease_version:
-            # Same-owner version changes can happen during safe renewal; avoid self-fencing.
+            # Same-owner version changes can happen during safe renewal; avoid self-fencing
+            # and preserve stable_since to maintain continuity tracking.
             if current_owner == self._owner_id:
                 self._lease_by_key[key_id] = self._LeaseState(
                     version=lease_version,
