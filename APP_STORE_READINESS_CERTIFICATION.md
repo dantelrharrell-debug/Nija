@@ -549,7 +549,7 @@ INDEPENDENT_TRADING_EXPLANATION = """
    • NO signal distribution between accounts
    
 🤖 HOW IT WORKS:
-   • All accounts use the SAME algorithm
+   • All accounts use the same strategy framework with account-specific state
    • Each account independently applies it
    • No coordination or copying
 """

@@ -133,6 +133,10 @@ class MasterStrategyRouter:
             self._apex is not None,
         )
 
+    def is_ready(self) -> bool:
+        """Return True when core strategy modules are loaded."""
+        return bool(self._voter or self._apex)
+
     # ------------------------------------------------------------------
     # Public API — consensus evaluation
     # ------------------------------------------------------------------

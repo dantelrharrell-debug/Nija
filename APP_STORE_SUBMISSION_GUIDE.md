@@ -738,7 +738,7 @@ python test_app_store_mode.py
 NIJA - Automated Cryptocurrency Trading
 
 INDEPENDENT TRADING MODEL
-Each account trades independently using the same algorithmic strategy.
+Each account trades independently using the same strategy framework with account-specific state.
 NO trade copying between accounts.
 
 FEATURES

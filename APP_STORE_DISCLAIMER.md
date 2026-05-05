@@ -19,11 +19,11 @@ accounts using YOUR API credentials.
 
 INDEPENDENT TRADING MODEL:
 NIJA does NOT copy trades between accounts. Each connected account evaluates 
-markets independently using the same NIJA trading algorithm and executes trades 
-based on risk-gated execution. Results may differ per account due to timing 
-variations, account balance differences, and market conditions. There is NO 
-platform account that controls other accounts, and NO trade signal distribution 
-occurs between accounts.
+markets independently using the same strategy framework applied with account-
+specific state, risk, and execution context. Results may differ per account due 
+to timing variations, account balance differences, cooldown variance, and market 
+conditions. There is NO platform account that controls other accounts, and NO 
+trade signal distribution occurs between accounts.
 
 WHY TRADING RESULTS DIFFER BETWEEN ACCOUNTS:
 • Timing variations (network latency, API response times, scan timing)
@@ -38,8 +38,9 @@ lose. Past performance does not guarantee future results.
 
 NOT FINANCIAL ADVICE:
 NIJA is a software tool, NOT a financial advisor. We do NOT provide investment 
-advice, recommendations, or financial planning services. You are solely 
-responsible for your trading decisions.
+advice, recommendations, or financial planning services. System optimizations 
+are technical in nature and do not imply improved financial outcomes. You are 
+solely responsible for your trading decisions.
 
 NO GUARANTEED RETURNS:
 There are NO guaranteed profits. Any representation of potential earnings or 
@@ -88,10 +89,10 @@ NIJA is an automated trading algorithm that will execute
 cryptocurrency trades on your exchange account(s).
 
 INDEPENDENT TRADING:
-• Each account evaluates independently using the same algorithm
+• Each account evaluates independently using the same strategy framework
 • Accounts do NOT copy trades from each other
 • Each account makes its own trading decisions via risk-gated execution
-• Results may differ per account due to timing and balance differences
+• Results may differ per account due to timing, cooldown variance, and balance differences
 • No platform account controls or leads other accounts
 
 RISKS:
@@ -208,13 +209,14 @@ What this means:
 SECTION: INDEPENDENT TRADING MODEL
 
 NIJA operates using an independent trading model. Each connected account 
-trades independently using the same NIJA trading algorithm. The system does 
-NOT copy, mirror, or replicate trades from one account to another.
+trades independently using the same strategy framework applied with account-
+specific state, risk, and execution context. The system does NOT copy, mirror, 
+or replicate trades from one account to another.
 
 Specifically:
-a) Each account analyzes market data independently
-b) Each account makes its own trading decisions based on the same algorithm
-c) Each account executes trades at its own timing
+a) Each account analyzes market data independently with account-specific state
+b) Each account makes its own trading decisions based on the same strategy framework
+c) Each account executes trades with timing jitter and cooldown variance
 d) Position sizes are calculated independently based on each account's balance
 e) No account has control over or influence on other accounts
 f) There is no "platform account" or "follower account" structure
@@ -225,11 +227,12 @@ h) The timing and exact trades may differ between accounts due to:
    - Account balance differences
    - Existing position differences
    - Natural timing variation in market scanning
+   - Account-specific cooldown variance
 
 Users acknowledge and agree that:
 - Accounts trade independently, not by copying
 - Each account is responsible for its own trading results
-- Similar trades across accounts result from using the same algorithm, not copying
+- Similar trades across accounts result from using the same framework, not copying
 - No account receives preferential treatment or information
 ```
 
@@ -293,8 +296,9 @@ IMPORTANT FOR APP REVIEW:
 
 1. INDEPENDENT TRADING MODEL:
    This app does NOT copy trades between accounts. Each account trades 
-   independently using the same algorithm. There is no "platform account" 
-   or signal distribution.
+   independently using the same strategy framework with account-specific 
+   state, risk, and execution context. There is no "platform account" or 
+   signal distribution.
 
 2. USER API CREDENTIALS:
    The app requires user-provided exchange API credentials. The app does 
@@ -363,9 +367,11 @@ All marketing materials (website, social media, ads) MUST include:
 ```
 ⚠️ TRADING DISCLAIMER
 Cryptocurrency trading involves substantial risk of loss. NIJA is an 
-automated trading algorithm - NOT financial advice. Each account trades 
-independently using the same algorithm. No trade copying occurs. Past 
-performance does not guarantee future results. You may lose money.
+automated trading algorithm - NOT financial advice. System optimizations are 
+technical in nature and do not imply improved financial outcomes. Each account 
+trades independently using the same strategy framework with account-specific 
+state, risk, and execution context. No trade copying occurs. Past performance 
+does not guarantee future results. You may lose money.
 ```
 
 ---
@@ -377,8 +383,9 @@ performance does not guarantee future results. You may lose money.
 RISK DISCLOSURE: Trading cryptocurrencies involves substantial risk of loss 
 and may not be suitable for all investors. This software is provided for 
 informational and automated trading purposes only and should not be considered 
-financial advice. Each account trades independently using the same algorithm - 
-no trade copying or signal distribution occurs. Past performance is not 
+financial advice. Each account trades independently using the same strategy 
+framework with account-specific state and risk - no trade copying or signal 
+distribution occurs. Past performance is not 
 indicative of future results. Users are solely responsible for their trading 
 decisions and should only invest capital they can afford to lose. Consult with 
 a licensed financial advisor before trading.

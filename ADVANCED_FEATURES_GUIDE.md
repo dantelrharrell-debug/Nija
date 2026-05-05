@@ -408,7 +408,7 @@ user_capital_isolation_engine.pause_container("user123")
 - Results that may differ per account based on timing and balance
 - Compliance with financial regulations
 
-Each account runs the same algorithm but makes independent trading decisions.
+Each account runs the same strategy framework but makes independent trading decisions.
 
 ---
 
