@@ -173,11 +173,11 @@ def _env_true(name: str, default: str = "0") -> bool:
 
 
 # Writer leases must remain stable between renewals while avoiding rapid churn.
-# Clamp TTL to 5-10s to cover typical private-call gaps and network jitter without 1s churn.
+# Clamp TTL to 10-30s to tolerate real-world latency spikes without flapping.
 # Renew at ~1/3 of TTL (default 0.333) to minimize expiry risk.
-_REDIS_LEASE_TTL_MIN_MS = 5_000
-_REDIS_LEASE_TTL_MAX_MS = 10_000
-_REDIS_LEASE_TTL_DEFAULT_MS = 8_000
+_REDIS_LEASE_TTL_MIN_MS = 10_000
+_REDIS_LEASE_TTL_MAX_MS = 30_000
+_REDIS_LEASE_TTL_DEFAULT_MS = 20_000
 try:
     _lease_ttl_raw = int(
         os.environ.get("NIJA_REDIS_LEASE_TTL_MS", str(_REDIS_LEASE_TTL_DEFAULT_MS)) or _REDIS_LEASE_TTL_DEFAULT_MS

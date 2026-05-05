@@ -234,6 +234,186 @@ class ExecutionPipeline:
     # Public API
     # ------------------------------------------------------------------
 
+    def _enforce_execution_gate(
+        self,
+        request: PipelineRequest,
+        t_start: float,
+    ) -> Optional[PipelineResult]:
+        """Gate execution based on SafetyController + TradingStateMachine."""
+        safety_mod = _try_import("bot.safety_controller", "safety_controller")
+        if safety_mod is None:
+            logger.warning("ExecutionPipeline: safety_controller unavailable; skipping safety gate")
+            return None
+        get_safety_controller = getattr(safety_mod, "get_safety_controller", None)
+        TradingMode = getattr(safety_mod, "TradingMode", None)
+        if get_safety_controller is None or TradingMode is None:
+            logger.warning("ExecutionPipeline: safety_controller missing expected exports; skipping safety gate")
+            return None
+
+        safety = get_safety_controller()
+        try:
+            if hasattr(safety, "recheck_mode"):
+                safety.recheck_mode()
+        except Exception as exc:
+            logger.debug("ExecutionPipeline: safety.recheck_mode() skipped: %s", exc)
+
+        mode = safety.get_current_mode()
+        allowed, reason = safety.is_trading_allowed()
+        mode_value = mode.value if mode is not None else "unknown"
+
+        if mode in (TradingMode.DISABLED, TradingMode.MONITOR):
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=reason or f"Trading blocked (mode={mode_value})",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
+        if mode in (TradingMode.APP_STORE, TradingMode.DRY_RUN):
+            return self._simulate_execution(request, t_start, mode_value, reason)
+
+        if not allowed:
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=reason or f"Trading blocked (mode={mode_value})",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
+        if mode == TradingMode.LIVE:
+            try:
+                state_mod = _try_import("bot.trading_state_machine", "trading_state_machine")
+                if state_mod is None:
+                    raise ImportError("trading_state_machine not available")
+                get_state_machine = getattr(state_mod, "get_state_machine", None)
+                if get_state_machine is None:
+                    raise ImportError("get_state_machine not available")
+                state_machine = get_state_machine()
+                if hasattr(state_machine, "can_dispatch_trades") and not state_machine.can_dispatch_trades():
+                    current_state = getattr(state_machine, "get_current_state", lambda: None)()
+                    state_value = current_state.value if current_state else "unknown"
+                    return PipelineResult(
+                        success=False,
+                        symbol=request.symbol,
+                        side=request.side,
+                        size_usd=request.size_usd,
+                        error=f"Execution gate pending (state_machine={state_value})",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: trading_state_machine gate skipped: %s", exc)
+
+        return None
+
+    def _simulate_execution(
+        self,
+        request: PipelineRequest,
+        t_start: float,
+        mode_value: str,
+        reason: str,
+    ) -> PipelineResult:
+        """Return a simulated PipelineResult when in dry-run/app-store mode."""
+        dry_run_mod = _try_import("bot.dry_run_engine", "dry_run_engine")
+        if dry_run_mod is None:
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=f"{mode_value} active but dry-run engine unavailable",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+        get_dry_run_engine = getattr(dry_run_mod, "get_dry_run_engine", None)
+        if get_dry_run_engine is None:
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=f"{mode_value} active but dry-run engine unavailable",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
+        app_store_mod = _try_import("bot.app_store_mode", "app_store_mode")
+        if app_store_mod is not None and mode_value == "app_store":
+            get_app_store_mode = getattr(app_store_mod, "get_app_store_mode", None)
+            if get_app_store_mode is not None:
+                try:
+                    get_app_store_mode().block_execution_with_log(
+                        operation="execution_pipeline",
+                        symbol=request.symbol,
+                        side=request.side,
+                        size=request.size_usd,
+                    )
+                except Exception as exc:
+                    logger.debug("ExecutionPipeline: app_store_mode log skipped: %s", exc)
+
+        price_hint = request.price_hint_usd
+        if price_hint is None or price_hint <= 0:
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error="Simulation requires price_hint_usd to compute quantity",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+        # price_hint_usd is expected to be USD per unit of the asset.
+        quantity = request.size_usd / price_hint
+        order_type = (request.order_type or "market").lower()
+
+        side = request.side.lower().strip()
+        if side == "long":
+            side = "buy"
+        elif side == "short":
+            side = "sell"
+
+        engine = get_dry_run_engine()
+        try:
+            order = engine.place_order(
+                symbol=request.symbol,
+                side=side,
+                order_type=order_type,
+                quantity=quantity,
+                price=price_hint if order_type == "limit" else None,
+                current_market_price=price_hint if order_type == "market" else None,
+            )
+            fill_price = order.average_fill_price if order.average_fill_price > 0 else price_hint
+            filled_usd = order.filled_quantity * fill_price
+        except Exception as exc:
+            logger.warning("ExecutionPipeline: simulation failed: %s", exc)
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=f"Simulation failed: {exc}",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
+        logger.info(
+            "ExecutionPipeline SIMULATED | mode=%s | %s %s $%.2f | reason=%s",
+            mode_value,
+            request.side.upper(),
+            request.symbol,
+            request.size_usd,
+            reason or "simulation",
+        )
+        return PipelineResult(
+            success=True,
+            symbol=request.symbol,
+            side=request.side,
+            size_usd=request.size_usd,
+            fill_price=fill_price,
+            filled_size_usd=filled_usd,
+            broker=f"{mode_value}_simulated",
+            latency_ms=(time.monotonic() - t_start) * 1000,
+        )
+
     def execute(self, request: PipelineRequest) -> PipelineResult:
         """Route an order through the TradeThrottler gate then to execution.
 
@@ -254,6 +434,10 @@ class ExecutionPipeline:
         effective_request = request
         order_validated = False
         compiled = None
+
+        gate_result = self._enforce_execution_gate(request, t_start)
+        if gate_result is not None:
+            return gate_result
 
         if self._execution_observer is not None:
             try:

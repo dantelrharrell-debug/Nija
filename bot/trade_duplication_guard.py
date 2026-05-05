@@ -19,7 +19,8 @@ uniquely identify an intent:
     fingerprint = hash(strategy + symbol + direction + time_bucket)
 
 A ``time_bucket`` divides continuous time into discrete windows (default:
-60 seconds).  Within a single window, identical strategy+symbol+direction
+180 seconds, configurable via ``NIJA_TRADE_DEDUP_WINDOW_S``). Within a single
+window, identical strategy+symbol+direction
 triples are considered duplicates.
 
 If the same fingerprint is seen again within ``dedup_window_seconds``, the
@@ -110,6 +111,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -117,6 +119,21 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("nija.trade_duplication_guard")
+
+
+_DEDUP_WINDOW_DEFAULT_S = 180.0
+_DEDUP_WINDOW_MIN_S = 30.0  # Covers typical 10-20s webhook retries + exchange latency spikes.
+
+
+def _default_dedup_window_seconds() -> float:
+    try:
+        value = float(os.getenv("NIJA_TRADE_DEDUP_WINDOW_S", str(_DEDUP_WINDOW_DEFAULT_S)))
+    except (TypeError, ValueError):
+        value = _DEDUP_WINDOW_DEFAULT_S
+    return max(_DEDUP_WINDOW_MIN_S, value)
+
+
+_DEFAULT_DEDUP_WINDOW_S = _default_dedup_window_seconds()
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +191,7 @@ class TradeDuplicationGuardConfig:
         Length of the deduplication window in seconds.  Two requests with
         the same strategy+symbol+direction within this window are treated as
         duplicates.
-        Default: 60 (one minute).
+        Default: 180 seconds (configurable via NIJA_TRADE_DEDUP_WINDOW_S).
     cleanup_interval_seconds:
         How often the guard purges expired fingerprints from its registry.
         Default: 300 (5 minutes).
@@ -183,7 +200,7 @@ class TradeDuplicationGuardConfig:
         Oldest entries are evicted first when the cap is reached.
         Default: 10_000.
     """
-    dedup_window_seconds: float = 60.0
+    dedup_window_seconds: float = _DEFAULT_DEDUP_WINDOW_S
     cleanup_interval_seconds: float = 300.0
     max_registry_size: int = 10_000
 
@@ -276,7 +293,8 @@ class TradeDuplicationGuardConfig:
 
     # How long (seconds) a fingerprint is held after registration.
     # Any identical trade within this window is rejected as a duplicate.
-    ttl_seconds: float = 60.0
+    # Tunable via NIJA_TRADE_DEDUP_WINDOW_S.
+    ttl_seconds: float = _DEFAULT_DEDUP_WINDOW_S
 
     # Round trade size to this many decimal places when fingerprinting.
     # Prevents float noise (e.g. 0.0010000001 vs 0.001) from creating
@@ -797,7 +815,7 @@ if __name__ == "__main__":  # pragma: no cover
 
     logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
 
-    cfg = TradeDuplicationGuardConfig(dedup_window_seconds=60.0)
+    cfg = TradeDuplicationGuardConfig(dedup_window_seconds=_DEFAULT_DEDUP_WINDOW_S)
     guard = TradeDuplicationGuard(cfg)
 
     print("\n=== Trade Duplication Guard — smoke test ===\n")

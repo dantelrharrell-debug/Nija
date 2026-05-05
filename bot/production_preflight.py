@@ -2,7 +2,7 @@
 NIJA Production Pre-Flight
 ==========================
 
-Executes the five mandatory checks before the bot enters live mode:
+Executes the mandatory checks before the bot enters live mode:
 
   Step 1 — Redis PING confirmation
   Step 2 — Lock acquisition logging
@@ -10,6 +10,7 @@ Executes the five mandatory checks before the bot enters live mode:
   Step 4 — Single-instance enforcement
   Step 5 — Stale lock clearance
   Step 6 — Live-mode verification
+  Step 7 — Adversarial validation (optional: multi-instance + failure injection)
 
 Run directly::
 
@@ -34,6 +35,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 # ── logging ──────────────────────────────────────────────────────────────────
@@ -50,7 +52,7 @@ log = logging.getLogger("nija.preflight")
 
 SEPARATOR = "=" * 72
 _TRUTHY = {"1", "true", "yes", "on", "enabled"}
-_RECOMMENDED_LEASE_TTL_MS = 8000  # Aligns with clamped 5-10s lease TTL range (8s default) and ~1/3 renewal cadence.
+_RECOMMENDED_LEASE_TTL_MS = 20_000  # 20s balances WAN jitter vs. failover; tune for latency.
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:
@@ -620,11 +622,78 @@ def _step6_live_mode_check() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Step 7 — Adversarial validation (optional)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _step7_adversarial_validation() -> None:
+    """Run optional adversarial validation (multi-instance + failure injection)."""
+    if not _env_truthy("NIJA_ADVERSARIAL_VALIDATION", "false"):
+        log.info("ℹ️  Adversarial validation disabled (NIJA_ADVERSARIAL_VALIDATION=false)")
+        return
+
+    _step(7, "Adversarial validation (multi-instance + failure injection)")
+
+    try:
+        from bot.execution_authority_context import (
+            get_distributed_writer_authority_status,
+            assert_distributed_writer_authority,
+        )
+        from bot.instance_identity import inspect_lock_holder
+    except ImportError as exc:
+        _fail(f"Cannot import adversarial validation helpers: {exc}")
+        sys.exit(1)
+
+    status = get_distributed_writer_authority_status(force_refresh=True)
+    if not status.get("ok"):
+        _fail(f"Distributed writer authority check failed: {status.get('error')}")
+        sys.exit(1)
+
+    holder = status.get("current_holder") or {}
+    current = status.get("current_instance") or {}
+    inspection = inspect_lock_holder(current, holder)
+    if inspection.get("relationship") == "other-instance":
+        _fail(f"Writer lock held by another instance — {inspection.get('summary')}")
+        sys.exit(1)
+
+    _ok(f"Writer lock holder validated ({inspection.get('relationship')})")
+
+    token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    strict_required = bool(status.get("effective_strict_required"))
+    if not token:
+        log.warning("⚠️  Skipping failure injection: NIJA_WRITER_FENCING_TOKEN not set")
+        return
+    if not strict_required:
+        log.warning("⚠️  Skipping failure injection: strict distributed lock not required")
+        return
+
+    adversarial_invalid_token = uuid.uuid4().hex
+    # Preflight runs before worker threads start; restore the original token immediately after.
+    original_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN")
+    os.environ["NIJA_WRITER_FENCING_TOKEN"] = adversarial_invalid_token
+    failed_as_expected = False
+    try:
+        # Expected to raise with an invalid fencing token (failure injection).
+        assert_distributed_writer_authority()
+    except Exception as exc:
+        failed_as_expected = True
+        _ok(f"Failure injection blocked as expected ({exc})")
+    finally:
+        if original_token is None:
+            os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+        else:
+            os.environ["NIJA_WRITER_FENCING_TOKEN"] = original_token
+
+    if not failed_as_expected:
+        _fail("Failure injection did not block invalid writer fence token")
+        sys.exit(1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_preflight() -> None:
-    """Execute all five pre-flight checks.  Exits with code 1 on any failure."""
+    """Execute all pre-flight checks.  Exits with code 1 on any failure."""
     log.info(SEPARATOR)
     log.info("NIJA PRODUCTION PRE-FLIGHT")
     log.info(SEPARATOR)
@@ -636,6 +705,7 @@ def run_preflight() -> None:
     _step4_single_instance()
     _step5_clear_stale_locks(redis_client)
     _step6_live_mode_check()
+    _step7_adversarial_validation()
 
     elapsed = time.monotonic() - start
     log.info(SEPARATOR)
