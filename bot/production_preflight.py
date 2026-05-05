@@ -50,7 +50,7 @@ log = logging.getLogger("nija.preflight")
 
 SEPARATOR = "=" * 72
 _TRUTHY = {"1", "true", "yes", "on", "enabled"}
-_RECOMMENDED_LEASE_TTL_MS = int(os.getenv("NIJA_REDIS_RECOMMENDED_TTL_MS", "600000"))
+_RECOMMENDED_LEASE_TTL_MS = 600000
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:
@@ -270,6 +270,7 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     live_mode = not dry_run and not paper
     unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "false")
     strict_lock_required = (live_mode or _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK", "false")) and not unsafe_bypass
+    # Strict nonce lease enforcement mirrors startup lock requirements.
     strict_lease = _env_truthy("NIJA_STRICT_REDIS_LEASE", "true") and not unsafe_bypass
     persistence_required = live_mode and _env_truthy("NIJA_REDIS_PERSISTENCE_REQUIRED", "true")
 
@@ -282,7 +283,13 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     aof_enabled = int(persistence_info.get("aof_enabled", 0) or 0)
     rdb_status = str(persistence_info.get("rdb_last_bgsave_status", "") or "").lower()
     rdb_last_save = int(persistence_info.get("rdb_last_save_time", 0) or 0)
-    persistence_ok = bool(aof_enabled == 1 or rdb_status == "ok" or rdb_last_save > 0)
+    rdb_in_progress = int(persistence_info.get("rdb_bgsave_in_progress", 0) or 0)
+    rdb_enabled = bool(
+        rdb_status == "ok"
+        or rdb_in_progress == 1
+        or (rdb_last_save > 0 and "rdb_last_bgsave_status" in persistence_info)
+    )
+    persistence_ok = bool(aof_enabled == 1 or rdb_enabled)
 
     if not persistence_info:
         msg = (
@@ -330,7 +337,7 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     if platform_key:
         try:
             from bot.distributed_nonce_manager import make_api_key_id
-        except ImportError:
+        except (ImportError, AttributeError):
             from distributed_nonce_manager import make_api_key_id  # type: ignore[import]
 
         key_id = make_api_key_id(platform_key)
@@ -340,7 +347,12 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
             lease_version = int(redis_client.get(lease_key) or 0)
             nonce_value = int(redis_client.get(nonce_key) or 0)
         except Exception as exc:
-            log.warning("Could not read nonce lease/nonce keys: %s", exc)
+            log.warning(
+                "Could not read nonce keys %s / %s: %s",
+                lease_key,
+                nonce_key,
+                exc,
+            )
 
         if strict_lease and lease_version <= 0:
             _fail("Redis nonce writer lease missing in strict mode")
