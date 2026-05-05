@@ -173,7 +173,7 @@ def _env_true(name: str, default: str = "0") -> bool:
 
 
 # Writer leases must remain stable between renewals while avoiding rapid churn.
-# Clamp the TTL into a safe 5-10s window and renew at roughly one-third of TTL.
+# Clamp the TTL into a safe 5-10s window and renew at ~1/3 of TTL (default 0.333).
 _REDIS_LEASE_TTL_MIN_MS = 5_000
 _REDIS_LEASE_TTL_MAX_MS = 10_000
 _REDIS_LEASE_TTL_DEFAULT_MS = 8_000
@@ -444,7 +444,10 @@ class _PerKeyRedisBackend:
             if not version then
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 if version > 0 then
-                    redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                    local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                    if not set_ok then
+                        redis.call('PEXPIRE', version_key, ttl)
+                    end
                 end
             else
                 redis.call('PEXPIRE', version_key, ttl)
@@ -452,7 +455,10 @@ class _PerKeyRedisBackend:
             if redis.call('EXISTS', fingerprint_key) == 1 then
                 redis.call('PEXPIRE', fingerprint_key, ttl)
             else
-                redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
+                local fp_set = redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
+                if not fp_set then
+                    redis.call('PEXPIRE', fingerprint_key, ttl)
+                end
             end
             redis.call('PEXPIRE', owner_key, ttl)
             return {1, version, owner}
@@ -495,7 +501,10 @@ class _PerKeyRedisBackend:
             if not version then
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 if version > 0 then
-                    redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                    local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                    if not set_ok then
+                        redis.call('PEXPIRE', version_key, ttl)
+                    end
                 end
             else
                 redis.call('PEXPIRE', version_key, ttl)
@@ -503,7 +512,10 @@ class _PerKeyRedisBackend:
             if redis.call('EXISTS', fingerprint_key) == 1 then
                 redis.call('PEXPIRE', fingerprint_key, ttl)
             else
-                redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
+                local fp_set = redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
+                if not fp_set then
+                    redis.call('PEXPIRE', fingerprint_key, ttl)
+                end
             end
             redis.call('PEXPIRE', owner_key, ttl)
             return {1, version, current_owner}
@@ -865,6 +877,7 @@ class _PerKeyRedisBackend:
                         force_enabled
                         and not force_attempted
                         and current_owner
+                        # Only force takeover if the current lease TTL has expired.
                         and holder_ttl_ms <= 0
                         and (now - last_refresh_at) >= _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S
                     ):
@@ -928,6 +941,7 @@ class _PerKeyRedisBackend:
         # Fencing rule: once a process has a lease version, any version rotation
         # means lease continuity was lost (TTL expiry / partition / failover).
         if prev.version != lease_version:
+            # Same-owner version changes can happen during safe renewal; avoid self-fencing.
             if current_owner == self._owner_id:
                 self._lease_by_key[key_id] = self._LeaseState(
                     version=lease_version,
