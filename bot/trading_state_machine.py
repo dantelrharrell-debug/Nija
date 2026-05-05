@@ -203,6 +203,10 @@ def _startup_reconciliation_gate() -> tuple[bool, str]:
     if not _env_truthy("NIJA_REQUIRE_STARTUP_RECONCILIATION", "true"):
         return True, ""
     if _env_truthy("NIJA_RECONCILIATION_OVERRIDE", "false"):
+        logger.critical(
+            "[RECONCILIATION OVERRIDE] NIJA_RECONCILIATION_OVERRIDE=true — "
+            "startup reconciliation gate bypassed (verify exchange state manually)."
+        )
         return True, ""
     status = os.environ.get("NIJA_RECONCILIATION_STATUS", "").strip().upper()
     if status in {"CLEAN", "CLEAN_START"} and _env_truthy("NIJA_RECONCILIATION_COMPLETE", "false"):

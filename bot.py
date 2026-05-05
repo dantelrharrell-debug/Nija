@@ -1979,9 +1979,9 @@ def _acquire_process_lock() -> None:
             stale_lock_detected = True
 
     if stale_lock_detected:
-        os.environ.setdefault("NIJA_UNCLEAN_SHUTDOWN", "true")
-        os.environ.setdefault("NIJA_SAFE_START_REQUIRED", "true")
-        os.environ.setdefault("NIJA_SAFE_START_REASON", "unclean shutdown detected")
+        os.environ["NIJA_UNCLEAN_SHUTDOWN"] = "true"
+        os.environ["NIJA_SAFE_START_REQUIRED"] = "true"
+        os.environ["NIJA_SAFE_START_REASON"] = "unclean shutdown detected"
         logger.warning(
             "⚠️  Unclean shutdown detected (stale PID lock) — safe-start mode required "
             "(set NIJA_SAFE_START_ACK or complete reconciliation to resume live trading)."

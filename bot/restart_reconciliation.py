@@ -372,10 +372,7 @@ class RestartReconciliationManager:
             try:
                 exchange_open_orders = broker.get_open_orders()  # type: ignore[call-arg]
             except TypeError:
-                try:
-                    exchange_open_orders = broker.get_open_orders(user_id=None)  # type: ignore[call-arg]
-                except Exception as exc:
-                    logger.warning("⚠️  Restart reconciliation: failed to fetch open orders: %s", exc)
+                exchange_open_orders = broker.get_open_orders(user_id=None)  # type: ignore[call-arg]
             except Exception as exc:
                 logger.warning("⚠️  Restart reconciliation: failed to fetch open orders: %s", exc)
 
