@@ -52,7 +52,7 @@ Every trade has **mandatory protection**:
 ### 4. **Independent Trading Model**
 - ✅ **Each account operates independently** - not copy trading
 - ✅ Positions sized **proportionally to YOUR balance**
-- ✅ **Same algorithm, different results** (transparently disclosed)
+- ✅ **Same strategy framework, different results** (transparently disclosed)
 - ✅ Your account makes **its own decisions**
 
 **Why Results Differ:**

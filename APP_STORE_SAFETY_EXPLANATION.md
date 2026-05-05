@@ -14,7 +14,7 @@
 
 ## Executive Summary
 
-NIJA is a **safe, transparent, and compliant** algorithmic trading platform that uses an **independent trading model**. Each user account makes its own trading decisions using the same algorithm, with position sizes calculated proportionally to their account balance.
+NIJA is a **safe, transparent, and compliant** algorithmic trading platform that uses an **independent trading model**. Each user account makes its own trading decisions using the same strategy framework, applied with account-specific state, risk, and execution context.
 
 **Key Safety Points:**
 - ✅ No copy trading - each account operates independently
@@ -51,10 +51,10 @@ Think of NIJA like a GPS navigation app:
 - Your personal preferences (fastest, scenic, etc.)
 
 Similarly with NIJA:
-- Everyone uses the same trading algorithm
-- But your position size depends on YOUR account balance
-- Your execution timing when YOU trade
-- Your risk settings and available capital
+- Everyone uses the same strategy framework
+- But your position size depends on YOUR account balance and risk budget
+- Your execution timing includes per-account jitter and cooldown variance
+- Your account state (PnL, exposure, cooldowns) shapes decisions
 
 ### What Happens When a Trade Signal Occurs
 
@@ -65,16 +65,16 @@ Similarly with NIJA:
 4. Executes trade on platform's Coinbase account
 
 **User Accounts (Independent):**
-1. **Same algorithm runs on each user's account independently**
-2. Each account analyzes the SAME market conditions
-3. Each account INDEPENDENTLY detects the same opportunity
-4. **Position size is calculated based on USER's balance:**
+1. **Same strategy framework runs on each user's account independently**
+2. Each account analyzes the same market conditions with account-specific state
+3. Each account independently detects opportunities with per-account timing variance
+4. **Position size is calculated based on the user's balance:**
    - User with $100 balance → $2 position (2% risk)
    - User with $1,000 balance → $20 position (2% risk)
    - User with $25,000 balance → $500 position (2% risk)
 5. Each account executes its own trade on its own exchange account
 
-**Important:** No "signal distribution" occurs. Each account reaches the same conclusion independently because they're all running the same algorithm on the same market data.
+**Important:** No "signal distribution" occurs. Each account reaches its own conclusion independently because they apply the same framework with account-specific state, risk, and execution context.
 
 ---
 
@@ -360,6 +360,32 @@ This simulation requires **NO API credentials** and uses **NO real money** - it'
 
 **Result:** Trades approved for one account may be rejected for another (by design).
 
+### 9. Explicit Failure Mode Handling
+
+**Purpose:** Ensure failures stop execution in a visible, deterministic way.
+
+**Visible States:**
+- **FAILSAFE_MODE** — emergency stop or critical risk breach detected
+- **EXECUTION_PAUSED** — execution halted due to lock/nonce/connection issues
+- **RECONCILIATION_REQUIRED** — startup reconciliation incomplete or stale
+
+**Result:** Operators can see exactly why trading is paused and remediate safely.
+
+### 10. Deterministic Startup Contract & Observability
+
+**Startup Contract (LIVE mode):**
+- Redis health + distributed writer lock verified
+- Nonce synchronization and lease ownership validated
+- Reconciliation completed (`NIJA_RECONCILIATION_COMPLETE=true`)
+- Strategy framework loaded and execution pipeline healthy
+
+**Observability:**
+- Current trading mode is a single source of truth
+- Reconciliation status and lease ownership are exposed in status output
+- Execution eligibility is surfaced as a boolean gate
+
+**Compliance Note:** System optimizations are technical in nature and do not imply improved financial outcomes.
+
 ---
 
 ## Why Results Differ Between Users
@@ -382,6 +408,7 @@ This is a **critical transparency point** for app reviewers. Results WILL differ
 - Each account scans every ~2.5 minutes
 - Scan times are not synchronized between accounts
 - Account A might scan at 10:00:00, Account B at 10:00:17
+- Per-account jitter and cooldown variance add additional timing divergence
 
 **Market Conditions Change:**
 - Bitcoin price at 10:00:00: $50,000.00
@@ -462,7 +489,7 @@ Users can connect different exchanges:
 - Entry price: $50,020 (slippage on market order)
 - Outcome: +$0.30 profit (1.5% gain)
 
-**Same algorithm, same balance, different results due to:**
+**Same strategy framework, same balance, different results due to:**
 1. Timing (23-second difference)
 2. Existing positions (Account B had less free capital)
 3. Entry price ($20 difference due to market movement)
@@ -497,11 +524,11 @@ Users can connect different exchanges:
 ### ✅ Independent Trading (NIJA's Model - Compliant)
 
 **How NIJA works:**
-1. Each account runs the same algorithm independently
-2. Each account analyzes market data independently
+1. Each account runs the same strategy framework independently
+2. Each account analyzes market data with account-specific state
 3. Each account makes its own trading decision
-4. Position size calculated based on account's own balance
-5. Each account executes on its own schedule
+4. Position size calculated based on account's own balance and risk budget
+5. Each account executes on its own schedule with timing jitter
 
 **Why it's compliant:**
 - Software tool, not a managed account service
@@ -762,10 +789,10 @@ Users grant NIJA **limited API permissions** on their exchange:
 ### Questions App Reviewers May Ask
 
 **Q: Is this copy trading?**  
-A: No. Each account runs the algorithm independently and makes its own decisions. Position sizes are calculated based on each account's balance, not copied from another account.
+A: No. Each account runs the same strategy framework independently and makes its own decisions. Position sizes are calculated based on each account's balance and risk budget, not copied from another account.
 
-**Q: Why would results differ if everyone uses the same algorithm?**  
-A: Timing variations (network latency, scan schedules), account-specific factors (balance, existing positions, risk settings), and execution differences (fill prices, slippage). This is expected and properly disclosed.
+**Q: Why would results differ if everyone uses the same strategy framework?**  
+A: Timing variations (network latency, scan schedules, per-account jitter), account-specific factors (balance, existing positions, risk settings, cooldown variance), and execution differences (fill prices, slippage). This is expected and properly disclosed.
 
 **Q: How do you ensure smaller accounts are protected?**  
 A: Multiple mechanisms: exchange minimum trade sizes ($2-$10), tier-based position limits, fee-aware sizing (rejects unprofitable trades), stop losses, daily loss limits, drawdown protection.

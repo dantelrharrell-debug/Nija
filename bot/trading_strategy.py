@@ -3265,19 +3265,30 @@ BROKER_MIN_BALANCE = {
 # - API credentials are valid
 # Useful for verification after deployment or to monitor exchange health
 HEARTBEAT_TRADE_ENABLED = os.getenv('HEARTBEAT_TRADE', 'false').lower() in ('true', '1', 'yes')
-HEARTBEAT_TRADE_SIZE_USD = float(os.getenv('HEARTBEAT_TRADE_SIZE', '5.50'))  # Minimum viable trade size
+HEARTBEAT_TRADE_SIZE_USD = float(os.getenv('HEARTBEAT_TRADE_SIZE', '5.50'))  # Requested trade size
+HEARTBEAT_TRADE_MAX_USD = float(os.getenv('HEARTBEAT_TRADE_MAX_USD', '5.00'))  # Hard cap for safety
 HEARTBEAT_TRADE_INTERVAL_SECONDS = int(os.getenv('HEARTBEAT_TRADE_INTERVAL', '600'))  # 10 minutes default
 HEARTBEAT_REQUIRED_FIRST_ACTIVATION = os.getenv('HEARTBEAT_REQUIRED_FIRST_ACTIVATION', 'false').lower() in ('true', '1', 'yes')
 HEARTBEAT_AUTO_EXIT = os.getenv('HEARTBEAT_AUTO_EXIT', 'true').lower() in ('true', '1', 'yes')
 HEARTBEAT_MARKER_PATH = os.getenv('HEARTBEAT_MARKER_PATH', './data/heartbeat_verified.flag')
+HEARTBEAT_ONESHOT_ENABLED = os.getenv('HEARTBEAT_ONESHOT_ENABLED', 'true').lower() in ('true', '1', 'yes')
+HEARTBEAT_ONESHOT_LOCK_PATH = os.getenv('HEARTBEAT_ONESHOT_LOCK_PATH', './data/heartbeat_one_shot.lock')
+HEARTBEAT_ONESHOT_RESET = os.getenv('HEARTBEAT_ONESHOT_RESET', 'false').lower() in ('true', '1', 'yes')
 
 if HEARTBEAT_TRADE_ENABLED:
-    logger.info(f"❤️  HEARTBEAT TRADE ENABLED: ${HEARTBEAT_TRADE_SIZE_USD:.2f} every {HEARTBEAT_TRADE_INTERVAL_SECONDS}s")
+    logger.info(
+        "❤️  HEARTBEAT TRADE ENABLED: request=$%.2f cap=$%.2f every %ss",
+        HEARTBEAT_TRADE_SIZE_USD,
+        HEARTBEAT_TRADE_MAX_USD,
+        HEARTBEAT_TRADE_INTERVAL_SECONDS,
+    )
 else:
     logger.debug("Heartbeat trade disabled (set HEARTBEAT_TRADE=true to enable)")
 
 if HEARTBEAT_REQUIRED_FIRST_ACTIVATION:
     logger.info(f"❤️  HEARTBEAT REQUIRED ON FIRST ACTIVATION (marker={HEARTBEAT_MARKER_PATH})")
+if HEARTBEAT_ONESHOT_ENABLED:
+    logger.info(f"❤️  HEARTBEAT ONESHOT LOCK ENABLED (marker={HEARTBEAT_ONESHOT_LOCK_PATH})")
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=60):
     """
@@ -8435,10 +8446,31 @@ class TradingStrategy:
         """
         if not HEARTBEAT_TRADE_ENABLED:
             return False
+
+        if HEARTBEAT_ONESHOT_RESET:
+            self._clear_heartbeat_one_shot_lock()
+
+        if self._is_heartbeat_one_shot_locked():
+            logger.warning(
+                "   ❤️  Heartbeat trade skipped: one-shot lock already set (%s)",
+                HEARTBEAT_ONESHOT_LOCK_PATH,
+            )
+            return False
         
         broker = broker or self.broker
         
         current_time = time.time()
+
+        trade_size_usd = min(HEARTBEAT_TRADE_SIZE_USD, HEARTBEAT_TRADE_MAX_USD)
+        if trade_size_usd <= 0:
+            logger.warning("   ❤️  Heartbeat trade skipped: trade size is zero after cap")
+            return False
+        if HEARTBEAT_TRADE_SIZE_USD > HEARTBEAT_TRADE_MAX_USD:
+            logger.warning(
+                "   ❤️  Heartbeat trade capped: requested $%.2f > max $%.2f",
+                HEARTBEAT_TRADE_SIZE_USD,
+                HEARTBEAT_TRADE_MAX_USD,
+            )
         
         # Check if enough time has passed since last heartbeat
         if self.heartbeat_last_trade_time > 0:
@@ -8456,8 +8488,12 @@ class TradingStrategy:
         try:
             # Get account balance to verify we can trade
             balance = BalanceService.get(_broker_key(broker))
-            if balance < HEARTBEAT_TRADE_SIZE_USD:
-                logger.warning(f"   ❤️  Heartbeat trade skipped: ${balance:.2f} < ${HEARTBEAT_TRADE_SIZE_USD:.2f} minimum")
+            if balance < trade_size_usd:
+                logger.warning(
+                    "   ❤️  Heartbeat trade skipped: $%.2f < $%.2f minimum",
+                    balance,
+                    trade_size_usd,
+                )
                 return False
             
             # Get available markets
@@ -8499,7 +8535,7 @@ class TradingStrategy:
             logger.info(f"❤️  HEARTBEAT TRADE EXECUTION")
             logger.info("=" * 70)
             logger.info(f"   Symbol: {heartbeat_symbol}")
-            logger.info(f"   Size: ${HEARTBEAT_TRADE_SIZE_USD:.2f}")
+            logger.info(f"   Size: ${trade_size_usd:.2f}")
             logger.info(f"   Broker: {broker_name.upper()}")
             logger.info(f"   Purpose: Verify connectivity & order execution")
             
@@ -8511,7 +8547,7 @@ class TradingStrategy:
                     broker,
                     symbol=heartbeat_symbol,
                     side='buy',
-                    quantity=HEARTBEAT_TRADE_SIZE_USD,
+                    quantity=trade_size_usd,
                     size_type='quote'  # USD amount, not base currency amount
                 )
             except TypeError:
@@ -8521,13 +8557,14 @@ class TradingStrategy:
                     broker,
                     symbol=heartbeat_symbol,
                     side='buy',
-                    quantity=HEARTBEAT_TRADE_SIZE_USD,
+                    quantity=trade_size_usd,
                     size_type='quote',
                 )
             
             if order_result and order_result.get('status') in ['filled', 'open', 'pending']:
                 self.heartbeat_last_trade_time = current_time
                 self.heartbeat_trade_count += 1
+                self._mark_heartbeat_one_shot_lock()
                 
                 logger.info(f"   ✅ Heartbeat trade #{self.heartbeat_trade_count} EXECUTED")
                 logger.info(f"   Order ID: {order_result.get('order_id', 'N/A')}")
@@ -8562,6 +8599,49 @@ class TradingStrategy:
             logger.critical("HEARTBEAT VERIFIED: marker created at %s", HEARTBEAT_MARKER_PATH)
         except Exception as exc:
             logger.warning("Could not persist heartbeat marker at %s: %s", HEARTBEAT_MARKER_PATH, exc)
+
+    def _is_heartbeat_one_shot_locked(self) -> bool:
+        """Return True when the heartbeat one-shot lock marker exists."""
+        if not HEARTBEAT_ONESHOT_ENABLED:
+            return False
+        try:
+            return os.path.exists(HEARTBEAT_ONESHOT_LOCK_PATH)
+        except Exception:
+            return False
+
+    def _clear_heartbeat_one_shot_lock(self) -> None:
+        """Clear the heartbeat one-shot lock marker when reset is requested."""
+        if not HEARTBEAT_ONESHOT_RESET:
+            return
+        try:
+            if os.path.exists(HEARTBEAT_ONESHOT_LOCK_PATH):
+                os.remove(HEARTBEAT_ONESHOT_LOCK_PATH)
+                logger.warning(
+                    "❤️  HEARTBEAT ONESHOT RESET: cleared %s",
+                    HEARTBEAT_ONESHOT_LOCK_PATH,
+                )
+        except Exception as exc:
+            logger.warning("Could not clear heartbeat one-shot lock at %s: %s", HEARTBEAT_ONESHOT_LOCK_PATH, exc)
+
+    def _mark_heartbeat_one_shot_lock(self) -> None:
+        """Persist the heartbeat one-shot lock after a successful heartbeat trade."""
+        if not HEARTBEAT_ONESHOT_ENABLED:
+            return
+        try:
+            marker_dir = os.path.dirname(HEARTBEAT_ONESHOT_LOCK_PATH) or "."
+            os.makedirs(marker_dir, exist_ok=True)
+            with open(HEARTBEAT_ONESHOT_LOCK_PATH, "w", encoding="utf-8") as fh:
+                fh.write(datetime.now(timezone.utc).isoformat())
+            logger.critical(
+                "HEARTBEAT ONESHOT LOCKED: marker created at %s (clear with HEARTBEAT_ONESHOT_RESET=true)",
+                HEARTBEAT_ONESHOT_LOCK_PATH,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not persist heartbeat one-shot lock at %s: %s",
+                HEARTBEAT_ONESHOT_LOCK_PATH,
+                exc,
+            )
 
     def _get_total_capital_snapshot(self, fallback: float = 0.0) -> float:
         """Best-effort authoritative total capital snapshot for safety gates."""

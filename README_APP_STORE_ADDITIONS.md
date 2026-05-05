@@ -95,7 +95,7 @@ For questions: See reviewer notes or contact support listed in App Store Connect
 
 **IMPORTANT**: Trading involves substantial risk of loss. Key points:
 
-- **Independent Trading**: Each account trades independently using the same algorithm. NO trade copying occurs.
+- **Independent Trading**: Each account trades independently using the same strategy framework with account-specific state. NO trade copying occurs.
 - **Financial Risk**: You may lose all invested capital. Only invest what you can afford to lose.
 - **Not Financial Advice**: NIJA is software, not a financial advisor.
 - **User Responsibility**: You maintain full control and are responsible for all trades.

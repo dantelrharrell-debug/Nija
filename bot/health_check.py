@@ -512,6 +512,76 @@ class HealthCheckManager:
         liveness = self.get_liveness_status()
         readiness, _ = self.get_readiness_status()
         critical = self.get_critical_status()
+        execution_gate = {
+            "execution_eligible": False,
+            "state_machine": None,
+            "safety_mode": None,
+            "reconciliation_complete": os.getenv("NIJA_RECONCILIATION_COMPLETE", "false").lower() in ("true", "1", "yes"),
+            "reconciliation_status": os.getenv("NIJA_RECONCILIATION_STATUS", "").strip() or None,
+            "writer_lock_ok": None,
+            "nonce_lease_ok": None,
+            "nonce_sync_ok": None,
+            "failure_mode": None,
+        }
+
+        try:
+            try:
+                from bot.trading_state_machine import (
+                    get_state_machine,
+                    _distributed_writer_authority_gate,
+                    _nonce_writer_lease_gate,
+                    _startup_reconciliation_gate,
+                    _nonce_sync_gate,
+                    TradingState,
+                )
+            except ImportError:
+                from trading_state_machine import (  # type: ignore[import]
+                    get_state_machine,
+                    _distributed_writer_authority_gate,
+                    _nonce_writer_lease_gate,
+                    _startup_reconciliation_gate,
+                    _nonce_sync_gate,
+                    TradingState,
+                )
+
+            sm = get_state_machine()
+            current_state = sm.get_current_state()
+            execution_gate["execution_eligible"] = bool(sm.can_dispatch_trades())
+            execution_gate["state_machine"] = current_state.value if current_state else None
+
+            recon_ok, recon_err = _startup_reconciliation_gate()
+            writer_ok, writer_err = _distributed_writer_authority_gate()
+            nonce_ok, nonce_err = _nonce_writer_lease_gate()
+            nonce_sync_ok, nonce_sync_err = _nonce_sync_gate()
+
+            execution_gate["writer_lock_ok"] = bool(writer_ok)
+            execution_gate["nonce_lease_ok"] = bool(nonce_ok)
+            execution_gate["nonce_sync_ok"] = bool(nonce_sync_ok)
+
+            failure_mode = None
+            if not recon_ok:
+                failure_mode = f"RECONCILIATION_REQUIRED ({recon_err})"
+            elif not writer_ok or not nonce_ok or not nonce_sync_ok:
+                detail = "; ".join(
+                    err for err in (writer_err, nonce_err, nonce_sync_err) if err
+                )
+                failure_mode = f"EXECUTION_PAUSED ({detail or 'lock check failed'})"
+            elif current_state == TradingState.EMERGENCY_STOP or os.path.exists("EMERGENCY_STOP"):
+                failure_mode = "FAILSAFE_MODE"
+            else:
+                failure_mode = "OK"
+            execution_gate["failure_mode"] = failure_mode
+        except Exception as exc:
+            execution_gate["failure_mode"] = f"UNKNOWN ({exc})"
+
+        try:
+            try:
+                from bot.safety_controller import SafetyController
+            except ImportError:
+                from safety_controller import SafetyController  # type: ignore[import]
+            execution_gate["safety_mode"] = SafetyController().get_current_mode().value
+        except Exception:
+            execution_gate["safety_mode"] = None
         
         return {
             "service": "NIJA Trading Bot",
@@ -522,8 +592,9 @@ class HealthCheckManager:
             "operational_state": {
                 "configuration_checked": self._configuration_checked,
                 "error_count": self.state.error_count,
-                "uptime_seconds": self.state.uptime_seconds
-            }
+                "uptime_seconds": self.state.uptime_seconds,
+                "execution_gate": execution_gate,
+            },
         }
     
     def get_prometheus_metrics(self) -> str:

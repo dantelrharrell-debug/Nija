@@ -122,8 +122,10 @@ If the bot logs `🛑 TRADING NOT ALLOWED`, check:
 
 NIJA now enforces a strict startup contract:
 1. Balance hydration must complete before FSM/runtime loops can start.
-2. In live mode, distributed single-writer lock ownership is required.
-3. Runtime order dispatch validates writer-lock ownership continuously.
+2. Startup reconciliation must complete before LIVE activation.
+3. In live mode, distributed single-writer lock + nonce lease ownership are required.
+4. Strategy framework and execution pipeline must be healthy before activation.
+5. Runtime order dispatch validates writer-lock ownership continuously.
 
 ### Health Endpoints For Operators
 
@@ -138,6 +140,7 @@ curl -s http://127.0.0.1:${PORT:-8080}/writer-lock
 `/status` now includes:
 - `writer_lock_ok`: compact boolean for dashboards/alerts
 - `writer_lock`: detailed ownership diagnostics
+- `execution_gate`: execution eligibility, reconciliation status, nonce/lease checks
 
 `/writer-lock` returns `503` when strict/live mode requires lock ownership and the check fails.
 
@@ -1377,8 +1380,10 @@ Execute tiny test trades to verify exchange connectivity:
 ```bash
 # Enable for deployment verification
 HEARTBEAT_TRADE=true
-HEARTBEAT_TRADE_SIZE=5.50  # Minimum viable trade
+HEARTBEAT_TRADE_SIZE=5.50  # Requested trade size
+HEARTBEAT_TRADE_MAX_USD=5.00  # Hard safety cap
 HEARTBEAT_TRADE_INTERVAL=600  # 10 minutes
+HEARTBEAT_ONESHOT_ENABLED=true  # Prevent repeat trades on restart
 
 # After confirming 1 trade executes, disable:
 HEARTBEAT_TRADE=false
@@ -1390,7 +1395,7 @@ HEARTBEAT_TRADE=false
 ...
 ❤️  HEARTBEAT TRADE EXECUTION
    Symbol: BTC-USD
-   Size: $5.50
+   Size: $5.00
    Broker: KRAKEN
    ✅ Heartbeat trade #1 EXECUTED
    Order ID: ABC123

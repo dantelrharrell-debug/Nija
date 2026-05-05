@@ -128,6 +128,66 @@ def get_safety_status():
         
         # Get risk acknowledgment status
         risk_ack = get_risk_acknowledgment_status()
+
+        execution_gate = {
+            "execution_eligible": False,
+            "state_machine": None,
+            "reconciliation_complete": os.getenv("NIJA_RECONCILIATION_COMPLETE", "false").lower() in ("true", "1", "yes"),
+            "reconciliation_status": os.getenv("NIJA_RECONCILIATION_STATUS", "").strip() or None,
+            "writer_lock_ok": None,
+            "nonce_lease_ok": None,
+            "nonce_sync_ok": None,
+            "failure_mode": None,
+        }
+        try:
+            try:
+                from bot.trading_state_machine import (
+                    get_state_machine,
+                    _distributed_writer_authority_gate,
+                    _nonce_writer_lease_gate,
+                    _startup_reconciliation_gate,
+                    _nonce_sync_gate,
+                    TradingState,
+                )
+            except ImportError:
+                from trading_state_machine import (  # type: ignore[import]
+                    get_state_machine,
+                    _distributed_writer_authority_gate,
+                    _nonce_writer_lease_gate,
+                    _startup_reconciliation_gate,
+                    _nonce_sync_gate,
+                    TradingState,
+                )
+
+            sm = get_state_machine()
+            current_state = sm.get_current_state()
+            execution_gate["execution_eligible"] = bool(sm.can_dispatch_trades())
+            execution_gate["state_machine"] = current_state.value if current_state else None
+
+            recon_ok, recon_err = _startup_reconciliation_gate()
+            writer_ok, writer_err = _distributed_writer_authority_gate()
+            nonce_ok, nonce_err = _nonce_writer_lease_gate()
+            nonce_sync_ok, nonce_sync_err = _nonce_sync_gate()
+
+            execution_gate["writer_lock_ok"] = bool(writer_ok)
+            execution_gate["nonce_lease_ok"] = bool(nonce_ok)
+            execution_gate["nonce_sync_ok"] = bool(nonce_sync_ok)
+
+            failure_mode = None
+            if not recon_ok:
+                failure_mode = f"RECONCILIATION_REQUIRED ({recon_err})"
+            elif not writer_ok or not nonce_ok or not nonce_sync_ok:
+                detail = "; ".join(
+                    err for err in (writer_err, nonce_err, nonce_sync_err) if err
+                )
+                failure_mode = f"EXECUTION_PAUSED ({detail or 'lock check failed'})"
+            elif current_state == TradingState.EMERGENCY_STOP or emergency_stop:
+                failure_mode = "FAILSAFE_MODE"
+            else:
+                failure_mode = "OK"
+            execution_gate["failure_mode"] = failure_mode
+        except Exception as exc:
+            execution_gate["failure_mode"] = f"UNKNOWN ({exc})"
         
         # Determine display message and UI state based on mode
         display_config = get_mode_display_config(mode_value, credentials_configured, emergency_stop)
@@ -147,6 +207,7 @@ def get_safety_status():
             'ui_indicators': display_config['ui_indicators'],
             'app_store_mode': safety.is_app_store_mode(),
             'simulator_allowed': safety.is_simulator_allowed(),
+            'execution_gate': execution_gate,
             'timestamp': datetime.utcnow().isoformat()
         }
         

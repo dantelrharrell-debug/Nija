@@ -51,7 +51,10 @@ Date: March 2026
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -171,6 +174,11 @@ class SignalBroadcaster:
         self._risk_fraction = risk_fraction
         self._retry_config = retry_config or RetryConfig()
         self._lock = threading.Lock()
+        self._execution_jitter_ms = float(os.getenv("NIJA_ACCOUNT_EXECUTION_JITTER_MS", "250") or 250.0)
+        self._cooldown_base_s = float(os.getenv("NIJA_ACCOUNT_COOLDOWN_BASE_S", "0.0") or 0.0)
+        self._cooldown_jitter_s = float(os.getenv("NIJA_ACCOUNT_COOLDOWN_JITTER_S", "0.25") or 0.25)
+        self._account_cooldown_offsets: Dict[str, float] = {}
+        self._account_last_exec_ts: Dict[str, float] = {}
 
     def _resolve_live_balance(self, broker: Any, candidate_balance: float) -> float:
         """Return a non-negative balance, preferring live broker balance when needed."""
@@ -217,6 +225,8 @@ class SignalBroadcaster:
                 broker=broker,
                 balance=resolved_balance,
             )
+            if account_id not in self._account_cooldown_offsets:
+                self._account_cooldown_offsets[account_id] = self._compute_account_cooldown_offset(account_id)
             # Keep GlobalCapitalManager in sync
             if _GCM_AVAILABLE and get_global_capital_manager:
                 try:
@@ -318,6 +328,7 @@ class SignalBroadcaster:
         This method is always fail-safe — it never raises an exception.
         """
         cfg = self._retry_config
+        self._apply_account_timing_controls(account.account_id, symbol)
         result = self._execute_single(
             account=account,
             signal=signal,
@@ -403,6 +414,7 @@ class SignalBroadcaster:
                 "[Broadcaster] → %s | %s %s $%.2f",
                 account.account_id, side.upper(), symbol, size,
             )
+            self._account_last_exec_ts[account.account_id] = time.monotonic()
 
             order = broker.execute_order(
                 symbol=symbol,
@@ -437,6 +449,52 @@ class SignalBroadcaster:
                 status="error",
                 error=str(exc),
             )
+
+    def _compute_account_cooldown_offset(self, account_id: str) -> float:
+        """Compute a deterministic cooldown offset for an account."""
+        if self._cooldown_jitter_s <= 0:
+            return 0.0
+        seed = self._seed_for_account(account_id)
+        rng = random.Random(seed)
+        return rng.uniform(0.0, self._cooldown_jitter_s)
+
+    def _seed_for_account(self, account_id: str) -> int:
+        """Return a deterministic integer seed for an account."""
+        digest = hashlib.sha256(account_id.encode("utf-8")).hexdigest()
+        return int(digest[:8], 16)
+
+    def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
+        """Apply per-account cooldown and jitter to diversify execution timing."""
+        cooldown_offset = self._account_cooldown_offsets.get(account_id)
+        if cooldown_offset is None:
+            cooldown_offset = self._compute_account_cooldown_offset(account_id)
+            self._account_cooldown_offsets[account_id] = cooldown_offset
+
+        cooldown_s = max(0.0, self._cooldown_base_s + cooldown_offset)
+        last_ts = self._account_last_exec_ts.get(account_id, 0.0)
+        if cooldown_s > 0 and last_ts > 0:
+            elapsed = time.monotonic() - last_ts
+            remaining = cooldown_s - elapsed
+            if remaining > 0:
+                logger.debug(
+                    "[Broadcaster] cooldown delay %.3fs for account=%s",
+                    remaining,
+                    account_id,
+                )
+                time.sleep(remaining)
+
+        jitter_s = max(0.0, self._execution_jitter_ms / 1000.0)
+        if jitter_s > 0:
+            seed = self._seed_for_account(f"{account_id}:{symbol}:{int(time.time())}")
+            rng = random.Random(seed)
+            delay = rng.uniform(0.0, jitter_s)
+            if delay > 0:
+                logger.debug(
+                    "[Broadcaster] jitter delay %.3fs for account=%s",
+                    delay,
+                    account_id,
+                )
+                time.sleep(delay)
 
 
 # ---------------------------------------------------------------------------

@@ -73,7 +73,7 @@ Copy trading sounds great until it doesn't:
 **Our independent model:**
 - Position sizes **scale proportionally** to your balance (fair and safe)
 - Entry/exit executed at YOUR optimal timing (no follow-the-leader)
-- Same algorithm, different results (transparently disclosed)
+- Same strategy framework, different results (transparently disclosed)
 - Each account maintains its own risk limits and positions
 
 Yes, this means **your results will differ from other users**. We're upfront about this because it's the right way to do it. Your $1,000 account shouldn't try to mirror a $100,000 account's trades—that's how accounts get destroyed.
