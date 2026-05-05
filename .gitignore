@@ -387,6 +387,7 @@ test_*.py
 !test_kraken_connection.py  # Keep Kraken connection tester (operational tool)
 !test_v2_balance.py
 !bot/test_*.py  # Keep bot tests
+!bot/test_production_preflight.py
 !bot/tests/test_*.py  # Keep bot/tests directory tests
 !bot/tests/test_delisted_asset_registry.py
 !scripts/chaos/test_*.py  # Keep chaos testing scripts

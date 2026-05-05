@@ -1029,6 +1029,32 @@ def _release_distributed_process_lock() -> None:
         _distributed_writer_fencing_token = 0
 
 
+def _release_nonce_writer_lease() -> None:
+    """Release the Redis nonce writer lease for the platform Kraken key."""
+    platform_key = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+    )
+    if not platform_key:
+        return
+    try:
+        try:
+            from bot.distributed_nonce_manager import (
+                get_distributed_nonce_manager,
+                make_api_key_id,
+            )
+        except ImportError:
+            from distributed_nonce_manager import (  # type: ignore[import]
+                get_distributed_nonce_manager,
+                make_api_key_id,
+            )
+        key_id = make_api_key_id(platform_key)
+        if get_distributed_nonce_manager().release_writer_lease(key_id):
+            logger.info("✅ Released Redis nonce writer lease for key_id=%s", key_id)
+    except Exception as exc:
+        logger.debug("Nonce lease release skipped: %s", exc)
+
+
 def _build_writer_lock_meta_payload(
     fencing_token: int,
     instance_identity: dict[str, str],
@@ -1893,6 +1919,7 @@ def _acquire_process_lock() -> None:
     """
     os.makedirs(os.path.dirname(_PID_FILE), exist_ok=True)
 
+    stale_lock_detected = False
     if os.path.exists(_PID_FILE):
         try:
             with open(_PID_FILE) as _pf:
@@ -1949,7 +1976,16 @@ def _acquire_process_lock() -> None:
             sys.exit(1)
         except (ProcessLookupError, ValueError, OSError):
             # Stale PID file — the previous process is gone; safe to overwrite.
-            pass
+            stale_lock_detected = True
+
+    if stale_lock_detected:
+        os.environ.setdefault("NIJA_UNCLEAN_SHUTDOWN", "true")
+        os.environ.setdefault("NIJA_SAFE_START_REQUIRED", "true")
+        os.environ.setdefault("NIJA_SAFE_START_REASON", "unclean shutdown detected")
+        logger.warning(
+            "⚠️  Unclean shutdown detected (stale PID lock) — safe-start mode required "
+            "(set NIJA_SAFE_START_ACK or complete reconciliation to resume live trading)."
+        )
 
     # Write PID + fingerprint metadata so future instances can cross-check.
     _pid_meta = {
@@ -1972,6 +2008,7 @@ def _release_process_lock() -> None:
     """Remove the PID file on clean exit."""
     _distributed_writer_lock_stop.set()
     _release_distributed_process_lock()
+    _release_nonce_writer_lease()
     try:
         if os.path.exists(_PID_FILE):
             with open(_PID_FILE) as _pf:

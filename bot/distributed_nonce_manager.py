@@ -190,6 +190,13 @@ _REDIS_LEASE_ACQUIRE_POLL_S = max(
 _REDIS_LEASE_WAIT_LOG_INTERVAL_S = max(
     0.5, float(os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "30"))
 )
+_REDIS_LEASE_FORCE_TAKEOVER = _env_true("NIJA_REDIS_LEASE_FORCE_TAKEOVER", "0")
+_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S = max(
+    0.0, float(os.environ.get("NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S", "0"))
+)
+_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS = max(
+    0, int(os.environ.get("NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS", "250"))
+)
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 
 
@@ -387,6 +394,46 @@ class _PerKeyRedisBackend:
         local current_version = tonumber(redis.call('GET', version_key)) or 0
         return {0, current_version, current_owner}
     """
+    _LEASE_RELEASE_LUA = """
+        local owner_key = KEYS[1]
+        local version_key = KEYS[2]
+        local fingerprint_key = KEYS[3]
+        local owner = ARGV[1]
+
+        local current_owner = redis.call('GET', owner_key)
+        if not current_owner then
+            return 0
+        end
+        if current_owner ~= owner then
+            return 0
+        end
+        redis.call('DEL', owner_key)
+        redis.call('DEL', version_key)
+        redis.call('DEL', fingerprint_key)
+        return 1
+    """
+    _LEASE_FORCE_LUA = """
+        local owner_key = KEYS[1]
+        local version_key = KEYS[2]
+        local counter_key = KEYS[3]
+        local fingerprint_key = KEYS[4]
+        local owner = ARGV[1]
+        local ttl = tonumber(ARGV[2])
+        local fingerprint = ARGV[3]
+        local force = tonumber(ARGV[4]) or 0
+
+        local current_owner = redis.call('GET', owner_key)
+        if current_owner and current_owner ~= owner and force ~= 1 then
+            local current_version = tonumber(redis.call('GET', version_key)) or 0
+            return {0, current_version, current_owner}
+        end
+
+        local version = redis.call('INCR', counter_key)
+        redis.call('SET', owner_key, owner, 'PX', ttl)
+        redis.call('SET', version_key, tostring(version), 'PX', ttl)
+        redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl)
+        return {1, version, current_owner or ""}
+    """
     _NEXT_WITH_FENCE_LUA = """
         local nonce_key = KEYS[1]
         local owner_key = KEYS[2]
@@ -427,6 +474,8 @@ class _PerKeyRedisBackend:
         self._client = redis_client
         self._script = redis_client.register_script(self._LUA)  # type: ignore[attr-defined]
         self._lease_script = redis_client.register_script(self._LEASE_LUA)  # type: ignore[attr-defined]
+        self._lease_release_script = redis_client.register_script(self._LEASE_RELEASE_LUA)  # type: ignore[attr-defined]
+        self._lease_force_script = redis_client.register_script(self._LEASE_FORCE_LUA)  # type: ignore[attr-defined]
         self._next_with_fence_script = redis_client.register_script(  # type: ignore[attr-defined]
             self._NEXT_WITH_FENCE_LUA
         )
@@ -499,6 +548,7 @@ class _PerKeyRedisBackend:
         counter_key = self._LEASE_VERSION_COUNTER_PREFIX + key_id
         fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
         prev = self._lease_by_key.get(key_id)
+        force_enabled = _REDIS_LEASE_FORCE_TAKEOVER and _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S > 0.0
 
         def _run_lease_script() -> tuple[bool, int, str]:
             _result = self._lease_script(
@@ -509,6 +559,16 @@ class _PerKeyRedisBackend:
             _lease_version = int(_result[1])
             _current_owner = str(_result[2])
             return _granted, _lease_version, _current_owner
+
+        def _force_takeover() -> tuple[bool, int, str]:
+            _result = self._lease_force_script(
+                keys=[owner_key, version_key, counter_key, fingerprint_key],
+                args=[self._owner_id, self._lease_ttl_ms, self._owner_fingerprint, 1],
+            )
+            _granted = int(_result[0]) == 1
+            _lease_version = int(_result[1])
+            _prev_owner = str(_result[2])
+            return _granted, _lease_version, _prev_owner
 
         granted, lease_version, current_owner = _run_lease_script()
         if not granted:
@@ -530,6 +590,9 @@ class _PerKeyRedisBackend:
                 )
                 deadline = time.monotonic() + wait_budget_s
                 wait_started_at = time.monotonic()
+                last_refresh_at = wait_started_at
+                last_ttl_ms = initial_holder_ttl_ms
+                force_attempted = False
                 if self._should_emit_wait_log(key_id, wait_started_at, force=True):
                     _logger.warning(
                         "DistributedNonceManager: Redis writer lease busy at startup "
@@ -548,6 +611,9 @@ class _PerKeyRedisBackend:
                         holder_ttl_ms = int(self._client.pttl(owner_key))  # type: ignore[attr-defined]
                     except Exception:
                         pass
+                    if holder_ttl_ms > last_ttl_ms + _REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS:
+                        last_refresh_at = now
+                    last_ttl_ms = holder_ttl_ms
                     force_terminal_log = remaining <= (_REDIS_LEASE_ACQUIRE_POLL_S + 0.05)
                     if self._should_emit_wait_log(key_id, now, force=force_terminal_log):
                         _logger.info(
@@ -560,6 +626,33 @@ class _PerKeyRedisBackend:
                             remaining,
                             wait_budget_s,
                         )
+                    if (
+                        force_enabled
+                        and not force_attempted
+                        and current_owner
+                        and (now - last_refresh_at) >= _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S
+                    ):
+                        force_attempted = True
+                        _logger.critical(
+                            "DistributedNonceManager: forcing Redis writer lease takeover "
+                            "(key=%s owner=%s lease_version=%d unhealthy_for=%.1fs timeout=%.1fs)",
+                            key_id,
+                            current_owner,
+                            lease_version,
+                            max(0.0, now - last_refresh_at),
+                            _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S,
+                        )
+                        granted, lease_version, current_owner = _force_takeover()
+                        if granted:
+                            self._clear_wait_log_gate(key_id)
+                            _logger.critical(
+                                "DistributedNonceManager: Redis writer lease force-acquired "
+                                "(key=%s lease_version=%d prev_owner=%s)",
+                                key_id,
+                                lease_version,
+                                current_owner or "<unknown>",
+                            )
+                            break
                     time.sleep(min(_REDIS_LEASE_ACQUIRE_POLL_S, max(0.05, remaining)))
                     granted, lease_version, current_owner = _run_lease_script()
 
@@ -599,8 +692,14 @@ class _PerKeyRedisBackend:
                 if self._strict_lease:
                     policy = os.environ.get("NIJA_REDIS_RESET_POLICY", "require_confirmation").strip().lower()
                     ack = _env_true("NIJA_REDIS_RESET_ACK", "0")
+                    reconciled = _env_true("NIJA_REDIS_RESET_RECONCILED", "0")
                     if policy not in {"auto_reinit", "require_confirmation"}:
                         policy = "require_confirmation"
+                    if policy == "auto_reinit" and not reconciled:
+                        raise RuntimeError(
+                            f"{reset_msg} Auto-reinit requires reconciliation. "
+                            "Set NIJA_REDIS_RESET_RECONCILED=true after exchange state is verified."
+                        )
                     if policy != "auto_reinit" and not ack:
                         raise RuntimeError(
                             f"{reset_msg} Set NIJA_REDIS_RESET_ACK=true to proceed after verifying persistence."
@@ -624,6 +723,24 @@ class _PerKeyRedisBackend:
     def ensure_writer_lease(self, key_id: str) -> int:
         """Public wrapper around lease acquire/renew + fencing validation."""
         return self._ensure_writer_lease(key_id)
+
+    def release_writer_lease(self, key_id: str) -> bool:
+        """Release the Redis writer lease for *key_id* if still owned by this process."""
+        owner_key = self._LEASE_OWNER_PREFIX + key_id
+        version_key = self._LEASE_VERSION_PREFIX + key_id
+        fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
+        try:
+            released = int(
+                self._lease_release_script(  # type: ignore[call-arg]
+                    keys=[owner_key, version_key, fingerprint_key],
+                    args=[self._owner_id],
+                )
+            )
+            if released:
+                self._lease_by_key.pop(key_id, None)
+            return bool(released)
+        except Exception:
+            return False
 
 
 # ── Distributed nonce manager ─────────────────────────────────────────────────
@@ -831,6 +948,12 @@ class DistributedNonceManager:
         if self._redis is None:
             return
         self._redis.ensure_writer_lease(api_key_id)
+
+    def release_writer_lease(self, api_key_id: str) -> bool:
+        """Release the Redis writer lease for *api_key_id* if held by this process."""
+        if self._redis is None:
+            return False
+        return self._redis.release_writer_lease(api_key_id)
 
     def can_issue_nonce(self, api_key_id: str = "") -> bool:
         """

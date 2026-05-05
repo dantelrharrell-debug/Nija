@@ -28,18 +28,29 @@ NIJA validates:
 - Nonce monotonicity
 
 If a reset is detected (token/lease/nonce decreases), startup halts until an
-operator confirms the reset.
+operator confirms the reset and the exchange state is reconciled. NIJA also
+enters **SAFE START** mode on reset or unclean shutdown — live trading remains
+blocked until reconciliation succeeds or an explicit manual override is set.
 
 **Manual confirmation flow**
 1. Inspect Redis persistence settings and logs.
 2. Confirm no other NIJA instance is running.
-3. Acknowledge reset:
+3. Reconcile exchange state (positions + open orders) and confirm internal
+   state is in sync (or no positions remain).
+4. Acknowledge reset:
    - Set `NIJA_REDIS_RESET_ACK=true`
    - Redeploy
 
 **Optional auto-reinit**
 - Set `NIJA_REDIS_RESET_POLICY=auto_reinit`
-- NIJA will log the reset and proceed after reinitializing state
+- Set `NIJA_REDIS_RESET_RECONCILED=true` once reconciliation is complete
+- NIJA will log the reset and proceed after reconciliation confirms safety
+
+**Force takeover (crash recovery)**
+- Optional: `NIJA_REDIS_LEASE_FORCE_TAKEOVER=1`
+- Set `NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S=<seconds>` to allow a new
+  instance to force-acquire the nonce writer lease when the existing holder
+  stops refreshing its TTL.
 
 ## 4) Redis Failover Strategy
 Recommended approach:
@@ -64,7 +75,8 @@ When moving from file-based nonces to Redis or after a Redis reset:
    - `Redis persistence confirmed`
    - `Redis nonce continuity verified`
 
-If a reset was detected, acknowledge with `NIJA_REDIS_RESET_ACK=true` before redeploying.
+If a reset was detected, acknowledge with `NIJA_REDIS_RESET_ACK=true` (or
+`NIJA_REDIS_RESET_RECONCILED=true` for auto-reinit) before redeploying.
 
 ## 6) Post-Reset Validation Checklist
 - Redis persistence enabled

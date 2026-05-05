@@ -191,6 +191,9 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     export NIJA_REDIS_LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-600000}"
     export NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S:-5}"
     export NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S:-5}"
+    export NIJA_REDIS_LEASE_FORCE_TAKEOVER="${NIJA_REDIS_LEASE_FORCE_TAKEOVER:-0}"
+    export NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S="${NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S:-0}"
+    export NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS="${NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS:-250}"
 
     _LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS}"
     _LEASE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}"
@@ -201,6 +204,9 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     echo "   Lease TTL: ${_LEASE_TTL_MS} ms | Wait checkpoint interval: ${_LEASE_TIMEOUT_S} s"
     echo "   Lease wait log interval: ${_LEASE_WAIT_LOG_INTERVAL_S} s"
     echo "   Writer lock heartbeat max transient failures: ${_WRITER_HEARTBEAT_MAX_FAILURES}"
+    if [ "${NIJA_REDIS_LEASE_FORCE_TAKEOVER}" = "1" ] || [ "${NIJA_REDIS_LEASE_FORCE_TAKEOVER}" = "true" ]; then
+        echo "   Force takeover enabled: timeout=${NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S}s refresh_delta=${NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS}ms"
+    fi
     echo "   If lock is not acquired quickly, process retries indefinitely until available (may block deployment if lock never releases)"
     echo ""
 fi
