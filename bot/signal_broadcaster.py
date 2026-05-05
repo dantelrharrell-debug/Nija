@@ -194,6 +194,7 @@ class SignalBroadcaster:
         self._cooldown_jitter_s = _get_env_float("NIJA_ACCOUNT_COOLDOWN_JITTER_S", 0.25)
         self._account_cooldown_offsets: Dict[str, float] = {}
         self._account_last_exec_ts: Dict[str, float] = {}
+        self._account_seed_cache: Dict[str, int] = {}
 
     def _resolve_live_balance(self, broker: Any, candidate_balance: float) -> float:
         """Return a non-negative balance, preferring live broker balance when needed."""
@@ -475,14 +476,24 @@ class SignalBroadcaster:
 
     def _seed_for_account(self, account_id: str) -> int:
         """Return a deterministic integer seed for an account."""
+        cached = self._account_seed_cache.get(account_id)
+        if cached is not None:
+            return cached
         digest = hashlib.sha256(account_id.encode("utf-8")).hexdigest()
+        seed = int(digest[:16], 16)
+        self._account_seed_cache[account_id] = seed
+        return seed
+
+    def _seed_from_components(self, payload: str) -> int:
+        """Return a deterministic seed from a composite payload."""
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return int(digest[:16], 16)
 
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
         """Apply per-account cooldown and jitter to diversify execution timing.
 
-        Jitter uses a per-second seed to introduce small, repeatable timing
-        variance without synchronizing accounts.
+        Jitter uses a per-minute seed bucket to introduce small timing variance
+        without synchronizing accounts.
         """
         cooldown_offset = self._account_cooldown_offsets.get(account_id)
         if cooldown_offset is None:
@@ -504,7 +515,9 @@ class SignalBroadcaster:
 
         jitter_s = max(0.0, self._execution_jitter_ms / 1000.0)
         if jitter_s > 0:
-            seed = self._seed_for_account(f"{account_id}:{symbol}:{int(time.time())}")
+            jitter_bucket = int(time.time() // 60)
+            seed_base = self._seed_for_account(account_id)
+            seed = self._seed_from_components(f"{seed_base}:{symbol}:{jitter_bucket}")
             rng = random.Random(seed)
             delay = rng.uniform(0.0, jitter_s)
             if delay > 0:
