@@ -122,7 +122,7 @@ logger = logging.getLogger("nija.trade_duplication_guard")
 
 
 _DEDUP_WINDOW_DEFAULT_S = 180.0
-_DEDUP_WINDOW_MIN_S = 30.0  # Minimum window to cover slow retries and webhook replays.
+_DEDUP_WINDOW_MIN_S = 30.0  # Covers typical 10-20s webhook retries + exchange latency spikes.
 
 
 def _default_dedup_window_seconds() -> float:

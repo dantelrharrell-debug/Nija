@@ -242,10 +242,12 @@ class ExecutionPipeline:
         """Gate execution based on SafetyController + TradingStateMachine."""
         safety_mod = _try_import("bot.safety_controller", "safety_controller")
         if safety_mod is None:
+            logger.warning("ExecutionPipeline: safety_controller unavailable; skipping safety gate")
             return None
         get_safety_controller = getattr(safety_mod, "get_safety_controller", None)
         TradingMode = getattr(safety_mod, "TradingMode", None)
         if get_safety_controller is None or TradingMode is None:
+            logger.warning("ExecutionPipeline: safety_controller missing expected exports; skipping safety gate")
             return None
 
         safety = get_safety_controller()
@@ -360,6 +362,7 @@ class ExecutionPipeline:
                 error="Simulation requires price_hint_usd to compute quantity",
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
+        # price_hint_usd is expected to be USD per unit of the asset.
         quantity = request.size_usd / price_hint
         order_type = (request.order_type or "market").lower()
 
