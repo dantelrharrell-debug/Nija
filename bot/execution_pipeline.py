@@ -240,12 +240,12 @@ class ExecutionPipeline:
         t_start: float,
     ) -> Optional[PipelineResult]:
         """Gate execution based on SafetyController + TradingStateMachine."""
-        try:
-            try:
-                from bot.safety_controller import get_safety_controller, TradingMode
-            except ImportError:
-                from safety_controller import get_safety_controller, TradingMode  # type: ignore
-        except ImportError:
+        safety_mod = _try_import("bot.safety_controller", "safety_controller")
+        if safety_mod is None:
+            return None
+        get_safety_controller = getattr(safety_mod, "get_safety_controller", None)
+        TradingMode = getattr(safety_mod, "TradingMode", None)
+        if get_safety_controller is None or TradingMode is None:
             return None
 
         safety = get_safety_controller()
@@ -284,10 +284,12 @@ class ExecutionPipeline:
 
         if mode == TradingMode.LIVE:
             try:
-                try:
-                    from bot.trading_state_machine import get_state_machine
-                except ImportError:
-                    from trading_state_machine import get_state_machine  # type: ignore
+                state_mod = _try_import("bot.trading_state_machine", "trading_state_machine")
+                if state_mod is None:
+                    raise ImportError("trading_state_machine not available")
+                get_state_machine = getattr(state_mod, "get_state_machine", None)
+                if get_state_machine is None:
+                    raise ImportError("get_state_machine not available")
                 state_machine = get_state_machine()
                 if hasattr(state_machine, "can_dispatch_trades") and not state_machine.can_dispatch_trades():
                     current_state = getattr(state_machine, "get_current_state", lambda: None)()
@@ -313,12 +315,18 @@ class ExecutionPipeline:
         reason: str,
     ) -> PipelineResult:
         """Return a simulated PipelineResult when in dry-run/app-store mode."""
-        try:
-            try:
-                from bot.dry_run_engine import get_dry_run_engine
-            except ImportError:
-                from dry_run_engine import get_dry_run_engine  # type: ignore
-        except ImportError:
+        dry_run_mod = _try_import("bot.dry_run_engine", "dry_run_engine")
+        if dry_run_mod is None:
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error=f"{mode_value} active but dry-run engine unavailable",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+        get_dry_run_engine = getattr(dry_run_mod, "get_dry_run_engine", None)
+        if get_dry_run_engine is None:
             return PipelineResult(
                 success=False,
                 symbol=request.symbol,
@@ -328,20 +336,19 @@ class ExecutionPipeline:
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
 
-        try:
-            try:
-                from bot.app_store_mode import get_app_store_mode
-            except ImportError:
-                from app_store_mode import get_app_store_mode  # type: ignore
-            if mode_value == "app_store":
-                get_app_store_mode().block_execution_with_log(
-                    operation="execution_pipeline",
-                    symbol=request.symbol,
-                    side=request.side,
-                    size=request.size_usd,
-                )
-        except Exception as exc:
-            logger.debug("ExecutionPipeline: app_store_mode log skipped: %s", exc)
+        app_store_mod = _try_import("bot.app_store_mode", "app_store_mode")
+        if app_store_mod is not None and mode_value == "app_store":
+            get_app_store_mode = getattr(app_store_mod, "get_app_store_mode", None)
+            if get_app_store_mode is not None:
+                try:
+                    get_app_store_mode().block_execution_with_log(
+                        operation="execution_pipeline",
+                        symbol=request.symbol,
+                        side=request.side,
+                        size=request.size_usd,
+                    )
+                except Exception as exc:
+                    logger.debug("ExecutionPipeline: app_store_mode log skipped: %s", exc)
 
         price_hint = request.price_hint_usd or 0.0
         if price_hint <= 0:

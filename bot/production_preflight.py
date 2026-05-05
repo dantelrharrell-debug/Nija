@@ -668,15 +668,18 @@ def _step7_adversarial_validation() -> None:
 
     invalid_token = uuid.uuid4().hex
     os.environ["NIJA_WRITER_FENCING_TOKEN"] = invalid_token
+    failed_as_expected = False
     try:
-        try:
-            assert_distributed_writer_authority()
-            _fail("Failure injection did not block invalid writer fence token")
-            sys.exit(1)
-        except Exception as exc:
-            _ok(f"Failure injection blocked as expected ({exc})")
+        assert_distributed_writer_authority()
+    except Exception as exc:
+        failed_as_expected = True
+        _ok(f"Failure injection blocked as expected ({exc})")
     finally:
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = token
+
+    if not failed_as_expected:
+        _fail("Failure injection did not block invalid writer fence token")
+        sys.exit(1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
