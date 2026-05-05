@@ -6,9 +6,10 @@ Executes the five mandatory checks before the bot enters live mode:
 
   Step 1 — Redis PING confirmation
   Step 2 — Lock acquisition logging
-  Step 3 — Single-instance enforcement
-  Step 4 — Stale lock clearance
-  Step 5 — Live-mode verification
+  Step 3 — Redis persistence + fencing health
+  Step 4 — Single-instance enforcement
+  Step 5 — Stale lock clearance
+  Step 6 — Live-mode verification
 
 Run directly::
 
@@ -27,6 +28,8 @@ Exit codes
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import sys
@@ -46,6 +49,61 @@ log = logging.getLogger("nija.preflight")
 # ─────────────────────────────────────────────────────────────────────────────
 
 SEPARATOR = "=" * 72
+_TRUTHY = {"1", "true", "yes", "on", "enabled"}
+_RECOMMENDED_LEASE_TTL_MS = int(os.getenv("NIJA_REDIS_RECOMMENDED_TTL_MS", "600000"))
+
+
+def _env_truthy(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in _TRUTHY
+
+
+def _redis_health_state_path() -> Path:
+    raw = os.getenv("NIJA_REDIS_HEALTH_STATE_PATH", "").strip()
+    if raw:
+        return Path(raw)
+    return Path(__file__).resolve().parents[1] / "data" / "redis_health_state.json"
+
+
+def _load_health_state(path: Path) -> dict:
+    try:
+        if path.exists():
+            return json.loads(path.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _write_health_state(path: Path, payload: dict) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        tmp_path.replace(path)
+    except Exception as exc:
+        log.warning("Could not persist Redis health state: %s", exc)
+
+
+def _resolve_writer_lock_scope() -> str:
+    raw = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+        or "default"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolve_writer_lock_key() -> str:
+    return os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_resolve_writer_lock_scope()}"
+
+
+def _parse_lock_token(raw_value: str) -> int:
+    if not raw_value:
+        return 0
+    token = str(raw_value).split(":", 1)[0]
+    try:
+        return int(token)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _step(n: int, title: str) -> None:
@@ -159,10 +217,17 @@ def _step2_lock_logging(redis_client: "redis.Redis") -> None:  # type: ignore[na
     _step(2, "Lock acquisition logging")
 
     lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "nija:writer_lock")
-    ttl_ms   = int(os.getenv("NIJA_REDIS_LEASE_TTL_MS", "30000"))
+    ttl_ms   = int(os.getenv("NIJA_REDIS_LEASE_TTL_MS", "600000"))
 
     log.info("Writer-lock Redis key : %s", lock_key)
     log.info("Writer-lock TTL       : %d ms", ttl_ms)
+    if ttl_ms < _RECOMMENDED_LEASE_TTL_MS:
+        log.warning(
+            "⚠️  Lease TTL below recommended minimum (%d ms < %d ms). "
+            "Increase NIJA_REDIS_LEASE_TTL_MS to reduce premature lease expiry.",
+            ttl_ms,
+            _RECOMMENDED_LEASE_TTL_MS,
+        )
 
     # Non-destructive probe: check whether the key already exists.
     try:
@@ -185,12 +250,173 @@ def _step2_lock_logging(redis_client: "redis.Redis") -> None:  # type: ignore[na
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 3 — Single instance enforcement (file-based bootstrap guard)
+# Step 3 — Redis health, persistence, and monotonicity guard
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _step3_single_instance() -> None:
+def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[name-defined]
+    """Validate Redis persistence, writer lock ownership, and nonce continuity."""
+    _step(3, "Redis persistence + fencing health")
+
+    dry_run = _env_truthy("DRY_RUN_MODE", "false")
+    paper = _env_truthy("PAPER_MODE", "false")
+    live_mode = not dry_run and not paper
+    strict_lock_required = (live_mode or _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK", "false")) and not _env_truthy(
+        "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "false"
+    )
+    strict_lease = _env_truthy("NIJA_STRICT_REDIS_LEASE", "true") and not _env_truthy(
+        "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "false"
+    )
+    persistence_required = live_mode and _env_truthy("NIJA_REDIS_PERSISTENCE_REQUIRED", "true")
+
+    persistence_info = {}
+    try:
+        persistence_info = redis_client.info("persistence")
+    except Exception as exc:
+        log.warning("Could not read Redis persistence info: %s", exc)
+
+    aof_enabled = int(persistence_info.get("aof_enabled", 0) or 0)
+    rdb_status = str(persistence_info.get("rdb_last_bgsave_status", "") or "").lower()
+    rdb_last_save = int(persistence_info.get("rdb_last_save_time", 0) or 0)
+    persistence_ok = bool(aof_enabled == 1 or rdb_status == "ok" or rdb_last_save > 0)
+
+    if not persistence_info:
+        msg = "Redis persistence info unavailable — cannot confirm AOF/RDB durability"
+        if persistence_required:
+            _fail(msg)
+            sys.exit(1)
+        log.warning("⚠️  %s (set NIJA_REDIS_PERSISTENCE_REQUIRED=true to enforce)", msg)
+    elif not persistence_ok:
+        msg = "Redis persistence disabled — enable AOF or RDB snapshots"
+        if persistence_required:
+            _fail(msg)
+            sys.exit(1)
+        log.warning("⚠️  %s", msg)
+    else:
+        _ok("Redis persistence confirmed (AOF or RDB enabled)")
+
+    lock_key = _resolve_writer_lock_key()
+    expected_token_raw = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    expected_token = int(expected_token_raw) if expected_token_raw.isdigit() else 0
+    current_raw = ""
+    current_token = 0
+    try:
+        current_raw = str(redis_client.get(lock_key) or "")
+        current_token = _parse_lock_token(current_raw)
+    except Exception as exc:
+        log.warning("Could not read writer lock key %s: %s", lock_key, exc)
+
+    if strict_lock_required and not expected_token:
+        _fail("Distributed writer fencing token missing in strict/live mode")
+        sys.exit(1)
+    if expected_token and current_token != expected_token:
+        _fail(
+            "Distributed writer lock token mismatch "
+            f"(expected={expected_token}, current={current_token or '<missing>'})"
+        )
+        sys.exit(1)
+
+    platform_key = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+    )
+    lease_version = 0
+    nonce_value = 0
+    key_id = ""
+    if platform_key:
+        try:
+            from bot.distributed_nonce_manager import make_api_key_id
+        except ImportError:
+            from distributed_nonce_manager import make_api_key_id  # type: ignore[import]
+
+        key_id = make_api_key_id(platform_key)
+        lease_key = f"nija:kraken:writer:lease_version:{key_id}"
+        nonce_key = f"nija:kraken:nonce:{key_id}"
+        try:
+            lease_version = int(redis_client.get(lease_key) or 0)
+            nonce_value = int(redis_client.get(nonce_key) or 0)
+        except Exception as exc:
+            log.warning("Could not read nonce lease/nonce keys: %s", exc)
+
+        if strict_lease and lease_version <= 0:
+            _fail("Redis nonce writer lease missing in strict mode")
+            sys.exit(1)
+    else:
+        log.warning("Kraken platform key not configured — skipping nonce continuity check")
+
+    state_path = _redis_health_state_path()
+    previous = _load_health_state(state_path)
+    prev_token = int(previous.get("writer_fence_token", 0) or 0)
+    prev_lease = int(previous.get("nonce_lease_version", 0) or 0)
+    prev_nonce = int(previous.get("nonce_value", 0) or 0)
+    prev_run_id = str(previous.get("redis_run_id", "") or "")
+
+    reset_reasons = []
+    if prev_token and current_token and current_token < prev_token:
+        reset_reasons.append(
+            f"writer lock token decreased (prev={prev_token}, current={current_token})"
+        )
+    if prev_lease and lease_version and lease_version < prev_lease:
+        reset_reasons.append(
+            f"nonce lease version decreased (prev={prev_lease}, current={lease_version})"
+        )
+    if prev_nonce and nonce_value and nonce_value < prev_nonce:
+        reset_reasons.append(
+            f"nonce value decreased (prev={prev_nonce}, current={nonce_value})"
+        )
+
+    run_id = ""
+    try:
+        run_id = str(redis_client.info().get("run_id", "") or "")
+    except Exception:
+        run_id = ""
+
+    if prev_run_id and run_id and prev_run_id != run_id:
+        log.warning("⚠️  Redis run_id changed since last boot (prev=%s, current=%s)", prev_run_id, run_id)
+
+    if reset_reasons:
+        policy = os.getenv("NIJA_REDIS_RESET_POLICY", "require_confirmation").strip().lower()
+        ack = _env_truthy("NIJA_REDIS_RESET_ACK", "false")
+        message = "; ".join(reset_reasons)
+        if policy not in {"auto_reinit", "require_confirmation"}:
+            policy = "require_confirmation"
+        if policy == "auto_reinit":
+            log.critical("Redis reset detected (%s) — auto-reinit policy enabled", message)
+        elif not ack:
+            _fail(
+                "Redis reset detected — manual confirmation required: "
+                f"{message}. Set NIJA_REDIS_RESET_ACK=true and redeploy to proceed."
+            )
+            sys.exit(1)
+        else:
+            log.critical("Redis reset detected (%s) — manual confirmation acknowledged", message)
+
+    if platform_key:
+        _ok(
+            "Redis nonce continuity verified "
+            f"(lease_version={lease_version}, nonce={nonce_value}, key_id={key_id})"
+        )
+
+    _write_health_state(
+        state_path,
+        {
+            "checked_at": time.time(),
+            "redis_run_id": run_id,
+            "writer_fence_token": current_token,
+            "nonce_lease_version": lease_version,
+            "nonce_value": nonce_value,
+        },
+    )
+
+    _ok("Redis fencing health verified")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 4 — Single instance enforcement (file-based bootstrap guard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _step4_single_instance() -> None:
     """Acquire the bootstrap guard to enforce single-instance operation."""
-    _step(3, "Single-instance enforcement")
+    _step(4, "Single-instance enforcement")
 
     try:
         from bot.bootstrap_guard import acquire_bootstrap_guard, is_guard_held
@@ -207,12 +433,12 @@ def _step3_single_instance() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4 — Clear stale locks
+# Step 5 — Clear stale locks
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _step4_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: ignore[name-defined]
+def _step5_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: ignore[name-defined]
     """Remove Redis keys that have no TTL (permanent/stale) from the lock namespace."""
-    _step(4, "Stale lock clearance")
+    _step(5, "Stale lock clearance")
 
     lock_key      = os.getenv("NIJA_WRITER_LOCK_KEY",  "nija:writer_lock")
     nonce_key     = os.getenv("NIJA_REDIS_NONCE_KEY",  "nija:kraken:nonce")
@@ -270,12 +496,12 @@ def _step4_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: igno
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 5 — Live-mode verification
+# Step 6 — Live-mode verification
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _step5_live_mode_check() -> None:
+def _step6_live_mode_check() -> None:
     """Confirm that the environment is correctly configured for live trading."""
-    _step(5, "Live-mode verification")
+    _step(6, "Live-mode verification")
 
     dry_run   = os.getenv("DRY_RUN_MODE",         "false").strip().lower() in {"1", "true", "yes", "on"}
     paper     = os.getenv("PAPER_MODE",            "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -331,9 +557,10 @@ def run_preflight() -> None:
 
     redis_client = _step1_redis_ping()
     _step2_lock_logging(redis_client)
-    _step3_single_instance()
-    _step4_clear_stale_locks(redis_client)
-    _step5_live_mode_check()
+    _step3_redis_health(redis_client)
+    _step4_single_instance()
+    _step5_clear_stale_locks(redis_client)
+    _step6_live_mode_check()
 
     elapsed = time.monotonic() - start
     log.info(SEPARATOR)

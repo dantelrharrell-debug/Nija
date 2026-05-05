@@ -8,6 +8,16 @@ The distributed writer lock uses Redis to prevent multiple bot instances from tr
 
 Railway provides a TCP proxy to access Redis from external services. This is **required** for NIJA to work reliably.
 
+## ✅ Step 0: Enable Redis persistence (AOF or RDB)
+
+NIJA relies on Redis for writer fencing + nonce continuity. **Persistence must be enabled** or every Redis reset
+looks like a split-brain event and trading will be blocked.
+
+- Railway Redis: enable **AOF** or **RDB** snapshots in the Redis service settings
+- Or use a managed provider (Upstash, Redis Cloud) with persistence enabled
+
+If persistence cannot be verified, NIJA startup will fail closed in live mode.
+
 ### Step 1: Enable TCP Proxy in Railway
 
 1. Go to Railway dashboard → Your project → Redis service
@@ -51,6 +61,15 @@ NIJA_REDIS_URL=rediss://default:your_redis_password_here@maglev.proxy.rlwy.net:1
 1. In Railway, restart the NIJA service
 2. Watch logs for Redis connection confirmation
 3. Look for: `✅ Redis connection established` or `✅ Distributed writer lock ready`
+
+## ✅ Single-Instance Requirement (Railway replicas)
+
+NIJA must run as **ONE** replica in live mode.
+
+- Keep `railway.json` → `deploy.numReplicas = 1`
+- Do not scale the NIJA service above 1 replica
+
+If a second instance boots, the writer lock will block it and live trading will fail closed.
 
 ## 🔍 Verify Your Setup
 
@@ -212,6 +231,10 @@ Expected fail indicators:
 - Check logs for `EXECUTION BLOCKED | ...committed=false`
 - Restart the NIJA service to reset the lock
 
+## 📘 Runbook
+
+For production resilience (failover + reset recovery + zero-downtime steps), see:
+`PRODUCTION_REDIS_RESILIENCE_RUNBOOK.md`.
 ## 📋 Configuration Priority
 
 NIJA checks for Redis URLs in this order:
