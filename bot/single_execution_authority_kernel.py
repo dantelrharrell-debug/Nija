@@ -92,6 +92,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 import time
 import uuid
@@ -111,8 +112,12 @@ logger = logging.getLogger("nija.seak")
 _SLOT_TIMEOUT_S: float = 30.0
 
 # Dedup window — requests with the same fingerprint within this window are
-# rejected as duplicates (seconds).
-_DEDUP_WINDOW_S: float = 60.0
+# rejected as duplicates (seconds). Tunable via NIJA_TRADE_DEDUP_WINDOW_S.
+try:
+    _DEDUP_WINDOW_S = float(os.environ.get("NIJA_TRADE_DEDUP_WINDOW_S", "180") or "180")
+except (TypeError, ValueError):
+    _DEDUP_WINDOW_S = 180.0
+_DEDUP_WINDOW_S = max(30.0, _DEDUP_WINDOW_S)
 
 # Maximum number of audit entries kept in the ring buffer.
 _AUDIT_RING_SIZE: int = 2_000
