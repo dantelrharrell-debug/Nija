@@ -350,13 +350,16 @@ class ExecutionPipeline:
                 except Exception as exc:
                     logger.debug("ExecutionPipeline: app_store_mode log skipped: %s", exc)
 
-        price_hint = request.price_hint_usd or 0.0
-        if price_hint <= 0:
-            logger.warning(
-                "ExecutionPipeline: missing price_hint for %s — using $1.00 fallback for simulation",
-                request.symbol,
+        price_hint = request.price_hint_usd
+        if price_hint is None or price_hint <= 0:
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error="Simulation requires price_hint_usd to compute quantity",
+                latency_ms=(time.monotonic() - t_start) * 1000,
             )
-            price_hint = 1.0
         quantity = request.size_usd / price_hint
         order_type = (request.order_type or "market").lower()
 

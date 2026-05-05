@@ -668,15 +668,20 @@ def _step7_adversarial_validation() -> None:
 
     adversarial_invalid_token = uuid.uuid4().hex
     # Preflight runs before worker threads start; restore the original token immediately after.
+    original_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN")
     os.environ["NIJA_WRITER_FENCING_TOKEN"] = adversarial_invalid_token
     failed_as_expected = False
     try:
+        # Expected to raise with an invalid fencing token (failure injection).
         assert_distributed_writer_authority()
     except Exception as exc:
         failed_as_expected = True
         _ok(f"Failure injection blocked as expected ({exc})")
     finally:
-        os.environ["NIJA_WRITER_FENCING_TOKEN"] = token
+        if original_token is None:
+            os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
+        else:
+            os.environ["NIJA_WRITER_FENCING_TOKEN"] = original_token
 
     if not failed_as_expected:
         _fail("Failure injection did not block invalid writer fence token")

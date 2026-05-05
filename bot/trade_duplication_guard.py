@@ -122,6 +122,7 @@ logger = logging.getLogger("nija.trade_duplication_guard")
 
 
 _DEDUP_WINDOW_DEFAULT_S = 180.0
+_DEDUP_WINDOW_MIN_S = 30.0  # Minimum window to cover slow retries and webhook replays.
 
 
 def _default_dedup_window_seconds() -> float:
@@ -129,7 +130,7 @@ def _default_dedup_window_seconds() -> float:
         value = float(os.getenv("NIJA_TRADE_DEDUP_WINDOW_S", str(_DEDUP_WINDOW_DEFAULT_S)))
     except (TypeError, ValueError):
         value = _DEDUP_WINDOW_DEFAULT_S
-    return max(30.0, value)
+    return max(_DEDUP_WINDOW_MIN_S, value)
 
 
 _DEFAULT_DEDUP_WINDOW_S = _default_dedup_window_seconds()
