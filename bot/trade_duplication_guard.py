@@ -123,7 +123,7 @@ logger = logging.getLogger("nija.trade_duplication_guard")
 
 def _default_dedup_window_seconds() -> float:
     try:
-        value = float(os.getenv("NIJA_TRADE_DEDUP_WINDOW_S", "180") or "180")
+        value = float(os.getenv("NIJA_TRADE_DEDUP_WINDOW_S", "180"))
     except (TypeError, ValueError):
         value = 180.0
     return max(30.0, value)

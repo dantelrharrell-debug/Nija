@@ -35,6 +35,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 # ── logging ──────────────────────────────────────────────────────────────────
@@ -665,7 +666,7 @@ def _step7_adversarial_validation() -> None:
         log.warning("⚠️  Skipping failure injection: strict distributed lock not required")
         return
 
-    invalid_token = f"invalid-{token[:6]}"
+    invalid_token = f"invalid-{uuid.uuid4().hex[:12]}"
     os.environ["NIJA_WRITER_FENCING_TOKEN"] = invalid_token
     try:
         try:

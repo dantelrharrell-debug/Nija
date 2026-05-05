@@ -114,7 +114,7 @@ _SLOT_TIMEOUT_S: float = 30.0
 # Dedup window — requests with the same fingerprint within this window are
 # rejected as duplicates (seconds). Tunable via NIJA_TRADE_DEDUP_WINDOW_S.
 try:
-    _DEDUP_WINDOW_S = float(os.environ.get("NIJA_TRADE_DEDUP_WINDOW_S", "180") or "180")
+    _DEDUP_WINDOW_S = float(os.environ.get("NIJA_TRADE_DEDUP_WINDOW_S", "180"))
 except (TypeError, ValueError):
     _DEDUP_WINDOW_S = 180.0
 _DEDUP_WINDOW_S = max(30.0, _DEDUP_WINDOW_S)

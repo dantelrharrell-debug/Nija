@@ -346,7 +346,7 @@ class ExecutionPipeline:
         price_hint = request.price_hint_usd or 0.0
         if price_hint <= 0:
             price_hint = 1.0
-        quantity = request.size_usd / price_hint if price_hint else request.size_usd
+        quantity = request.size_usd / price_hint
         order_type = (request.order_type or "market").lower()
 
         side = request.side.lower().strip()
