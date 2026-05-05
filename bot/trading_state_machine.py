@@ -226,7 +226,15 @@ def _nonce_sync_gate() -> tuple[bool, str]:
 
 
 def _strategy_ready_gate() -> tuple[bool, str]:
-    """Return True when the startup readiness gate is open (strategy ready)."""
+    """Report whether the StartupReadinessGate has opened.
+
+    Returns
+    -------
+    (ok, detail)
+        ok=True when the readiness gate is open.
+        ok=False when the gate is closed or its status cannot be determined.
+        detail provides a short reason (e.g., pending components) when ok=False.
+    """
     try:
         try:
             from bot.startup_readiness_gate import get_startup_readiness_gate
@@ -285,7 +293,18 @@ def _startup_reconciliation_gate() -> tuple[bool, str]:
 
 
 def _collect_live_gate_status() -> Dict[str, object]:
-    """Collect gate status for LIVE execution logging."""
+    """Collect safety gate status used for LIVE execution logging.
+
+    Gates captured:
+    - safe_ok: NIJA safe-start acknowledgement gate.
+    - recon_ok: restart reconciliation completion gate.
+    - nonce_ok: global nonce synchronization gate.
+    - lease_ok: distributed writer authority (lease owner) gate.
+    - strategy_ok: startup readiness gate for strategy initialization.
+
+    Returns a dict with *_ok and *_err keys plus execution_allowed, which is
+    true only when safe/reconciliation/nonce/lease/strategy gates pass.
+    """
     safe_ok, safe_err = _safe_start_gate()
     recon_ok, recon_err = _startup_reconciliation_gate()
     nonce_ok, nonce_err = _nonce_sync_gate()
@@ -308,7 +327,13 @@ def _collect_live_gate_status() -> Dict[str, object]:
 
 
 def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
-    """Log the live gate status once per change."""
+    """Log live gate status once per change.
+
+    Deduplicates output by comparing a compact snapshot of key booleans.
+    Fail-fast logging only applies to reconciliation/nonce/lease failures
+    as required by the safety contract, while strategy readiness is logged
+    but not part of the fail-fast trigger.
+    """
     global _LIVE_GATE_LAST_STATUS
 
     recon_ok = bool(live_gate_status.get("recon_ok"))
