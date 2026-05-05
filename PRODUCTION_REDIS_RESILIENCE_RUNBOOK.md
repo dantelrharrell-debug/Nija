@@ -52,6 +52,22 @@ blocked until reconciliation succeeds or an explicit manual override is set.
   instance to force-acquire the nonce writer lease when the existing holder
   stops refreshing its TTL.
 
+**Lease stability safeguards**
+- Startup backoff: `NIJA_REDIS_LEASE_STARTUP_BACKOFF_MIN_S` /
+  `NIJA_REDIS_LEASE_STARTUP_BACKOFF_MAX_S` (default 5–15s) adds jitter before
+  first lease acquisition to avoid
+  synchronized contention storms.
+- Renewal loop: `NIJA_REDIS_LEASE_RENEWAL_FRACTION` (default 0.6) refreshes the
+  nonce writer lease at ~60% of TTL (min cadence via
+  `NIJA_REDIS_LEASE_RENEWAL_MIN_S`).
+- Stability gate: `NIJA_NONCE_LEASE_STABILITY_S` (default 30s in live mode)
+  requires a stable lease window before LIVE activation. Use
+  `NIJA_REQUIRE_NONCE_LEASE_STABILITY=1` to enforce in non-live modes or set the
+  window to 0 to disable.
+- Lease status logs: `LEASE STATUS: key_id=... token=... owner_id=...
+  ttl_remaining_ms=...` (interval controlled by
+  `NIJA_REDIS_LEASE_STATUS_LOG_INTERVAL_S`).
+
 ## 4) Redis Failover Strategy
 Recommended approach:
 1. Use managed Redis with built-in durability.

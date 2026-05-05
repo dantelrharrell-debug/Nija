@@ -152,6 +152,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import random
 import socket
 import threading
 import time
@@ -198,6 +199,45 @@ _REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS = max(
     0, int(os.environ.get("NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS", "250"))
 )
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
+try:
+    _REDIS_LEASE_STARTUP_BACKOFF_MIN_S = max(
+        0.0, float(os.environ.get("NIJA_REDIS_LEASE_STARTUP_BACKOFF_MIN_S", "5") or "5")
+    )
+except (TypeError, ValueError):
+    _REDIS_LEASE_STARTUP_BACKOFF_MIN_S = 5.0
+try:
+    _REDIS_LEASE_STARTUP_BACKOFF_MAX_S = max(
+        0.0, float(os.environ.get("NIJA_REDIS_LEASE_STARTUP_BACKOFF_MAX_S", "15") or "15")
+    )
+except (TypeError, ValueError):
+    _REDIS_LEASE_STARTUP_BACKOFF_MAX_S = 15.0
+if _REDIS_LEASE_STARTUP_BACKOFF_MAX_S < _REDIS_LEASE_STARTUP_BACKOFF_MIN_S:
+    _REDIS_LEASE_STARTUP_BACKOFF_MIN_S, _REDIS_LEASE_STARTUP_BACKOFF_MAX_S = (
+        _REDIS_LEASE_STARTUP_BACKOFF_MAX_S,
+        _REDIS_LEASE_STARTUP_BACKOFF_MIN_S,
+    )
+try:
+    _REDIS_LEASE_RENEWAL_FRACTION = float(
+        os.environ.get("NIJA_REDIS_LEASE_RENEWAL_FRACTION", "0.6") or "0.6"
+    )
+except (TypeError, ValueError):
+    _REDIS_LEASE_RENEWAL_FRACTION = 0.6
+if _REDIS_LEASE_RENEWAL_FRACTION < 0.0:
+    _REDIS_LEASE_RENEWAL_FRACTION = 0.0
+elif _REDIS_LEASE_RENEWAL_FRACTION > 0.9:
+    _REDIS_LEASE_RENEWAL_FRACTION = 0.9
+try:
+    _REDIS_LEASE_RENEWAL_MIN_S = max(
+        0.5, float(os.environ.get("NIJA_REDIS_LEASE_RENEWAL_MIN_S", "1.0") or "1.0")
+    )
+except (TypeError, ValueError):
+    _REDIS_LEASE_RENEWAL_MIN_S = 1.0
+try:
+    _REDIS_LEASE_STATUS_LOG_INTERVAL_S = max(
+        0.0, float(os.environ.get("NIJA_REDIS_LEASE_STATUS_LOG_INTERVAL_S", "30") or "30")
+    )
+except (TypeError, ValueError):
+    _REDIS_LEASE_STATUS_LOG_INTERVAL_S = 30.0
 
 
 def _runtime_strict_redis_lease() -> bool:
@@ -298,6 +338,19 @@ def _build_process_fingerprint() -> str:
     host = socket.gethostname()
     container_id = _detect_container_id()
     return f"pid={pid}|host={host}|container={container_id}|startup={_PROCESS_STARTUP_HASH}"
+
+
+def _resolve_instance_id() -> str:
+    """Return a best-effort instance id for logs (Railway/container aware)."""
+    try:
+        try:
+            from bot.instance_identity import current_instance_identity
+        except ImportError:
+            from instance_identity import current_instance_identity  # type: ignore[import]
+        identity = current_instance_identity()
+        return str(identity.get("instance_id", "") or "")
+    except Exception:
+        return ""
 
 
 def _redact_redis_url(redis_url: str) -> str:
@@ -462,12 +515,15 @@ class _PerKeyRedisBackend:
     class _LeaseState:
         version: int
         owner_id: str
+        stable_since: float
+        last_renewed_at: float
 
     def __init__(
         self,
         redis_client: object,
         owner_id: str,
         owner_fingerprint: str,
+        owner_instance_id: str,
         lease_ttl_ms: int = _REDIS_LEASE_TTL_MS,
         strict_lease: bool = _STRICT_REDIS_LEASE,
     ) -> None:
@@ -482,11 +538,23 @@ class _PerKeyRedisBackend:
         self._client.ping()  # type: ignore[attr-defined]
         self._owner_id = owner_id
         self._owner_fingerprint = owner_fingerprint
+        self._owner_instance_id = owner_instance_id
         self._lease_ttl_ms = lease_ttl_ms
         self._strict_lease = strict_lease
         self._lease_by_key: Dict[str, _PerKeyRedisBackend._LeaseState] = {}
         self._wait_log_next_at: Dict[str, float] = {}
         self._wait_log_lock = threading.Lock()
+        self._startup_backoff_done: set[str] = set()
+        self._lease_heartbeat_threads: Dict[str, threading.Thread] = {}
+        self._lease_heartbeat_stop: Dict[str, threading.Event] = {}
+        self._lease_status_last_log: Dict[str, float] = {}
+        if _REDIS_LEASE_RENEWAL_FRACTION > 0:
+            self._lease_renewal_interval_s = max(
+                _REDIS_LEASE_RENEWAL_MIN_S,
+                (self._lease_ttl_ms / 1000.0) * _REDIS_LEASE_RENEWAL_FRACTION,
+            )
+        else:
+            self._lease_renewal_interval_s = 0.0
         _logger.info("DistributedNonceManager: Redis backend connected")
 
     def _should_emit_wait_log(self, key_id: str, now_monotonic: float, *, force: bool = False) -> bool:
@@ -502,6 +570,138 @@ class _PerKeyRedisBackend:
         """Clear per-key wait-log gate after successful lease acquisition."""
         with self._wait_log_lock:
             self._wait_log_next_at.pop(key_id, None)
+
+    def _maybe_apply_startup_backoff(self, key_id: str) -> None:
+        """Sleep once per key to desynchronize lease acquisition at startup."""
+        if key_id in self._startup_backoff_done:
+            return
+        self._startup_backoff_done.add(key_id)
+        if _REDIS_LEASE_STARTUP_BACKOFF_MAX_S <= 0:
+            return
+        delay = random.uniform(
+            _REDIS_LEASE_STARTUP_BACKOFF_MIN_S,
+            _REDIS_LEASE_STARTUP_BACKOFF_MAX_S,
+        )
+        if delay <= 0:
+            return
+        _logger.warning(
+            "DistributedNonceManager: startup backoff before Redis writer lease acquisition "
+            "(key=%s delay=%.1fs)",
+            key_id,
+            delay,
+        )
+        time.sleep(delay)
+
+    def _ensure_lease_heartbeat(self, key_id: str) -> None:
+        """Start a background renewal loop to keep the writer lease alive."""
+        if self._lease_renewal_interval_s <= 0:
+            return
+        if key_id in self._lease_heartbeat_threads:
+            return
+        stop_event = threading.Event()
+        self._lease_heartbeat_stop[key_id] = stop_event
+        thread = threading.Thread(
+            target=self._lease_heartbeat_loop,
+            args=(key_id, stop_event, self._lease_renewal_interval_s),
+            daemon=True,
+            name=f"RedisNonceLeaseHeartbeat-{key_id}",
+        )
+        self._lease_heartbeat_threads[key_id] = thread
+        thread.start()
+
+    def _stop_lease_heartbeat(self, key_id: str) -> None:
+        """Stop the heartbeat loop for a key (if running)."""
+        stop_event = self._lease_heartbeat_stop.pop(key_id, None)
+        if stop_event is not None:
+            stop_event.set()
+        self._lease_heartbeat_threads.pop(key_id, None)
+
+    def _lease_heartbeat_loop(
+        self,
+        key_id: str,
+        stop_event: threading.Event,
+        interval_s: float,
+    ) -> None:
+        """Heartbeat loop that renews the Redis writer lease periodically."""
+        while not stop_event.wait(interval_s):
+            try:
+                self._ensure_writer_lease(key_id)
+            except Exception as exc:
+                _logger.warning(
+                    "DistributedNonceManager: Redis writer lease heartbeat failed (key=%s err=%s)",
+                    key_id,
+                    exc,
+                )
+
+    def _log_lease_status(
+        self,
+        key_id: str,
+        lease_version: int,
+        owner_id: str,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Log lease ownership diagnostics with TTL and stability metadata."""
+        if _REDIS_LEASE_STATUS_LOG_INTERVAL_S <= 0 and not force:
+            return
+        now = time.monotonic()
+        last_log = self._lease_status_last_log.get(key_id, 0.0)
+        if not force and (now - last_log) < _REDIS_LEASE_STATUS_LOG_INTERVAL_S:
+            return
+        self._lease_status_last_log[key_id] = now
+        ttl_ms = -1
+        try:
+            ttl_ms = int(self._client.pttl(self._LEASE_OWNER_PREFIX + key_id))  # type: ignore[attr-defined]
+        except Exception:
+            ttl_ms = -1
+        stable_for_s = None
+        lease_state = self._lease_by_key.get(key_id)
+        if lease_state is not None:
+            stable_for_s = max(0.0, now - lease_state.stable_since)
+        owner_instance = self._owner_instance_id or self._owner_fingerprint
+        stable_for_txt = f"{stable_for_s:.1f}s" if isinstance(stable_for_s, float) else "unknown"
+        _logger.info(
+            "LEASE STATUS: key_id=%s token=%d owner_id=%s owner_instance=%s ttl_remaining_ms=%s stable_for=%s",
+            key_id,
+            lease_version,
+            owner_id,
+            owner_instance,
+            ttl_ms,
+            stable_for_txt,
+        )
+
+    def get_writer_lease_status(self, key_id: str) -> dict[str, object]:
+        """Return current writer lease status for diagnostics."""
+        status: dict[str, object] = {
+            "enabled": True,
+            "key_id": key_id,
+            "token": 0,
+            "owner_id": "",
+            "owner_instance": self._owner_instance_id or self._owner_fingerprint,
+            "ttl_remaining_ms": None,
+            "stable_for_s": None,
+            "error": "",
+        }
+        owner_key = self._LEASE_OWNER_PREFIX + key_id
+        version_key = self._LEASE_VERSION_PREFIX + key_id
+        fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
+        try:
+            owner = str(self._client.get(owner_key) or "")  # type: ignore[attr-defined]
+            version = int(self._client.get(version_key) or 0)  # type: ignore[attr-defined]
+            ttl_ms = int(self._client.pttl(owner_key))  # type: ignore[attr-defined]
+            fingerprint = str(self._client.get(fingerprint_key) or "")  # type: ignore[attr-defined]
+            status["owner_id"] = owner
+            status["token"] = version
+            status["ttl_remaining_ms"] = ttl_ms
+            status["owner_fingerprint"] = fingerprint
+        except Exception as exc:
+            status["error"] = str(exc)
+            return status
+        lease_state = self._lease_by_key.get(key_id)
+        if lease_state is not None:
+            status["stable_for_s"] = max(0.0, time.monotonic() - lease_state.stable_since)
+            status["last_renewed_at"] = lease_state.last_renewed_at
+        return status
 
     def next_nonce(self, key_id: str) -> int:
         """Atomically return the next nonce for *key_id* (>= now_ms, strictly increasing)."""
@@ -530,6 +730,7 @@ class _PerKeyRedisBackend:
         """Delete the nonce key for *key_id* (fresh start — use only after key rotation)."""
         self._client.delete(self._KEY_PREFIX + key_id)  # type: ignore[attr-defined]
         self._lease_by_key.pop(key_id, None)
+        self._stop_lease_heartbeat(key_id)
         _logger.warning(
             "DistributedNonceManager: Redis nonce key reset for key_id=%s "
             "(new key rotation — nonce sequence restarting from 0)",
@@ -548,6 +749,8 @@ class _PerKeyRedisBackend:
         counter_key = self._LEASE_VERSION_COUNTER_PREFIX + key_id
         fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
         prev = self._lease_by_key.get(key_id)
+        if prev is None:
+            self._maybe_apply_startup_backoff(key_id)
         force_enabled = _REDIS_LEASE_FORCE_TAKEOVER and _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S > 0.0
 
         def _run_lease_script() -> tuple[bool, int, str]:
@@ -671,8 +874,16 @@ class _PerKeyRedisBackend:
                     "Redis writer lease rejected "
                     f"(key_id={key_id}, owner={current_owner}, lease_version={lease_version})"
                 )
+        now = time.monotonic()
         if prev is None:
-            self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
+            self._lease_by_key[key_id] = self._LeaseState(
+                version=lease_version,
+                owner_id=self._owner_id,
+                stable_since=now,
+                last_renewed_at=now,
+            )
+            self._ensure_lease_heartbeat(key_id)
+            self._log_lease_status(key_id, lease_version, current_owner, force=True)
             _logger.info(
                 "DistributedNonceManager: Redis writer lease acquired key=%s lease_version=%d owner=%s",
                 key_id,
@@ -707,7 +918,13 @@ class _PerKeyRedisBackend:
                     _logger.critical("%s Recovery acknowledged; continuing.", reset_msg)
                 else:
                     _logger.critical(reset_msg)
-                self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
+                self._lease_by_key[key_id] = self._LeaseState(
+                    version=lease_version,
+                    owner_id=self._owner_id,
+                    stable_since=now,
+                    last_renewed_at=now,
+                )
+                self._log_lease_status(key_id, lease_version, current_owner, force=True)
                 return lease_version
             msg = (
                 "Redis writer lease fencing token changed "
@@ -717,7 +934,21 @@ class _PerKeyRedisBackend:
             if self._strict_lease:
                 raise RuntimeError(msg)
             _logger.critical(msg)
-            self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
+            self._lease_by_key[key_id] = self._LeaseState(
+                version=lease_version,
+                owner_id=self._owner_id,
+                stable_since=now,
+                last_renewed_at=now,
+            )
+            self._log_lease_status(key_id, lease_version, current_owner, force=True)
+            return lease_version
+        self._lease_by_key[key_id] = self._LeaseState(
+            version=lease_version,
+            owner_id=self._owner_id,
+            stable_since=prev.stable_since,
+            last_renewed_at=now,
+        )
+        self._log_lease_status(key_id, lease_version, current_owner)
         return lease_version
 
     def ensure_writer_lease(self, key_id: str) -> int:
@@ -738,6 +969,7 @@ class _PerKeyRedisBackend:
             )
             if released:
                 self._lease_by_key.pop(key_id, None)
+                self._stop_lease_heartbeat(key_id)
             return bool(released)
         except Exception:
             return False
@@ -779,6 +1011,7 @@ class DistributedNonceManager:
         self._redis: Optional[_PerKeyRedisBackend] = None
         self._owner_id = str(uuid.uuid4())
         self._owner_fingerprint = _build_process_fingerprint()
+        self._owner_instance_id = _resolve_instance_id()
         self._strict_redis_lease = _runtime_strict_redis_lease()
 
         if redis_client is not None:
@@ -787,6 +1020,7 @@ class DistributedNonceManager:
                     redis_client=redis_client,
                     owner_id=self._owner_id,
                     owner_fingerprint=self._owner_fingerprint,
+                    owner_instance_id=self._owner_instance_id,
                     lease_ttl_ms=_REDIS_LEASE_TTL_MS,
                     strict_lease=self._strict_redis_lease,
                 )
@@ -954,6 +1188,15 @@ class DistributedNonceManager:
         if self._redis is None:
             return False
         return self._redis.release_writer_lease(api_key_id)
+
+    def get_writer_lease_status(self, api_key_id: str) -> dict[str, object]:
+        """Return writer lease diagnostics for *api_key_id* (never raises)."""
+        if self._redis is None:
+            return {"enabled": False, "key_id": api_key_id, "error": "redis_unavailable"}
+        try:
+            return self._redis.get_writer_lease_status(api_key_id)
+        except Exception as exc:
+            return {"enabled": True, "key_id": api_key_id, "error": str(exc)}
 
     def can_issue_nonce(self, api_key_id: str = "") -> bool:
         """

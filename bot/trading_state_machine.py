@@ -176,7 +176,29 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
                 )
 
             key_id = make_api_key_id(platform_key)
-            get_distributed_nonce_manager().ensure_writer_lock(key_id)
+            manager = get_distributed_nonce_manager()
+            manager.ensure_writer_lock(key_id)
+            stability_required_s = _nonce_lease_stability_requirement_s()
+            if stability_required_s > 0:
+                status = None
+                status_fn = getattr(manager, "get_writer_lease_status", None)
+                if callable(status_fn):
+                    status = status_fn(key_id)
+                if not isinstance(status, dict):
+                    raise RuntimeError("nonce lease stability status unavailable")
+                if status.get("enabled") is False:
+                    return True, ""
+                stable_for = status.get("stable_for_s")
+                if not isinstance(stable_for, (int, float)):
+                    stable_for = 0.0
+                if stable_for < stability_required_s:
+                    token = status.get("token")
+                    owner = status.get("owner_instance") or status.get("owner_id") or "<unknown>"
+                    raise RuntimeError(
+                        "nonce lease unstable "
+                        f"(stable_for={stable_for:.1f}s required={stability_required_s:.1f}s "
+                        f"token={token} owner={owner})"
+                    )
             return True, ""
         except Exception as exc:
             last_err = str(exc)
@@ -192,6 +214,23 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
         return True, ""
 
     return False, last_err
+
+
+def _nonce_lease_stability_requirement_s() -> float:
+    """Return required lease stability window in seconds (0 disables)."""
+    require_stability = (
+        _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false")
+        or _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
+    )
+    if not require_stability:
+        return 0.0
+    raw = os.environ.get("NIJA_NONCE_LEASE_STABILITY_S", "").strip()
+    if not raw:
+        return 30.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 30.0
 
 
 def _nonce_sync_gate() -> tuple[bool, str]:
