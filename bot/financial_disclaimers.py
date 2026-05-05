@@ -114,6 +114,7 @@ NIJA SUPPORTS MULTIPLE TRADING MODES:
 🔴 DISABLED MODE (Default - Safest):
    • NO credentials configured
    • NO trading possible
+   • ZERO capital exposure
    • App starts in this mode for safety
    • Perfect for: First installation, testing setup
 

@@ -38,6 +38,8 @@ from pathlib import Path
 
 logger = logging.getLogger("nija.trading_state_machine")
 
+_LIVE_GATE_LAST_STATUS: Optional[tuple[bool, bool, bool, bool, bool]] = None
+
 # Keep both import paths bound to the same module object so the process only
 # ever has one TradingStateMachine singleton.
 if __name__ == "bot.trading_state_machine":
@@ -213,6 +215,33 @@ def _nonce_sync_gate() -> tuple[bool, str]:
     return True, ""
 
 
+def _strategy_ready_gate() -> tuple[bool, str]:
+    """Return True when the startup readiness gate is open (strategy ready)."""
+    try:
+        try:
+            from bot.startup_readiness_gate import get_startup_readiness_gate
+        except ImportError:
+            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
+    except ImportError:
+        return True, "startup_readiness_gate_unavailable"
+
+    try:
+        gate = get_startup_readiness_gate()
+    except Exception as exc:
+        return False, f"startup_gate_unavailable: {exc}"
+
+    try:
+        if gate.is_ready():
+            return True, ""
+        status = gate.get_status()
+        pending = status.get("pending_components") if isinstance(status, dict) else []
+        if pending:
+            return False, f"pending={','.join(sorted(pending))}"
+        return False, "not_ready"
+    except Exception as exc:
+        return False, f"startup_gate_status_unavailable: {exc}"
+
+
 def _safe_start_gate() -> tuple[bool, str]:
     """Block LIVE activation when safe-start mode is required."""
     if not _env_truthy("NIJA_SAFE_START_REQUIRED", "false"):
@@ -245,11 +274,63 @@ def _startup_reconciliation_gate() -> tuple[bool, str]:
     return False, f"status={status or 'missing'}"
 
 
-def _live_activation_gate() -> tuple[bool, str]:
+def _collect_live_gate_status() -> Dict[str, object]:
+    """Collect gate status for LIVE execution logging."""
     safe_ok, safe_err = _safe_start_gate()
+    recon_ok, recon_err = _startup_reconciliation_gate()
+    nonce_ok, nonce_err = _nonce_sync_gate()
+    lease_ok, lease_err = _distributed_writer_authority_gate()
+    strategy_ok, strategy_err = _strategy_ready_gate()
+    execution_allowed = safe_ok and recon_ok and nonce_ok and lease_ok
+    return {
+        "safe_ok": safe_ok,
+        "safe_err": safe_err,
+        "recon_ok": recon_ok,
+        "recon_err": recon_err,
+        "nonce_ok": nonce_ok,
+        "nonce_err": nonce_err,
+        "lease_ok": lease_ok,
+        "lease_err": lease_err,
+        "strategy_ok": strategy_ok,
+        "strategy_err": strategy_err,
+        "execution_allowed": execution_allowed,
+    }
+
+
+def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
+    """Log the live gate status once per change."""
+    global _LIVE_GATE_LAST_STATUS
+
+    recon_ok = bool(live_gate_status.get("recon_ok"))
+    nonce_ok = bool(live_gate_status.get("nonce_ok"))
+    lease_ok = bool(live_gate_status.get("lease_ok"))
+    strategy_ok = bool(live_gate_status.get("strategy_ok"))
+    execution_allowed = bool(live_gate_status.get("execution_allowed"))
+    status_tuple = (recon_ok, nonce_ok, lease_ok, strategy_ok, execution_allowed)
+    if _LIVE_GATE_LAST_STATUS == status_tuple:
+        return
+    _LIVE_GATE_LAST_STATUS = status_tuple
+
+    logger.info("LIVE GATE STATUS:")
+    logger.info("   • Reconciliation: %s", "COMPLETE" if recon_ok else "INCOMPLETE")
+    logger.info("   • Nonce Sync: %s", "VALID" if nonce_ok else "INVALID")
+    logger.info("   • Lease Owner: %s", "CONFIRMED" if lease_ok else "CONFLICT")
+    logger.info("   • Strategy Ready: %s", "TRUE" if strategy_ok else "FALSE")
+    logger.info("   • EXECUTION_ALLOWED: %s", "TRUE" if execution_allowed else "FALSE")
+
+    if not (recon_ok and nonce_ok and lease_ok):
+        logger.critical("🚫 EXECUTION BLOCKED — SAFETY GATE FAILURE")
+
+
+def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) -> tuple[bool, str]:
+    live_gate_status = live_gate_status or _collect_live_gate_status()
+    _log_live_gate_status(live_gate_status)
+    safe_ok = bool(live_gate_status.get("safe_ok"))
+    safe_err = str(live_gate_status.get("safe_err") or "")
     if not safe_ok:
         return False, f"SAFE_START_REQUIRED {safe_err}"
-    recon_ok, recon_err = _startup_reconciliation_gate()
+    recon_ok = bool(live_gate_status.get("recon_ok"))
+    recon_err = str(live_gate_status.get("recon_err") or "")
     if not recon_ok:
         return False, f"STARTUP_RECONCILIATION {recon_err}"
     return True, ""
@@ -797,7 +878,8 @@ class TradingStateMachine:
             )
             return False
 
-        _live_ok, _live_err = _live_activation_gate()
+        _live_gate_status = _collect_live_gate_status()
+        _live_ok, _live_err = _live_activation_gate(_live_gate_status)
         if not _live_ok:
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=SAFE_START detail=%s",
@@ -806,7 +888,8 @@ class TradingStateMachine:
             return False
 
         if _force and _lcv_quick and not _dry_run_quick:
-            _force_writer_ok, _force_writer_err = _distributed_writer_authority_gate()
+            _force_writer_ok = bool(_live_gate_status.get("lease_ok"))
+            _force_writer_err = str(_live_gate_status.get("lease_err") or "")
             if not _force_writer_ok:
                 logger.critical(
                     "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_DISTRIBUTED_WRITER_AUTHORITY detail=%s",
@@ -822,7 +905,8 @@ class TradingStateMachine:
                 )
                 return False
 
-            _force_nonce_sync_ok, _force_nonce_sync_err = _nonce_sync_gate()
+            _force_nonce_sync_ok = bool(_live_gate_status.get("nonce_ok"))
+            _force_nonce_sync_err = str(_live_gate_status.get("nonce_err") or "")
             if not _force_nonce_sync_ok:
                 logger.critical(
                     "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_NONCE_SYNC detail=%s",
@@ -903,7 +987,8 @@ class TradingStateMachine:
         # ── Gate 2b: distributed writer authority must be valid ──────────
         # Prevent split-brain activation when another container/process owns
         # the Redis writer fence token.
-        _writer_ok, _writer_err = _distributed_writer_authority_gate()
+        _writer_ok = bool(_live_gate_status.get("lease_ok"))
+        _writer_err = str(_live_gate_status.get("lease_err") or "")
         if not _writer_ok:
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=DISTRIBUTED_WRITER_AUTHORITY detail=%s",
@@ -922,7 +1007,8 @@ class TradingStateMachine:
             )
             return False
 
-        _nonce_sync_ok, _nonce_sync_err = _nonce_sync_gate()
+        _nonce_sync_ok = bool(_live_gate_status.get("nonce_ok"))
+        _nonce_sync_err = str(_live_gate_status.get("nonce_err") or "")
         if not _nonce_sync_ok:
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=NONCE_SYNC detail=%s",
