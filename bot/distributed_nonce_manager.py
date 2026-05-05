@@ -591,11 +591,6 @@ class _PerKeyRedisBackend:
         # Fencing rule: once a process has a lease version, any version rotation
         # means lease continuity was lost (TTL expiry / partition / failover).
         if prev.version != lease_version:
-            msg = (
-                "Redis writer lease fencing token changed "
-                f"(key_id={key_id}, prev={prev.version}, new={lease_version}). "
-                "Hard-stopping to prevent split-brain writes."
-            )
             if lease_version < prev.version:
                 reset_msg = (
                     "Redis reset detected: writer lease version decreased "
@@ -614,6 +609,11 @@ class _PerKeyRedisBackend:
                 _logger.critical(reset_msg)
                 self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
                 return lease_version
+            msg = (
+                "Redis writer lease fencing token changed "
+                f"(key_id={key_id}, prev={prev.version}, new={lease_version}). "
+                "Hard-stopping to prevent split-brain writes."
+            )
             if self._strict_lease:
                 raise RuntimeError(msg)
             _logger.critical(msg)

@@ -280,13 +280,16 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     persistence_ok = bool(aof_enabled == 1 or rdb_status == "ok" or rdb_last_save > 0)
 
     if not persistence_info:
-        msg = "Redis persistence info unavailable — cannot confirm AOF/RDB durability"
+        msg = (
+            "Redis persistence info unavailable — verify Redis connection and INFO permissions "
+            "to confirm AOF/RDB durability"
+        )
         if persistence_required:
             _fail(msg)
             sys.exit(1)
         log.warning("⚠️  %s (set NIJA_REDIS_PERSISTENCE_REQUIRED=true to enforce)", msg)
     elif not persistence_ok:
-        msg = "Redis persistence disabled — enable AOF or RDB snapshots"
+        msg = "Redis persistence not confirmed or disabled — enable AOF or RDB snapshots"
         if persistence_required:
             _fail(msg)
             sys.exit(1)
@@ -364,7 +367,6 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
             f"nonce value decreased (prev={prev_nonce}, current={nonce_value})"
         )
 
-    run_id = ""
     try:
         run_id = str(redis_client.info().get("run_id", "") or "")
     except Exception:
