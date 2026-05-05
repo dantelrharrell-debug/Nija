@@ -666,8 +666,9 @@ def _step7_adversarial_validation() -> None:
         log.warning("⚠️  Skipping failure injection: strict distributed lock not required")
         return
 
-    invalid_token = uuid.uuid4().hex
-    os.environ["NIJA_WRITER_FENCING_TOKEN"] = invalid_token
+    adversarial_invalid_token = uuid.uuid4().hex
+    # Preflight runs before worker threads start; restore the original token immediately after.
+    os.environ["NIJA_WRITER_FENCING_TOKEN"] = adversarial_invalid_token
     failed_as_expected = False
     try:
         assert_distributed_writer_authority()

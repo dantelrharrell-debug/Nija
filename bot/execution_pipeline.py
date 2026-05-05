@@ -352,6 +352,10 @@ class ExecutionPipeline:
 
         price_hint = request.price_hint_usd or 0.0
         if price_hint <= 0:
+            logger.warning(
+                "ExecutionPipeline: missing price_hint for %s — using $1.00 fallback for simulation",
+                request.symbol,
+            )
             price_hint = 1.0
         quantity = request.size_usd / price_hint
         order_type = (request.order_type or "market").lower()
@@ -372,7 +376,7 @@ class ExecutionPipeline:
                 price=price_hint if order_type == "limit" else None,
                 current_market_price=price_hint if order_type == "market" else None,
             )
-            fill_price = order.average_fill_price or price_hint
+            fill_price = order.average_fill_price if order.average_fill_price > 0 else price_hint
             filled_usd = order.filled_quantity * fill_price
         except Exception as exc:
             logger.warning("ExecutionPipeline: simulation failed: %s", exc)
