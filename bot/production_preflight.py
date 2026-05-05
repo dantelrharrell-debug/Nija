@@ -50,7 +50,7 @@ log = logging.getLogger("nija.preflight")
 
 SEPARATOR = "=" * 72
 _TRUTHY = {"1", "true", "yes", "on", "enabled"}
-_RECOMMENDED_LEASE_TTL_MS = 600000
+_RECOMMENDED_LEASE_TTL_MS = 8000
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:

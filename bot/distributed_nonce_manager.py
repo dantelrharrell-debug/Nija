@@ -172,12 +172,18 @@ def _env_true(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
-# The writer lease must outlive ordinary gaps between Kraken private calls.
-# Prior short defaults could expire during normal startup/watchdog idle periods,
-# causing the same process to reacquire a fresh lease version and hard-stop on
-# the next nonce request. Keep the override env var, but default to 10 minutes
-# so routine idle windows do not look like split-brain.
-_REDIS_LEASE_TTL_MS = max(1_000, int(os.environ.get("NIJA_REDIS_LEASE_TTL_MS", "600000")))
+# Writer leases must remain stable between renewals while avoiding rapid churn.
+# Clamp the TTL into a safe 5-10s window and renew at roughly one-third of TTL.
+_REDIS_LEASE_TTL_MIN_MS = 5_000
+_REDIS_LEASE_TTL_MAX_MS = 10_000
+_REDIS_LEASE_TTL_DEFAULT_MS = 8_000
+try:
+    _lease_ttl_raw = int(
+        os.environ.get("NIJA_REDIS_LEASE_TTL_MS", str(_REDIS_LEASE_TTL_DEFAULT_MS)) or _REDIS_LEASE_TTL_DEFAULT_MS
+    )
+except (TypeError, ValueError):
+    _lease_ttl_raw = _REDIS_LEASE_TTL_DEFAULT_MS
+_REDIS_LEASE_TTL_MS = min(_REDIS_LEASE_TTL_MAX_MS, max(_REDIS_LEASE_TTL_MIN_MS, _lease_ttl_raw))
 _STRICT_REDIS_LEASE = (
     _env_true("NIJA_STRICT_REDIS_LEASE", "1")
     and not _env_true("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "0")
@@ -218,20 +224,20 @@ if _REDIS_LEASE_STARTUP_BACKOFF_MAX_S < _REDIS_LEASE_STARTUP_BACKOFF_MIN_S:
     )
 try:
     _REDIS_LEASE_RENEWAL_FRACTION = float(
-        os.environ.get("NIJA_REDIS_LEASE_RENEWAL_FRACTION", "0.6") or "0.6"
+        os.environ.get("NIJA_REDIS_LEASE_RENEWAL_FRACTION", "0.333") or "0.333"
     )
 except (TypeError, ValueError):
-    _REDIS_LEASE_RENEWAL_FRACTION = 0.6
+    _REDIS_LEASE_RENEWAL_FRACTION = 0.333
 if _REDIS_LEASE_RENEWAL_FRACTION < 0.0:
     _REDIS_LEASE_RENEWAL_FRACTION = 0.0
 elif _REDIS_LEASE_RENEWAL_FRACTION > 0.9:
     _REDIS_LEASE_RENEWAL_FRACTION = 0.9
 try:
     _REDIS_LEASE_RENEWAL_MIN_S = max(
-        0.5, float(os.environ.get("NIJA_REDIS_LEASE_RENEWAL_MIN_S", "1.0") or "1.0")
+        0.5, float(os.environ.get("NIJA_REDIS_LEASE_RENEWAL_MIN_S", "1.5") or "1.5")
     )
 except (TypeError, ValueError):
-    _REDIS_LEASE_RENEWAL_MIN_S = 1.0
+    _REDIS_LEASE_RENEWAL_MIN_S = 1.5
 try:
     _REDIS_LEASE_STATUS_LOG_INTERVAL_S = max(
         0.0, float(os.environ.get("NIJA_REDIS_LEASE_STATUS_LOG_INTERVAL_S", "30") or "30")
@@ -436,11 +442,19 @@ class _PerKeyRedisBackend:
         if current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
-                version = redis.call('INCR', counter_key)
+                version = tonumber(redis.call('GET', counter_key)) or 0
+                if version > 0 then
+                    redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                end
+            else
+                redis.call('PEXPIRE', version_key, ttl)
+            end
+            if redis.call('EXISTS', fingerprint_key) == 1 then
+                redis.call('PEXPIRE', fingerprint_key, ttl)
+            else
+                redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
             end
             redis.call('PEXPIRE', owner_key, ttl)
-            redis.call('SET', version_key, tostring(version), 'PX', ttl)
-            redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl)
             return {1, version, owner}
         end
 
@@ -476,6 +490,24 @@ class _PerKeyRedisBackend:
         local force = tonumber(ARGV[4]) or 0
 
         local current_owner = redis.call('GET', owner_key)
+        if current_owner and current_owner == owner then
+            local version = tonumber(redis.call('GET', version_key))
+            if not version then
+                version = tonumber(redis.call('GET', counter_key)) or 0
+                if version > 0 then
+                    redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                end
+            else
+                redis.call('PEXPIRE', version_key, ttl)
+            end
+            if redis.call('EXISTS', fingerprint_key) == 1 then
+                redis.call('PEXPIRE', fingerprint_key, ttl)
+            else
+                redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl, 'NX')
+            end
+            redis.call('PEXPIRE', owner_key, ttl)
+            return {1, version, current_owner}
+        end
         if current_owner and current_owner ~= owner and force ~= 1 then
             local current_version = tonumber(redis.call('GET', version_key)) or 0
             return {0, current_version, current_owner}
@@ -833,6 +865,7 @@ class _PerKeyRedisBackend:
                         force_enabled
                         and not force_attempted
                         and current_owner
+                        and holder_ttl_ms <= 0
                         and (now - last_refresh_at) >= _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S
                     ):
                         force_attempted = True
@@ -895,6 +928,15 @@ class _PerKeyRedisBackend:
         # Fencing rule: once a process has a lease version, any version rotation
         # means lease continuity was lost (TTL expiry / partition / failover).
         if prev.version != lease_version:
+            if current_owner == self._owner_id:
+                self._lease_by_key[key_id] = self._LeaseState(
+                    version=lease_version,
+                    owner_id=self._owner_id,
+                    stable_since=prev.stable_since,
+                    last_renewed_at=now,
+                )
+                self._log_lease_status(key_id, lease_version, current_owner, force=True)
+                return lease_version
             if lease_version < prev.version:
                 reset_msg = (
                     "Redis reset detected: writer lease version decreased "
