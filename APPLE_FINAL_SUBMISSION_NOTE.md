@@ -16,7 +16,7 @@ Trading automation software that runs algorithmic strategies on users' exchange 
 Yes. Funds stay on user's exchange. Multiple safety mechanisms. User maintains full control.
 
 **Is it copy trading?**  
-No. Each account runs the same algorithm independently with proportional position sizing.
+No. Each account runs the same strategy framework independently with proportional position sizing.
 
 **Is it financial advice?**  
 No. It's software. User makes decision to use it. User responsible for outcomes.
@@ -76,7 +76,7 @@ Yes, and we're very clear about this. Trading has risk. We don't guarantee profi
 
 **Explanation:**  
 - Copy trading = Account A copies trades from Account B (synchronized, same sizes)
-- NIJA = Each account runs same algorithm independently (different timing, proportional sizes)
+- NIJA = Each account runs same strategy framework independently (different timing, proportional sizes)
 - Position sizes scale to account balance ($100 account → $2 trade, $10k account → $200 trade)
 - No signal distribution between accounts
 - Each account makes own decisions based on market analysis
@@ -86,7 +86,7 @@ See [APP_STORE_SAFETY_EXPLANATION.md](APP_STORE_SAFETY_EXPLANATION.md) Section: 
 
 ---
 
-### Q2: "Why would results differ if everyone uses the same algorithm?"
+### Q2: "Why would results differ if everyone uses the same strategy framework?"
 
 **A:** Because of timing, account size, and execution differences.
 

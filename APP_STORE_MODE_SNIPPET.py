@@ -176,8 +176,8 @@ def get_reviewer_risk_disclosures() -> Dict[str, Any]:
         'status': 'success',
         'disclosures': {
             'independent_trading': (
-                'Each account trades independently using the same algorithm. '
-                'No trade copying occurs.'
+                'Each account trades independently using the same strategy framework '
+                'with account-specific state and execution context. No trade copying occurs.'
             ),
             'risk_warning': (
                 'Trading involves substantial risk of loss. '

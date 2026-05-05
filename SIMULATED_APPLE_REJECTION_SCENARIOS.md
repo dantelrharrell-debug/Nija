@@ -297,7 +297,7 @@ INDEPENDENT_TRADING_EXPLANATION = """
    • NO signal distribution between accounts
 
 🤖 HOW IT WORKS:
-   • All accounts use the SAME algorithm
+   • All accounts use the same strategy framework with account-specific state
    • Each account independently applies it
    • No coordination or copying
 """
@@ -306,7 +306,7 @@ INDEPENDENT_TRADING_EXPLANATION = """
 **Documentation Updates Needed:**
 1. Remove "master account" terminology
 2. Use "platform account" instead
-3. Clarify: "Same algorithm, independent execution"
+3. Clarify: "Same strategy framework, independent execution"
 4. Emphasize: "No revenue from other users' trades"
 
 **Status:** ✅ **ADDRESSED** - Clear independent trading explanation provided

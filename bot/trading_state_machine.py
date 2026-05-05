@@ -182,6 +182,37 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
     return False, last_err
 
 
+def _nonce_sync_gate() -> tuple[bool, str]:
+    """Verify nonce synchronization state before LIVE activation."""
+    if not _env_truthy("NIJA_ENFORCE_NONCE_SYNC", "true"):
+        return True, ""
+
+    platform_key = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+    )
+    if not platform_key:
+        return True, ""
+
+    try:
+        try:
+            from bot.global_kraken_nonce import get_global_nonce_stats
+        except ImportError:
+            from global_kraken_nonce import get_global_nonce_stats  # type: ignore[import]
+        stats = get_global_nonce_stats()
+    except Exception as exc:
+        return False, f"nonce_stats_unavailable: {exc}"
+
+    if stats.get("key_invalidated"):
+        return False, "nonce_key_invalidated"
+    if stats.get("broker_quarantined"):
+        return False, "nonce_broker_quarantined"
+    if stats.get("trading_paused"):
+        return False, "nonce_trading_paused"
+
+    return True, ""
+
+
 def _safe_start_gate() -> tuple[bool, str]:
     """Block LIVE activation when safe-start mode is required."""
     if not _env_truthy("NIJA_SAFE_START_REQUIRED", "false"):
@@ -791,6 +822,14 @@ class TradingStateMachine:
                 )
                 return False
 
+            _force_nonce_sync_ok, _force_nonce_sync_err = _nonce_sync_gate()
+            if not _force_nonce_sync_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_NONCE_SYNC detail=%s",
+                    _force_nonce_sync_err,
+                )
+                return False
+
             with self._lock:
                 if not self._activation_committed:
                     self._current_state = TradingState.LIVE_ACTIVE
@@ -880,6 +919,14 @@ class TradingStateMachine:
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=NONCE_WRITER_LEASE detail=%s",
                 _nonce_lease_err,
+            )
+            return False
+
+        _nonce_sync_ok, _nonce_sync_err = _nonce_sync_gate()
+        if not _nonce_sync_ok:
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=NONCE_SYNC detail=%s",
+                _nonce_sync_err,
             )
             return False
 
@@ -1574,7 +1621,34 @@ def _capital_readiness_gate() -> tuple:
     return True, "ok"
 
 
-def _execution_readiness_gate() -> tuple:
+def _strategy_readiness_gate() -> tuple[bool, str]:
+    """Check that core strategy modules are loaded and available.
+
+    Returns:
+        (ok, reason) where ``ok`` is True when strategy modules are ready.
+    """
+    if not _env_truthy("NIJA_REQUIRE_STRATEGY_READY", "true"):
+        return True, ""
+    try:
+        try:
+            from bot.master_strategy_router import get_master_strategy_router
+        except ImportError:
+            from master_strategy_router import get_master_strategy_router  # type: ignore[import]
+        router = get_master_strategy_router()
+        if hasattr(router, "is_ready"):
+            if not router.is_ready():
+                return False, "STRATEGY_READY=false: no strategy modules loaded"
+        else:
+            voter_ready = getattr(router, "_voter", None) is not None
+            apex_ready = getattr(router, "_apex", None) is not None
+            if not voter_ready and not apex_ready:
+                return False, "STRATEGY_READY=false: no strategy modules loaded"
+        return True, "ok"
+    except Exception as exc:
+        return False, f"STRATEGY_READY=false: {exc}"
+
+
+def _execution_readiness_gate() -> tuple[bool, str]:
     """Check execution pipeline health independently from capital readiness."""
     try:
         try:
@@ -1600,6 +1674,9 @@ def _execution_readiness_gate() -> tuple:
             )
     except (ImportError, AttributeError, Exception) as exc:
         logger.debug("_execution_readiness_gate: ExecutionRouter unavailable (%s) — skipping", exc)
+    strategy_ok, strategy_err = _strategy_readiness_gate()
+    if not strategy_ok:
+        return False, strategy_err
     return True, "ok"
 
 

@@ -16,15 +16,17 @@ LIVE_CAPITAL_VERIFIED=true
 
 # REQUIRED: Heartbeat Verification (enable temporarily)
 HEARTBEAT_TRADE=true
-HEARTBEAT_TRADE_SIZE=5.50
+HEARTBEAT_TRADE_SIZE=5.00
+HEARTBEAT_TRADE_MAX_USD=5.00
 HEARTBEAT_TRADE_INTERVAL=600
+HEARTBEAT_ONESHOT_ENABLED=true
 ```
 
 ### Step 2: Deploy & Monitor Logs
 
 Watch for heartbeat execution (~10 minutes):
 ```
-❤️  HEARTBEAT TRADE ENABLED: $5.50 every 600s
+❤️  HEARTBEAT TRADE ENABLED: request=$5.00 cap=$5.00 every 600s
 ...
 ❤️  HEARTBEAT TRADE EXECUTION
    ✅ Heartbeat trade #1 EXECUTED
@@ -53,7 +55,7 @@ This guide covers the new features added to NIJA for deployment verification and
 
 ### Purpose
 
-Heartbeat trades are minimal-size test trades ($5.50) that verify:
+Heartbeat trades are minimal-size test trades (capped at $5.00 by default) that verify:
 - Exchange API credentials are working
 - Order execution is functional
 - Network connectivity is stable
@@ -72,18 +74,24 @@ Add to `.env` or set as environment variables:
 # Enable heartbeat trading
 HEARTBEAT_TRADE=true
 
-# Trade size in USD (default: $5.50 - minimum viable)
-HEARTBEAT_TRADE_SIZE=5.50
+# Trade size in USD (default: $5.00 - minimum viable)
+HEARTBEAT_TRADE_SIZE=5.00
+
+# Hard safety cap (default: $5.00)
+HEARTBEAT_TRADE_MAX_USD=5.00
 
 # Interval between heartbeat trades in seconds (default: 600 = 10 minutes)
 HEARTBEAT_TRADE_INTERVAL=600
+
+# One-shot lock to prevent repeated trades on restart
+HEARTBEAT_ONESHOT_ENABLED=true
 ```
 
 ### How It Works
 
 1. Bot checks if heartbeat is enabled and interval has elapsed
 2. Selects a liquid market (prefers BTC-USD or ETH-USD)
-3. Executes a tiny market buy order ($5.50)
+3. Executes a tiny market buy order (capped at $5.00)
 4. Logs execution details and updates heartbeat counter
 5. Next heartbeat won't execute until interval elapses
 
@@ -97,11 +105,11 @@ HEARTBEAT_TRADE=true
 
 **Step 2: Deploy and Monitor Logs**
 ```
-❤️  HEARTBEAT TRADE ENABLED: $5.50 every 600s
+❤️  HEARTBEAT TRADE ENABLED: request=$5.00 cap=$5.00 every 600s
 ...
 ❤️  HEARTBEAT TRADE EXECUTION
    Symbol: BTC-USD
-   Size: $5.50
+   Size: $5.00
    Broker: KRAKEN
    Purpose: Verify connectivity & order execution
    ✅ Heartbeat trade #1 EXECUTED
@@ -125,6 +133,10 @@ HEARTBEAT_TRADE=false
 - Each heartbeat costs money (trade fees)
 - Not intended for continuous operation in production
 - **RECOMMENDED**: Auto-disable after verifying 1-3 successful trades
+
+✅ **One-shot Guard**:
+- A persistent one-shot lock prevents repeat trades on restart
+- To intentionally re-run a heartbeat, set `HEARTBEAT_ONESHOT_RESET=true` and restart once
 
 ✅ **Best Practice**:
 - Enable after deployment
@@ -233,8 +245,10 @@ In Railway dashboard, add:
 KRAKEN_PLATFORM_API_KEY=<your-api-key>
 KRAKEN_PLATFORM_API_SECRET=<your-api-secret>
 HEARTBEAT_TRADE=true
-HEARTBEAT_TRADE_SIZE=5.50
+HEARTBEAT_TRADE_SIZE=5.00
+HEARTBEAT_TRADE_MAX_USD=5.00
 HEARTBEAT_TRADE_INTERVAL=600
+HEARTBEAT_ONESHOT_ENABLED=true
 LIVE_CAPITAL_VERIFIED=true
 ```
 
@@ -254,7 +268,7 @@ Watch Railway logs for:
 ✅ KRAKEN (Platform) - PRIMARY BROKER:
    ✅ Configured (Key: 64 chars, Secret: 88 chars)
 
-❤️  HEARTBEAT TRADE ENABLED: $5.50 every 600s
+❤️  HEARTBEAT TRADE ENABLED: request=$5.00 cap=$5.00 every 600s
 
 📊 USER STATUS BANNER
    💰 KRAKEN Balance: $150.00
@@ -322,7 +336,7 @@ Railway will automatically redeploy with heartbeat disabled.
 
 ⚠️ **Heartbeat Cost**:
 - Each heartbeat costs trading fees (~0.26% on Kraken)
-- On $5.50 trade: ~$0.014 per heartbeat
+- On $5.00 trade: ~$0.013 per heartbeat
 - Disable after verification to avoid unnecessary fees
 
 ## Summary

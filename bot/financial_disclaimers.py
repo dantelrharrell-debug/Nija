@@ -35,10 +35,12 @@ CRYPTOCURRENCY TRADING INVOLVES SUBSTANTIAL RISK OF LOSS
    • NIJA is an independent trading tool - NOT investment advice
    • You make all decisions about when and what to trade
    • This software executes trades based on YOUR configuration
+   • System optimizations are technical in nature and do not imply improved financial outcomes.
    • NO GUARANTEES of profit or performance are made
 
 📊 INDEPENDENT TRADING MODEL:
-   • Each account trades independently using algorithmic signals
+   • Each account trades independently using the same strategy framework
+   • Account-specific state (PnL, exposure, cooldowns) shapes every decision
    • No copy trading or signal distribution to other users
    • Each user controls their own trading strategy and risk
    • Your results are based on YOUR account's performance
@@ -86,10 +88,10 @@ WHAT IS INDEPENDENT TRADING?
    • Each account makes its own trading decisions
 
 🤖 HOW IT WORKS:
-   • All accounts use the SAME trading algorithm/strategy
-   • Each account independently applies this algorithm
+   • All accounts use the same strategy framework with account-specific state
+   • Per-account risk scaling, timing jitter, and cooldown variance are enforced
    • Market conditions may trigger similar trades across accounts
-   • But each account's execution is INDEPENDENT
+   • But each account's execution context is INDEPENDENT
 
 💡 THINK OF IT LIKE:
    • Multiple people using the same weather app
@@ -198,6 +200,7 @@ def log_compliance_notice():
     logger.info("=" * 70)
     logger.info("   • NIJA is a trading tool, NOT a financial advisor")
     logger.info("   • No investment advice is provided")
+    logger.info("   • Technical optimizations do not imply improved financial outcomes")
     logger.info("   • No guaranteed returns or performance claims")
     logger.info("   • Independent trading model (no copy trading)")
     logger.info("   • User controls all trading decisions")
