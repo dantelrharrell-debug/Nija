@@ -512,6 +512,7 @@ class HealthCheckManager:
         liveness = self.get_liveness_status()
         readiness, _ = self.get_readiness_status()
         critical = self.get_critical_status()
+        emergency_stop_active = os.path.exists("EMERGENCY_STOP")
         execution_gate = {
             "execution_eligible": False,
             "state_machine": None,
@@ -521,6 +522,7 @@ class HealthCheckManager:
             "writer_lock_ok": None,
             "nonce_lease_ok": None,
             "nonce_sync_ok": None,
+            "emergency_stop_active": emergency_stop_active,
             "failure_mode": None,
         }
 
@@ -566,7 +568,7 @@ class HealthCheckManager:
                     err for err in (writer_err, nonce_err, nonce_sync_err) if err
                 )
                 failure_mode = f"EXECUTION_PAUSED ({detail or 'lock check failed'})"
-            elif current_state == TradingState.EMERGENCY_STOP or os.path.exists("EMERGENCY_STOP"):
+            elif current_state == TradingState.EMERGENCY_STOP or emergency_stop_active:
                 failure_mode = "FAILSAFE_MODE"
             else:
                 failure_mode = "OK"

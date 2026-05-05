@@ -137,6 +137,7 @@ def get_safety_status():
             "writer_lock_ok": None,
             "nonce_lease_ok": None,
             "nonce_sync_ok": None,
+            "emergency_stop_active": emergency_stop,
             "failure_mode": None,
         }
         try:

@@ -1635,10 +1635,14 @@ def _strategy_readiness_gate() -> tuple[bool, str]:
         except ImportError:
             from master_strategy_router import get_master_strategy_router  # type: ignore[import]
         router = get_master_strategy_router()
-        voter_ready = getattr(router, "_voter", None) is not None
-        apex_ready = getattr(router, "_apex", None) is not None
-        if not voter_ready and not apex_ready:
-            return False, "STRATEGY_READY=false: no strategy modules loaded"
+        if hasattr(router, "is_ready"):
+            if not router.is_ready():
+                return False, "STRATEGY_READY=false: no strategy modules loaded"
+        else:
+            voter_ready = getattr(router, "_voter", None) is not None
+            apex_ready = getattr(router, "_apex", None) is not None
+            if not voter_ready and not apex_ready:
+                return False, "STRATEGY_READY=false: no strategy modules loaded"
         return True, "ok"
     except Exception as exc:
         return False, f"STRATEGY_READY=false: {exc}"

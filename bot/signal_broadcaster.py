@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
-SEED_HEX_LENGTH = 16
+SEED_HEX_LENGTH = 16  # 64-bit seed; stable across accounts and compatible with random.Random()
 JITTER_BUCKET_SECONDS = 60
 
 
@@ -518,7 +518,7 @@ class SignalBroadcaster:
 
         jitter_s = max(0.0, self._execution_jitter_ms / 1000.0)
         if jitter_s > 0:
-            jitter_bucket = int(time.time() // JITTER_BUCKET_SECONDS)
+            jitter_bucket = int(time.monotonic() // JITTER_BUCKET_SECONDS)
             seed_base = self._seed_for_account(account_id)
             seed = self._seed_from_components(f"{seed_base}:{symbol}:{jitter_bucket}")
             rng = random.Random(seed)

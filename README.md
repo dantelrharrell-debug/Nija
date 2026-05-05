@@ -1380,7 +1380,7 @@ Execute tiny test trades to verify exchange connectivity:
 ```bash
 # Enable for deployment verification
 HEARTBEAT_TRADE=true
-HEARTBEAT_TRADE_SIZE=5.00  # Requested trade size
+HEARTBEAT_TRADE_SIZE=5.00  # Requested trade size (set higher to observe cap enforcement)
 HEARTBEAT_TRADE_MAX_USD=5.00  # Hard safety cap
 HEARTBEAT_TRADE_INTERVAL=600  # 10 minutes
 HEARTBEAT_ONESHOT_ENABLED=true  # Prevent repeat trades on restart
