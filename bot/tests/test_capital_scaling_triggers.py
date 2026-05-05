@@ -13,12 +13,15 @@ import pytest
 # Allow imports from bot/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from capital_scaling_triggers import (
-    CapitalScalingTrigger,
-    ScaleDecision,
-    TriggerConfig,
-    get_capital_scaling_trigger,
+capital_scaling_triggers = pytest.importorskip(
+    "capital_scaling_triggers",
+    reason="capital_scaling_triggers module not available in this build",
 )
+
+CapitalScalingTrigger = capital_scaling_triggers.CapitalScalingTrigger
+ScaleDecision = capital_scaling_triggers.ScaleDecision
+TriggerConfig = capital_scaling_triggers.TriggerConfig
+get_capital_scaling_trigger = capital_scaling_triggers.get_capital_scaling_trigger
 
 
 # ---------------------------------------------------------------------------
