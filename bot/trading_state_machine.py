@@ -33,12 +33,22 @@ import threading
 import sys
 from enum import Enum
 from datetime import datetime
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, NamedTuple
 from pathlib import Path
 
 logger = logging.getLogger("nija.trading_state_machine")
 
-_LIVE_GATE_LAST_STATUS: Optional[tuple[bool, bool, bool, bool, bool]] = None
+class LiveGateSnapshot(NamedTuple):
+    """Snapshot of live gate boolean status for log deduplication."""
+
+    reconciliation_ok: bool
+    nonce_ok: bool
+    lease_ok: bool
+    strategy_ok: bool
+    execution_allowed: bool
+
+
+_LIVE_GATE_LAST_STATUS: Optional[LiveGateSnapshot] = None
 
 # Keep both import paths bound to the same module object so the process only
 # ever has one TradingStateMachine singleton.
@@ -281,7 +291,7 @@ def _collect_live_gate_status() -> Dict[str, object]:
     nonce_ok, nonce_err = _nonce_sync_gate()
     lease_ok, lease_err = _distributed_writer_authority_gate()
     strategy_ok, strategy_err = _strategy_ready_gate()
-    execution_allowed = safe_ok and recon_ok and nonce_ok and lease_ok
+    execution_allowed = safe_ok and recon_ok and nonce_ok and lease_ok and strategy_ok
     return {
         "safe_ok": safe_ok,
         "safe_err": safe_err,
@@ -306,10 +316,16 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
     lease_ok = bool(live_gate_status.get("lease_ok"))
     strategy_ok = bool(live_gate_status.get("strategy_ok"))
     execution_allowed = bool(live_gate_status.get("execution_allowed"))
-    status_tuple = (recon_ok, nonce_ok, lease_ok, strategy_ok, execution_allowed)
-    if _LIVE_GATE_LAST_STATUS == status_tuple:
+    snapshot = LiveGateSnapshot(
+        reconciliation_ok=recon_ok,
+        nonce_ok=nonce_ok,
+        lease_ok=lease_ok,
+        strategy_ok=strategy_ok,
+        execution_allowed=execution_allowed,
+    )
+    if _LIVE_GATE_LAST_STATUS == snapshot:
         return
-    _LIVE_GATE_LAST_STATUS = status_tuple
+    _LIVE_GATE_LAST_STATUS = snapshot
 
     logger.info("LIVE GATE STATUS:")
     logger.info("   • Reconciliation: %s", "COMPLETE" if recon_ok else "INCOMPLETE")
@@ -318,6 +334,7 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
     logger.info("   • Strategy Ready: %s", "TRUE" if strategy_ok else "FALSE")
     logger.info("   • EXECUTION_ALLOWED: %s", "TRUE" if execution_allowed else "FALSE")
 
+    # Fail-fast gate only for reconciliation/nonce/lease conflicts per safety contract.
     if not (recon_ok and nonce_ok and lease_ok):
         logger.critical("🚫 EXECUTION BLOCKED — SAFETY GATE FAILURE")
 
