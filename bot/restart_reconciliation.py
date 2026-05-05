@@ -93,6 +93,8 @@ class RestartReconciliationManager:
         self._last_known_state: Optional[SystemState] = None
         self._restart_detected = False
         self._reconciliation_complete = False
+        self._last_report: Optional[Dict[str, Any]] = None
+        self._last_status: str = ""
         
         # Check if this is a restart
         self._check_for_restart()
@@ -232,9 +234,25 @@ class RestartReconciliationManager:
         }
         
         if not self._restart_detected or not self._last_known_state:
-            logger.info("✅ No restart or no previous state - clean start")
-            report['status'] = 'CLEAN_START'
+            exchange_positions = exchange_positions or []
+            exchange_open_orders = exchange_open_orders or []
+            if exchange_positions or exchange_open_orders:
+                report['discrepancies'].append(
+                    {
+                        "type": "STATE_MISSING",
+                        "detail": "No local restart state available but exchange reports open positions/orders.",
+                        "severity": "HIGH",
+                    }
+                )
+                report['status'] = 'DISCREPANCIES_FOUND'
+                logger.warning(
+                    "⚠️  RECONCILIATION REQUIRED - exchange positions/orders exist but no local state found"
+                )
+            else:
+                logger.info("✅ No restart or no previous state - clean start")
+                report['status'] = 'CLEAN_START'
             self._reconciliation_complete = True
+            self._record_report(report)
             return report
             
         # Compare positions
@@ -273,7 +291,102 @@ class RestartReconciliationManager:
         logger.info("=" * 80)
         
         self._reconciliation_complete = True
+        self._record_report(report)
         return report
+
+    def reconcile_with_broker(self, broker) -> Dict[str, Any]:
+        """Run reconciliation using broker-sourced positions, balances, and open orders."""
+        exchange_positions: List[PositionSnapshot] = []
+        exchange_balances: Dict[str, BalanceSnapshot] = {}
+        exchange_open_orders: List[Dict[str, Any]] = []
+
+        def _as_float(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except Exception:
+                return default
+
+        try:
+            raw_positions = broker.get_positions() if broker else []
+        except Exception as exc:
+            logger.warning("⚠️  Restart reconciliation: failed to fetch broker positions: %s", exc)
+            raw_positions = []
+
+        for pos in raw_positions or []:
+            if isinstance(pos, PositionSnapshot):
+                exchange_positions.append(pos)
+                continue
+            symbol = str(pos.get("symbol", "") or pos.get("product_id", "") or "")
+            side_raw = str(
+                pos.get("side")
+                or pos.get("position_side")
+                or pos.get("direction")
+                or pos.get("type")
+                or "long"
+            ).lower()
+            side = "short" if side_raw in {"short", "sell"} else "long"
+            quantity = _as_float(
+                pos.get("quantity")
+                or pos.get("base_size")
+                or pos.get("size")
+                or pos.get("amount")
+                or pos.get("position_size")
+                or 0.0
+            )
+            entry_price = _as_float(
+                pos.get("entry_price")
+                or pos.get("avg_entry_price")
+                or pos.get("average_entry_price")
+                or pos.get("entryPrice")
+                or pos.get("avgPrice")
+                or pos.get("price")
+                or 0.0
+            )
+            exchange_positions.append(
+                PositionSnapshot(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    entry_price=entry_price,
+                    current_price=_as_float(pos.get("current_price") or pos.get("mark_price") or 0.0),
+                    unrealized_pnl=_as_float(pos.get("unrealized_pnl") or pos.get("pnl") or 0.0),
+                    order_id=pos.get("order_id") or pos.get("id") or pos.get("txid"),
+                    timestamp=datetime.utcnow().isoformat(),
+                )
+            )
+
+        try:
+            if broker and hasattr(broker, "get_account_balance"):
+                total_balance = _as_float(broker.get_account_balance())
+                exchange_balances["USD"] = BalanceSnapshot(
+                    total_balance=total_balance,
+                    available_balance=total_balance,
+                    reserved_balance=0.0,
+                    currency="USD",
+                    timestamp=datetime.utcnow().isoformat(),
+                )
+        except Exception as exc:
+            logger.warning("⚠️  Restart reconciliation: failed to fetch broker balance: %s", exc)
+
+        if broker and hasattr(broker, "get_open_orders"):
+            try:
+                exchange_open_orders = broker.get_open_orders()  # type: ignore[call-arg]
+            except TypeError:
+                exchange_open_orders = broker.get_open_orders(user_id=None)  # type: ignore[call-arg]
+            except Exception as exc:
+                logger.warning("⚠️  Restart reconciliation: failed to fetch open orders: %s", exc)
+
+        return self.reconcile_with_exchange(
+            exchange_positions=exchange_positions,
+            exchange_balances=exchange_balances,
+            exchange_open_orders=exchange_open_orders or [],
+        )
+
+    def _record_report(self, report: Dict[str, Any]) -> None:
+        self._last_report = report
+        self._last_status = str(report.get("status", "") or "UNKNOWN")
+        os.environ["NIJA_RECONCILIATION_STATUS"] = self._last_status
+        os.environ["NIJA_RECONCILIATION_COMPLETE"] = "true"
         
     def _compare_positions(
         self,
@@ -415,6 +528,10 @@ class RestartReconciliationManager:
     def is_reconciliation_complete(self) -> bool:
         """Check if reconciliation is complete"""
         return self._reconciliation_complete
+
+    def get_reconciliation_status(self) -> str:
+        """Return the last reconciliation status (CLEAN/CLEAN_START/DISCREPANCIES_FOUND/UNKNOWN)."""
+        return self._last_status
         
     def assert_reconciliation_complete(self):
         """Assert that reconciliation is complete before trading"""

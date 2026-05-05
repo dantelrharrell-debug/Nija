@@ -182,6 +182,48 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
     return False, last_err
 
 
+def _safe_start_gate() -> tuple[bool, str]:
+    """Block LIVE activation when safe-start mode is required."""
+    if not _env_truthy("NIJA_SAFE_START_REQUIRED", "false"):
+        return True, ""
+    if _env_truthy("NIJA_SAFE_START_ACK", "false"):
+        return True, ""
+    status = os.environ.get("NIJA_RECONCILIATION_STATUS", "").strip().upper()
+    if status in {"CLEAN", "CLEAN_START"} and _env_truthy("NIJA_RECONCILIATION_COMPLETE", "false"):
+        return True, ""
+    reason = os.environ.get("NIJA_SAFE_START_REASON", "").strip()
+    detail = f"status={status or 'missing'}"
+    if reason:
+        detail = f"{reason} ({detail})"
+    return False, detail
+
+
+def _startup_reconciliation_gate() -> tuple[bool, str]:
+    """Require startup reconciliation to complete before LIVE activation."""
+    if not _env_truthy("NIJA_REQUIRE_STARTUP_RECONCILIATION", "true"):
+        return True, ""
+    if _env_truthy("NIJA_RECONCILIATION_OVERRIDE", "false"):
+        logger.critical(
+            "[RECONCILIATION OVERRIDE] NIJA_RECONCILIATION_OVERRIDE=true — "
+            "startup reconciliation gate bypassed (verify exchange state manually)."
+        )
+        return True, ""
+    status = os.environ.get("NIJA_RECONCILIATION_STATUS", "").strip().upper()
+    if status in {"CLEAN", "CLEAN_START"} and _env_truthy("NIJA_RECONCILIATION_COMPLETE", "false"):
+        return True, ""
+    return False, f"status={status or 'missing'}"
+
+
+def _live_activation_gate() -> tuple[bool, str]:
+    safe_ok, safe_err = _safe_start_gate()
+    if not safe_ok:
+        return False, f"SAFE_START_REQUIRED {safe_err}"
+    recon_ok, recon_err = _startup_reconciliation_gate()
+    if not recon_ok:
+        return False, f"STARTUP_RECONCILIATION {recon_err}"
+    return True, ""
+
+
 class TradingState(Enum):
     """Trading state enumeration - SINGLE SOURCE OF TRUTH"""
     OFF = "OFF"
@@ -524,6 +566,15 @@ class TradingStateMachine:
             except Exception as _ks_err:
                 logger.debug("activate_live_trading: kill switch check skipped: %s", _ks_err)
 
+            _live_ok, _live_err = _live_activation_gate()
+            if not _live_ok:
+                logger.critical(
+                    "[FORCE_ACTIVATE BLOCKED] reason=SAFE_START detail=%s requested_reason=%s",
+                    _live_err,
+                    reason,
+                )
+                return False
+
             with self._lock:
                 if self._current_state == TradingState.LIVE_ACTIVE:
                     self._activation_committed = True
@@ -574,6 +625,13 @@ class TradingStateMachine:
         """
         with self._lock:
             current = self._current_state
+
+            if new_state == TradingState.LIVE_ACTIVE:
+                live_ok, live_err = _live_activation_gate()
+                if not live_ok:
+                    error_msg = f"Activation blocked: {live_err}"
+                    logger.critical("ACTIVATION BLOCKED: %s", error_msg)
+                    raise StateTransitionError(error_msg)
 
             # Check if transition is valid
             if new_state not in self.VALID_TRANSITIONS.get(current, []):
@@ -705,6 +763,14 @@ class TradingStateMachine:
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_REQUIRED_FIRST_ACTIVATION marker_missing path=%s",
                 _heartbeat_marker_path(),
+            )
+            return False
+
+        _live_ok, _live_err = _live_activation_gate()
+        if not _live_ok:
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=SAFE_START detail=%s",
+                _live_err,
             )
             return False
 

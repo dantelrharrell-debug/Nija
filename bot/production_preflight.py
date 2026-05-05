@@ -83,6 +83,13 @@ def _write_health_state(path: Path, payload: dict) -> None:
         log.warning("Could not persist Redis health state: %s", exc)
 
 
+def _mark_safe_start_required(reason: str) -> None:
+    """Flag that startup must enter safe-start mode until reconciliation/ack."""
+    os.environ["NIJA_SAFE_START_REQUIRED"] = "true"
+    os.environ.setdefault("NIJA_SAFE_START_REASON", reason)
+    log.critical("SAFE START REQUIRED — %s", reason)
+
+
 def _resolve_platform_key() -> str:
     return (
         os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
@@ -282,17 +289,25 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
         reset_policy = "require_confirmation"
 
     persistence_info = {}
+    server_info = {}
     try:
         persistence_info = redis_client.info("persistence")
     except Exception as exc:
         log.warning("Could not read Redis persistence info: %s", exc)
+    try:
+        server_info = redis_client.info()
+    except Exception as exc:
+        log.warning("Could not read Redis server info: %s", exc)
 
     aof_enabled = int(persistence_info.get("aof_enabled", 0) or 0)
+    aof_write_status = str(persistence_info.get("aof_last_write_status", "") or "").lower()
+    aof_write_errno = int(persistence_info.get("aof_last_write_errno", 0) or 0)
     rdb_status = str(persistence_info.get("rdb_last_bgsave_status", "") or "").lower()
     rdb_in_progress = int(persistence_info.get("rdb_bgsave_in_progress", 0) or 0)
     rdb_configured = "rdb_last_bgsave_status" in persistence_info
     rdb_enabled = bool(rdb_configured and (rdb_status == "ok" or rdb_in_progress == 1))
     persistence_ok = bool(aof_enabled == 1 or rdb_enabled)
+    loading = int(server_info.get("loading", 0) or 0)
 
     if not persistence_info:
         msg = (
@@ -305,6 +320,30 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
         log.warning("⚠️  %s (set NIJA_REDIS_PERSISTENCE_REQUIRED=true to enforce)", msg)
     elif not persistence_ok:
         msg = "Redis persistence not confirmed or disabled — enable AOF or RDB snapshots"
+        if persistence_required:
+            _fail(msg)
+            sys.exit(1)
+        log.warning("⚠️  %s", msg)
+    elif aof_enabled and aof_write_status and aof_write_status != "ok":
+        msg = f"Redis AOF last write status not ok (status={aof_write_status})"
+        if persistence_required:
+            _fail(msg)
+            sys.exit(1)
+        log.warning("⚠️  %s", msg)
+    elif aof_enabled and aof_write_errno != 0:
+        msg = f"Redis AOF last write errno non-zero (errno={aof_write_errno})"
+        if persistence_required:
+            _fail(msg)
+            sys.exit(1)
+        log.warning("⚠️  %s", msg)
+    elif rdb_configured and rdb_status and rdb_status != "ok":
+        msg = f"Redis RDB last bgsave status not ok (status={rdb_status})"
+        if persistence_required:
+            _fail(msg)
+            sys.exit(1)
+        log.warning("⚠️  %s", msg)
+    elif loading == 1:
+        msg = "Redis is still loading data — wait for persistence load to complete"
         if persistence_required:
             _fail(msg)
             sys.exit(1)
@@ -388,7 +427,7 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
         )
 
     try:
-        run_id = str(redis_client.info().get("run_id", "") or "")
+        run_id = str(server_info.get("run_id", "") or "")
     except Exception:
         run_id = ""
 
@@ -400,12 +439,23 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
             run_id,
         )
 
+    if _env_truthy("NIJA_UNCLEAN_SHUTDOWN", "false"):
+        _mark_safe_start_required("unclean shutdown detected")
+
     if reset_reasons:
+        _mark_safe_start_required("redis reset detected")
         policy = reset_policy
         ack = _env_truthy("NIJA_REDIS_RESET_ACK", "false")
+        reconciled = _env_truthy("NIJA_REDIS_RESET_RECONCILED", "false")
         message = "; ".join(reset_reasons)
         if policy == "auto_reinit":
-            log.critical("Redis reset detected (%s) — auto-reinit policy enabled", message)
+            if not reconciled:
+                _fail(
+                    "Redis reset detected — auto-reinit requires reconciliation: "
+                    f"{message}. Set NIJA_REDIS_RESET_RECONCILED=true after exchange state is verified."
+                )
+                sys.exit(1)
+            log.critical("Redis reset detected (%s) — auto-reinit allowed after reconciliation", message)
         elif not ack:
             _fail(
                 "Redis reset detected — manual confirmation required: "

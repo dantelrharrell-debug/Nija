@@ -5992,6 +5992,22 @@ class TradingStrategy:
                     except Exception as sync_err:
                         logger.warning(f"⚠️ Position tracker sync failed: {sync_err}")
 
+                # CRITICAL: Reconcile restart state against live exchange before trading
+                try:
+                    try:
+                        from bot.restart_reconciliation import get_restart_reconciliation_manager
+                    except ImportError:
+                        from restart_reconciliation import get_restart_reconciliation_manager  # type: ignore[import]
+                    recon_mgr = get_restart_reconciliation_manager()
+                    report = recon_mgr.reconcile_with_broker(self.broker)
+                    logger.info(
+                        "🔄 Restart reconciliation completed: status=%s discrepancies=%d",
+                        report.get("status"),
+                        len(report.get("discrepancies", []) or []),
+                    )
+                except Exception as recon_err:
+                    logger.warning("⚠️ Restart reconciliation failed: %s", recon_err)
+
                 logger.info("✅ TradingStrategy initialized (APEX v7.1 + Multi-Broker + 8-Position Cap)")
                 logger.critical("STEP 8: Broker manager initialized, attaching Nija Core Loop")
                 logger.critical("TS3 broker references attached")
