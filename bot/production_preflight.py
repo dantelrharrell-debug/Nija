@@ -273,6 +273,13 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     # Strict nonce lease enforcement mirrors startup lock requirements.
     strict_lease = _env_truthy("NIJA_STRICT_REDIS_LEASE", "true") and not unsafe_bypass
     persistence_required = live_mode and _env_truthy("NIJA_REDIS_PERSISTENCE_REQUIRED", "true")
+    reset_policy = os.getenv("NIJA_REDIS_RESET_POLICY", "require_confirmation").strip().lower()
+    if reset_policy not in {"auto_reinit", "require_confirmation"}:
+        log.warning(
+            "Invalid NIJA_REDIS_RESET_POLICY=%r; defaulting to require_confirmation",
+            reset_policy,
+        )
+        reset_policy = "require_confirmation"
 
     persistence_info = {}
     try:
@@ -282,13 +289,9 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
 
     aof_enabled = int(persistence_info.get("aof_enabled", 0) or 0)
     rdb_status = str(persistence_info.get("rdb_last_bgsave_status", "") or "").lower()
-    rdb_last_save = int(persistence_info.get("rdb_last_save_time", 0) or 0)
     rdb_in_progress = int(persistence_info.get("rdb_bgsave_in_progress", 0) or 0)
-    rdb_enabled = bool(
-        rdb_status == "ok"
-        or rdb_in_progress == 1
-        or (rdb_last_save > 0 and "rdb_last_bgsave_status" in persistence_info)
-    )
+    rdb_configured = "rdb_last_bgsave_status" in persistence_info
+    rdb_enabled = bool(rdb_configured and (rdb_status == "ok" or rdb_in_progress == 1))
     persistence_ok = bool(aof_enabled == 1 or rdb_enabled)
 
     if not persistence_info:
@@ -311,7 +314,10 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
 
     lock_key = _resolve_writer_lock_key()
     expected_token_raw = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
-    expected_token = int(expected_token_raw) if expected_token_raw.isdigit() else 0
+    try:
+        expected_token = int(expected_token_raw)
+    except (TypeError, ValueError):
+        expected_token = 0
     current_raw = ""
     current_token = 0
     try:
@@ -387,18 +393,17 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
         run_id = ""
 
     if prev_run_id and run_id and prev_run_id != run_id:
-        log.warning("⚠️  Redis run_id changed since last boot (prev=%s, current=%s)", prev_run_id, run_id)
+        log.warning(
+            "⚠️  Redis run_id changed since last boot (prev=%s, current=%s). "
+            "Treating as a restart signal; persistence checks enforce durability.",
+            prev_run_id,
+            run_id,
+        )
 
     if reset_reasons:
-        policy = os.getenv("NIJA_REDIS_RESET_POLICY", "require_confirmation").strip().lower()
+        policy = reset_policy
         ack = _env_truthy("NIJA_REDIS_RESET_ACK", "false")
         message = "; ".join(reset_reasons)
-        if policy not in {"auto_reinit", "require_confirmation"}:
-            log.warning(
-                "Invalid NIJA_REDIS_RESET_POLICY=%r; defaulting to require_confirmation",
-                policy,
-            )
-            policy = "require_confirmation"
         if policy == "auto_reinit":
             log.critical("Redis reset detected (%s) — auto-reinit policy enabled", message)
         elif not ack:

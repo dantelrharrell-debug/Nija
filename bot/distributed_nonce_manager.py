@@ -599,14 +599,15 @@ class _PerKeyRedisBackend:
                 if self._strict_lease:
                     policy = os.environ.get("NIJA_REDIS_RESET_POLICY", "require_confirmation").strip().lower()
                     ack = _env_true("NIJA_REDIS_RESET_ACK", "0")
-                    if policy == "auto_reinit" or ack:
-                        _logger.critical("%s Recovery acknowledged; continuing.", reset_msg)
-                        self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
-                        return lease_version
-                    raise RuntimeError(
-                        f"{reset_msg} Set NIJA_REDIS_RESET_ACK=true to proceed after verifying persistence."
-                    )
-                _logger.critical(reset_msg)
+                    if policy not in {"auto_reinit", "require_confirmation"}:
+                        policy = "require_confirmation"
+                    if policy != "auto_reinit" and not ack:
+                        raise RuntimeError(
+                            f"{reset_msg} Set NIJA_REDIS_RESET_ACK=true to proceed after verifying persistence."
+                        )
+                    _logger.critical("%s Recovery acknowledged; continuing.", reset_msg)
+                else:
+                    _logger.critical(reset_msg)
                 self._lease_by_key[key_id] = self._LeaseState(version=lease_version, owner_id=self._owner_id)
                 return lease_version
             msg = (
