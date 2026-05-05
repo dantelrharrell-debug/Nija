@@ -174,7 +174,7 @@ def _env_true(name: str, default: str = "0") -> bool:
 
 # Writer leases must remain stable between renewals while avoiding rapid churn.
 # Clamp TTL to 5-10s to cover typical private-call gaps and network jitter without 1s churn.
-# Renew at ~1/3 of TTL (default 0.333; 8s TTL -> ~2.7s) to minimize expiry risk.
+# Renew at ~1/3 of TTL (default 0.333) to minimize expiry risk.
 _REDIS_LEASE_TTL_MIN_MS = 5_000
 _REDIS_LEASE_TTL_MAX_MS = 10_000
 _REDIS_LEASE_TTL_DEFAULT_MS = 8_000
@@ -229,7 +229,7 @@ try:
     )
 except (TypeError, ValueError):
     _REDIS_LEASE_RENEWAL_FRACTION = 0.333
-# TTL/3 default minimizes expiry risk (8s TTL -> ~2.7s renew); override via env if needed.
+# TTL/3 default minimizes expiry risk; override via env if needed.
 if _REDIS_LEASE_RENEWAL_FRACTION < 0.0:
     _REDIS_LEASE_RENEWAL_FRACTION = 0.0
 elif _REDIS_LEASE_RENEWAL_FRACTION > 0.9:
@@ -423,6 +423,7 @@ class _PerKeyRedisBackend:
     _LEASE_VERSION_COUNTER_PREFIX = "nija:kraken:writer:version_counter:"
     _LEASE_FINGERPRINT_PREFIX = "nija:kraken:writer:fingerprint:"
 
+    # Lua scripts execute atomically on Redis; internal read/write sequences do not interleave.
     # Renewal logic is duplicated across lease scripts to keep each Lua script self-contained.
     _LEASE_LUA = """
         local owner_key = KEYS[1]
@@ -445,9 +446,12 @@ class _PerKeyRedisBackend:
         if current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
-                -- Lua script runs atomically; these reads/writes cannot interleave with other clients.
-                redis.call('SETNX', counter_key, 0)
-                version = tonumber(redis.call('GET', counter_key)) or 0
+                local counter_created = redis.call('SETNX', counter_key, 0)
+                if counter_created == 1 then
+                    version = 0
+                else
+                    version = tonumber(redis.call('GET', counter_key)) or 0
+                end
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
                 if not set_ok then
                     local existing_version = tonumber(redis.call('GET', version_key))
@@ -495,7 +499,7 @@ class _PerKeyRedisBackend:
         redis.call('DEL', fingerprint_key)
         return 1
     """
-    # Keep renewal semantics mirrored with _LEASE_LUA for consistency.
+    # Keep renewal semantics mirrored with _LEASE_LUA for consistency (update both together).
     _LEASE_FORCE_LUA = """
         local owner_key = KEYS[1]
         local version_key = KEYS[2]
@@ -510,9 +514,12 @@ class _PerKeyRedisBackend:
         if current_owner and current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
-                -- Lua script runs atomically; these reads/writes cannot interleave with other clients.
-                redis.call('SETNX', counter_key, 0)
-                version = tonumber(redis.call('GET', counter_key)) or 0
+                local counter_created = redis.call('SETNX', counter_key, 0)
+                if counter_created == 1 then
+                    version = 0
+                else
+                    version = tonumber(redis.call('GET', counter_key)) or 0
+                end
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
                 if not set_ok then
                     local existing_version = tonumber(redis.call('GET', version_key))
