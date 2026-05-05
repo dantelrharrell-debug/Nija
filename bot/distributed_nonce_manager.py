@@ -444,11 +444,9 @@ class _PerKeyRedisBackend:
             local version = tonumber(redis.call('GET', version_key))
             if not version then
                 version = tonumber(redis.call('GET', counter_key)) or 0
-                if version > 0 then
-                    local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
-                    if not set_ok then
-                        redis.call('PEXPIRE', version_key, ttl)
-                    end
+                local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                if not set_ok then
+                    redis.call('PEXPIRE', version_key, ttl)
                 end
             else
                 redis.call('PEXPIRE', version_key, ttl)
@@ -501,11 +499,9 @@ class _PerKeyRedisBackend:
             local version = tonumber(redis.call('GET', version_key))
             if not version then
                 version = tonumber(redis.call('GET', counter_key)) or 0
-                if version > 0 then
-                    local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
-                    if not set_ok then
-                        redis.call('PEXPIRE', version_key, ttl)
-                    end
+                local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
+                if not set_ok then
+                    redis.call('PEXPIRE', version_key, ttl)
                 end
             else
                 redis.call('PEXPIRE', version_key, ttl)
@@ -878,7 +874,7 @@ class _PerKeyRedisBackend:
                         force_enabled
                         and not force_attempted
                         and current_owner
-                        # Only force takeover if the current lease TTL has expired.
+                        # Only force takeover if the current lease TTL is non-positive (expired or missing).
                         and holder_ttl_ms <= 0
                         and (now - last_refresh_at) >= _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S
                     ):
