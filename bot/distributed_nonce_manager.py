@@ -173,7 +173,8 @@ def _env_true(name: str, default: str = "0") -> bool:
 
 
 # Writer leases must remain stable between renewals while avoiding rapid churn.
-# Clamp the TTL into a safe 5-10s window and renew at ~1/3 of TTL (default 0.333).
+# Clamp TTL to 5-10s to cover typical private-call gaps and network jitter without 1s churn.
+# Renew at ~1/3 of TTL (default 0.333; 8s TTL -> ~2.7s) to minimize expiry risk.
 _REDIS_LEASE_TTL_MIN_MS = 5_000
 _REDIS_LEASE_TTL_MAX_MS = 10_000
 _REDIS_LEASE_TTL_DEFAULT_MS = 8_000
@@ -228,7 +229,7 @@ try:
     )
 except (TypeError, ValueError):
     _REDIS_LEASE_RENEWAL_FRACTION = 0.333
-# TTL/3 default minimizes expiry risk; override via env if load concerns require a slower cadence.
+# TTL/3 default minimizes expiry risk (8s TTL -> ~2.7s renew); override via env if needed.
 if _REDIS_LEASE_RENEWAL_FRACTION < 0.0:
     _REDIS_LEASE_RENEWAL_FRACTION = 0.0
 elif _REDIS_LEASE_RENEWAL_FRACTION > 0.9:
@@ -444,7 +445,7 @@ class _PerKeyRedisBackend:
         if current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
-                -- Lua script runs atomically; SETNX/GET/SET is safe from interleaving.
+                -- Lua script runs atomically; these reads/writes cannot interleave with other clients.
                 redis.call('SETNX', counter_key, 0)
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
@@ -509,7 +510,7 @@ class _PerKeyRedisBackend:
         if current_owner and current_owner == owner then
             local version = tonumber(redis.call('GET', version_key))
             if not version then
-                -- Lua script runs atomically; SETNX/GET/SET is safe from interleaving.
+                -- Lua script runs atomically; these reads/writes cannot interleave with other clients.
                 redis.call('SETNX', counter_key, 0)
                 version = tonumber(redis.call('GET', counter_key)) or 0
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
@@ -894,7 +895,7 @@ class _PerKeyRedisBackend:
                         force_enabled
                         and not force_attempted
                         and current_owner
-                        # Only force takeover if the current lease TTL is non-positive (expired or missing).
+                        # Only force takeover if holder_ttl_ms (PTTL in ms) is non-positive (expired/missing).
                         and holder_ttl_ms <= 0
                         and (now - last_refresh_at) >= _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S
                     ):
@@ -958,8 +959,8 @@ class _PerKeyRedisBackend:
         # Fencing rule: once a process has a lease version, any version rotation
         # means lease continuity was lost (TTL expiry / partition / failover).
         if prev.version != lease_version:
-            # Same-owner version changes can happen during Redis repairs or renewals that
-            # refresh metadata; avoid self-fencing and preserve stable_since continuity.
+            # Same-owner version changes can happen during Redis failover/reload or metadata refresh
+            # during renewals; avoid self-fencing and preserve stable_since continuity.
             if current_owner == self._owner_id:
                 _logger.warning(
                     "DistributedNonceManager: same-owner lease version change; preserving continuity "
