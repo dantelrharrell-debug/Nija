@@ -3282,6 +3282,27 @@ if HEARTBEAT_TRADE_ENABLED:
         HEARTBEAT_TRADE_MAX_USD,
         HEARTBEAT_TRADE_INTERVAL_SECONDS,
     )
+    logger.info("❤️  HEARTBEAT PROTECTIONS:")
+    logger.info(
+        "   • Size cap: $%.2f (requested $%.2f)",
+        HEARTBEAT_TRADE_MAX_USD,
+        HEARTBEAT_TRADE_SIZE_USD,
+    )
+    logger.info(
+        "   • Auto-exit: %s",
+        "ENABLED" if HEARTBEAT_AUTO_EXIT else "DISABLED",
+    )
+    logger.info(
+        "   • One-shot lock: %s (marker=%s)",
+        "ENABLED" if HEARTBEAT_ONESHOT_ENABLED else "DISABLED",
+        HEARTBEAT_ONESHOT_LOCK_PATH,
+    )
+    logger.info(
+        "   • First-activation required: %s",
+        "YES" if HEARTBEAT_REQUIRED_FIRST_ACTIVATION else "NO",
+    )
+    if HEARTBEAT_ONESHOT_RESET:
+        logger.info("   • One-shot reset: ENABLED (lock will be cleared on startup)")
 else:
     logger.debug("Heartbeat trade disabled (set HEARTBEAT_TRADE=true to enable)")
 

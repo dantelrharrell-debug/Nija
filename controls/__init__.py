@@ -156,7 +156,16 @@ class HardControls:
         except Exception as e:
             self._log_fallback_to_master(f"Unexpected error loading user accounts: {e}")
 
-        logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
+        enabled_user_count = self._count_enabled_user_accounts()
+        logger.info(f"📊 Total user accounts enabled for trading: {enabled_user_count}")
+
+    def _count_enabled_user_accounts(self) -> int:
+        """Return the count of enabled non-platform user accounts."""
+        return sum(
+            1
+            for user_id, status in self.user_kill_switches.items()
+            if user_id != "platform" and status == KillSwitchStatus.ACTIVE
+        )
 
     def _check_live_capital_verification(self) -> bool:
         """
@@ -180,7 +189,8 @@ class HardControls:
         """Log warning message when falling back to master-only mode."""
         logger.warning(f"⚠️  {reason}")
         logger.warning("   Continuing with platform account only")
-        logger.info(f"📊 Total accounts enabled for trading: {len(self.user_kill_switches)}")
+        enabled_user_count = self._count_enabled_user_accounts()
+        logger.info(f"📊 Total user accounts enabled for trading: {enabled_user_count}")
 
     def validate_position_size(
         self,
