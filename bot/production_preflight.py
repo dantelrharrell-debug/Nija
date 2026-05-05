@@ -83,12 +83,15 @@ def _write_health_state(path: Path, payload: dict) -> None:
         log.warning("Could not persist Redis health state: %s", exc)
 
 
-def _resolve_writer_lock_scope() -> str:
-    raw = (
+def _resolve_platform_key() -> str:
+    return (
         os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
         or os.environ.get("KRAKEN_API_KEY", "").strip()
-        or "default"
     )
+
+
+def _resolve_writer_lock_scope() -> str:
+    raw = _resolve_platform_key() or "default"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -217,7 +220,7 @@ def _step2_lock_logging(redis_client: "redis.Redis") -> None:  # type: ignore[na
     _step(2, "Lock acquisition logging")
 
     lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "nija:writer_lock")
-    ttl_ms   = int(os.getenv("NIJA_REDIS_LEASE_TTL_MS", "600000"))
+    ttl_ms   = int(os.getenv("NIJA_REDIS_LEASE_TTL_MS", str(_RECOMMENDED_LEASE_TTL_MS)))
 
     log.info("Writer-lock Redis key : %s", lock_key)
     log.info("Writer-lock TTL       : %d ms", ttl_ms)
@@ -265,12 +268,9 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     dry_run = _env_truthy("DRY_RUN_MODE", "false")
     paper = _env_truthy("PAPER_MODE", "false")
     live_mode = not dry_run and not paper
-    strict_lock_required = (live_mode or _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK", "false")) and not _env_truthy(
-        "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "false"
-    )
-    strict_lease = _env_truthy("NIJA_STRICT_REDIS_LEASE", "true") and not _env_truthy(
-        "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "false"
-    )
+    unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "false")
+    strict_lock_required = (live_mode or _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK", "false")) and not unsafe_bypass
+    strict_lease = _env_truthy("NIJA_STRICT_REDIS_LEASE", "true") and not unsafe_bypass
     persistence_required = live_mode and _env_truthy("NIJA_REDIS_PERSISTENCE_REQUIRED", "true")
 
     persistence_info = {}
@@ -323,10 +323,7 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
         )
         sys.exit(1)
 
-    platform_key = (
-        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
-        or os.environ.get("KRAKEN_API_KEY", "").strip()
-    )
+    platform_key = _resolve_platform_key()
     lease_version = 0
     nonce_value = 0
     key_id = ""
