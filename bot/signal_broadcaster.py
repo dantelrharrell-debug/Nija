@@ -64,6 +64,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nija.signal_broadcaster")
 
 DEFAULT_RISK_FRACTION = 0.02
+SEED_HEX_LENGTH = 16
+JITTER_BUCKET_SECONDS = 60
 
 
 def _get_env_float(name: str, default: float) -> float:
@@ -189,6 +191,7 @@ class SignalBroadcaster:
         self._risk_fraction = risk_fraction
         self._retry_config = retry_config or RetryConfig()
         self._lock = threading.Lock()
+        # Timing divergence controls (defaults add slight jitter/cooldown per account)
         self._execution_jitter_ms = _get_env_float("NIJA_ACCOUNT_EXECUTION_JITTER_MS", 250.0)
         self._cooldown_base_s = _get_env_float("NIJA_ACCOUNT_COOLDOWN_BASE_S", 0.0)
         self._cooldown_jitter_s = _get_env_float("NIJA_ACCOUNT_COOLDOWN_JITTER_S", 0.25)
@@ -480,14 +483,14 @@ class SignalBroadcaster:
         if cached is not None:
             return cached
         digest = hashlib.sha256(account_id.encode("utf-8")).hexdigest()
-        seed = int(digest[:16], 16)
+        seed = int(digest[:SEED_HEX_LENGTH], 16)
         self._account_seed_cache[account_id] = seed
         return seed
 
     def _seed_from_components(self, payload: str) -> int:
         """Return a deterministic seed from a composite payload."""
         digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        return int(digest[:16], 16)
+        return int(digest[:SEED_HEX_LENGTH], 16)
 
     def _apply_account_timing_controls(self, account_id: str, symbol: str) -> None:
         """Apply per-account cooldown and jitter to diversify execution timing.
@@ -515,7 +518,7 @@ class SignalBroadcaster:
 
         jitter_s = max(0.0, self._execution_jitter_ms / 1000.0)
         if jitter_s > 0:
-            jitter_bucket = int(time.time() // 60)
+            jitter_bucket = int(time.time() // JITTER_BUCKET_SECONDS)
             seed_base = self._seed_for_account(account_id)
             seed = self._seed_from_components(f"{seed_base}:{symbol}:{jitter_bucket}")
             rng = random.Random(seed)

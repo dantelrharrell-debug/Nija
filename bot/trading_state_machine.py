@@ -1622,7 +1622,11 @@ def _capital_readiness_gate() -> tuple:
 
 
 def _strategy_readiness_gate() -> tuple[bool, str]:
-    """Check that core strategy modules are loaded and available."""
+    """Check that core strategy modules are loaded and available.
+
+    Returns:
+        (ok, reason) where ``ok`` is True when strategy modules are ready.
+    """
     if not _env_truthy("NIJA_REQUIRE_STRATEGY_READY", "true"):
         return True, ""
     try:
