@@ -1828,7 +1828,7 @@ class NIJAApexStrategyV71:
             return metadata.get('legacy_score', score)
         return score
 
-    def _get_entry_confidence(self, score: float, metadata: Dict, legacy_score: float) -> float:
+    def _get_entry_confidence(self, score: float, metadata: Dict, risk_score: float) -> float:
         """
         Normalize confidence for entry decisions (0.0–1.0).
 
@@ -1844,7 +1844,7 @@ class NIJAApexStrategyV71:
                     return min(float(enhanced_score) / 100.0, 1.0)
                 except (TypeError, ValueError):
                     pass
-        return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
+        return min(float(risk_score) / MAX_ENTRY_SCORE, 1.0)
 
     @staticmethod
     def _get_volume_ratio(df: pd.DataFrame, window: int = VOLUME_RATIO_WINDOW) -> float:
