@@ -3017,14 +3017,23 @@ def _run_preflight_check() -> bool:
 
     # ── Production pre-flight: Redis PING, lock logging, single-instance,
     #    stale-lock clearance, live-mode verification ─────────────────────
-    try:
-        from bot.production_preflight import run_preflight as _run_production_preflight
-        _run_production_preflight()
-    except SystemExit:
-        raise  # propagate hard failures (Redis down, wrong mode, etc.)
-    except Exception as _pf_exc:
-        print(f"⚠️  production_preflight raised unexpectedly: {_pf_exc}", flush=True)
-        # Non-fatal: allow existing checks below to continue
+    # Honors NIJA_REDIS_STARTUP_CHECK=false for environments that intentionally
+    # run without Redis startup enforcement.
+    _redis_startup_check_enabled = _is_truthy_env("NIJA_REDIS_STARTUP_CHECK", "true")
+    if _redis_startup_check_enabled:
+        try:
+            from bot.production_preflight import run_preflight as _run_production_preflight
+            _run_production_preflight()
+        except SystemExit:
+            raise  # propagate hard failures (Redis down, wrong mode, etc.)
+        except Exception as _pf_exc:
+            print(f"⚠️  production_preflight raised unexpectedly: {_pf_exc}", flush=True)
+            # Non-fatal: allow existing checks below to continue
+    else:
+        print(
+            "ℹ️  NIJA_REDIS_STARTUP_CHECK=false — skipping production preflight Redis gate",
+            flush=True,
+        )
 
     SEP = "═" * 70
     checks = []   # list of (label, passed: bool, detail: str)
@@ -6042,9 +6051,22 @@ def main():
 
     # Advance bootstrap FSM: BOOT_INIT → LOCK_ACQUIRED → HEALTH_BOUND
     # (process lock was acquired at module import; health server is now bound)
+    # Guard transitions so re-entrant starts do not attempt illegal backward moves.
     if _BOOTSTRAP_FSM_AVAILABLE:
-        _bfsm_transition(_BootstrapState.LOCK_ACQUIRED, "process lock acquired at module load")
-        _bfsm_transition(_BootstrapState.HEALTH_BOUND, "health server bound")
+        try:
+            _bfsm_current = _get_bootstrap_fsm().state
+            if _bfsm_current == _BootstrapState.BOOT_INIT:
+                _bfsm_transition(_BootstrapState.LOCK_ACQUIRED, "process lock acquired at module load")
+                _bfsm_transition(_BootstrapState.HEALTH_BOUND, "health server bound")
+            elif _bfsm_current == _BootstrapState.LOCK_ACQUIRED:
+                _bfsm_transition(_BootstrapState.HEALTH_BOUND, "health server bound")
+            else:
+                logger.info(
+                    "[BootstrapFSM] Startup pre-health transitions already satisfied (state=%s)",
+                    getattr(_bfsm_current, "value", _bfsm_current),
+                )
+        except Exception as _bfsm_state_err:
+            logger.debug("[BootstrapFSM] startup transition guard skipped: %s", _bfsm_state_err)
     
     # Small delay to ensure health server is fully bound
     time.sleep(0.2)
