@@ -1865,25 +1865,75 @@ class NIJAApexStrategyV71:
         return float(df["volume"].iloc[-1]) / avg_volume
 
     @staticmethod
+    def _normalize_reason_code(reason: str) -> str:
+        """Normalize free-form reason text to a stable analytics code."""
+        if not reason:
+            return "unknown"
+        base = reason.strip().lower()
+        for sep in ("\n", "(", ":", "|"):
+            if sep in base:
+                base = base.split(sep)[0]
+        normalized_chars = []
+        last_underscore = False
+        for ch in base:
+            if ch.isalnum():
+                normalized_chars.append(ch)
+                last_underscore = False
+            elif not last_underscore:
+                normalized_chars.append("_")
+                last_underscore = True
+        code = "".join(normalized_chars).strip("_")
+        return code or "unknown"
+
+    @classmethod
     def _log_final_decision(
+        cls,
         score: float,
         confidence: float,
         adx: float,
         volume: float,
-        size: float,
-        should_trade: bool,
+        raw_size: float,
+        final_size: float,
+        min_notional: float,
+        decision: str,
         reason: str,
     ) -> None:
+        reason_code = cls._normalize_reason_code(reason)
         logger.info(
-            "FINAL DECISION:\n"
+            "TRADE DECISION:\n"
             f"score={score}/5\n"
             f"confidence={confidence:.2f}\n"
             f"adx={adx:.2f}\n"
             f"volume={volume:.3f}\n"
-            f"size=${size:.2f}\n"
-            f"action={'TRADE' if should_trade else 'SKIP'}\n"
+            f"raw_size=${raw_size:.2f}\n"
+            f"final_size=${final_size:.2f}\n"
+            f"min_notional=${min_notional:.2f}\n"
+            f"decision={decision}\n"
+            f"reason_code={reason_code}\n"
             f"reason={reason}"
         )
+
+    @staticmethod
+    def _apply_executable_trade_floor(
+        raw_size: float,
+        capital: float,
+        min_notional: float,
+        risk_percent: float,
+    ) -> Tuple[float, float]:
+        """
+        Enforce executable trade sizing with a hard 15% capital cap.
+
+        final_size = min(max(raw_size, min_notional*1.15, capital*risk_percent), capital*0.15)
+        """
+        safe_capital = max(float(capital), 0.0)
+        safe_risk = max(float(risk_percent), 0.0)
+        safe_min_notional = max(float(min_notional), 0.0)
+        safe_raw_size = max(float(raw_size), 0.0)
+
+        executable_floor = max(safe_min_notional * 1.15, safe_capital * safe_risk)
+        hard_cap = safe_capital * 0.15
+        final_size = min(max(safe_raw_size, executable_floor), hard_cap) if hard_cap > 0 else 0.0
+        return final_size, executable_floor
 
     @staticmethod
     def _check_candle_closed(df: pd.DataFrame, current_time: datetime) -> Tuple[bool, str]:
@@ -2504,6 +2554,17 @@ class NIJAApexStrategyV71:
 
             if not allow_trade:
                 logger.info(f"   📊 TRACE [market_filter] {symbol}: {market_reason}")
+                self._log_final_decision(
+                    score=0.0,
+                    confidence=0.0,
+                    adx=scalar(indicators.get('adx', pd.Series([0])).iloc[-1]),
+                    volume=self._get_volume_ratio(df),
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision='SKIP',
+                    reason=market_reason,
+                )
                 return {
                     'action': 'hold',
                     'reason': market_reason,
@@ -2526,6 +2587,21 @@ class NIJAApexStrategyV71:
                     logger.debug(
                         "   %s: Consolidation scalp skipped — RSI=%.1f in neutral band",
                         symbol, _cons_rsi,
+                    )
+                    _skip_reason = (
+                        f'No trend + RSI={_cons_rsi:.1f} neutral '
+                        f'({_SCALP_RSI_SHORT:.0f}-{_SCALP_RSI_LONG:.0f})'
+                    )
+                    self._log_final_decision(
+                        score=0.0,
+                        confidence=0.0,
+                        adx=scalar(indicators.get('adx', pd.Series([0])).iloc[-1]),
+                        volume=self._get_volume_ratio(df),
+                        raw_size=0.0,
+                        final_size=0.0,
+                        min_notional=0.0,
+                        decision='SKIP',
+                        reason=_skip_reason,
                     )
                     return {'action': 'hold', 'reason': f'No trend + RSI={_cons_rsi:.1f} neutral ({_SCALP_RSI_SHORT:.0f}-{_SCALP_RSI_LONG:.0f})', 'filter_stage': 'market_filter'}
 
@@ -2576,6 +2652,17 @@ class NIJAApexStrategyV71:
             # If trend is still 'none' (NIJA_CONSOLIDATION_SCALP=false or disabled path)
             if trend == 'none':
                 logger.info(f"   📊 TRACE [market_filter] {symbol}: {market_reason}")
+                self._log_final_decision(
+                    score=0.0,
+                    confidence=0.0,
+                    adx=scalar(indicators.get('adx', pd.Series([0])).iloc[-1]),
+                    volume=self._get_volume_ratio(df),
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision='SKIP',
+                    reason=market_reason,
+                )
                 return {'action': 'hold', 'reason': market_reason, 'filter_stage': 'market_filter'}
 
             # ── 4-Layer Drawdown Risk Controller (pre-entry authority) ────────
@@ -2609,6 +2696,17 @@ class NIJAApexStrategyV71:
                         logger.debug(
                             "   🛡️  %s: Risk envelope blocked — %s",
                             symbol, _risk_result.reason,
+                        )
+                        self._log_final_decision(
+                            score=0.0,
+                            confidence=0.0,
+                            adx=scalar(indicators.get('adx', pd.Series([0])).iloc[-1]),
+                            volume=self._get_volume_ratio(df),
+                            raw_size=0.0,
+                            final_size=0.0,
+                            min_notional=0.0,
+                            decision='SKIP',
+                            reason=_risk_result.reason,
                         )
                         return {'action': 'hold', 'reason': _risk_result.reason}
                 except Exception as _drc_check_err:
@@ -2769,6 +2867,18 @@ class NIJAApexStrategyV71:
                     "      Balance: $%.2f | Sizing %%: %.2f%% | Min size: $%.2f | Min notional: $%.2f",
                     account_balance, min_position_pct * 100, min_position_size, min_required_balance,
                 )
+                volume_ratio = self._get_volume_ratio(df)
+                self._log_final_decision(
+                    score=0.0,
+                    confidence=0.0,
+                    adx=adx,
+                    volume=volume_ratio,
+                    raw_size=min_position_size,
+                    final_size=min_position_size,
+                    min_notional=min_required_balance,
+                    decision='SKIP',
+                    reason='ENTRY BLOCKED: insufficient capital for this strategy',
+                )
                 if min_position_pct > 0:
                     min_balance_needed = min_required_balance / min_position_pct
                     logger.info(
@@ -2924,6 +3034,17 @@ class NIJAApexStrategyV71:
                                     logger.warning(
                                         "🛑 VOLATILITY_EXPLOSION: LONG entry hard-blocked (%s)",
                                         symbol,
+                                    )
+                                    self._log_final_decision(
+                                        score=risk_score,
+                                        confidence=entry_confidence,
+                                        adx=adx,
+                                        volume=self._get_volume_ratio(df),
+                                        raw_size=0.0,
+                                        final_size=0.0,
+                                        min_notional=min_required_balance,
+                                        decision='SKIP',
+                                        reason=_gate_result_l.reason,
                                     )
                                     return {'action': 'hold', 'reason': _gate_result_l.reason}
                                 # All other gate failures: log advisory, proceed (score-based arch)
@@ -3093,6 +3214,20 @@ class NIJAApexStrategyV71:
                         metadata['ai_eval'] = ai_eval.to_dict()
                     # ──────────────────────────────────────────────────────
 
+                    raw_size = scalar(position_size)
+                    risk_percent = max(getattr(self.risk_manager, 'min_position_pct', 0.0), 0.0)
+                    position_size, executable_floor = self._apply_executable_trade_floor(
+                        raw_size=raw_size,
+                        capital=account_balance,
+                        min_notional=min_required_balance,
+                        risk_percent=risk_percent,
+                    )
+                    if abs(position_size - raw_size) > 1e-9:
+                        logger.debug(
+                            "   📏 LONG executable floor/cap: raw=$%.2f floor=$%.2f final=$%.2f",
+                            raw_size, executable_floor, position_size,
+                        )
+
                     if position_size < min_required_balance:
                         reason = (
                             f"below min notional after sizing "
@@ -3108,8 +3243,10 @@ class NIJAApexStrategyV71:
                             confidence=entry_confidence,
                             adx=adx,
                             volume=volume_ratio,
-                            size=position_size,
-                            should_trade=False,
+                            raw_size=raw_size,
+                            final_size=position_size,
+                            min_notional=min_required_balance,
+                            decision='SKIP',
                             reason=reason,
                         )
                         return {
@@ -3119,9 +3256,22 @@ class NIJAApexStrategyV71:
                         }
 
                     if float(position_size) == 0:
+                        reason = f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
+                        volume_ratio = self._get_volume_ratio(df)
+                        self._log_final_decision(
+                            score=risk_score,
+                            confidence=entry_confidence,
+                            adx=adx,
+                            volume=volume_ratio,
+                            raw_size=raw_size,
+                            final_size=position_size,
+                            min_notional=min_required_balance,
+                            decision='SKIP',
+                            reason=reason,
+                        )
                         return {
                             'action': 'hold',
-                            'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
+                            'reason': reason
                         }
 
                     # Validate trade quality (position size minimum — physical limit)
@@ -3323,8 +3473,10 @@ class NIJAApexStrategyV71:
                         confidence=entry_confidence,
                         adx=adx,
                         volume=volume_ratio,
-                        size=position_size,
-                        should_trade=True,
+                        raw_size=raw_size,
+                        final_size=position_size,
+                        min_notional=min_required_balance,
+                        decision='TRADE',
                         reason=reason,
                     )
                     return result
@@ -3479,6 +3631,17 @@ class NIJAApexStrategyV71:
                                     logger.warning(
                                         "🛑 VOLATILITY_EXPLOSION: SHORT entry hard-blocked (%s)",
                                         symbol,
+                                    )
+                                    self._log_final_decision(
+                                        score=risk_score,
+                                        confidence=entry_confidence,
+                                        adx=adx,
+                                        volume=self._get_volume_ratio(df),
+                                        raw_size=0.0,
+                                        final_size=0.0,
+                                        min_notional=min_required_balance,
+                                        decision='SKIP',
+                                        reason=_gate_result_s.reason,
                                     )
                                     return {'action': 'hold', 'reason': _gate_result_s.reason}
                                 # All other gate failures: log advisory, proceed (score-based arch)
@@ -3644,6 +3807,20 @@ class NIJAApexStrategyV71:
                         metadata['ai_eval'] = ai_eval.to_dict()
                     # ──────────────────────────────────────────────────────
 
+                    raw_size = scalar(position_size)
+                    risk_percent = max(getattr(self.risk_manager, 'min_position_pct', 0.0), 0.0)
+                    position_size, executable_floor = self._apply_executable_trade_floor(
+                        raw_size=raw_size,
+                        capital=account_balance,
+                        min_notional=min_required_balance,
+                        risk_percent=risk_percent,
+                    )
+                    if abs(position_size - raw_size) > 1e-9:
+                        logger.debug(
+                            "   📏 SHORT executable floor/cap: raw=$%.2f floor=$%.2f final=$%.2f",
+                            raw_size, executable_floor, position_size,
+                        )
+
                     if position_size < min_required_balance:
                         reason = (
                             f"below min notional after sizing "
@@ -3659,8 +3836,10 @@ class NIJAApexStrategyV71:
                             confidence=entry_confidence,
                             adx=adx,
                             volume=volume_ratio,
-                            size=position_size,
-                            should_trade=False,
+                            raw_size=raw_size,
+                            final_size=position_size,
+                            min_notional=min_required_balance,
+                            decision='SKIP',
                             reason=reason,
                         )
                         return {
@@ -3670,9 +3849,22 @@ class NIJAApexStrategyV71:
                         }
 
                     if float(position_size) == 0:
+                        reason = f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
+                        volume_ratio = self._get_volume_ratio(df)
+                        self._log_final_decision(
+                            score=risk_score,
+                            confidence=entry_confidence,
+                            adx=adx,
+                            volume=volume_ratio,
+                            raw_size=raw_size,
+                            final_size=position_size,
+                            min_notional=min_required_balance,
+                            decision='SKIP',
+                            reason=reason,
+                        )
                         return {
                             'action': 'hold',
-                            'reason': f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
+                            'reason': reason
                         }
 
                     # Validate trade quality (position size minimum — physical limit)
@@ -3876,15 +4068,29 @@ class NIJAApexStrategyV71:
                         confidence=entry_confidence,
                         adx=adx,
                         volume=volume_ratio,
-                        size=position_size,
-                        should_trade=True,
+                        raw_size=raw_size,
+                        final_size=position_size,
+                        min_notional=min_required_balance,
+                        decision='TRADE',
                         reason=reason,
                     )
                     return result
 
+            no_entry_reason = f'No entry signal ({trend})'
+            self._log_final_decision(
+                score=0.0,
+                confidence=0.0,
+                adx=scalar(indicators.get('adx', pd.Series([0])).iloc[-1]),
+                volume=self._get_volume_ratio(df),
+                raw_size=0.0,
+                final_size=0.0,
+                min_notional=min_required_balance if 'min_required_balance' in locals() else 0.0,
+                decision='SKIP',
+                reason=no_entry_reason,
+            )
             return {
                 'action': 'hold',
-                'reason': f'No entry signal ({trend})',
+                'reason': no_entry_reason,
                 'filter_stage': 'no_entry',
             }
 

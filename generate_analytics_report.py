@@ -29,6 +29,13 @@ except ImportError:
     from trade_analytics import get_analytics
 
 
+def _reason_code_to_label(reason_code: str) -> str:
+    """Convert snake_case reason codes into readable title labels."""
+    if not reason_code:
+        return "Unknown"
+    return reason_code.replace('_', ' ').strip().title()
+
+
 def main():
     parser = argparse.ArgumentParser(description='Generate NIJA trading analytics reports')
     parser.add_argument('--detailed', action='store_true', help='Generate detailed report')
@@ -74,8 +81,12 @@ def main():
         key=lambda x: x[1]['count'],
         reverse=True
     )[:10]
-    for reason, data in entry_sorted:
-        print(f"      {reason:35} {data['count']:>5} trades ({data['percentage']:>5.1f}%)")
+    for reason_code, data in entry_sorted:
+        label = _reason_code_to_label(reason_code)
+        print(
+            f"      {reason_code:28} | {label:28} "
+            f"{data['count']:>5} trades ({data['percentage']:>5.1f}%)"
+        )
     
     print("\n   Exit Reasons (Top 10):")
     exit_sorted = sorted(
@@ -83,8 +94,12 @@ def main():
         key=lambda x: x[1]['count'],
         reverse=True
     )[:10]
-    for reason, data in exit_sorted:
-        print(f"      {reason:35} {data['count']:>5} trades ({data['percentage']:>5.1f}%)")
+    for reason_code, data in exit_sorted:
+        label = _reason_code_to_label(reason_code)
+        print(
+            f"      {reason_code:28} | {label:28} "
+            f"{data['count']:>5} trades ({data['percentage']:>5.1f}%)"
+        )
     print()
     
     # 3. Market Scan Performance

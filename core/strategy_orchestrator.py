@@ -216,6 +216,83 @@ class StrategyOrchestrator:
         logger.info(f"Strategy Orchestrator initialized with ${total_capital:,.2f} total capital")
         logger.info(f"Reserve capital: {self.reserve_capital_pct*100:.0f}% (${total_capital*self.reserve_capital_pct:,.2f})")
 
+    @staticmethod
+    def _safe_adx(indicators: Dict) -> float:
+        """Best-effort ADX extraction for diagnostics."""
+        try:
+            adx_series = indicators.get("adx")
+            if adx_series is None:
+                return 0.0
+            return float(adx_series.iloc[-1])
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _safe_volume_ratio(df: pd.DataFrame, window: int = 5) -> float:
+        """Best-effort volume ratio extraction for diagnostics."""
+        try:
+            if "volume" not in df.columns or len(df) < window:
+                return 0.0
+            avg_vol = float(df["volume"].iloc[-window:].mean())
+            if avg_vol <= 0:
+                return 0.0
+            return float(df["volume"].iloc[-1]) / avg_vol
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _normalize_reason_code(reason: str) -> str:
+        """Normalize free-form reason text to a stable analytics code."""
+        if not reason:
+            return "unknown"
+        base = reason.strip().lower()
+        for sep in ("\n", "(", ":", "|"):
+            if sep in base:
+                base = base.split(sep)[0]
+        normalized_chars = []
+        last_underscore = False
+        for ch in base:
+            if ch.isalnum():
+                normalized_chars.append(ch)
+                last_underscore = False
+            elif not last_underscore:
+                normalized_chars.append("_")
+                last_underscore = True
+        code = "".join(normalized_chars).strip("_")
+        return code or "unknown"
+
+    @staticmethod
+    def _log_trade_decision(
+        score: float,
+        confidence: float,
+        adx: float,
+        volume: float,
+        raw_size: float,
+        final_size: float,
+        min_notional: float,
+        decision: str,
+        reason: str,
+        strategy_id: str,
+        symbol: str,
+    ) -> None:
+        """Emit unified orchestrator-layer trade decision diagnostics."""
+        reason_code = StrategyOrchestrator._normalize_reason_code(reason)
+        logger.info(
+            "TRADE DECISION:\n"
+            f"strategy={strategy_id}\n"
+            f"symbol={symbol}\n"
+            f"score={score}/5\n"
+            f"confidence={confidence:.2f}\n"
+            f"adx={adx:.2f}\n"
+            f"volume={volume:.3f}\n"
+            f"raw_size=${raw_size:.2f}\n"
+            f"final_size=${final_size:.2f}\n"
+            f"min_notional=${min_notional:.2f}\n"
+            f"decision={decision}\n"
+            f"reason_code={reason_code}\n"
+            f"reason={reason}"
+        )
+
     def register_strategy(self, strategy_config: StrategyConfig) -> bool:
         """
         Register a new strategy with the orchestrator
@@ -341,6 +418,19 @@ class StrategyOrchestrator:
             # Check if strategy prefers this regime
             if config.preferred_regimes and current_regime not in config.preferred_regimes:
                 logger.debug(f"Skipping {strategy_id} - not optimal for {current_regime} regime")
+                self._log_trade_decision(
+                    score=0.0,
+                    confidence=0.0,
+                    adx=self._safe_adx(indicators),
+                    volume=self._safe_volume_ratio(df),
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision="SKIP",
+                    reason=f"not optimal for regime {current_regime}",
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
                 continue
 
             try:
@@ -358,6 +448,19 @@ class StrategyOrchestrator:
 
             except Exception as e:
                 logger.error(f"Error getting signal from {strategy_id}: {e}")
+                self._log_trade_decision(
+                    score=0.0,
+                    confidence=0.0,
+                    adx=self._safe_adx(indicators),
+                    volume=self._safe_volume_ratio(df),
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision="SKIP",
+                    reason=f"signal generation error: {e}",
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
 
         return signals
 
@@ -377,6 +480,9 @@ class StrategyOrchestrator:
             Signal dictionary or None
         """
         signal = None
+        strategy_id = strategy.__class__.__name__
+        adx = self._safe_adx(indicators)
+        volume = self._safe_volume_ratio(df)
 
         # Try v7.2 strategy interface
         if hasattr(strategy, 'check_long_entry_v72'):
@@ -396,24 +502,136 @@ class StrategyOrchestrator:
                     'position_size': position_size,
                     'symbol': symbol
                 }
+                self._log_trade_decision(
+                    score=float(score),
+                    confidence=float(score) / 5.0,
+                    adx=adx,
+                    volume=volume,
+                    raw_size=float(position_size),
+                    final_size=float(position_size),
+                    min_notional=0.0,
+                    decision="TRADE",
+                    reason=str(reason),
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
+            else:
+                self._log_trade_decision(
+                    score=float(score),
+                    confidence=float(score) / 5.0,
+                    adx=adx,
+                    volume=volume,
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision="SKIP",
+                    reason=str(reason),
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
 
         # Try v7.1 strategy interface
         elif hasattr(strategy, 'check_market_filter'):
             market_filter = strategy.check_market_filter(df, indicators)
-            if market_filter:
-                entry_signal, entry_score, entry_reason = strategy.check_long_entry(df, indicators)
-                if entry_signal:
-                    signal = {
-                        'action': 'long',
-                        'confidence': entry_score / 100.0,  # v7.1 uses 0-100 score
-                        'score': entry_score,
-                        'reason': entry_reason,
-                        'symbol': symbol
-                    }
+            market_pass = bool(market_filter)
+            market_reason = "market filter passed"
+
+            if isinstance(market_filter, tuple):
+                if len(market_filter) > 0:
+                    market_pass = bool(market_filter[0])
+                if len(market_filter) > 2:
+                    market_reason = str(market_filter[2])
+            elif isinstance(market_filter, dict):
+                market_pass = bool(market_filter.get('allowed', True))
+                market_reason = str(market_filter.get('reason', market_reason))
+
+            if not market_pass:
+                self._log_trade_decision(
+                    score=0.0,
+                    confidence=0.0,
+                    adx=adx,
+                    volume=volume,
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision="SKIP",
+                    reason=market_reason,
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
+                return None
+
+            entry_signal, entry_score, entry_reason = strategy.check_long_entry(df, indicators)
+            if entry_signal:
+                signal = {
+                    'action': 'long',
+                    'confidence': entry_score / 100.0,  # v7.1 uses 0-100 score
+                    'score': entry_score,
+                    'reason': entry_reason,
+                    'symbol': symbol
+                }
+                self._log_trade_decision(
+                    score=float(entry_score),
+                    confidence=float(entry_score) / 100.0,
+                    adx=adx,
+                    volume=volume,
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision="TRADE",
+                    reason=str(entry_reason),
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
+            else:
+                self._log_trade_decision(
+                    score=float(entry_score),
+                    confidence=float(entry_score) / 100.0,
+                    adx=adx,
+                    volume=volume,
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision="SKIP",
+                    reason=str(entry_reason),
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
 
         # Generic strategy interface
         elif hasattr(strategy, 'generate_signal'):
             signal = strategy.generate_signal(symbol, df, indicators, broker_name)
+            if signal:
+                signal_conf = float(signal.get('confidence', 0.0) or 0.0)
+                signal_score = float(signal.get('score', signal_conf * 5.0) or 0.0)
+                signal_size = float(signal.get('position_size', 0.0) or 0.0)
+                self._log_trade_decision(
+                    score=signal_score,
+                    confidence=signal_conf,
+                    adx=adx,
+                    volume=volume,
+                    raw_size=signal_size,
+                    final_size=signal_size,
+                    min_notional=0.0,
+                    decision="TRADE",
+                    reason=str(signal.get('reason', 'generic signal approved')),
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
+            else:
+                self._log_trade_decision(
+                    score=0.0,
+                    confidence=0.0,
+                    adx=adx,
+                    volume=volume,
+                    raw_size=0.0,
+                    final_size=0.0,
+                    min_notional=0.0,
+                    decision="SKIP",
+                    reason="generate_signal returned no action",
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                )
 
         return signal
 
@@ -428,6 +646,19 @@ class StrategyOrchestrator:
             Consolidated signal or None if no consensus
         """
         if not signals:
+            self._log_trade_decision(
+                score=0.0,
+                confidence=0.0,
+                adx=0.0,
+                volume=0.0,
+                raw_size=0.0,
+                final_size=0.0,
+                min_notional=0.0,
+                decision="SKIP",
+                reason="no strategy signals",
+                strategy_id="ensemble",
+                symbol="unknown",
+            )
             return None
 
         if not self.ensemble_voting_enabled:
@@ -455,6 +686,19 @@ class StrategyOrchestrator:
         # Check if we have minimum required votes
         if max_votes < self.ensemble_min_votes:
             logger.debug(f"Insufficient votes: {max_votes} < {self.ensemble_min_votes}")
+            self._log_trade_decision(
+                score=float(max_votes),
+                confidence=0.0,
+                adx=0.0,
+                volume=0.0,
+                raw_size=0.0,
+                final_size=0.0,
+                min_notional=0.0,
+                decision="SKIP",
+                reason=f"insufficient votes: {max_votes} < {self.ensemble_min_votes}",
+                strategy_id="ensemble",
+                symbol=signals[0].get('symbol', 'unknown'),
+            )
             return None
 
         # Calculate weighted confidence from agreeing strategies
@@ -477,6 +721,19 @@ class StrategyOrchestrator:
             consensus_signal['position_size'] = np.mean(position_sizes)
 
         logger.info(f"✅ Ensemble consensus: {best_action} ({max_votes} votes, {avg_confidence:.2%} confidence)")
+        self._log_trade_decision(
+            score=float(max_votes),
+            confidence=float(avg_confidence),
+            adx=0.0,
+            volume=0.0,
+            raw_size=float(consensus_signal.get('position_size', 0.0) or 0.0),
+            final_size=float(consensus_signal.get('position_size', 0.0) or 0.0),
+            min_notional=0.0,
+            decision="TRADE",
+            reason=f"ensemble consensus: {best_action}",
+            strategy_id="ensemble",
+            symbol=consensus_signal.get('symbol', 'unknown'),
+        )
 
         return consensus_signal
 

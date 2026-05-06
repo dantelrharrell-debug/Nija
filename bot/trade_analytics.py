@@ -216,6 +216,36 @@ class TradeAnalytics:
     COINBASE_TAKER_FEE = 0.006  # 0.6%
     COINBASE_MAKER_FEE = 0.004  # 0.4%
 
+    @staticmethod
+    def _normalize_reason_code(reason: str) -> str:
+        """Normalize free-form reason text to stable snake_case reason codes."""
+        if not reason:
+            return "unknown"
+        base = str(reason).strip().lower()
+        for sep in ("\n", "(", ":", "|"):
+            if sep in base:
+                base = base.split(sep)[0]
+        normalized_chars = []
+        last_underscore = False
+        for ch in base:
+            if ch.isalnum():
+                normalized_chars.append(ch)
+                last_underscore = False
+            elif not last_underscore:
+                normalized_chars.append("_")
+                last_underscore = True
+        code = "".join(normalized_chars).strip("_")
+        return code or "unknown"
+
+    @classmethod
+    def _normalize_reason_counts(cls, reason_counts: Dict[str, int]) -> Dict[str, int]:
+        """Aggregate reason counters into normalized reason_code buckets."""
+        aggregated: Dict[str, int] = defaultdict(int)
+        for reason, count in reason_counts.items():
+            code = cls._normalize_reason_code(reason)
+            aggregated[code] += int(count)
+        return dict(aggregated)
+
     def __init__(self, data_dir: str = "./data"):
         """
         Initialize analytics tracker
@@ -530,8 +560,16 @@ class TradeAnalytics:
             
             self.pnl_by_signal = defaultdict(float, data.get('by_signal', {}))
             self.pnl_by_strategy = defaultdict(float, data.get('by_strategy', {}))
-            self.trades_by_entry_reason = defaultdict(int, data.get('entry_reasons', {}))
-            self.trades_by_exit_reason = defaultdict(int, data.get('exit_reasons', {}))
+            entry_reasons_raw = data.get('entry_reasons', {})
+            exit_reasons_raw = data.get('exit_reasons', {})
+            self.trades_by_entry_reason = defaultdict(
+                int,
+                self._normalize_reason_counts(entry_reasons_raw),
+            )
+            self.trades_by_exit_reason = defaultdict(
+                int,
+                self._normalize_reason_counts(exit_reasons_raw),
+            )
             
             logger.info("📊 Loaded PnL attribution data")
         except Exception as e:
@@ -571,8 +609,10 @@ class TradeAnalytics:
             self.pnl_by_strategy[trade.strategy_name] += trade.net_profit
             
             # Update reason codes
-            self.trades_by_entry_reason[trade.entry_reason] += 1
-            self.trades_by_exit_reason[trade.exit_reason] += 1
+            entry_reason_code = self._normalize_reason_code(trade.entry_reason)
+            exit_reason_code = self._normalize_reason_code(trade.exit_reason)
+            self.trades_by_entry_reason[entry_reason_code] += 1
+            self.trades_by_exit_reason[exit_reason_code] += 1
             
             # Save updated attribution
             self._save_pnl_attribution()
@@ -592,8 +632,8 @@ class TradeAnalytics:
             return {
                 'by_signal': dict(self.pnl_by_signal),
                 'by_strategy': dict(self.pnl_by_strategy),
-                'entry_reasons': dict(self.trades_by_entry_reason),
-                'exit_reasons': dict(self.trades_by_exit_reason),
+                'entry_reasons': self._normalize_reason_counts(dict(self.trades_by_entry_reason)),
+                'exit_reasons': self._normalize_reason_counts(dict(self.trades_by_exit_reason)),
                 'timestamp': datetime.now().isoformat()
             }
     
@@ -609,18 +649,20 @@ class TradeAnalytics:
             Dict with entry/exit reason statistics
         """
         with self._lock:
-            total_trades = sum(self.trades_by_entry_reason.values())
+            entry_counts = self._normalize_reason_counts(dict(self.trades_by_entry_reason))
+            exit_counts = self._normalize_reason_counts(dict(self.trades_by_exit_reason))
+            total_trades = sum(entry_counts.values())
             
             # Calculate percentages
             entry_pct = {}
-            for reason, count in self.trades_by_entry_reason.items():
+            for reason, count in entry_counts.items():
                 entry_pct[reason] = {
                     'count': count,
                     'percentage': (count / total_trades * 100) if total_trades > 0 else 0.0
                 }
             
             exit_pct = {}
-            for reason, count in self.trades_by_exit_reason.items():
+            for reason, count in exit_counts.items():
                 exit_pct[reason] = {
                     'count': count,
                     'percentage': (count / total_trades * 100) if total_trades > 0 else 0.0
