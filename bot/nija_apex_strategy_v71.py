@@ -84,7 +84,7 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-MIN_CONFIDENCE = 0.25  # Confidence floor aligned to entry gate threshold
+MIN_CONFIDENCE = 0.25  # Confidence floor aligned with ENTRY_GATE_CONFIDENCE_THRESHOLD
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Entry gate thresholds (weighted scoring)
@@ -1820,7 +1820,16 @@ class NIJAApexStrategyV71:
         return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
 
     def _get_entry_gate_thresholds(self, drought: Optional['DroughtRelaxation']) -> Tuple[float, float, float]:
-        """Return (confidence, ADX, volume) thresholds with drought/fallback adjustments."""
+        """
+        Return (confidence, ADX, volume) thresholds with drought/fallback adjustments.
+
+        Args:
+            drought: Optional drought snapshot from the TradeFrequencyController.
+
+        Returns:
+            Tuple[float, float, float]: (confidence_threshold, adx_threshold, volume_threshold)
+            after applying the 10-minute fallback and drought relaxation (if active).
+        """
         threshold_conf = ENTRY_GATE_CONFIDENCE_THRESHOLD
         threshold_adx = ENTRY_GATE_ADX_THRESHOLD
         threshold_vol = ENTRY_GATE_VOLUME_THRESHOLD
@@ -1847,7 +1856,12 @@ class NIJAApexStrategyV71:
         threshold_adx: float,
         threshold_vol: float,
     ) -> int:
-        """Return the weighted gate score for entry eligibility (0–5)."""
+        """
+        Return the weighted gate score for entry eligibility (0–5).
+
+        Each of the five inputs contributes one point when it meets its
+        corresponding threshold or boolean requirement.
+        """
         return (
             int(confidence >= threshold_conf) +
             int(adx >= threshold_adx) +
@@ -1876,7 +1890,13 @@ class NIJAApexStrategyV71:
         )
 
     def _entry_gate_rsi_signal(self, indicators: Dict, side: str, adx: float) -> bool:
-        """Return RSI pullback confirmation for the entry gate."""
+        """
+        Return RSI pullback confirmation for the entry gate.
+
+        Uses regime/scalp-mode RSI ranges when available, otherwise falls back
+        to balanced static ranges. Long signals require RSI rising; short
+        signals require RSI falling versus the prior candle.
+        """
         rsi_series = indicators.get('rsi')
         if rsi_series is None or len(rsi_series) < 2:
             return False
