@@ -84,7 +84,7 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-MIN_CONFIDENCE = 0.25  # Relaxed confidence floor for high-frequency entries
+MIN_CONFIDENCE = 0.25  # Confidence floor aligned to entry gate threshold
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Entry gate thresholds (weighted scoring)
@@ -1820,7 +1820,7 @@ class NIJAApexStrategyV71:
         return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
 
     def _get_entry_gate_thresholds(self, drought: Optional['DroughtRelaxation']) -> Tuple[float, float, float]:
-        """Return confidence, ADX, and volume thresholds with drought/fallback adjustments."""
+        """Return (confidence, ADX, volume) thresholds with drought/fallback adjustments."""
         threshold_conf = ENTRY_GATE_CONFIDENCE_THRESHOLD
         threshold_adx = ENTRY_GATE_ADX_THRESHOLD
         threshold_vol = ENTRY_GATE_VOLUME_THRESHOLD
