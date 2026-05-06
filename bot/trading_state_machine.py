@@ -218,10 +218,7 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
 
 def _nonce_lease_stability_requirement_s() -> float:
     """Return required lease stability window in seconds (0 disables)."""
-    require_stability = (
-        _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false")
-        or _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
-    )
+    require_stability = _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false")
     if not require_stability:
         return 0.0
     raw = os.environ.get("NIJA_NONCE_LEASE_STABILITY_S", "").strip()
@@ -317,7 +314,7 @@ def _safe_start_gate() -> tuple[bool, str]:
 
 def _startup_reconciliation_gate() -> tuple[bool, str]:
     """Require startup reconciliation to complete before LIVE activation."""
-    if not _env_truthy("NIJA_REQUIRE_STARTUP_RECONCILIATION", "true"):
+    if not _env_truthy("NIJA_REQUIRE_STARTUP_RECONCILIATION", "false"):
         return True, ""
     if _env_truthy("NIJA_RECONCILIATION_OVERRIDE", "false"):
         logger.critical(

@@ -122,10 +122,11 @@ If the bot logs `🛑 TRADING NOT ALLOWED`, check:
 
 NIJA now enforces a strict startup contract:
 1. Balance hydration must complete before FSM/runtime loops can start.
-2. Startup reconciliation must complete before LIVE activation.
+2. Startup reconciliation must complete before LIVE activation when `NIJA_REQUIRE_STARTUP_RECONCILIATION=true`.
 3. In live mode, distributed single-writer lock + nonce lease ownership are required.
-4. Strategy framework and execution pipeline must be healthy before activation.
-5. Runtime order dispatch validates writer-lock ownership continuously.
+4. Optional nonce lease stability checks are enabled by `NIJA_REQUIRE_NONCE_LEASE_STABILITY=true` (default 30s window via `NIJA_NONCE_LEASE_STABILITY_S`).
+5. Strategy framework and execution pipeline must be healthy before activation.
+6. Runtime order dispatch validates writer-lock ownership continuously.
 
 ### Health Endpoints For Operators
 
