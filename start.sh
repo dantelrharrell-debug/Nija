@@ -154,9 +154,13 @@ fi
 _REDIS_CONFIGURED=false
 if [ -n "${NIJA_REDIS_URL:-}" ] || [ -n "${REDIS_URL:-}" ] || [ -n "${REDIS_PRIVATE_URL:-}" ] || [ -n "${REDIS_PUBLIC_URL:-}" ]; then
     _REDIS_CONFIGURED=true
-elif { [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] && [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; } \
-    || { [ -n "${REDIS_HOST:-${REDISHOST:-}}" ] && [ -n "${REDIS_PORT:-${REDISPORT:-}}" ]; }; then
-    _REDIS_CONFIGURED=true
+else
+    _component_port_check="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"
+    if [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-${REDIS_HOST:-${REDISHOST:-}}}" ] \
+        && [ -n "${_component_port_check}" ] \
+        && printf "%s" "${_component_port_check}" | grep -Eq '^[0-9]+$'; then
+        _REDIS_CONFIGURED=true
+    fi
 fi
 
 _STRICT_LEASE=true
@@ -643,6 +647,7 @@ _log_redis_lock_source_hint() {
     local _component_host
     local _component_port
     local _component_source
+    local _component_port_valid
     local _endpoint
 
     _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
@@ -673,6 +678,7 @@ PY
     _component_host="${RAILWAY_TCP_PROXY_DOMAIN:-${REDIS_HOST:-${REDISHOST:-}}}"
     _component_port="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"
     _component_source=""
+    _component_port_valid=false
 
     if [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] && [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; then
         _component_source="RAILWAY_TCP_PROXY_DOMAIN+RAILWAY_TCP_PROXY_PORT"
@@ -680,9 +686,18 @@ PY
         _component_source="REDIS_HOST+REDIS_PORT"
     fi
 
+    if [ -n "${_component_port}" ] && printf "%s" "${_component_port}" | grep -Eq '^[0-9]+$'; then
+        _component_port_valid=true
+    fi
+
     if [ -n "${_component_source}" ]; then
-        echo "🔐 Writer-lock Redis source: ${_component_source} (${_component_host}:${_component_port})"
-        echo "   Runtime will synthesize Redis URL from component variables if URL vars are unset."
+        if [ "${_component_port_valid}" = "true" ]; then
+            echo "🔐 Writer-lock Redis source: ${_component_source} (${_component_host}:${_component_port})"
+            echo "   Runtime will synthesize Redis URL from component variables if URL vars are unset."
+        else
+            echo "⚠️  Writer-lock Redis component vars are present but invalid: ${_component_source} (${_component_host}:${_component_port})"
+            echo "   Runtime will NOT synthesize a Redis URL until the port is a numeric value from Railway Redis Connect."
+        fi
     else
         echo "🔐 Writer-lock Redis source: none configured"
     fi

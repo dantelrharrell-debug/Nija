@@ -145,7 +145,7 @@ def _step1_redis_ping() -> "redis.Redis":  # type: ignore[name-defined]
     _step(1, "Redis PING confirmation")
 
     try:
-        from bot.redis_env import get_redis_url, get_redis_url_source
+        from bot.redis_env import get_redis_resolution_diagnostics, get_redis_url, get_redis_url_source
         from bot.redis_runtime import connect_redis_with_fallback
     except ImportError as exc:
         _fail(f"Cannot import Redis helpers: {exc}")
@@ -155,7 +155,12 @@ def _step1_redis_ping() -> "redis.Redis":  # type: ignore[name-defined]
     source = get_redis_url_source()
 
     if not url:
-        _fail("No Redis URL configured.  Set NIJA_REDIS_URL (or REDIS_URL) and retry.")
+        diagnostics = get_redis_resolution_diagnostics()
+        _fail(
+            "No valid Redis URL configured. Set NIJA_REDIS_URL / REDIS_URL, or provide valid component vars "
+            "(for Railway: RAILWAY_TCP_PROXY_DOMAIN + numeric RAILWAY_TCP_PROXY_PORT + REDIS_PASSWORD)."
+        )
+        log.info("Redis resolution diagnostics: %s", diagnostics)
         sys.exit(1)
 
     log.info("Redis URL source : %s", source)

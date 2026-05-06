@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 
 import redis  # type: ignore[import]
 
+from bot.redis_env import get_redis_url
+
 
 def _redis_tls_kwargs(parsed) -> dict[str, Any]:
     """Return explicit TLS kwargs when using rediss:// URLs."""
@@ -51,15 +53,15 @@ def create_redis(
     socket_connect_timeout: int = 5,
 ) -> redis.Redis:
     """Create Redis client from URL with explicit parsed configuration."""
-    raw_url = (url or os.getenv("NIJA_REDIS_URL", "")).strip()
+    raw_url = (url or get_redis_url()).strip()
     if not raw_url:
-        raise RuntimeError("NIJA_REDIS_URL is missing")
+        raise RuntimeError("Redis URL is missing")
 
     parsed = urlparse(raw_url)
     if parsed.scheme not in {"redis", "rediss"}:
-        raise RuntimeError("NIJA_REDIS_URL must start with redis:// or rediss://")
+        raise RuntimeError("Redis URL must start with redis:// or rediss://")
     if not parsed.hostname or not parsed.port:
-        raise RuntimeError("NIJA_REDIS_URL must include host and port")
+        raise RuntimeError("Redis URL must include host and port")
 
     db = 0
     try:
@@ -113,9 +115,9 @@ def connect_redis_with_fallback(
     log: Callable[[str], None] = print,
 ) -> tuple[redis.Redis, str]:
     """Connect to Redis with optional plain Railway fallback when explicitly enabled."""
-    primary_url = (url or os.getenv("NIJA_REDIS_URL", "")).strip()
+    primary_url = (url or get_redis_url()).strip()
     if not primary_url:
-        raise RuntimeError("NIJA_REDIS_URL is missing")
+        raise RuntimeError("Redis URL is missing")
 
     candidates = [primary_url]
     allow_plain_fallback = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in {

@@ -23,7 +23,13 @@ import threading
 import subprocess
 from urllib.parse import urlparse
 
-from bot.redis_env import get_all_redis_urls, get_redis_env_presence, get_redis_url, get_redis_url_source
+from bot.redis_env import (
+    get_all_redis_urls,
+    get_redis_env_presence,
+    get_redis_resolution_diagnostics,
+    get_redis_url,
+    get_redis_url_source,
+)
 from bot.instance_identity import (
     current_instance_identity,
     format_instance_identity,
@@ -1246,6 +1252,7 @@ def _acquire_distributed_process_lock() -> None:
     _redis_url = get_redis_url()
     _redis_url_source = get_redis_url_source()
     _redis_env_presence = get_redis_env_presence()
+    _redis_resolution_diag = get_redis_resolution_diagnostics()
     _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
     _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
     _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
@@ -1266,6 +1273,7 @@ def _acquire_distributed_process_lock() -> None:
         f"strict_single_url={_strict_single_redis} plain_fallback={_allow_plain_redis_fallback}"
     )
     print(f"🔐 Redis env presence | {_redis_env_presence}")
+    print(f"🔐 Redis resolution diag | {_redis_resolution_diag}")
     print(
         "🛡️ Hardening config | "
         f"redis_force_tls={_force_redis_tls} "
@@ -1275,7 +1283,7 @@ def _acquire_distributed_process_lock() -> None:
     if not _redis_url:
         _msg = (
             "⚠️ Distributed single-writer lock disabled "
-            "(checked NIJA_REDIS_URL, REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL)."
+            "(no valid Redis URL resolved from URL vars or component vars; see Redis resolution diag above)."
         )
         if _require_lock:
             if _standby_retry_active:

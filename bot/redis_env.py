@@ -190,6 +190,37 @@ def get_redis_env_presence() -> dict[str, bool]:
     return {name: bool(_strip_wrapping_quotes(os.getenv(name, ""))) for name in _REDIS_URL_ENV_NAMES}
 
 
+def get_redis_resolution_diagnostics() -> dict[str, object]:
+    """Return component-aware Redis resolution diagnostics for startup logs."""
+    host = _first_nonempty("RAILWAY_TCP_PROXY_DOMAIN", "REDIS_HOST", "REDISHOST")
+    port = _first_nonempty("RAILWAY_TCP_PROXY_PORT", "REDIS_PORT", "REDISPORT")
+
+    port_valid = False
+    if port:
+        try:
+            int(port)
+            port_valid = True
+        except (TypeError, ValueError):
+            port_valid = False
+
+    component_source = ""
+    if os.getenv("RAILWAY_TCP_PROXY_DOMAIN", "").strip() and os.getenv("RAILWAY_TCP_PROXY_PORT", "").strip():
+        component_source = "RAILWAY_TCP_PROXY_DOMAIN+RAILWAY_TCP_PROXY_PORT"
+    elif _first_nonempty("REDIS_HOST", "REDISHOST") and _first_nonempty("REDIS_PORT", "REDISPORT"):
+        component_source = "REDIS_HOST+REDIS_PORT"
+
+    return {
+        "url_env_presence": get_redis_env_presence(),
+        "component_host_present": bool(host),
+        "component_port_present": bool(port),
+        "component_port_valid": port_valid,
+        "component_source": component_source or None,
+        "component_endpoint": f"{host}:{port}" if host and port else None,
+        "resolved_url_present": bool(get_redis_url()),
+        "resolved_source": get_redis_url_source() or None,
+    }
+
+
 def get_all_redis_urls() -> list[tuple[str, str]]:
     """Return all configured Redis URLs as (source_env_name, url) in priority order."""
     result = []
