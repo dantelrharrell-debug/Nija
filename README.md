@@ -122,10 +122,21 @@ If the bot logs `🛑 TRADING NOT ALLOWED`, check:
 
 NIJA now enforces a strict startup contract:
 1. Balance hydration must complete before FSM/runtime loops can start.
-2. Startup reconciliation must complete before LIVE activation.
+2. Startup reconciliation must complete before LIVE activation when `NIJA_REQUIRE_STARTUP_RECONCILIATION=true` (recommended for production).
 3. In live mode, distributed single-writer lock + nonce lease ownership are required.
-4. Strategy framework and execution pipeline must be healthy before activation.
-5. Runtime order dispatch validates writer-lock ownership continuously.
+4. Nonce lease stability checks are enforced when `LIVE_CAPITAL_VERIFIED=true` or `NIJA_REQUIRE_NONCE_LEASE_STABILITY=true` (default 30s window via `NIJA_NONCE_LEASE_STABILITY_S`).
+5. Strategy framework and execution pipeline must be healthy before activation.
+6. Runtime order dispatch validates writer-lock ownership continuously.
+
+Unsafe emergency bypasses (require `NIJA_CONFIRM_BYPASS_RISKS=true` and are intended for recovery only):
+- `NIJA_BYPASS_STARTUP_RECONCILIATION=true` or `NIJA_RECONCILIATION_OVERRIDE=true`
+- `NIJA_BYPASS_NONCE_LEASE_STABILITY=true`
+
+⚠️ **Financial risk warning:** using these bypasses (including `NIJA_RECONCILIATION_OVERRIDE`, which bypasses without
+`NIJA_CONFIRM_BYPASS_RISKS=true`) can lead to duplicate orders if multiple instances run, incorrect position sizing
+or exits due to stale state, and potential capital loss from trading on unreconciled data. Only use them during
+emergency recovery (e.g., Redis outage, reconciliation deadlock) when you can manually confirm account state and
+guarantee a single running process.
 
 ### Health Endpoints For Operators
 

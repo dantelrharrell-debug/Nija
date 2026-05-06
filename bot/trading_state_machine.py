@@ -218,6 +218,18 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
 
 def _nonce_lease_stability_requirement_s() -> float:
     """Return required lease stability window in seconds (0 disables)."""
+    if _env_truthy("NIJA_BYPASS_NONCE_LEASE_STABILITY", "false"):
+        if not _env_truthy("NIJA_CONFIRM_BYPASS_RISKS", "false"):
+            logger.warning(
+                "[NONCE LEASE STABILITY BYPASS IGNORED] NIJA_BYPASS_NONCE_LEASE_STABILITY=true but "
+                "NIJA_CONFIRM_BYPASS_RISKS!=true; stability checks remain enforced."
+            )
+        else:
+            logger.critical(
+                "[NONCE LEASE STABILITY BYPASS] NIJA_BYPASS_NONCE_LEASE_STABILITY=true — "
+                "lease stability checks disabled (ensure single-writer safety manually)."
+            )
+            return 0.0
     require_stability = (
         _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false")
         or _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
@@ -317,6 +329,18 @@ def _safe_start_gate() -> tuple[bool, str]:
 
 def _startup_reconciliation_gate() -> tuple[bool, str]:
     """Require startup reconciliation to complete before LIVE activation."""
+    if _env_truthy("NIJA_BYPASS_STARTUP_RECONCILIATION", "false"):
+        if not _env_truthy("NIJA_CONFIRM_BYPASS_RISKS", "false"):
+            logger.warning(
+                "[RECONCILIATION BYPASS IGNORED] NIJA_BYPASS_STARTUP_RECONCILIATION=true but "
+                "NIJA_CONFIRM_BYPASS_RISKS!=true; reconciliation gate remains enforced."
+            )
+        else:
+            logger.critical(
+                "[RECONCILIATION BYPASS] NIJA_BYPASS_STARTUP_RECONCILIATION=true — "
+                "startup reconciliation gate bypassed (verify exchange state manually)."
+            )
+            return True, ""
     if not _env_truthy("NIJA_REQUIRE_STARTUP_RECONCILIATION", "true"):
         return True, ""
     if _env_truthy("NIJA_RECONCILIATION_OVERRIDE", "false"):
