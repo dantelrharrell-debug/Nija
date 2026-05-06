@@ -1855,16 +1855,14 @@ class NIJAApexStrategyV71:
         reason: str,
     ) -> None:
         logger.info(
-            f"""
-FINAL DECISION:
-score={score}/5
-confidence={confidence:.2f}
-adx={adx:.2f}
-volume={volume:.3f}
-size=${size:.2f}
-action={'TRADE' if should_trade else 'SKIP'}
-reason={reason}
-""".strip()
+            "FINAL DECISION:\n"
+            f"score={score}/5\n"
+            f"confidence={confidence:.2f}\n"
+            f"adx={adx:.2f}\n"
+            f"volume={volume:.3f}\n"
+            f"size=${size:.2f}\n"
+            f"action={'TRADE' if should_trade else 'SKIP'}\n"
+            f"reason={reason}"
         )
 
     @staticmethod
@@ -2317,18 +2315,19 @@ reason={reason}
             _drought_snapshot = None
             if self._freq_ctrl is not None:
                 _drought_snapshot = self._freq_ctrl.get_drought_relaxation()
-                no_trade_minutes = _drought_snapshot.secs_since_last_trade / 60.0
-                if no_trade_minutes > 10:
-                    confidence_anchor_threshold = 0.22
-                    effective_min_adx = min(self.min_adx, 6.0)
-                    effective_volume_threshold = min(self.volume_threshold, 0.005)
-                    logger.info(
-                        "⏳ %s: 10m fallback active — conf≥%.2f ADX≥%.1f vol≥%.2f%%",
-                        symbol,
-                        confidence_anchor_threshold,
-                        effective_min_adx,
-                        effective_volume_threshold * 100,
-                    )
+                if _drought_snapshot is not None:
+                    no_trade_minutes = _drought_snapshot.secs_since_last_trade / 60.0
+                    if no_trade_minutes > 10:
+                        confidence_anchor_threshold = 0.22
+                        effective_min_adx = min(self.min_adx, 6.0)
+                        effective_volume_threshold = min(self.volume_threshold, 0.005)
+                        logger.info(
+                            "⏳ %s: 10m fallback active — conf≥%.2f ADX≥%.1f vol≥%.2f%%",
+                            symbol,
+                            confidence_anchor_threshold,
+                            effective_min_adx,
+                            effective_volume_threshold * 100,
+                        )
 
             # Check market filter — returns 4-tuple including market_strength
             allow_trade, trend, market_reason, _market_strength = self.check_market_filter(
@@ -2615,19 +2614,19 @@ reason={reason}
             # Kraken requires $10 minimum, others typically allow smaller sizes
             min_required_balance = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
-            risk_percent = max(self.risk_manager.min_position_pct, 0.0)
-            raw_size = account_balance * risk_percent
+            sizing_pct = max(self.risk_manager.min_position_pct, 0.0)
+            raw_size = account_balance * sizing_pct
             if raw_size < min_required_balance:
                 logger.info("   ⛔ ENTRY BLOCKED: insufficient capital for this strategy")
                 logger.info(
-                    "      Balance: $%.2f | Risk %%: %.2f%% | Raw size: $%.2f | Min notional: $%.2f",
-                    account_balance, risk_percent * 100, raw_size, min_required_balance,
+                    "      Balance: $%.2f | Sizing %%: %.2f%% | Raw size: $%.2f | Min notional: $%.2f",
+                    account_balance, sizing_pct * 100, raw_size, min_required_balance,
                 )
-                if risk_percent > 0:
-                    min_balance_needed = min_required_balance / risk_percent
+                if sizing_pct > 0:
+                    min_balance_needed = min_required_balance / sizing_pct
                     logger.info(
-                        "      💡 Need $%.2f+ balance at %.2f%% risk to trade on %s",
-                        min_balance_needed, risk_percent * 100, broker_name,
+                        "      💡 Need $%.2f+ balance at %.2f%% sizing to trade on %s",
+                        min_balance_needed, sizing_pct * 100, broker_name,
                     )
                 return {
                     'action': 'hold',
