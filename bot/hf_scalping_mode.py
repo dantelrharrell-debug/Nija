@@ -5,7 +5,7 @@ NIJA High-Frequency Micro Scalping Mode
 Enables a high-frequency micro scalping mode that dramatically increases trade
 throughput by:
 
-  • Reducing the inter-cycle scan interval from 150 s (2.5 min) to 60 s (was 30 s)
+  • Reducing the inter-cycle scan interval from 150 s (2.5 min) to 60 s
   • Dropping MIN_CONFIDENCE from 0.75 → 0.25 for faster entry triggers
   • Lowering volume filters (volume_threshold 0.10 → 0.01,
     volume_min_threshold 0.002 → 0.001)

@@ -1814,7 +1814,13 @@ class NIJAApexStrategyV71:
             return metadata.get('legacy_score', score)
         return score
 
+    def _calculate_entry_confidence(self, score: float, metadata: Dict) -> float:
+        """Return normalized confidence (0–1) from the legacy entry score."""
+        legacy_score = metadata.get('legacy_score', score) if metadata else score
+        return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
+
     def _get_entry_gate_thresholds(self, drought: Optional['DroughtRelaxation']) -> Tuple[float, float, float]:
+        """Return confidence, ADX, and volume thresholds with drought/fallback adjustments."""
         threshold_conf = ENTRY_GATE_CONFIDENCE_THRESHOLD
         threshold_adx = ENTRY_GATE_ADX_THRESHOLD
         threshold_vol = ENTRY_GATE_VOLUME_THRESHOLD
@@ -1830,6 +1836,26 @@ class NIJAApexStrategyV71:
 
         return threshold_conf, threshold_adx, threshold_vol
 
+    def _calculate_entry_gate_score(
+        self,
+        confidence: float,
+        adx: float,
+        volume_ratio: float,
+        rsi_signal: bool,
+        trend_alignment: bool,
+        threshold_conf: float,
+        threshold_adx: float,
+        threshold_vol: float,
+    ) -> int:
+        """Return the weighted gate score for entry eligibility (0–5)."""
+        return (
+            int(confidence >= threshold_conf) +
+            int(adx >= threshold_adx) +
+            int(volume_ratio >= threshold_vol) +
+            int(rsi_signal) +
+            int(trend_alignment)
+        )
+
     def _log_entry_gate_diagnostics(
         self,
         confidence: float,
@@ -1840,6 +1866,7 @@ class NIJAApexStrategyV71:
         threshold_vol: float,
         gate_score: int,
     ) -> None:
+        """Log entry gate thresholds and pass count for no-trade diagnostics."""
         logger.info(
             "ENTRY CHECK:\n"
             f"confidence={confidence:.2f} (need ≥ {threshold_conf})\n"
@@ -1849,6 +1876,7 @@ class NIJAApexStrategyV71:
         )
 
     def _entry_gate_rsi_signal(self, indicators: Dict, side: str, adx: float) -> bool:
+        """Return RSI pullback confirmation for the entry gate."""
         rsi_series = indicators.get('rsi')
         if rsi_series is None or len(rsi_series) < 2:
             return False
@@ -2644,18 +2672,20 @@ class NIJAApexStrategyV71:
                         if self._freq_ctrl is not None else None
                     )
                     _threshold_conf, _threshold_adx, _threshold_vol = self._get_entry_gate_thresholds(_drought_l)
-                    _legacy_score = metadata.get('legacy_score', score) if metadata else score
-                    _confidence = min(float(_legacy_score) / MAX_ENTRY_SCORE, 1.0)
+                    _confidence = self._calculate_entry_confidence(score, metadata)
                     _avg_vol_5 = df['volume'].iloc[-5:].mean()
                     _volume_ratio = float(df['volume'].iloc[-1]) / _avg_vol_5 if _avg_vol_5 > 0 else 0.0
                     _rsi_signal = self._entry_gate_rsi_signal(indicators, "long", adx)
                     _trend_alignment = trend == 'uptrend'
-                    _gate_score = (
-                        int(_confidence >= _threshold_conf) +
-                        int(adx >= _threshold_adx) +
-                        int(_volume_ratio >= _threshold_vol) +
-                        int(_rsi_signal) +
-                        int(_trend_alignment)
+                    _gate_score = self._calculate_entry_gate_score(
+                        _confidence,
+                        adx,
+                        _volume_ratio,
+                        _rsi_signal,
+                        _trend_alignment,
+                        _threshold_conf,
+                        _threshold_adx,
+                        _threshold_vol,
                     )
                     if _gate_score < ENTRY_GATE_MIN_SCORE:
                         self._log_entry_gate_diagnostics(
@@ -3155,18 +3185,20 @@ class NIJAApexStrategyV71:
                         if self._freq_ctrl is not None else None
                     )
                     _threshold_conf, _threshold_adx, _threshold_vol = self._get_entry_gate_thresholds(_drought_s)
-                    _legacy_score = metadata.get('legacy_score', score) if metadata else score
-                    _confidence = min(float(_legacy_score) / MAX_ENTRY_SCORE, 1.0)
+                    _confidence = self._calculate_entry_confidence(score, metadata)
                     _avg_vol_5 = df['volume'].iloc[-5:].mean()
                     _volume_ratio = float(df['volume'].iloc[-1]) / _avg_vol_5 if _avg_vol_5 > 0 else 0.0
                     _rsi_signal = self._entry_gate_rsi_signal(indicators, "short", adx)
                     _trend_alignment = trend == 'downtrend'
-                    _gate_score = (
-                        int(_confidence >= _threshold_conf) +
-                        int(adx >= _threshold_adx) +
-                        int(_volume_ratio >= _threshold_vol) +
-                        int(_rsi_signal) +
-                        int(_trend_alignment)
+                    _gate_score = self._calculate_entry_gate_score(
+                        _confidence,
+                        adx,
+                        _volume_ratio,
+                        _rsi_signal,
+                        _trend_alignment,
+                        _threshold_conf,
+                        _threshold_adx,
+                        _threshold_vol,
                     )
                     if _gate_score < ENTRY_GATE_MIN_SCORE:
                         self._log_entry_gate_diagnostics(
