@@ -1343,7 +1343,14 @@ class NIJAApexStrategyV71:
             'allow_with_reduced_size': allow_with_reduced_size,
         }
 
-    def check_market_filter(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, str, str, float]:
+    def check_market_filter(
+        self,
+        df: pd.DataFrame,
+        indicators: Dict,
+        adx_threshold: Optional[float] = None,
+        volume_threshold: Optional[float] = None,
+        drought_relaxation: Optional["DroughtRelaxation"] = None,
+    ) -> Tuple[bool, str, str, float]:
         """
         Market Filter: Determine trade direction and signal strength from trend conditions.
 
@@ -1381,23 +1388,27 @@ class NIJAApexStrategyV71:
         # condition in uptrend/downtrend scoring already penalises choppy markets.
         # Hard block retained only when min_adx is explicitly forced above zero AND
         # drought relaxation is not active (drought mode disables even this gate).
-        _drought = (
-            self._freq_ctrl.get_drought_relaxation()
-            if self._freq_ctrl is not None
-            else None
-        )
+        _drought = drought_relaxation
+        if _drought is None:
+            _drought = (
+                self._freq_ctrl.get_drought_relaxation()
+                if self._freq_ctrl is not None
+                else None
+            )
         _drought_active = _drought is not None and _drought.active
+        _base_adx = self.min_adx if adx_threshold is None else float(adx_threshold)
+        _base_vol = self.volume_threshold if volume_threshold is None else float(volume_threshold)
 
         # Apply drought relaxation to effective thresholds
-        _eff_adx = max(0.0, self.min_adx - (_drought.adx_reduction if _drought and _drought.active else 0.0))
-        _eff_vol = self.volume_threshold * (_drought.volume_multiplier if _drought and _drought.active else 1.0)
+        _eff_adx = max(0.0, _base_adx - (_drought.adx_reduction if _drought and _drought.active else 0.0))
+        _eff_vol = _base_vol * (_drought.volume_multiplier if _drought and _drought.active else 1.0)
 
         if _drought_active:
             logger.info(
                 "⏳ Drought relaxation active — ADX threshold %.1f→%.1f, "
                 "volume threshold %.1f%%→%.1f%%",
-                self.min_adx, _eff_adx,
-                self.volume_threshold * 100, _eff_vol * 100,
+                _base_adx, _eff_adx,
+                _base_vol * 100, _eff_vol * 100,
             )
 
         # Check for uptrend
@@ -1805,6 +1816,85 @@ class NIJAApexStrategyV71:
             return metadata.get('legacy_score', score)
         return score
 
+    def _get_entry_confidence(self, score: float, metadata: Dict, legacy_score: float) -> float:
+        """
+        Normalize confidence for entry decisions (0.0–1.0).
+
+        Uses enhanced/composite scores when available, otherwise falls back to
+        legacy 0–5 scoring.
+        """
+        if metadata:
+            enhanced_score = metadata.get("enhanced_score")
+            if enhanced_score is None:
+                enhanced_score = metadata.get("composite_score")
+            if enhanced_score is not None:
+                try:
+                    return min(float(enhanced_score) / 100.0, 1.0)
+                except (TypeError, ValueError):
+                    pass
+        return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
+
+    @staticmethod
+    def _get_volume_ratio(df: pd.DataFrame, window: int = 5) -> float:
+        """Return current volume vs rolling average for diagnostics."""
+        if "volume" not in df.columns or len(df) < window:
+            return 0.0
+        avg_volume = float(df["volume"].iloc[-window:].mean())
+        if avg_volume <= 0:
+            return 0.0
+        return float(df["volume"].iloc[-1]) / avg_volume
+
+    @staticmethod
+    def _log_final_decision(
+        score: float,
+        confidence: float,
+        adx: float,
+        volume: float,
+        size: float,
+        should_trade: bool,
+        reason: str,
+    ) -> None:
+        logger.info(
+            f"""
+FINAL DECISION:
+score={score}/5
+confidence={confidence:.2f}
+adx={adx:.2f}
+volume={volume:.3f}
+size=${size:.2f}
+action={'TRADE' if should_trade else 'SKIP'}
+reason={reason}
+""".strip()
+        )
+
+    @staticmethod
+    def _is_candle_closed(df: pd.DataFrame, current_time: datetime) -> Tuple[bool, str]:
+        """Return True when the latest candle has closed."""
+        if len(df) < 2 or not hasattr(df.index, "to_pydatetime"):
+            return True, "candle timing unavailable"
+        try:
+            last_ts = df.index[-1]
+            prev_ts = df.index[-2]
+            last_dt = last_ts.to_pydatetime() if hasattr(last_ts, "to_pydatetime") else last_ts
+            prev_dt = prev_ts.to_pydatetime() if hasattr(prev_ts, "to_pydatetime") else prev_ts
+        except Exception:
+            return True, "candle timing unavailable"
+
+        if last_dt.tzinfo is not None:
+            last_dt = last_dt.replace(tzinfo=None)
+        if prev_dt.tzinfo is not None:
+            prev_dt = prev_dt.replace(tzinfo=None)
+
+        current_naive = current_time.replace(tzinfo=None) if current_time.tzinfo else current_time
+        candle_secs = (last_dt - prev_dt).total_seconds()
+        if candle_secs <= 0:
+            return True, "candle timing unavailable"
+        candle_close = last_dt + timedelta(seconds=candle_secs)
+        if current_naive < candle_close:
+            remaining = (candle_close - current_naive).total_seconds()
+            return False, f"waiting for candle close ({remaining:.0f}s remaining)"
+        return True, "candle closed"
+
     def check_entry_with_enhanced_scoring(self, df: pd.DataFrame, indicators: Dict,
                                          side: str, account_balance: float) -> Tuple[bool, float, str, Dict]:
         """
@@ -2182,6 +2272,16 @@ class NIJAApexStrategyV71:
                     'reason': f'Insufficient data ({len(df)} candles, need 100+)'
                 }
 
+            current_time = datetime.now()
+            candle_closed, candle_reason = self._is_candle_closed(df, current_time)
+            if not candle_closed:
+                logger.info("   ⏳ %s: %s", symbol, candle_reason)
+                return {
+                    'action': 'hold',
+                    'reason': f'Waiting for candle close ({candle_reason})',
+                    'filter_stage': 'candle_close',
+                }
+
             # _last_daily_target_usd stays 0: edge-driven mode, no dollar target blocking.
 
             # Set starting balance once (first non-zero account balance seen).
@@ -2195,7 +2295,6 @@ class NIJAApexStrategyV71:
             indicators = self.calculate_indicators(df)
 
             # Check smart filters
-            current_time = datetime.now()
             filters_ok, filter_reason = self.check_smart_filters(df, current_time, symbol)
             if not filters_ok:
                 if _BYPASS_SMART_FILTER:
@@ -2211,8 +2310,34 @@ class NIJAApexStrategyV71:
                         'filter_stage': 'smart_filter',
                     }
 
+            # Short-term fallback (10 min idle): soften entry thresholds
+            confidence_anchor_threshold = MIN_CONFIDENCE
+            effective_min_adx = self.min_adx
+            effective_volume_threshold = self.volume_threshold
+            _drought_snapshot = None
+            if self._freq_ctrl is not None:
+                _drought_snapshot = self._freq_ctrl.get_drought_relaxation()
+                no_trade_minutes = _drought_snapshot.secs_since_last_trade / 60.0
+                if no_trade_minutes > 10:
+                    confidence_anchor_threshold = 0.22
+                    effective_min_adx = min(self.min_adx, 6.0)
+                    effective_volume_threshold = min(self.volume_threshold, 0.005)
+                    logger.info(
+                        "⏳ %s: 10m fallback active — conf≥%.2f ADX≥%.1f vol≥%.2f%%",
+                        symbol,
+                        confidence_anchor_threshold,
+                        effective_min_adx,
+                        effective_volume_threshold * 100,
+                    )
+
             # Check market filter — returns 4-tuple including market_strength
-            allow_trade, trend, market_reason, _market_strength = self.check_market_filter(df, indicators)
+            allow_trade, trend, market_reason, _market_strength = self.check_market_filter(
+                df,
+                indicators,
+                adx_threshold=effective_min_adx,
+                volume_threshold=effective_volume_threshold,
+                drought_relaxation=_drought_snapshot,
+            )
 
             # ── NIJA_DISABLE_MARKET_FILTER diagnostic bypass ──────────────────
             # When enabled, skip the market filter gate entirely and assign trend
@@ -2490,30 +2615,24 @@ class NIJAApexStrategyV71:
             # Kraken requires $10 minimum, others typically allow smaller sizes
             min_required_balance = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
-            # Calculate maximum possible position size
-            # For small accounts (<$100), use 20% to meet broker minimums
-            # For larger accounts, use configured max (typically 10%)
-            if account_balance < SMALL_ACCOUNT_THRESHOLD:
-                max_position_pct = SMALL_ACCOUNT_MAX_POSITION_PCT
-            else:
-                max_position_pct = self.risk_manager.max_position_pct
-
-            max_position_size = account_balance * max_position_pct
-
-            # If even our maximum possible position is below minimum, skip analysis entirely
-            if max_position_size < min_required_balance:
-                logger.info(f"   ❌ {symbol}: Account too small for {broker_name}")
-                logger.info(f"      Balance: ${account_balance:.2f} | Max position: ${max_position_size:.2f} ({max_position_pct*100:.0f}%)")
-                logger.info(f"      Required minimum: ${min_required_balance:.2f}")
-                # Guard against division by zero
-                if max_position_pct > 0:
-                    min_balance_needed = min_required_balance / max_position_pct
-                    logger.info(f"      💡 Need ${min_balance_needed:.2f}+ balance to trade on {broker_name}")
-                else:
-                    logger.info(f"      💡 Need larger balance to trade on {broker_name}")
+            risk_percent = max(self.risk_manager.min_position_pct, 0.0)
+            raw_size = account_balance * risk_percent
+            if raw_size < min_required_balance:
+                logger.info("   ⛔ ENTRY BLOCKED: insufficient capital for this strategy")
+                logger.info(
+                    "      Balance: $%.2f | Risk %%: %.2f%% | Raw size: $%.2f | Min notional: $%.2f",
+                    account_balance, risk_percent * 100, raw_size, min_required_balance,
+                )
+                if risk_percent > 0:
+                    min_balance_needed = min_required_balance / risk_percent
+                    logger.info(
+                        "      💡 Need $%.2f+ balance at %.2f%% risk to trade on %s",
+                        min_balance_needed, risk_percent * 100, broker_name,
+                    )
                 return {
                     'action': 'hold',
-                    'reason': f'Account too small for {broker_name} minimum (${min_required_balance:.2f})'
+                    'reason': 'ENTRY BLOCKED: insufficient capital for this strategy',
+                    'filter_stage': 'min_notional',
                 }
 
             if trend == 'uptrend':
@@ -2552,6 +2671,20 @@ class NIJAApexStrategyV71:
                             logger.info("   🚀 %s: BREAKOUT long entry — %s", symbol, _bo_reason)
                     except Exception as _be:
                         logger.debug("breakout_long error: %s", _be)
+
+                risk_score = self._get_risk_score(score, metadata)
+                entry_confidence = self._get_entry_confidence(score, metadata, risk_score)
+                if not long_signal and entry_confidence >= confidence_anchor_threshold and risk_score >= 3:
+                    long_signal = True
+                    anchor_reason = (
+                        f"confidence anchor (conf {entry_confidence:.2f} ≥ "
+                        f"{confidence_anchor_threshold:.2f}, score {risk_score}/5)"
+                    )
+                    metadata = metadata or {}
+                    metadata["confidence_anchor"] = True
+                    metadata["confidence_anchor_reason"] = anchor_reason
+                    reason = f"{reason} | {anchor_reason}"
+                    logger.info("   ✅ %s: %s", symbol, anchor_reason)
 
                 if long_signal:
                     # ── Score-based AI Entry Gate (LONG) ──────────────────────
@@ -2649,8 +2782,6 @@ class NIJAApexStrategyV71:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
-                    risk_score = self._get_risk_score(score, metadata)
-
                     # Get broker context for intelligent minimum position adjustments
                     broker_min = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
@@ -2782,6 +2913,31 @@ class NIJAApexStrategyV71:
                             position_size = ai_adjusted_size
                         metadata['ai_eval'] = ai_eval.to_dict()
                     # ──────────────────────────────────────────────────────
+
+                    if position_size < min_required_balance:
+                        reason = (
+                            f"below min notional after sizing "
+                            f"(${position_size:.2f} < ${min_required_balance:.2f})"
+                        )
+                        logger.warning(
+                            "   ⏭️  SKIP: below min notional after sizing (%.2f < %.2f)",
+                            position_size, min_required_balance,
+                        )
+                        volume_ratio = self._get_volume_ratio(df)
+                        self._log_final_decision(
+                            score=risk_score,
+                            confidence=entry_confidence,
+                            adx=adx,
+                            volume=volume_ratio,
+                            size=position_size,
+                            should_trade=False,
+                            reason=reason,
+                        )
+                        return {
+                            'action': 'hold',
+                            'reason': reason,
+                            'filter_stage': 'min_notional',
+                        }
 
                     if float(position_size) == 0:
                         return {
@@ -2982,6 +3138,16 @@ class NIJAApexStrategyV71:
                         except Exception:
                             pass
 
+                    volume_ratio = self._get_volume_ratio(df)
+                    self._log_final_decision(
+                        score=risk_score,
+                        confidence=entry_confidence,
+                        adx=adx,
+                        volume=volume_ratio,
+                        size=position_size,
+                        should_trade=True,
+                        reason=reason,
+                    )
                     return result
 
             elif trend == 'downtrend':
@@ -3033,6 +3199,20 @@ class NIJAApexStrategyV71:
                             logger.info("   🚀 %s: BREAKOUT short entry — %s", symbol, _bo_reason_s)
                     except Exception as _be_s:
                         logger.debug("breakout_short error: %s", _be_s)
+
+                risk_score = self._get_risk_score(score, metadata)
+                entry_confidence = self._get_entry_confidence(score, metadata, risk_score)
+                if not short_signal and entry_confidence >= confidence_anchor_threshold and risk_score >= 3:
+                    short_signal = True
+                    anchor_reason = (
+                        f"confidence anchor (conf {entry_confidence:.2f} ≥ "
+                        f"{confidence_anchor_threshold:.2f}, score {risk_score}/5)"
+                    )
+                    metadata = metadata or {}
+                    metadata["confidence_anchor"] = True
+                    metadata["confidence_anchor_reason"] = anchor_reason
+                    reason = f"{reason} | {anchor_reason}"
+                    logger.info("   ✅ %s: %s", symbol, anchor_reason)
 
                 if short_signal:
                     # ── Score-based AI Entry Gate (SHORT) ─────────────────────
@@ -3124,8 +3304,6 @@ class NIJAApexStrategyV71:
                     # Calculate position size
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
-                    risk_score = self._get_risk_score(score, metadata)
-
                     # Get broker context for intelligent minimum position adjustments
                     broker_min = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
@@ -3253,6 +3431,31 @@ class NIJAApexStrategyV71:
                             position_size = ai_adjusted_size
                         metadata['ai_eval'] = ai_eval.to_dict()
                     # ──────────────────────────────────────────────────────
+
+                    if position_size < min_required_balance:
+                        reason = (
+                            f"below min notional after sizing "
+                            f"(${position_size:.2f} < ${min_required_balance:.2f})"
+                        )
+                        logger.warning(
+                            "   ⏭️  SKIP: below min notional after sizing (%.2f < %.2f)",
+                            position_size, min_required_balance,
+                        )
+                        volume_ratio = self._get_volume_ratio(df)
+                        self._log_final_decision(
+                            score=risk_score,
+                            confidence=entry_confidence,
+                            adx=adx,
+                            volume=volume_ratio,
+                            size=position_size,
+                            should_trade=False,
+                            reason=reason,
+                        )
+                        return {
+                            'action': 'hold',
+                            'reason': reason,
+                            'filter_stage': 'min_notional',
+                        }
 
                     if float(position_size) == 0:
                         return {
@@ -3455,6 +3658,16 @@ class NIJAApexStrategyV71:
                         except Exception:
                             pass
 
+                    volume_ratio = self._get_volume_ratio(df)
+                    self._log_final_decision(
+                        score=risk_score,
+                        confidence=entry_confidence,
+                        adx=adx,
+                        volume=volume_ratio,
+                        size=position_size,
+                        should_trade=True,
+                        reason=reason,
+                    )
                     return result
 
             return {
