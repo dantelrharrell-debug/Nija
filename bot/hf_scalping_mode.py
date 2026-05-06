@@ -5,11 +5,10 @@ NIJA High-Frequency Micro Scalping Mode
 Enables a high-frequency micro scalping mode that dramatically increases trade
 throughput by:
 
-  • Reducing the inter-cycle scan interval from 150 s (2.5 min) to 30 s
-  • Dropping MIN_CONFIDENCE from 0.75 → 0.55 for faster entry triggers
-  • Lowering volume filters (volume_threshold 0.10 → 0.05,
-    volume_min_threshold 0.002 → 0.001)
-  • Relaxing ADX minimum (15 → 8) and trend confirmation count (3 → 2)
+  • Reducing the inter-cycle scan interval to 60 s
+  • Setting MIN_CONFIDENCE to 0.25 for faster entry triggers
+  • Setting volume filters (volume_threshold 0.01, volume_min_threshold 0.002)
+  • Relaxing ADX minimum to 7 and trend confirmation count to 2
   • Setting tight profit targets 0.4 %–1 % for rapid realisation
   • Setting tight stop-losses 0.25 %–0.6 %
   • Capping position hold time at 3 minutes so capital re-deploys quickly
@@ -94,14 +93,14 @@ class HFScalpConfig:
     Default values are tuned for safer live operation when no explicit
     environment overrides are provided:
 
-        MIN_CONFIDENCE    0.38
-        volume_threshold  0.03
+        MIN_CONFIDENCE    0.25
+        volume_threshold  0.01
         volume_min_thr    0.002
-        min_adx           10
+        min_adx           7
         min_trend_conf    3/5
         TAKE_PROFIT       0.6 %
         STOP_LOSS         0.3 %
-        SCAN_INTERVAL     30 s
+        SCAN_INTERVAL     60 s
         MAX_TRADES/HR     20
     """
 
@@ -111,14 +110,14 @@ class HFScalpConfig:
 
     # ── Timing ────────────────────────────────────────────────────────────────
     cycle_interval_seconds: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_CYCLE_SECONDS", 30)
+        default_factory=lambda: _env_int("HF_SCALP_CYCLE_SECONDS", 60)
     )
-    # env: HF_SCALP_CYCLE_SECONDS  (default 45 s vs normal 150 s)
+    # env: HF_SCALP_CYCLE_SECONDS  (default 60 s vs normal 150 s)
 
     candle_cache_ttl: int = field(
         default_factory=lambda: _env_int("HF_SCALP_CACHE_TTL", 25)
     )
-    # env: HF_SCALP_CACHE_TTL  (25 s to fit inside 30-s cycle)
+    # env: HF_SCALP_CACHE_TTL  (25 s to fit inside 60-s cycle)
 
     max_hold_seconds: int = field(
         default_factory=lambda: _env_int("HF_SCALP_MAX_HOLD_SECONDS", 180)
@@ -127,22 +126,22 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.34)
+        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.25)
     )
     # env: HF_SCALP_MIN_CONFIDENCE
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.34)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.25)
     )
     # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
 
     min_adx: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 9)
+        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 7)
     )
     # env: HF_SCALP_MIN_ADX
 
     volume_threshold: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.025)
+        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.01)
     )
     # env: HF_SCALP_VOLUME_THRESHOLD
 
@@ -247,11 +246,11 @@ class HFScalpingMode:
 
         # Safer baseline for live production with small capital.
         floors = {
-            "cycle_interval_seconds": 30,
-            "min_confidence": 0.34,
-            "kraken_min_confidence": 0.34,
-            "min_adx": 9,
-            "volume_threshold": 0.025,
+            "cycle_interval_seconds": 60,
+            "min_confidence": 0.25,
+            "kraken_min_confidence": 0.25,
+            "min_adx": 7,
+            "volume_threshold": 0.01,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
@@ -265,10 +264,10 @@ class HFScalpingMode:
         # Enabled by default to prevent drift from ad-hoc env overrides.
         lock_profile = _env_bool("HF_SCALP_LOCK_PROFILE", True)
         if lock_profile:
-            self.config.min_confidence = 0.34
-            self.config.kraken_min_confidence = 0.34
-            self.config.min_adx = 9
-            self.config.volume_threshold = 0.025
+            self.config.min_confidence = 0.25
+            self.config.kraken_min_confidence = 0.25
+            self.config.min_adx = 7
+            self.config.volume_threshold = 0.01
             self.config.profit_target_pct = 2.0
             self.config.stop_loss_pct = 0.4
             # Keep within requested 15–25 trades/hr band.
@@ -277,7 +276,7 @@ class HFScalpingMode:
             elif self.config.max_trades_per_hour > 25:
                 self.config.max_trades_per_hour = 25
             logger.info(
-                "HF profile lock active — conf=0.34 adx=9 vol=2.5%% tp=2.0%% sl=0.4%% trades/hr=%d",
+                "HF profile lock active — conf=0.25 adx=7 vol=1.0%% tp=2.0%% sl=0.4%% trades/hr=%d",
                 self.config.max_trades_per_hour,
             )
 
@@ -357,7 +356,7 @@ class HFScalpingMode:
     # ── Cycle timing ───────────────────────────────────────────────────────────
 
     def get_cycle_interval(self) -> int:
-        """Return the inter-cycle sleep in seconds (30 when active, 150 otherwise)."""
+        """Return the inter-cycle sleep in seconds (60 when active, 150 otherwise)."""
         return self.config.cycle_interval_seconds if self.config.enabled else 150
 
     def get_candle_cache_ttl(self) -> int:

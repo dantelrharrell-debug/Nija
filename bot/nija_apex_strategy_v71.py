@@ -84,8 +84,17 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-MIN_CONFIDENCE = 0.20  # DEBUG TEMP: relaxed confidence floor to force pipeline visibility
+MIN_CONFIDENCE = 0.25  # Confidence floor aligned with ENTRY_GATE_CONFIDENCE_THRESHOLD
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
+
+# Entry gate thresholds (weighted scoring)
+ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.25
+ENTRY_GATE_ADX_THRESHOLD = 7.0
+ENTRY_GATE_VOLUME_THRESHOLD = 0.01
+ENTRY_GATE_MIN_SCORE = 3
+ENTRY_GATE_FALLBACK_CONFIDENCE = 0.22
+ENTRY_GATE_FALLBACK_ADX = 6.0
+ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
 
 # Volume gate for entry confirmation in check_long/short_entry.
 # Widened from 0.6x to 0.4x to unlock quieter markets (where most scalps occur).
@@ -1805,6 +1814,130 @@ class NIJAApexStrategyV71:
             return metadata.get('legacy_score', score)
         return score
 
+    def _calculate_entry_confidence(self, score: float, metadata: Dict) -> float:
+        """Return normalized confidence (0–1) from the legacy entry score."""
+        legacy_score = metadata.get('legacy_score', score) if metadata else score
+        return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
+
+    def _get_entry_gate_thresholds(self, drought: Optional['DroughtRelaxation']) -> Tuple[float, float, float]:
+        """
+        Return (confidence, ADX, volume) thresholds with drought/fallback adjustments.
+
+        Args:
+            drought: Optional drought snapshot from the TradeFrequencyController.
+
+        Returns:
+            Tuple[float, float, float]: (confidence_threshold, adx_threshold, volume_threshold)
+            after applying the 10-minute fallback and drought relaxation (if active).
+        """
+        threshold_conf = ENTRY_GATE_CONFIDENCE_THRESHOLD
+        threshold_adx = ENTRY_GATE_ADX_THRESHOLD
+        threshold_vol = ENTRY_GATE_VOLUME_THRESHOLD
+
+        if drought is not None:
+            if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS:
+                threshold_conf = ENTRY_GATE_FALLBACK_CONFIDENCE
+                threshold_adx = ENTRY_GATE_FALLBACK_ADX
+
+            if drought.active:
+                threshold_adx = max(0.0, threshold_adx - drought.adx_reduction)
+                threshold_vol = threshold_vol * drought.volume_multiplier
+
+        return threshold_conf, threshold_adx, threshold_vol
+
+    def _calculate_entry_gate_score(
+        self,
+        confidence: float,
+        adx: float,
+        volume_ratio: float,
+        rsi_signal: bool,
+        trend_alignment: bool,
+        threshold_conf: float,
+        threshold_adx: float,
+        threshold_vol: float,
+    ) -> int:
+        """
+        Return the weighted gate score for entry eligibility (0–5).
+
+        Each of the five inputs contributes one point when it meets its
+        corresponding threshold or boolean requirement.
+        """
+        return (
+            int(confidence >= threshold_conf) +
+            int(adx >= threshold_adx) +
+            int(volume_ratio >= threshold_vol) +
+            int(rsi_signal) +
+            int(trend_alignment)
+        )
+
+    def _log_entry_gate_diagnostics(
+        self,
+        confidence: float,
+        adx: float,
+        volume_ratio: float,
+        threshold_conf: float,
+        threshold_adx: float,
+        threshold_vol: float,
+        gate_score: int,
+    ) -> None:
+        """Log entry gate thresholds and pass count for no-trade diagnostics."""
+        logger.info(
+            "ENTRY CHECK:\n"
+            f"confidence={confidence:.2f} (need ≥ {threshold_conf})\n"
+            f"adx={adx:.2f} (need ≥ {threshold_adx})\n"
+            f"volume={volume_ratio:.3f} (need ≥ {threshold_vol})\n"
+            f"passed={gate_score}/5\n"
+        )
+
+    def _entry_gate_rsi_signal(self, indicators: Dict, side: str, adx: float) -> bool:
+        """
+        Return RSI pullback confirmation for the entry gate.
+
+        Uses regime/scalp-mode RSI ranges when available, otherwise falls back
+        to balanced static ranges. Long signals require RSI rising; short
+        signals require RSI falling versus the prior candle.
+        """
+        rsi_series = indicators.get('rsi')
+        if rsi_series is None or len(rsi_series) < 2:
+            return False
+
+        rsi = scalar(rsi_series.iloc[-1])
+        rsi_prev = scalar(rsi_series.iloc[-2])
+        side = side.lower()
+
+        if side == "long":
+            rsi_min, rsi_max = 25, 67
+        else:
+            rsi_min, rsi_max = 33, 75
+
+        _broker_name = self._get_broker_name()
+        if (REGIME_BRIDGE_AVAILABLE and self.regime_bridge is not None
+                and self.current_regime is not None):
+            _rb_params = self.regime_bridge.get_params(self.current_regime)
+            if side == "long":
+                rsi_min, rsi_max = _rb_params.rsi_long_min, _rb_params.rsi_long_max
+            else:
+                rsi_min, rsi_max = _rb_params.rsi_short_min, _rb_params.rsi_short_max
+            if (SCALP_MODE_OPTIMIZER_AVAILABLE and self.scalp_optimizer is not None
+                    and self.scalp_optimizer.should_use_scalp_mode(self.current_regime)):
+                _scalp_cfg = self.scalp_optimizer.get_scalp_config(
+                    _broker_name, getattr(self, '_last_account_balance', 100.0)
+                )
+                if side == "long":
+                    rsi_min, rsi_max = _scalp_cfg.rsi_long_min, _scalp_cfg.rsi_long_max
+                else:
+                    rsi_min, rsi_max = _scalp_cfg.rsi_short_min, _scalp_cfg.rsi_short_max
+        elif self.use_enhanced_scoring and self.regime_detector and self.current_regime:
+            rsi_ranges = self.regime_detector.get_adaptive_rsi_ranges(self.current_regime, adx)
+            if side == "long":
+                rsi_min, rsi_max = rsi_ranges['long_min'], rsi_ranges['long_max']
+            else:
+                rsi_min, rsi_max = rsi_ranges['short_min'], rsi_ranges['short_max']
+
+        if side == "long":
+            return rsi_min <= rsi <= rsi_max and rsi > rsi_prev
+        return rsi_min <= rsi <= rsi_max and rsi < rsi_prev
+
     def check_entry_with_enhanced_scoring(self, df: pd.DataFrame, indicators: Dict,
                                          side: str, account_balance: float) -> Tuple[bool, float, str, Dict]:
         """
@@ -2554,14 +2687,46 @@ class NIJAApexStrategyV71:
                         logger.debug("breakout_long error: %s", _be)
 
                 if long_signal:
-                    # ── Score-based AI Entry Gate (LONG) ──────────────────────
-                    # Gates contribute weighted points; trade passes when total ≥ threshold.
-                    # Drought safeguard lowers gate thresholds by gate_score_reduction %.
-                    _entry_type_l = _momentum_entry_type or self._get_entry_type_for_regime(self.current_regime)
                     _drought_l = (
                         self._freq_ctrl.get_drought_relaxation()
                         if self._freq_ctrl is not None else None
                     )
+                    _threshold_conf, _threshold_adx, _threshold_vol = self._get_entry_gate_thresholds(_drought_l)
+                    _confidence = self._calculate_entry_confidence(score, metadata)
+                    _avg_vol_5 = df['volume'].iloc[-5:].mean()
+                    _volume_ratio = float(df['volume'].iloc[-1]) / _avg_vol_5 if _avg_vol_5 > 0 else 0.0
+                    _rsi_signal = self._entry_gate_rsi_signal(indicators, "long", adx)
+                    _trend_alignment = trend == 'uptrend'
+                    _gate_score = self._calculate_entry_gate_score(
+                        _confidence,
+                        adx,
+                        _volume_ratio,
+                        _rsi_signal,
+                        _trend_alignment,
+                        _threshold_conf,
+                        _threshold_adx,
+                        _threshold_vol,
+                    )
+                    if _gate_score < ENTRY_GATE_MIN_SCORE:
+                        self._log_entry_gate_diagnostics(
+                            _confidence,
+                            adx,
+                            _volume_ratio,
+                            _threshold_conf,
+                            _threshold_adx,
+                            _threshold_vol,
+                            _gate_score,
+                        )
+                        return {
+                            'action': 'hold',
+                            'reason': f'Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}',
+                            'filter_stage': 'entry_gate',
+                        }
+
+                    # ── Score-based AI Entry Gate (LONG) ──────────────────────
+                    # Gates contribute weighted points; trade passes when total ≥ threshold.
+                    # Drought safeguard lowers gate thresholds by gate_score_reduction %.
+                    _entry_type_l = _momentum_entry_type or self._get_entry_type_for_regime(self.current_regime)
                     _gate_reduction_l = _drought_l.gate_pct_reduction if (_drought_l and _drought_l.active) else 0.0
                     # NIJA_MICROCAP_RELAX_SIDEWAYS: in consolidation/ranging/sideways
                     # regimes the gate is relaxed slightly so the bot stays active
@@ -3035,12 +3200,44 @@ class NIJAApexStrategyV71:
                         logger.debug("breakout_short error: %s", _be_s)
 
                 if short_signal:
-                    # ── Score-based AI Entry Gate (SHORT) ─────────────────────
-                    _entry_type_s = _momentum_entry_type_s or self._get_entry_type_for_regime(self.current_regime)
                     _drought_s = (
                         self._freq_ctrl.get_drought_relaxation()
                         if self._freq_ctrl is not None else None
                     )
+                    _threshold_conf, _threshold_adx, _threshold_vol = self._get_entry_gate_thresholds(_drought_s)
+                    _confidence = self._calculate_entry_confidence(score, metadata)
+                    _avg_vol_5 = df['volume'].iloc[-5:].mean()
+                    _volume_ratio = float(df['volume'].iloc[-1]) / _avg_vol_5 if _avg_vol_5 > 0 else 0.0
+                    _rsi_signal = self._entry_gate_rsi_signal(indicators, "short", adx)
+                    _trend_alignment = trend == 'downtrend'
+                    _gate_score = self._calculate_entry_gate_score(
+                        _confidence,
+                        adx,
+                        _volume_ratio,
+                        _rsi_signal,
+                        _trend_alignment,
+                        _threshold_conf,
+                        _threshold_adx,
+                        _threshold_vol,
+                    )
+                    if _gate_score < ENTRY_GATE_MIN_SCORE:
+                        self._log_entry_gate_diagnostics(
+                            _confidence,
+                            adx,
+                            _volume_ratio,
+                            _threshold_conf,
+                            _threshold_adx,
+                            _threshold_vol,
+                            _gate_score,
+                        )
+                        return {
+                            'action': 'hold',
+                            'reason': f'Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}',
+                            'filter_stage': 'entry_gate',
+                        }
+
+                    # ── Score-based AI Entry Gate (SHORT) ─────────────────────
+                    _entry_type_s = _momentum_entry_type_s or self._get_entry_type_for_regime(self.current_regime)
                     _gate_reduction_s = _drought_s.gate_pct_reduction if (_drought_s and _drought_s.active) else 0.0
                     # NIJA_MICROCAP_RELAX_SIDEWAYS: mirror the long-side gate relaxation
                     if _MICROCAP_RELAX_SIDEWAYS and self.current_regime is not None:
