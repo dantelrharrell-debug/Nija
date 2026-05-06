@@ -87,6 +87,15 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 MIN_CONFIDENCE = 0.25  # Relaxed confidence floor for high-frequency entries
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
+# Entry gate thresholds (weighted scoring)
+ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.25
+ENTRY_GATE_ADX_THRESHOLD = 7.0
+ENTRY_GATE_VOLUME_THRESHOLD = 0.01
+ENTRY_GATE_MIN_SCORE = 3
+ENTRY_GATE_FALLBACK_CONFIDENCE = 0.22
+ENTRY_GATE_FALLBACK_ADX = 6.0
+ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
+
 # Volume gate for entry confirmation in check_long/short_entry.
 # Widened from 0.6x to 0.4x to unlock quieter markets (where most scalps occur).
 ENTRY_VOLUME_MIN_MULTIPLIER: float = 0.4
@@ -1805,22 +1814,39 @@ class NIJAApexStrategyV71:
             return metadata.get('legacy_score', score)
         return score
 
-    def _get_entry_gate_thresholds(self, drought: Optional[object]) -> Tuple[float, float, float]:
-        threshold_conf = 0.25
-        threshold_adx = 7.0
-        threshold_vol = 0.01
+    def _get_entry_gate_thresholds(self, drought: Optional['DroughtRelaxation']) -> Tuple[float, float, float]:
+        threshold_conf = ENTRY_GATE_CONFIDENCE_THRESHOLD
+        threshold_adx = ENTRY_GATE_ADX_THRESHOLD
+        threshold_vol = ENTRY_GATE_VOLUME_THRESHOLD
 
         if drought is not None:
-            secs_since = getattr(drought, "secs_since_last_trade", 0.0)
-            if secs_since >= 600.0:
-                threshold_conf = 0.22
-                threshold_adx = 6.0
+            if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS:
+                threshold_conf = ENTRY_GATE_FALLBACK_CONFIDENCE
+                threshold_adx = ENTRY_GATE_FALLBACK_ADX
 
-            if getattr(drought, "active", False):
-                threshold_adx = max(0.0, threshold_adx - float(getattr(drought, "adx_reduction", 0.0)))
-                threshold_vol = threshold_vol * float(getattr(drought, "volume_multiplier", 1.0))
+            if drought.active:
+                threshold_adx = max(0.0, threshold_adx - drought.adx_reduction)
+                threshold_vol = threshold_vol * drought.volume_multiplier
 
         return threshold_conf, threshold_adx, threshold_vol
+
+    def _log_entry_gate_diagnostics(
+        self,
+        confidence: float,
+        adx: float,
+        volume_ratio: float,
+        threshold_conf: float,
+        threshold_adx: float,
+        threshold_vol: float,
+        gate_score: int,
+    ) -> None:
+        logger.info(
+            "ENTRY CHECK:\n"
+            f"confidence={confidence:.2f} (need ≥ {threshold_conf})\n"
+            f"adx={adx:.2f} (need ≥ {threshold_adx})\n"
+            f"volume={volume_ratio:.3f} (need ≥ {threshold_vol})\n"
+            f"passed={gate_score}/5\n"
+        )
 
     def _entry_gate_rsi_signal(self, indicators: Dict, side: str, adx: float) -> bool:
         rsi_series = indicators.get('rsi')
@@ -2631,17 +2657,19 @@ class NIJAApexStrategyV71:
                         int(_rsi_signal) +
                         int(_trend_alignment)
                     )
-                    if _gate_score < 3:
-                        logger.info(
-                            "ENTRY CHECK:\n"
-                            f"confidence={_confidence:.2f} (need ≥ {_threshold_conf})\n"
-                            f"adx={adx:.2f} (need ≥ {_threshold_adx})\n"
-                            f"volume={_volume_ratio:.3f} (need ≥ {_threshold_vol})\n"
-                            f"passed={_gate_score}/5\n"
+                    if _gate_score < ENTRY_GATE_MIN_SCORE:
+                        self._log_entry_gate_diagnostics(
+                            _confidence,
+                            adx,
+                            _volume_ratio,
+                            _threshold_conf,
+                            _threshold_adx,
+                            _threshold_vol,
+                            _gate_score,
                         )
                         return {
                             'action': 'hold',
-                            'reason': f'Entry gate score {_gate_score}/5 < 3',
+                            'reason': f'Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}',
                             'filter_stage': 'entry_gate',
                         }
 
@@ -3140,17 +3168,19 @@ class NIJAApexStrategyV71:
                         int(_rsi_signal) +
                         int(_trend_alignment)
                     )
-                    if _gate_score < 3:
-                        logger.info(
-                            "ENTRY CHECK:\n"
-                            f"confidence={_confidence:.2f} (need ≥ {_threshold_conf})\n"
-                            f"adx={adx:.2f} (need ≥ {_threshold_adx})\n"
-                            f"volume={_volume_ratio:.3f} (need ≥ {_threshold_vol})\n"
-                            f"passed={_gate_score}/5\n"
+                    if _gate_score < ENTRY_GATE_MIN_SCORE:
+                        self._log_entry_gate_diagnostics(
+                            _confidence,
+                            adx,
+                            _volume_ratio,
+                            _threshold_conf,
+                            _threshold_adx,
+                            _threshold_vol,
+                            _gate_score,
                         )
                         return {
                             'action': 'hold',
-                            'reason': f'Entry gate score {_gate_score}/5 < 3',
+                            'reason': f'Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}',
                             'filter_stage': 'entry_gate',
                         }
 
