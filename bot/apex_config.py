@@ -69,7 +69,7 @@ SL_FLOOR_PCT = 0.004      # 0.4 % minimum stop distance
 MARKET_FILTER = {
     'adx_threshold': 7,   # ADX must be > 7 — below 10 allows real market movement
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.02,  # Volume must be > 2% of recent average (lowered from 5% to allow more entries)
+    'volume_threshold': 0.01,  # Volume must be > 1% of recent average (lowered from 2% to allow more entries)
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
