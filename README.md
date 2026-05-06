@@ -132,10 +132,11 @@ Unsafe emergency bypasses (require `NIJA_CONFIRM_BYPASS_RISKS=true` and are inte
 - `NIJA_BYPASS_STARTUP_RECONCILIATION=true` or `NIJA_RECONCILIATION_OVERRIDE=true`
 - `NIJA_BYPASS_NONCE_LEASE_STABILITY=true`
 
-⚠️ **Financial risk warning:** using these bypasses can lead to duplicate orders if multiple instances run, incorrect
-position sizing or exits due to stale state, and potential capital loss from trading on unreconciled data. Only use
-them during emergency recovery (e.g., Redis outage, reconciliation deadlock) when you can manually confirm account
-state and guarantee a single running process.
+⚠️ **Financial risk warning:** using these bypasses (including `NIJA_RECONCILIATION_OVERRIDE`, which bypasses without
+`NIJA_CONFIRM_BYPASS_RISKS=true`) can lead to duplicate orders if multiple instances run, incorrect position sizing
+or exits due to stale state, and potential capital loss from trading on unreconciled data. Only use them during
+emergency recovery (e.g., Redis outage, reconciliation deadlock) when you can manually confirm account state and
+guarantee a single running process.
 
 ### Health Endpoints For Operators
 
