@@ -2630,12 +2630,12 @@ class NIJAApexStrategyV71:
             min_required_balance = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
             min_position_pct = max(self.risk_manager.min_position_pct, 0.0)
-            raw_size = account_balance * min_position_pct
-            if raw_size < min_required_balance:
+            min_position_size = account_balance * min_position_pct
+            if min_position_size < min_required_balance:
                 logger.info("   ⛔ ENTRY BLOCKED: insufficient capital for this strategy")
                 logger.info(
-                    "      Balance: $%.2f | Sizing %%: %.2f%% | Raw size: $%.2f | Min notional: $%.2f",
-                    account_balance, min_position_pct * 100, raw_size, min_required_balance,
+                    "      Balance: $%.2f | Sizing %%: %.2f%% | Min size: $%.2f | Min notional: $%.2f",
+                    account_balance, min_position_pct * 100, min_position_size, min_required_balance,
                 )
                 if min_position_pct > 0:
                     min_balance_needed = min_required_balance / min_position_pct
