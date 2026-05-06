@@ -1828,7 +1828,7 @@ class NIJAApexStrategyV71:
             return metadata.get('legacy_score', score)
         return score
 
-    def _get_entry_confidence(self, score: float, metadata: Dict, risk_score: float) -> float:
+    def _get_entry_confidence(self, metadata: Dict, risk_score: float) -> float:
         """
         Normalize confidence for entry decisions (0.0–1.0).
 
@@ -2629,6 +2629,7 @@ class NIJAApexStrategyV71:
             # Kraken requires $10 minimum, others typically allow smaller sizes
             min_required_balance = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
+            # Defensive: guard against invalid negative sizing configs.
             min_position_pct = max(self.risk_manager.min_position_pct, 0.0)
             min_position_size = account_balance * min_position_pct
             if min_position_size < min_required_balance:
@@ -2687,7 +2688,7 @@ class NIJAApexStrategyV71:
                         logger.debug("breakout_long error: %s", _be)
 
                 risk_score = self._get_risk_score(score, metadata)
-                entry_confidence = self._get_entry_confidence(score, metadata, risk_score)
+                entry_confidence = self._get_entry_confidence(metadata, risk_score)
                 if (not long_signal and entry_confidence >= confidence_anchor_threshold
                         and risk_score >= MIN_RISK_SCORE_FOR_ANCHOR):
                     long_signal = True
@@ -3216,7 +3217,7 @@ class NIJAApexStrategyV71:
                         logger.debug("breakout_short error: %s", _be_s)
 
                 risk_score = self._get_risk_score(score, metadata)
-                entry_confidence = self._get_entry_confidence(score, metadata, risk_score)
+                entry_confidence = self._get_entry_confidence(metadata, risk_score)
                 if (not short_signal and entry_confidence >= confidence_anchor_threshold
                         and risk_score >= MIN_RISK_SCORE_FOR_ANCHOR):
                     short_signal = True
