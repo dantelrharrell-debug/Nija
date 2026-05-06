@@ -87,6 +87,18 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 MIN_CONFIDENCE = 0.20  # DEBUG TEMP: relaxed confidence floor to force pipeline visibility
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
+# Short-term fallback thresholds (idle > 10 minutes)
+FALLBACK_IDLE_MINUTES_THRESHOLD = 10.0
+FALLBACK_CONFIDENCE_THRESHOLD = 0.22
+FALLBACK_MIN_ADX = 6.0
+FALLBACK_MIN_VOLUME_THRESHOLD = 0.005
+
+# Confidence anchor floor (legacy score scale)
+MIN_RISK_SCORE_FOR_ANCHOR = 3
+
+# Diagnostics window
+VOLUME_RATIO_WINDOW = 5
+
 # Volume gate for entry confirmation in check_long/short_entry.
 # Widened from 0.6x to 0.4x to unlock quieter markets (where most scalps occur).
 ENTRY_VOLUME_MIN_MULTIPLIER: float = 0.4
@@ -1835,7 +1847,7 @@ class NIJAApexStrategyV71:
         return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
 
     @staticmethod
-    def _get_volume_ratio(df: pd.DataFrame, window: int = 5) -> float:
+    def _get_volume_ratio(df: pd.DataFrame, window: int = VOLUME_RATIO_WINDOW) -> float:
         """Return current volume vs rolling average for diagnostics."""
         if "volume" not in df.columns or len(df) < window:
             return 0.0
@@ -1866,7 +1878,7 @@ class NIJAApexStrategyV71:
         )
 
     @staticmethod
-    def _is_candle_closed(df: pd.DataFrame, current_time: datetime) -> Tuple[bool, str]:
+    def _check_candle_closed(df: pd.DataFrame, current_time: datetime) -> Tuple[bool, str]:
         """Return True when the latest candle has closed."""
         if len(df) < 2 or not hasattr(df.index, "to_pydatetime"):
             return True, "candle timing unavailable"
@@ -2271,7 +2283,7 @@ class NIJAApexStrategyV71:
                 }
 
             current_time = datetime.now()
-            candle_closed, candle_reason = self._is_candle_closed(df, current_time)
+            candle_closed, candle_reason = self._check_candle_closed(df, current_time)
             if not candle_closed:
                 logger.info("   ⏳ %s: %s", symbol, candle_reason)
                 return {
@@ -2317,13 +2329,16 @@ class NIJAApexStrategyV71:
                 _drought_snapshot = self._freq_ctrl.get_drought_relaxation()
                 if _drought_snapshot is not None:
                     no_trade_minutes = _drought_snapshot.secs_since_last_trade / 60.0
-                    if no_trade_minutes > 10:
-                        confidence_anchor_threshold = 0.22
-                        effective_min_adx = min(self.min_adx, 6.0)
-                        effective_volume_threshold = min(self.volume_threshold, 0.005)
+                    if no_trade_minutes > FALLBACK_IDLE_MINUTES_THRESHOLD:
+                        confidence_anchor_threshold = FALLBACK_CONFIDENCE_THRESHOLD
+                        effective_min_adx = min(self.min_adx, FALLBACK_MIN_ADX)
+                        effective_volume_threshold = min(
+                            self.volume_threshold, FALLBACK_MIN_VOLUME_THRESHOLD
+                        )
                         logger.info(
-                            "⏳ %s: 10m fallback active — conf≥%.2f ADX≥%.1f vol≥%.2f%%",
+                            "⏳ %s: %.0fm fallback active — conf≥%.2f ADX≥%.1f vol≥%.2f%%",
                             symbol,
+                            FALLBACK_IDLE_MINUTES_THRESHOLD,
                             confidence_anchor_threshold,
                             effective_min_adx,
                             effective_volume_threshold * 100,
@@ -2614,19 +2629,19 @@ class NIJAApexStrategyV71:
             # Kraken requires $10 minimum, others typically allow smaller sizes
             min_required_balance = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
 
-            sizing_pct = max(self.risk_manager.min_position_pct, 0.0)
-            raw_size = account_balance * sizing_pct
+            min_position_pct = max(self.risk_manager.min_position_pct, 0.0)
+            raw_size = account_balance * min_position_pct
             if raw_size < min_required_balance:
                 logger.info("   ⛔ ENTRY BLOCKED: insufficient capital for this strategy")
                 logger.info(
                     "      Balance: $%.2f | Sizing %%: %.2f%% | Raw size: $%.2f | Min notional: $%.2f",
-                    account_balance, sizing_pct * 100, raw_size, min_required_balance,
+                    account_balance, min_position_pct * 100, raw_size, min_required_balance,
                 )
-                if sizing_pct > 0:
-                    min_balance_needed = min_required_balance / sizing_pct
+                if min_position_pct > 0:
+                    min_balance_needed = min_required_balance / min_position_pct
                     logger.info(
                         "      💡 Need $%.2f+ balance at %.2f%% sizing to trade on %s",
-                        min_balance_needed, sizing_pct * 100, broker_name,
+                        min_balance_needed, min_position_pct * 100, broker_name,
                     )
                 return {
                     'action': 'hold',
@@ -2673,7 +2688,8 @@ class NIJAApexStrategyV71:
 
                 risk_score = self._get_risk_score(score, metadata)
                 entry_confidence = self._get_entry_confidence(score, metadata, risk_score)
-                if not long_signal and entry_confidence >= confidence_anchor_threshold and risk_score >= 3:
+                if (not long_signal and entry_confidence >= confidence_anchor_threshold
+                        and risk_score >= MIN_RISK_SCORE_FOR_ANCHOR):
                     long_signal = True
                     anchor_reason = (
                         f"confidence anchor (conf {entry_confidence:.2f} ≥ "
@@ -3201,7 +3217,8 @@ class NIJAApexStrategyV71:
 
                 risk_score = self._get_risk_score(score, metadata)
                 entry_confidence = self._get_entry_confidence(score, metadata, risk_score)
-                if not short_signal and entry_confidence >= confidence_anchor_threshold and risk_score >= 3:
+                if (not short_signal and entry_confidence >= confidence_anchor_threshold
+                        and risk_score >= MIN_RISK_SCORE_FOR_ANCHOR):
                     short_signal = True
                     anchor_reason = (
                         f"confidence anchor (conf {entry_confidence:.2f} ≥ "
