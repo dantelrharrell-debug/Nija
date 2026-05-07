@@ -233,10 +233,13 @@ MINIMUM_TRADING_BALANCE: float = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0
 # Hard floor for every order regardless of broker-specific minimums.
 MIN_TRADE_USD: float = float(os.getenv("MIN_TRADE_USD", os.getenv("MIN_NOTIONAL_USD", "3.50")))
 MIN_NOTIONAL_USD: float = MIN_TRADE_USD
-# Exchange-level hard floor; never submit orders below this USD notional.
+# Exchange-level hard floor; Coinbase's $1.00 minimum anchors this absolute floor
+# so no broker order is ever submitted below a known exchange minimum.
 EXCHANGE_HARD_FLOOR_USD: float = 1.0
-# Synthetic order ids emitted by internal pipelines (no broker order to confirm).
+# Synthetic order ids emitted by ExecutionPipeline (no broker order to confirm).
+# These are internal/simulated ids that do not map to a real exchange order_id.
 SYNTHETIC_ORDER_IDS: Set[str] = {"pipeline"}
+LARGE_QUANTITY_RATIO_THRESHOLD: float = 1e6
 
 # Fee-dominated micro-trade guardrails.
 TAKER_FEE_RATE: float = float(os.getenv("TAKER_FEE_RATE", "0.0026"))
@@ -1200,8 +1203,8 @@ class ExecutionEngine:
         try:
             if min_value is not None:
                 return max(EXCHANGE_HARD_FLOOR_USD, float(min_value))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Exchange floor conversion failed: %s", exc)
         return EXCHANGE_HARD_FLOOR_USD
 
     def _extract_order_failure_details(
@@ -1710,7 +1713,9 @@ class ExecutionEngine:
             # In FORCE_TRADE_MODE (micro test mode), bypass this gate.
             if self.broker_client is not None and not FORCE_TRADE_MODE:
                 _scalar_balance = _balance_total if _balance_total is not None else _balance_available
-                if _scalar_balance is not None and _scalar_balance <= 0:
+                if _scalar_balance is None:
+                    pass
+                elif _scalar_balance <= 0:
                     logger.warning(
                         "⛔ FIX1 BALANCE GATE: Skipping %s — zero or negative balance ($%.2f)",
                         symbol,
@@ -2442,7 +2447,7 @@ class ExecutionEngine:
                 if result:
                     # position_size is USD notional; dividing by entry_price yields base-asset quantity.
                     _expected_quantity = position_size / entry_price if entry_price > 0 else 0.0
-                    if entry_price > 0 and _expected_quantity / max(position_size, 1e-9) > 1e6:
+                    if entry_price > 0 and _expected_quantity / max(position_size, 1e-9) > LARGE_QUANTITY_RATIO_THRESHOLD:
                         logger.debug(
                             "Large expected quantity computed for %s: %.6g (entry_price=%.8f)",
                             symbol,
