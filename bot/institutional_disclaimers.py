@@ -146,13 +146,13 @@ def get_institutional_logger(name: str) -> InstitutionalLogger:
 
 
 def print_validation_banner():
-    """Print the validation banner to console"""
+    """Log the validation banner"""
     if _should_emit_disclosure():
         _get_compliance_logger().info(VALIDATION_DISCLAIMER)
 
 
 def print_all_disclaimers():
-    """Print all disclaimers to console"""
+    """Log all disclaimers"""
     if _should_emit_disclosure():
         logger = _get_compliance_logger()
         logger.info(VALIDATION_DISCLAIMER)
