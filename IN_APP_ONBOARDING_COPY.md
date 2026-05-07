@@ -18,6 +18,8 @@ This document provides **copy-paste ready** text for all onboarding screens in t
 
 **For Developers**: Use exact wording. Do not modify without legal review.
 
+**Canonical Mobile API base path**: `/api/mobile`
+
 ---
 
 ## 🎯 Onboarding Flow Overview
@@ -168,7 +170,7 @@ Master algorithmic trading with our simulated environment
 ```
 💰 $10,000 Simulated Balance
 
-Practice with virtual money. Learn without risk.
+Practice with virtual money. Learn with simulated trades.
 ```
 
 #### Card 2: Real Market Data
@@ -182,7 +184,7 @@ Trade on live market conditions with simulated execution.
 ```
 📈 Track Your Progress
 
-Monitor win rate, risk control, and profitability.
+Monitor performance trends, risk control, and profitability.
 ```
 
 #### Card 4: Upgrade When Ready
@@ -336,7 +338,7 @@ and can modify or disable at any time.
 
 **Screen Type**: Modal dialog (blocking)  
 **Trigger**: User clicks "Upgrade to Live Trading" AND meets graduation criteria  
-**Requirements**: 10+ trades, 50%+ win rate, positive P&L  
+**Requirements**: 10+ trades, 50%+ positive outcome rate, positive P&L  
 **Cannot Proceed Without**: All checkboxes checked
 
 ### Title (with Celebration Icon)
@@ -352,7 +354,7 @@ You've demonstrated consistent profitability in education mode.
 ### Your Stats (Card Display)
 ```
 ┌──────────────┬──────────────┬──────────────┐
-│  Win Rate    │ Total Trades │  Total P&L   │
+│ Outcome Rate │ Total Trades │  Total P&L   │
 │              │              │ (Simulated)  │
 │    58%       │     15       │  +$125.50    │
 └──────────────┴──────────────┴──────────────┘
@@ -377,18 +379,18 @@ acknowledge and accept the following:
 
 ### Required Checkboxes (All Must Be Checked)
 ```
-□ I understand that trading cryptocurrencies and other 
-  financial instruments involves substantial risk of loss.
+□ Cryptocurrency trading involves substantial risk of loss.
 
-□ I understand that NIJA is a tool for executing MY OWN 
-  trading strategy, and I am solely responsible for all 
-  trading decisions.
+□ NIJA is a software trading tool and does not provide 
+  investment advice.
 
-□ I understand that past performance does not guarantee 
-  future results and that I may lose all invested capital.
+□ I am solely responsible for my trading decisions and 
+  risk settings.
 
-□ I understand that NIJA does not provide financial advice, 
-  investment recommendations, or guaranteed returns.
+□ No profit or performance guarantees are provided.
+
+□ Accounts execute independently without copy trading or 
+  signal sharing.
 
 □ I understand that I am responsible for:
   • Monitoring my account
@@ -859,7 +861,7 @@ App Version: 1.0.0
 ### Short Version (Always Visible)
 ```
 ⚠️ Trading involves risk of loss. Past performance does 
-   not guarantee future results. You are solely responsible 
+   not indicate future results. You are solely responsible 
    for your trading decisions.
 ```
 
@@ -873,8 +875,8 @@ for all investors. You should carefully consider whether
 trading is appropriate for your financial situation.
 
 NIJA is a software tool for executing YOUR trading strategy. 
-NIJA does not provide investment advice, financial planning, 
-or guaranteed returns. You are solely responsible for all 
+NIJA does not provide investment advice or financial planning. 
+No profit or performance guarantees are provided. You are solely responsible for all 
 trading decisions and outcomes.
 
 Past performance is not indicative of future results. 

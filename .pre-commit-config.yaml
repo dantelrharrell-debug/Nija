@@ -170,9 +170,9 @@ repos:
         files: \.py$
         stages: [pre-commit]
 
-      - id: risk-freeze-check
+      - id: risk_freeze_check
         name: 🔒 RISK FREEZE - Check for unauthorized risk parameter changes
-        entry: python .pre-commit-hooks/risk-freeze-check.py
+        entry: python .pre-commit-hooks/risk_freeze_check.py
         language: system
         pass_filenames: false
         files: \.py$|\.json$

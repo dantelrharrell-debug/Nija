@@ -2,6 +2,7 @@
   "name": "NIJA AI Trading Platform",
   "short_name": "NIJA",
   "description": "Autonomous cryptocurrency trading with AI-powered strategies",
+  "api_base_path": "/api/mobile",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",

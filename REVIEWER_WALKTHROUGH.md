@@ -75,7 +75,7 @@ Options:
 - ✅ No errors or crashes
 - ✅ Clear, compliant language
 - ✅ Prominent risk disclosures
-- ✅ No promises of guaranteed returns
+- ✅ No promises of return assurances
 - ✅ User agency emphasized
 
 ---
@@ -171,7 +171,7 @@ acknowledge and accept the following:
   future results and that I may lose all invested capital.
 
 □ I understand that NIJA does not provide financial advice, 
-  investment recommendations, or guaranteed returns.
+  investment recommendations, or promised returns.
 
 □ I understand that I am responsible for:
   • Monitoring my account
@@ -190,7 +190,7 @@ acknowledge and accept the following:
 - ✅ Cannot proceed without checking all
 - ✅ Clear, specific risk statements
 - ✅ "Sole responsibility" emphasized
-- ✅ No guaranteed returns mentioned
+- ✅ No return promises mentioned
 - ✅ Button disabled until all checked
 - ✅ "Cancel" option prominent
 
@@ -353,12 +353,12 @@ Period: Last 30 Days (Simulation)
 ### 9. Forbidden Language Check
 
 **What Should NEVER Appear:**
-- ❌ "Guaranteed profits"
-- ❌ "Passive income"
+- ❌ "Profit promises"
+- ❌ "Supplemental income"
 - ❌ "AI trades for you"
 - ❌ "Set and forget"
-- ❌ "100% win rate"
-- ❌ "Risk-free"
+- ❌ "100% success rate"
+- ❌ "No real-money execution"
 - ❌ "Get rich"
 
 **What SHOULD Appear:**
@@ -448,7 +448,7 @@ NIJA meets all Apple App Store Review Guidelines for financial applications:
 
 **Guideline 3.1.1 - Business:** ✅  
 - User-directed tool (not investment service)
-- No guaranteed returns promised
+- No return promises
 - Clear risk disclosure
 - User maintains control
 

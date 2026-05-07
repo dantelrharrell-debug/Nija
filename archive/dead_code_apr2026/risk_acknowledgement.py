@@ -71,7 +71,7 @@ class RiskAcknowledgementManager:
         ),
         "no_financial_advice": (
             "I understand that NIJA does not provide financial advice, investment "
-            "recommendations, or guaranteed returns."
+            "recommendations, or promised returns."
         ),
         "monitoring_required": (
             "I understand that I am responsible for monitoring my account, managing risk, "

@@ -29,7 +29,7 @@
 │                                                               │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ 📈  Track Your Progress                               │   │
-│  │     Monitor win rate, risk control, and              │   │
+│  │     Monitor performance trends, risk control, and    │   │
 │  │     profitability.                                    │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                               │
@@ -117,7 +117,7 @@
 │                                                         Basic │
 │                                                               │
 │  ┌──────────────┬──────────────┬──────────────┬─────────┐   │
-│  │ Total P&L    │  Win Rate    │ Total Trades │ Active  │   │
+│  │ Total P&L    │ Outcome Rate │ Total Trades │ Active  │   │
 │  │ (Simulated)  │              │              │ Positions│   │
 │  │              │              │              │         │   │
 │  │  +$125.50    │    58%       │     15       │    2    │   │
@@ -153,7 +153,7 @@
 ├─────────────────────────────────────────────────────────────┤
 │                                                               │
 │  ┌──────────────┬──────────────┬──────────────┐             │
-│  │  Win Rate    │ Total Trades │  Total P&L   │             │
+│  │ Outcome Rate │ Total Trades │  Total P&L   │             │
 │  │              │              │              │             │
 │  │    58%       │     15       │  +$125.50    │             │
 │  └──────────────┴──────────────┴──────────────┘             │
@@ -163,8 +163,23 @@
 │  money.                                                       │
 │                                                               │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │ ☑️ I understand that live trading involves real       │   │
-│  │    financial risk                                     │   │
+│  │ ☑️ Cryptocurrency trading involves substantial risk  │   │
+│  │    of loss                                            │   │
+│  └──────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ ☑️ NIJA is a software trading tool and does not       │   │
+│  │    provide investment advice                          │   │
+│  └──────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ ☑️ I am solely responsible for my trading decisions  │   │
+│  │    and risk settings                                  │   │
+│  └──────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ ☑️ No profit or performance guarantees are provided  │   │
+│  └──────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ ☑️ Accounts execute independently without copy        │   │
+│  │    trading or signal sharing                          │   │
 │  └──────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ ☑️ I can afford to lose the capital I'm trading with  │   │
@@ -214,7 +229,7 @@
 4. **Progress Tracking** ✅
    - Visual progress bar
    - Milestone checklist
-   - Stats (win rate, trades, P&L)
+   - Stats (outcome rate, trades, P&L)
    - Ready indicator for upgrade
 
 5. **Explicit Consent** ✅

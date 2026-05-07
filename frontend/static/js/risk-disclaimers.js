@@ -26,7 +26,7 @@ const RISK_DISCLAIMERS = {
                     <ul>
                         <li>Trading involves <strong>substantial risk of loss</strong></li>
                         <li><strong>YOU CAN LOSE MONEY</strong></li>
-                        <li><strong>NO GUARANTEES</strong> of profitability or performance</li>
+                        <li><strong>No profit or performance promises</strong> are provided</li>
                         <li>Users are <strong>solely responsible</strong> for trading outcomes</li>
                     </ul>
                 </div>
@@ -74,7 +74,7 @@ const RISK_DISCLAIMERS = {
             <ul>
                 <li>✅ $10,000 simulated balance (not real money)</li>
                 <li>✅ Real market data with simulated execution</li>
-                <li>✅ Track your progress and learn risk-free</li>
+                <li>✅ Track your progress and learn with simulated trades</li>
                 <li>✅ Upgrade to live trading when you're ready</li>
             </ul>
             <p class="education-note">
@@ -95,12 +95,16 @@ const REQUIRED_CONSENTS = [
         text: 'I understand that cryptocurrency trading involves substantial risk of loss, and I may lose some or all of my invested capital.'
     },
     {
+        id: 'consent-no-advice',
+        text: 'I understand that NIJA is a software trading tool and does not provide investment advice.'
+    },
+    {
         id: 'consent-no-guarantee',
-        text: 'I understand that NIJA makes NO GUARANTEES of profit or performance, and past results do not indicate future returns.'
+        text: 'I understand that NIJA provides no profit or performance promises, and past results do not indicate future returns.'
     },
     {
         id: 'consent-responsibility',
-        text: 'I understand that I am solely responsible for my trading decisions and that NIJA is a tool I control.'
+        text: 'I understand that I am solely responsible for my trading decisions and risk settings and that NIJA is a tool I control.'
     },
     {
         id: 'consent-independent',

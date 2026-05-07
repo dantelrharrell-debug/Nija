@@ -313,6 +313,6 @@ See code documentation in:
 
 - [ ] Machine learning for regime prediction
 - [ ] Multi-timeframe volatility analysis
-- [ ] Adaptive risk-free rate based on market conditions
+- [ ] Adaptive lower-risk rate based on market conditions
 - [ ] Portfolio-level capital allocation
 - [ ] Cross-asset correlation adjustments

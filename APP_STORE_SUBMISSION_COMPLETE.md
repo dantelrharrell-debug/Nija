@@ -248,7 +248,7 @@ Select the appropriate ratings for each category:
 - [x] App includes prominent risk warnings
 - [x] Terms of Service and Privacy Policy linked
 - [x] Age gate (17+) for financial content
-- [x] No guaranteed returns promised
+- [x] No return promises
 - [x] Clear subscription terms and pricing
 - [x] Restore purchases functionality
 - [x] Cancel subscription instructions

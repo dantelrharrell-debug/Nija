@@ -385,7 +385,7 @@ send_to_investors(filepath)
 dashboard.snapshot_interval = timedelta(minutes=30)  # 30 min snapshots
 ```
 
-### Risk-Free Rate
+### Lower-Risk Rate
 ```python
 # Adjust for Sharpe calculation
 metrics_calculator = dashboard.metrics_calculator

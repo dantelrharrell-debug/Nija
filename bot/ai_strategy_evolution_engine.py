@@ -179,7 +179,7 @@ class StrategyGenome:
         return float(np.asarray(self.pnl_history).std(ddof=1))
 
     def sharpe(self) -> float:
-        """Return / Volatility (Sharpe ratio without risk-free rate)."""
+        """Return / Volatility (Sharpe ratio without lower-risk rate)."""
         vol = self.volatility()
         if vol < 1e-9 or len(self.pnl_history) < 5:
             return 0.0
@@ -255,7 +255,7 @@ class StrategyGenome:
         """Risk-adjusted fitness: fitness = return / volatility.
 
         Uses the mean trade return divided by the standard deviation of
-        returns (a Sharpe-like ratio without a risk-free rate deduction).
+        returns (a Sharpe-like ratio without a lower-risk rate deduction).
         The raw ratio is normalised to [0, 1] via:
             fitness = clamp((rar + RISK_ADJ_OFFSET) / RISK_ADJ_SCALE, 0, 1)
         which maps the typical range [-1, 3] onto [0, 1].

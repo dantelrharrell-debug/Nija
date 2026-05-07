@@ -54,6 +54,8 @@ Production: https://your-nija-deployment.railway.app
 Development: http://localhost:8000
 ```
 
+**Canonical Mobile API base path**: `/api/mobile`
+
 ### Authentication
 
 All API requests (except `/` and `/health`) require JWT authentication.

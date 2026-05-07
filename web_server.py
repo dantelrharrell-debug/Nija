@@ -10,7 +10,7 @@ from flask import Flask, send_from_directory
 from api_server import app as api_app
 
 # Import mobile API blueprint
-from mobile_api import mobile_api
+from mobile_api import mobile_api, MOBILE_API_BASE
 
 # Import safety status API blueprint
 from safety_status_api import safety_api
@@ -46,7 +46,7 @@ if __name__ == '__main__':
     print(f"Starting NIJA Platform on port {port}")
     print(f"Frontend: http://localhost:{port}/")
     print(f"API: http://localhost:{port}/api/")
-    print(f"Mobile API: http://localhost:{port}/api/mobile/")
+    print(f"Mobile API: http://localhost:{port}{MOBILE_API_BASE}/")
     print(f"Safety API: http://localhost:{port}/api/safety/")
     print(f"")
     print(f"App Store Readiness: All 6 GO CONDITIONS implemented ✅")

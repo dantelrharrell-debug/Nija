@@ -214,7 +214,7 @@ Let's create your account to start learning automated trading.
 
 [Create Account]
 
-You'll start with $10,000 in virtual funds to practice risk-free.
+You'll start with $10,000 in virtual funds to practice with simulated trading.
 ```
 
 **Step 2: Email Verification** (1 minute)
@@ -1116,4 +1116,3 @@ This graduation system addresses key regulatory requirements:
 **Last Updated**: January 31, 2026  
 **Version**: 1.0  
 **Owner**: Product & Compliance Teams
-

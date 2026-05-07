@@ -16,7 +16,7 @@ import logging
 from typing import Optional, Dict, List
 from flask import Flask, request, jsonify, Blueprint
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 
@@ -28,7 +28,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Create mobile API blueprint
-mobile_api = Blueprint('mobile_api', __name__, url_prefix='/api/mobile')
+MOBILE_API_BASE = "/api/mobile"
+mobile_api = Blueprint('mobile_api', __name__, url_prefix=MOBILE_API_BASE)
 
 
 # WARNING: In-memory storage for push tokens - NOT SUITABLE FOR PRODUCTION
@@ -41,6 +42,17 @@ push_tokens = {}
 # ========================================
 # Mobile Device Management
 # ========================================
+
+@mobile_api.route('/status', methods=['GET'])
+def get_mobile_status():
+    """
+    Lightweight status endpoint for the mobile API.
+    """
+    return jsonify({
+        'status': 'ok',
+        'service': 'mobile_api',
+        'timestamp': datetime.now(timezone.utc).isoformat()
+    })
 
 @mobile_api.route('/device/register', methods=['POST'])
 # TODO: Add authentication in production - uncomment next line

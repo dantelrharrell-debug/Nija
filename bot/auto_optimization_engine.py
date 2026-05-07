@@ -327,7 +327,7 @@ class AutoOptimizationEngine:
             mean_return = np.mean(returns)
             std_return = np.std(returns)
             
-            # Sharpe ratio (assuming 0% risk-free rate for simplicity)
+            # Sharpe ratio (assuming 0% lower-risk rate for simplicity)
             self.current_metrics.sharpe_ratio = mean_return / std_return if std_return > 0 else 0.0
             
             # Sortino ratio (downside deviation)

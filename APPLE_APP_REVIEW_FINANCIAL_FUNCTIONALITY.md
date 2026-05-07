@@ -121,7 +121,7 @@ Users are clearly informed that their results WILL differ from other users becau
 
 - ✅ Substantial risk of loss
 - ✅ Potential to lose all invested capital
-- ✅ No guaranteed profits
+- ✅ No profit promises
 - ✅ Past performance does not predict future results
 - ✅ Cryptocurrency volatility
 - ✅ Market risks
@@ -150,7 +150,7 @@ Users are clearly informed that their results WILL differ from other users becau
 - Users acknowledge they are responsible for trading decisions
 - Users acknowledge NIJA is software, not advice
 - Users acknowledge substantial risk of loss
-- Users acknowledge no guaranteed returns
+- Users acknowledge no return promises
 - Users acknowledge independent trading model
 - Users must be 18+ (21+ where required)
 - Users must verify cryptocurrency trading is legal in their jurisdiction
@@ -303,7 +303,7 @@ Users are clearly informed that their results WILL differ from other users becau
 ### Apple Financial App Requirements:
 
 - [x] **Clear disclosure of risks** - ✅ Multiple disclaimers throughout app
-- [x] **No guaranteed returns** - ✅ Explicitly stated in all disclaimers
+- [x] **No return promises** - ✅ Explicitly stated in all disclaimers
 - [x] **Transparent operation** - ✅ Independent trading model clearly explained
 - [x] **User maintains control** - ✅ Users control their exchange accounts
 - [x] **Age restrictions** - ✅ 17+ rating, 18+/21+ age gate

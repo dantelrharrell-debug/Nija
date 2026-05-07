@@ -197,7 +197,7 @@ class PreSubmissionChecker:
             "guarantee profit",
             "always profitable",
             "never lose",
-            "risk-free",
+            "simulated",
             "100% win rate"
         ]
         

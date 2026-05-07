@@ -18,7 +18,7 @@ Supported Exchanges:
 - Binance
 - OKX
 
-This can generate risk-free profits from price inefficiencies.
+This can generate lower-risk profit opportunities from price inefficiencies.
 
 Author: NIJA Trading Systems
 Version: 1.0 (Path 3)
@@ -145,7 +145,7 @@ class CrossExchangeArbitrageEngine:
     2. Detect price discrepancies
     3. Calculate profitability after fees
     4. Execute simultaneous buy/sell orders
-    5. Capture risk-free profit
+    5. Capture lower-risk profit opportunities
     
     Example:
         BTC-USD on Coinbase: $50,000

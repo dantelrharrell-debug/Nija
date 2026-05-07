@@ -266,7 +266,7 @@ async function showUpgradeOption() {
     // Populate stats
     if (onboardingState.progress) {
         const p = onboardingState.progress;
-        document.getElementById('upgrade-winrate').textContent = `${p.win_rate}%`;
+        document.getElementById('upgrade-outcome-rate').textContent = `${p.win_rate}%`;
         document.getElementById('upgrade-trades').textContent = p.total_trades;
         document.getElementById('upgrade-pnl').textContent = `$${p.total_pnl.toFixed(2)}`;
     }
@@ -281,6 +281,10 @@ async function showUpgradeOption() {
 function setupConsentCheckboxes() {
     const checkboxes = [
         'consent-understand-risk',
+        'consent-no-advice',
+        'consent-user-responsibility',
+        'consent-no-guarantees',
+        'consent-independent-execution',
         'consent-can-afford',
         'consent-broker-direct',
         'consent-in-control'

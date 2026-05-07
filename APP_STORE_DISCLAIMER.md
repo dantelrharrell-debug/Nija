@@ -42,8 +42,8 @@ advice, recommendations, or financial planning services. System optimizations
 are technical in nature and do not imply improved financial outcomes. You are 
 solely responsible for your trading decisions.
 
-NO GUARANTEED RETURNS:
-There are NO guaranteed profits. Any representation of potential earnings or 
+NO RETURN PROMISES:
+There are no profit promises. Any representation of potential earnings or 
 returns is purely hypothetical and not a guarantee of actual performance. 
 Trading results vary widely and depend on market conditions, account size, 
 risk settings, and timing.
@@ -99,7 +99,7 @@ RISKS:
 • You can lose money, potentially all invested capital
 • Cryptocurrency markets are highly volatile
 • Past performance ≠ future results
-• No guaranteed profits
+• No profit promises
 
 YOUR RESPONSIBILITY:
 • Monitor your account regularly
@@ -252,7 +252,7 @@ loss include but are not limited to:
 • Liquidity Risk: You may not be able to exit positions quickly
 • Regulatory Risk: Laws may change affecting cryptocurrency trading
 
-NO GUARANTEED RETURNS: There are no guaranteed profits. Any hypothetical 
+NO RETURN PROMISES: There are no profit promises. Any hypothetical 
 performance results or backtests do not guarantee future performance. 
 Past performance is not indicative of future results.
 

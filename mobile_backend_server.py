@@ -29,7 +29,7 @@ from api_server import app as base_app, require_auth
 from unified_mobile_api import register_unified_mobile_api
 from iap_handler import register_iap_api
 from education_system import register_education_api
-from mobile_api import mobile_api
+from mobile_api import mobile_api, MOBILE_API_BASE
 
 # Configure logging
 logging.basicConfig(
@@ -101,7 +101,7 @@ def index():
         'status': '/status',
         'api_versions': {
             'v1': '/api/v1',
-            'mobile': '/api/mobile',
+            'mobile': MOBILE_API_BASE,
             'iap': '/api/iap',
             'education': '/api/education'
         },
@@ -242,7 +242,7 @@ if __name__ == '__main__':
     logger.info("  Status: /status")
     logger.info("\nAPI Versions:")
     logger.info("  v1: /api/v1/*")
-    logger.info("  Mobile: /api/mobile/*")
+    logger.info("  Mobile: %s/*", MOBILE_API_BASE)
     logger.info("  IAP: /api/iap/*")
     logger.info("  Education: /api/education/*")
     logger.info("\nWebSocket:")

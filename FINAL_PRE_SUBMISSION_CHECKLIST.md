@@ -17,7 +17,7 @@ These items will cause **instant rejection** if missed. Check these FIRST.
 |------|-------------|--------|
 | **Risk disclaimer shown on FIRST LAUNCH before any functionality** | Open fresh install → See disclaimer before dashboard | ⏳ |
 | **User MUST acknowledge "I can lose money" before proceeding** | Cannot skip disclaimer, must check box | ⏳ |
-| **NO claims of guaranteed profits anywhere** | Search codebase for: "guaranteed", "guarantee profit", "always profitable" | ⏳ |
+| **NO claims of profit promises anywhere** | Search codebase for: "profit promises", "profit guarantee", "always profitable" | ⏳ |
 | **NO claims of "best" or "#1" without proof** | Search app descriptions, screenshots, code for unsubstantiated claims | ⏳ |
 | **Education mode is DEFAULT on first launch** | Fresh install → Lands in education mode, NOT live trading | ⏳ |
 | **"Not Real Money" indicator ALWAYS visible in education mode** | Orange banner stays visible while scrolling | ⏳ |

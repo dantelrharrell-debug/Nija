@@ -297,7 +297,7 @@ To test:
 - "guaranteed profit"
 - "always profitable"
 - "never lose"
-- "risk-free"
+- "simulated"
 - "100% win rate"
 
 ### Risk #4: Insufficient Privacy Policy

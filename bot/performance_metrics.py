@@ -215,7 +215,7 @@ class PerformanceMetricsCalculator:
         Calculate Sharpe ratio
 
         Args:
-            risk_free_rate: Annual risk-free rate (default: 2%)
+            risk_free_rate: Annual lower-risk rate (default: 2%)
 
         Returns:
             Sharpe ratio (annualized)
@@ -248,7 +248,7 @@ class PerformanceMetricsCalculator:
         Calculate Sortino ratio (like Sharpe but only penalizes downside volatility)
 
         Args:
-            risk_free_rate: Annual risk-free rate (default: 2%)
+            risk_free_rate: Annual lower-risk rate (default: 2%)
 
         Returns:
             Sortino ratio (annualized)

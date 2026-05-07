@@ -60,7 +60,7 @@ def demo_new_user_onboarding():
     print(f"   Status: {graduation.progress.status.value}")
     print(f"   Paper Trading Start: {graduation.progress.paper_trading_start_date[:10]}")
     print(f"\nNew users automatically start in PAPER TRADING mode.")
-    print("This ensures they learn the platform risk-free before using real money.")
+    print("This ensures they learn the platform with simulated trading before using real money.")
     
     return graduation
 

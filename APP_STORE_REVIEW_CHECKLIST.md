@@ -69,7 +69,7 @@
 - [x] **Financial App Requirements**
   - Clear risk warnings: ✅
   - Independent trading model explained: ✅
-  - No guaranteed returns claims: ✅
+  - No return promises claims: ✅
   - User control emphasized: ✅
 
 ---

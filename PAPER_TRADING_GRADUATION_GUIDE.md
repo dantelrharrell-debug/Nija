@@ -145,7 +145,7 @@ Profitability Component:
 
 **Key Messages:**
 - "Start with $10,000 virtual money"
-- "Learn risk-free before using real capital"
+- "Learn with paper trading before using real capital"
 - "Complete challenges to unlock live trading"
 
 ### Phase 2: Paper Trading (Days 1-30+)

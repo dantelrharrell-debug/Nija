@@ -627,7 +627,7 @@ kpi_tracker = KPITracker(
     initial_capital=50000.0,
     data_dir="./custom/kpi",
     history_size=2000,
-    risk_free_rate=0.03  # 3% risk-free rate
+    risk_free_rate=0.03  # 3% lower-risk rate
 )
 
 # Custom performance tracker

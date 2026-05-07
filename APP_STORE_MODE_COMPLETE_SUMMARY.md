@@ -332,7 +332,7 @@ Execute (only if ALL layers pass)
 
 ✅ **User Control**
 - Users maintain full account control
-- No guaranteed returns
+- No return promises
 - App doesn't handle user funds
 
 ---

@@ -180,6 +180,8 @@ Create `test_websocket.html`:
 ### React Native (.env)
 ```
 API_BASE_URL=https://your-api-url
+
+Mobile API base path: `/api/mobile`
 ```
 
 ---

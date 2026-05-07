@@ -588,7 +588,7 @@ def get_kpi_tracker(initial_capital: float = 1000.0, reset: bool = False) -> KPI
             initial_capital: Starting capital amount
             data_dir: Directory to store KPI data
             history_size: Number of snapshots to keep in memory
-            risk_free_rate: Annual risk-free rate for Sharpe calculation (default: 2%)
+            risk_free_rate: Annual lower-risk rate for Sharpe calculation (default: 2%)
         """
         self.initial_capital = initial_capital
         self.data_dir = Path(data_dir)

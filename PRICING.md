@@ -250,7 +250,7 @@ Not sure which tier is right for you? Contact us:
 - **Discord:** Join our community at discord.gg/nija-trading
 
 **We recommend:**
-- **Free Tier:** If you're new to trading or want to test NIJA risk-free
+- **Free Tier:** If you're new to trading or want to test NIJA with paper trading
 - **Basic Tier:** If you're ready to trade live and need core features
 - **Pro Tier:** If you want advanced AI features and API access (most popular)
 - **Enterprise Tier:** If you need white-label or custom solutions
@@ -259,7 +259,7 @@ Not sure which tier is right for you? Contact us:
 
 ## ⚠️ Important Disclaimers
 
-**No Guaranteed Returns:**
+**No Return Promises:**
 - NIJA is a trading tool, not an investment product
 - Past performance does not guarantee future results
 - Cryptocurrency trading involves substantial risk of loss

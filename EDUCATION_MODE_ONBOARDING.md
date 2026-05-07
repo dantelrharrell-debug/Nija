@@ -463,7 +463,7 @@ Settings → Trading Mode → Switch to Education Mode
 ```
 
 **Benefits of Reverting**:
-- Test new strategies risk-free
+- Test new strategies with simulated trading
 - Practice without real money
 - Refresh skills
 - No pressure

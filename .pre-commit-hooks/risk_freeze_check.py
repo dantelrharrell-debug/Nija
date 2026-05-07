@@ -5,7 +5,7 @@ Pre-commit hook to detect RISK FREEZE violations
 This hook checks for changes to risk configuration files and ensures
 that proper versioning and approval is in place.
 
-Install: ln -s ../../.pre-commit-hooks/risk-freeze-check.py .git/hooks/pre-commit
+Install: ln -s ../../.pre-commit-hooks/risk_freeze_check.py .git/hooks/pre-commit
 Or use with pre-commit framework.
 """
 

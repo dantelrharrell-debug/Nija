@@ -424,7 +424,7 @@ This comprehensive checklist ensures NIJA is fully prepared for submission to bo
 
 - [ ] **Financial Services Policy**
   - [ ] Clear risk disclaimers
-  - [ ] No guaranteed returns
+  - [ ] No return promises
   - [ ] Not a gambling app
   - [ ] Not facilitating loans
   - [ ] Transparent about fees

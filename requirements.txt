@@ -27,7 +27,7 @@ defusedxml==0.7.1
 ecdsa==0.19.1
 executing==2.2.1
 fastjsonschema==2.21.2
-Flask==2.3.3
+flask>=3.0,<4.0
 Flask-CORS==4.0.0
 Flask-Limiter==4.1.1
 # FastAPI stack (recommended for production)

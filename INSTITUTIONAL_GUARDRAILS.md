@@ -870,11 +870,11 @@ class MarketingCompliance:
     """Ensure all marketing is compliant"""
     
     PROHIBITED_CLAIMS = [
-        "guaranteed profits",
-        "risk-free",
+        "profit promises",
+        "no real-money execution",
         "get rich quick",
         "never lose",
-        "100% win rate",
+        "100% success rate",
         "beats the market every time"
     ]
     
@@ -960,4 +960,3 @@ class MarketingCompliance:
 **Last Updated**: January 31, 2026  
 **Version**: 1.0  
 **Owner**: Risk & Compliance Teams
-

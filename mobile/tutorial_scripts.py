@@ -596,7 +596,7 @@ def create_tutorial_library() -> List[Tutorial]:
                     "• 1.0-2.0: Good\n"
                     "• 2.0-3.0: Very good\n"
                     "• 3.0+: Excellent\n\n"
-                    "Formula: (Return - Risk-Free Rate) / Volatility\n\n"
+                    "Formula: (Return - Lower-Risk Rate) / Volatility\n\n"
                     "It's better to have consistent small wins (higher Sharpe) than "
                     "volatile big swings."
                 ),
