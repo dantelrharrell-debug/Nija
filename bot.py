@@ -438,7 +438,19 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     - Kraken startup FSM must report CONNECTED when Kraken is configured.
     - At least one connected broker must exist.
     - At least one execution-eligible broker must exist.
+
+    FORCE_TRADE bypass: when FORCE_TRADE=true (or FORCE_TRADE_MODE=true), all
+    readiness gates are treated as satisfied so the bot enters the trading loop
+    immediately without waiting for broker/risk/strategy/execution gates.
     """
+    _force_trade = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
+    if _force_trade:
+        logger.warning(
+            "⚡ FORCE_TRADE enabled — bypassing strict readiness gates; "
+            "bot will enter trading loop immediately regardless of gate state"
+        )
+        return True, True, True, True, True, True
+
     strategy = state_snapshot.get("strategy")
 
     strategy_ready = strategy is not None and _strategy_ready_event.is_set()
@@ -542,9 +554,16 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
 
 
 def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
-    """Fail closed unless the startup readiness contract is fully satisfied."""
+    """Fail closed unless the startup readiness contract is fully satisfied.
+
+    When FORCE_TRADE=true (or FORCE_TRADE_MODE=true), the strict gate check is
+    skipped and all readiness values are returned as True so the caller proceeds
+    directly to the trading loop.
+    """
     system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
         _compute_system_ready(state_snapshot)
+    # _compute_system_ready already returns all-True when FORCE_TRADE is set,
+    # so the check below is naturally satisfied in that case.
     if not all([broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready]):
         raise RuntimeError(
             f"BLOCKED: System not fully initialized ({context}) "
@@ -6487,8 +6506,19 @@ def main():
     #   risk_ready       — risk / execution engine present on strategy
     #   capital_ready    — BootstrapFSM has reached CAPITAL_READY or beyond
     #   execution_ready  — strategy.execution_engine is not None
+    #
+    # FORCE_TRADE bypass: when FORCE_TRADE=true (or FORCE_TRADE_MODE=true) the
+    # barrier is skipped entirely and the bot proceeds directly to the trading
+    # loop.  _compute_system_ready() returns all-True in that case so the loop
+    # below exits on the very first iteration.
     # ─────────────────────────────────────────────────────────────────────────
     logger.critical("🧭 BEFORE system_ready wait")
+    _force_trade_active = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE active — skipping strict system_ready barrier; "
+            "proceeding directly to trading loop"
+        )
     strategy = None
     _last_system_ready_log = 0.0
     while True:
