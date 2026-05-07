@@ -2568,6 +2568,7 @@ def _bfsm_transition(state, reason: str = "") -> None:
 _execution_layer_initialized = False
 _execution_layer_init_lock = threading.Lock()
 _balance_polling_disabled = False
+_balance_polling_disabled_lock = threading.Lock()
 
 
 def run_bootstrap() -> None:
@@ -5227,14 +5228,19 @@ def _run_bot_startup_and_trading():
                 except Exception as _bms_err:
                     logger.warning("[Bootstrap] BOOTSTRAP_START refresh error: %s", _bms_err)
             log_balance_polling_skip = False
-            skip_balance_polling_loop = _balance_polling_disabled
+            with _balance_polling_disabled_lock:
+                skip_balance_polling_loop = _balance_polling_disabled
             if not skip_balance_polling_loop and _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
                 try:
                     _bootstrap_fsm = _get_bootstrap_fsm()
                     if not _bootstrap_fsm.balance_polling_enabled:
-                        _balance_polling_disabled = True
-                        skip_balance_polling_loop = True
-                        log_balance_polling_skip = True
+                        with _balance_polling_disabled_lock:
+                            if not _balance_polling_disabled:
+                                _balance_polling_disabled = True
+                                skip_balance_polling_loop = True
+                                log_balance_polling_skip = True
+                            else:
+                                skip_balance_polling_loop = True
                 except Exception as _skip_err:
                     logger.debug(
                         "[Bootstrap] Unable to read bootstrap FSM state for balance polling skip: %s",
