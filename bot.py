@@ -302,7 +302,7 @@ def _read_initialized_state_snapshot(
             timeout_s=lock_timeout_s,
         )
         if acquired:
-            # Ensure RUNNING_SUPERVISED is reached even if thread launch raises.
+            # Ensure INIT lock is released after snapshot.
             try:
                 return dict(_initialized_state)
             finally:
@@ -794,7 +794,7 @@ def _ensure_running_supervised(active_threads: dict, *, context: str) -> None:
 def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> tuple[dict, bool]:
     """Start trading threads and return (active_threads, use_independent_trading)."""
     _active_threads: dict = {}
-    # Ensure RUNNING_SUPERVISED is reached even if thread launch raises.
+    # Ensure RUNNING_SUPERVISED is reached if any threads were started.
     try:
         if use_independent_trading:
             logger.info("=" * 70)

@@ -68,8 +68,6 @@ def _env_truthy(name: str, default: str = "false") -> bool:
     return os.environ.get(name, default).lower().strip() in ("true", "1", "yes", "enabled")
 
 
-def _resolve_runtime_mode_safe() -> Optional[RuntimeModeResolution]:
-    return resolve_runtime_mode_safe(logger)
 
 
 def _is_transient_redis_error(err_text: str) -> bool:
@@ -239,7 +237,7 @@ def _nonce_lease_stability_requirement_s() -> float:
                 "lease stability checks disabled (ensure single-writer safety manually)."
             )
             return 0.0
-    runtime_mode = _resolve_runtime_mode_safe()
+    runtime_mode = resolve_runtime_mode_safe(logger)
     require_stability = _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false") or (
         runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
     )
@@ -584,7 +582,7 @@ class TradingStateMachine:
 
     def _apply_startup_state_override(self) -> None:
         """Apply env-driven startup state so LIVE intent doesn't get stuck in monitor/OFF."""
-        runtime_mode = _resolve_runtime_mode_safe()
+        runtime_mode = resolve_runtime_mode_safe(logger)
         dry_run_mode = runtime_mode.dry_run if runtime_mode is not None else _env_truthy("DRY_RUN_MODE")
         live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
         auto_activate = _env_truthy("AUTO_ACTIVATE")
@@ -759,7 +757,7 @@ class TradingStateMachine:
             os.environ.get("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
             or os.environ.get("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
         )
-        runtime_mode = _resolve_runtime_mode_safe()
+        runtime_mode = resolve_runtime_mode_safe(logger)
         live_active_flag = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
         if _force and live_active_flag:
             return True
@@ -987,7 +985,7 @@ class TradingStateMachine:
             or _env_truthy("FORCE_LIVE_TRANSITION")
             or (_env_truthy("AUTO_ACTIVATE") and _env_truthy("HEARTBEAT_TRADE"))
         )
-        runtime_mode = _resolve_runtime_mode_safe()
+        runtime_mode = resolve_runtime_mode_safe(logger)
         _lcv_quick = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
         _dry_run_quick = runtime_mode.dry_run if runtime_mode is not None else _env_truthy("DRY_RUN_MODE")
         _lcv_raw = (
@@ -1413,7 +1411,7 @@ class TradingStateMachine:
         # force transition to LIVE_ACTIVE immediately. This prevents stuck
         # LIVE_PENDING_CONFIRMATION states caused by complex invariant locks.
         current_state = self.get_current_state()
-        runtime_mode = _resolve_runtime_mode_safe()
+        runtime_mode = resolve_runtime_mode_safe(logger)
         if current_state != TradingState.LIVE_ACTIVE:
             live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
 

@@ -66,12 +66,8 @@ except ImportError:
     from runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution  # type: ignore[import]
 
 
-def _resolve_runtime_mode_safe() -> Optional[RuntimeModeResolution]:
-    return resolve_runtime_mode_safe(logger)
-
-
-def _is_live_mode(runtime_mode: Optional[RuntimeModeResolution] = None) -> bool:
-    runtime_mode = runtime_mode or _resolve_runtime_mode_safe()
+def _is_live_mode(existing_mode: Optional[RuntimeModeResolution] = None) -> bool:
+    runtime_mode = existing_mode or resolve_runtime_mode_safe(logger)
     if runtime_mode is not None:
         return runtime_mode.is_live
     return os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
@@ -378,7 +374,7 @@ def _supervisor_step_state_machine() -> None:
         ):
             return
 
-        _runtime_mode = _resolve_runtime_mode_safe()
+        _runtime_mode = resolve_runtime_mode_safe(logger)
         _live_verified = _is_live_mode(_runtime_mode)
         _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
         _cycle_capital = _current_cycle_capital if isinstance(_current_cycle_capital, dict) else {}
@@ -1807,7 +1803,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
 
-    _runtime_mode = _resolve_runtime_mode_safe()
+    _runtime_mode = resolve_runtime_mode_safe(logger)
     _live_verified = _is_live_mode(_runtime_mode)
     if _live_verified and not TRADING_ENGINE_READY.is_set():
         logger.critical(
@@ -2011,7 +2007,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 logger.critical("CORE LOOP TICK | live=%s", _live_now)
 
                 if _sm_loop is not None:
-                    _runtime_mode_loop = _resolve_runtime_mode_safe()
+                    _runtime_mode_loop = resolve_runtime_mode_safe(logger)
                     _live_verified_loop = _is_live_mode(_runtime_mode_loop)
                     try:
                         _current_state_loop = _sm_loop.get_current_state()
@@ -2120,7 +2116,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
                     logger.critical("✅ FIRST STRATEGY TICK")
                     # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
-                    _runtime_mode_cycle = _resolve_runtime_mode_safe()
+                    _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
                     _lcv_val = (
                         _runtime_mode_cycle.raw.get("LIVE_CAPITAL_VERIFIED", "false")
                         if _runtime_mode_cycle is not None
@@ -2159,7 +2155,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _committed = bool(_sm_loop.get_activation_committed())
                         _can_dispatch = bool(_sm_loop.can_dispatch_trades())
                         _first_snap = bool(_sm_loop.get_first_snap_accepted())
-                        _runtime_mode_cycle = _resolve_runtime_mode_safe()
+                        _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
                         _live_verified_now = _is_live_mode(_runtime_mode_cycle)
                         _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
                         _balance_ok = float(_cycle_balance or 0.0) >= _min_balance
