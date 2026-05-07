@@ -596,7 +596,10 @@ def _is_balance_hydrated_ready() -> bool:
 
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
         try:
-            _state_value = getattr(_get_bootstrap_fsm().state, "value", "")
+            _bootstrap_fsm = _get_bootstrap_fsm()
+            if hasattr(_bootstrap_fsm, "is_balance_hydrated"):
+                return bool(_bootstrap_fsm.is_balance_hydrated())
+            _state_value = getattr(_bootstrap_fsm.state, "value", "")
             return _state_value in {
                 "BALANCE_HYDRATED",
                 "CAPITAL_REFRESHING",
@@ -2626,6 +2629,17 @@ except ImportError:
 
         def reset_for_retry(self, reason: str = "") -> None:
             self.state = _BootstrapState.BOOT_INIT
+
+        def is_balance_hydrated(self) -> bool:
+            _state_value = getattr(self.state, "value", "")
+            return _state_value in {
+                "BALANCE_HYDRATED",
+                "CAPITAL_REFRESHING",
+                "CAPITAL_READY",
+                "INIT_COMPLETE",
+                "THREADS_STARTING",
+                "RUNNING_SUPERVISED",
+            }
 
     _NOOP_BOOTSTRAP_FSM = _NoopBootstrapFSM()
 
@@ -5613,6 +5627,20 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _bms_hydrate_timeout = 60.0
                 if not skip_balance_polling_loop:
                     while not _bms_ca.is_hydrated:
+                        if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                            try:
+                                _bootstrap_fsm = _get_bootstrap_fsm()
+                                if (
+                                    hasattr(_bootstrap_fsm, "is_balance_hydrated")
+                                    and _bootstrap_fsm.is_balance_hydrated()
+                                ):
+                                    logger.info("Stopping startup balance loop")
+                                    break
+                            except Exception as _fsm_probe_err:
+                                logger.debug(
+                                    "[Bootstrap] balance loop FSM probe failed: %s",
+                                    _fsm_probe_err,
+                                )
                         if time.monotonic() - _bms_hydrate_start >= _bms_hydrate_timeout:
                             logger.warning(
                                 "[Bootstrap] Capital hydration timeout (%.0fs) — proceeding",

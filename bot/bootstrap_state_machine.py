@@ -335,6 +335,11 @@ class BootstrapStateMachine:
         with self._lock:
             self._balance_polling_skip_logged = True
 
+    def is_balance_hydrated(self) -> bool:
+        """True once bootstrap has reached balance hydration or later."""
+        with self._lock:
+            return self._state in _BALANCE_POLLING_DISABLED_STATES
+
     def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Return the most recent *limit* transition records."""
         with self._lock:

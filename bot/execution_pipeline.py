@@ -1238,5 +1238,6 @@ def get_execution_pipeline() -> ExecutionPipeline:
     with _PIPELINE_LOCK:
         if _PIPELINE is None:
             _PIPELINE = ExecutionPipeline()
+            logger.critical("LIFECYCLE: entering execution coordinator")
             logger.info("[Pipeline] singleton created — full execution pipeline ENABLED")
     return _PIPELINE

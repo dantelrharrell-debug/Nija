@@ -2386,7 +2386,33 @@ class MultiAccountBrokerManager:
         attempts = 0
         snapshot: Dict[str, float] = {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
+        def _bootstrap_balance_hydrated() -> bool:
+            try:
+                try:
+                    from bot.bootstrap_state_machine import get_bootstrap_fsm as _get_bootstrap_fsm
+                except ImportError:
+                    from bootstrap_state_machine import get_bootstrap_fsm as _get_bootstrap_fsm  # type: ignore[import]
+            except ImportError:
+                return False
+            try:
+                _bfsm = _get_bootstrap_fsm()
+                if hasattr(_bfsm, "is_balance_hydrated"):
+                    return bool(_bfsm.is_balance_hydrated())
+            except Exception:
+                return False
+            return False
+
         while True:
+            if _bootstrap_balance_hydrated():
+                elapsed = time.monotonic() - start
+                logger.info("Stopping startup balance loop")
+                return {
+                    "ready": float(snapshot.get("ready", 0.0)),
+                    "total_capital": float(snapshot.get("total_capital", 0.0)),
+                    "valid_brokers": float(snapshot.get("valid_brokers", 0.0)),
+                    "attempts": float(attempts),
+                    "elapsed_s": float(elapsed),
+                }
             attempts += 1
             # Bootstrap loop requests a refresh via the event bus for
             # observability, then calls refresh_capital_authority() which routes
