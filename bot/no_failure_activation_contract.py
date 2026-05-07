@@ -312,6 +312,42 @@ class ForcedActivationFallbackTimer:
             )
             return
 
+        # FORCE_TRADE bypass: when FORCE_TRADE=true (or FORCE_TRADE_MODE=true),
+        # force-open all startup gates so the bot enters the trading loop
+        # immediately instead of remaining blocked indefinitely.
+        _force_trade = (
+            os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on")
+            or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+        )
+        if _force_trade:
+            logger.warning(
+                "⚡ [ForcedActivationFallback] FORCE_TRADE active — "
+                "forcing all startup gates open so trading loop can start"
+            )
+            try:
+                capital_hydrated.set()
+                logger.info("[ForcedActivationFallback] CAPITAL_HYDRATED_EVENT force-set")
+            except Exception as exc:
+                logger.warning("[ForcedActivationFallback] failed to set CAPITAL_HYDRATED_EVENT: %s", exc)
+            try:
+                _get_capital_system_ready().set()
+                logger.info("[ForcedActivationFallback] CAPITAL_SYSTEM_READY force-set")
+            except Exception as exc:
+                logger.warning("[ForcedActivationFallback] failed to set CAPITAL_SYSTEM_READY: %s", exc)
+            try:
+                _get_startup_lock().set()
+                logger.info("[ForcedActivationFallback] STARTUP_LOCK force-set")
+            except Exception as exc:
+                logger.warning("[ForcedActivationFallback] failed to set STARTUP_LOCK: %s", exc)
+            try:
+                gate = _get_startup_readiness_gate()
+                if gate is not None:
+                    gate.force_open("FORCE_TRADE active — forced activation fallback")
+                    logger.info("[ForcedActivationFallback] StartupReadinessGate force-opened")
+            except Exception as exc:
+                logger.warning("[ForcedActivationFallback] failed to force-open StartupReadinessGate: %s", exc)
+            return
+
         # Fail closed: do not force-open any startup gates.
         logger.critical(
             "🚨 [ForcedActivationFallback] ACTIVATION BLOCKED — "
@@ -368,21 +404,43 @@ def install_no_failure_activation_contract(
     """
     global _hydration_loop_installed, _fallback_timer_installed
 
+    _force_trade = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+    )
+
     with _install_lock:
         # ── Shared trigger event between hydration loop and fallback timer ──
         # When the hydration loop exhausts retries it sets this event so the
         # fallback timer fires immediately instead of waiting for its deadline.
         trigger = threading.Event()
 
-        # ── Invariant 3 removed: forced activation fallback is disabled ─────
+        # ── Invariant 3: forced activation fallback timer ────────────────────
+        # When FORCE_TRADE=true the timer is started with a short deadline so
+        # it fires quickly and force-opens all startup gates.  Without
+        # FORCE_TRADE the timer is not started and startup fails closed until
+        # readiness gates are naturally satisfied.
         if not _fallback_timer_installed:
-            logger.info(
-                "[install_no_failure_activation_contract] forced activation fallback removed; "
-                "startup now fails closed until readiness gates are naturally satisfied"
-            )
+            if _force_trade:
+                logger.warning(
+                    "⚡ [install_no_failure_activation_contract] FORCE_TRADE active — "
+                    "starting ForcedActivationFallbackTimer (deadline=%.0fs) to force-open "
+                    "startup gates if capital hydration does not complete in time",
+                    fallback_timeout_s,
+                )
+                fallback_timer = ForcedActivationFallbackTimer(
+                    fallback_timeout_s=fallback_timeout_s,
+                    trigger_event=trigger,
+                )
+                fallback_timer.start()
+            else:
+                logger.info(
+                    "[install_no_failure_activation_contract] forced activation fallback removed; "
+                    "startup now fails closed until readiness gates are naturally satisfied"
+                )
             _fallback_timer_installed = True
         else:
-            logger.debug("[install_no_failure_activation_contract] fail-closed startup policy already installed")
+            logger.debug("[install_no_failure_activation_contract] fallback timer policy already installed")
 
         # ── Invariant 2: hydration loop ──────────────────────────────────────
         if not _hydration_loop_installed:
@@ -400,7 +458,7 @@ def install_no_failure_activation_contract(
                 logger.info(
                     "[install_no_failure_activation_contract] "
                     "coordinator/broker_map not provided — Invariant 2 (hydration loop) skipped; "
-                    "Invariant 3 (fallback timer) is active only when NIJA_ENABLE_FORCED_ACTIVATION_FALLBACK=1"
+                    "Invariant 3 (fallback timer) is active only when FORCE_TRADE=true"
                 )
                 # Mark as installed anyway so repeated calls with a coordinator
                 # do not start a second loop.
@@ -410,8 +468,9 @@ def install_no_failure_activation_contract(
 
     logger.info(
         "✅ [no_failure_activation_contract] installed — "
-        "forced_fallback=%s fallback_timeout=%.0fs retry_interval=%.0fs max_attempts=%d",
-        "disabled",
+        "force_trade=%s forced_fallback=%s fallback_timeout=%.0fs retry_interval=%.0fs max_attempts=%d",
+        _force_trade,
+        "enabled" if _force_trade else "disabled",
         fallback_timeout_s,
         retry_interval_s,
         max_hydration_attempts,
