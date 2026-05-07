@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import pandas as pd
 import numpy as np
-from nija_trailing_system import NIJATrailingSystem
+from bot.nija_trailing_system import NIJATrailingSystem
 
 
 def create_sample_dataframe(current_price, num_rows=100):

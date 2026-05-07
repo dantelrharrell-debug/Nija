@@ -23,8 +23,8 @@ echo ""
 # start.sh is invoked a second time while a previous instance is still live.
 #
 # Cross-container / cross-deployment protection is handled separately by the
-# distributed Redis lock inside bot.py (set NIJA_REDIS_URL, REDIS_URL,
-# REDIS_PRIVATE_URL, or REDIS_PUBLIC_URL to enable it).
+# distributed Redis lock inside bot.py (set NIJA_REDIS_URL, REDIS_TLS_URL,
+# REDIS_URL, REDIS_PRIVATE_URL, or REDIS_PUBLIC_URL to enable it).
 # ─────────────────────────────────────────────────────────────────────────────
 _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 _PID_FILE="${_SCRIPT_DIR}/data/nija.pid"
@@ -152,7 +152,7 @@ if [ "${DRY_RUN_MODE:-false}" = "false" ] && [ "${PAPER_MODE:-false}" = "false" 
 fi
 
 _REDIS_CONFIGURED=false
-if [ -n "${NIJA_REDIS_URL:-}" ] || [ -n "${REDIS_URL:-}" ] || [ -n "${REDIS_PRIVATE_URL:-}" ] || [ -n "${REDIS_PUBLIC_URL:-}" ]; then
+if [ -n "${NIJA_REDIS_URL:-}" ] || [ -n "${REDIS_TLS_URL:-}" ] || [ -n "${REDIS_URL:-}" ] || [ -n "${REDIS_PRIVATE_URL:-}" ] || [ -n "${REDIS_PUBLIC_URL:-}" ]; then
     _REDIS_CONFIGURED=true
 else
     _component_port_check="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"

@@ -50,7 +50,7 @@ def _build_strategy():
     """Instantiate NIJAApexStrategyV71 with all expensive optional modules disabled."""
     # Disable modules that require broker credentials / DB connections
     with patch.dict(os.environ, {}):
-        from nija_apex_strategy_v71 import NIJAApexStrategyV71
+        from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
         cfg = {
             'use_enhanced_scoring': False,
             'use_regime_detection': False,
