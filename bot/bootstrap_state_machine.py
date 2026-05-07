@@ -470,8 +470,9 @@ class BootstrapStateMachine:
             }
             self._history.append(record)
             self._state = new_state
+            _prev_balance_polling_disabled = self._balance_polling_disabled
             self._balance_polling_disabled = new_state in _BALANCE_POLLING_DISABLED_STATES
-            if not self._balance_polling_disabled:
+            if _prev_balance_polling_disabled and not self._balance_polling_disabled:
                 self._balance_polling_skip_logged = False
             if new_state == BootstrapState.RUNNING_SUPERVISED:
                 self._boot_complete = True
