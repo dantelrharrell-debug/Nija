@@ -295,6 +295,12 @@ class BootstrapStateMachine:
         with self._lock:
             return self._state
 
+    @property
+    def balance_polling_enabled(self) -> bool:
+        """True when startup balance polling should run."""
+        with self._lock:
+            return self._state != BootstrapState.BALANCE_HYDRATED
+
     def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Return the most recent *limit* transition records."""
         with self._lock:
