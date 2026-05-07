@@ -2345,7 +2345,21 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 )
                 logger.critical("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
                 logger.critical("🚀 RUNNING TRADE CYCLE")
+                _cycle_start_ts = time.time()
                 strategy.run_cycle()
+                _cycle_elapsed = time.time() - _cycle_start_ts
+                # Retrieve symbol count from strategy for heartbeat diagnostics
+                _hb_symbols = 0
+                try:
+                    _hb_symbols = len(getattr(strategy, "symbols", None) or [])
+                except Exception:
+                    _hb_symbols = 0
+                logger.info(
+                    "STRATEGY HEARTBEAT | cycle=%s symbols=%s runtime=%.1fs",
+                    cycle,
+                    _hb_symbols,
+                    _cycle_elapsed,
+                )
                 time.sleep(cycle_secs)
 
             except Exception as _err:
