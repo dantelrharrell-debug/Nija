@@ -492,7 +492,7 @@ SUITABILITY ASSESSMENT
 
 ❌ **Cannot Say**:
 - "Profit promises"
-- "Simulated trading"
+- "No-risk trading"
 - "Get rich quick"
 - "Never lose money"
 - "Beats the market every time"
