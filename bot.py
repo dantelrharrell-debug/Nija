@@ -264,6 +264,12 @@ def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool
         logger.warning("Skipping INIT lock - already in LIVE mode (context=%s)", context)
         return False
 
+    # FORCE_TRADE bypass: skip INIT lock entirely when FORCE_TRADE is enabled
+    _force_trade = _is_truthy(os.environ.get("FORCE_TRADE", "")) or _is_truthy(os.environ.get("FORCE_TRADE_MODE", ""))
+    if _force_trade:
+        logger.warning("⚡ FORCE_TRADE enabled — skipping INIT lock acquisition; proceeding directly")
+        return True  # Pretend lock was acquired
+
     print("INIT_LOCK_ATTEMPT", flush=True)
     acquired = _initialized_state_lock.acquire(timeout=timeout_s)
     if acquired:
