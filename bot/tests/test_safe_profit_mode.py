@@ -30,7 +30,7 @@ import pandas as pd
 
 def _fresh_manager(target_pct=1.0, lock_fraction=0.50):
     """Return a new SafeProfitModeManager with state file patched to /tmp."""
-    from safe_profit_mode import SafeProfitModeManager
+    from bot.safe_profit_mode import SafeProfitModeManager
     mgr = SafeProfitModeManager.__new__(SafeProfitModeManager)
     mgr._lock                  = threading.Lock()
     mgr.target_pct_threshold   = target_pct
@@ -45,7 +45,7 @@ def _fresh_manager(target_pct=1.0, lock_fraction=0.50):
     mgr._daily_profit_usd  = 0.0
     mgr._daily_target_usd  = 0.0
     mgr._locked_profit_usd = 0.0
-    from safe_profit_mode import SafeMode
+    from bot.safe_profit_mode import SafeMode
     mgr._mode              = SafeMode.INACTIVE
     mgr._activated_at      = None
     mgr._trades_blocked    = 0
@@ -66,7 +66,7 @@ def _make_df(close_prices):
 
 def _build_strategy():
     """Instantiate NIJAApexStrategyV71 with optional modules disabled."""
-    from nija_apex_strategy_v71 import NIJAApexStrategyV71
+    from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
     cfg = {
         'use_enhanced_scoring':    False,
         'use_regime_detection':    False,

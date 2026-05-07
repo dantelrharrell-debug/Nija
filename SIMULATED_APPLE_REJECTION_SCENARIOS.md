@@ -41,15 +41,20 @@ they understand the risks.
 1. **Startup Disclaimers (bot/financial_disclaimers.py):**
 ```python
 RISK_DISCLAIMER = """
-CRYPTOCURRENCY TRADING INVOLVES SUBSTANTIAL RISK OF LOSS
+A. Risk Disclosure
+Trading involves substantial risk of loss.
+YOU CAN LOSE MONEY.
+NO GUARANTEES of profitability or performance.
+Users are solely responsible for trading outcomes.
 
-⚠️  YOU CAN LOSE MONEY:
-   • You can lose some or ALL of your invested capital
-   • Only trade with money you can afford to lose
+B. Platform Classification
+NIJA is a software trading tool, NOT investment advice and not a financial advisor.
+No investment advice is provided.
+No copy trading or signal distribution occurs.
 
-🤖 ABOUT THIS SOFTWARE:
-   • NIJA is an independent trading tool - NOT investment advice
-   • NO GUARANTEES of profit or performance are made
+C. Operational Model
+Each account operates independently using shared software logic with independent per-account evaluation,
+with account-specific state, exposure, cooldowns, and execution context. That’s it.
 """
 ```
 
@@ -290,23 +295,17 @@ Please clarify:
 **Clear Explanation (bot/financial_disclaimers.py):**
 ```python
 INDEPENDENT_TRADING_EXPLANATION = """
-✅ EACH account trades INDEPENDENTLY:
-   • Your account evaluates markets independently
-   • NO copying of trades from other users
-   • NO master account controlling your trades
-   • NO signal distribution between accounts
-
-🤖 HOW IT WORKS:
-   • All accounts use the same strategy framework with account-specific state
-   • Each account independently applies it
-   • No coordination or copying
+INDEPENDENT TRADING MODEL:
+• Each account operates independently using shared software logic with independent per-account evaluation
+• Account-specific state, exposure, cooldowns, and execution context shape decisions
+• No copy trading or signal distribution occurs
 """
 ```
 
 **Documentation Updates Needed:**
 1. Remove "master account" terminology
 2. Use "platform account" instead
-3. Clarify: "Same strategy framework, independent execution"
+3. Clarify: "Shared software logic with independent per-account evaluation, independent execution"
 4. Emphasize: "No revenue from other users' trades"
 
 **Status:** ✅ **ADDRESSED** - Clear independent trading explanation provided

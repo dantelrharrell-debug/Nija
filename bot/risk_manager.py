@@ -20,7 +20,7 @@ from datetime import datetime
 import time
 import logging
 
-logger = logging.getLogger("nija.risk_manager")
+logger = logging.getLogger("nija.risk")
 
 # Import Risk Intelligence System (correlation, volatility caps, drawdown breaker)
 try:

@@ -13,7 +13,7 @@ import pytest
 # Allow imports from bot/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from trade_duplication_guard import (
+from bot.trade_duplication_guard import (
     TradeDuplicationGuard,
     TradeDuplicationGuardConfig,
     get_trade_duplication_guard,

@@ -11,7 +11,7 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fee_aware_config import (
+from bot.fee_aware_config import (
     MIN_BALANCE_TO_TRADE,
     SMALL_BALANCE_POSITION_PCT,
     MEDIUM_BALANCE_POSITION_PCT,
@@ -22,9 +22,9 @@ from fee_aware_config import (
     MAX_TRADES_PER_DAY
 )
 try:
-    from fee_aware_config import SMALL_BALANCE_THRESHOLD
+    from bot.fee_aware_config import SMALL_BALANCE_THRESHOLD
 except ImportError:  # pragma: no cover - backwards compatibility for renamed constant
-    from fee_aware_config import MICRO_BALANCE_THRESHOLD as SMALL_BALANCE_THRESHOLD
+    from bot.fee_aware_config import MICRO_BALANCE_THRESHOLD as SMALL_BALANCE_THRESHOLD
 
 
 class TestFeeAwareConfig(unittest.TestCase):

@@ -19,7 +19,7 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from profit_confirmation_logger import ProfitConfirmationLogger
+from bot.profit_confirmation_logger import ProfitConfirmationLogger
 
 
 class TestProfitConfirmationLogger(unittest.TestCase):
