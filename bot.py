@@ -4262,6 +4262,57 @@ def _force_trade_readiness_handoff(
         logger.error(f"FORCE_TRADE readiness check error: {_ft_err}")
 
 
+def _try_finalize_running_supervised_handoff(
+    *,
+    reason: str,
+    completion_log: str,
+    set_bootstrap_events: bool,
+) -> bool:
+    """Finalize BootstrapFSM handoff legally; never force illegal transitions."""
+    if not (_BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None):
+        return False
+
+    try:
+        _bfsm = _get_bootstrap_fsm()
+        _state = getattr(_bfsm, "state", None)
+
+        if _state == _BootstrapState.RUNNING_SUPERVISED:
+            logger.critical(completion_log)
+            if set_bootstrap_events:
+                _strategy_ready_event.set()
+                _bootstrap_complete_flag.set()
+                _bootstrap_completed_event.set()
+            return True
+
+        # Best-effort legal fast-forward to strategy-arming states.
+        if hasattr(_bfsm, "advance_to_capital_ready"):
+            try:
+                _bfsm.advance_to_capital_ready(reason=f"{reason}: force-trade pre-handoff")
+            except Exception as _advance_err:
+                logger.debug("BootstrapFSM advance_to_capital_ready skipped: %s", _advance_err)
+
+        _state = getattr(_bfsm, "state", None)
+        if _state == _BootstrapState.THREADS_STARTING and hasattr(_bfsm, "finalize_boot"):
+            _ok = bool(_bfsm.finalize_boot(reason))
+            if _ok:
+                logger.critical(completion_log)
+                if set_bootstrap_events:
+                    _strategy_ready_event.set()
+                    _bootstrap_complete_flag.set()
+                    _bootstrap_completed_event.set()
+                return True
+
+        logger.info(
+            "Deferring RUNNING_SUPERVISED handoff (reason=%s): current_state=%s",
+            reason,
+            getattr(_state, "value", str(_state)),
+        )
+        return False
+    except Exception as _handoff_err:
+        logger.error("BootstrapFSM handoff error (%s): %s", reason, _handoff_err)
+        return False
+
+
 def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     """
     Background thread: Initialize bot and run trading loops.
@@ -4340,16 +4391,11 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # Environment variables were verified at module import; health server was
     # bound in main().  Advance the FSM to ENV_VERIFIED so the startup thread
     # can drive subsequent transitions.  On retry the FSM is already in
-    # BOOT_FAILED_RETRY (set by the retry wrapper) — skip early-state transitions.
-    if _BOOTSTRAP_FSM_AVAILABLE:
-        _current_boot_state = _get_bootstrap_fsm().state
-        if _current_boot_state == _BootstrapState.HEALTH_BOUND:
-            _bfsm_transition(
-                _BootstrapState.ENV_VERIFIED,
-                "startup thread active; environment verified at module load",
+            _try_finalize_running_supervised_handoff(
+                reason=transition_reason,
+                completion_log=completion_log,
+                set_bootstrap_events=set_bootstrap_events,
             )
-
-    # ── FIX 3: CONNECTION PHASE GUARD — can only run once ───────────────────
     # If a previous attempt completed the connection/credential-check phase,
     # skip it entirely on retry so we never loop back through broker init.
     _state_copy = _read_initialized_state_snapshot(context="connection phase guard")
@@ -4561,17 +4607,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         and _ft_execution_ready
                     ):
                         logger.critical("🚀 ALL STRICT READINESS FLAGS SATISFIED - RELEASING RUNNING_SUPERVISED")
-                        if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                            try:
-                                _bfsm = _get_bootstrap_fsm()
-                                logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
-                                _bfsm_transition(
-                                    _BootstrapState.RUNNING_SUPERVISED,
-                                    "Post-capability-verification: all readiness gates satisfied",
-                                )
-                                logger.critical("🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP")
-                            except Exception as _fsm_err:
-                                logger.error(f"FSM transition error: {_fsm_err}")
+                        logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                        _try_finalize_running_supervised_handoff(
+                            reason="Post-capability-verification: all readiness gates satisfied",
+                            completion_log="🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP",
+                            set_bootstrap_events=True,
+                        )
 
                     # Activation must occur in the bootstrap owner thread.
                     try:
@@ -4624,17 +4665,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _ft_execution_ready
                     ):
                         logger.critical("🚀 ALL STRICT READINESS FLAGS SATISFIED - RELEASING RUNNING_SUPERVISED")
-                        try:
-                            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                                _bfsm = _get_bootstrap_fsm()
-                                logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
-                                _bfsm_transition(
-                                    _BootstrapState.RUNNING_SUPERVISED,
-                                    "Post-capability-verification: all readiness gates satisfied",
-                                )
-                                logger.critical("🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP")
-                        except Exception as _fsm_err:
-                            logger.error(f"FSM transition error: {_fsm_err}")
+                        logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                        _try_finalize_running_supervised_handoff(
+                            reason="Post-capability-verification: all readiness gates satisfied",
+                            completion_log="🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP",
+                            set_bootstrap_events=True,
+                        )
                     else:
                         logger.critical(
                             f"🚀 FORCE_TRADE: not all gates open yet — "
@@ -4694,16 +4730,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                             logger.critical("🚀 SYSTEM_READY EVENT RELEASED - ALL GATES OPEN")
 
                             # Transition BootstrapFSM to RUNNING_SUPERVISED
-                            try:
-                                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                                    logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
-                                    _bfsm_transition(
-                                        _BootstrapState.RUNNING_SUPERVISED,
-                                        "FORCE_TRADE: all readiness gates satisfied after capability verification",
-                                    )
-                                    logger.critical("🚀 FSM TRANSITION COMPLETE - BOT ENTERING TRADING LOOP")
-                            except Exception as _ft_fsm_err:
-                                logger.error(f"FSM transition error: {_ft_fsm_err}")
+                            logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                            _try_finalize_running_supervised_handoff(
+                                reason="FORCE_TRADE: all readiness gates satisfied after capability verification",
+                                completion_log="🚀 FSM TRANSITION COMPLETE - BOT ENTERING TRADING LOOP",
+                                set_bootstrap_events=True,
+                            )
                         else:
                             logger.critical(
                                 "🚀 FORCE_TRADE: not all gates open yet — "
