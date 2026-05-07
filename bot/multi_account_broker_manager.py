@@ -2402,6 +2402,9 @@ class MultiAccountBrokerManager:
             if _is_bootstrap_balance_hydrated is not None and _is_bootstrap_balance_hydrated():
                 elapsed = time.monotonic() - start
                 logger.info("Stopping startup balance loop")
+                logger.debug(
+                    "[MABM] bootstrap FSM reports BALANCE_HYDRATED — exiting hydration loop"
+                )
                 try:
                     _fresh_snapshot = self.refresh_capital_authority(
                         trigger=f"{trigger}:bootstrap_balance_hydrated"

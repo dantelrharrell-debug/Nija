@@ -5629,6 +5629,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                                     and _bootstrap_fsm.is_balance_hydrated()
                                 ):
                                     logger.info("Stopping startup balance loop")
+                                    logger.debug(
+                                        "[Bootstrap] bootstrap FSM reports BALANCE_HYDRATED — exiting hydration loop"
+                                    )
                                     break
                             except Exception as _fsm_probe_err:
                                 logger.debug(

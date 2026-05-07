@@ -993,7 +993,8 @@ def is_bootstrap_balance_hydrated() -> bool:
     """Return True when the bootstrap FSM reports balance hydration."""
     try:
         return bool(get_bootstrap_fsm().is_balance_hydrated())
-    except Exception:
+    except Exception as exc:
+        logger.debug("[BootstrapFSM] balance hydration probe failed: %s", exc)
         return False
 
 

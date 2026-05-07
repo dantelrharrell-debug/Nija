@@ -205,7 +205,7 @@ class CAHydrationLoop:
         while not self._stop_event.is_set():
             if _is_bootstrap_balance_hydrated is not None and _is_bootstrap_balance_hydrated():
                 logger.info("Stopping startup balance loop")
-                logger.info(
+                logger.debug(
                     "[CAHydrationLoop] bootstrap FSM reports BALANCE_HYDRATED — exiting hydration loop"
                 )
                 return
