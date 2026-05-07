@@ -17,7 +17,7 @@ Thank you for reviewing NIJA. This document addresses common questions about fin
 
 **NIJA is a trading automation tool** that executes cryptocurrency trades on users' existing exchange accounts using algorithmic analysis.
 
-**Think of it as:** Software that runs a trading algorithm on behalf of the user - similar to how a smart thermostat automates temperature control based on programmed logic.
+**NIJA is software that runs a trading algorithm on behalf of the user** based on configured rules and risk controls.
 
 ---
 
@@ -43,7 +43,7 @@ Thank you for reviewing NIJA. This document addresses common questions about fin
 
 - Account A scans markets → evaluates conditions → executes trade (if approved)
 - Account B scans markets → evaluates conditions → executes trade (if approved)
-- Same strategy framework, independent execution, different results
+- Shared software logic with independent per-account evaluation; independent execution; different results
 
 ### Why Results Differ Between Users
 
@@ -73,7 +73,7 @@ Users are explicitly informed that results WILL differ because:
 
 ### ❌ NOT Copy Trading
 - **Copy Trading:** One account replicates trades from another account
-- **NIJA:** Each account runs the same strategy framework independently
+- **NIJA:** Each account runs shared software logic with independent per-account evaluation
 - **Why Different:** No account "follows" another; each evaluates markets itself
 
 ### ❌ NOT Signal Distribution
@@ -144,7 +144,7 @@ Users are explicitly informed that results WILL differ because:
 - ✅ User makes decision to use the tool
 - ✅ User responsible for all trading outcomes
 
-**Analogy:** Like TurboTax (software tool for taxes) vs. a CPA (professional advisor). NIJA is the tool, not the advisor.
+**Clarification:** NIJA is software. It does not provide financial advice or professional advisory services.
 
 ---
 
@@ -226,9 +226,9 @@ User's Phone → HTTPS → Exchange API (Coinbase/Kraken)
 ## Common Review Questions (Anticipated)
 
 ### Q: "Is this copy trading?"
-**A:** No. Copy trading is when Account A copies trades from Account B. NIJA has each account run the same strategy framework independently. Same framework ≠ copying trades. Each account makes its own decisions based on its own market scan and risk evaluation.
+**A:** No. Copy trading is when Account A copies trades from Account B. NIJA has each account run the shared software logic with independent per-account evaluation. Shared software logic ≠ copying trades. Each account makes its own decisions based on its own market scan and risk evaluation.
 
-### Q: "Why would results differ if they use the same strategy framework?"
+### Q: "Why would results differ if they use the shared software logic with independent per-account evaluation?"
 **A:** Because of timing (market scans happen at slightly different times), account size (position sizes scale to balance), and market conditions (prices change between executions). We're transparent about this - it's explained in our FAQ and disclaimers.
 
 ### Q: "Are you providing financial advice?"
