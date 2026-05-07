@@ -4599,6 +4599,70 @@ def _run_bot_startup_and_trading():
                         "deferring bootstrap event release to RUNNING_SUPERVISED gate"
                     )
 
+                    # FORCE_TRADE: Immediate readiness flag setting and FSM transition
+                    if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+                        logger.critical("🚀 FORCE_TRADE ACTIVE: Setting readiness flags and transitioning FSM")
+
+                        # Set all readiness flags
+                        _initialized_state["broker_ready"] = True
+                        _initialized_state["risk_ready"] = True
+                        _initialized_state["strategy_ready"] = True
+                        _initialized_state["execution_ready"] = True
+
+                        # Fire strategy ready event
+                        _strategy_ready_event.set()
+
+                        # Compute system ready state
+                        try:
+                            _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE post-capability")
+                            (
+                                _ft_system_ready,
+                                _ft_broker_ready,
+                                _ft_risk_ready,
+                                _ft_strategy_ready,
+                                _ft_capital_ready,
+                                _ft_execution_ready,
+                            ) = _compute_system_ready(_ft_state_snapshot)
+
+                            logger.critical(
+                                f"🚀 FORCE_TRADE READINESS STATE:\n"
+                                f"  broker_ready={_ft_broker_ready}\n"
+                                f"  risk_ready={_ft_risk_ready}\n"
+                                f"  strategy_ready={_ft_strategy_ready}\n"
+                                f"  capital_ready={_ft_capital_ready}\n"
+                                f"  execution_ready={_ft_execution_ready}"
+                            )
+
+                            # If all gates are open, transition FSM immediately
+                            if (
+                                _ft_broker_ready and
+                                _ft_risk_ready and
+                                _ft_strategy_ready and
+                                _ft_capital_ready and
+                                _ft_execution_ready
+                            ):
+                                logger.critical("🚀 FORCE_TRADE: ALL GATES OPEN - TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                try:
+                                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                        _bfsm_transition(
+                                            _BootstrapState.RUNNING_SUPERVISED,
+                                            "FORCE_TRADE: post-capability-verification readiness satisfied",
+                                        )
+                                        logger.critical("🚀 FORCE_TRADE: FSM TRANSITION COMPLETE")
+                                        _strategy_ready_event.set()
+                                        _bootstrap_complete_flag.set()
+                                        _bootstrap_completed_event.set()
+                                except Exception as _ft_fsm_err:
+                                    logger.error(f"FORCE_TRADE FSM transition error: {_ft_fsm_err}")
+                            else:
+                                logger.critical(
+                                    f"🚀 FORCE_TRADE: Not all gates open yet - "
+                                    f"broker={_ft_broker_ready} risk={_ft_risk_ready} "
+                                    f"strategy={_ft_strategy_ready} capital={_ft_capital_ready} "
+                                    f"execution={_ft_execution_ready}"
+                                )
+                        except Exception as _ft_err:
+                            logger.error(f"FORCE_TRADE readiness check error: {_ft_err}")
                     # FORCE_TRADE: Set readiness flags immediately after subsystem verification
                     import os as _os_ft
                     _force_trade = _os_ft.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
