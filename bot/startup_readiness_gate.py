@@ -143,6 +143,11 @@ class StartupReadinessGate:
         configured when threads call ``wait_until_ready``.
         """
         with self._cond:
+            logger.critical(
+                "READINESS TRANSITION | action=register_component | component=%s | before=%s",
+                name,
+                self._snapshot_locked(),
+            )
             self._required.add(name)
             self._registered_at[name] = datetime.now(timezone.utc)
             logger.debug(
@@ -162,6 +167,11 @@ class StartupReadinessGate:
         that callers do not need to be strictly ordered.
         """
         with self._cond:
+            logger.critical(
+                "READINESS TRANSITION | action=signal_ready | component=%s | before=%s",
+                name,
+                self._snapshot_locked(),
+            )
             logger.critical("📡 BARRIER SIGNAL RECEIVED: %s", name)
 
             # Detect case/style mismatches that can look valid but break contracts
@@ -210,6 +220,12 @@ class StartupReadinessGate:
         at WARNING level and is included in the status report.
         """
         with self._cond:
+            logger.critical(
+                "READINESS TRANSITION | action=signal_failed | component=%s | reason=%s | before=%s",
+                name,
+                reason or "unknown failure",
+                self._snapshot_locked(),
+            )
             self._failed[name] = reason or "unknown failure"
             self._required.discard(name)
             logger.warning(
@@ -311,6 +327,11 @@ class StartupReadinessGate:
 
             # Timed out
             pending = self._required - self._ready
+            logger.critical(
+                "READINESS DEADLOCK DETECTED | snapshot=%s | pending=%s",
+                self._snapshot_locked(),
+                sorted(pending),
+            )
             logger.error(
                 "❌ Startup readiness gate TIMED OUT after %.1fs — pending components: %s",
                 elapsed,
@@ -335,6 +356,11 @@ class StartupReadinessGate:
         appropriate for emergency situations or unit tests.
         """
         with self._cond:
+            logger.critical(
+                "READINESS TRANSITION | action=force_open | reason=%s | before=%s",
+                reason,
+                self._snapshot_locked(),
+            )
             was_open = self._gate_open
             self._gate_forced_open = True
             self._gate_open = True
@@ -360,6 +386,11 @@ class StartupReadinessGate:
         Existing blocked calls will unblock and return False.
         """
         with self._cond:
+            logger.critical(
+                "READINESS TRANSITION | action=force_close | reason=%s | before=%s",
+                reason,
+                self._snapshot_locked(),
+            )
             self._gate_forced_closed = True
             self._cond.notify_all()  # wake all waiters so they observe the closed state
             logger.error("🔒 StartupReadinessGate FORCE CLOSED: %s", reason)
@@ -373,6 +404,10 @@ class StartupReadinessGate:
         callbacks.
         """
         with self._cond:
+            logger.critical(
+                "READINESS TRANSITION | action=reset | before=%s",
+                self._snapshot_locked(),
+            )
             self._required.clear()
             self._ready.clear()
             self._failed.clear()
@@ -393,19 +428,17 @@ class StartupReadinessGate:
     def get_status(self) -> Dict:
         """Return a serialisable snapshot of the gate's current state."""
         with self._cond:
-            pending = sorted(self._required - self._ready)
-            return {
-                "gate_open": self._gate_open and not self._gate_forced_closed,
-                "forced_open": self._gate_forced_open,
-                "forced_closed": self._gate_forced_closed,
-                "required_count": len(self._required),
-                "ready_count": len(self._ready),
-                "failed_count": len(self._failed),
-                "pending_components": pending,
-                "ready_components": sorted(self._ready),
-                "failed_components": dict(self._failed),
-                "opened_at": self._opened_at.isoformat() if self._opened_at else None,
-            }
+            return self._snapshot_locked()
+
+    def snapshot(self) -> Dict:
+        """Return a serialisable snapshot of the gate's current state."""
+        with self._cond:
+            return self._snapshot_locked()
+
+    def pending_components(self) -> List[str]:
+        """Return the list of components that have not yet signalled ready."""
+        with self._cond:
+            return sorted(self._required - self._ready)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -424,6 +457,10 @@ class StartupReadinessGate:
 
         if not self._required:
             # Nothing registered — open immediately to avoid an eternal block.
+            logger.critical(
+                "READINESS TRANSITION | action=gate_open | reason=no_components | before=%s",
+                self._snapshot_locked(),
+            )
             self._gate_open = True
             self._opened_at = datetime.now(timezone.utc)
             logger.info(
@@ -433,6 +470,10 @@ class StartupReadinessGate:
         elif self._required.issubset(self._ready):
             # Every required component has signalled ready
             # (failed components are removed from _required so they don't block).
+            logger.critical(
+                "READINESS TRANSITION | action=gate_open | reason=all_ready | before=%s",
+                self._snapshot_locked(),
+            )
             self._gate_open = True
             self._opened_at = datetime.now(timezone.utc)
             logger.info(
@@ -440,6 +481,21 @@ class StartupReadinessGate:
                 len(self._ready),
                 self._opened_at.isoformat(),
             )
+
+    def _snapshot_locked(self) -> Dict:
+        pending = sorted(self._required - self._ready)
+        return {
+            "gate_open": self._gate_open and not self._gate_forced_closed,
+            "forced_open": self._gate_forced_open,
+            "forced_closed": self._gate_forced_closed,
+            "required_count": len(self._required),
+            "ready_count": len(self._ready),
+            "failed_count": len(self._failed),
+            "pending_components": pending,
+            "ready_components": sorted(self._ready),
+            "failed_components": dict(self._failed),
+            "opened_at": self._opened_at.isoformat() if self._opened_at else None,
+        }
 
 
 # ---------------------------------------------------------------------------
