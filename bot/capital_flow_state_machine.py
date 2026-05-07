@@ -1060,6 +1060,7 @@ class CapitalRefreshCoordinator:
         # in Stage 4 confidence scoring.
         # =================================================================
         raw_balances: Dict[str, float] = {}   # broker_id → fetched scalar
+        balance_fetched_successfully = False
         kraken_fetch_ts: Optional[float] = None
         kraken_response_age_s: float = FRESHNESS_TTL_S   # default = maximally stale
         assets_priced_success_pct: float = 1.0
@@ -1101,6 +1102,8 @@ class CapitalRefreshCoordinator:
                 if is_kraken:
                     kraken_fetch_ts = time.time()
                 raw = broker.get_account_balance()
+                if raw is not None:
+                    balance_fetched_successfully = True
                 if is_kraken and hasattr(broker, "get_balance_fetch_timestamp"):
                     # Use the broker's own timestamp for accuracy (it may have
                     # served a TTL-cached result rather than hitting the API).
@@ -1170,7 +1173,7 @@ class CapitalRefreshCoordinator:
             if authority.last_updated is not None
             else float("inf")
         )
-        if not self.balance_hydrated:
+        if balance_fetched_successfully and not self.balance_hydrated:
             usd_available = float(sum(new_balances.values()))
             if new_balances:
                 if len(new_balances) == 1:
@@ -1196,10 +1199,12 @@ class CapitalRefreshCoordinator:
             else:
                 try:
                     bootstrap_fsm = get_bootstrap_fsm()
-                    bootstrap_fsm.transition(
+                    advanced = bootstrap_fsm.transition(
                         BootstrapState.BALANCE_HYDRATED,
                         reason="initial balances fetched successfully",
                     )
+                    if advanced:
+                        logger.info("FSM ADVANCED: BALANCE_READY")
                 except Exception as exc:
                     logger.warning(
                         "[Coordinator] balance hydration bootstrap transition failed: %s",

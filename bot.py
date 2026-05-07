@@ -5224,19 +5224,31 @@ def _run_bot_startup_and_trading():
                     _bms_refresh_ok = True
                 except Exception as _bms_err:
                     logger.warning("[Bootstrap] BOOTSTRAP_START refresh error: %s", _bms_err)
+            skip_balance_polling_loop = False
+            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                try:
+                    if _get_bootstrap_fsm().state == _BootstrapState.BALANCE_HYDRATED:
+                        skip_balance_polling_loop = True
+                except Exception:
+                    pass
             if _bms_ca is not None and _bms_refresh_ok:
                 # 60 s covers typical cold-start broker API latency; the capital gate
                 # polling loop below handles the case where we proceed without hydration.
                 _bms_hydrate_start = time.monotonic()
                 _bms_hydrate_timeout = 60.0
-                while not _bms_ca.is_hydrated:
-                    if time.monotonic() - _bms_hydrate_start >= _bms_hydrate_timeout:
-                        logger.warning(
-                            "[Bootstrap] Capital hydration timeout (%.0fs) — proceeding",
-                            _bms_hydrate_timeout,
-                        )
-                        break
-                    time.sleep(0.1)
+                if skip_balance_polling_loop:
+                    logger.info(
+                        "[Bootstrap] Skipping balance polling loop — bootstrap FSM already BALANCE_HYDRATED"
+                    )
+                else:
+                    while not _bms_ca.is_hydrated:
+                        if time.monotonic() - _bms_hydrate_start >= _bms_hydrate_timeout:
+                            logger.warning(
+                                "[Bootstrap] Capital hydration timeout (%.0fs) — proceeding",
+                                _bms_hydrate_timeout,
+                            )
+                            break
+                        time.sleep(0.1)
                 if _bms_ca.is_hydrated:
                     logger.info("[Bootstrap] CapitalAuthority hydrated — releasing startup lock")
                     if _bms_mabm is not None:
