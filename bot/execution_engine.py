@@ -6,7 +6,7 @@ Handles order execution and position management for Apex Strategy v7.1
 Enhanced with Execution Intelligence Layer for optimal trade execution.
 """
 
-from typing import Any, Dict, Optional, List, Set
+from typing import Any, Dict, Optional, List, Set, Tuple
 from datetime import datetime, timedelta
 import logging
 import sys
@@ -233,6 +233,7 @@ MINIMUM_TRADING_BALANCE: float = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0
 # Hard floor for every order regardless of broker-specific minimums.
 MIN_TRADE_USD: float = float(os.getenv("MIN_TRADE_USD", os.getenv("MIN_NOTIONAL_USD", "3.50")))
 MIN_NOTIONAL_USD: float = MIN_TRADE_USD
+ABSOLUTE_MIN_ORDER_USD: float = 1.0
 
 # Fee-dominated micro-trade guardrails.
 TAKER_FEE_RATE: float = float(os.getenv("TAKER_FEE_RATE", "0.0026"))
@@ -1103,7 +1104,7 @@ class ExecutionEngine:
         return type(self.broker_client).__name__.lower()
 
     @staticmethod
-    def _extract_balance_values(balance_data: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
+    def _extract_balance_values(balance_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
         """Return (available_balance, total_balance) from a balance dict."""
         if not balance_data:
             return None, None
@@ -1138,7 +1139,7 @@ class ExecutionEngine:
             total = None
         return available, total
 
-    def _get_cached_balance_snapshot(self) -> tuple[Optional[float], Optional[float], Dict[str, Any]]:
+    def _get_cached_balance_snapshot(self) -> Tuple[Optional[float], Optional[float], Dict[str, Any]]:
         """Return cached (available, total, raw) balance without polling the exchange."""
         broker_key = self._get_broker_label()
 
@@ -1876,7 +1877,7 @@ class ExecutionEngine:
             # backstop remains self-contained even if other modules fail to load.
             # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
             _HARD_MIN_BY_BROKER = {
-                'coinbase': max(1.0, MIN_TRADE_USD),
+                'coinbase': max(ABSOLUTE_MIN_ORDER_USD, MIN_TRADE_USD),
                 'kraken':   max(10.5, MIN_TRADE_USD),
                 'binance':  10.0,   # Binance MIN_NOTIONAL filter (USDT pairs)
                 'okx':      10.0,   # OKX operational floor
@@ -1891,10 +1892,10 @@ class ExecutionEngine:
             _hard_min = (
                 _min_notional_floor
                 if _min_notional_floor is not None
-                else _HARD_MIN_BY_BROKER.get(_hard_broker_key, max(1.0, MIN_TRADE_USD))
+                else _HARD_MIN_BY_BROKER.get(_hard_broker_key, max(ABSOLUTE_MIN_ORDER_USD, MIN_TRADE_USD))
             )
             if _hard_min is not None:
-                _hard_min = max(1.0, float(_hard_min))
+                _hard_min = max(ABSOLUTE_MIN_ORDER_USD, float(_hard_min))
 
             # Reserve a spendable cash buffer to avoid precision/fee insufficient-funds rejects.
             if _spendable_usd is not None and position_size > _spendable_usd:
@@ -2402,8 +2403,8 @@ class ExecutionEngine:
 
                 # Post-submit fill confirmation (when order_id is available)
                 if result:
-                    _expected_qty = position_size / entry_price if entry_price > 0 else 0.0
-                    result = self._confirm_order_fill(symbol, order_side, _expected_qty, result)
+                    _expected_quantity = position_size / entry_price if entry_price > 0 else 0.0
+                    result = self._confirm_order_fill(symbol, order_side, _expected_quantity, result)
 
                 # ─── FIX 6: MANDATORY POST-EXECUTION LOG ─────────────────────────
                 _result_status_log = result.get('status', 'N/A') if result else 'NONE'
