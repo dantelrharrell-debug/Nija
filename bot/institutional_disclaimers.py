@@ -56,7 +56,14 @@ def _resolve_disclosure_interval_seconds() -> float:
     if not raw:
         return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
     try:
-        return max(0.0, float(raw)) * 3600
+        hours = float(raw)
+        if hours < 0:
+            logging.getLogger(COMPLIANCE_LOGGER_NAME).warning(
+                "NIJA_DISCLOSURE_INTERVAL_HOURS is negative (%s); disclosures will emit on first boot only.",
+                raw,
+            )
+            return 0.0
+        return hours * 3600
     except ValueError:
         return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
 
@@ -76,6 +83,7 @@ def _should_emit_disclosure() -> bool:
             _FIRST_BOOT_THIS_PROCESS = False
             _LAST_DISCLOSURE_TIMESTAMP = now
             return True
+        # Interval <= 0 disables periodic emission after the first boot.
         if interval_seconds <= 0:
             return False
         if now - _LAST_DISCLOSURE_TIMESTAMP >= interval_seconds:
@@ -94,6 +102,7 @@ class InstitutionalLogger:
     
     Wraps standard Python logger to automatically include validation disclaimers
     in appropriate contexts. Disclosure emission is gated globally per process
+    with time-based throttling configurable via NIJA_DISCLOSURE_INTERVAL_HOURS,
     so multiple logger instances share the same timing rules.
     """
     
@@ -102,7 +111,7 @@ class InstitutionalLogger:
         Initialize institutional logger.
         
         Args:
-            name: Logger name
+            name: Logger name (used to initialize the underlying logger)
             base_logger: Optional base logger to wrap (creates new if None)
         """
         self.logger = base_logger or logging.getLogger(name)
