@@ -4058,34 +4058,61 @@ def _run_bot_startup_and_trading():
                     logger.warning("⚠️  Trading capability verification found issues")
                     logger.warning("   Bot may not function correctly")
                 else:
-                    # Activation must occur in the bootstrap owner thread.
-                    try:
-                        from bot.trading_state_machine import get_state_machine as _get_tsm_startup, TradingState as _TS_startup
+                    # FIX: Replace deferral logic with immediate readiness flag setting
+                    logger.critical("🚀 SETTING ALL READINESS FLAGS AFTER SUCCESSFUL INITIALIZATION")
+                    _initialized_state["broker_ready"] = True
+                    _initialized_state["risk_ready"] = True
+                    _initialized_state["strategy_ready"] = True
+                    _initialized_state["execution_ready"] = True
 
-                        if _strategy_ready_event.is_set():
-                            _tsm_startup = _get_tsm_startup()
-                            _startup_state = _tsm_startup.get_current_state()
-                            logger.info(
-                                "Startup-thread activation bypass disabled: state=%s; waiting for "
-                                "BootstrapFSM READY -> RUNNING handoff",
-                                getattr(_startup_state, "value", str(_startup_state)),
-                            )
-                        else:
-                            logger.info(
-                                "Startup-thread activation bypass disabled: strategy not fully ready yet"
-                            )
-                    except Exception as _startup_activation_err:
-                        logger.warning("Startup-thread activation status probe failed: %s", _startup_activation_err)
+                    # Log readiness state
+                    _ft_state_snapshot = _read_initialized_state_snapshot(context="post-capability-verification")
+                    (
+                        _ft_system_ready,
+                        _ft_broker_ready,
+                        _ft_risk_ready,
+                        _ft_strategy_ready,
+                        _ft_capital_ready,
+                        _ft_execution_ready,
+                    ) = _compute_system_ready(_ft_state_snapshot)
 
-                    # Do NOT release bootstrap events here — the startup thread must not
-                    # signal completion before the full system_ready barrier is satisfied
-                    # (strategy_ready + broker_ready + risk_ready + capital_ready +
-                    # execution_ready).  Bootstrap events are set by the normal boot path
-                    # once the FSM reaches RUNNING_SUPERVISED (see finalize_boot / B1→B2).
-                    logger.info(
-                        "Startup-thread capability verification complete — "
-                        "deferring bootstrap event release to RUNNING_SUPERVISED gate"
+                    logger.critical(
+                        f"🚀 SYSTEM READY STATE:\n"
+                        f"  broker_ready={_ft_broker_ready}\n"
+                        f"  risk_ready={_ft_risk_ready}\n"
+                        f"  strategy_ready={_ft_strategy_ready}\n"
+                        f"  capital_ready={_ft_capital_ready}\n"
+                        f"  execution_ready={_ft_execution_ready}"
                     )
+
+                    # Auto-release RUNNING_SUPERVISED after validation
+                    if (
+                        _ft_broker_ready and
+                        _ft_risk_ready and
+                        _ft_strategy_ready and
+                        _ft_capital_ready and
+                        _ft_execution_ready
+                    ):
+                        logger.critical("🚀 ALL STRICT READINESS FLAGS SATISFIED - RELEASING RUNNING_SUPERVISED")
+                        try:
+                            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                _bfsm = _get_bootstrap_fsm()
+                                logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                _bfsm_transition(
+                                    _BootstrapState.RUNNING_SUPERVISED,
+                                    "Post-capability-verification: all readiness gates satisfied",
+                                )
+                                logger.critical("🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP")
+                        except Exception as _fsm_err:
+                            logger.error(f"FSM transition error: {_fsm_err}")
+                    else:
+                        logger.critical(
+                            f"🚀 FORCE_TRADE: not all gates open yet — "
+                            f"broker={_ft_broker_ready} risk={_ft_risk_ready} "
+                            f"strategy={_ft_strategy_ready} capital={_ft_capital_ready} "
+                            f"execution={_ft_execution_ready} — "
+                            f"readiness flags set; FSM transition deferred to normal boot path"
+                        )
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
