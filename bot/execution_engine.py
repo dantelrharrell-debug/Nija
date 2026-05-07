@@ -115,6 +115,31 @@ except ImportError:
         MIN_NOTIONAL_GATE_AVAILABLE = False
         logger.warning("⚠️ Minimum Notional Gate not available")
 
+# Import BalanceService (single source of truth for balance snapshots)
+try:
+    from bot.balance_service import BalanceService
+    BALANCE_SERVICE_AVAILABLE = True
+except ImportError:
+    try:
+        from balance_service import BalanceService
+        BALANCE_SERVICE_AVAILABLE = True
+    except ImportError:
+        BALANCE_SERVICE_AVAILABLE = False
+        BalanceService = None  # type: ignore
+
+# Import Execution Confirmation Layer (fill verification)
+try:
+    from bot.execution_confirmation_layer import get_execution_confirmation_layer, FillStatus
+    EXECUTION_CONFIRMATION_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_confirmation_layer import get_execution_confirmation_layer, FillStatus
+        EXECUTION_CONFIRMATION_AVAILABLE = True
+    except ImportError:
+        EXECUTION_CONFIRMATION_AVAILABLE = False
+        get_execution_confirmation_layer = None  # type: ignore
+        FillStatus = None  # type: ignore
+
 # Import Exchange Constraints Enforcer (reject-proof order validation)
 try:
     from bot.exchange_constraints_enforcer import (
@@ -541,6 +566,7 @@ class ExecutionEngine:
         symbol: str,
         side: str,
         size_usd: float,
+        available_balance_usd: Optional[float] = None,
         price_hint_usd: Optional[float] = None,
         strategy_name: str = "ExecutionEngine",
     ) -> Dict[str, Any]:
@@ -589,6 +615,7 @@ class ExecutionEngine:
                 size_usd=float(max(0.0, size_usd)),
                 order_type="MARKET",
                 preferred_broker=preferred_broker,
+                available_balance_usd=available_balance_usd,
                 price_hint_usd=price_hint_usd,
             )
         )
@@ -618,6 +645,8 @@ class ExecutionEngine:
         side: str,
         size_usd: float,
         limit_price: float,
+        available_balance_usd: Optional[float] = None,
+        spendable_balance_usd: Optional[float] = None,
         strategy_name: str = "ExecutionEngine",
     ) -> Dict[str, Any]:
         """Place a limit order through the ECEL choke point.
@@ -637,18 +666,16 @@ class ExecutionEngine:
             pass
 
         # Fetch available balance for fee-aware sizing
-        available_balance: Optional[float] = None
-        spendable_balance: Optional[float] = None
-        if broker_client and hasattr(broker_client, "get_account_balance"):
-            try:
-                _bal = broker_client.get_account_balance()
-                available_balance = (
-                    float(_bal.get("available_balance", _bal.get("total_balance", 0.0)))
-                    if isinstance(_bal, dict) else float(_bal)
+        available_balance: Optional[float] = available_balance_usd
+        spendable_balance: Optional[float] = spendable_balance_usd
+        if available_balance is None and spendable_balance is None:
+            cached_available, cached_total, _ = self._get_cached_balance_snapshot()
+            available_balance = cached_available if cached_available is not None else cached_total
+            if available_balance is not None:
+                spendable_balance = max(
+                    0.0,
+                    available_balance * (1.0 - max(0.0, min(BALANCE_BUFFER_PCT, 0.50))),
                 )
-                spendable_balance = max(0.0, available_balance * (1.0 - max(0.0, min(BALANCE_BUFFER_PCT, 0.50))))
-            except Exception:
-                pass
 
         if _ECEL_AVAILABLE and _get_ecel and _ECELCompileRequest:
             ecel = _get_ecel()
@@ -1075,6 +1102,80 @@ class ExecutionEngine:
             return broker_type.lower()
         return type(self.broker_client).__name__.lower()
 
+    @staticmethod
+    def _extract_balance_values(balance_data: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
+        """Return (available_balance, total_balance) from a balance dict."""
+        if not balance_data:
+            return None, None
+        available = None
+        total = None
+        try:
+            available = float(
+                balance_data.get(
+                    "available_balance",
+                    balance_data.get(
+                        "trading_balance",
+                        balance_data.get(
+                            "total_balance",
+                            balance_data.get("total_funds", 0.0),
+                        ),
+                    ),
+                )
+            )
+        except Exception:
+            available = None
+        try:
+            total = float(
+                balance_data.get(
+                    "total_balance",
+                    balance_data.get(
+                        "total_funds",
+                        balance_data.get("trading_balance", available or 0.0),
+                    ),
+                )
+            )
+        except Exception:
+            total = None
+        return available, total
+
+    def _get_cached_balance_snapshot(self) -> tuple[Optional[float], Optional[float], Dict[str, Any]]:
+        """Return cached (available, total, raw) balance without polling the exchange."""
+        broker_key = self._get_broker_label()
+
+        if BALANCE_SERVICE_AVAILABLE and BalanceService is not None:
+            detailed = BalanceService.get_detailed(broker_key)
+            if detailed:
+                available, total = self._extract_balance_values(detailed)
+                if available is not None or total is not None:
+                    return available, total, detailed
+            scalar = BalanceService.get(broker_key)
+            if scalar > 0:
+                cached = {
+                    "trading_balance": scalar,
+                    "total_balance": scalar,
+                    "available_balance": scalar,
+                }
+                return scalar, scalar, cached
+
+        # Fallback to broker-local caches (no network call)
+        if self.broker_client is not None:
+            cached_detail = getattr(self.broker_client, "_balance_cache", None)
+            if isinstance(cached_detail, dict):
+                available, total = self._extract_balance_values(cached_detail)
+                if available is not None or total is not None:
+                    return available, total, cached_detail
+            cached_scalar = getattr(self.broker_client, "_last_known_balance", None)
+            if isinstance(cached_scalar, (int, float)) and cached_scalar > 0:
+                scalar = float(cached_scalar)
+                cached = {
+                    "trading_balance": scalar,
+                    "total_balance": scalar,
+                    "available_balance": scalar,
+                }
+                return scalar, scalar, cached
+
+        return None, None, {}
+
     def _extract_order_failure_details(
         self,
         broker_response: Optional[Dict] = None,
@@ -1147,6 +1248,66 @@ class ExecutionEngine:
         )
         logger.error("   Hint: %s", details["hint"])
         logger.error("   ⚠️  DO NOT RECORD TRADE - Order did not execute")
+
+    def _confirm_order_fill(
+        self,
+        symbol: str,
+        side: str,
+        expected_quantity: float,
+        broker_response: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Attempt to confirm fills via ExecutionConfirmationLayer when available."""
+        if not broker_response or not isinstance(broker_response, dict):
+            return broker_response
+        if not EXECUTION_CONFIRMATION_AVAILABLE or get_execution_confirmation_layer is None:
+            return broker_response
+        if self.broker_client is None:
+            return broker_response
+
+        order_id = broker_response.get("order_id") or broker_response.get("id")
+        if not order_id or str(order_id).lower() == "pipeline":
+            return broker_response
+
+        status = self._normalized_order_status(broker_response)
+        if status in ("filled", "closed"):
+            return broker_response
+
+        try:
+            ecl = get_execution_confirmation_layer()
+            confirm = ecl.confirm_existing_order(
+                broker=self.broker_client,
+                symbol=symbol,
+                side=side,
+                expected_size=max(0.0, expected_quantity),
+                order_id=str(order_id),
+                initial_response=broker_response,
+            )
+        except Exception as exc:
+            logger.debug("Fill confirmation skipped for %s (%s)", symbol, exc)
+            return broker_response
+
+        if confirm is None:
+            return broker_response
+
+        if confirm.avg_price and not broker_response.get("filled_price"):
+            broker_response["filled_price"] = confirm.avg_price
+        if confirm.filled_size > 0:
+            broker_response["filled_volume"] = confirm.filled_size
+
+        if FillStatus is not None:
+            if confirm.status == FillStatus.FILLED:
+                broker_response["status"] = "filled"
+                logger.info("✅ Fill confirmed: %s %s @ %s", symbol, side, confirm.avg_price or "market")
+            elif confirm.status == FillStatus.PARTIAL:
+                broker_response["status"] = "pending"
+                logger.warning(
+                    "⚠️ Partial fill confirmed: %s %s (%.2f%%)",
+                    symbol,
+                    side,
+                    confirm.filled_pct,
+                )
+
+        return broker_response
 
     def _resolve_expected_win_rate(self, take_profit_levels: Dict[str, float]) -> float:
         """Resolve expected win probability for expectancy gate."""
@@ -1503,29 +1664,72 @@ class ExecutionEngine:
             except Exception as _auth_exc:
                 logger.debug("Bootstrap execution authority check skipped: %s", _auth_exc)
 
+            _balance_available, _balance_total, _balance_data = self._get_cached_balance_snapshot()
+
             # ─── FIX 1: MINIMUM BALANCE GATE ────────────────────────────────────────
             # Skip accounts that cannot meet the minimum trading balance.
             # In FORCE_TRADE_MODE (micro test mode), bypass this gate.
             if self.broker_client is not None and not FORCE_TRADE_MODE:
-                try:
-                    _acct_balance = self.broker_client.get_account_balance()
-                    _scalar_balance = float(_acct_balance) if not isinstance(_acct_balance, dict) else float(
-                        _acct_balance.get('total_balance', _acct_balance.get('available_balance', 0.0))
+                _scalar_balance = _balance_total if _balance_total is not None else _balance_available
+                if _scalar_balance is not None and _scalar_balance <= 0:
+                    logger.warning(
+                        "⛔ FIX1 BALANCE GATE: Skipping %s — zero/negative balance ($%.2f)",
+                        symbol,
+                        _scalar_balance,
                     )
-                    if _scalar_balance <= 0:
-                        logger.warning(
-                            "⛔ FIX1 BALANCE GATE: Skipping %s — zero/negative balance ($%.2f)",
-                            symbol, _scalar_balance,
-                        )
-                        return None
-                except Exception as _bal_exc:
-                    logger.debug("Balance gate check failed (non-blocking): %s", _bal_exc)
+                    return None
 
             # ─── FIX 2: MINIMUM ORDER SIZE GATE ─────────────────────────────────────
-            if position_size < MIN_NOTIONAL_USD:
+            broker_label = self._get_broker_label()
+            _available_usd = _balance_available if _balance_available is not None else _balance_total
+            _spendable_usd = None
+            if _available_usd is not None:
+                _spendable_usd = max(
+                    0.0,
+                    _available_usd * (1.0 - max(0.0, min(BALANCE_BUFFER_PCT, 0.50))),
+                )
+                if position_size > _spendable_usd > 0:
+                    logger.info(
+                        "🔒 Spendable-balance cap: requested $%.2f -> $%.2f (available=$%.2f, buffer=%.1f%%)",
+                        position_size,
+                        _spendable_usd,
+                        _available_usd,
+                        BALANCE_BUFFER_PCT * 100.0,
+                    )
+                    position_size = _spendable_usd
+
+            _min_notional_floor = None
+            if MIN_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate:
+                try:
+                    _notional_gate = get_minimum_notional_gate()
+                    _min_notional_floor = _notional_gate.config.get_min_notional_for_broker(
+                        broker_label,
+                        balance=_available_usd or 0.0,
+                    )
+                    if position_size < _min_notional_floor:
+                        if _spendable_usd is not None and _min_notional_floor > _spendable_usd:
+                            logger.warning(
+                                "⛔ FIX2 ORDER SIZE GATE: %s below min notional $%.2f "
+                                "(spendable=$%.2f)",
+                                symbol,
+                                _min_notional_floor,
+                                _spendable_usd,
+                            )
+                            return None
+                        logger.info(
+                            "📈 Auto-adjusting size from $%.2f to $%.2f (minimum notional)",
+                            position_size,
+                            _min_notional_floor,
+                        )
+                        position_size = _min_notional_floor
+                except Exception as _ng_exc:
+                    logger.debug("Notional gate sizing skipped: %s", _ng_exc)
+            elif position_size < MIN_NOTIONAL_USD:
                 logger.warning(
                     "⛔ FIX2 ORDER SIZE GATE: %s order too small ($%.2f < $%.2f minimum)",
-                    symbol, position_size, MIN_NOTIONAL_USD,
+                    symbol,
+                    position_size,
+                    MIN_NOTIONAL_USD,
                 )
                 return None
 
@@ -1684,32 +1888,24 @@ class ExecutionEngine:
                 _hard_broker_key = (
                     _bt.value if hasattr(_bt, 'value') else str(_bt)
                 ).lower()
-            _hard_min = _HARD_MIN_BY_BROKER.get(_hard_broker_key, max(1.0, MIN_TRADE_USD))
+            _hard_min = (
+                _min_notional_floor
+                if _min_notional_floor is not None
+                else _HARD_MIN_BY_BROKER.get(_hard_broker_key, max(1.0, MIN_TRADE_USD))
+            )
+            if _hard_min is not None:
+                _hard_min = max(1.0, float(_hard_min))
 
             # Reserve a spendable cash buffer to avoid precision/fee insufficient-funds rejects.
-            if self.broker_client and hasattr(self.broker_client, "get_account_balance"):
-                try:
-                    _bal_data = self.broker_client.get_account_balance()
-                    _available_usd = (
-                        float(_bal_data.get('available_balance', _bal_data.get('total_balance', 0.0)))
-                        if isinstance(_bal_data, dict)
-                        else float(_bal_data)
-                    )
-                    _spendable_usd = max(
-                        0.0,
-                        _available_usd * (1.0 - max(0.0, min(BALANCE_BUFFER_PCT, 0.50))),
-                    )
-                    if _spendable_usd > 0 and position_size > _spendable_usd:
-                        logger.info(
-                            "🔒 Spendable-balance cap: requested $%.2f -> $%.2f (available=$%.2f, buffer=%.1f%%)",
-                            position_size,
-                            _spendable_usd,
-                            _available_usd,
-                            BALANCE_BUFFER_PCT * 100.0,
-                        )
-                        position_size = _spendable_usd
-                except Exception:
-                    pass
+            if _spendable_usd is not None and position_size > _spendable_usd:
+                logger.info(
+                    "🔒 Spendable-balance cap: requested $%.2f -> $%.2f (available=$%.2f, buffer=%.1f%%)",
+                    position_size,
+                    _spendable_usd,
+                    _available_usd or 0.0,
+                    BALANCE_BUFFER_PCT * 100.0,
+                )
+                position_size = _spendable_usd
 
             # Optional one-shot probe trade to validate end-to-end execution plumbing.
             if FORCE_FIRST_TRADE and FORCE_TRADE_ON_FIRST_VALID_SIGNAL and not self._force_first_trade_done:
@@ -1721,11 +1917,48 @@ class ExecutionEngine:
                 position_size = _probe_size
 
             if position_size < _hard_min:
-                logger.warning(
-                    f"Trade skipped: size ${position_size:.2f} < min ${_hard_min:.2f} "
-                    f"for {symbol} ({_hard_broker_key or 'broker'})"
-                )
-                return None
+                if _spendable_usd is not None and _hard_min <= _spendable_usd:
+                    logger.info(
+                        "📈 Auto-adjusting size from $%.2f to $%.2f (hard minimum)",
+                        position_size,
+                        _hard_min,
+                    )
+                    position_size = _hard_min
+                else:
+                    logger.warning(
+                        f"Trade skipped: size ${position_size:.2f} < min ${_hard_min:.2f} "
+                        f"for {symbol} ({_hard_broker_key or 'broker'})"
+                    )
+                    return None
+
+            # ✅ Exchange constraints enforcer — adjust or reject before broker submission
+            if EXCHANGE_CONSTRAINTS_AVAILABLE and validate_order_constraints and entry_price > 0:
+                try:
+                    _constraint = validate_order_constraints(
+                        symbol=symbol,
+                        order_size_usd=position_size,
+                        price_usd=entry_price,
+                        broker_type=_hard_broker_key or broker_label,
+                    )
+                    if not _constraint.is_valid:
+                        _recommended = _constraint.recommended_size_usd or _constraint.min_required_usd
+                        if _recommended and (_spendable_usd is None or _recommended <= _spendable_usd):
+                            logger.info(
+                                "📏 Exchange constraint resize: $%.2f → $%.2f (%s)",
+                                position_size,
+                                _recommended,
+                                _constraint.reason,
+                            )
+                            position_size = _recommended
+                        else:
+                            logger.warning(
+                                "🚫 EXCHANGE CONSTRAINT REJECT: %s (size=$%.2f)",
+                                _constraint.reason,
+                                position_size,
+                            )
+                            return None
+                except Exception as _constraint_exc:
+                    logger.debug("Exchange constraint validation skipped: %s", _constraint_exc)
 
             logger.info(
                 "✅ TRADE APPROVED: symbol=%s side=%s size=$%.2f broker=%s",
@@ -1754,7 +1987,8 @@ class ExecutionEngine:
                     symbol=symbol,
                     size_usd=position_size,
                     is_stop_loss=False,
-                    broker_name=broker_name
+                    broker_name=broker_name,
+                    balance=_available_usd or 0.0,
                 )
                 
                 if not is_valid:
@@ -2025,6 +2259,8 @@ class ExecutionEngine:
                             side=order_side,
                             size_usd=position_size,
                             limit_price=_limit_price,
+                            available_balance_usd=_available_usd,
+                            spendable_balance_usd=_spendable_usd,
                             strategy_name=strategy_name if hasattr(self, "_strategy_name") else "ExecutionEngine",
                         )
                     except Exception as _limit_exc:
@@ -2050,6 +2286,7 @@ class ExecutionEngine:
                                 symbol=symbol,
                                 side=order_side,
                                 size_usd=position_size,
+                                available_balance_usd=_spendable_usd or _available_usd,
                                 price_hint_usd=entry_price,
                             )
                         except Exception as _fb_exc:
@@ -2078,19 +2315,8 @@ class ExecutionEngine:
                     _compiled_order = None
                     if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc:
                         try:
-                            # Get current balance
-                            _available_balance = 0.0
-                            if self.broker_client and hasattr(self.broker_client, "get_account_balance"):
-                                try:
-                                    _bal_data = self.broker_client.get_account_balance()
-                                    if isinstance(_bal_data, dict):
-                                        _available_balance = float(
-                                            _bal_data.get('available_balance', _bal_data.get('total_balance', 0.0))
-                                        )
-                                    else:
-                                        _available_balance = float(_bal_data)
-                                except Exception:
-                                    pass
+                            # Use cached balance snapshot (no exchange polling)
+                            _available_balance = float(_available_usd or 0.0)
 
                             # Build pricing snapshot
                             _pricing = PricingSnapshot(
@@ -2164,6 +2390,7 @@ class ExecutionEngine:
                             symbol=symbol,
                             side=order_side,
                             size_usd=_order_size_usd,
+                            available_balance_usd=_spendable_usd or _available_usd,
                             price_hint_usd=entry_price,
                         )
                     except Exception as _mk_exc:
@@ -2172,6 +2399,11 @@ class ExecutionEngine:
                     self._emit_execution_result(symbol, order_side, result, _entry_t0, _market_exc)
                     if _market_exc is not None:
                         raise _market_exc
+
+                # Post-submit fill confirmation (when order_id is available)
+                if result:
+                    _expected_qty = position_size / entry_price if entry_price > 0 else 0.0
+                    result = self._confirm_order_fill(symbol, order_side, _expected_qty, result)
 
                 # ─── FIX 6: MANDATORY POST-EXECUTION LOG ─────────────────────────
                 _result_status_log = result.get('status', 'N/A') if result else 'NONE'
@@ -2540,19 +2772,13 @@ class ExecutionEngine:
                     _exit_compiled_order = None
                     if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc:
                         try:
-                            # Get current balance
-                            _available_balance = 0.0
-                            if hasattr(self.broker_client, "get_account_balance"):
-                                try:
-                                    _bal_data = self.broker_client.get_account_balance()
-                                    if isinstance(_bal_data, dict):
-                                        _available_balance = float(
-                                            _bal_data.get('available_balance', _bal_data.get('total_balance', 0.0))
-                                        )
-                                    else:
-                                        _available_balance = float(_bal_data)
-                                except Exception:
-                                    pass
+                            # Get cached balance snapshot (no exchange polling)
+                            _exit_available, _exit_total, _ = self._get_cached_balance_snapshot()
+                            _available_balance = float(
+                                _exit_available
+                                if _exit_available is not None
+                                else (_exit_total or 0.0)
+                            )
 
                             # Build pricing snapshot for exit
                             _exit_pricing = PricingSnapshot(
@@ -2614,6 +2840,9 @@ class ExecutionEngine:
                     self._emit_execution_result(symbol, order_side, result, _exit_t0, _exit_exc)
                     if _exit_exc is not None:
                         raise _exit_exc
+
+                    if result:
+                        result = self._confirm_order_fill(symbol, order_side, _exit_quantity, result)
 
                     if self._normalized_order_status(result) == 'error':
                         error_msg = result.get('error')

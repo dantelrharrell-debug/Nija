@@ -358,6 +358,51 @@ class ExecutionConfirmationLayer:
         )
         return result
 
+    def confirm_existing_order(
+        self,
+        broker: Any,
+        symbol: str,
+        side: str,
+        expected_size: float,
+        order_id: Optional[str],
+        initial_response: Optional[Dict[str, Any]] = None,
+    ) -> ConfirmationResult:
+        """
+        Confirm fill status for an already-placed order.
+
+        Uses the same polling logic as :meth:`place_and_confirm` but skips
+        order placement, allowing callers to verify an order placed through
+        another pipeline.
+        """
+        result = ConfirmationResult(
+            symbol=symbol,
+            side=side,
+            order_id=order_id,
+            expected_size=expected_size,
+            placed_at=datetime.now(),
+        )
+
+        filled, avg_price = self._wait_for_fill(
+            broker,
+            order_id,
+            initial_response or {},
+        )
+        result.filled_size = filled
+        result.avg_price = avg_price
+        result.confirmed_at = datetime.now()
+
+        if expected_size > 0:
+            if filled >= expected_size * (1.0 - self.partial_fill_tolerance):
+                result.status = FillStatus.FILLED
+            elif filled > 0:
+                result.status = FillStatus.PARTIAL
+            else:
+                result.status = FillStatus.UNFILLED
+        else:
+            result.status = FillStatus.FILLED if filled > 0 else FillStatus.UNFILLED
+
+        return result
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

@@ -129,7 +129,8 @@ class MinimumNotionalGate:
         symbol: str, 
         size_usd: float, 
         is_stop_loss: bool = False,
-        broker_name: Optional[str] = None
+        broker_name: Optional[str] = None,
+        balance: float = 0.0
     ) -> Tuple[bool, Optional[str]]:
         """
         Validate that entry size meets minimum notional requirements
@@ -154,7 +155,7 @@ class MinimumNotionalGate:
         
         # Get applicable minimum notional
         if broker_name:
-            min_notional = self.config.get_min_notional_for_broker(broker_name)
+            min_notional = self.config.get_min_notional_for_broker(broker_name, balance=balance)
         else:
             min_notional = self.config.min_entry_notional_usd
         
@@ -199,7 +200,8 @@ class MinimumNotionalGate:
     def adjust_size_to_minimum(
         self, 
         size_usd: float, 
-        broker_name: Optional[str] = None
+        broker_name: Optional[str] = None,
+        balance: float = 0.0
     ) -> float:
         """
         Adjust size to meet minimum notional if below threshold
@@ -215,8 +217,8 @@ class MinimumNotionalGate:
             return size_usd
         
         min_notional = (
-            self.config.get_min_notional_for_broker(broker_name) 
-            if broker_name 
+            self.config.get_min_notional_for_broker(broker_name, balance=balance)
+            if broker_name
             else self.config.min_entry_notional_usd
         )
         
