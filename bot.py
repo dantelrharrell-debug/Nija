@@ -5309,6 +5309,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     _BootstrapState.BALANCE_HYDRATED,
                     f"startup balance hydration complete: ${_total_balance:.2f}",
                 )
+            logger.critical(
+                "LIFECYCLE: balance hydration complete - FSM state=%s",
+                getattr(_get_bootstrap_fsm().state, "value", "UNAVAILABLE")
+                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None
+                else "UNAVAILABLE",
+            )
 
             _minimum_trading_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1"))
             logger.critical(
@@ -5647,6 +5653,13 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                                 _bms_hydrate_timeout,
                             )
                             break
+                        # Gate: exit polling loop early if bootstrap FSM already
+                        # reports balance hydration complete (avoids infinite loop).
+                        if _is_balance_hydrated_ready():
+                            logger.critical(
+                                "LIFECYCLE: bootstrap complete - exiting balance polling loop"
+                            )
+                            break
                         time.sleep(0.1)
                 if _bms_ca.is_hydrated:
                     logger.info("[Bootstrap] CapitalAuthority hydrated — releasing startup lock")
@@ -5657,6 +5670,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                             logger.warning("[Bootstrap] finalize_bootstrap_ready error: %s", _bms_fbr_err)
             # ── END BOOTSTRAP MASTER SEQUENCE ─────────────────────────────────
             # ── B: Phase 2 → 3 (capital brain hydrated; strategy engine ready) ──
+            logger.critical("LIFECYCLE: entering strategy scheduler")
             _advance_phase(_Phase.STRATEGY_ENGINE, reason="CapitalAuthority hydrated; capital data available")
             if _startup_buffer:
                 _startup_buffer.flush_phase("BROKER_REGISTRY")
@@ -5699,6 +5713,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
 
             logger.critical("🔥 A5: before SENTINEL B")
             logger.critical("🔥 SENTINEL B: entering capital gate")
+            logger.critical("LIFECYCLE: entering market scanner")
             _capital_gate_deadline = time.time() + 60
             while True:
                 logger.critical("🔥 SENTINEL C: capital loop iteration")
@@ -5863,6 +5878,8 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 time.sleep(3)
             logger.info("=" * 70)
             # ── B: Phase 3 → 4 (strategy engine ready; execution layer may begin) ──
+            logger.critical("LIFECYCLE: entering signal generation")
+            logger.critical("LIFECYCLE: entering order execution coordinator")
             _advance_phase(_Phase.EXECUTION_LAYER, reason="startup capital confirmed; strategy engine ready")
             if _startup_buffer:
                 _startup_buffer.flush_phase("CAPITAL_BRAIN")
@@ -5944,25 +5961,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     and _b1_nonce_ready
                 )
 
-                try:
-                    if not _b1_preflight_ready:
-                        logger.critical("CRITICAL B1 RESULT: FAIL")
-                        logger.critical("❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE")
-                        with _b1_executed_lock:
-                            # Mark executed even on failure so the barrier below does not re-run
-                            globals()["_b1_executed"] = True
-                        try:
-                            from bot.exceptions import CapitalIntegrityError as _CIE_b1
-                        except ImportError:
-                            from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
-                        raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
-
-                    logger.critical("CRITICAL B1 RESULT: PASS")
-                    logger.critical("✅ B1 PASSED — transitioning to B2")
+                if not _b1_preflight_ready:
+                    logger.critical("CRITICAL B1 RESULT: FAIL")
+                    logger.critical("❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE")
                     with _b1_executed_lock:
+                        # Mark executed even on failure so the barrier below does not re-run
                         globals()["_b1_executed"] = True
-                finally:
-                    logger.critical("⚠️ B1 EXIT GUARANTEE REACHED (this must always print)")
                     try:
                         from bot.exceptions import CapitalIntegrityError as _CIE_b1
                     except ImportError:
@@ -6154,6 +6158,8 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     "spawning trading worker threads",
                 )
 
+            logger.critical("LIFECYCLE: entering cycle scheduler")
+
             use_independent_trading = (
                 os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
                 and strategy.independent_trader is not None
@@ -6164,6 +6170,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 strategy, use_independent_trading, _hf_bot
             )
             logger.critical("B4 EXECUTION_LOOP_STARTED")
+            logger.critical("LIFECYCLE: entering live trading runtime")
 
             # ── FIX 2: RUNTIME START CONFIRMATION ──────────────────────────────────
             # Emit the definitive "RUNTIME MODE ACTIVE" log ONLY when all three
