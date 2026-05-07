@@ -3,8 +3,6 @@
 import sys as _sys
 
 print("🔥 PYTHON ENTRYPOINT HIT", flush=True)
-_sys.stderr.write("🔥 PYTHON ENTRYPOINT HIT (stderr)\n")
-_sys.stderr.flush()
 
 import logging
 import os
@@ -31,7 +29,6 @@ def hard_exit(msg: str) -> None:
 def main() -> None:
     """Delegate execution to bot.py while preserving visible startup logs."""
     print("🔥 BOOT START", flush=True)
-    logger.critical("🔥 BOOT START")
 
     print("STEP 1: imports done", flush=True)
 
