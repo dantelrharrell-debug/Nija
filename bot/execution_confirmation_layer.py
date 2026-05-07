@@ -391,11 +391,17 @@ class ExecutionConfirmationLayer:
             placed_at=datetime.now(),
         )
 
-        filled, avg_price = self._wait_for_fill(
-            broker,
-            order_id,
-            initial_response or {},
-        )
+        try:
+            filled, avg_price = self._wait_for_fill(
+                broker,
+                order_id,
+                initial_response or {},
+            )
+        except Exception as exc:
+            result.error = str(exc)
+            result.status = FillStatus.UNFILLED
+            logger.warning("Confirmation failed for %s: %s", order_id, exc)
+            return result
         result.filled_size = filled
         result.avg_price = avg_price
         result.confirmed_at = datetime.now()

@@ -233,7 +233,9 @@ MINIMUM_TRADING_BALANCE: float = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0
 # Hard floor for every order regardless of broker-specific minimums.
 MIN_TRADE_USD: float = float(os.getenv("MIN_TRADE_USD", os.getenv("MIN_NOTIONAL_USD", "3.50")))
 MIN_NOTIONAL_USD: float = MIN_TRADE_USD
-EXCHANGE_ABSOLUTE_MIN_USD: float = 1.0
+# Exchange-level hard floor; never submit orders below this USD notional.
+EXCHANGE_HARD_FLOOR_USD: float = 1.0
+# Synthetic order ids emitted by internal pipelines (no broker order to confirm).
 SYNTHETIC_ORDER_IDS: Set[str] = {"pipeline"}
 
 # Fee-dominated micro-trade guardrails.
@@ -1108,9 +1110,11 @@ class ExecutionEngine:
     def _extract_balance_values(balance_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
         """Return (available_balance, total_balance) from a balance dict.
 
-        Key precedence:
+        Key precedence (first non-zero value wins):
         available_balance → trading_balance → total_balance → total_funds.
-        Missing or empty balance_data yields (None, None).
+        If only trading_balance exists, it becomes available_balance; if only
+        total_balance/total_funds exists, those become the total. Missing or
+        empty balance_data yields (None, None).
         """
         if not balance_data:
             return None, None
@@ -1147,6 +1151,8 @@ class ExecutionEngine:
 
     def _get_cached_balance_snapshot(self) -> Tuple[Optional[float], Optional[float], Dict[str, Any]]:
         """Return cached (available_balance, total_balance, raw_balance_dict) without polling.
+
+        Prefer this helper during sizing to avoid unnecessary API calls.
 
         Fallback order:
         BalanceService detailed → BalanceService scalar → broker_client._balance_cache →
@@ -1187,6 +1193,16 @@ class ExecutionEngine:
                 return scalar, scalar, cached
 
         return None, None, {}
+
+    @staticmethod
+    def _apply_exchange_floor(min_value: Optional[float]) -> float:
+        """Clamp the requested minimum to the exchange hard floor."""
+        try:
+            if min_value is not None:
+                return max(EXCHANGE_HARD_FLOOR_USD, float(min_value))
+        except Exception:
+            pass
+        return EXCHANGE_HARD_FLOOR_USD
 
     def _extract_order_failure_details(
         self,
@@ -1273,6 +1289,8 @@ class ExecutionEngine:
         expected_quantity is the base-asset quantity implied by the order.
         Mutates broker_response in-place by adding ``filled_price``,
         ``filled_volume``, and updating ``status`` when confirmation succeeds.
+        If confirmation is unavailable or fails, the original response is
+        returned unchanged.
         """
         if not broker_response or not isinstance(broker_response, dict):
             return broker_response
@@ -1284,7 +1302,9 @@ class ExecutionEngine:
             return broker_response
 
         order_id = broker_response.get("order_id") or broker_response.get("id")
-        if not order_id or str(order_id).lower() in SYNTHETIC_ORDER_IDS:
+        if not order_id:
+            return broker_response
+        if str(order_id).lower() in SYNTHETIC_ORDER_IDS:
             return broker_response
 
         status = self._normalized_order_status(broker_response)
@@ -1692,7 +1712,7 @@ class ExecutionEngine:
                 _scalar_balance = _balance_total if _balance_total is not None else _balance_available
                 if _scalar_balance is not None and _scalar_balance <= 0:
                     logger.warning(
-                        "⛔ FIX1 BALANCE GATE: Skipping %s — zero/negative balance ($%.2f)",
+                        "⛔ FIX1 BALANCE GATE: Skipping %s — zero or negative balance ($%.2f)",
                         symbol,
                         _scalar_balance,
                     )
@@ -1895,7 +1915,7 @@ class ExecutionEngine:
             # backstop remains self-contained even if other modules fail to load.
             # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
             _HARD_MIN_BY_BROKER = {
-                'coinbase': max(EXCHANGE_ABSOLUTE_MIN_USD, MIN_TRADE_USD),
+                'coinbase': max(EXCHANGE_HARD_FLOOR_USD, MIN_TRADE_USD),
                 'kraken':   max(10.5, MIN_TRADE_USD),
                 'binance':  10.0,   # Binance MIN_NOTIONAL filter (USDT pairs)
                 'okx':      10.0,   # OKX operational floor
@@ -1910,10 +1930,9 @@ class ExecutionEngine:
             _hard_min = (
                 _min_notional_floor
                 if _min_notional_floor is not None
-                else _HARD_MIN_BY_BROKER.get(_hard_broker_key, max(EXCHANGE_ABSOLUTE_MIN_USD, MIN_TRADE_USD))
+                else _HARD_MIN_BY_BROKER.get(_hard_broker_key, max(EXCHANGE_HARD_FLOOR_USD, MIN_TRADE_USD))
             )
-            if _hard_min is not None:
-                _hard_min = max(EXCHANGE_ABSOLUTE_MIN_USD, float(_hard_min))
+            _hard_min = self._apply_exchange_floor(_hard_min)
 
             # Reserve a spendable cash buffer to avoid precision/fee insufficient-funds rejects.
             if _spendable_usd is not None and position_size > _spendable_usd:
@@ -2423,6 +2442,13 @@ class ExecutionEngine:
                 if result:
                     # position_size is USD notional; dividing by entry_price yields base-asset quantity.
                     _expected_quantity = position_size / entry_price if entry_price > 0 else 0.0
+                    if entry_price > 0 and _expected_quantity / max(position_size, 1e-9) > 1e6:
+                        logger.debug(
+                            "Large expected quantity computed for %s: %.6g (entry_price=%.8f)",
+                            symbol,
+                            _expected_quantity,
+                            entry_price,
+                        )
                     result = self._confirm_order_fill(symbol, order_side, _expected_quantity, result)
 
                 # ─── FIX 6: MANDATORY POST-EXECUTION LOG ─────────────────────────
