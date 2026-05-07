@@ -1178,10 +1178,10 @@ class CapitalRefreshCoordinator:
                 },
             )
             try:
-                try:
-                    from bot.bootstrap_state_machine import BootstrapState, get_bootstrap_fsm
-                except ImportError:
-                    from bootstrap_state_machine import BootstrapState, get_bootstrap_fsm  # type: ignore[import]
+                from bot.bootstrap_state_machine import BootstrapState, get_bootstrap_fsm
+            except ImportError:
+                from bootstrap_state_machine import BootstrapState, get_bootstrap_fsm  # type: ignore[import]
+            try:
                 bootstrap_fsm = get_bootstrap_fsm()
                 bootstrap_fsm.transition(
                     BootstrapState.BALANCE_HYDRATED,
