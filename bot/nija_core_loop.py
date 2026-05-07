@@ -1976,6 +1976,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _activation_idle_since = None
         _activation_idle_timeout_s = float(os.getenv("NIJA_IDLE_ACTIVATION_TIMEOUT_S", "90") or 90)
 
+        logger.critical("🚀 ENTERING ACTIVE TRADE LOOP")
         while _trading_active:
             try:
                 # FIX 4: emit every cycle so a silent dead-bot is immediately visible.

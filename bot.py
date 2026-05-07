@@ -6265,6 +6265,14 @@ def main():
                 "capital_ready=%s execution_ready=%s",
                 broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
             )
+            logger.critical(
+                f"FSM READY STATE | "
+                f"broker={broker_ready} "
+                f"risk={risk_ready} "
+                f"strategy={strategy_ready} "
+                f"capital={capital_ready} "
+                f"execution={execution_ready}"
+            )
             break
 
         _now = time.monotonic()
