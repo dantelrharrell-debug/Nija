@@ -46,6 +46,7 @@ purposes only.
 
 COMPLIANCE_LOGGER_NAME = "nija.bootstrap"
 DEFAULT_DISCLOSURE_INTERVAL_HOURS = 6.0
+_COMPLIANCE_LOGGER = logging.getLogger(COMPLIANCE_LOGGER_NAME)
 _DISCLOSURE_LOCK = threading.Lock()
 _LAST_DISCLOSURE_TIMESTAMP = 0.0
 _FIRST_BOOT_THIS_PROCESS = True
@@ -58,7 +59,7 @@ def _resolve_disclosure_interval_seconds() -> float:
     try:
         hours = float(raw)
         if hours < 0:
-            logging.getLogger(COMPLIANCE_LOGGER_NAME).warning(
+            _COMPLIANCE_LOGGER.warning(
                 "NIJA_DISCLOSURE_INTERVAL_HOURS is negative (%s); disclosures will emit on first boot only.",
                 raw,
             )
@@ -74,6 +75,7 @@ _DISCLOSURE_INTERVAL_SECONDS = _resolve_disclosure_interval_seconds()
 def _should_emit_disclosure() -> bool:
     global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
     if not is_production_environment():
+        # Non-production environments always emit disclosures for visibility.
         return True
 
     now = time.time()
@@ -93,7 +95,7 @@ def _should_emit_disclosure() -> bool:
 
 
 def _get_compliance_logger() -> logging.Logger:
-    return logging.getLogger(COMPLIANCE_LOGGER_NAME)
+    return _COMPLIANCE_LOGGER
 
 
 class InstitutionalLogger:
@@ -112,7 +114,7 @@ class InstitutionalLogger:
         
         Args:
             name: Logger name (used to initialize the underlying logger)
-            base_logger: Optional base logger to wrap (creates new if None)
+            base_logger: Optional base logger to wrap (name is ignored when provided)
         """
         self.logger = base_logger or logging.getLogger(name)
     
