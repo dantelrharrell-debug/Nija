@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from stress_test_engine import (
+from bot.stress_test_engine import (
     StressTestEngine,
     ScenarioReport,
     StressTestReport,

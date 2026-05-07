@@ -19,7 +19,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from delisted_asset_registry import DelistedAssetRegistry
+from bot.delisted_asset_registry import DelistedAssetRegistry
 
 
 # ---------------------------------------------------------------------------

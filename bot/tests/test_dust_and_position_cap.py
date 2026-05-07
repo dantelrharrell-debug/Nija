@@ -4,34 +4,10 @@ Test script for auto-dust cleanup and hard position cap features
 """
 
 import sys
-import os
 from datetime import datetime, timedelta
 
-# Set up paths correctly
-repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, repo_root)
-
-# Import directly from modules
-import importlib.util
-
-# Load dust_prevention_engine
-dust_spec = importlib.util.spec_from_file_location(
-    "dust_prevention_engine",
-    os.path.join(repo_root, "bot", "dust_prevention_engine.py")
-)
-dust_module = importlib.util.module_from_spec(dust_spec)
-dust_spec.loader.exec_module(dust_module)
-DustPreventionEngine = dust_module.DustPreventionEngine
-
-# Load user_risk_manager
-risk_spec = importlib.util.spec_from_file_location(
-    "user_risk_manager",
-    os.path.join(repo_root, "bot", "user_risk_manager.py")
-)
-risk_module = importlib.util.module_from_spec(risk_spec)
-risk_spec.loader.exec_module(risk_module)
-UserRiskManager = risk_module.UserRiskManager
-UserRiskLimits = risk_module.UserRiskLimits
+from bot.dust_prevention_engine import DustPreventionEngine
+from bot.user_risk_manager import UserRiskManager, UserRiskLimits
 
 def test_dust_cleanup():
     """Test auto-dust cleanup functionality"""

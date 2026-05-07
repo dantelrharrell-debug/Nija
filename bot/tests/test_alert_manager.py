@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from alert_manager import (
+from bot.alert_manager import (
     AlertManager,
     Alert,
     AlertSeverity,
