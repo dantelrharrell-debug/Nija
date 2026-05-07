@@ -56,7 +56,7 @@ def _resolve_disclosure_interval_seconds() -> float:
     """
     Resolve the disclosure interval (seconds) from NIJA_DISCLOSURE_INTERVAL_HOURS.
 
-    Negative values disable periodic emission after the first boot.
+    Negative values disable periodic emission after the first boot in production environments.
     """
     raw = os.getenv("NIJA_DISCLOSURE_INTERVAL_HOURS", "").strip()
     if not raw:
@@ -65,7 +65,7 @@ def _resolve_disclosure_interval_seconds() -> float:
         hours = float(raw)
         if hours < 0:
             _COMPLIANCE_LOGGER.warning(
-                "NIJA_DISCLOSURE_INTERVAL_HOURS is negative (%s); disclosures will emit on first boot only.",
+                "NIJA_DISCLOSURE_INTERVAL_HOURS is negative (%s); disclosures will emit on first boot only in production.",
                 raw,
             )
             return 0.0
@@ -88,6 +88,7 @@ def _should_emit_disclosure() -> bool:
 
     In production, disclosures emit on first boot and then at the configured interval.
     In non-production environments, disclosures always emit for visibility.
+    Module-level state is guarded by _DISCLOSURE_LOCK to keep emission decisions consistent across threads.
     """
     global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
     if not is_production_environment():
