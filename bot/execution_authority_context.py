@@ -70,7 +70,11 @@ def assert_distributed_writer_authority() -> None:
 
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
     unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
-    strict_required = (_env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode) and not unsafe_bypass
+    strict_required = (
+        _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK")
+        or _env_truthy("STRICT_REDIS_WRITER_LOCK")
+        or live_mode
+    ) and not unsafe_bypass
     degraded_override = _allow_degraded_writer_authority()
 
     if strict_required and degraded_override:
@@ -178,7 +182,11 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
 
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
     unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
-    strict_required = (_env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK") or live_mode) and not unsafe_bypass
+    strict_required = (
+        _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK")
+        or _env_truthy("STRICT_REDIS_WRITER_LOCK")
+        or live_mode
+    ) and not unsafe_bypass
     degraded_override = _allow_degraded_writer_authority()
     effective_strict_required = strict_required and not degraded_override
     redis_url = get_redis_url()

@@ -283,7 +283,11 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     paper = _env_truthy("PAPER_MODE", "false")
     live_mode = not dry_run and not paper
     unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "false")
-    strict_lock_required = (live_mode or _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK", "false")) and not unsafe_bypass
+    strict_lock_required = (
+        live_mode
+        or _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK", "false")
+        or _env_truthy("STRICT_REDIS_WRITER_LOCK", "false")
+    ) and not unsafe_bypass
     # Strict nonce lease enforcement mirrors startup lock requirements.
     strict_lease = _env_truthy("NIJA_STRICT_REDIS_LEASE", "true") and not unsafe_bypass
     persistence_required = live_mode and _env_truthy("NIJA_REDIS_PERSISTENCE_REQUIRED", "true")

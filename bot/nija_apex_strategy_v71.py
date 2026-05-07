@@ -2974,9 +2974,24 @@ class NIJAApexStrategyV71:
                             _threshold_vol,
                             _gate_score,
                         )
+                        reject_reason = f"Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}"
+                        _regime_label = str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN")
+                        logger.info(
+                            "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
+                            symbol,
+                            _confidence,
+                            adx,
+                            _volume_ratio * 100.0,
+                            _regime_label,
+                        )
+                        logger.warning(
+                            "ENTRY REJECTED | symbol=%s reason=%s",
+                            symbol,
+                            reject_reason,
+                        )
                         return {
                             'action': 'hold',
-                            'reason': f'Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}',
+                            'reason': reject_reason,
                             'filter_stage': 'entry_gate',
                         }
 
@@ -3035,6 +3050,23 @@ class NIJAApexStrategyV71:
                                         "🛑 VOLATILITY_EXPLOSION: LONG entry hard-blocked (%s)",
                                         symbol,
                                     )
+                                    reject_reason = _gate_result_l.reason
+                                    _regime_label = str(
+                                        getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN"
+                                    )
+                                    logger.info(
+                                        "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
+                                        symbol,
+                                        _confidence,
+                                        adx,
+                                        _volume_ratio * 100.0,
+                                        _regime_label,
+                                    )
+                                    logger.warning(
+                                        "ENTRY REJECTED | symbol=%s reason=%s",
+                                        symbol,
+                                        reject_reason,
+                                    )
                                     self._log_final_decision(
                                         score=risk_score,
                                         confidence=entry_confidence,
@@ -3046,7 +3078,7 @@ class NIJAApexStrategyV71:
                                         decision='SKIP',
                                         reason=_gate_result_l.reason,
                                     )
-                                    return {'action': 'hold', 'reason': _gate_result_l.reason}
+                                    return {'action': 'hold', 'reason': reject_reason}
                                 # All other gate failures: log advisory, proceed (score-based arch)
                                 logger.warning(
                                     "⚠️ AIEntryGate LONG soft-fail %s (proceeding): "
@@ -3577,9 +3609,24 @@ class NIJAApexStrategyV71:
                             _threshold_vol,
                             _gate_score,
                         )
+                        reject_reason = f"Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}"
+                        _regime_label = str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN")
+                        logger.info(
+                            "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
+                            symbol,
+                            _confidence,
+                            adx,
+                            _volume_ratio * 100.0,
+                            _regime_label,
+                        )
+                        logger.warning(
+                            "ENTRY REJECTED | symbol=%s reason=%s",
+                            symbol,
+                            reject_reason,
+                        )
                         return {
                             'action': 'hold',
-                            'reason': f'Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}',
+                            'reason': reject_reason,
                             'filter_stage': 'entry_gate',
                         }
 
@@ -3632,6 +3679,23 @@ class NIJAApexStrategyV71:
                                         "🛑 VOLATILITY_EXPLOSION: SHORT entry hard-blocked (%s)",
                                         symbol,
                                     )
+                                    reject_reason = _gate_result_s.reason
+                                    _regime_label = str(
+                                        getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN"
+                                    )
+                                    logger.info(
+                                        "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
+                                        symbol,
+                                        _confidence,
+                                        adx,
+                                        _volume_ratio * 100.0,
+                                        _regime_label,
+                                    )
+                                    logger.warning(
+                                        "ENTRY REJECTED | symbol=%s reason=%s",
+                                        symbol,
+                                        reject_reason,
+                                    )
                                     self._log_final_decision(
                                         score=risk_score,
                                         confidence=entry_confidence,
@@ -3643,7 +3707,7 @@ class NIJAApexStrategyV71:
                                         decision='SKIP',
                                         reason=_gate_result_s.reason,
                                     )
-                                    return {'action': 'hold', 'reason': _gate_result_s.reason}
+                                    return {'action': 'hold', 'reason': reject_reason}
                                 # All other gate failures: log advisory, proceed (score-based arch)
                                 logger.warning(
                                     "⚠️ AIEntryGate SHORT soft-fail %s (proceeding): "

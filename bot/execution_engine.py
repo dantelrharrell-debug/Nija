@@ -2289,16 +2289,24 @@ class ExecutionEngine:
                         )
                         _use_limit = False
 
-                if _use_limit:
-                    _limit_price = execution_plan.limit_price
-                    logger.info(
-                        f"   📊 Dynamic order type: LIMIT @ ${_limit_price:.6f} "
-                        f"(liquidity/volatility-driven, ECEL will compile qty)"
-                    )
-                    _entry_t0 = _time.monotonic()
-                    _entry_exc: Optional[Exception] = None
-                    try:
-                        result = self._submit_limit_order_via_ecel(
+                    if _use_limit:
+                        _limit_price = execution_plan.limit_price
+                        logger.info(
+                            f"   📊 Dynamic order type: LIMIT @ ${_limit_price:.6f} "
+                            f"(liquidity/volatility-driven, ECEL will compile qty)"
+                        )
+                        _limit_qty = position_size / _limit_price if _limit_price > 0 else 0.0
+                        logger.critical(
+                            "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                            symbol,
+                            order_side,
+                            f"{_limit_qty:.8f}",
+                            position_size,
+                        )
+                        _entry_t0 = _time.monotonic()
+                        _entry_exc: Optional[Exception] = None
+                        try:
+                            result = self._submit_limit_order_via_ecel(
                             broker_client=self.broker_client,
                             symbol=symbol,
                             side=order_side,
@@ -2326,6 +2334,14 @@ class ExecutionEngine:
                         _entry_t0 = _time.monotonic()
                         _fallback_exc: Optional[Exception] = None
                         try:
+                            _fallback_qty = position_size / entry_price if entry_price > 0 else 0.0
+                            logger.critical(
+                                "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                                symbol,
+                                order_side,
+                                f"{_fallback_qty:.8f}",
+                                position_size,
+                            )
                             result = self._submit_market_order_via_pipeline(
                                 broker_client=self.broker_client,
                                 symbol=symbol,
@@ -2430,6 +2446,13 @@ class ExecutionEngine:
                     _entry_t0 = _time.monotonic()
                     _market_exc: Optional[Exception] = None
                     try:
+                        logger.critical(
+                            "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                            symbol,
+                            order_side,
+                            f"{_order_quantity:.8f}",
+                            _order_size_usd,
+                        )
                         result = self._submit_market_order_via_pipeline(
                             broker_client=self.broker_client,
                             symbol=symbol,

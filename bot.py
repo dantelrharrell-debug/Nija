@@ -1567,7 +1567,11 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"⚠️ Retry failed: {_msg}")
 
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
-    _require_lock = os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
+    _strict_lock_alias = os.environ.get("STRICT_REDIS_WRITER_LOCK", "").strip().lower() in _truthy
+    _require_lock = (
+        os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
+        or _strict_lock_alias
+    )
     _disable_writer_lock_alias = os.environ.get("NIJA_DISABLE_WRITER_LOCK", "").strip().lower() in _truthy
     _unsafe_bypass = (
         os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
