@@ -9397,6 +9397,8 @@ class TradingStrategy:
 
         # ⏱️ Scan-cycle timing: record overall start time
         cycle_start_time = time.time()
+        cycle_id = getattr(self, "cycle_count", 0) + 1
+        symbols_scanned = 0
 
         # 💹 CYCLE P&L TRACKING — reset apex accumulator at cycle start
         if hasattr(self, 'apex') and self.apex is not None:
@@ -12753,6 +12755,7 @@ class TradingStrategy:
             else:
                 account_balance = float(account_balance or 0.0)
             if not user_mode and not entries_blocked and len(current_positions) < effective_max_positions and can_enter:
+                logger.critical("LIFECYCLE: entering market scanner")
                 logger.debug(f"🔍 Scanning for new opportunities (positions: {len(current_positions)}/{effective_max_positions}, balance: ${account_balance:.2f}, min: ${MIN_BALANCE_TO_TRADE_USD})...")
 
                 # Get top market candidates (limit scan to prevent timeouts)
@@ -12863,6 +12866,7 @@ class TradingStrategy:
 
                     # FIX #3 (Jan 20, 2026): Kraken markets already filtered at startup
                     # No need to filter again during scan - markets_to_scan already contains only supported pairs
+                    symbols_scanned = len(markets_to_scan)
                     scan_limit = len(markets_to_scan)
                     logger.critical(
                         "🔁 EXECUTION LOOP ACTIVE — signal scan started | broker=%s | markets=%d",
@@ -18209,6 +18213,12 @@ class TradingStrategy:
                 f"⏱️  [TIMING] Cycle total: {cycle_total_duration:.2f}s  |  "
                 f"Moving avg ({len(self._cycle_durations)} cycles): {cycle_duration_average:.2f}s  |  "
                 f"balance={balance_duration:.2f}s  positions={positions_duration:.2f}s  entry={entry_duration:.2f}s"
+            )
+            logger.info(
+                "STRATEGY HEARTBEAT | cycle=%s symbols=%s runtime=%ss",
+                cycle_id,
+                symbols_scanned,
+                f"{cycle_total_duration:.2f}",
             )
 
             # ⚡ ATM + TCS — record cycle outcomes so idle timers and ladders stay current

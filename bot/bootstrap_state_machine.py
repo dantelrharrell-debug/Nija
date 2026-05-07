@@ -148,6 +148,7 @@ _BALANCE_POLLING_DISABLED_STATES = frozenset({
     BootstrapState.EXTERNAL_RESTART_REQUIRED,
     BootstrapState.SHUTDOWN,
 })
+BALANCE_POLLING_DISABLED_STATES = _BALANCE_POLLING_DISABLED_STATES
 
 # ---------------------------------------------------------------------------
 # Emergency / terminal states that any thread may drive (FIX 4 — ownership)
@@ -334,6 +335,11 @@ class BootstrapStateMachine:
         """Mark the balance polling skip message as logged."""
         with self._lock:
             self._balance_polling_skip_logged = True
+
+    def is_balance_hydrated(self) -> bool:
+        """True once bootstrap has reached balance hydration or later."""
+        with self._lock:
+            return self._state in _BALANCE_POLLING_DISABLED_STATES
 
     def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Return the most recent *limit* transition records."""
@@ -984,11 +990,21 @@ def get_bootstrap_fsm() -> BootstrapStateMachine:
     return _bootstrap_fsm
 
 
+def is_bootstrap_balance_hydrated() -> bool:
+    """Return True when the bootstrap FSM reports balance hydration."""
+    try:
+        return bool(get_bootstrap_fsm().is_balance_hydrated())
+    except Exception as exc:
+        logger.debug("[BootstrapFSM] balance hydration probe failed: %s", exc)
+        return False
+
+
 __all__ = [
     "BootstrapState",
     "BootstrapInvariantError",
     "BootstrapStateMachine",
     "get_bootstrap_fsm",
+    "BALANCE_POLLING_DISABLED_STATES",
     "_STRATEGY_ARM_ALLOWED_STATES",
     "_ANY_THREAD_ALLOWED_TARGETS",
 ]

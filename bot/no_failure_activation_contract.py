@@ -190,8 +190,22 @@ class CAHydrationLoop:
     def _run(self) -> None:
         capital_hydrated = _get_capital_hydrated_event()
         attempt = 0
+        _bootstrap_balance_probe = None
+        try:
+            from bot.bootstrap_utils import (
+                resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
+            )
+            _bootstrap_balance_probe = _resolve_bootstrap_balance_probe()
+        except ImportError:
+            _bootstrap_balance_probe = None
 
         while not self._stop_event.is_set():
+            if _bootstrap_balance_probe is not None and _bootstrap_balance_probe():
+                logger.info("Stopping startup balance loop")
+                logger.debug(
+                    "[CAHydrationLoop] bootstrap FSM reports BALANCE_HYDRATED — exiting hydration loop"
+                )
+                return
             # If capital authority is already hydrated, nothing left to do.
             if capital_hydrated.is_set():
                 logger.info(

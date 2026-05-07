@@ -2386,7 +2386,45 @@ class MultiAccountBrokerManager:
         attempts = 0
         snapshot: Dict[str, float] = {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
+        _bootstrap_balance_probe = None
+        try:
+            from bot.bootstrap_utils import (
+                resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
+            )
+            _bootstrap_balance_probe = _resolve_bootstrap_balance_probe()
+        except ImportError:
+            _bootstrap_balance_probe = None
+
         while True:
+            if _bootstrap_balance_probe is not None and _bootstrap_balance_probe():
+                elapsed = time.monotonic() - start
+                logger.info("Stopping startup balance loop")
+                logger.debug(
+                    "[MABM] bootstrap FSM reports BALANCE_HYDRATED — exiting hydration loop"
+                )
+                try:
+                    _fresh_snapshot = self.refresh_capital_authority(
+                        trigger=f"{trigger}:bootstrap_balance_hydrated"
+                    )
+                    if isinstance(_fresh_snapshot, dict):
+                        snapshot = _fresh_snapshot
+                    else:
+                        logger.warning(
+                            "[MABM] bootstrap balance exit refresh returned non-dict: %r",
+                            type(_fresh_snapshot).__name__,
+                        )
+                except Exception as _fresh_err:
+                    logger.debug(
+                        "[MABM] bootstrap balance exit refresh failed: %s",
+                        _fresh_err,
+                    )
+                return {
+                    "ready": float(snapshot.get("ready", 0.0)),
+                    "total_capital": float(snapshot.get("total_capital", 0.0)),
+                    "valid_brokers": float(snapshot.get("valid_brokers", 0.0)),
+                    "attempts": float(attempts),
+                    "elapsed_s": float(elapsed),
+                }
             attempts += 1
             # Bootstrap loop requests a refresh via the event bus for
             # observability, then calls refresh_capital_authority() which routes

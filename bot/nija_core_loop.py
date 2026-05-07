@@ -1781,6 +1781,7 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
         daemon=True,
     )
     t.start()
+    logger.critical("LIFECYCLE: entering live trading runtime")
     return t
 
 
@@ -1814,6 +1815,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     logger.critical("🧵 WAITING FOR START SIGNAL")
     TRADING_ENGINE_READY.wait()
     logger.critical("🟢 START SIGNAL RECEIVED — ENTERING LIVE LOOP")
+    logger.critical("LIFECYCLE: entering strategy loop")
 
     # Supervisor-mode hard gate: only block execution when supervisor mode is
     # enabled AND live trading is not active.
@@ -1989,6 +1991,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _activation_idle_timeout_s = float(os.getenv("NIJA_IDLE_ACTIVATION_TIMEOUT_S", "90") or 90)
 
         logger.critical("🚀 ENTERING ACTIVE TRADE LOOP")
+        logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
                 # FIX 4: emit every cycle so a silent dead-bot is immediately visible.

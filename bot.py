@@ -596,15 +596,11 @@ def _is_balance_hydrated_ready() -> bool:
 
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
         try:
-            _state_value = getattr(_get_bootstrap_fsm().state, "value", "")
-            return _state_value in {
-                "BALANCE_HYDRATED",
-                "CAPITAL_REFRESHING",
-                "CAPITAL_READY",
-                "INIT_COMPLETE",
-                "THREADS_STARTING",
-                "RUNNING_SUPERVISED",
-            }
+            _bootstrap_fsm = _get_bootstrap_fsm()
+            if hasattr(_bootstrap_fsm, "is_balance_hydrated"):
+                return bool(_bootstrap_fsm.is_balance_hydrated())
+            _state_value = getattr(_bootstrap_fsm.state, "value", "")
+            return _state_value in _BALANCE_HYDRATED_STATE_VALUES
         except Exception:
             return False
     return False
@@ -2586,10 +2582,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 # ── Bootstrap FSM — best-effort import ───────────────────────────────────────
 # Imported here so transitions are available throughout the module.  All usage
 # is wrapped in try/except so a missing or broken module never stops the bot.
+_BALANCE_HYDRATED_STATE_VALUES = {
+    "BALANCE_HYDRATED",
+    "CAPITAL_REFRESHING",
+    "CAPITAL_READY",
+    "INIT_COMPLETE",
+    "THREADS_STARTING",
+    "RUNNING_SUPERVISED",
+}
 try:
     _bfsm_mod = importlib.import_module("bot.bootstrap_state_machine")
     _BootstrapState = cast(Any, getattr(_bfsm_mod, "BootstrapState"))
     _get_bootstrap_fsm = cast(Any, getattr(_bfsm_mod, "get_bootstrap_fsm"))
+    _balance_states = getattr(_bfsm_mod, "BALANCE_POLLING_DISABLED_STATES", None)
+    if _balance_states:
+        _BALANCE_HYDRATED_STATE_VALUES = {state.value for state in _balance_states}
     _BOOTSTRAP_FSM_AVAILABLE = True
 except ImportError:
     class _BootstrapStateFallback:
@@ -2626,6 +2633,10 @@ except ImportError:
 
         def reset_for_retry(self, reason: str = "") -> None:
             self.state = _BootstrapState.BOOT_INIT
+
+        def is_balance_hydrated(self) -> bool:
+            _state_value = getattr(self.state, "value", "")
+            return _state_value in _BALANCE_HYDRATED_STATE_VALUES
 
     _NOOP_BOOTSTRAP_FSM = _NoopBootstrapFSM()
 
@@ -5613,6 +5624,23 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _bms_hydrate_timeout = 60.0
                 if not skip_balance_polling_loop:
                     while not _bms_ca.is_hydrated:
+                        if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                            try:
+                                _bootstrap_fsm = _get_bootstrap_fsm()
+                                if (
+                                    hasattr(_bootstrap_fsm, "is_balance_hydrated")
+                                    and _bootstrap_fsm.is_balance_hydrated()
+                                ):
+                                    logger.info("Stopping startup balance loop")
+                                    logger.debug(
+                                        "[Bootstrap] bootstrap FSM reports BALANCE_HYDRATED — exiting hydration loop"
+                                    )
+                                    break
+                            except Exception as _fsm_probe_err:
+                                logger.debug(
+                                    "[Bootstrap] balance loop FSM probe failed: %s",
+                                    _fsm_probe_err,
+                                )
                         if time.monotonic() - _bms_hydrate_start >= _bms_hydrate_timeout:
                             logger.warning(
                                 "[Bootstrap] Capital hydration timeout (%.0fs) — proceeding",
