@@ -2567,8 +2567,6 @@ def _bfsm_transition(state, reason: str = "") -> None:
 
 _execution_layer_initialized = False
 _execution_layer_init_lock = threading.Lock()
-_balance_polling_disabled = False
-_balance_polling_disabled_lock = threading.Lock()
 
 
 def run_bootstrap() -> None:
@@ -2578,7 +2576,6 @@ def run_bootstrap() -> None:
     This function is the ONLY place allowed to drive multi-subsystem startup.
     Called from the BotStartup thread after acquire_bootstrap_guard().
     """
-    global _balance_polling_disabled
     try:
         from bot.init_registry import InitRegistry as _IR
     except ImportError:
@@ -5227,20 +5224,16 @@ def _run_bot_startup_and_trading():
                     _bms_refresh_ok = True
                 except Exception as _bms_err:
                     logger.warning("[Bootstrap] BOOTSTRAP_START refresh error: %s", _bms_err)
-            log_balance_polling_skip = False
-            with _balance_polling_disabled_lock:
-                skip_balance_polling_loop = _balance_polling_disabled
-            if not skip_balance_polling_loop and _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+            skip_balance_polling_loop = False
+            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
                 try:
                     _bootstrap_fsm = _get_bootstrap_fsm()
-                    if not _bootstrap_fsm.balance_polling_enabled:
-                        with _balance_polling_disabled_lock:
-                            if not _balance_polling_disabled:
-                                _balance_polling_disabled = True
-                                skip_balance_polling_loop = True
-                                log_balance_polling_skip = True
-                            else:
-                                skip_balance_polling_loop = True
+                    skip_balance_polling_loop = _bootstrap_fsm.balance_polling_disabled
+                    if skip_balance_polling_loop and not _bootstrap_fsm.balance_polling_skip_logged:
+                        logger.info(
+                            "[Bootstrap] Skipping balance polling loop — bootstrap FSM already BALANCE_HYDRATED"
+                        )
+                        _bootstrap_fsm.mark_balance_polling_skip_logged()
                 except Exception as _skip_err:
                     logger.debug(
                         "[Bootstrap] Unable to read bootstrap FSM state for balance polling skip: %s",
@@ -5251,12 +5244,7 @@ def _run_bot_startup_and_trading():
                 # polling loop below handles the case where we proceed without hydration.
                 _bms_hydrate_start = time.monotonic()
                 _bms_hydrate_timeout = 60.0
-                if skip_balance_polling_loop:
-                    if log_balance_polling_skip:
-                        logger.info(
-                            "[Bootstrap] Skipping balance polling loop — bootstrap FSM already BALANCE_HYDRATED"
-                        )
-                else:
+                if not skip_balance_polling_loop:
                     while not _bms_ca.is_hydrated:
                         if time.monotonic() - _bms_hydrate_start >= _bms_hydrate_timeout:
                             logger.warning(

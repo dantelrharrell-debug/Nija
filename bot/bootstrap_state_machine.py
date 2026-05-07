@@ -135,6 +135,21 @@ _STRATEGY_ARM_ALLOWED_STATES = frozenset({
 })
 
 # ---------------------------------------------------------------------------
+# Balance polling latch states
+# ---------------------------------------------------------------------------
+_BALANCE_POLLING_DISABLED_STATES = frozenset({
+    BootstrapState.BALANCE_HYDRATED,
+    BootstrapState.CAPITAL_REFRESHING,
+    BootstrapState.CAPITAL_READY,
+    BootstrapState.INIT_COMPLETE,
+    BootstrapState.THREADS_STARTING,
+    BootstrapState.RUNNING_SUPERVISED,
+    BootstrapState.CONFIG_ERROR_KEEPALIVE,
+    BootstrapState.EXTERNAL_RESTART_REQUIRED,
+    BootstrapState.SHUTDOWN,
+})
+
+# ---------------------------------------------------------------------------
 # Emergency / terminal states that any thread may drive (FIX 4 — ownership)
 # ---------------------------------------------------------------------------
 # The bootstrap kernel (BotStartup thread) owns all non-terminal transitions.
@@ -281,6 +296,8 @@ class BootstrapStateMachine:
         self._history: List[Dict[str, Any]] = []
         self._boot_complete: bool = False
         self._execution_authority: bool = False
+        self._balance_polling_disabled: bool = False
+        self._balance_polling_skip_logged: bool = False
         # Single-owner kernel: only the designated thread may drive transitions.
         # None until claim_bootstrap_ownership() is called.
         self._owner_thread_id: Optional[int] = None
@@ -299,7 +316,24 @@ class BootstrapStateMachine:
     def balance_polling_enabled(self) -> bool:
         """True when startup balance polling should run."""
         with self._lock:
-            return self._state != BootstrapState.BALANCE_HYDRATED
+            return not self._balance_polling_disabled
+
+    @property
+    def balance_polling_disabled(self) -> bool:
+        """True when the balance polling loop has been latched off."""
+        with self._lock:
+            return self._balance_polling_disabled
+
+    @property
+    def balance_polling_skip_logged(self) -> bool:
+        """True once the balance polling skip message has been logged."""
+        with self._lock:
+            return self._balance_polling_skip_logged
+
+    def mark_balance_polling_skip_logged(self) -> None:
+        """Mark the balance polling skip message as logged."""
+        with self._lock:
+            self._balance_polling_skip_logged = True
 
     def get_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Return the most recent *limit* transition records."""
@@ -436,6 +470,9 @@ class BootstrapStateMachine:
             }
             self._history.append(record)
             self._state = new_state
+            self._balance_polling_disabled = new_state in _BALANCE_POLLING_DISABLED_STATES
+            if not self._balance_polling_disabled:
+                self._balance_polling_skip_logged = False
             if new_state == BootstrapState.RUNNING_SUPERVISED:
                 self._boot_complete = True
                 self._execution_authority = True
@@ -485,6 +522,8 @@ class BootstrapStateMachine:
             }
             self._history.append(record)
             self._state = BootstrapState.BOOT_FAILED_RETRY
+            self._balance_polling_disabled = False
+            self._balance_polling_skip_logged = False
 
         logger.warning(
             "⚠️  [BootstrapFSM] reset_for_retry: %s → BOOT_FAILED_RETRY  reason=%s",
