@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -56,12 +57,13 @@ def main() -> int:
     banned_phrases = [phrase.lower() for phrase in BANNED]
     failures: list[str] = []
 
-    for path in repo_root.rglob("*"):
-        if path == Path(__file__).resolve():
-            continue
-        if any(part in EXCLUDE_DIRS for part in path.parts):
-            continue
-        if path.is_file():
+    script_path = Path(__file__).resolve()
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        for file_name in files:
+            path = Path(root) / file_name
+            if path.resolve() == script_path:
+                continue
             failures.extend(scan_file(path, banned_phrases))
 
     if failures:

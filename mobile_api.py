@@ -16,7 +16,7 @@ import logging
 from typing import Optional, Dict, List
 from flask import Flask, request, jsonify, Blueprint
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 
@@ -51,7 +51,7 @@ def get_mobile_status():
     return jsonify({
         'status': 'ok',
         'service': 'mobile_api',
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     })
 
 @mobile_api.route('/device/register', methods=['POST'])
