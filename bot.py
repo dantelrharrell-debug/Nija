@@ -38,6 +38,11 @@ from bot.instance_identity import (
     parse_writer_lock_metadata,
 )
 
+try:
+    from bot.runtime_mode import resolve_runtime_mode
+except ImportError:
+    from runtime_mode import resolve_runtime_mode  # type: ignore[import]
+
 # Early bootstrap logger so pre-config startup paths (locking, env checks,
 # nonce init) can log safely before the full logging pipeline is configured.
 logger = logging.getLogger("nija.bootstrap")
@@ -713,6 +718,300 @@ BOOTSTRAP_PHASES = [
 # can never accidentally advance the nonce during live trading.
 _nonce_bootstrap_jump_done = False
 _nonce_bootstrap_jump_lock = threading.Lock()
+
+# Startup readiness gate naming contract
+# - bootstrap_ready: bootstrap kernel completed core init
+# - capital_ready: capital hydration gate open
+# - strategy_ready: TradingStrategy fully initialised
+# - execution_ready: execution engine wired and ready for dispatch
+_STARTUP_READINESS_COMPONENTS = (
+    "bootstrap_ready",
+    "capital_ready",
+    "strategy_ready",
+    "execution_ready",
+)
+_startup_readiness_registered = False
+
+
+def _register_startup_readiness_components(context: str) -> None:
+    """Register the canonical startup readiness gate components."""
+    global _startup_readiness_registered
+    try:
+        from bot.startup_readiness_gate import get_startup_readiness_gate
+    except ImportError:
+        try:
+            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
+        except ImportError:
+            logger.debug("StartupReadinessGate unavailable; registration skipped (%s)", context)
+            return
+
+    try:
+        gate = get_startup_readiness_gate()
+        for name in _STARTUP_READINESS_COMPONENTS:
+            gate.register_component(name)
+        if not _startup_readiness_registered:
+            logger.critical(
+                "✅ Startup readiness gate registered (%s): %s",
+                context,
+                ", ".join(_STARTUP_READINESS_COMPONENTS),
+            )
+        _startup_readiness_registered = True
+    except Exception as exc:
+        logger.warning("Startup readiness gate registration failed (%s): %s", context, exc)
+
+
+def _ensure_running_supervised(active_threads: dict, *, context: str) -> None:
+    """Ensure the Bootstrap FSM reaches RUNNING_SUPERVISED after threads start.
+
+    No-op when no active threads are present.
+    """
+    if not _BOOTSTRAP_FSM_AVAILABLE or _get_bootstrap_fsm is None:
+        return
+    if not active_threads:
+        logger.debug("RUNNING_SUPERVISED safeguard skipped (no active threads): %s", context)
+        return
+    try:
+        _bfsm = _get_bootstrap_fsm()
+        _state = _bfsm.state
+        if _state == _BootstrapState.RUNNING_SUPERVISED:
+            return
+        if _state != _BootstrapState.THREADS_STARTING:
+            logger.warning(
+                "RUNNING_SUPERVISED safeguard: unexpected state=%s context=%s",
+                getattr(_state, "value", str(_state)),
+                context,
+            )
+        _bfsm_transition(
+            _BootstrapState.RUNNING_SUPERVISED,
+            f"{len(active_threads)} trader thread(s) started; safeguard from {context}",
+        )
+        logger.info("🚀 FSM STATE: RUNNING_SUPERVISED (safeguard)")
+    except Exception as exc:
+        logger.warning("RUNNING_SUPERVISED safeguard failed (%s): %s", context, exc)
+
+
+def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> tuple[dict, bool]:
+    """Start trading threads and return (active_threads, use_independent_trading)."""
+    _active_threads: dict = {}
+    # Ensure RUNNING_SUPERVISED is reached if any threads were started.
+    try:
+        if use_independent_trading:
+            logger.info("=" * 70)
+            logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
+            logger.info("=" * 70)
+            logger.info("   Each broker trades in its own self-healing daemon thread.")
+            logger.info("   The supervisor restarts any thread that dies unexpectedly.")
+            logger.info("=" * 70)
+
+            # Detect funded platform brokers
+            _funded = strategy.independent_trader.detect_funded_brokers()
+            _broker_source = strategy.independent_trader._get_platform_broker_source()
+
+            # Register all platform brokers with the failure manager
+            try:
+                if strategy.independent_trader.broker_failure_manager and _broker_source:
+                    _equal_alloc = 1.0 / max(len(_broker_source), 1)
+                    for _bt, _br in _broker_source.items():
+                        strategy.independent_trader.broker_failure_manager.register_broker(
+                            _bt.value, initial_allocation=_equal_alloc
+                        )
+                    strategy.independent_trader.broker_failure_manager.log_active_dead_banner()
+            except Exception as _reg_err:
+                logger.debug("Failure manager registration skipped: %s", _reg_err)
+
+            # Start a self-healing thread for each funded, connected platform broker
+            _platform_stagger = 0
+            for _broker_type, _broker in _broker_source.items():
+                _bname = _broker_type.value
+                if _bname not in _funded:
+                    logger.info("   ⏭️  %s — not funded, skipping", _bname.upper())
+                    continue
+                if not _broker.connected:
+                    logger.warning("   ⚠️  %s — not connected, skipping", _bname.upper())
+                    continue
+                # Stagger starts to prevent simultaneous API bursts
+                if _platform_stagger > 0:
+                    logger.info(
+                        "   ⏳ Staggering: 10s before starting %s…", _bname.upper()
+                    )
+                    time.sleep(10)
+                _t, _sf = _start_trader_thread(
+                    strategy.independent_trader, _broker_type, _broker
+                )
+                _active_threads[_bname] = {
+                    "thread": _t,
+                    "stop_flag": _sf,
+                    "broker_type": _broker_type,
+                    "broker": _broker,
+                    "mode": "platform",
+                }
+                logger.info(
+                    "   ✅ Self-healing trader thread started for %s", _bname.upper()
+                )
+                _platform_stagger += 1
+
+            # Start user broker threads (individually wrapped for self-healing)
+            try:
+                _funded_users = strategy.independent_trader.detect_funded_user_brokers()
+            except Exception as _fu_err:
+                logger.warning("Could not detect funded user brokers: %s", _fu_err)
+                _funded_users = {}
+
+            if _funded_users and strategy.multi_account_manager:
+                logger.info("=" * 70)
+                logger.info("👤 STARTING USER BROKER THREADS")
+                logger.info("=" * 70)
+                for _uid, _user_brokers in strategy.multi_account_manager.user_brokers.items():
+                    if _uid not in _funded_users:
+                        continue
+                    for _ubt, _ubr in _user_brokers.items():
+                        _ubname = f"{_uid}_{_ubt.value}"
+                        # Respect user-mode policy from IndependentBrokerTrader.
+                        # This auto-promotes to independent when copy trading is inactive.
+                        if not strategy.independent_trader.should_start_user_independent_thread(_uid):
+                            logger.info(
+                                "   ⏭️  %s — copy trading active and independent_trading not enabled", _ubname
+                            )
+                            continue
+                        if _ubt.value not in _funded_users.get(_uid, {}):
+                            continue
+                        if not _ubr.connected:
+                            logger.warning(
+                                "   ⚠️  %s — not connected, skipping", _ubname
+                            )
+                            continue
+                        _user_sf = threading.Event()
+                        _user_t = threading.Thread(
+                            target=strategy.independent_trader.run_user_broker_trading_loop,
+                            args=(_uid, _ubt, _ubr, _user_sf),
+                            name=f"Trader-{_ubname}",
+                            daemon=True,
+                        )
+                        _user_t.start()
+                        _active_threads[_ubname] = {
+                            "thread": _user_t,
+                            "stop_flag": _user_sf,
+                            "broker_type": _ubt,
+                            "broker": _ubr,
+                            "mode": "user",
+                            "user_id": _uid,
+                        }
+                        logger.info("   ✅ User trader thread started: %s", _ubname)
+
+            if not _active_threads:
+                logger.warning(
+                    "⚠️  No funded/connected brokers — falling back to single-broker mode"
+                )
+                use_independent_trading = False
+
+            # Start connection monitor for brokers that couldn't connect at boot
+            try:
+                strategy.independent_trader.start_connection_monitor()
+            except Exception as _cm_err:
+                logger.debug("Connection monitor start skipped: %s", _cm_err)
+
+        if not use_independent_trading:
+            # Single-broker fallback: run strategy.run_cycle() in a self-healing thread
+            _hf_cycle_secs = hf_bot.get_cycle_interval() if hf_bot is not None else 150
+            _hf_label = (
+                f"HF scalping ({_hf_cycle_secs}s)"
+                if (hf_bot is not None and hf_bot.enabled)
+                else "2.5 minute"
+            )
+            logger.info(
+                "🚀 Starting single-broker trading thread (%s cadence)…", _hf_label
+            )
+            _t, _sf = _start_single_broker_thread(strategy, _hf_cycle_secs)
+            _active_threads["__single_broker__"] = {
+                "thread": _t,
+                "stop_flag": _sf,
+                "broker_type": None,
+                "broker": None,
+                "mode": "single",
+            }
+            logger.info("   ✅ Self-healing single-broker thread started")
+    finally:
+        _ensure_running_supervised(_active_threads, context="threads live (post-start)")
+
+    return _active_threads, use_independent_trading
+
+
+def _emit_startup_orchestration_snapshot(context: str) -> None:
+    """Emit a single authoritative startup snapshot for diagnostics."""
+    try:
+        from bot.startup_event_buffer import StartupSnapshot
+    except ImportError:
+        try:
+            from startup_event_buffer import StartupSnapshot  # type: ignore[import]
+        except ImportError:
+            StartupSnapshot = None  # type: ignore[assignment]
+
+    runtime_mode = resolve_runtime_mode()
+    bootstrap_state = "UNAVAILABLE"
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        try:
+            _bfsm = _get_bootstrap_fsm()
+            bootstrap_state = getattr(_bfsm.state, "value", str(_bfsm.state))
+        except Exception:
+            bootstrap_state = "ERROR"
+
+    gate_ready = None
+    gate_detail = ""
+    try:
+        from bot.startup_readiness_gate import get_startup_readiness_gate
+    except ImportError:
+        try:
+            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
+        except ImportError:
+            get_startup_readiness_gate = None  # type: ignore[assignment]
+    if get_startup_readiness_gate is not None:
+        try:
+            gate = get_startup_readiness_gate()
+            gate_ready = bool(gate.is_ready())
+            if not gate_ready:
+                status = gate.get_status()
+                pending = status.get("pending_components", []) if isinstance(status, dict) else []
+                gate_detail = f"pending={','.join(sorted(pending))}" if pending else "pending=unknown"
+        except Exception as exc:
+            gate_ready = False
+            gate_detail = f"error={exc}"
+
+    env_flags = {
+        "AUTO_ACTIVATE": os.getenv("AUTO_ACTIVATE", "false"),
+        "HEARTBEAT_TRADE": os.getenv("HEARTBEAT_TRADE", "false"),
+        "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": os.getenv("HEARTBEAT_REQUIRED_FIRST_ACTIVATION", "false"),
+        "FORCE_LIVE_TRANSITION": os.getenv("FORCE_LIVE_TRANSITION", "false"),
+    }
+
+    if StartupSnapshot is None:
+        logger.critical(
+            "STARTUP SNAPSHOT (%s) bootstrap_state=%s gate_ready=%s runtime_mode=%s env=%s",
+            context,
+            bootstrap_state,
+            gate_ready,
+            runtime_mode.as_dict(),
+            env_flags,
+        )
+        return
+
+    snap = StartupSnapshot("Startup Orchestration")
+    snap.record("bootstrap_state", bootstrap_state == "RUNNING_SUPERVISED", detail=bootstrap_state)
+    if gate_ready is None:
+        snap.record("readiness_gate", True, detail="unavailable")
+    else:
+        snap.record("readiness_gate", bool(gate_ready), detail=gate_detail)
+    mode_detail = f"mode={runtime_mode.mode} source={runtime_mode.source}"
+    if runtime_mode.conflicts:
+        mode_detail = f"{mode_detail} conflicts={','.join(runtime_mode.conflicts)}"
+    snap.record("runtime_mode", not runtime_mode.conflicts, detail=mode_detail)
+    live_detail = (
+        f"lcv={runtime_mode.raw.get('LIVE_CAPITAL_VERIFIED')} "
+        f"live_trading={runtime_mode.raw.get('LIVE_TRADING')}"
+    )
+    snap.record("live_flags", True, detail=live_detail)
+    for flag_name, flag_val in env_flags.items():
+        snap.record(flag_name.lower(), True, detail=flag_val)
+    snap.emit(logger, level=logging.CRITICAL)
 
 
 def _capital_bootstrap_state_value() -> str:
@@ -5437,6 +5736,7 @@ def _run_bot_startup_and_trading():
             # Advance bootstrap FSM to THREADS_STARTING only after LIVE_ACTIVE is
             # confirmed so that any failure above leaves the FSM at INIT_COMPLETE
             # (from which reset_for_retry can reach BOOT_FAILED_RETRY).
+            _register_startup_readiness_components("pre-thread launch")
             if _BOOTSTRAP_FSM_AVAILABLE:
                 _bfsm_transition(
                     _BootstrapState.THREADS_STARTING,
@@ -5449,144 +5749,9 @@ def _run_bot_startup_and_trading():
             )
 
             # _active_threads: broker_key → {thread, stop_flag, broker_type, broker, mode, ...}
-            _active_threads: dict = {}
-
-            if use_independent_trading:
-                logger.info("=" * 70)
-                logger.info("🚀 STARTING INDEPENDENT MULTI-BROKER TRADING MODE")
-                logger.info("=" * 70)
-                logger.info("   Each broker trades in its own self-healing daemon thread.")
-                logger.info("   The supervisor restarts any thread that dies unexpectedly.")
-                logger.info("=" * 70)
-
-                # Detect funded platform brokers
-                _funded = strategy.independent_trader.detect_funded_brokers()
-                _broker_source = strategy.independent_trader._get_platform_broker_source()
-
-                # Register all platform brokers with the failure manager
-                try:
-                    if strategy.independent_trader.broker_failure_manager and _broker_source:
-                        _equal_alloc = 1.0 / max(len(_broker_source), 1)
-                        for _bt, _br in _broker_source.items():
-                            strategy.independent_trader.broker_failure_manager.register_broker(
-                                _bt.value, initial_allocation=_equal_alloc
-                            )
-                        strategy.independent_trader.broker_failure_manager.log_active_dead_banner()
-                except Exception as _reg_err:
-                    logger.debug("Failure manager registration skipped: %s", _reg_err)
-
-                # Start a self-healing thread for each funded, connected platform broker
-                _platform_stagger = 0
-                for _broker_type, _broker in _broker_source.items():
-                    _bname = _broker_type.value
-                    if _bname not in _funded:
-                        logger.info("   ⏭️  %s — not funded, skipping", _bname.upper())
-                        continue
-                    if not _broker.connected:
-                        logger.warning("   ⚠️  %s — not connected, skipping", _bname.upper())
-                        continue
-                    # Stagger starts to prevent simultaneous API bursts
-                    if _platform_stagger > 0:
-                        logger.info(
-                            "   ⏳ Staggering: 10s before starting %s…", _bname.upper()
-                        )
-                        time.sleep(10)
-                    _t, _sf = _start_trader_thread(
-                        strategy.independent_trader, _broker_type, _broker
-                    )
-                    _active_threads[_bname] = {
-                        "thread": _t,
-                        "stop_flag": _sf,
-                        "broker_type": _broker_type,
-                        "broker": _broker,
-                        "mode": "platform",
-                    }
-                    logger.info(
-                        "   ✅ Self-healing trader thread started for %s", _bname.upper()
-                    )
-                    _platform_stagger += 1
-
-                # Start user broker threads (individually wrapped for self-healing)
-                try:
-                    _funded_users = strategy.independent_trader.detect_funded_user_brokers()
-                except Exception as _fu_err:
-                    logger.warning("Could not detect funded user brokers: %s", _fu_err)
-                    _funded_users = {}
-
-                if _funded_users and strategy.multi_account_manager:
-                    logger.info("=" * 70)
-                    logger.info("👤 STARTING USER BROKER THREADS")
-                    logger.info("=" * 70)
-                    for _uid, _user_brokers in strategy.multi_account_manager.user_brokers.items():
-                        if _uid not in _funded_users:
-                            continue
-                        for _ubt, _ubr in _user_brokers.items():
-                            _ubname = f"{_uid}_{_ubt.value}"
-                            # Respect user-mode policy from IndependentBrokerTrader.
-                            # This auto-promotes to independent when copy trading is inactive.
-                            if not strategy.independent_trader.should_start_user_independent_thread(_uid):
-                                logger.info(
-                                    "   ⏭️  %s — copy trading active and independent_trading not enabled", _ubname
-                                )
-                                continue
-                            if _ubt.value not in _funded_users.get(_uid, {}):
-                                continue
-                            if not _ubr.connected:
-                                logger.warning(
-                                    "   ⚠️  %s — not connected, skipping", _ubname
-                                )
-                                continue
-                            _user_sf = threading.Event()
-                            _user_t = threading.Thread(
-                                target=strategy.independent_trader.run_user_broker_trading_loop,
-                                args=(_uid, _ubt, _ubr, _user_sf),
-                                name=f"Trader-{_ubname}",
-                                daemon=True,
-                            )
-                            _user_t.start()
-                            _active_threads[_ubname] = {
-                                "thread": _user_t,
-                                "stop_flag": _user_sf,
-                                "broker_type": _ubt,
-                                "broker": _ubr,
-                                "mode": "user",
-                                "user_id": _uid,
-                            }
-                            logger.info("   ✅ User trader thread started: %s", _ubname)
-
-                if not _active_threads:
-                    logger.warning(
-                        "⚠️  No funded/connected brokers — falling back to single-broker mode"
-                    )
-                    use_independent_trading = False
-
-                # Start connection monitor for brokers that couldn't connect at boot
-                try:
-                    strategy.independent_trader.start_connection_monitor()
-                except Exception as _cm_err:
-                    logger.debug("Connection monitor start skipped: %s", _cm_err)
-
-            if not use_independent_trading:
-                # Single-broker fallback: run strategy.run_cycle() in a self-healing thread
-                _hf_cycle_secs = _hf_bot.get_cycle_interval() if _hf_bot is not None else 150
-                _hf_label = (
-                    f"HF scalping ({_hf_cycle_secs}s)"
-                    if (_hf_bot is not None and _hf_bot.enabled)
-                    else "2.5 minute"
-                )
-                logger.info(
-                    "🚀 Starting single-broker trading thread (%s cadence)…", _hf_label
-                )
-                _t, _sf = _start_single_broker_thread(strategy, _hf_cycle_secs)
-                _active_threads["__single_broker__"] = {
-                    "thread": _t,
-                    "stop_flag": _sf,
-                    "broker_type": None,
-                    "broker": None,
-                    "mode": "single",
-                }
-                logger.info("   ✅ Self-healing single-broker thread started")
-
+            _active_threads, use_independent_trading = _launch_trading_threads(
+                strategy, use_independent_trading, _hf_bot
+            )
             logger.critical("B4 EXECUTION_LOOP_STARTED")
 
             # ── FIX 2: RUNTIME START CONFIRMATION ──────────────────────────────────
@@ -5687,6 +5852,8 @@ def _run_bot_startup_and_trading():
                 ],
             )
 
+            _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
+
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
             # Delegates to _rerun_supervisor_loop so the supervisor logic lives
             # in exactly one place and retries (fast-path) use the same code.
@@ -5704,12 +5871,6 @@ def _run_bot_startup_and_trading():
                     _state_for_supervisor = dict(_initialized_state)
                 finally:
                     _initialized_state_lock.release()
-            # Bootstrap FSM: all threads live → RUNNING_SUPERVISED
-            _bfsm_transition(
-                _BootstrapState.RUNNING_SUPERVISED,
-                f"{len(_active_threads)} trader thread(s) started; supervisor loop active",
-            )
-            logger.info("🚀 FSM STATE: RUNNING_SUPERVISED")
 
             # Explicit capital bootstrap final step: READY -> RUNNING.
             try:
@@ -5743,12 +5904,7 @@ def _run_bot_startup_and_trading():
             if get_startup_readiness_gate is not None:
                 try:
                     gate = get_startup_readiness_gate()
-                    expected_signals = (
-                        "bootstrap_ready",
-                        "capital_ready",
-                        "strategy_ready",
-                        "execution_ready",
-                    )
+                    expected_signals = _STARTUP_READINESS_COMPONENTS
                     for signal_name in expected_signals:
                         gate.signal_ready(signal_name)
 
@@ -5768,6 +5924,7 @@ def _run_bot_startup_and_trading():
                         logger.critical("❌ BARRIER STILL BLOCKING EXECUTION LOOP")
                 except Exception as _gate_signal_err:
                     logger.warning("⚠️ readiness gate signal failed at bootstrap completion: %s", _gate_signal_err)
+            _emit_startup_orchestration_snapshot("bootstrap_complete")
             try:
                 from bot.nija_core_loop import TRADING_ENGINE_READY
             except ImportError:
