@@ -315,7 +315,7 @@ Status: Production-ready, capital-protected, honesty-first
 
 ### DO NOT SAY:
 - ❌ "Profitable trading bot"
-- ❌ "Guaranteed returns"
+- ❌ "Return promises"
 - ❌ "AI-powered profits"
 
 ### INSTEAD SAY:

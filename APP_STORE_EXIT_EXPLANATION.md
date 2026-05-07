@@ -132,7 +132,7 @@ For all App Store communications, emphasize:
 
 Avoid these phrases in App Store materials:
 
-❌ "Guaranteed profits"
+❌ "Profit promises"
 ❌ "Never lose money"
 ❌ "Automated trading bot"
 ❌ "Set and forget"

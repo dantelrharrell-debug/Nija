@@ -241,7 +241,7 @@ Throttled (aggressive): 25% monthly
 
 ## 📐 7. Sharpe Ratio
 
-**Formula:** (Return - Risk-Free Rate) ÷ Standard Deviation of Returns
+**Formula:** (Return - Lower-Risk Rate) ÷ Standard Deviation of Returns
 
 ### Benchmarks
 

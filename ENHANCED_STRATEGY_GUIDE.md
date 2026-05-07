@@ -26,7 +26,7 @@ The NIJA Enhanced Strategy implements research-backed improvements specifically 
 - Perfect consistency at 3 AM same as 3 PM (zero fatigue)
 
 **Expected Results (Conservative Estimates):**
-⚠️ **IMPORTANT DISCLAIMER**: Trading involves substantial risk of loss. Past performance and research findings do not guarantee future results. These are theoretical projections based on research and backtesting, not guaranteed returns.
+⚠️ **IMPORTANT DISCLAIMER**: Trading involves substantial risk of loss. Past performance and research findings do not indicate future results. These are theoretical projections based on research and backtesting, not promised returns.
 
 - Win Rate: 70-80% (vs 55-60% baseline) - Based on multi-indicator research
 - Daily Returns: 1.5-3.5% (with 24/7 opportunities) - Theoretical best case

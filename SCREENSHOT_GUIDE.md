@@ -95,7 +95,7 @@ showSubscriptionModal('free');
 
 ### Screenshot 3: Education Mode (Free Tier)
 
-**Description:** "Learn trading risk-free with paper trading"
+**Description:** "Learn trading with paper trading"
 
 **Elements to Capture:**
 - [ ] "Education Mode" banner visible
@@ -323,7 +323,7 @@ Consider using:
 1. **Live Trading Dashboard** - Core functionality first
 2. **Pro AI Features** - Premium value
 3. **Subscription Plans** - Clear pricing
-4. **Education Mode** - Risk-free learning
+4. **Education Mode** - Simulated learning
 5. **Safety & Security** - Trust building
 6. **Account Settings** - Management ease
 
@@ -338,7 +338,7 @@ Consider using:
 "Advanced AI features for professional traders"
 
 **Screenshot 3:**
-"Practice risk-free with $10,000 simulated funds"
+"Practice with $10,000 simulated funds"
 
 **Screenshot 4:**
 "Trade crypto across multiple exchanges"
@@ -355,7 +355,7 @@ Each screenshot needs a description (max 80 characters):
 
 1. "Flexible subscription plans with 14-day free trial"
 2. "AI-powered trading with Meta-AI optimization"
-3. "Learn trading risk-free in education mode"
+3. "Learn trading with simulated trades in education mode"
 4. "Trade cryptocurrencies across top exchanges"
 5. "Advanced safety features and risk management"
 6. "Simple account and subscription management"

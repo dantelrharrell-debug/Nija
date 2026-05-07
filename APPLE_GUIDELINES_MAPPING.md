@@ -52,7 +52,7 @@ This document provides explicit mappings between NIJA's onboarding flow, UI comp
 
 ---
 
-#### § 2.5.6(b) - No Guaranteed Returns
+#### § 2.5.6(b) - No Return Promises
 
 **Requirement**: Apps must not promise or guarantee financial returns.
 
@@ -60,8 +60,8 @@ This document provides explicit mappings between NIJA's onboarding flow, UI comp
 
 | Prohibited Language | Apple-Compliant Alternative | Location |
 |---------------------|----------------------------|----------|
-| ❌ "Guaranteed profits" | ✅ "Trading involves risk of loss" | All screens |
-| ❌ "Passive income" | ✅ "User-directed trading tool" | Welcome screen |
+| ❌ "Profit promises" | ✅ "Trading involves risk of loss" | All screens |
+| ❌ "Supplemental income" | ✅ "User-directed trading tool" | Welcome screen |
 | ❌ "AI trades for you" | ✅ "You configure your own trading rules" | Strategy configuration |
 | ❌ "Consistent returns" | ✅ "Past performance does not guarantee future results" | Performance display |
 
@@ -107,7 +107,7 @@ This document provides explicit mappings between NIJA's onboarding flow, UI comp
 
 | Educational Component | Purpose | Guideline Compliance |
 |----------------------|---------|---------------------|
-| **Education Mode** | Risk-free learning environment | Provides $10,000 simulated balance for practice (EDUCATION_MODE_ONBOARDING.md lines 14-35) |
+| **Education Mode** | Simulated learning environment | Provides $10,000 simulated balance for practice (EDUCATION_MODE_ONBOARDING.md lines 14-35) |
 | **Progress Tracking** | User skill development | Milestones: First Trade, 10 Trades, Profitability, Ready for Live (lines 75-89) |
 | **Graduation Criteria** | Ensures user competency | Requires 10+ trades, 50%+ win rate, positive P&L before live trading (lines 160-195) |
 | **FAQ Section** | Risk and strategy education | "Why do my trades differ from others?" (APPLE_APP_REVIEW_FINANCIAL_FUNCTIONALITY.md lines 86-88) |
@@ -165,7 +165,7 @@ NIJA does not:
 | Metadata Field | Approved Content | Prohibited Content |
 |----------------|------------------|-------------------|
 | **Primary Category** | Finance | ❌ Games, Entertainment |
-| **Keywords** | "trading automation", "algorithmic trading", "crypto trading tool" | ❌ "passive income", "guaranteed profits", "get rich" |
+| **Keywords** | "trading automation", "algorithmic trading", "crypto trading tool" | ❌ "supplemental income", "profit promises", "get rich" |
 | **Age Rating** | 17+ (Financial Transactions: YES) | ❌ Lower age ratings |
 
 **File References**:

@@ -194,7 +194,7 @@ acknowledge and accept the following:
   future results and that I may lose all invested capital.
 
 □ I understand that NIJA does not provide financial advice, 
-  investment recommendations, or guaranteed returns.
+  investment recommendations, or promised returns.
 
 □ I understand that I am responsible for:
   • Monitoring my account
@@ -303,7 +303,7 @@ Exit Rules:
 **❌ DON'T SAY:**
 - "Profit Guaranteed"
 - "Consistent Returns"
-- "Passive Income Generated"
+- "Supplemental Income Generated"
 
 **✅ DO SAY:**
 ```
@@ -454,8 +454,8 @@ This is not investment advice. You configured these rules.
 
 These will cause **INSTANT REJECTION**:
 
-1. ❌ "Guaranteed profits"
-2. ❌ "Passive income"
+1. ❌ "Profit promises"
+2. ❌ "Supplemental income"
 3. ❌ "Get rich"
 4. ❌ "AI trades for you"
 5. ❌ "Automatic money"
@@ -464,11 +464,11 @@ These will cause **INSTANT REJECTION**:
 8. ❌ "100% win rate"
 9. ❌ "Consistent returns"
 10. ❌ "Set and forget"
-11. ❌ "Financial freedom"
+11. ❌ "Financial independence"
 12. ❌ "Replace your job"
 13. ❌ "Guaranteed ROI"
 14. ❌ "Always profitable"
-15. ❌ "Risk-free"
+15. ❌ "No real-money execution"
 
 ---
 
@@ -488,7 +488,7 @@ These will cause **INSTANT REJECTION**:
 NIJA is a user-directed trading tool. You maintain full 
 control over trading decisions, strategy configuration, 
 and risk management. NIJA does not provide investment 
-advice or guaranteed returns.
+advice or promised returns.
 ```
 
 ---

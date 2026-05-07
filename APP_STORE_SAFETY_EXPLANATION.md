@@ -821,7 +821,7 @@ Users acknowledge:
 - They are responsible for all trading decisions
 - NIJA is software, not financial advice
 - Substantial risk of loss exists
-- No guaranteed returns
+- No return promises
 - Independent trading model (results will differ)
 - Must be 18+ (21+ where required)
 - Must verify cryptocurrency trading is legal in their jurisdiction

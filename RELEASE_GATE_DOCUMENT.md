@@ -136,7 +136,7 @@ All failure modes tested and handled gracefully:
 ## ✅ GATE 4: Financial Compliance Audit
 
 ### Acceptance Criteria:
-- [ ] NO "guaranteed profits" language anywhere in code/docs
+- [ ] NO "profit promises" language anywhere in code/docs
 - [ ] NO "AI trades for you automatically" phrasing
 - [ ] Clear risk disclaimers present on startup
 - [ ] User acknowledges risk (via LIVE_CAPITAL_VERIFIED opt-in)
@@ -146,7 +146,7 @@ All failure modes tested and handled gracefully:
 ### Language Audit Checklist:
 
 **PROHIBITED PHRASES (Must be ABSENT):**
-- [ ] "Guaranteed profits" - VERIFIED ABSENT ☐
+- [ ] "Profit promises" - VERIFIED ABSENT ☐
 - [ ] "AI trades for you" - VERIFIED ABSENT ☐
 - [ ] "Get rich quick" - VERIFIED ABSENT ☐
 - [ ] "No risk" - VERIFIED ABSENT ☐

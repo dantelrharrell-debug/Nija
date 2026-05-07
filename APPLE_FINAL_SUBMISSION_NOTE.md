@@ -39,7 +39,7 @@ Yes, and we're very clear about this. Trading has risk. We don't guarantee profi
 | Requirement | Status | Evidence |
 |------------|---------|----------|
 | Clear risk disclosure | ✅ **Met** | [RISK_DISCLOSURE.md](RISK_DISCLOSURE.md) - shown at first launch, activation, daily |
-| No guaranteed returns | ✅ **Met** | Explicitly stated in all disclaimers and documentation |
+| No return promises | ✅ **Met** | Explicitly stated in all disclaimers and documentation |
 | Transparent operation | ✅ **Met** | [APP_STORE_SAFETY_EXPLANATION.md](APP_STORE_SAFETY_EXPLANATION.md) - independent trading model explained |
 | User control | ✅ **Met** | Pause/resume, kill-switch, revoke access via exchange |
 | Age restrictions | ✅ **Met** | 17+ App Store rating, 18+/21+ age gate in app |
@@ -135,7 +135,7 @@ See [APPLE_APP_REVIEW_SUBMISSION_NOTES.md](APPLE_APP_REVIEW_SUBMISSION_NOTES.md)
 
 **Key Messages Shown:**
 - ✅ "Substantial risk of loss - you may lose all invested capital"
-- ✅ "No guaranteed profits"
+- ✅ "No profit promises"
 - ✅ "Past performance does not predict future results"
 - ✅ "Only invest what you can afford to lose"
 - ✅ "You are responsible for trading decisions"
@@ -234,7 +234,7 @@ User enters: **Exchange API credentials**
 
 ### **Step 5: Paper Trading (Recommended)**
 System recommends: **Start with paper trading**
-- Risk-free testing period
+- Simulated testing period
 - Learn how system works
 - No real money risk
 

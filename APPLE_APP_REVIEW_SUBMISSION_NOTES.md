@@ -119,7 +119,7 @@ Users are explicitly informed that results WILL differ because:
 ### Key Risk Messages
 
 ✅ "Substantial risk of loss - you may lose all invested capital"  
-✅ "No guaranteed profits"  
+✅ "No profit promises"  
 ✅ "Past performance does not predict future results"  
 ✅ "Results may differ per account"  
 ✅ "Not financial advice - you are responsible for trading decisions"  
@@ -247,7 +247,7 @@ User's Phone → HTTPS → Exchange API (Coinbase/Kraken)
 ### Apple Financial App Requirements:
 
 ✅ **Clear risk disclosure** - Multiple warnings throughout app  
-✅ **No guaranteed returns** - Explicitly stated in all disclaimers  
+✅ **No return promises** - Explicitly stated in all disclaimers  
 ✅ **Transparent operation** - Independent trading model clearly explained  
 ✅ **User control** - Users maintain control via exchange accounts  
 ✅ **Age restrictions** - 17+ rating, 18+/21+ age gate enforced  

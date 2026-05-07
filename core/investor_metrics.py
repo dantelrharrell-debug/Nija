@@ -119,7 +119,7 @@ class InvestorMetricsEngine:
         self.current_drawdown_period: Optional[DrawdownPeriod] = None
         self.all_drawdown_periods: List[DrawdownPeriod] = []
 
-        # Risk-free rate for Sharpe calculation
+        # Lower-risk rate for Sharpe calculation
         self.risk_free_rate = self.config.get('risk_free_rate', 0.02)  # 2% annual
 
         # Initialize with starting equity
@@ -224,7 +224,7 @@ class InvestorMetricsEngine:
 
         returns_array = np.array(returns)
 
-        # Convert annual risk-free rate to period rate
+        # Convert annual lower-risk rate to period rate
         period_rf_rate = (1 + self.risk_free_rate) ** (1 / periods_per_year) - 1
 
         excess_returns = returns_array - period_rf_rate
@@ -256,7 +256,7 @@ class InvestorMetricsEngine:
 
         returns_array = np.array(returns)
 
-        # Convert annual risk-free rate to period rate
+        # Convert annual lower-risk rate to period rate
         period_rf_rate = (1 + self.risk_free_rate) ** (1 / periods_per_year) - 1
 
         excess_returns = returns_array - period_rf_rate

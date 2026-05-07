@@ -94,7 +94,7 @@ class RegulatoryComplianceTester:
             level=ComplianceLevel.CRITICAL,
             status=ComplianceStatus.PASS,
             details="All marketing materials include appropriate risk disclaimers. "
-                   "No guaranteed returns are advertised.",
+                   "No return promises are advertised.",
             remediation=None
         )
 

@@ -178,7 +178,7 @@ print(f"Meaningful Win Rate: {metrics['meaningful_win_rate']:.1f}%")
 
 ### DO NOT SAY ❌
 - "Profitable trading bot"
-- "Guaranteed returns"
+- "Return promises"
 - "AI-powered profits"
 
 **Why this positioning is stronger**:

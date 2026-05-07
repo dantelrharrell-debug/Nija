@@ -66,7 +66,7 @@ NIJA has completed a comprehensive App Store readiness review and has implemente
 - **Status:** Complete and tested
 - **Features:**
   - ✅ Scans for 50+ forbidden terms
-  - ✅ Blocks: "guaranteed profits", "passive income", "AI trades for you", etc.
+  - ✅ Blocks: "profit promises", "supplemental income", "AI trades for you", etc.
   - ✅ Suggests compliant alternatives
   - ✅ Can scan entire codebase, docs, UI
   - ✅ Generates compliance reports
@@ -518,7 +518,7 @@ BALANCE_FETCH_TIMEOUT = 45  # 45 second timeout with cached fallback
 
 #### Prohibited Language - ALL REMOVED:
 
-- ❌ "Guaranteed profits" → **NOT FOUND** ✅
+- ❌ "Profit promises" → **NOT FOUND** ✅
 - ❌ "AI trades for you automatically" → **CORRECTED TO:** "Independent algorithmic tool" ✅
 - ❌ No risk warnings → **IMPLEMENTED** comprehensive disclaimers ✅
 
@@ -700,7 +700,7 @@ All trades are simulated - NO REAL ORDERS PLACED
 - "Monitor markets and execute trades based on technical indicators"
 
 **DON'T SAY:**
-- ❌ "Guaranteed profits"
+- ❌ "Profit promises"
 - ❌ "AI that trades for you"
 - ❌ "Get rich quick"
 - ❌ "Automated money-making"

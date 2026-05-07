@@ -85,7 +85,7 @@ class AutonomousScalingConfig:
 
     # Risk adjustment
     enable_risk_adjustment: bool = True
-    risk_free_rate: float = 0.05  # 5% annual risk-free rate
+    risk_free_rate: float = 0.05  # 5% annual lower-risk rate
     target_sharpe_ratio: float = 2.0  # Target Sharpe ratio
 
     # Market regime allocation

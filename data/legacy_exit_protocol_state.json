@@ -6,22 +6,30 @@
       "position": {
         "symbol": "BTC-USD",
         "size_usd": 1000.0,
-        "quantity": 0.02,
-        "pnl_pct": 5.0
+        "quantity": 0.02
       },
       "exit_strategy": "EMERGENCY_STOP",
-      "classified_at": "2026-02-18T22:16:04.600422"
+      "classified_at": "2026-05-07T16:17:16.356691"
     },
-    "DUST-USD": {
+    "ETH-USD": {
       "category": "ZOMBIE_LEGACY",
       "position": {
-        "symbol": "DUST-USD",
+        "symbol": "ETH-USD",
         "size_usd": 0.5,
-        "quantity": 1.0,
-        "pnl_pct": 0.0
+        "quantity": 0.0001
       },
       "exit_strategy": "MARKET_IMMEDIATE",
-      "classified_at": "2026-02-18T22:16:04.600443"
+      "classified_at": "2026-05-07T16:17:16.356762"
+    },
+    "UNKNOWN": {
+      "category": "ZOMBIE_LEGACY",
+      "position": {
+        "symbol": "UNKNOWN",
+        "size_usd": 50.0,
+        "quantity": 1.0
+      },
+      "exit_strategy": "MARKET_IMMEDIATE",
+      "classified_at": "2026-05-07T16:17:16.356815"
     }
   },
   "unwind_progress": {
@@ -44,13 +52,13 @@
       "last_cycle_at": "2026-02-18T22:16:04.596751"
     }
   },
-  "last_cleanup_run": "2026-02-18T22:16:04.601425",
+  "last_cleanup_run": "2026-05-07T16:17:16.352642",
   "cleanup_metrics": {
     "total_positions_cleaned": 12,
     "zombie_positions_closed": 6,
     "legacy_positions_unwound": 3,
-    "stale_orders_cancelled": 6,
-    "capital_freed_usd": 525.0
+    "stale_orders_cancelled": 10,
+    "capital_freed_usd": 875.0
   },
   "high_exposure_assets_tracked": [
     "PEPE-USD",
@@ -65,7 +73,7 @@
       "pct_of_account": 15.0,
       "message": "PEPE-USD is 15.0% of account (>10% threshold)",
       "recommendation": "Consider reducing position size or setting tighter stop-loss",
-      "timestamp": "2026-03-11T04:30:26.702062"
+      "timestamp": "2026-05-07T16:17:16.502721"
     }
   ]
 }

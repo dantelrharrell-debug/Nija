@@ -1826,6 +1826,8 @@ NIJA has achieved a critical milestone: **Platform account and ALL user accounts
 
 NIJA now includes a production-ready API Gateway that exposes trading controls, account balance, positions, and performance metrics through secure REST endpoints. Build mobile apps, web dashboards, or integrate NIJA into your existing systems.
 
+**Canonical Mobile API base path**: `/api/mobile`
+
 ### 🎯 Available Endpoints
 
 - **POST /api/v1/start** - Start the trading engine
@@ -2613,11 +2615,11 @@ NIJA is not just another crypto trading bot—it's a **comprehensive algorithmic
 - **P&L Tracking**: Live profit/loss monitoring with entry price persistence
 - **Trade Journal**: Complete audit trail with performance analytics
 - **Position Monitoring**: 2.5-minute scan cycles for instant reaction
-- **Performance Metrics**: Win rate, average hold time, daily/monthly returns
+- **Performance Metrics**: Outcome rate, average hold time, daily/monthly returns
 
 ### 🧪 Development & Testing Tools
 - **Backtesting Engine**: Historical performance validation with multi-timeframe analysis
-- **Paper Trading Mode**: Risk-free strategy testing with simulated capital
+- **Paper Trading Mode**: Simulated strategy testing with paper trading capital
 - **Comprehensive Diagnostics**: 5/5 profitability checks, broker status, system health
 - **Emergency Procedures**: Instant shutdown, position liquidation, recovery modes
 

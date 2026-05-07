@@ -23,7 +23,7 @@ Successfully implemented a comprehensive **RISK FREEZE** governance system to pr
 - **24 protected parameters** under governance
 
 ### 🛡️ Pre-Commit Protection
-- **.pre-commit-hooks/risk-freeze-check.py** (6KB) - Git hook
+- **.pre-commit-hooks/risk_freeze_check.py** (6KB) - Git hook
 - Automatic detection of risk parameter changes
 - Blocks commits without version increment
 
@@ -292,7 +292,7 @@ Added Files (10):
 ├── RISK_FREEZE_QUICK_REF.md                 (9KB quick reference)
 ├── bot/risk_config_versions.py              (14KB versioning system)
 ├── bot/risk_freeze_guard.py                 (14KB enforcement guard)
-├── .pre-commit-hooks/risk-freeze-check.py   (6KB git hook)
+├── .pre-commit-hooks/risk_freeze_check.py   (6KB git hook)
 ├── config/risk_versions/baseline_risk_config.json
 ├── config/risk_versions/RISK_CONFIG_v1.0.0.json
 ├── config/risk_versions/RISK_CONFIG_v1.1.0.json

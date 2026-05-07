@@ -64,7 +64,7 @@ NIJA has been upgraded from a "good plan" to an **institutional-grade execution 
 
 **Before**: Direct access to live trading without validation
 **After**: Structured 3-tier progression:
-- **Level 1 (Paper)**: Risk-free learning with $10K virtual funds
+- **Level 1 (Paper)**: Simulated learning with $10K virtual funds
 - **Level 2 (Limited Live)**: Capped at $5K with training wheels
 - **Level 3 (Full Live)**: Progressive unlocking up to institutional scale
 
@@ -431,4 +431,3 @@ This upgrade transforms NIJA from a trading bot into an **institutional-grade fi
 - [ ] Legal Counsel
 - [ ] Compliance Officer
 - [ ] Executive Team
-

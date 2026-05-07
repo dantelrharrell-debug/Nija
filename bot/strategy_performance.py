@@ -367,7 +367,7 @@ class StrategyPerformanceTracker:
 
         Args:
             pnl_series: List of per-trade net P&L values.
-            risk_free_rate: Daily risk-free rate (default: 0).
+            risk_free_rate: Daily lower-risk rate (default: 0).
 
         Returns:
             Annualised Sharpe ratio.

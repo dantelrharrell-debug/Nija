@@ -477,7 +477,7 @@ top = affiliate_referral_system.get_top_affiliates(limit=10)
 
 **Benefits**:
 - Viral growth mechanics
-- Passive income for users
+- Supplemental income for users
 - Sustainable revenue sharing
 - Performance-based rewards
 - Target: 20-30% user growth rate
@@ -512,7 +512,7 @@ The portfolio allocation engine is already implemented with:
 
 **File**: `bot/cross_exchange_arbitrage_engine.py`
 
-**What it does**: Detects and executes arbitrage opportunities across multiple exchanges for risk-free profits.
+**What it does**: Detects and executes arbitrage opportunities across multiple exchanges for lower-risk profit opportunities.
 
 **Supported Exchanges**:
 - Coinbase (0.6% taker fee)
@@ -525,7 +525,7 @@ The portfolio allocation engine is already implemented with:
 2. Detect price discrepancies
 3. Calculate profitability after fees
 4. Execute simultaneous buy/sell orders
-5. Capture risk-free profit
+5. Capture lower-risk profit opportunities
 
 **Example**:
 ```
@@ -574,7 +574,7 @@ if opportunity and opportunity.is_valid():
 ```
 
 **Benefits**:
-- Risk-free profits
+- Lower-risk profits
 - Market-neutral strategy
 - Works in any market condition
 - Multiple exchanges = more opportunities
@@ -876,12 +876,12 @@ else:
 **Referral Growth**:
 - 20-30% monthly user growth from referrals
 - Average referral value: $300-500 lifetime
-- Top affiliates: $1,000-5,000/month passive income
+- Top affiliates: $1,000-5,000/month supplemental income
 
 ### PATH 3 - Institutional Grade
 
 **Additional Returns**:
-- Arbitrage: +5-10% annual returns (risk-free)
+- Arbitrage: +5-10% annual returns (lower-risk)
 - Liquidity routing: +0.1-0.3% per trade (execution improvement)
 - Risk parity: -20-30% portfolio volatility (better risk-adjusted returns)
 

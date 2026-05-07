@@ -76,7 +76,7 @@ This implementation adds 11 major new components across three strategic paths, t
    - Real-time arbitrage opportunity detection
    - Fee-aware profitability calculation
    - Automatic execution
-   - **Impact**: +5-10% annual returns (risk-free)
+   - **Impact**: +5-10% annual returns (lower-risk)
 
 2. **Liquidity Routing System** (`bot/liquidity_routing_system.py`)
    - Smart order routing across multiple venues

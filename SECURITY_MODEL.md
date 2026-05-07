@@ -17,7 +17,7 @@ NIJA is an institutional-grade automated cryptocurrency trading platform that pr
 - ✅ Mandatory tier-based capital protection
 - ✅ Real-time monitoring and anomaly detection
 - ✅ Industry-standard encryption and security practices
-- ✅ Read-only demo mode for risk-free validation
+- ✅ Read-only demo mode for simulated validation
 
 ---
 
@@ -174,7 +174,7 @@ if estimated_fees > trade_profit_potential * 0.3:
 ### Tier Graduation
 
 Users can graduate to higher tiers through:
-- **Paper Trading Success**: Demonstrate profitability risk-free
+- **Paper Trading Success**: Demonstrate profitability with simulated trading
 - **Increased Capital**: Deposit more funds to reach higher tier thresholds
 - **Progressive Unlocking**: 14-day restricted period when transitioning to live trading
 
@@ -461,7 +461,7 @@ NIJA_ENCRYPTION_KEY=<encrypted>
 - ✅ Clear risk disclosures
 - ✅ User data privacy protection
 - ✅ Financial functionality transparency
-- ✅ Demo mode for risk-free testing
+- ✅ Demo mode for simulated testing
 
 **Data Privacy (GDPR/CCPA)**
 - User data encrypted at rest and in transit
@@ -546,7 +546,7 @@ python bot.py --paper-mode
 **Via Web/Mobile Interface:**
 1. Create account
 2. Select "Paper Trading Mode" (default for new users)
-3. Explore platform risk-free for 30+ days
+3. Explore platform with simulated trading for 30+ days
 4. Graduate to live trading after meeting criteria
 
 ### 📊 Demo Mode Graduation Criteria

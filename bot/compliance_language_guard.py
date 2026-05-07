@@ -11,8 +11,8 @@ This module scans and enforces compliant language across:
     - Marketing materials
 
 Forbidden language that triggers App Store rejection:
-    ❌ "Guaranteed profits"
-    ❌ "Passive income"
+    ❌ "Profit promises"
+    ❌ "Supplemental income"
     ❌ "AI trades for you"
     ❌ "Automatic money"
     ❌ And 50+ more...
@@ -57,7 +57,7 @@ class ComplianceLanguageGuard:
     
     # FORBIDDEN TERMS - These will cause instant App Store rejection
     FORBIDDEN_TERMS = [
-        # Guaranteed returns
+        # Return promises
         r"\bguaranteed?\s+(profit|return|income|gain|money|roi)\b",
         r"\b(profit|return|income|gain|money)\s+guaranteed?\b",
         r"\bguaranteed?\s+to\s+(make|earn|generate)\b",
@@ -67,7 +67,7 @@ class ComplianceLanguageGuard:
         r"\bno\s+risk\b",
         r"\bzero\s+risk\b",
         
-        # Passive income claims
+        # Supplemental income claims
         r"\bpassive\s+income\b",
         r"\bmake\s+money\s+(while|when)\s+you\s+sleep\b",
         r"\bautomated?\s+income\b",
@@ -83,7 +83,7 @@ class ComplianceLanguageGuard:
         r"\bfully\s+automated?\b",
         r"\bcompletely\s+automated?\b",
         
-        # Financial freedom / get rich
+        # Financial independence / get rich
         r"\bfinancial\s+freedom\b",
         r"\bget\s+rich\b",
         r"\bmake\s+you\s+rich\b",
@@ -142,17 +142,17 @@ class ComplianceLanguageGuard:
     
     # COMPLIANT ALTERNATIVES
     COMPLIANT_ALTERNATIVES = {
-        "guaranteed profit": "potential for profit (with risk of loss)",
-        "passive income": "user-directed trading activity",
+        "profit promises": "potential for profit (with risk of loss)",
+        "supplemental income": "user-directed trading activity",
         "AI trades for you": "AI-assisted signal generation requiring user approval",
         "automatic trading": "user-configured automated execution",
         "set and forget": "configurable strategy execution",
-        "financial freedom": "trading tool for independent investors",
+        "financial independence": "trading tool for independent investors",
         "get rich": "potential to generate returns (with substantial risk)",
         "always profitable": "designed to identify favorable risk/reward opportunities",
         "never loses": "includes stop-loss protection (losses still possible)",
         "consistent returns": "systematic approach to trading (results vary)",
-        "guaranteed returns": "no guaranteed returns; past performance does not indicate future results",
+        "return promises": "no return promises; past performance does not indicate future results",
     }
     
     def __init__(self):
@@ -376,8 +376,8 @@ if __name__ == "__main__":
     
     # Test forbidden terms
     test_texts = [
-        "Our AI trades for you with guaranteed profits!",
-        "Generate passive income while you sleep.",
+        "Our AI trades for you with profit promises!",
+        "Generate supplemental income while you sleep.",
         "This is a user-directed trading tool with risk of loss.",
         "Set and forget automated trading system.",
         "100% win rate guaranteed!",

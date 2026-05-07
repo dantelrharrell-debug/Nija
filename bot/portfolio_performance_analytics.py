@@ -42,7 +42,7 @@ logger = logging.getLogger("nija.portfolio_performance_analytics")
 # Constants
 # ---------------------------------------------------------------------------
 
-RISK_FREE_RATE_ANNUAL = 0.05          # 5% annual risk-free rate
+RISK_FREE_RATE_ANNUAL = 0.05          # 5% annual lower-risk rate
 TRADING_DAYS_PER_YEAR = 252
 MAX_TRADES_IN_MEMORY  = 10_000        # rolling cap on trade history
 

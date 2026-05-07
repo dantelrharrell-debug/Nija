@@ -162,7 +162,7 @@ def _bs_price(
     S     : underlying price
     K     : strike
     T     : time to expiry in years
-    r     : risk-free rate (e.g. 0.05)
+    r     : lower-risk rate (e.g. 0.05)
     sigma : annual volatility (e.g. 0.25)
     """
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
@@ -208,7 +208,7 @@ class BarrierOptionHandler:
     put_call      : "call" | "put"
     spot_price    : current underlying price (optional; fetched from broker if absent)
     sigma         : implied volatility (default 0.25)
-    risk_free     : risk-free rate (default 0.05)
+    risk_free     : lower-risk rate (default 0.05)
     """
 
     def validate(self, order: ExoticOrder) -> None:
@@ -279,7 +279,7 @@ class AsianOptionHandler:
     put_call       : "call" | "put"
     num_obs        : number of observation points (default 30)
     sigma          : implied volatility (default 0.25)
-    risk_free      : risk-free rate (default 0.05)
+    risk_free      : lower-risk rate (default 0.05)
     """
 
     def validate(self, order: ExoticOrder) -> None:
@@ -331,7 +331,7 @@ class DigitalOptionHandler:
     put_call      : "call" (pays if S > K) | "put" (pays if S < K)
     payout        : fixed cash payout per contract (default 1.0)
     sigma         : implied volatility (default 0.25)
-    risk_free     : risk-free rate (default 0.05)
+    risk_free     : lower-risk rate (default 0.05)
     """
 
     def validate(self, order: ExoticOrder) -> None:
@@ -384,7 +384,7 @@ class LookbackOptionHandler:
     put_call  : "call" (buys at min) | "put" (sells at max)
     expiry    : ISO date string
     sigma     : implied volatility (default 0.25)
-    risk_free : risk-free rate (default 0.05)
+    risk_free : lower-risk rate (default 0.05)
     """
 
     def validate(self, order: ExoticOrder) -> None:

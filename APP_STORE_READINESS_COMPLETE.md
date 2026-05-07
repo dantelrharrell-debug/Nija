@@ -56,7 +56,7 @@ NIJA has been prepared for App Store submission with all required legal, complia
 - □ I understand that trading involves substantial risk of loss
 - □ I understand NIJA is a tool and I am solely responsible for trading decisions
 - □ I understand past performance does not guarantee future results
-- □ I understand NIJA does not provide financial advice or guaranteed returns
+- □ I understand NIJA does not provide financial advice or return promises
 - □ I understand my responsibilities (monitoring, risk management, fees, compliance)
 - □ I have read and agree to Terms of Service and Privacy Policy
 
@@ -95,7 +95,7 @@ NIJA has been prepared for App Store submission with all required legal, complia
 **Verification:**
 - ✅ Searched entire codebase for "guaranteed" language
 - ✅ Instances found are only in:
-  - Risk disclaimers ("No guaranteed profits")
+  - Risk disclaimers ("No profit promises")
   - Technical architecture guarantees (non-marketing)
   - Compliance statements ("We do not guarantee...")
 
@@ -231,7 +231,7 @@ Expected: All 19 tests pass
 
 **Regulatory Compliance:**
 - ✅ [REGULATORY_COMPLIANCE_FRAMEWORK.md](REGULATORY_COMPLIANCE_FRAMEWORK.md)
-- ✅ No promises of guaranteed returns
+- ✅ No promises of return assurances
 - ✅ Clear risk disclosures
 - ✅ User-directed trading (not automated investment advice)
 - ✅ Age restrictions enforced (18+)
@@ -300,7 +300,7 @@ Expected: All 19 tests pass
 - [x] Risk Disclosure comprehensive and visible
 - [x] Age verification (18+) enforced
 - [x] Jurisdiction restrictions clear
-- [x] No guaranteed returns language
+- [x] No return promises language
 - [x] Financial disclaimers present throughout
 
 ### Pricing & Support

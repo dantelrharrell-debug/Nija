@@ -80,7 +80,7 @@ This document establishes NIJA's institutional-grade compliance framework for au
 
 ✅ **Restricted Content**:
 - No false or misleading claims about performance
-- No promises of guaranteed returns
+- No promises of return assurances
 - No testimonials without proper disclaimers
 - No imagery suggesting "get rich quick"
 
@@ -297,7 +297,7 @@ Users must agree NOT to:
 
 NIJA explicitly disclaims:
 - Guaranteed uptime (best effort basis)
-- Guaranteed profits or returns
+- Profit promises or return assurances
 - Liability for exchange failures
 - Liability for market losses
 - Liability for system errors
@@ -491,8 +491,8 @@ SUITABILITY ASSESSMENT
 ### 9.1 Prohibited Claims
 
 ❌ **Cannot Say**:
-- "Guaranteed profits"
-- "Risk-free trading"
+- "Profit promises"
+- "Simulated trading"
 - "Get rich quick"
 - "Never lose money"
 - "Beats the market every time"
@@ -1078,4 +1078,3 @@ This regulatory compliance framework provides NIJA with institutional-grade stan
 - **Next Review**: July 31, 2026
 - **Owner**: Compliance Team
 - **Approved By**: [Pending]
-

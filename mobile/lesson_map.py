@@ -156,7 +156,7 @@ def create_lesson_map() -> List[Lesson]:
             QuizQuestion(
                 question="What should you expect from this onboarding?",
                 options=[
-                    "Guaranteed profits immediately",
+                    "Profit promises immediately",
                     "Free cryptocurrency",
                     "Education on trading and risk management",
                     "Stock trading tips"
@@ -1471,7 +1471,7 @@ def create_lesson_map() -> List[Lesson]:
             "• All trading involves risk of loss\n"
             "• Even the best strategies have losing trades\n"
             "• Market conditions can change unexpectedly\n"
-            "• There are no guaranteed profits in trading\n\n"
+            "• There are no profit promises in trading\n\n"
             "**What \"Afford to Lose\" Means:**\n\n"
             "❌ **Never use:**\n"
             "• Rent or mortgage money\n"

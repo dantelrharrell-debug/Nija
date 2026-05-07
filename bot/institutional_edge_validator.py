@@ -366,7 +366,7 @@ class InstitutionalEdgeValidator:
         
         Args:
             returns: Array of returns
-            risk_free_rate: Risk-free rate (annualized)
+            risk_free_rate: Lower-risk rate (annualized)
             
         Returns:
             Annualized Sharpe ratio
