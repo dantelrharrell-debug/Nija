@@ -1420,12 +1420,12 @@ class TradingStateMachine:
         runtime_mode = _resolve_runtime_mode_safe()
         if current_state != TradingState.LIVE_ACTIVE:
             live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
-            
+
             # Check if capital is hydrated and balance available
             _ca_check = _get_capital_authority_instance()
             _capital_ready = (
-                _ca_check is not None 
-                and _ca_check.is_hydrated 
+                _ca_check is not None
+                and _ca_check.is_hydrated
                 and _ca_check.get_real_capital() is not None
             )
             

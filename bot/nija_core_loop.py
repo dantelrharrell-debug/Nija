@@ -2120,35 +2120,35 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                 cycle += 1
 
-                    if cycle == 1:
-                        logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
-                        logger.critical("✅ FIRST STRATEGY TICK")
-                        # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
-                        _runtime_mode_cycle = _resolve_runtime_mode_safe()
-                        _lcv_val = (
-                            _runtime_mode_cycle.raw.get("LIVE_CAPITAL_VERIFIED", "false")
-                            if _runtime_mode_cycle is not None
-                            else os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+                if cycle == 1:
+                    logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
+                    logger.critical("✅ FIRST STRATEGY TICK")
+                    # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
+                    _runtime_mode_cycle = _resolve_runtime_mode_safe()
+                    _lcv_val = (
+                        _runtime_mode_cycle.raw.get("LIVE_CAPITAL_VERIFIED", "false")
+                        if _runtime_mode_cycle is not None
+                        else os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+                    )
+                    _live_trading_val = (
+                        _runtime_mode_cycle.raw.get("LIVE_TRADING", "false")
+                        if _runtime_mode_cycle is not None
+                        else os.getenv("LIVE_TRADING", "false").lower().strip()
+                    )
+                    _live_authorized = (
+                        _runtime_mode_cycle.is_live if _runtime_mode_cycle is not None else _lcv_val in ("true", "1", "yes", "enabled")
+                    )
+                    if not _live_authorized:
+                        logger.critical(
+                            "⚠️  OPERATOR ACTION REQUIRED: "
+                            "LIVE_CAPITAL_VERIFIED/LIVE_TRADING not set to 'true' "
+                            "(LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r). "
+                            "Trading is permanently blocked until this env var is set. "
+                            "Add 'LIVE_CAPITAL_VERIFIED=true' to your environment / Railway "
+                            "variables and redeploy.",
+                            _lcv_val,
+                            _live_trading_val,
                         )
-                        _live_trading_val = (
-                            _runtime_mode_cycle.raw.get("LIVE_TRADING", "false")
-                            if _runtime_mode_cycle is not None
-                            else os.getenv("LIVE_TRADING", "false").lower().strip()
-                        )
-                        _live_authorized = (
-                            _runtime_mode_cycle.is_live if _runtime_mode_cycle is not None else _lcv_val in ("true", "1", "yes", "enabled")
-                        )
-                        if not _live_authorized:
-                            logger.critical(
-                                "⚠️  OPERATOR ACTION REQUIRED: "
-                                "LIVE_CAPITAL_VERIFIED/LIVE_TRADING not set to 'true' "
-                                "(LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r). "
-                                "Trading is permanently blocked until this env var is set. "
-                                "Add 'LIVE_CAPITAL_VERIFIED=true' to your environment / Railway "
-                                "variables and redeploy.",
-                                _lcv_val,
-                                _live_trading_val,
-                            )
 
                 # Shared-cycle snapshot is captured before activation attempts.
                 logger.critical("💰 AVAILABLE CAPITAL: %.2f", _cycle_balance)
