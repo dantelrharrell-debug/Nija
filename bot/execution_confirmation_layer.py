@@ -358,6 +358,66 @@ class ExecutionConfirmationLayer:
         )
         return result
 
+    def confirm_existing_order(
+        self,
+        broker: Any,
+        symbol: str,
+        side: str,
+        expected_size: float,
+        order_id: Optional[str],
+        initial_response: Optional[Dict[str, Any]] = None,
+    ) -> ConfirmationResult:
+        """
+        Confirm fill status for an already-placed order.
+
+        Args:
+            broker: Broker adapter used to poll ``get_order_status``.
+            symbol: Trading pair symbol.
+            side: ``"buy"`` or ``"sell"``.
+            expected_size: Expected base-asset quantity for the order.
+            order_id: Exchange order id to confirm (may be None).
+            initial_response: Optional response dict from the original submit.
+
+        Returns:
+            ConfirmationResult with fill status. If order_id is None, the
+            confirmation falls back to parsing ``initial_response`` without
+            polling the broker.
+        """
+        result = ConfirmationResult(
+            symbol=symbol,
+            side=side,
+            order_id=order_id,
+            expected_size=expected_size,
+            placed_at=datetime.now(),
+        )
+
+        try:
+            filled, avg_price = self._wait_for_fill(
+                broker,
+                order_id,
+                initial_response or {},
+            )
+        except Exception as exc:
+            result.error = str(exc)
+            result.status = FillStatus.UNFILLED
+            logger.warning("Confirmation failed for %s: %s", order_id, exc)
+            return result
+        result.filled_size = filled
+        result.avg_price = avg_price
+        result.confirmed_at = datetime.now()
+
+        if expected_size > 0:
+            if filled >= expected_size * (1.0 - self.partial_fill_tolerance):
+                result.status = FillStatus.FILLED
+            elif filled > 0:
+                result.status = FillStatus.PARTIAL
+            else:
+                result.status = FillStatus.UNFILLED
+        else:
+            result.status = FillStatus.PARTIAL if filled > 0 else FillStatus.UNFILLED
+
+        return result
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
