@@ -39,9 +39,9 @@ from pathlib import Path
 logger = logging.getLogger("nija.trading_state_machine")
 
 try:
-    from bot.runtime_mode import resolve_runtime_mode, RuntimeModeResolution
+    from bot.runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution
 except ImportError:
-    from runtime_mode import resolve_runtime_mode, RuntimeModeResolution  # type: ignore[import]
+    from runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution  # type: ignore[import]
 
 class LiveGateSnapshot(NamedTuple):
     """Snapshot of live gate boolean status for log deduplication."""
@@ -69,11 +69,7 @@ def _env_truthy(name: str, default: str = "false") -> bool:
 
 
 def _resolve_runtime_mode_safe() -> Optional[RuntimeModeResolution]:
-    try:
-        return resolve_runtime_mode()
-    except Exception as exc:
-        logger.debug("runtime_mode resolution failed: %s", exc)
-        return None
+    return resolve_runtime_mode_safe(logger)
 
 
 def _is_transient_redis_error(err_text: str) -> bool:

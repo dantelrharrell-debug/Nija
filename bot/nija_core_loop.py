@@ -61,17 +61,13 @@ import pandas as pd
 logger = logging.getLogger("nija.core_loop")
 
 try:
-    from bot.runtime_mode import resolve_runtime_mode, RuntimeModeResolution
+    from bot.runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution
 except ImportError:
-    from runtime_mode import resolve_runtime_mode, RuntimeModeResolution  # type: ignore[import]
+    from runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution  # type: ignore[import]
 
 
 def _resolve_runtime_mode_safe() -> Optional[RuntimeModeResolution]:
-    try:
-        return resolve_runtime_mode()
-    except Exception as exc:
-        logger.debug("runtime_mode resolution failed: %s", exc)
-        return None
+    return resolve_runtime_mode_safe(logger)
 
 
 def _is_live_mode(runtime_mode: Optional[RuntimeModeResolution] = None) -> bool:
@@ -2135,9 +2131,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         if _runtime_mode_cycle is not None
                         else os.getenv("LIVE_TRADING", "false").lower().strip()
                     )
-                    _live_authorized = (
-                        _runtime_mode_cycle.is_live if _runtime_mode_cycle is not None else _lcv_val in ("true", "1", "yes", "enabled")
-                    )
+                    _live_authorized = _is_live_mode(_runtime_mode_cycle)
                     if not _live_authorized:
                         logger.critical(
                             "⚠️  OPERATOR ACTION REQUIRED: "

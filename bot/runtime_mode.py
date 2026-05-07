@@ -10,8 +10,9 @@ active runtime mode to prevent divergent interpretations across subsystems.
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 _TRUTHY = {"1", "true", "yes", "enabled", "on"}
 
@@ -100,3 +101,15 @@ def resolve_runtime_mode() -> RuntimeModeResolution:
         conflicts=tuple(conflicts),
         raw=raw,
     )
+
+
+def resolve_runtime_mode_safe(
+    logger: Optional[logging.Logger] = None,
+) -> Optional[RuntimeModeResolution]:
+    """Best-effort runtime mode resolution with optional debug logging."""
+    try:
+        return resolve_runtime_mode()
+    except Exception as exc:
+        if logger:
+            logger.debug("runtime_mode resolution failed: %s", exc)
+        return None
