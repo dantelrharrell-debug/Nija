@@ -370,9 +370,13 @@ class ExecutionConfirmationLayer:
         """
         Confirm fill status for an already-placed order.
 
-        Uses the same polling logic as :meth:`place_and_confirm` but skips
-        order placement, allowing callers to verify an order placed through
-        another pipeline.
+        Args:
+            broker: Broker adapter used to poll ``get_order_status``.
+            symbol: Trading pair symbol.
+            side: ``"buy"`` or ``"sell"``.
+            expected_size: Expected base-asset quantity for the order.
+            order_id: Exchange order id to confirm (may be None).
+            initial_response: Optional response dict from the original submit.
         """
         result = ConfirmationResult(
             symbol=symbol,

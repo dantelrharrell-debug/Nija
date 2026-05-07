@@ -1105,7 +1105,11 @@ class ExecutionEngine:
 
     @staticmethod
     def _extract_balance_values(balance_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
-        """Return (available_balance, total_balance) from a balance dict."""
+        """Return (available_balance, total_balance) from a balance dict.
+
+        Expects common keys like ``available_balance``, ``trading_balance``,
+        ``total_balance``, or ``total_funds`` in *balance_data*.
+        """
         if not balance_data:
             return None, None
         available = None
@@ -1140,7 +1144,7 @@ class ExecutionEngine:
         return available, total
 
     def _get_cached_balance_snapshot(self) -> Tuple[Optional[float], Optional[float], Dict[str, Any]]:
-        """Return cached (available, total, raw) balance without polling the exchange."""
+        """Return cached (available_balance, total_balance, raw_balance_dict) without polling the exchange."""
         broker_key = self._get_broker_label()
 
         if BALANCE_SERVICE_AVAILABLE and BalanceService is not None:
@@ -1257,12 +1261,18 @@ class ExecutionEngine:
         expected_quantity: float,
         broker_response: Optional[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        """Attempt to confirm fills via ExecutionConfirmationLayer when available."""
+        """Attempt to confirm fills via ExecutionConfirmationLayer when available.
+
+        expected_quantity is the base-asset quantity implied by the order.
+        Returns the updated broker_response dict (or the original response).
+        """
         if not broker_response or not isinstance(broker_response, dict):
             return broker_response
         if not EXECUTION_CONFIRMATION_AVAILABLE or get_execution_confirmation_layer is None:
             return broker_response
         if self.broker_client is None:
+            return broker_response
+        if expected_quantity <= 0:
             return broker_response
 
         order_id = broker_response.get("order_id") or broker_response.get("id")
