@@ -53,6 +53,11 @@ _FIRST_BOOT_THIS_PROCESS = True
 
 
 def _resolve_disclosure_interval_seconds() -> float:
+    """
+    Resolve the disclosure interval (seconds) from NIJA_DISCLOSURE_INTERVAL_HOURS.
+
+    Negative values disable periodic emission after the first boot.
+    """
     raw = os.getenv("NIJA_DISCLOSURE_INTERVAL_HOURS", "").strip()
     if not raw:
         return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
@@ -78,6 +83,12 @@ _DISCLOSURE_INTERVAL_SECONDS = _resolve_disclosure_interval_seconds()
 
 
 def _should_emit_disclosure() -> bool:
+    """
+    Decide whether to emit a disclosure.
+
+    In production, disclosures emit on first boot and then at the configured interval.
+    In non-production environments, disclosures always emit for visibility.
+    """
     global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
     now = time.time()
     interval_seconds = _DISCLOSURE_INTERVAL_SECONDS
@@ -98,10 +109,6 @@ def _should_emit_disclosure() -> bool:
     return False
 
 
-def _get_compliance_logger() -> logging.Logger:
-    return _COMPLIANCE_LOGGER
-
-
 class InstitutionalLogger:
     """
     Institutional-grade logger wrapper that adds disclaimers to output.
@@ -112,7 +119,7 @@ class InstitutionalLogger:
     so multiple logger instances share the same timing rules.
     """
     
-    def __init__(self, name: str = COMPLIANCE_LOGGER_NAME, base_logger: Optional[logging.Logger] = None):
+    def __init__(self, name: str, base_logger: Optional[logging.Logger] = None):
         """
         Initialize institutional logger.
         
@@ -120,6 +127,7 @@ class InstitutionalLogger:
             name: Logger name (used to initialize the underlying logger when base_logger is None)
             base_logger: Optional base logger to wrap
         """
+        self.name = name
         self.logger = base_logger or logging.getLogger(name)
     
     def show_validation_disclaimer(self):
@@ -166,16 +174,15 @@ def get_institutional_logger(name: str) -> InstitutionalLogger:
 def print_validation_banner():
     """Log the validation banner"""
     if _should_emit_disclosure():
-        _get_compliance_logger().info(VALIDATION_DISCLAIMER)
+        _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
 
 
 def print_all_disclaimers():
     """Log all disclaimers"""
     if _should_emit_disclosure():
-        logger = _get_compliance_logger()
-        logger.info(VALIDATION_DISCLAIMER)
-        logger.info(PERFORMANCE_DISCLAIMER)
-        logger.info(RISK_DISCLAIMER)
+        _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
+        _COMPLIANCE_LOGGER.info(PERFORMANCE_DISCLAIMER)
+        _COMPLIANCE_LOGGER.info(RISK_DISCLAIMER)
 
 
 # Auto-display banner when module is imported in main execution
@@ -185,4 +192,4 @@ if __name__ != "__main__":
     if not any('test' in arg.lower() for arg in sys.argv):
         # Display banner once at module import for institutional compliance
         if _should_emit_disclosure():
-            _get_compliance_logger().info(VALIDATION_DISCLAIMER)
+            _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
