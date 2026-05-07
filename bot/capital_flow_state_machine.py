@@ -1204,7 +1204,7 @@ class CapitalRefreshCoordinator:
                         reason="initial balances fetched successfully",
                     )
                     if advanced:
-                        logger.info("FSM ADVANCED: BALANCE_READY")
+                        logger.info("FSM ADVANCED: %s", bootstrap_fsm.state.value)
                 except Exception as exc:
                     logger.warning(
                         "[Coordinator] balance hydration bootstrap transition failed: %s",

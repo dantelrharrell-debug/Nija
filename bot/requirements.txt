@@ -21,3 +21,4 @@ numpy>=1.26.0
 loguru>=0.7.0
 backoff>=2.2.1
 pytz>=2025.2
+pytest>=8.2.2
