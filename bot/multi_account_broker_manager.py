@@ -2402,6 +2402,17 @@ class MultiAccountBrokerManager:
             if _is_bootstrap_balance_hydrated is not None and _is_bootstrap_balance_hydrated():
                 elapsed = time.monotonic() - start
                 logger.info("Stopping startup balance loop")
+                try:
+                    _fresh_snapshot = self.refresh_capital_authority(
+                        trigger=f"{trigger}:bootstrap_balance_hydrated"
+                    )
+                    if isinstance(_fresh_snapshot, dict):
+                        snapshot = _fresh_snapshot
+                except Exception as _fresh_err:
+                    logger.debug(
+                        "[MABM] bootstrap balance exit refresh failed: %s",
+                        _fresh_err,
+                    )
                 return {
                     "ready": float(snapshot.get("ready", 0.0)),
                     "total_capital": float(snapshot.get("total_capital", 0.0)),

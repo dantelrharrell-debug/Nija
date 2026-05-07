@@ -2631,7 +2631,7 @@ except ImportError:
 
     _get_bootstrap_fsm = cast(Any, lambda: _NOOP_BOOTSTRAP_FSM)
 
-_BOOTSTRAP_FSM_AVAILABLE = False
+    _BOOTSTRAP_FSM_AVAILABLE = False
 _BALANCE_HYDRATED_STATE_VALUES = {
     "BALANCE_HYDRATED",
     "CAPITAL_REFRESHING",
