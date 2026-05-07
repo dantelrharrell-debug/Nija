@@ -66,6 +66,11 @@ def _resolve_disclosure_interval_seconds() -> float:
             return 0.0
         return hours * 3600
     except ValueError:
+        _COMPLIANCE_LOGGER.warning(
+            "NIJA_DISCLOSURE_INTERVAL_HOURS is invalid (%s); using default %.1f hours.",
+            raw,
+            DEFAULT_DISCLOSURE_INTERVAL_HOURS,
+        )
         return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
 
 
@@ -74,13 +79,12 @@ _DISCLOSURE_INTERVAL_SECONDS = _resolve_disclosure_interval_seconds()
 
 def _should_emit_disclosure() -> bool:
     global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
-    if not is_production_environment():
-        # Non-production environments always emit disclosures for visibility
-        return True
-
     now = time.time()
     interval_seconds = _DISCLOSURE_INTERVAL_SECONDS
     with _DISCLOSURE_LOCK:
+        if not is_production_environment():
+            # Non-production environments always emit disclosures for visibility
+            return True
         if _FIRST_BOOT_THIS_PROCESS:
             _FIRST_BOOT_THIS_PROCESS = False
             _LAST_DISCLOSURE_TIMESTAMP = now
@@ -108,13 +112,13 @@ class InstitutionalLogger:
     so multiple logger instances share the same timing rules.
     """
     
-    def __init__(self, name: str, base_logger: Optional[logging.Logger] = None):
+    def __init__(self, name: str = COMPLIANCE_LOGGER_NAME, base_logger: Optional[logging.Logger] = None):
         """
         Initialize institutional logger.
         
         Args:
-            name: Logger name (used to initialize the underlying logger)
-            base_logger: Optional base logger to wrap (name is only used when base_logger is None)
+            name: Logger name (used to initialize the underlying logger when base_logger is None)
+            base_logger: Optional base logger to wrap
         """
         self.logger = base_logger or logging.getLogger(name)
     
