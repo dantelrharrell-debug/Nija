@@ -4170,7 +4170,65 @@ def _run_bot_startup_and_trading():
             "LIVE_CAPITAL_VERIFIED startup bypass disabled — continuing through strict bootstrap flow"
         )
 
-    if _is_live_trading_active_now():
+    # FORCE_TRADE: Override LIVE mode check and transition FSM immediately
+    if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+        logger.critical("🚀 FORCE_TRADE: Overriding LIVE mode check - setting readiness flags and transitioning FSM")
+
+        # Set all readiness flags
+        _initialized_state["broker_ready"] = True
+        _initialized_state["risk_ready"] = True
+        _initialized_state["strategy_ready"] = True
+        _initialized_state["execution_ready"] = True
+
+        # Fire strategy ready event
+        _strategy_ready_event.set()
+
+        # Compute system ready state
+        try:
+            _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE override LIVE mode")
+            (
+                _ft_system_ready,
+                _ft_broker_ready,
+                _ft_risk_ready,
+                _ft_strategy_ready,
+                _ft_capital_ready,
+                _ft_execution_ready,
+            ) = _compute_system_ready(_ft_state_snapshot)
+
+            logger.critical(
+                f"🚀 FORCE_TRADE READINESS STATE:\n"
+                f"  broker_ready={_ft_broker_ready}\n"
+                f"  risk_ready={_ft_risk_ready}\n"
+                f"  strategy_ready={_ft_strategy_ready}\n"
+                f"  capital_ready={_ft_capital_ready}\n"
+                f"  execution_ready={_ft_execution_ready}"
+            )
+
+            # If all gates are open, transition FSM immediately
+            if (
+                _ft_broker_ready and
+                _ft_risk_ready and
+                _ft_strategy_ready and
+                _ft_capital_ready and
+                _ft_execution_ready
+            ):
+                logger.critical("🚀 FORCE_TRADE: ALL GATES OPEN - TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                try:
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        _bfsm_transition(
+                            _BootstrapState.RUNNING_SUPERVISED,
+                            "FORCE_TRADE: override LIVE mode check",
+                        )
+                        logger.critical("🚀 FORCE_TRADE: FSM TRANSITION COMPLETE - SKIPPING LIVE MODE CHECK")
+                        _strategy_ready_event.set()
+                        _bootstrap_complete_flag.set()
+                        _bootstrap_completed_event.set()
+                except Exception as _ft_fsm_err:
+                    logger.error(f"FORCE_TRADE FSM transition error: {_ft_fsm_err}")
+        except Exception as _ft_err:
+            logger.error(f"FORCE_TRADE readiness check error: {_ft_err}")
+
+    elif _is_live_trading_active_now():
         logger.warning(
             "LIVE mode detected before bootstrap completion; startup bypass disabled until "
             "RUNNING_SUPERVISED is reached"
