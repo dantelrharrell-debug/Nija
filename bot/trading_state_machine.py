@@ -38,6 +38,11 @@ from pathlib import Path
 
 logger = logging.getLogger("nija.trading_state_machine")
 
+try:
+    from bot.runtime_mode import resolve_runtime_mode, RuntimeModeResolution
+except ImportError:
+    from runtime_mode import resolve_runtime_mode, RuntimeModeResolution  # type: ignore[import]
+
 class LiveGateSnapshot(NamedTuple):
     """Snapshot of live gate boolean status for log deduplication."""
 
@@ -61,6 +66,14 @@ elif __name__ == "trading_state_machine":
 def _env_truthy(name: str, default: str = "false") -> bool:
     """Return True when an env var is set to a truthy value."""
     return os.environ.get(name, default).lower().strip() in ("true", "1", "yes", "enabled")
+
+
+def _resolve_runtime_mode_safe() -> Optional[RuntimeModeResolution]:
+    try:
+        return resolve_runtime_mode()
+    except Exception as exc:
+        logger.debug("runtime_mode resolution failed: %s", exc)
+        return None
 
 
 def _is_transient_redis_error(err_text: str) -> bool:
@@ -230,10 +243,12 @@ def _nonce_lease_stability_requirement_s() -> float:
                 "lease stability checks disabled (ensure single-writer safety manually)."
             )
             return 0.0
-    require_stability = (
-        _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false")
-        or _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
-    )
+    runtime_mode = _resolve_runtime_mode_safe()
+    require_stability = _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false")
+    if not require_stability:
+        require_stability = (
+            runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
+        )
     if not require_stability:
         return 0.0
     raw = os.environ.get("NIJA_NONCE_LEASE_STABILITY_S", "").strip()
@@ -575,8 +590,9 @@ class TradingStateMachine:
 
     def _apply_startup_state_override(self) -> None:
         """Apply env-driven startup state so LIVE intent doesn't get stuck in monitor/OFF."""
-        dry_run_mode = _env_truthy("DRY_RUN_MODE")
-        live_verified = _env_truthy("LIVE_CAPITAL_VERIFIED")
+        runtime_mode = _resolve_runtime_mode_safe()
+        dry_run_mode = runtime_mode.dry_run if runtime_mode is not None else _env_truthy("DRY_RUN_MODE")
+        live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
         auto_activate = _env_truthy("AUTO_ACTIVATE")
         heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
         force_live = _env_truthy("FORCE_LIVE_TRANSITION")
@@ -749,7 +765,9 @@ class TradingStateMachine:
             os.environ.get("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
             or os.environ.get("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
         )
-        if _force and os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes"):
+        runtime_mode = _resolve_runtime_mode_safe()
+        live_active_flag = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
+        if _force and live_active_flag:
             return True
         return self.get_current_state() == TradingState.LIVE_ACTIVE
 
@@ -975,8 +993,19 @@ class TradingStateMachine:
             or _env_truthy("FORCE_LIVE_TRANSITION")
             or (_env_truthy("AUTO_ACTIVATE") and _env_truthy("HEARTBEAT_TRADE"))
         )
-        _lcv_quick = _env_truthy("LIVE_CAPITAL_VERIFIED")
-        _dry_run_quick = _env_truthy("DRY_RUN_MODE")
+        runtime_mode = _resolve_runtime_mode_safe()
+        _lcv_quick = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
+        _dry_run_quick = runtime_mode.dry_run if runtime_mode is not None else _env_truthy("DRY_RUN_MODE")
+        _lcv_raw = (
+            runtime_mode.raw.get("LIVE_CAPITAL_VERIFIED", "false")
+            if runtime_mode is not None
+            else os.environ.get("LIVE_CAPITAL_VERIFIED", "false")
+        )
+        _live_trading_raw = (
+            runtime_mode.raw.get("LIVE_TRADING", "false")
+            if runtime_mode is not None
+            else os.environ.get("LIVE_TRADING", "false")
+        )
         _heartbeat_required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
         _heartbeat_ok = _heartbeat_verified()
         _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
@@ -1135,11 +1164,12 @@ class TradingStateMachine:
         #   LIVE_CAPITAL_VERIFIED = (flag == true
         #                            AND capital_hydrated == true
         #                            AND total_balance is not None)
-        lcv = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
-        if lcv not in ("true", "1", "yes", "enabled"):
+        if not _lcv_quick:
             logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_NOT_SET value=%r",
-                lcv,
+                "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_NOT_SET "
+                "LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r",
+                _lcv_raw,
+                _live_trading_raw,
             )
             return False
 
@@ -1155,7 +1185,7 @@ class TradingStateMachine:
                 "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED "
                 "flag=%r ca_available=%s ca_hydrated=%s — LIVE_CAPITAL_VERIFIED requires "
                 "CapitalAuthority to have received at least one broker snapshot before activation.",
-                lcv,
+                _lcv_raw,
                 _ca_lcv is not None,
                 bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False,
             )
@@ -1172,7 +1202,7 @@ class TradingStateMachine:
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_BALANCE_UNKNOWN "
                 "flag=%r total_balance=None — capital balance not resolvable from CA.",
-                lcv,
+                _lcv_raw,
             )
             return False
 
@@ -1389,10 +1419,9 @@ class TradingStateMachine:
         # force transition to LIVE_ACTIVE immediately. This prevents stuck
         # LIVE_PENDING_CONFIRMATION states caused by complex invariant locks.
         current_state = self.get_current_state()
+        runtime_mode = _resolve_runtime_mode_safe()
         if current_state != TradingState.LIVE_ACTIVE:
-            live_verified = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip() in (
-                "true", "1", "yes", "enabled"
-            )
+            live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
             
             # Check if capital is hydrated and balance available
             _ca_check = _get_capital_authority_instance()
@@ -1457,9 +1486,7 @@ class TradingStateMachine:
         except Exception:
             pass
 
-        live_verified = os.environ.get("LIVE_CAPITAL_VERIFIED", "false").lower().strip() in (
-            "true", "1", "yes", "enabled"
-        )
+        live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
 
         CA_READY = None
         EXECUTION_PIPELINE_HEALTHY = None
