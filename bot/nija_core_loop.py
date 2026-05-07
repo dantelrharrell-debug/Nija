@@ -74,6 +74,13 @@ def _resolve_runtime_mode_safe() -> Optional[RuntimeModeResolution]:
         return None
 
 
+def _is_live_mode(runtime_mode: Optional[RuntimeModeResolution] = None) -> bool:
+    runtime_mode = runtime_mode or _resolve_runtime_mode_safe()
+    if runtime_mode is not None:
+        return runtime_mode.is_live
+    return os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
+
+
 # ---------------------------------------------------------------------------
 # CycleSnapshot — immutable state captured once per activation tick
 # ---------------------------------------------------------------------------
@@ -376,9 +383,7 @@ def _supervisor_step_state_machine() -> None:
             return
 
         _runtime_mode = _resolve_runtime_mode_safe()
-        _live_verified = (
-            _runtime_mode.is_live if _runtime_mode is not None else os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
-        )
+        _live_verified = _is_live_mode(_runtime_mode)
         _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
         _cycle_capital = _current_cycle_capital if isinstance(_current_cycle_capital, dict) else {}
         _balance = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
@@ -1807,7 +1812,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
 
     _runtime_mode = _resolve_runtime_mode_safe()
-    _live_verified = _runtime_mode.is_live if _runtime_mode is not None else os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() == "true"
+    _live_verified = _is_live_mode(_runtime_mode)
     if _live_verified and not TRADING_ENGINE_READY.is_set():
         logger.critical(
             "LIVE_CAPITAL_VERIFIED=true detected — bypassing passive activation wait gate"
@@ -2011,11 +2016,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                 if _sm_loop is not None:
                     _runtime_mode_loop = _resolve_runtime_mode_safe()
-                    _live_verified_loop = (
-                        _runtime_mode_loop.is_live
-                        if _runtime_mode_loop is not None
-                        else os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
-                    )
+                    _live_verified_loop = _is_live_mode(_runtime_mode_loop)
                     try:
                         _current_state_loop = _sm_loop.get_current_state()
                     except Exception:
@@ -2165,9 +2166,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _can_dispatch = bool(_sm_loop.can_dispatch_trades())
                         _first_snap = bool(_sm_loop.get_first_snap_accepted())
                         _runtime_mode_cycle = _resolve_runtime_mode_safe()
-                        _live_verified_now = (
-                            _runtime_mode_cycle.is_live if _runtime_mode_cycle is not None else os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
-                        )
+                        _live_verified_now = _is_live_mode(_runtime_mode_cycle)
                         _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
                         _balance_ok = float(_cycle_balance or 0.0) >= _min_balance
 

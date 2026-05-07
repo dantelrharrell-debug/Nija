@@ -302,6 +302,7 @@ def _read_initialized_state_snapshot(
             timeout_s=lock_timeout_s,
         )
         if acquired:
+            # Ensure RUNNING_SUPERVISED is reached even if thread launch raises.
             try:
                 return dict(_initialized_state)
             finally:
@@ -720,6 +721,10 @@ _nonce_bootstrap_jump_done = False
 _nonce_bootstrap_jump_lock = threading.Lock()
 
 # Startup readiness gate naming contract
+# - bootstrap_ready: bootstrap kernel completed core init
+# - capital_ready: capital hydration gate open
+# - strategy_ready: TradingStrategy fully initialised
+# - execution_ready: execution engine wired and ready for dispatch
 _STARTUP_READINESS_COMPONENTS = (
     "bootstrap_ready",
     "capital_ready",

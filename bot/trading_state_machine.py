@@ -244,11 +244,9 @@ def _nonce_lease_stability_requirement_s() -> float:
             )
             return 0.0
     runtime_mode = _resolve_runtime_mode_safe()
-    require_stability = _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false")
-    if not require_stability:
-        require_stability = (
-            runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
-        )
+    require_stability = _env_truthy("NIJA_REQUIRE_NONCE_LEASE_STABILITY", "false") or (
+        runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED", "false")
+    )
     if not require_stability:
         return 0.0
     raw = os.environ.get("NIJA_NONCE_LEASE_STABILITY_S", "").strip()
