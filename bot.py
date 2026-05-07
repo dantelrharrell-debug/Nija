@@ -4286,7 +4286,24 @@ def _try_finalize_running_supervised_handoff(
             except Exception as _advance_err:
                 logger.debug("BootstrapFSM advance_to_capital_ready skipped: %s", _advance_err)
 
+        # advance_to_capital_ready() stops at CAPITAL_READY; walk the remaining
+        # two hops (CAPITAL_READY → INIT_COMPLETE → THREADS_STARTING) so that
+        # finalize_boot() can legally complete the handoff.
         _state = getattr(_bfsm, "state", None)
+        if hasattr(_bfsm, "transition") and hasattr(_BootstrapState, "INIT_COMPLETE"):
+            if _state == _BootstrapState.CAPITAL_READY:
+                try:
+                    _bfsm.transition(_BootstrapState.INIT_COMPLETE, f"{reason}: force-trade init-complete")
+                except Exception as _t1_err:
+                    logger.debug("BootstrapFSM INIT_COMPLETE transition skipped: %s", _t1_err)
+            _state = getattr(_bfsm, "state", None)
+            if _state == _BootstrapState.INIT_COMPLETE:
+                try:
+                    _bfsm.transition(_BootstrapState.THREADS_STARTING, f"{reason}: force-trade threads-starting")
+                except Exception as _t2_err:
+                    logger.debug("BootstrapFSM THREADS_STARTING transition skipped: %s", _t2_err)
+            _state = getattr(_bfsm, "state", None)
+
         if _state == _BootstrapState.THREADS_STARTING and hasattr(_bfsm, "finalize_boot"):
             _ok = bool(_bfsm.finalize_boot(reason))
             if _ok:
