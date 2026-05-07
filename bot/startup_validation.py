@@ -17,6 +17,11 @@ from enum import Enum
 
 logger = logging.getLogger("nija")
 
+try:
+    from bot.runtime_mode import resolve_runtime_mode
+except ImportError:
+    from runtime_mode import resolve_runtime_mode  # type: ignore[import]
+
 
 class StartupRisk(Enum):
     """Categories of startup risks"""
@@ -453,53 +458,43 @@ def validate_trading_mode() -> StartupValidationResult:
     """
     result = StartupValidationResult()
     
-    # Check DRY_RUN_MODE flag (takes priority - safest mode)
-    dry_run_str = os.getenv("DRY_RUN_MODE", "false").lower()
-    dry_run_mode = dry_run_str in ("true", "1", "yes")
-    
-    # Check PAPER_MODE flag (default to false for consistency)
-    paper_mode_str = os.getenv("PAPER_MODE", "false").lower()
-    paper_mode = paper_mode_str in ("true", "1", "yes")
-    
-    # Check LIVE_CAPITAL_VERIFIED flag (default to false for consistency)
-    live_verified_str = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower()
-    live_verified = live_verified_str in ("true", "1", "yes")
-    
-    # Check if mode flags are contradictory
-    if dry_run_mode and live_verified:
+    runtime_mode = resolve_runtime_mode()
+    dry_run_mode = runtime_mode.dry_run
+    paper_mode = runtime_mode.paper
+    if "dry_run_vs_live" in runtime_mode.conflicts:
         result.add_risk(
             StartupRisk.MODE_AMBIGUOUS,
-            "CONTRADICTORY: Both DRY_RUN_MODE=true and LIVE_CAPITAL_VERIFIED=true are set"
+            "CONTRADICTORY: DRY_RUN_MODE=true with LIVE_CAPITAL_VERIFIED/LIVE_TRADING enabled"
         )
         result.add_warning(
-            "⚠️  MODE CONFLICT: DRY_RUN_MODE and LIVE_CAPITAL_VERIFIED both enabled. "
+            "⚠️  MODE CONFLICT: DRY_RUN_MODE and LIVE trading flags both enabled. "
             "DRY_RUN_MODE takes priority (simulation mode)."
         )
-    
-    if paper_mode and live_verified:
+
+    if "paper_vs_live" in runtime_mode.conflicts:
         result.add_risk(
             StartupRisk.MODE_AMBIGUOUS,
-            "CONTRADICTORY: Both PAPER_MODE=true and LIVE_CAPITAL_VERIFIED=true are set"
+            "CONTRADICTORY: PAPER_MODE=true with LIVE_CAPITAL_VERIFIED/LIVE_TRADING enabled"
         )
         result.add_warning(
-            "⚠️  MODE CONFLICT: PAPER_MODE and LIVE_CAPITAL_VERIFIED both enabled. "
+            "⚠️  MODE CONFLICT: PAPER_MODE and LIVE trading flags both enabled. "
             "This is contradictory. Bot behavior may be unpredictable."
         )
-    
+
     # Determine actual mode (priority: DRY_RUN > LIVE > PAPER)
-    if dry_run_mode:
+    if runtime_mode.mode == "dry_run":
         result.add_info("🟡 DRY RUN MODE: DRY_RUN_MODE=true (SAFEST - Full simulation)")
         result.add_info(
             "✅ SIMULATION ONLY: All exchanges in dry-run mode. "
             "No real orders will be placed. No real money at risk."
         )
-    elif live_verified:
-        result.add_info("🔴 LIVE TRADING MODE: LIVE_CAPITAL_VERIFIED=true")
+    elif runtime_mode.mode == "live":
+        result.add_info("🔴 LIVE TRADING MODE: LIVE_CAPITAL_VERIFIED/LIVE_TRADING enabled")
         result.add_warning(
             "⚠️  LIVE TRADING ENABLED: Real money at risk. "
             "Ensure this is intentional. Set LIVE_CAPITAL_VERIFIED=false to disable live trading."
         )
-    elif paper_mode:
+    elif runtime_mode.mode == "paper":
         result.add_info("📝 PAPER TRADING MODE: PAPER_MODE=true")
     else:
         # Neither flag is explicitly set - ambiguous

@@ -179,7 +179,7 @@ except ImportError:
         class ExecutionFailed(ExecutionError):
             pass
 
-logger = logging.getLogger("nija.broker")
+logger = logging.getLogger("nija.exchange")
 
 try:
     from bot.execution_authority_context import (

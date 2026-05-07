@@ -22,42 +22,32 @@ const RISK_DISCLAIMERS = {
             
             <div class="risk-content">
                 <div class="risk-section">
-                    <h3>⚠️ YOU CAN LOSE MONEY</h3>
+                    <h3>A. Risk Disclosure</h3>
                     <ul>
-                        <li>Cryptocurrency markets are <strong>highly volatile</strong></li>
-                        <li>Past performance does <strong>NOT</strong> indicate future results</li>
-                        <li>You can lose <strong>some or ALL</strong> of your invested capital</li>
-                        <li><strong>Only trade with money you can afford to lose</strong></li>
+                        <li>Trading involves <strong>substantial risk of loss</strong></li>
+                        <li><strong>YOU CAN LOSE MONEY</strong></li>
+                        <li><strong>NO GUARANTEES</strong> of profitability or performance</li>
+                        <li>Users are <strong>solely responsible</strong> for trading outcomes</li>
                     </ul>
                 </div>
                 
                 <div class="risk-section">
-                    <h3>🤖 ABOUT THIS SOFTWARE</h3>
+                    <h3>B. Platform Classification</h3>
                     <ul>
-                        <li>NIJA is an independent trading tool - <strong>NOT investment advice</strong></li>
-                        <li>You make all decisions about when and what to trade</li>
-                        <li>This software executes trades based on <strong>YOUR configuration</strong></li>
-                        <li><strong>NO GUARANTEES</strong> of profit or performance are made</li>
+                        <li>NIJA is a software trading tool, <strong>NOT investment advice</strong></li>
+                        <li>No investment advice is provided</li>
+                        <li>No copy trading or signal distribution occurs</li>
                     </ul>
                 </div>
                 
                 <div class="risk-section">
-                    <h3>📊 INDEPENDENT TRADING MODEL</h3>
+                    <h3>C. Operational Model</h3>
                     <ul>
-                        <li>Each account trades <strong>independently</strong> using algorithmic signals</li>
-                        <li>No copy trading or signal distribution to other users</li>
-                        <li>Each user controls their own trading strategy and risk</li>
-                        <li>Your results are based on <strong>YOUR account's performance</strong></li>
-                    </ul>
-                </div>
-                
-                <div class="risk-section">
-                    <h3>🛡️ YOUR RESPONSIBILITY</h3>
-                    <ul>
-                        <li>You are <strong>solely responsible</strong> for your trading decisions</li>
-                        <li>You control when trading is enabled or disabled</li>
-                        <li>You set your own risk parameters and position sizes</li>
-                        <li><strong>Consult a licensed financial advisor</strong> before trading</li>
+                        <li>
+                            Each account operates independently using shared software logic with independent
+                            per-account evaluation
+                        </li>
+                        <li>Account-specific state, exposure, cooldowns, and execution context drive decisions. That’s it.</li>
                     </ul>
                 </div>
                 

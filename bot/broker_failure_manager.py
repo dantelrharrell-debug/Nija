@@ -83,7 +83,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-logger = logging.getLogger("nija.broker_failure_manager")
+logger = logging.getLogger("nija.supervisor")
 
 # ---------------------------------------------------------------------------
 # Configuration constants

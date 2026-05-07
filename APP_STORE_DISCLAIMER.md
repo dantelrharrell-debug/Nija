@@ -19,7 +19,7 @@ accounts using YOUR API credentials.
 
 INDEPENDENT TRADING MODEL:
 NIJA does NOT copy trades between accounts. Each connected account evaluates 
-markets independently using the same strategy framework applied with account-
+markets independently using shared software logic with independent per-account evaluation and account-
 specific state, risk, and execution context. Results may differ per account due 
 to timing variations, account balance differences, cooldown variance, and market 
 conditions. There is NO platform account that controls other accounts, and NO 
@@ -89,7 +89,7 @@ NIJA is an automated trading algorithm that will execute
 cryptocurrency trades on your exchange account(s).
 
 INDEPENDENT TRADING:
-• Each account evaluates independently using the same strategy framework
+• Each account evaluates independently using shared software logic with independent per-account evaluation
 • Accounts do NOT copy trades from each other
 • Each account makes its own trading decisions via risk-gated execution
 • Results may differ per account due to timing, cooldown variance, and balance differences
@@ -209,13 +209,13 @@ What this means:
 SECTION: INDEPENDENT TRADING MODEL
 
 NIJA operates using an independent trading model. Each connected account 
-trades independently using the same strategy framework applied with account-
+trades independently using shared software logic with independent per-account evaluation and account-
 specific state, risk, and execution context. The system does NOT copy, mirror, 
 or replicate trades from one account to another.
 
 Specifically:
 a) Each account analyzes market data independently with account-specific state
-b) Each account makes its own trading decisions based on the same strategy framework
+b) Each account makes its own trading decisions based on shared software logic with independent per-account evaluation
 c) Each account executes trades with timing jitter and cooldown variance
 d) Position sizes are calculated independently based on each account's balance
 e) No account has control over or influence on other accounts
@@ -232,7 +232,7 @@ h) The timing and exact trades may differ between accounts due to:
 Users acknowledge and agree that:
 - Accounts trade independently, not by copying
 - Each account is responsible for its own trading results
-- Similar trades across accounts result from using the same framework, not copying
+- Similar trades across accounts result from using shared software logic, not copying
 - No account receives preferential treatment or information
 ```
 
@@ -296,7 +296,7 @@ IMPORTANT FOR APP REVIEW:
 
 1. INDEPENDENT TRADING MODEL:
    This app does NOT copy trades between accounts. Each account trades 
-   independently using the same strategy framework with account-specific 
+   independently using shared software logic with independent per-account evaluation and account-specific 
    state, risk, and execution context. There is no "platform account" or 
    signal distribution.
 
@@ -369,7 +369,7 @@ All marketing materials (website, social media, ads) MUST include:
 Cryptocurrency trading involves substantial risk of loss. NIJA is an 
 automated trading algorithm - NOT financial advice. System optimizations are 
 technical in nature and do not imply improved financial outcomes. Each account 
-trades independently using the same strategy framework with account-specific 
+trades independently using shared software logic with independent per-account evaluation and account-specific 
 state, risk, and execution context. No trade copying occurs. Past performance 
 does not guarantee future results. You may lose money.
 ```

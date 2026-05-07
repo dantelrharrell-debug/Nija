@@ -10,7 +10,7 @@ import logging
 # Set up logging for the bot package
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
 
 logger = logging.getLogger(__name__)
@@ -20,4 +20,3 @@ __version__ = "7.2.0"
 
 # Verify we're in the bot directory context
 logger.debug(f"NIJA Bot package initialized (v{__version__})")
-

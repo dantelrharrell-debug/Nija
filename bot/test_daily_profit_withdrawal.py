@@ -27,7 +27,7 @@ for _p in (_BOT_DIR, _REPO_ROOT):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from daily_profit_withdrawal import (
+from bot.daily_profit_withdrawal import (
     DailyWithdrawalConfig,
     DailyProfitWithdrawalEngine,
     get_daily_profit_withdrawal_engine,
@@ -244,10 +244,10 @@ def test_get_daily_summary_fields():
 
 def test_profit_lock_system_wires_daily_withdrawal():
     """ProfitLockSystem.daily_withdrawal should be an active DailyProfitWithdrawalEngine."""
-    from profit_lock_system import get_profit_lock_system, ProfitLockSystem
+    from bot.profit_lock_system import get_profit_lock_system, ProfitLockSystem
 
     # Reset singleton for test isolation
-    import profit_lock_system as _pls_mod
+    import bot.profit_lock_system as _pls_mod
     orig = _pls_mod._SYSTEM_INSTANCE
     _pls_mod._SYSTEM_INSTANCE = None
     try:
@@ -262,8 +262,8 @@ def test_profit_lock_system_wires_daily_withdrawal():
 
 def test_profit_lock_system_record_closed_profit_updates_daily():
     """record_closed_profit should update the daily withdrawal engine's daily profit."""
-    from profit_lock_system import ProfitLockSystem
-    import profit_lock_system as _pls_mod
+    from bot.profit_lock_system import ProfitLockSystem
+    import bot.profit_lock_system as _pls_mod
 
     orig = _pls_mod._SYSTEM_INSTANCE
     _pls_mod._SYSTEM_INSTANCE = None
@@ -286,8 +286,8 @@ def test_profit_lock_system_record_closed_profit_updates_daily():
 
 def test_get_report_contains_daily_withdrawal_section():
     """ProfitLockSystem.get_report() should include the daily withdrawal section."""
-    from profit_lock_system import ProfitLockSystem
-    import profit_lock_system as _pls_mod
+    from bot.profit_lock_system import ProfitLockSystem
+    import bot.profit_lock_system as _pls_mod
 
     orig = _pls_mod._SYSTEM_INSTANCE
     _pls_mod._SYSTEM_INSTANCE = None
