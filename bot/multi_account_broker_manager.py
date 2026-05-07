@@ -2386,20 +2386,22 @@ class MultiAccountBrokerManager:
         attempts = 0
         snapshot: Dict[str, float] = {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
 
+        _bootstrap_balance_probe = None
         try:
             try:
-                from bot.bootstrap_state_machine import (
-                    is_bootstrap_balance_hydrated as _is_bootstrap_balance_hydrated,
+                from bot.bootstrap_utils import (
+                    resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
                 )
             except ImportError:
-                from bootstrap_state_machine import (  # type: ignore[import]
-                    is_bootstrap_balance_hydrated as _is_bootstrap_balance_hydrated,
+                from bootstrap_utils import (  # type: ignore[import]
+                    resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
                 )
+            _bootstrap_balance_probe = _resolve_bootstrap_balance_probe()
         except ImportError:
-            _is_bootstrap_balance_hydrated = None
+            _bootstrap_balance_probe = None
 
         while True:
-            if _is_bootstrap_balance_hydrated is not None and _is_bootstrap_balance_hydrated():
+            if _bootstrap_balance_probe is not None and _bootstrap_balance_probe():
                 elapsed = time.monotonic() - start
                 logger.info("Stopping startup balance loop")
                 logger.debug(

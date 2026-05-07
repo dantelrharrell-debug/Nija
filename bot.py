@@ -2582,6 +2582,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 # ── Bootstrap FSM — best-effort import ───────────────────────────────────────
 # Imported here so transitions are available throughout the module.  All usage
 # is wrapped in try/except so a missing or broken module never stops the bot.
+_BALANCE_HYDRATED_STATE_VALUES = {
+    "BALANCE_HYDRATED",
+    "CAPITAL_REFRESHING",
+    "CAPITAL_READY",
+    "INIT_COMPLETE",
+    "THREADS_STARTING",
+    "RUNNING_SUPERVISED",
+}
 try:
     _bfsm_mod = importlib.import_module("bot.bootstrap_state_machine")
     _BootstrapState = cast(Any, getattr(_bfsm_mod, "BootstrapState"))
@@ -2632,14 +2640,6 @@ except ImportError:
     _get_bootstrap_fsm = cast(Any, lambda: _NOOP_BOOTSTRAP_FSM)
 
     _BOOTSTRAP_FSM_AVAILABLE = False
-_BALANCE_HYDRATED_STATE_VALUES = {
-    "BALANCE_HYDRATED",
-    "CAPITAL_REFRESHING",
-    "CAPITAL_READY",
-    "INIT_COMPLETE",
-    "THREADS_STARTING",
-    "RUNNING_SUPERVISED",
-}
 
 
 def _bfsm_transition(state, reason: str = "") -> None:
