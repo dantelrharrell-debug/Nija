@@ -432,8 +432,7 @@ class StartupReadinessGate:
 
     def snapshot(self) -> Dict:
         """Return a serialisable snapshot of the gate's current state."""
-        with self._cond:
-            return self._snapshot_locked()
+        return self.get_status()
 
     def pending_components(self) -> List[str]:
         """Return the list of components that have not yet signalled ready."""
