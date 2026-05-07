@@ -600,14 +600,7 @@ def _is_balance_hydrated_ready() -> bool:
             if hasattr(_bootstrap_fsm, "is_balance_hydrated"):
                 return bool(_bootstrap_fsm.is_balance_hydrated())
             _state_value = getattr(_bootstrap_fsm.state, "value", "")
-            return _state_value in {
-                "BALANCE_HYDRATED",
-                "CAPITAL_REFRESHING",
-                "CAPITAL_READY",
-                "INIT_COMPLETE",
-                "THREADS_STARTING",
-                "RUNNING_SUPERVISED",
-            }
+            return _state_value in _BALANCE_HYDRATED_STATE_VALUES
         except Exception:
             return False
     return False
@@ -2632,20 +2625,21 @@ except ImportError:
 
         def is_balance_hydrated(self) -> bool:
             _state_value = getattr(self.state, "value", "")
-            return _state_value in {
-                "BALANCE_HYDRATED",
-                "CAPITAL_REFRESHING",
-                "CAPITAL_READY",
-                "INIT_COMPLETE",
-                "THREADS_STARTING",
-                "RUNNING_SUPERVISED",
-            }
+            return _state_value in _BALANCE_HYDRATED_STATE_VALUES
 
     _NOOP_BOOTSTRAP_FSM = _NoopBootstrapFSM()
 
     _get_bootstrap_fsm = cast(Any, lambda: _NOOP_BOOTSTRAP_FSM)
 
-    _BOOTSTRAP_FSM_AVAILABLE = False
+_BOOTSTRAP_FSM_AVAILABLE = False
+_BALANCE_HYDRATED_STATE_VALUES = {
+    "BALANCE_HYDRATED",
+    "CAPITAL_REFRESHING",
+    "CAPITAL_READY",
+    "INIT_COMPLETE",
+    "THREADS_STARTING",
+    "RUNNING_SUPERVISED",
+}
 
 
 def _bfsm_transition(state, reason: str = "") -> None:

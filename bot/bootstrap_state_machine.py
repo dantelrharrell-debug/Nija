@@ -989,6 +989,14 @@ def get_bootstrap_fsm() -> BootstrapStateMachine:
     return _bootstrap_fsm
 
 
+def is_bootstrap_balance_hydrated() -> bool:
+    """Return True when the bootstrap FSM reports balance hydration."""
+    try:
+        return bool(get_bootstrap_fsm().is_balance_hydrated())
+    except Exception:
+        return False
+
+
 __all__ = [
     "BootstrapState",
     "BootstrapInvariantError",
