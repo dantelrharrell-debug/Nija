@@ -51,7 +51,7 @@ _LAST_DISCLOSURE_TIMESTAMP = 0.0
 _FIRST_BOOT_THIS_PROCESS = True
 
 
-def _get_disclosure_interval_seconds() -> float:
+def _resolve_disclosure_interval_seconds() -> float:
     raw = os.getenv("NIJA_DISCLOSURE_INTERVAL_HOURS", "").strip()
     if not raw:
         return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
@@ -61,13 +61,16 @@ def _get_disclosure_interval_seconds() -> float:
         return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
 
 
+_DISCLOSURE_INTERVAL_SECONDS = _resolve_disclosure_interval_seconds()
+
+
 def _should_emit_disclosure() -> bool:
     global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
     if not is_production_environment():
         return True
 
     now = time.time()
-    interval_seconds = _get_disclosure_interval_seconds()
+    interval_seconds = _DISCLOSURE_INTERVAL_SECONDS
     with _DISCLOSURE_LOCK:
         if _FIRST_BOOT_THIS_PROCESS:
             _FIRST_BOOT_THIS_PROCESS = False
@@ -90,7 +93,8 @@ class InstitutionalLogger:
     Institutional-grade logger wrapper that adds disclaimers to output.
     
     Wraps standard Python logger to automatically include validation disclaimers
-    in appropriate contexts.
+    in appropriate contexts. Disclosure emission is gated globally per process
+    so multiple logger instances share the same timing rules.
     """
     
     def __init__(self, name: str, base_logger: Optional[logging.Logger] = None):
@@ -101,7 +105,6 @@ class InstitutionalLogger:
             name: Logger name
             base_logger: Optional base logger to wrap (creates new if None)
         """
-        self.name = name
         self.logger = base_logger or logging.getLogger(name)
     
     def show_validation_disclaimer(self):
