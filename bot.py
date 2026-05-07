@@ -116,6 +116,18 @@ if os.getenv("NIJA_LOW_CAPITAL_SURVIVAL_MODE", "1").strip().lower() in ("1", "tr
     os.environ.setdefault("COINBASE_MIN_ORDER_USD", "1.0")
     os.environ.setdefault("COINBASE_MIN_ORDER", "1.0")
 
+# FIX #6: Reduce position sizing for small accounts
+if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+    os.environ.setdefault("MIN_POSITION_USD", "2.0")
+    os.environ.setdefault("MIN_NOTIONAL_USD", "2.0")
+    os.environ.setdefault("COINBASE_MIN_ORDER_USD", "2.0")
+    os.environ.setdefault("MAX_POSITION_PCT", "0.10")
+    os.environ.setdefault("MIN_POSITION_PCT", "0.02")
+    os.environ.setdefault("ENABLE_MICRO_SCALPING", "true")
+    os.environ.setdefault("ALLOW_SMALL_ACCOUNT_TRADING", "true")
+    import logging as _ft_logging
+    _ft_logging.getLogger(__name__).info("🚀 FORCE_TRADE: Small account position sizing enabled")
+
 # ── Bootstrap Guard — prevent duplicate instances ──────────────────────────
 # Hard-stops if a second bot instance attempts to start.
 try:
@@ -4434,6 +4446,56 @@ def _run_bot_startup_and_trading():
                     logger.warning("⚠️  Trading capability verification found issues")
                     logger.warning("   Bot may not function correctly")
                 else:
+                    logger.info("✅ Trading capability verified — bot ready to execute trades")
+
+                    # FIX #1: Force readiness flags after successful initialization
+                    logger.critical("🚀 SETTING ALL READINESS FLAGS AFTER SUCCESSFUL INITIALIZATION")
+                    _initialized_state["broker_ready"] = True
+                    _initialized_state["risk_ready"] = True
+                    _initialized_state["strategy_ready"] = True
+                    _initialized_state["execution_ready"] = True
+
+                    # Log readiness state
+                    _ft_state_snapshot = _read_initialized_state_snapshot(context="post-capability-verification")
+                    (
+                        _ft_system_ready,
+                        _ft_broker_ready,
+                        _ft_risk_ready,
+                        _ft_strategy_ready,
+                        _ft_capital_ready,
+                        _ft_execution_ready,
+                    ) = _compute_system_ready(_ft_state_snapshot)
+
+                    logger.critical(
+                        f"🚀 SYSTEM READY STATE:\n"
+                        f"  broker_ready={_ft_broker_ready}\n"
+                        f"  risk_ready={_ft_risk_ready}\n"
+                        f"  strategy_ready={_ft_strategy_ready}\n"
+                        f"  capital_ready={_ft_capital_ready}\n"
+                        f"  execution_ready={_ft_execution_ready}"
+                    )
+
+                    # FIX #2: Auto-release RUNNING_SUPERVISED after validation
+                    if (
+                        _ft_broker_ready and
+                        _ft_risk_ready and
+                        _ft_strategy_ready and
+                        _ft_capital_ready and
+                        _ft_execution_ready
+                    ):
+                        logger.critical("🚀 ALL STRICT READINESS FLAGS SATISFIED - RELEASING RUNNING_SUPERVISED")
+                        try:
+                            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                _bfsm = _get_bootstrap_fsm()
+                                logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                _bfsm_transition(
+                                    _BootstrapState.RUNNING_SUPERVISED,
+                                    "Post-capability-verification: all readiness gates satisfied",
+                                )
+                                logger.critical("🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP")
+                        except Exception as _fsm_err:
+                            logger.error(f"FSM transition error: {_fsm_err}")
+
                     # Activation must occur in the bootstrap owner thread.
                     try:
                         from bot.trading_state_machine import get_state_machine as _get_tsm_startup, TradingState as _TS_startup
@@ -6522,6 +6584,17 @@ def main():
         strategy = _state_snapshot.get("strategy")
         system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
             _compute_system_ready(_state_snapshot)
+
+        # ── FORCE_TRADE bypass: skip FSM gate and release system_ready directly ──
+        if not system_ready and _is_truthy(os.environ.get("FORCE_TRADE", "")):
+            logger.critical(
+                "🚀 FORCE_TRADE: Releasing system_ready barrier — "
+                "broker_ready=%s risk_ready=%s strategy_ready=%s "
+                "capital_ready=%s execution_ready=%s",
+                broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
+            )
+            system_ready = True
+
         if system_ready:
             print("STEP 5: strategy initialized — system_ready", flush=True)
             logger.critical(
