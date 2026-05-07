@@ -14,7 +14,7 @@ import pytest
 # Allow imports from bot/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from portfolio_kill_switch import (
+from bot.portfolio_kill_switch import (
     PortfolioKillSwitch,
     PortfolioKillSwitchConfig,
     get_portfolio_kill_switch,

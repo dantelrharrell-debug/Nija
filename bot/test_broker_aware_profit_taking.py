@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from execution_engine import ExecutionEngine
+from bot.execution_engine import ExecutionEngine
 
 
 class MockBrokerClient:

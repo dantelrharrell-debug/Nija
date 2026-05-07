@@ -15,32 +15,18 @@ Covers:
 
 import unittest
 
-try:
-    from bot.portfolio_alpha_allocator import (
-        PortfolioAlphaAllocator,
-        PortfolioAlphaConfig,
-        AllocationResult,
-        FilterResult,
-        allocate_alpha_position,
-        DEFAULT_RISK_PCT,
-        DEFAULT_MIN_ATR_THRESHOLD,
-        DEFAULT_TREND_MULTIPLIER,
-        DEFAULT_BTC_SPIKE_THRESHOLD,
-        BTC_SYMBOLS,
-    )
-except ImportError:
-    from portfolio_alpha_allocator import (
-        PortfolioAlphaAllocator,
-        PortfolioAlphaConfig,
-        AllocationResult,
-        FilterResult,
-        allocate_alpha_position,
-        DEFAULT_RISK_PCT,
-        DEFAULT_MIN_ATR_THRESHOLD,
-        DEFAULT_TREND_MULTIPLIER,
-        DEFAULT_BTC_SPIKE_THRESHOLD,
-        BTC_SYMBOLS,
-    )
+from bot.portfolio_alpha_allocator import (
+    PortfolioAlphaAllocator,
+    PortfolioAlphaConfig,
+    AllocationResult,
+    FilterResult,
+    allocate_alpha_position,
+    DEFAULT_RISK_PCT,
+    DEFAULT_MIN_ATR_THRESHOLD,
+    DEFAULT_TREND_MULTIPLIER,
+    DEFAULT_BTC_SPIKE_THRESHOLD,
+    BTC_SYMBOLS,
+)
 
 
 # ---------------------------------------------------------------------------

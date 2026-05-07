@@ -35,7 +35,7 @@ class TestPlatformHierarchyFix(unittest.TestCase):
     """
 
     def setUp(self):
-        from capital_tier_hierarchy import CapitalTierHierarchy, CapitalTier
+        from bot.capital_tier_hierarchy import CapitalTierHierarchy, CapitalTier
         self.hierarchy = CapitalTierHierarchy()
         self.CapitalTier = CapitalTier
 
@@ -66,14 +66,14 @@ class TestPlatformHierarchyFix(unittest.TestCase):
 
     def test_get_max_positions_platform_flag(self):
         """Platform accounts should get BALLER-tier max positions even with $50."""
-        from capital_tier_hierarchy import TIER_POSITION_RULES, CapitalTier
+        from bot.capital_tier_hierarchy import TIER_POSITION_RULES, CapitalTier
         baller_max = TIER_POSITION_RULES[CapitalTier.BALLER].max_positions
         platform_max = self.hierarchy.get_max_positions(50.0, is_platform=True)
         self.assertEqual(platform_max, baller_max)
 
     def test_get_optimal_positions_platform_flag(self):
         """Platform accounts should get BALLER-tier max_positions even with $50."""
-        from capital_tier_hierarchy import TIER_POSITION_RULES, CapitalTier
+        from bot.capital_tier_hierarchy import TIER_POSITION_RULES, CapitalTier
         # The key benefit: platform gets BALLER max_positions (15), not STARTER max (2)
         baller_max = TIER_POSITION_RULES[CapitalTier.BALLER].max_positions
         starter_max = TIER_POSITION_RULES[CapitalTier.STARTER].max_positions
@@ -98,7 +98,7 @@ class TestPlatformHierarchyFix(unittest.TestCase):
 
     def test_validate_new_position_non_platform_blocked_by_starter_cap(self):
         """Non-platform with $75 balance hits STARTER max_positions cap."""
-        from capital_tier_hierarchy import TIER_POSITION_RULES, CapitalTier
+        from bot.capital_tier_hierarchy import TIER_POSITION_RULES, CapitalTier
         starter_max = TIER_POSITION_RULES[CapitalTier.STARTER].max_positions
         # Use current_position_count == starter_max so we are exactly at the cap
         result = self.hierarchy.validate_new_position(
@@ -113,7 +113,7 @@ class TestPlatformHierarchyFix(unittest.TestCase):
 
     def test_convenience_get_max_positions_for_balance(self):
         """Convenience function must forward is_platform flag."""
-        from capital_tier_hierarchy import (
+        from bot.capital_tier_hierarchy import (
             get_max_positions_for_balance,
             TIER_POSITION_RULES,
             CapitalTier,
@@ -124,7 +124,7 @@ class TestPlatformHierarchyFix(unittest.TestCase):
 
     def test_convenience_validate_position_entry(self):
         """validate_position_entry convenience function must forward is_platform."""
-        from capital_tier_hierarchy import validate_position_entry
+        from bot.capital_tier_hierarchy import validate_position_entry
         # Use BALLER-compatible values: $25k balance, $500 position
         is_valid, code, message = validate_position_entry(
             balance=25000.0,
@@ -153,7 +153,7 @@ class TestDeletePositionFiles(unittest.TestCase):
     """Tests for emergency_reset.delete_position_files."""
 
     def test_deletes_existing_positions_json(self):
-        from emergency_reset import delete_position_files
+        from bot.emergency_reset import delete_position_files
 
         with tempfile.NamedTemporaryFile(
             suffix='.json', delete=False, mode='w'
@@ -170,14 +170,14 @@ class TestDeletePositionFiles(unittest.TestCase):
                 os.remove(tmp_path)
 
     def test_no_error_when_files_absent(self):
-        from emergency_reset import delete_position_files
+        from bot.emergency_reset import delete_position_files
 
         # Should complete without raising
         deleted = delete_position_files(extra_paths=['/tmp/nija_nonexistent_positions.json'])
         self.assertEqual(deleted, [])
 
     def test_deletes_multiple_files(self):
-        from emergency_reset import delete_position_files
+        from bot.emergency_reset import delete_position_files
 
         tmp_files = []
         for _ in range(3):
@@ -205,7 +205,7 @@ class TestStopBot(unittest.TestCase):
         mock_ks.is_active.return_value = False
 
         with patch('emergency_reset.get_kill_switch', return_value=mock_ks):
-            from emergency_reset import stop_bot
+            from bot.emergency_reset import stop_bot
             result = stop_bot("unit test")
 
         self.assertTrue(result)
@@ -216,7 +216,7 @@ class TestStopBot(unittest.TestCase):
         mock_ks.is_active.return_value = True
 
         with patch('emergency_reset.get_kill_switch', return_value=mock_ks):
-            from emergency_reset import stop_bot
+            from bot.emergency_reset import stop_bot
             result = stop_bot("already active")
 
         self.assertTrue(result)
@@ -227,7 +227,7 @@ class TestCancelAllOpenOrders(unittest.TestCase):
     """Tests for emergency_reset.cancel_all_open_orders."""
 
     def test_coinbase_orders_cancelled(self):
-        from emergency_reset import cancel_all_open_orders
+        from bot.emergency_reset import cancel_all_open_orders
 
         mock_order = MagicMock()
         mock_order.order_id = 'ORDER-123'
@@ -244,7 +244,7 @@ class TestCancelAllOpenOrders(unittest.TestCase):
         mock_client.cancel_orders.assert_called_once_with(order_ids=['ORDER-123'])
 
     def test_no_brokers_returns_empty(self):
-        from emergency_reset import cancel_all_open_orders
+        from bot.emergency_reset import cancel_all_open_orders
         results = cancel_all_open_orders([])
         self.assertEqual(results, {})
 
@@ -253,7 +253,7 @@ class TestLiquidateAllPositions(unittest.TestCase):
     """Tests for emergency_reset.liquidate_all_positions."""
 
     def test_liquidates_using_pipeline_helper(self):
-        from emergency_reset import liquidate_all_positions
+        from bot.emergency_reset import liquidate_all_positions
 
         mock_broker = MagicMock()
         mock_broker.broker_type = 'coinbase'
@@ -278,7 +278,7 @@ class TestLiquidateAllPositions(unittest.TestCase):
         self.assertEqual(results.get('coinbase', results.get(str(mock_broker.broker_type))), 1)
 
     def test_helper_unavailable_fails_closed(self):
-        from emergency_reset import liquidate_all_positions
+        from bot.emergency_reset import liquidate_all_positions
 
         mock_broker = MagicMock()
         mock_broker.broker_type = 'coinbase'
@@ -292,7 +292,7 @@ class TestLiquidateAllPositions(unittest.TestCase):
         self.assertEqual(results.get('coinbase', results.get(str(mock_broker.broker_type))), 0)
 
     def test_no_positions_returns_zero(self):
-        from emergency_reset import liquidate_all_positions
+        from bot.emergency_reset import liquidate_all_positions
 
         mock_broker = MagicMock()
         mock_broker.broker_type = 'coinbase'
@@ -307,7 +307,7 @@ class TestRunEmergencyReset(unittest.TestCase):
 
     def test_all_steps_called_in_order(self):
         """Verify each step is invoked and summary keys are populated."""
-        import emergency_reset as er
+        import bot.emergency_reset as er
 
         calls = []
 
@@ -350,7 +350,7 @@ class TestRunEmergencyReset(unittest.TestCase):
 
     def test_no_brokers_skips_broker_steps(self):
         """With no brokers, only kill switch and file deletion should execute."""
-        import emergency_reset as er
+        import bot.emergency_reset as er
 
         calls = []
 

@@ -23,7 +23,7 @@ def test_concurrent_open_respects_cap():
     print("TEST: Atomic position cap check prevents concurrent cap bypass")
     print("=" * 70)
 
-    from position_architecture import PositionArchitecture
+    from bot.position_architecture import PositionArchitecture
 
     arch = PositionArchitecture(
         tier_name="TEST",
@@ -85,7 +85,7 @@ def test_can_open_position_is_threadsafe():
     print("TEST: can_open_position returns consistent results under concurrency")
     print("=" * 70)
 
-    from position_architecture import PositionArchitecture
+    from bot.position_architecture import PositionArchitecture
 
     arch = PositionArchitecture(
         tier_name="TEST",

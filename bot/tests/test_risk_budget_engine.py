@@ -12,36 +12,20 @@ Covers:
 
 import unittest
 
-try:
-    from bot.risk_budget_engine import (
-        RiskBudgetEngine,
-        RiskBudgetConfig,
-        TradeRecord,
-        calculate_risk_position,
-        DEFAULT_BASE_RISK_PCT,
-        WINNING_RISK_PCT,
-        LOSING_RISK_PCT,
-        WIN_RATE_THRESHOLD,
-        LOSING_STREAK_THRESHOLD,
-        LOOKBACK_TRADES,
-        OUTCOME_WIN,
-        OUTCOME_LOSS,
-    )
-except ImportError:
-    from risk_budget_engine import (
-        RiskBudgetEngine,
-        RiskBudgetConfig,
-        TradeRecord,
-        calculate_risk_position,
-        DEFAULT_BASE_RISK_PCT,
-        WINNING_RISK_PCT,
-        LOSING_RISK_PCT,
-        WIN_RATE_THRESHOLD,
-        LOSING_STREAK_THRESHOLD,
-        LOOKBACK_TRADES,
-        OUTCOME_WIN,
-        OUTCOME_LOSS,
-    )
+from bot.risk_budget_engine import (
+    RiskBudgetEngine,
+    RiskBudgetConfig,
+    TradeRecord,
+    calculate_risk_position,
+    DEFAULT_BASE_RISK_PCT,
+    WINNING_RISK_PCT,
+    LOSING_RISK_PCT,
+    WIN_RATE_THRESHOLD,
+    LOSING_STREAK_THRESHOLD,
+    LOOKBACK_TRADES,
+    OUTCOME_WIN,
+    OUTCOME_LOSS,
+)
 
 
 class TestRiskBudgetEngineCore(unittest.TestCase):
