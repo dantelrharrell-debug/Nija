@@ -21,7 +21,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from broker_registry import BrokerRegistry, BrokerStateDict, broker_registry as _global_registry
+from bot.broker_registry import BrokerRegistry, BrokerStateDict, broker_registry as _global_registry
 
 
 # ---------------------------------------------------------------------------

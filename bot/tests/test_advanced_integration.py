@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 # This allows imports to work when tests are run directly or via test runner
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from advanced_trading_integration import (
+from bot.advanced_trading_integration import (
     AdvancedTradingManager,
     ExchangeType,
     validate_configuration

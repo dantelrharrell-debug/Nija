@@ -10,7 +10,7 @@ import sys
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
-from forced_position_cleanup import ForcedPositionCleanup, CleanupType
+from bot.forced_position_cleanup import ForcedPositionCleanup, CleanupType
 
 
 def test_default_config():
