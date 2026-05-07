@@ -414,7 +414,7 @@ class ExecutionConfirmationLayer:
             else:
                 result.status = FillStatus.UNFILLED
         else:
-            result.status = FillStatus.FILLED if filled > 0 else FillStatus.UNFILLED
+            result.status = FillStatus.PARTIAL if filled > 0 else FillStatus.UNFILLED
 
         return result
 
