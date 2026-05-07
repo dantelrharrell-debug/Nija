@@ -75,7 +75,7 @@ _DISCLOSURE_INTERVAL_SECONDS = _resolve_disclosure_interval_seconds()
 def _should_emit_disclosure() -> bool:
     global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
     if not is_production_environment():
-        # Non-production environments always emit disclosures for visibility.
+        # Non-production environments always emit disclosures for visibility
         return True
 
     now = time.time()
@@ -114,7 +114,7 @@ class InstitutionalLogger:
         
         Args:
             name: Logger name (used to initialize the underlying logger)
-            base_logger: Optional base logger to wrap (name is ignored when provided)
+            base_logger: Optional base logger to wrap (name is only used when base_logger is None)
         """
         self.logger = base_logger or logging.getLogger(name)
     
