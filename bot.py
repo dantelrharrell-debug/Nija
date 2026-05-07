@@ -4241,16 +4241,11 @@ def _force_trade_readiness_handoff(
             and _ft_execution_ready
         ):
             logger.critical("🚀 FORCE_TRADE: ALL GATES OPEN - TRANSITIONING FSM TO RUNNING_SUPERVISED")
-            try:
-                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                    _bfsm_transition(_BootstrapState.RUNNING_SUPERVISED, transition_reason)
-                    logger.critical(completion_log)
-                    if set_bootstrap_events:
-                        _strategy_ready_event.set()
-                        _bootstrap_complete_flag.set()
-                        _bootstrap_completed_event.set()
-            except Exception as _ft_fsm_err:
-                logger.error(f"FORCE_TRADE FSM transition error: {_ft_fsm_err}")
+            _try_finalize_running_supervised_handoff(
+                reason=transition_reason,
+                completion_log=completion_log,
+                set_bootstrap_events=set_bootstrap_events,
+            )
         else:
             logger.critical(
                 f"🚀 FORCE_TRADE: Not all gates open yet - "
@@ -4391,11 +4386,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # Environment variables were verified at module import; health server was
     # bound in main().  Advance the FSM to ENV_VERIFIED so the startup thread
     # can drive subsequent transitions.  On retry the FSM is already in
-            _try_finalize_running_supervised_handoff(
-                reason=transition_reason,
-                completion_log=completion_log,
-                set_bootstrap_events=set_bootstrap_events,
-            )
     # If a previous attempt completed the connection/credential-check phase,
     # skip it entirely on retry so we never loop back through broker init.
     _state_copy = _read_initialized_state_snapshot(context="connection phase guard")
