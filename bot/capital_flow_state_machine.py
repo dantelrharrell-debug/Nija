@@ -64,6 +64,7 @@ Author: NIJA Trading Systems
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import queue
@@ -102,6 +103,17 @@ def _log_snapshot_trace_throttled(balances: Dict[str, float], valid_brokers: int
         valid_brokers,
         source,
     )
+
+
+def _resolve_bootstrap_fsm():
+    """Return (BootstrapState, get_bootstrap_fsm) when available, else (None, None)."""
+    for module_name in ("bot.bootstrap_state_machine", "bootstrap_state_machine"):
+        try:
+            module = importlib.import_module(module_name)
+            return module.BootstrapState, module.get_bootstrap_fsm
+        except ImportError:
+            continue
+    return None, None
 
 # Keep both import paths bound to the same module object.
 # This avoids duplicate process-wide singletons when callers mix
@@ -929,6 +941,12 @@ class CapitalRefreshCoordinator:
         self._runtime = runtime_fsm
         self._lock = threading.Lock()
         self._in_flight = False
+        self.balance_hydrated: bool = False
+        self.balance_hydrated_event: threading.Event = threading.Event()
+
+    def wait_for_balance_hydration(self, timeout: Optional[float] = None) -> bool:
+        """Block until the balance hydration event is set or timeout expires."""
+        return self.balance_hydrated_event.wait(timeout=timeout)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -1152,6 +1170,41 @@ class CapitalRefreshCoordinator:
             if authority.last_updated is not None
             else float("inf")
         )
+        if not self.balance_hydrated:
+            usd_available = float(sum(new_balances.values()))
+            if new_balances:
+                if len(new_balances) == 1:
+                    exchange_name = next(iter(new_balances))
+                else:
+                    exchange_name = ",".join(sorted(new_balances.keys()))
+            else:
+                exchange_name = "none"
+            self.balance_hydrated = True
+            self.balance_hydrated_event.set()
+            logger.info(
+                "✅ Balance hydration complete",
+                extra={
+                    "usd_available": usd_available,
+                    "exchange": exchange_name,
+                },
+            )
+            BootstrapState, get_bootstrap_fsm = _resolve_bootstrap_fsm()
+            if BootstrapState is None or get_bootstrap_fsm is None:
+                logger.debug(
+                    "[Coordinator] balance hydration bootstrap transition skipped: bootstrap FSM unavailable"
+                )
+            else:
+                try:
+                    bootstrap_fsm = get_bootstrap_fsm()
+                    bootstrap_fsm.transition(
+                        BootstrapState.BALANCE_HYDRATED,
+                        reason="initial balances fetched successfully",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[Coordinator] balance hydration bootstrap transition failed: %s",
+                        exc,
+                    )
 
         # =================================================================
         # STAGE 3: VALUATE
