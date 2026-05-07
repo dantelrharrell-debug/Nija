@@ -2445,7 +2445,7 @@ def _start_health_server():
                         try:
                             from bot.health_check import get_health_manager
                             health_manager = get_health_manager()
-                            status = health_manager.get_detailed_status()
+                            status: dict[str, object] = health_manager.get_detailed_status()
                             try:
                                 from bot.execution_authority_context import get_distributed_writer_authority_status
                             except ImportError:
@@ -2456,7 +2456,11 @@ def _start_health_server():
                             except Exception as lock_err:
                                 status["writer_lock"] = {"ok": False, "error": str(lock_err)}
 
-                            status["writer_lock_ok"] = bool(status.get("writer_lock", {}).get("ok", False))
+                            _writer_lock_status = status.get("writer_lock")
+                            if isinstance(_writer_lock_status, dict):
+                                status["writer_lock_ok"] = bool(_writer_lock_status.get("ok", False))
+                            else:
+                                status["writer_lock_ok"] = False
 
                             self.send_response(200)
                             self.send_header("Content-Type", "application/json")
@@ -2467,7 +2471,7 @@ def _start_health_server():
                             self.send_response(200)
                             self.send_header("Content-Type", "application/json")
                             self.end_headers()
-                            _fallback = {"status": "initializing"}
+                            _fallback: dict[str, object] = {"status": "initializing"}
                             try:
                                 from bot.execution_authority_context import get_distributed_writer_authority_status
                             except ImportError:
@@ -2478,7 +2482,11 @@ def _start_health_server():
                             except Exception as lock_err:
                                 _fallback["writer_lock"] = {"ok": False, "error": str(lock_err)}
 
-                            _fallback["writer_lock_ok"] = bool(_fallback.get("writer_lock", {}).get("ok", False))
+                            _fallback_writer_lock = _fallback.get("writer_lock")
+                            if isinstance(_fallback_writer_lock, dict):
+                                _fallback["writer_lock_ok"] = bool(_fallback_writer_lock.get("ok", False))
+                            else:
+                                _fallback["writer_lock_ok"] = False
 
                             self.wfile.write(json.dumps(_fallback, indent=2).encode())
                     
@@ -4484,15 +4492,15 @@ def _run_bot_startup_and_trading():
 
                     # FIX #2: Auto-release RUNNING_SUPERVISED after validation
                     if (
-                        _ft_broker_ready and
-                        _ft_risk_ready and
-                        _ft_strategy_ready and
-                        _ft_capital_ready and
-                        _ft_execution_ready
+                        _ft_broker_ready
+                        and _ft_risk_ready
+                        and _ft_strategy_ready
+                        and _ft_capital_ready
+                        and _ft_execution_ready
                     ):
                         logger.critical("🚀 ALL STRICT READINESS FLAGS SATISFIED - RELEASING RUNNING_SUPERVISED")
-                        try:
-                            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                            try:
                                 _bfsm = _get_bootstrap_fsm()
                                 logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
                                 _bfsm_transition(
@@ -4500,12 +4508,12 @@ def _run_bot_startup_and_trading():
                                     "Post-capability-verification: all readiness gates satisfied",
                                 )
                                 logger.critical("🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP")
-                        except Exception as _fsm_err:
-                            logger.error(f"FSM transition error: {_fsm_err}")
+                            except Exception as _fsm_err:
+                                logger.error(f"FSM transition error: {_fsm_err}")
 
                     # Activation must occur in the bootstrap owner thread.
                     try:
-                        from bot.trading_state_machine import get_state_machine as _get_tsm_startup, TradingState as _TS_startup
+                        from bot.trading_state_machine import get_state_machine as _get_tsm_startup
 
                     logger.critical(
                         f"🚀 SYSTEM READY STATE:\n"
