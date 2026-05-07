@@ -14,7 +14,7 @@ import pytest
 # Allow imports from bot/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from exchange_kill_switch import (
+from bot.exchange_kill_switch import (
     CircuitState,
     ExchangeKillSwitchConfig,
     ExchangeKillSwitchProtector,
@@ -477,7 +477,7 @@ class TestEvaluateAllGates:
 class TestSingletonFactory:
 
     def test_returns_same_instance(self, tmp_path):
-        import exchange_kill_switch as eks_module
+        import bot.exchange_kill_switch as eks_module
         # Reset module-level singleton for this test
         original = eks_module._protector
         eks_module._protector = None
@@ -624,7 +624,7 @@ class TestCircuitBreakerGetStatus:
 class TestCircuitBreakerSingleton:
 
     def test_singleton_returns_same_instance(self):
-        import exchange_kill_switch as eks_module
+        import bot.exchange_kill_switch as eks_module
         original = eks_module._circuit_breaker
         eks_module._circuit_breaker = None
         try:

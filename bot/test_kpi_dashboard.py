@@ -14,9 +14,9 @@ import shutil
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
-from kpi_tracker import KPITracker, KPISnapshot
-from automated_performance_tracker import AutomatedPerformanceTracker
-from risk_alarm_system import RiskAlarmSystem, RiskThresholds, RiskAlarmType
+from bot.kpi_tracker import KPITracker, KPISnapshot
+from bot.automated_performance_tracker import AutomatedPerformanceTracker
+from bot.risk_alarm_system import RiskAlarmSystem, RiskThresholds, RiskAlarmType
 
 
 class TestKPITracker(unittest.TestCase):

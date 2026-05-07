@@ -12,7 +12,7 @@ import pytest
 # Allow imports from bot/
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from regime_aware_memory import (
+from bot.regime_aware_memory import (
     DEFAULT_EMA_ALPHA,
     DEFAULT_MIN_TRADES,
     DEFAULT_WINDOW,

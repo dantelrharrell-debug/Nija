@@ -33,7 +33,7 @@ def test_atomic_close_lock():
     print("=" * 70)
 
     # Import execution engine
-    from execution_engine import ExecutionEngine
+    from bot.execution_engine import ExecutionEngine
 
     # Create mock broker
     mock_broker = Mock()
@@ -110,7 +110,7 @@ def test_concurrent_exit_blocking():
     print("TEST 2: Block Concurrent Exit (FIX #3)")
     print("=" * 70)
 
-    from execution_engine import ExecutionEngine
+    from bot.execution_engine import ExecutionEngine
 
     # Create mock broker with delayed response
     mock_broker = Mock()
@@ -183,7 +183,7 @@ def test_immediate_position_flush():
     print("TEST 3: Immediate Position State Flush (FIX #2)")
     print("=" * 70)
 
-    from execution_engine import ExecutionEngine
+    from bot.execution_engine import ExecutionEngine
 
     # Create mock broker
     mock_broker = Mock()
@@ -237,7 +237,7 @@ def test_balance_refresh_before_emergency_sell():
     print("TEST 4: Mandatory Balance Refresh Before Emergency Sell (FIX #4)")
     print("=" * 70)
 
-    from forced_stop_loss import ForcedStopLoss
+    from bot.forced_stop_loss import ForcedStopLoss
 
     # Create mock broker
     mock_broker = Mock()
@@ -288,7 +288,7 @@ def test_orphan_position_resolution():
     print("TEST 5: Proper Orphan Resolution Logic (FIX #5)")
     print("=" * 70)
 
-    from forced_stop_loss import ForcedStopLoss
+    from bot.forced_stop_loss import ForcedStopLoss
 
     # Create mock broker
     mock_broker = Mock()
@@ -346,7 +346,7 @@ def test_orphan_already_closed():
     print("TEST 6: Orphan Resolution - Already Closed (FIX #5)")
     print("=" * 70)
 
-    from forced_stop_loss import ForcedStopLoss
+    from bot.forced_stop_loss import ForcedStopLoss
 
     # Create mock broker
     mock_broker = Mock()
@@ -390,7 +390,7 @@ def test_partial_exit_lock_release():
     print("TEST 7: Lock Release After Partial Exit")
     print("=" * 70)
 
-    from execution_engine import ExecutionEngine
+    from bot.execution_engine import ExecutionEngine
 
     # Create mock broker
     mock_broker = Mock()

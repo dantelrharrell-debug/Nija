@@ -4,7 +4,7 @@ import logging
 from coinbase.rest import RESTClient
 import time
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
 
 
 # Load environment variables

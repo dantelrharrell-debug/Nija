@@ -23,24 +23,14 @@ import pandas as pd
 _bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _bot_dir)
 
-try:
-    from market_regime_controller import (
-        MarketRegime,
-        MarketRegimeController,
-        RegimeControls,
-        RegimeMetrics,
-        TradePermission,
-        get_market_regime_controller,
-    )
-except ImportError:
-    from bot.market_regime_controller import (
-        MarketRegime,
-        MarketRegimeController,
-        RegimeControls,
-        RegimeMetrics,
-        TradePermission,
-        get_market_regime_controller,
-    )
+from bot.market_regime_controller import (
+    MarketRegime,
+    MarketRegimeController,
+    RegimeControls,
+    RegimeMetrics,
+    TradePermission,
+    get_market_regime_controller,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +401,7 @@ class TestSingleton(unittest.TestCase):
 
     def test_singleton_returns_same_instance(self):
         import importlib
-        import market_regime_controller as mrc
+        import bot.market_regime_controller as mrc
         # Reset the singleton for test isolation
         mrc._controller_instance = None
         inst1 = get_market_regime_controller()
