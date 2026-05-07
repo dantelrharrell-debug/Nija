@@ -377,6 +377,11 @@ class ExecutionConfirmationLayer:
             expected_size: Expected base-asset quantity for the order.
             order_id: Exchange order id to confirm (may be None).
             initial_response: Optional response dict from the original submit.
+
+        Returns:
+            ConfirmationResult with fill status. If order_id is None, the
+            confirmation falls back to parsing ``initial_response`` without
+            polling the broker.
         """
         result = ConfirmationResult(
             symbol=symbol,
