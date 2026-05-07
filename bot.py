@@ -6526,6 +6526,17 @@ def main():
         strategy = _state_snapshot.get("strategy")
         system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
             _compute_system_ready(_state_snapshot)
+
+        # ── FORCE_TRADE bypass: skip FSM gate and release system_ready directly ──
+        if not system_ready and _is_truthy(os.environ.get("FORCE_TRADE", "")):
+            logger.critical(
+                "🚀 FORCE_TRADE: Releasing system_ready barrier — "
+                "broker_ready=%s risk_ready=%s strategy_ready=%s "
+                "capital_ready=%s execution_ready=%s",
+                broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
+            )
+            system_ready = True
+
         if system_ready:
             print("STEP 5: strategy initialized — system_ready", flush=True)
             logger.critical(
