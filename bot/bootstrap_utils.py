@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 
 def resolve_bootstrap_balance_probe() -> Optional[Callable[[], bool]]:
-    """Return the balance-hydration probe from bootstrap_state_machine if available."""
+    """Return the balance-hydration probe or None when the bootstrap module is unavailable."""
     for module_name in ("bot.bootstrap_state_machine", "bootstrap_state_machine"):
         try:
             module = importlib.import_module(module_name)
