@@ -2388,14 +2388,9 @@ class MultiAccountBrokerManager:
 
         _bootstrap_balance_probe = None
         try:
-            try:
-                from bot.bootstrap_utils import (
-                    resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
-                )
-            except ImportError:
-                from bootstrap_utils import (  # type: ignore[import]
-                    resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
-                )
+            from bot.bootstrap_utils import (
+                resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
+            )
             _bootstrap_balance_probe = _resolve_bootstrap_balance_probe()
         except ImportError:
             _bootstrap_balance_probe = None
@@ -2413,6 +2408,11 @@ class MultiAccountBrokerManager:
                     )
                     if isinstance(_fresh_snapshot, dict):
                         snapshot = _fresh_snapshot
+                    else:
+                        logger.warning(
+                            "[MABM] bootstrap balance exit refresh returned non-dict: %r",
+                            type(_fresh_snapshot).__name__,
+                        )
                 except Exception as _fresh_err:
                     logger.debug(
                         "[MABM] bootstrap balance exit refresh failed: %s",

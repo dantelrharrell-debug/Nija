@@ -148,6 +148,7 @@ _BALANCE_POLLING_DISABLED_STATES = frozenset({
     BootstrapState.EXTERNAL_RESTART_REQUIRED,
     BootstrapState.SHUTDOWN,
 })
+BALANCE_POLLING_DISABLED_STATES = _BALANCE_POLLING_DISABLED_STATES
 
 # ---------------------------------------------------------------------------
 # Emergency / terminal states that any thread may drive (FIX 4 — ownership)
@@ -1003,6 +1004,7 @@ __all__ = [
     "BootstrapInvariantError",
     "BootstrapStateMachine",
     "get_bootstrap_fsm",
+    "BALANCE_POLLING_DISABLED_STATES",
     "_STRATEGY_ARM_ALLOWED_STATES",
     "_ANY_THREAD_ALLOWED_TARGETS",
 ]

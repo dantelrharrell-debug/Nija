@@ -192,14 +192,9 @@ class CAHydrationLoop:
         attempt = 0
         _bootstrap_balance_probe = None
         try:
-            try:
-                from bot.bootstrap_utils import (
-                    resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
-                )
-            except ImportError:
-                from bootstrap_utils import (  # type: ignore[import]
-                    resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
-                )
+            from bot.bootstrap_utils import (
+                resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
+            )
             _bootstrap_balance_probe = _resolve_bootstrap_balance_probe()
         except ImportError:
             _bootstrap_balance_probe = None

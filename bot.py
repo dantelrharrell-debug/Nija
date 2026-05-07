@@ -2594,7 +2594,7 @@ try:
     _bfsm_mod = importlib.import_module("bot.bootstrap_state_machine")
     _BootstrapState = cast(Any, getattr(_bfsm_mod, "BootstrapState"))
     _get_bootstrap_fsm = cast(Any, getattr(_bfsm_mod, "get_bootstrap_fsm"))
-    _balance_states = getattr(_bfsm_mod, "_BALANCE_POLLING_DISABLED_STATES", None)
+    _balance_states = getattr(_bfsm_mod, "BALANCE_POLLING_DISABLED_STATES", None)
     if _balance_states:
         _BALANCE_HYDRATED_STATE_VALUES = {state.value for state in _balance_states}
     _BOOTSTRAP_FSM_AVAILABLE = True
