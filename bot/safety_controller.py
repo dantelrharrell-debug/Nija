@@ -27,6 +27,11 @@ from datetime import datetime
 
 logger = logging.getLogger("nija.safety")
 
+try:
+    from bot.runtime_mode import resolve_runtime_mode
+except ImportError:
+    from runtime_mode import resolve_runtime_mode  # type: ignore[import]
+
 
 class TradingMode(Enum):
     """Trading mode states for NIJA bot"""
@@ -95,9 +100,10 @@ class SafetyController:
             self._log_state_change("APP_STORE_MODE enabled - read-only demo mode")
             return
             
+        runtime_mode = resolve_runtime_mode()
+
         # Check #3: Dry-run simulator mode (for App Store reviewers)
-        dry_run_mode = os.getenv('DRY_RUN_MODE', 'false').lower() in ('true', '1', 'yes')
-        if dry_run_mode:
+        if runtime_mode.dry_run:
             self._mode = TradingMode.DRY_RUN
             logger.info("=" * 70)
             logger.info("🎭 DRY-RUN SIMULATOR MODE ACTIVE")
@@ -126,10 +132,10 @@ class SafetyController:
         # Supports two equivalent authorization methods:
         #   LIVE_CAPITAL_VERIFIED=true  — explicit opt-in via safety gate
         #   LIVE_TRADING=1              — legacy alias used in .env.example and diagnostics
-        live_capital_verified = os.getenv('LIVE_CAPITAL_VERIFIED', 'false').lower() in ('true', '1', 'yes')
-        live_trading_value = os.getenv('LIVE_TRADING', '0')
-        live_trading_enabled = live_trading_value.lower() in ('true', '1', 'yes')
-        live_authorized = live_capital_verified or live_trading_enabled
+        live_capital_verified = runtime_mode.live_capital_verified
+        live_trading_value = runtime_mode.raw.get("LIVE_TRADING", "0")
+        live_trading_enabled = runtime_mode.live_trading
+        live_authorized = runtime_mode.is_live
         
         # Check #5: Credential validation
         self._credentials_configured = self._check_credentials()

@@ -9,7 +9,7 @@ Test suite for deployable capital and max position size calculations.
 import sys
 sys.path.insert(0, './bot')
 
-from portfolio_state import PortfolioState, UserPortfolioState
+from bot.portfolio_state import PortfolioState, UserPortfolioState
 
 
 def test_empty_portfolio():

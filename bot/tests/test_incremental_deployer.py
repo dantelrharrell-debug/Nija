@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from incremental_deployer import (
+from bot.incremental_deployer import (
     IncrementalDeployer,
     DeployPhase,
     LiveTradeAudit,

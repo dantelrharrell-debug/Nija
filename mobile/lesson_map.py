@@ -123,8 +123,8 @@ def create_lesson_map() -> List[Lesson]:
         content=(
             "Welcome to NIJA - your intelligent cryptocurrency trading assistant!\n\n"
             "NIJA is an autonomous trading bot that executes trades on your behalf using "
-            "advanced algorithms and market analysis. Think of it as your 24/7 trading partner "
-            "that never sleeps, never gets emotional, and follows your risk parameters exactly.\n\n"
+            "advanced algorithms and market analysis. It runs continuously, avoids emotional "
+            "decision-making, and follows your risk parameters exactly.\n\n"
             "In this onboarding journey, you'll learn:\n"
             "• How NIJA works and what it can do for you\n"
             "• How to set up your trading account safely\n"

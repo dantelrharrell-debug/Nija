@@ -23,6 +23,11 @@ from dataclasses import dataclass, asdict
 
 logger = logging.getLogger("nija.health")
 
+try:
+    from bot.runtime_mode import resolve_runtime_mode
+except ImportError:
+    from runtime_mode import resolve_runtime_mode  # type: ignore[import]
+
 
 class HealthStatus(Enum):
     """Health status states"""
@@ -585,6 +590,22 @@ class HealthCheckManager:
             execution_gate["safety_mode"] = SafetyController().get_current_mode().value
         except Exception:
             execution_gate["safety_mode"] = None
+
+        try:
+            runtime_mode_snapshot = resolve_runtime_mode().as_dict()
+        except Exception as exc:
+            runtime_mode_snapshot = {"error": str(exc)}
+
+        runtime_env_flags = {
+            "LIVE_CAPITAL_VERIFIED": os.getenv("LIVE_CAPITAL_VERIFIED", "false"),
+            "LIVE_TRADING": os.getenv("LIVE_TRADING", "false"),
+            "DRY_RUN_MODE": os.getenv("DRY_RUN_MODE", "false"),
+            "PAPER_MODE": os.getenv("PAPER_MODE", "false"),
+            "AUTO_ACTIVATE": os.getenv("AUTO_ACTIVATE", "false"),
+            "HEARTBEAT_TRADE": os.getenv("HEARTBEAT_TRADE", "false"),
+            "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": os.getenv("HEARTBEAT_REQUIRED_FIRST_ACTIVATION", "false"),
+            "FORCE_LIVE_TRANSITION": os.getenv("FORCE_LIVE_TRANSITION", "false"),
+        }
         
         return {
             "service": "NIJA Trading Bot",
@@ -597,6 +618,8 @@ class HealthCheckManager:
                 "error_count": self.state.error_count,
                 "uptime_seconds": self.state.uptime_seconds,
                 "execution_gate": execution_gate,
+                "runtime_mode": runtime_mode_snapshot,
+                "runtime_env_flags": runtime_env_flags,
             },
         }
     

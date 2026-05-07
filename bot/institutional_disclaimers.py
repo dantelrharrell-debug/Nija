@@ -10,7 +10,17 @@ Date: February 2026
 """
 
 import logging
+import os
+import threading
+import time
 from typing import Optional
+
+try:
+    from config.environment import is_production_environment
+except ImportError:
+    def is_production_environment() -> bool:
+        env = os.getenv("ENVIRONMENT", "").lower()
+        return env in ("production", "prod")
 
 # Primary institutional disclaimer
 VALIDATION_DISCLAIMER = """
@@ -34,12 +44,80 @@ purposes only.
 """
 
 
+COMPLIANCE_LOGGER_NAME = "nija.bootstrap"
+DEFAULT_DISCLOSURE_INTERVAL_HOURS = 6.0
+_COMPLIANCE_LOGGER = logging.getLogger(COMPLIANCE_LOGGER_NAME)
+_DISCLOSURE_LOCK = threading.Lock()
+_LAST_DISCLOSURE_TIMESTAMP = 0.0
+_FIRST_BOOT_THIS_PROCESS = True
+
+
+def _resolve_disclosure_interval_seconds() -> float:
+    """
+    Resolve the disclosure interval (seconds) from NIJA_DISCLOSURE_INTERVAL_HOURS.
+
+    Negative values disable periodic emission after the first boot in production environments.
+    """
+    raw = os.getenv("NIJA_DISCLOSURE_INTERVAL_HOURS", "").strip()
+    if not raw:
+        return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
+    try:
+        hours = float(raw)
+        if hours < 0:
+            _COMPLIANCE_LOGGER.warning(
+                "NIJA_DISCLOSURE_INTERVAL_HOURS is negative (%s); disclosures will emit on first boot only in production.",
+                raw,
+            )
+            return 0.0
+        return hours * 3600
+    except ValueError:
+        _COMPLIANCE_LOGGER.warning(
+            "NIJA_DISCLOSURE_INTERVAL_HOURS is invalid (%s); using default %.1f hours.",
+            raw,
+            DEFAULT_DISCLOSURE_INTERVAL_HOURS,
+        )
+        return DEFAULT_DISCLOSURE_INTERVAL_HOURS * 3600
+
+
+_DISCLOSURE_INTERVAL_SECONDS = _resolve_disclosure_interval_seconds()
+
+
+def _should_emit_disclosure() -> bool:
+    """
+    Decide whether to emit a disclosure.
+
+    In production, disclosures emit on first boot and then at the configured interval.
+    In non-production environments, disclosures always emit for visibility.
+    Module-level state is guarded by _DISCLOSURE_LOCK to keep emission decisions consistent across threads.
+    """
+    global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
+    now = time.time()
+    interval_seconds = _DISCLOSURE_INTERVAL_SECONDS
+    with _DISCLOSURE_LOCK:
+        if not is_production_environment():
+            # Non-production environments always emit disclosures for visibility
+            return True
+        if _FIRST_BOOT_THIS_PROCESS:
+            _FIRST_BOOT_THIS_PROCESS = False
+            _LAST_DISCLOSURE_TIMESTAMP = now
+            return True
+        # Interval <= 0 disables periodic emission after the first boot.
+        if interval_seconds <= 0:
+            return False
+        if now - _LAST_DISCLOSURE_TIMESTAMP >= interval_seconds:
+            _LAST_DISCLOSURE_TIMESTAMP = now
+            return True
+    return False
+
+
 class InstitutionalLogger:
     """
     Institutional-grade logger wrapper that adds disclaimers to output.
     
     Wraps standard Python logger to automatically include validation disclaimers
-    in appropriate contexts.
+    in appropriate contexts. Disclosure emission is gated globally per process
+    with time-based throttling configurable via NIJA_DISCLOSURE_INTERVAL_HOURS,
+    so multiple logger instances share the same timing rules.
     """
     
     def __init__(self, name: str, base_logger: Optional[logging.Logger] = None):
@@ -47,18 +125,16 @@ class InstitutionalLogger:
         Initialize institutional logger.
         
         Args:
-            name: Logger name
-            base_logger: Optional base logger to wrap (creates new if None)
+            name: Logger name (used to create the underlying logger if base_logger is None)
+            base_logger: Optional base logger to wrap
         """
         self.name = name
         self.logger = base_logger or logging.getLogger(name)
-        self._disclaimer_shown = False
     
     def show_validation_disclaimer(self):
         """Display the primary validation disclaimer"""
-        if not self._disclaimer_shown:
+        if _should_emit_disclosure():
             self.logger.info(VALIDATION_DISCLAIMER)
-            self._disclaimer_shown = True
     
     def info(self, msg: str, *args, show_disclaimer: bool = False, **kwargs):
         """Log info message with optional disclaimer"""
@@ -97,15 +173,17 @@ def get_institutional_logger(name: str) -> InstitutionalLogger:
 
 
 def print_validation_banner():
-    """Print the validation banner to console"""
-    print(VALIDATION_DISCLAIMER)
+    """Log the validation banner"""
+    if _should_emit_disclosure():
+        _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
 
 
 def print_all_disclaimers():
-    """Print all disclaimers to console"""
-    print(VALIDATION_DISCLAIMER)
-    print(PERFORMANCE_DISCLAIMER)
-    print(RISK_DISCLAIMER)
+    """Log all disclaimers"""
+    if _should_emit_disclosure():
+        _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
+        _COMPLIANCE_LOGGER.info(PERFORMANCE_DISCLAIMER)
+        _COMPLIANCE_LOGGER.info(RISK_DISCLAIMER)
 
 
 # Auto-display banner when module is imported in main execution
@@ -114,5 +192,5 @@ if __name__ != "__main__":
     import sys
     if not any('test' in arg.lower() for arg in sys.argv):
         # Display banner once at module import for institutional compliance
-        logger = logging.getLogger("nija.institutional")
-        logger.info(VALIDATION_DISCLAIMER)
+        if _should_emit_disclosure():
+            _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
