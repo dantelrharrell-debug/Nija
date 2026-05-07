@@ -4466,6 +4466,67 @@ def _run_bot_startup_and_trading():
                         "Startup-thread capability verification complete — "
                         "deferring bootstrap event release to RUNNING_SUPERVISED gate"
                     )
+
+                    # FORCE_TRADE: Set readiness flags immediately after subsystem verification
+                    import os as _os_ft
+                    _force_trade = _os_ft.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
+                    if _force_trade:
+                        logger.critical("🚀 SETTING READINESS FLAGS FOR FORCE_TRADE MODE")
+
+                        # Mark risk_ready in the shared initialized state
+                        _initialized_state["risk_ready"] = True
+
+                        # Set the strategy-ready event so _compute_system_ready sees it
+                        _strategy_ready_event.set()
+
+                        # Derive current readiness values for logging
+                        _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE readiness gate")
+                        (
+                            _ft_system_ready,
+                            _ft_broker_ready,
+                            _ft_risk_ready,
+                            _ft_strategy_ready,
+                            _ft_capital_ready,
+                            _ft_execution_ready,
+                        ) = _compute_system_ready(_ft_state_snapshot)
+
+                        logger.critical(
+                            "🚀 FORCED READY FLAGS | "
+                            f"broker={_ft_broker_ready} "
+                            f"risk={_ft_risk_ready} "
+                            f"strategy={_ft_strategy_ready} "
+                            f"execution={_ft_execution_ready}"
+                        )
+
+                        # Check if all readiness conditions are met
+                        if (
+                            _ft_broker_ready and
+                            _ft_risk_ready and
+                            _ft_strategy_ready and
+                            _ft_capital_ready and
+                            _ft_execution_ready
+                        ):
+                            logger.critical("🚀 SYSTEM_READY EVENT RELEASED - ALL GATES OPEN")
+
+                            # Transition BootstrapFSM to RUNNING_SUPERVISED
+                            try:
+                                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                    logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                    _bfsm_transition(
+                                        _BootstrapState.RUNNING_SUPERVISED,
+                                        "FORCE_TRADE: all readiness gates satisfied after capability verification",
+                                    )
+                                    logger.critical("🚀 FSM TRANSITION COMPLETE - BOT ENTERING TRADING LOOP")
+                            except Exception as _ft_fsm_err:
+                                logger.error(f"FSM transition error: {_ft_fsm_err}")
+                        else:
+                            logger.critical(
+                                "🚀 FORCE_TRADE: not all gates open yet — "
+                                f"broker={_ft_broker_ready} risk={_ft_risk_ready} "
+                                f"strategy={_ft_strategy_ready} capital={_ft_capital_ready} "
+                                f"execution={_ft_execution_ready} — "
+                                "readiness flags set; FSM transition deferred to normal boot path"
+                            )
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
