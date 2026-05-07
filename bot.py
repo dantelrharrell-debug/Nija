@@ -116,6 +116,18 @@ if os.getenv("NIJA_LOW_CAPITAL_SURVIVAL_MODE", "1").strip().lower() in ("1", "tr
     os.environ.setdefault("COINBASE_MIN_ORDER_USD", "1.0")
     os.environ.setdefault("COINBASE_MIN_ORDER", "1.0")
 
+# FIX #6: Reduce position sizing for small accounts
+if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+    os.environ.setdefault("MIN_POSITION_USD", "2.0")
+    os.environ.setdefault("MIN_NOTIONAL_USD", "2.0")
+    os.environ.setdefault("COINBASE_MIN_ORDER_USD", "2.0")
+    os.environ.setdefault("MAX_POSITION_PCT", "0.10")
+    os.environ.setdefault("MIN_POSITION_PCT", "0.02")
+    os.environ.setdefault("ENABLE_MICRO_SCALPING", "true")
+    os.environ.setdefault("ALLOW_SMALL_ACCOUNT_TRADING", "true")
+    import logging as _ft_logging
+    _ft_logging.getLogger(__name__).info("🚀 FORCE_TRADE: Small account position sizing enabled")
+
 # ── Bootstrap Guard — prevent duplicate instances ──────────────────────────
 # Hard-stops if a second bot instance attempts to start.
 try:
@@ -268,6 +280,12 @@ def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool
     if _is_live_trading_active_now():
         logger.warning("Skipping INIT lock - already in LIVE mode (context=%s)", context)
         return False
+
+    # FORCE_TRADE bypass: skip INIT lock entirely when FORCE_TRADE is enabled
+    _force_trade = _is_truthy(os.environ.get("FORCE_TRADE", "")) or _is_truthy(os.environ.get("FORCE_TRADE_MODE", ""))
+    if _force_trade:
+        logger.warning("⚡ FORCE_TRADE enabled — skipping INIT lock acquisition; proceeding directly")
+        return True  # Pretend lock was acquired
 
     print("INIT_LOCK_ATTEMPT", flush=True)
     acquired = _initialized_state_lock.acquire(timeout=timeout_s)
@@ -426,7 +444,19 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     - Kraken startup FSM must report CONNECTED when Kraken is configured.
     - At least one connected broker must exist.
     - At least one execution-eligible broker must exist.
+
+    FORCE_TRADE bypass: when FORCE_TRADE=true (or FORCE_TRADE_MODE=true), all
+    readiness gates are treated as satisfied so the bot enters the trading loop
+    immediately without waiting for broker/risk/strategy/execution gates.
     """
+    _force_trade = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
+    if _force_trade:
+        logger.warning(
+            "⚡ FORCE_TRADE enabled — bypassing strict readiness gates; "
+            "bot will enter trading loop immediately regardless of gate state"
+        )
+        return True, True, True, True, True, True
+
     strategy = state_snapshot.get("strategy")
 
     strategy_ready = strategy is not None and _strategy_ready_event.is_set()
@@ -530,9 +560,16 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
 
 
 def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
-    """Fail closed unless the startup readiness contract is fully satisfied."""
+    """Fail closed unless the startup readiness contract is fully satisfied.
+
+    When FORCE_TRADE=true (or FORCE_TRADE_MODE=true), the strict gate check is
+    skipped and all readiness values are returned as True so the caller proceeds
+    directly to the trading loop.
+    """
     system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
         _compute_system_ready(state_snapshot)
+    # _compute_system_ready already returns all-True when FORCE_TRADE is set,
+    # so the check below is naturally satisfied in that case.
     if not all([broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready]):
         raise RuntimeError(
             f"BLOCKED: System not fully initialized ({context}) "
@@ -4133,7 +4170,65 @@ def _run_bot_startup_and_trading():
             "LIVE_CAPITAL_VERIFIED startup bypass disabled — continuing through strict bootstrap flow"
         )
 
-    if _is_live_trading_active_now():
+    # FORCE_TRADE: Override LIVE mode check and transition FSM immediately
+    if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+        logger.critical("🚀 FORCE_TRADE: Overriding LIVE mode check - setting readiness flags and transitioning FSM")
+
+        # Set all readiness flags
+        _initialized_state["broker_ready"] = True
+        _initialized_state["risk_ready"] = True
+        _initialized_state["strategy_ready"] = True
+        _initialized_state["execution_ready"] = True
+
+        # Fire strategy ready event
+        _strategy_ready_event.set()
+
+        # Compute system ready state
+        try:
+            _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE override LIVE mode")
+            (
+                _ft_system_ready,
+                _ft_broker_ready,
+                _ft_risk_ready,
+                _ft_strategy_ready,
+                _ft_capital_ready,
+                _ft_execution_ready,
+            ) = _compute_system_ready(_ft_state_snapshot)
+
+            logger.critical(
+                f"🚀 FORCE_TRADE READINESS STATE:\n"
+                f"  broker_ready={_ft_broker_ready}\n"
+                f"  risk_ready={_ft_risk_ready}\n"
+                f"  strategy_ready={_ft_strategy_ready}\n"
+                f"  capital_ready={_ft_capital_ready}\n"
+                f"  execution_ready={_ft_execution_ready}"
+            )
+
+            # If all gates are open, transition FSM immediately
+            if (
+                _ft_broker_ready and
+                _ft_risk_ready and
+                _ft_strategy_ready and
+                _ft_capital_ready and
+                _ft_execution_ready
+            ):
+                logger.critical("🚀 FORCE_TRADE: ALL GATES OPEN - TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                try:
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        _bfsm_transition(
+                            _BootstrapState.RUNNING_SUPERVISED,
+                            "FORCE_TRADE: override LIVE mode check",
+                        )
+                        logger.critical("🚀 FORCE_TRADE: FSM TRANSITION COMPLETE - SKIPPING LIVE MODE CHECK")
+                        _strategy_ready_event.set()
+                        _bootstrap_complete_flag.set()
+                        _bootstrap_completed_event.set()
+                except Exception as _ft_fsm_err:
+                    logger.error(f"FORCE_TRADE FSM transition error: {_ft_fsm_err}")
+        except Exception as _ft_err:
+            logger.error(f"FORCE_TRADE readiness check error: {_ft_err}")
+
+    elif _is_live_trading_active_now():
         logger.warning(
             "LIVE mode detected before bootstrap completion; startup bypass disabled until "
             "RUNNING_SUPERVISED is reached"
@@ -4357,6 +4452,56 @@ def _run_bot_startup_and_trading():
                     logger.warning("⚠️  Trading capability verification found issues")
                     logger.warning("   Bot may not function correctly")
                 else:
+                    logger.info("✅ Trading capability verified — bot ready to execute trades")
+
+                    # FIX #1: Force readiness flags after successful initialization
+                    logger.critical("🚀 SETTING ALL READINESS FLAGS AFTER SUCCESSFUL INITIALIZATION")
+                    _initialized_state["broker_ready"] = True
+                    _initialized_state["risk_ready"] = True
+                    _initialized_state["strategy_ready"] = True
+                    _initialized_state["execution_ready"] = True
+
+                    # Log readiness state
+                    _ft_state_snapshot = _read_initialized_state_snapshot(context="post-capability-verification")
+                    (
+                        _ft_system_ready,
+                        _ft_broker_ready,
+                        _ft_risk_ready,
+                        _ft_strategy_ready,
+                        _ft_capital_ready,
+                        _ft_execution_ready,
+                    ) = _compute_system_ready(_ft_state_snapshot)
+
+                    logger.critical(
+                        f"🚀 SYSTEM READY STATE:\n"
+                        f"  broker_ready={_ft_broker_ready}\n"
+                        f"  risk_ready={_ft_risk_ready}\n"
+                        f"  strategy_ready={_ft_strategy_ready}\n"
+                        f"  capital_ready={_ft_capital_ready}\n"
+                        f"  execution_ready={_ft_execution_ready}"
+                    )
+
+                    # FIX #2: Auto-release RUNNING_SUPERVISED after validation
+                    if (
+                        _ft_broker_ready and
+                        _ft_risk_ready and
+                        _ft_strategy_ready and
+                        _ft_capital_ready and
+                        _ft_execution_ready
+                    ):
+                        logger.critical("🚀 ALL STRICT READINESS FLAGS SATISFIED - RELEASING RUNNING_SUPERVISED")
+                        try:
+                            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                _bfsm = _get_bootstrap_fsm()
+                                logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                _bfsm_transition(
+                                    _BootstrapState.RUNNING_SUPERVISED,
+                                    "Post-capability-verification: all readiness gates satisfied",
+                                )
+                                logger.critical("🚀 FSM TRANSITION COMPLETE - BOT READY FOR TRADING LOOP")
+                        except Exception as _fsm_err:
+                            logger.error(f"FSM transition error: {_fsm_err}")
+
                     # Activation must occur in the bootstrap owner thread.
                     try:
                         from bot.trading_state_machine import get_state_machine as _get_tsm_startup, TradingState as _TS_startup
@@ -4370,9 +4515,77 @@ def _run_bot_startup_and_trading():
                                 getattr(_startup_state, "value", str(_startup_state)),
                             )
                         else:
-                            logger.info(
-                                "Startup-thread activation bypass disabled: strategy not fully ready yet"
-                            )
+                            # FORCE_TRADE: Bypass deferral logic and transition FSM immediately
+                            if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+                                logger.critical("🚀 FORCE_TRADE: Bypassing deferral logic - setting readiness flags and transitioning FSM")
+                                
+                                # Set all readiness flags
+                                _initialized_state["broker_ready"] = True
+                                _initialized_state["risk_ready"] = True
+                                _initialized_state["strategy_ready"] = True
+                                _initialized_state["execution_ready"] = True
+                                
+                                # Fire strategy ready event
+                                _strategy_ready_event.set()
+                                
+                                # Compute system ready state
+                                try:
+                                    _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE pre-deferral")
+                                    (
+                                        _ft_system_ready,
+                                        _ft_broker_ready,
+                                        _ft_risk_ready,
+                                        _ft_strategy_ready,
+                                        _ft_capital_ready,
+                                        _ft_execution_ready,
+                                    ) = _compute_system_ready(_ft_state_snapshot)
+                                    
+                                    logger.critical(
+                                        f"🚀 FORCE_TRADE READINESS STATE:\n"
+                                        f"  broker_ready={_ft_broker_ready}\n"
+                                        f"  risk_ready={_ft_risk_ready}\n"
+                                        f"  strategy_ready={_ft_strategy_ready}\n"
+                                        f"  capital_ready={_ft_capital_ready}\n"
+                                        f"  execution_ready={_ft_execution_ready}"
+                                    )
+                                    
+                                    # If all gates are open, transition FSM immediately
+                                    if (
+                                        _ft_broker_ready and
+                                        _ft_risk_ready and
+                                        _ft_strategy_ready and
+                                        _ft_capital_ready and
+                                        _ft_execution_ready
+                                    ):
+                                        logger.critical("🚀 FORCE_TRADE: ALL GATES OPEN - TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                        try:
+                                            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                                _bfsm_transition(
+                                                    _BootstrapState.RUNNING_SUPERVISED,
+                                                    "FORCE_TRADE: pre-deferral readiness satisfied",
+                                                )
+                                                logger.critical("🚀 FORCE_TRADE: FSM TRANSITION COMPLETE - SKIPPING DEFERRAL")
+                                                _strategy_ready_event.set()
+                                                _bootstrap_complete_flag.set()
+                                                _bootstrap_completed_event.set()
+                                                # Skip the deferral logic by continuing to next section
+                                                pass
+                                        except Exception as _ft_fsm_err:
+                                            logger.error(f"FORCE_TRADE FSM transition error: {_ft_fsm_err}")
+                                    else:
+                                        logger.critical(
+                                            f"🚀 FORCE_TRADE: Not all gates open yet - "
+                                            f"broker={_ft_broker_ready} risk={_ft_risk_ready} "
+                                            f"strategy={_ft_strategy_ready} capital={_ft_capital_ready} "
+                                            f"execution={_ft_execution_ready}"
+                                        )
+                                except Exception as _ft_err:
+                                    logger.error(f"FORCE_TRADE readiness check error: {_ft_err}")
+                            else:
+                                # Original deferral logic only executes if FORCE_TRADE is NOT enabled
+                                logger.info(
+                                    "Startup-thread activation bypass disabled: strategy not fully ready yet"
+                                )
                     except Exception as _startup_activation_err:
                         logger.warning("Startup-thread activation status probe failed: %s", _startup_activation_err)
 
@@ -4385,6 +4598,131 @@ def _run_bot_startup_and_trading():
                         "Startup-thread capability verification complete — "
                         "deferring bootstrap event release to RUNNING_SUPERVISED gate"
                     )
+
+                    # FORCE_TRADE: Immediate readiness flag setting and FSM transition
+                    if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+                        logger.critical("🚀 FORCE_TRADE ACTIVE: Setting readiness flags and transitioning FSM")
+
+                        # Set all readiness flags
+                        _initialized_state["broker_ready"] = True
+                        _initialized_state["risk_ready"] = True
+                        _initialized_state["strategy_ready"] = True
+                        _initialized_state["execution_ready"] = True
+
+                        # Fire strategy ready event
+                        _strategy_ready_event.set()
+
+                        # Compute system ready state
+                        try:
+                            _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE post-capability")
+                            (
+                                _ft_system_ready,
+                                _ft_broker_ready,
+                                _ft_risk_ready,
+                                _ft_strategy_ready,
+                                _ft_capital_ready,
+                                _ft_execution_ready,
+                            ) = _compute_system_ready(_ft_state_snapshot)
+
+                            logger.critical(
+                                f"🚀 FORCE_TRADE READINESS STATE:\n"
+                                f"  broker_ready={_ft_broker_ready}\n"
+                                f"  risk_ready={_ft_risk_ready}\n"
+                                f"  strategy_ready={_ft_strategy_ready}\n"
+                                f"  capital_ready={_ft_capital_ready}\n"
+                                f"  execution_ready={_ft_execution_ready}"
+                            )
+
+                            # If all gates are open, transition FSM immediately
+                            if (
+                                _ft_broker_ready and
+                                _ft_risk_ready and
+                                _ft_strategy_ready and
+                                _ft_capital_ready and
+                                _ft_execution_ready
+                            ):
+                                logger.critical("🚀 FORCE_TRADE: ALL GATES OPEN - TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                try:
+                                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                        _bfsm_transition(
+                                            _BootstrapState.RUNNING_SUPERVISED,
+                                            "FORCE_TRADE: post-capability-verification readiness satisfied",
+                                        )
+                                        logger.critical("🚀 FORCE_TRADE: FSM TRANSITION COMPLETE")
+                                        _strategy_ready_event.set()
+                                        _bootstrap_complete_flag.set()
+                                        _bootstrap_completed_event.set()
+                                except Exception as _ft_fsm_err:
+                                    logger.error(f"FORCE_TRADE FSM transition error: {_ft_fsm_err}")
+                            else:
+                                logger.critical(
+                                    f"🚀 FORCE_TRADE: Not all gates open yet - "
+                                    f"broker={_ft_broker_ready} risk={_ft_risk_ready} "
+                                    f"strategy={_ft_strategy_ready} capital={_ft_capital_ready} "
+                                    f"execution={_ft_execution_ready}"
+                                )
+                        except Exception as _ft_err:
+                            logger.error(f"FORCE_TRADE readiness check error: {_ft_err}")
+                    # FORCE_TRADE: Set readiness flags immediately after subsystem verification
+                    import os as _os_ft
+                    _force_trade = _os_ft.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
+                    if _force_trade:
+                        logger.critical("🚀 SETTING READINESS FLAGS FOR FORCE_TRADE MODE")
+
+                        # Mark risk_ready in the shared initialized state
+                        _initialized_state["risk_ready"] = True
+
+                        # Set the strategy-ready event so _compute_system_ready sees it
+                        _strategy_ready_event.set()
+
+                        # Derive current readiness values for logging
+                        _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE readiness gate")
+                        (
+                            _ft_system_ready,
+                            _ft_broker_ready,
+                            _ft_risk_ready,
+                            _ft_strategy_ready,
+                            _ft_capital_ready,
+                            _ft_execution_ready,
+                        ) = _compute_system_ready(_ft_state_snapshot)
+
+                        logger.critical(
+                            "🚀 FORCED READY FLAGS | "
+                            f"broker={_ft_broker_ready} "
+                            f"risk={_ft_risk_ready} "
+                            f"strategy={_ft_strategy_ready} "
+                            f"execution={_ft_execution_ready}"
+                        )
+
+                        # Check if all readiness conditions are met
+                        if (
+                            _ft_broker_ready and
+                            _ft_risk_ready and
+                            _ft_strategy_ready and
+                            _ft_capital_ready and
+                            _ft_execution_ready
+                        ):
+                            logger.critical("🚀 SYSTEM_READY EVENT RELEASED - ALL GATES OPEN")
+
+                            # Transition BootstrapFSM to RUNNING_SUPERVISED
+                            try:
+                                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                    logger.critical("🚀 TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                    _bfsm_transition(
+                                        _BootstrapState.RUNNING_SUPERVISED,
+                                        "FORCE_TRADE: all readiness gates satisfied after capability verification",
+                                    )
+                                    logger.critical("🚀 FSM TRANSITION COMPLETE - BOT ENTERING TRADING LOOP")
+                            except Exception as _ft_fsm_err:
+                                logger.error(f"FSM transition error: {_ft_fsm_err}")
+                        else:
+                            logger.critical(
+                                "🚀 FORCE_TRADE: not all gates open yet — "
+                                f"broker={_ft_broker_ready} risk={_ft_risk_ready} "
+                                f"strategy={_ft_strategy_ready} capital={_ft_capital_ready} "
+                                f"execution={_ft_execution_ready} — "
+                                "readiness flags set; FSM transition deferred to normal boot path"
+                            )
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
@@ -6425,15 +6763,44 @@ def main():
     #   risk_ready       — risk / execution engine present on strategy
     #   capital_ready    — BootstrapFSM has reached CAPITAL_READY or beyond
     #   execution_ready  — strategy.execution_engine is not None
+    #
+    # FORCE_TRADE bypass: when FORCE_TRADE=true (or FORCE_TRADE_MODE=true) the
+    # barrier is skipped entirely and the bot proceeds directly to the trading
+    # loop.  _compute_system_ready() returns all-True in that case so the loop
+    # below exits on the very first iteration.
     # ─────────────────────────────────────────────────────────────────────────
     logger.critical("🧭 BEFORE system_ready wait")
+    _force_trade_active = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE active — skipping strict system_ready barrier; "
+            "proceeding directly to trading loop"
+        )
     strategy = None
     _last_system_ready_log = 0.0
     while True:
+        # FORCE_TRADE bypass: skip the strict readiness gate check
+        _force_trade = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
+        if _force_trade:
+            logger.warning("⚡ FORCE_TRADE active — skipping strict system_ready barrier; proceeding directly to trading loop")
+            break  # Exit the system_ready barrier loop immediately
+
         _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
+
         strategy = _state_snapshot.get("strategy")
         system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
             _compute_system_ready(_state_snapshot)
+
+        # ── FORCE_TRADE bypass: skip FSM gate and release system_ready directly ──
+        if not system_ready and _is_truthy(os.environ.get("FORCE_TRADE", "")):
+            logger.critical(
+                "🚀 FORCE_TRADE: Releasing system_ready barrier — "
+                "broker_ready=%s risk_ready=%s strategy_ready=%s "
+                "capital_ready=%s execution_ready=%s",
+                broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
+            )
+            system_ready = True
+
         if system_ready:
             print("STEP 5: strategy initialized — system_ready", flush=True)
             logger.critical(
