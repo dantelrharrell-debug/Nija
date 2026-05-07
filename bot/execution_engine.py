@@ -15,7 +15,7 @@ import threading
 import time as _time
 from collections import defaultdict, deque
 
-logger = logging.getLogger("nija")
+logger = logging.getLogger("nija.execution")
 
 try:
     from bot.execution_pipeline import get_execution_pipeline, PipelineRequest

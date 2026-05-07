@@ -24,7 +24,7 @@ import shutil
 bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, bot_dir)
 
-from adaptive_intelligence_engine import (
+from bot.adaptive_intelligence_engine import (
     DynamicRiskController,
     RiskParameters,
     VolatilityLevel,

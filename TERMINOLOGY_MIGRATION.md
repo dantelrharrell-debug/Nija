@@ -6,7 +6,7 @@ Align NIJA's terminology with Apple's requirements for transparency and user exp
 ## Key Messaging Principles
 
 **What NIJA Does:**
-- ✅ Each account evaluates independently using the same strategy framework
+- ✅ Each account evaluates independently using shared software logic with independent per-account evaluation
 - ✅ Risk is managed per account based on specific account factors
 - ✅ Execution happens independently when conditions are met
 - ✅ Results vary naturally due to timing, balance, and market conditions

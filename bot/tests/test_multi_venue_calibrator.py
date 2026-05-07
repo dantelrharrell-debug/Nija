@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from multi_venue_calibrator import (
+from bot.multi_venue_calibrator import (
     ExecutionSample,
     MultiVenueCalibrator,
     VenueStats,

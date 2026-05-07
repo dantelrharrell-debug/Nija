@@ -18,7 +18,7 @@ try:
 except ImportError:
     from bot.institutional_disclaimers import print_validation_banner
 
-logger = logging.getLogger("nija")
+logger = logging.getLogger("nija.bootstrap")
 
 
 def _snap_key(label: str) -> str:

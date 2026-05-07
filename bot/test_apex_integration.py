@@ -14,14 +14,14 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # Import modules to test
-from apex_indicators import (
+from bot.apex_indicators import (
     calculate_adx, calculate_atr, calculate_enhanced_macd,
     calculate_vwap, calculate_rsi, calculate_ema_alignment
 )
-from apex_risk_manager import ApexRiskManager
-from apex_filters import ApexSmartFilters
-from apex_trailing_system import ApexTrailingSystem
-from apex_strategy_v7 import ApexStrategyV7
+from bot.apex_risk_manager import ApexRiskManager
+from bot.apex_filters import ApexSmartFilters
+from bot.apex_trailing_system import ApexTrailingSystem
+from bot.apex_strategy_v7 import ApexStrategyV7
 
 
 def generate_test_data(num_candles=150):

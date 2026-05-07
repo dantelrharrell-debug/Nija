@@ -20,15 +20,15 @@ except ImportError:
 # ----------------------------
 # Logging
 # ----------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-logger = logging.getLogger("nija_trading_bot")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger("nija.execution")
 
 # Optional rotating file handler (permission required)
 try:
     from logging.handlers import RotatingFileHandler
     log_path = os.getenv("NIJA_TRADE_LOG_PATH", "/var/log/nija_trades.log")
     fh = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3)
-    fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+    fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
     logger.addHandler(fh)
     logger.info("Trade logs will also be written to: %s", log_path)
 except Exception as e:
