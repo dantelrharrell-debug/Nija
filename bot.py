@@ -302,7 +302,6 @@ def _read_initialized_state_snapshot(
             timeout_s=lock_timeout_s,
         )
         if acquired:
-            # Ensure INIT lock is released after snapshot.
             try:
                 return dict(_initialized_state)
             finally:

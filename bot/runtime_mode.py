@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
 
-_TRUTHY = {"1", "true", "yes", "enabled", "on"}
+_TRUTHY = {"1", "true", "yes", "enabled"}
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:

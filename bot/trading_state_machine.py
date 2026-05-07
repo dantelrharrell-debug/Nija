@@ -68,8 +68,6 @@ def _env_truthy(name: str, default: str = "false") -> bool:
     return os.environ.get(name, default).lower().strip() in ("true", "1", "yes", "enabled")
 
 
-
-
 def _is_transient_redis_error(err_text: str) -> bool:
     """Best-effort detection for transient Redis/network failures."""
     _e = (err_text or "").lower()
