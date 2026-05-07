@@ -4577,13 +4577,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     try:
                         from bot.trading_state_machine import get_state_machine as _get_tsm_startup
 
-                    logger.critical(
-                        f"🚀 SYSTEM READY STATE:\n"
-                        f"  broker_ready={_ft_broker_ready}\n"
-                        f"  risk_ready={_ft_risk_ready}\n"
-                        f"  strategy_ready={_ft_strategy_ready}\n"
-                        f"  capital_ready={_ft_capital_ready}\n"
-                        f"  execution_ready={_ft_execution_ready}"
                         if _strategy_ready_event.is_set():
                             _tsm_startup = _get_tsm_startup()
                             _startup_state = _tsm_startup.get_current_state()
@@ -4595,8 +4588,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         else:
                             # FORCE_TRADE: Bypass deferral logic and transition FSM immediately
                             if _is_truthy(os.environ.get("FORCE_TRADE", "")):
-                                logger.critical("🚀 FORCE_TRADE: Bypassing deferral logic - setting readiness flags and transitioning FSM")
-                                
+                                logger.critical(
+                                    "🚀 FORCE_TRADE: Bypassing deferral logic - setting readiness flags and transitioning FSM"
+                                )
                                 _force_trade_readiness_handoff(
                                     context="FORCE_TRADE pre-deferral",
                                     transition_reason="FORCE_TRADE: pre-deferral readiness satisfied",
