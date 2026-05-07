@@ -5231,7 +5231,8 @@ def _run_bot_startup_and_trading():
                     skip_balance_polling_loop = _bootstrap_fsm.balance_polling_disabled
                     if skip_balance_polling_loop and not _bootstrap_fsm.balance_polling_skip_logged:
                         logger.info(
-                            "[Bootstrap] Skipping balance polling loop — bootstrap FSM already BALANCE_HYDRATED"
+                            "[Bootstrap] Skipping balance polling loop — bootstrap FSM state=%s",
+                            _bootstrap_fsm.state.value,
                         )
                         _bootstrap_fsm.mark_balance_polling_skip_logged()
                 except Exception as _skip_err:
