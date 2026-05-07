@@ -23,7 +23,7 @@ bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, bot_dir)
 
 from datetime import datetime, timedelta
-from account_order_tracker import (
+from bot.account_order_tracker import (
     AccountOrderTracker,
     OrderInfo,
     get_order_tracker

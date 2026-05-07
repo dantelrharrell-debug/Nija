@@ -14,8 +14,8 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from execution_engine import ExecutionEngine
-from risk_manager import AdaptiveRiskManager as RiskManager
+from bot.execution_engine import ExecutionEngine
+from bot.risk_manager import AdaptiveRiskManager as RiskManager
 
 
 class TestProfitTakingGuarantee(unittest.TestCase):
@@ -199,7 +199,7 @@ class TestProfitTakingGuarantee(unittest.TestCase):
         """Test that profit-taking is always enabled"""
         # Import the strategy
         try:
-            from nija_apex_strategy_v71 import NIJAApexStrategyV71
+            from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
 
             # Create strategy with config trying to disable profit-taking
             config = {'enable_take_profit': False}
@@ -237,7 +237,7 @@ class TestProfitMonitoringGuardian(unittest.TestCase):
     def test_guardian_can_be_initialized(self):
         """Test that Profit Monitoring Guardian can be initialized"""
         try:
-            from profit_monitoring_guardian import ProfitMonitoringGuardian
+            from bot.profit_monitoring_guardian import ProfitMonitoringGuardian
 
             execution_engine = ExecutionEngine(broker_client=None)
             risk_manager = RiskManager()
@@ -252,7 +252,7 @@ class TestProfitMonitoringGuardian(unittest.TestCase):
     def test_guardian_verify_profit_taking_enabled(self):
         """Test that guardian verifies profit-taking is enabled"""
         try:
-            from profit_monitoring_guardian import ensure_profit_taking_always_on
+            from bot.profit_monitoring_guardian import ensure_profit_taking_always_on
 
             result = ensure_profit_taking_always_on()
             self.assertTrue(result, "Should confirm profit-taking is always on")

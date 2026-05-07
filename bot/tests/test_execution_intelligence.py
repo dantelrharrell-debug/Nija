@@ -14,32 +14,18 @@ import time
 from unittest.mock import Mock, patch
 
 # Import execution intelligence components
-try:
-    from bot.execution_intelligence import (
-        ExecutionIntelligence,
-        SlippageModeler,
-        SpreadPredictor,
-        LiquidityAnalyzer,
-        MarketImpactEstimator,
-        MarketMicrostructure,
-        MarketCondition,
-        OrderType,
-        ExecutionPlan,
-        get_execution_intelligence
-    )
-except ImportError:
-    from execution_intelligence import (
-        ExecutionIntelligence,
-        SlippageModeler,
-        SpreadPredictor,
-        LiquidityAnalyzer,
-        MarketImpactEstimator,
-        MarketMicrostructure,
-        MarketCondition,
-        OrderType,
-        ExecutionPlan,
-        get_execution_intelligence
-    )
+from bot.execution_intelligence import (
+    ExecutionIntelligence,
+    SlippageModeler,
+    SpreadPredictor,
+    LiquidityAnalyzer,
+    MarketImpactEstimator,
+    MarketMicrostructure,
+    MarketCondition,
+    OrderType,
+    ExecutionPlan,
+    get_execution_intelligence,
+)
 
 
 class TestMarketMicrostructure(unittest.TestCase):

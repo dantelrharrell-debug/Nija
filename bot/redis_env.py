@@ -8,8 +8,8 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 _REDIS_URL_ENV_NAMES = (
     "NIJA_REDIS_URL",
-    "REDIS_URL",
     "REDIS_TLS_URL",
+    "REDIS_URL",
     "REDIS_PRIVATE_URL",
     "REDIS_PUBLIC_URL",
 )
