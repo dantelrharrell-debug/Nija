@@ -5229,8 +5229,11 @@ def _run_bot_startup_and_trading():
                 try:
                     if _get_bootstrap_fsm().state == _BootstrapState.BALANCE_HYDRATED:
                         skip_balance_polling_loop = True
-                except Exception:
-                    pass
+                except Exception as _skip_err:
+                    logger.debug(
+                        "[Bootstrap] Unable to read bootstrap FSM state for balance polling skip: %s",
+                        _skip_err,
+                    )
             if _bms_ca is not None and _bms_refresh_ok:
                 # 60 s covers typical cold-start broker API latency; the capital gate
                 # polling loop below handles the case where we proceed without hydration.
