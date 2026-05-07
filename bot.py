@@ -6583,7 +6583,14 @@ def main():
     strategy = None
     _last_system_ready_log = 0.0
     while True:
+        # FORCE_TRADE bypass: skip the strict readiness gate check
+        _force_trade = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
+        if _force_trade:
+            logger.warning("⚡ FORCE_TRADE active — skipping strict system_ready barrier; proceeding directly to trading loop")
+            break  # Exit the system_ready barrier loop immediately
+
         _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
+
         strategy = _state_snapshot.get("strategy")
         system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
             _compute_system_ready(_state_snapshot)
