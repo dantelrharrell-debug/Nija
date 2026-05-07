@@ -90,12 +90,12 @@ def _should_emit_disclosure() -> bool:
     In non-production environments, disclosures always emit for visibility.
     """
     global _LAST_DISCLOSURE_TIMESTAMP, _FIRST_BOOT_THIS_PROCESS
+    if not is_production_environment():
+        # Non-production environments always emit disclosures for visibility
+        return True
     now = time.time()
     interval_seconds = _DISCLOSURE_INTERVAL_SECONDS
     with _DISCLOSURE_LOCK:
-        if not is_production_environment():
-            # Non-production environments always emit disclosures for visibility
-            return True
         if _FIRST_BOOT_THIS_PROCESS:
             _FIRST_BOOT_THIS_PROCESS = False
             _LAST_DISCLOSURE_TIMESTAMP = now
@@ -124,7 +124,7 @@ class InstitutionalLogger:
         Initialize institutional logger.
         
         Args:
-            name: Logger name (used to initialize the underlying logger when base_logger is None)
+            name: Logger name (identifies this logger instance and initializes the underlying logger when base_logger is None)
             base_logger: Optional base logger to wrap
         """
         self.name = name
@@ -180,9 +180,7 @@ def print_validation_banner():
 def print_all_disclaimers():
     """Log all disclaimers"""
     if _should_emit_disclosure():
-        _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
-        _COMPLIANCE_LOGGER.info(PERFORMANCE_DISCLAIMER)
-        _COMPLIANCE_LOGGER.info(RISK_DISCLAIMER)
+        _COMPLIANCE_LOGGER.info("%s\n%s\n%s", VALIDATION_DISCLAIMER, PERFORMANCE_DISCLAIMER, RISK_DISCLAIMER)
 
 
 # Auto-display banner when module is imported in main execution
