@@ -48,7 +48,7 @@ NIJA is an automated cryptocurrency trading application that uses algorithmic an
 **Each account operates independently:**
 
 - **Market Analysis:** Each account scans cryptocurrency markets independently every ~2.5 minutes
-- **Decision Making:** Each account evaluates entry/exit criteria independently using the same strategy framework with account-specific state
+- **Decision Making:** Each account evaluates entry/exit criteria independently using shared software logic with independent per-account evaluation and account-specific state
 - **Risk Management:** Each account applies risk checks based on its specific balance, positions, and settings
 - **Execution:** Each account executes trades independently when conditions are met
 
@@ -249,7 +249,7 @@ Users are clearly informed that their results WILL differ from other users becau
 
 ### ✅ Independent Trading (NIJA's Model - Compliant)
 - Each account evaluates markets independently
-- Same strategy framework, independent execution
+- Shared software logic with independent per-account evaluation; independent execution
 - No account controls another account
 - No signal distribution
 - Results naturally differ due to timing and account factors
@@ -260,7 +260,7 @@ Users are clearly informed that their results WILL differ from other users becau
 ## Questions App Review May Ask
 
 ### Q: "How is this different from copy trading?"
-**A:** Copy trading involves one account replicating trades from another account. NIJA does NOT do this. Each account runs the same strategy framework independently and makes its own trading decisions based on its own market analysis, balance, risk profile, and execution context. Think of it like everyone using the same GPS app - same routing algorithm, but your actual route depends on where you start, current traffic when YOU drive, and your preferences.
+**A:** Copy trading involves one account replicating trades from another account. NIJA does NOT do this. Each account runs the shared software logic with independent per-account evaluation and makes its own trading decisions based on its own market analysis, balance, risk profile, and execution context.
 
 ### Q: "Why would someone use this if results differ?"
 **A:** Users want algorithmic trading automation without needing to build their own system. The algorithm is sophisticated (dual RSI strategy, risk management, profit targeting) and users benefit from the automation even though results vary. We're transparent that results differ - this is a feature (transparency) not a bug.

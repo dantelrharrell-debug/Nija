@@ -91,7 +91,7 @@ def test_slippage_protection():
     print("TEST 1: Slippage Protection")
     print("="*70)
     
-    from copy_trade_engine import CopyTradeEngine
+    from bot.copy_trade_engine import CopyTradeEngine
     
     # Create signal with master entry price of $100
     signal = MockTradeSignal(

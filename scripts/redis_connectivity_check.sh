@@ -138,12 +138,12 @@ resolve_redis_url() {
     printf "%s" "${NIJA_REDIS_URL}"
     return 0
   fi
-  if [ -n "${REDIS_URL:-}" ]; then
-    printf "%s" "${REDIS_URL}"
-    return 0
-  fi
   if [ -n "${REDIS_TLS_URL:-}" ]; then
     printf "%s" "${REDIS_TLS_URL}"
+    return 0
+  fi
+  if [ -n "${REDIS_URL:-}" ]; then
+    printf "%s" "${REDIS_URL}"
     return 0
   fi
   if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
@@ -186,7 +186,7 @@ url="$(resolve_redis_url || true)"
 
 if [ -z "${url}" ]; then
   echo "ERROR: Redis URL is empty"
-  echo "Checked: NIJA_REDIS_URL, REDIS_URL, REDIS_TLS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL"
+  echo "Checked: NIJA_REDIS_URL, REDIS_TLS_URL, REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL"
   echo "Also checked component vars: RAILWAY_TCP_PROXY_DOMAIN/PORT, REDIS_HOST/PORT, REDIS_PASSWORD"
   echo "Tip: pass an env file with --env-file <path> if variables are not exported in this shell"
   exit 4

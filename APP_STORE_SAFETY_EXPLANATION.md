@@ -14,7 +14,7 @@
 
 ## Executive Summary
 
-NIJA is a **safe, transparent, and compliant** algorithmic trading platform that uses an **independent trading model**. Each user account makes its own trading decisions using the same strategy framework, applied with account-specific state, risk, and execution context.
+NIJA is a **safe, transparent, and compliant** algorithmic trading platform that uses an **independent trading model**. Each user account makes its own trading decisions using shared software logic with independent per-account evaluation and account-specific state, risk, and execution context.
 
 **Key Safety Points:**
 - ✅ No copy trading - each account operates independently
@@ -44,17 +44,11 @@ NIJA is a **safe, transparent, and compliant** algorithmic trading platform that
 
 **Each user account evaluates the market independently and makes its own trading decisions.**
 
-Think of NIJA like a GPS navigation app:
-- Everyone uses the same routing algorithm
-- But your actual route depends on YOUR starting location
-- Your traffic conditions when YOU drive
-- Your personal preferences (fastest, scenic, etc.)
-
-Similarly with NIJA:
-- Everyone uses the same strategy framework
-- But your position size depends on YOUR account balance and risk budget
-- Your execution timing includes per-account jitter and cooldown variance
-- Your account state (PnL, exposure, cooldowns) shapes decisions
+Key characteristics:
+- Shared software logic with independent per-account evaluation
+- Position size depends on each account balance and risk budget
+- Execution timing includes per-account jitter and cooldown variance
+- Account state (PnL, exposure, cooldowns) shapes decisions
 
 ### What Happens When a Trade Signal Occurs
 
@@ -65,7 +59,7 @@ Similarly with NIJA:
 4. Executes trade on platform's Coinbase account
 
 **User Accounts (Independent):**
-1. **Same strategy framework runs on each user's account independently**
+1. **Shared software logic with independent per-account evaluation runs on each user's account**
 2. Each account analyzes the same market conditions with account-specific state
 3. Each account independently detects opportunities with per-account timing variance
 4. **Position size is calculated based on the user's balance:**
@@ -74,7 +68,7 @@ Similarly with NIJA:
    - User with $25,000 balance → $500 position (2% risk)
 5. Each account executes its own trade on its own exchange account
 
-**Important:** No "signal distribution" occurs. Each account reaches its own conclusion independently because they apply the same framework with account-specific state, risk, and execution context.
+**Important:** No "signal distribution" occurs. Each account reaches its own conclusion independently using shared software logic with independent per-account evaluation plus account-specific state, risk, and execution context.
 
 ---
 
@@ -489,7 +483,7 @@ Users can connect different exchanges:
 - Entry price: $50,020 (slippage on market order)
 - Outcome: +$0.30 profit (1.5% gain)
 
-**Same strategy framework, same balance, different results due to:**
+**Shared software logic with independent per-account evaluation, same balance, different results due to:**
 1. Timing (23-second difference)
 2. Existing positions (Account B had less free capital)
 3. Entry price ($20 difference due to market movement)
@@ -524,7 +518,7 @@ Users can connect different exchanges:
 ### ✅ Independent Trading (NIJA's Model - Compliant)
 
 **How NIJA works:**
-1. Each account runs the same strategy framework independently
+1. Each account runs the shared software logic with independent per-account evaluation
 2. Each account analyzes market data with account-specific state
 3. Each account makes its own trading decision
 4. Position size calculated based on account's own balance and risk budget
@@ -789,9 +783,9 @@ Users grant NIJA **limited API permissions** on their exchange:
 ### Questions App Reviewers May Ask
 
 **Q: Is this copy trading?**  
-A: No. Each account runs the same strategy framework independently and makes its own decisions. Position sizes are calculated based on each account's balance and risk budget, not copied from another account.
+A: No. Each account runs the shared software logic with independent per-account evaluation and makes its own decisions. Position sizes are calculated based on each account's balance and risk budget, not copied from another account.
 
-**Q: Why would results differ if everyone uses the same strategy framework?**  
+**Q: Why would results differ if everyone uses the shared software logic with independent per-account evaluation?**  
 A: Timing variations (network latency, scan schedules, per-account jitter), account-specific factors (balance, existing positions, risk settings, cooldown variance), and execution differences (fill prices, slippage). This is expected and properly disclosed.
 
 **Q: How do you ensure smaller accounts are protected?**  

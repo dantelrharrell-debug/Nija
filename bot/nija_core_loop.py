@@ -60,6 +60,18 @@ import pandas as pd
 
 logger = logging.getLogger("nija.core_loop")
 
+try:
+    from bot.runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution
+except ImportError:
+    from runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution  # type: ignore[import]
+
+
+def _is_live_mode(existing_mode: Optional[RuntimeModeResolution] = None) -> bool:
+    runtime_mode = existing_mode or resolve_runtime_mode_safe(logger)
+    if runtime_mode is not None:
+        return runtime_mode.is_live
+    return os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
+
 
 # ---------------------------------------------------------------------------
 # CycleSnapshot — immutable state captured once per activation tick
@@ -362,9 +374,8 @@ def _supervisor_step_state_machine() -> None:
         ):
             return
 
-        _live_verified = os.getenv(
-            "LIVE_CAPITAL_VERIFIED", "false"
-        ).lower() in ("true", "1", "yes", "enabled")
+        _runtime_mode = resolve_runtime_mode_safe(logger)
+        _live_verified = _is_live_mode(_runtime_mode)
         _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
         _cycle_capital = _current_cycle_capital if isinstance(_current_cycle_capital, dict) else {}
         _balance = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
@@ -1792,7 +1803,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
 
-    _live_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() == "true"
+    _runtime_mode = resolve_runtime_mode_safe(logger)
+    _live_verified = _is_live_mode(_runtime_mode)
     if _live_verified and not TRADING_ENGINE_READY.is_set():
         logger.critical(
             "LIVE_CAPITAL_VERIFIED=true detected — bypassing passive activation wait gate"
@@ -1995,9 +2007,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 logger.critical("CORE LOOP TICK | live=%s", _live_now)
 
                 if _sm_loop is not None:
-                    _live_verified_loop = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in (
-                        "true", "1", "yes", "enabled"
-                    )
+                    _runtime_mode_loop = resolve_runtime_mode_safe(logger)
+                    _live_verified_loop = _is_live_mode(_runtime_mode_loop)
                     try:
                         _current_state_loop = _sm_loop.get_current_state()
                     except Exception:
@@ -2105,15 +2116,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     logger.critical("🟢 TRADING LOOP ACTIVE — FIRST TICK REACHED")
                     logger.critical("✅ FIRST STRATEGY TICK")
                     # Emit a clear operator diagnostic if LIVE_CAPITAL_VERIFIED is not set.
-                    _lcv_val = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
-                    if _lcv_val not in ("true", "1", "yes", "enabled"):
+                    _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
+                    _lcv_val = (
+                        _runtime_mode_cycle.raw.get("LIVE_CAPITAL_VERIFIED", "false")
+                        if _runtime_mode_cycle is not None
+                        else os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower().strip()
+                    )
+                    _live_trading_val = (
+                        _runtime_mode_cycle.raw.get("LIVE_TRADING", "false")
+                        if _runtime_mode_cycle is not None
+                        else os.getenv("LIVE_TRADING", "false").lower().strip()
+                    )
+                    _live_authorized = _is_live_mode(_runtime_mode_cycle)
+                    if not _live_authorized:
                         logger.critical(
                             "⚠️  OPERATOR ACTION REQUIRED: "
-                            "LIVE_CAPITAL_VERIFIED is not set to 'true' (current value=%r). "
+                            "LIVE_CAPITAL_VERIFIED/LIVE_TRADING not set to 'true' "
+                            "(LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r). "
                             "Trading is permanently blocked until this env var is set. "
                             "Add 'LIVE_CAPITAL_VERIFIED=true' to your environment / Railway "
                             "variables and redeploy.",
                             _lcv_val,
+                            _live_trading_val,
                         )
 
                 # Shared-cycle snapshot is captured before activation attempts.
@@ -2131,9 +2155,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _committed = bool(_sm_loop.get_activation_committed())
                         _can_dispatch = bool(_sm_loop.can_dispatch_trades())
                         _first_snap = bool(_sm_loop.get_first_snap_accepted())
-                        _live_verified_now = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in (
-                            "true", "1", "yes", "enabled"
-                        )
+                        _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
+                        _live_verified_now = _is_live_mode(_runtime_mode_cycle)
                         _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
                         _balance_ok = float(_cycle_balance or 0.0) >= _min_balance
 

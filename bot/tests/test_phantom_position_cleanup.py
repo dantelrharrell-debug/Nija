@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import tempfile
 import json
-from position_tracker import PositionTracker
+from bot.position_tracker import PositionTracker
 
 
 def test_phantom_position_cleanup():
