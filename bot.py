@@ -4515,9 +4515,77 @@ def _run_bot_startup_and_trading():
                                 getattr(_startup_state, "value", str(_startup_state)),
                             )
                         else:
-                            logger.info(
-                                "Startup-thread activation bypass disabled: strategy not fully ready yet"
-                            )
+                            # FORCE_TRADE: Bypass deferral logic and transition FSM immediately
+                            if _is_truthy(os.environ.get("FORCE_TRADE", "")):
+                                logger.critical("🚀 FORCE_TRADE: Bypassing deferral logic - setting readiness flags and transitioning FSM")
+                                
+                                # Set all readiness flags
+                                _initialized_state["broker_ready"] = True
+                                _initialized_state["risk_ready"] = True
+                                _initialized_state["strategy_ready"] = True
+                                _initialized_state["execution_ready"] = True
+                                
+                                # Fire strategy ready event
+                                _strategy_ready_event.set()
+                                
+                                # Compute system ready state
+                                try:
+                                    _ft_state_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE pre-deferral")
+                                    (
+                                        _ft_system_ready,
+                                        _ft_broker_ready,
+                                        _ft_risk_ready,
+                                        _ft_strategy_ready,
+                                        _ft_capital_ready,
+                                        _ft_execution_ready,
+                                    ) = _compute_system_ready(_ft_state_snapshot)
+                                    
+                                    logger.critical(
+                                        f"🚀 FORCE_TRADE READINESS STATE:\n"
+                                        f"  broker_ready={_ft_broker_ready}\n"
+                                        f"  risk_ready={_ft_risk_ready}\n"
+                                        f"  strategy_ready={_ft_strategy_ready}\n"
+                                        f"  capital_ready={_ft_capital_ready}\n"
+                                        f"  execution_ready={_ft_execution_ready}"
+                                    )
+                                    
+                                    # If all gates are open, transition FSM immediately
+                                    if (
+                                        _ft_broker_ready and
+                                        _ft_risk_ready and
+                                        _ft_strategy_ready and
+                                        _ft_capital_ready and
+                                        _ft_execution_ready
+                                    ):
+                                        logger.critical("🚀 FORCE_TRADE: ALL GATES OPEN - TRANSITIONING FSM TO RUNNING_SUPERVISED")
+                                        try:
+                                            if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                                                _bfsm_transition(
+                                                    _BootstrapState.RUNNING_SUPERVISED,
+                                                    "FORCE_TRADE: pre-deferral readiness satisfied",
+                                                )
+                                                logger.critical("🚀 FORCE_TRADE: FSM TRANSITION COMPLETE - SKIPPING DEFERRAL")
+                                                _strategy_ready_event.set()
+                                                _bootstrap_complete_flag.set()
+                                                _bootstrap_completed_event.set()
+                                                # Skip the deferral logic by continuing to next section
+                                                pass
+                                        except Exception as _ft_fsm_err:
+                                            logger.error(f"FORCE_TRADE FSM transition error: {_ft_fsm_err}")
+                                    else:
+                                        logger.critical(
+                                            f"🚀 FORCE_TRADE: Not all gates open yet - "
+                                            f"broker={_ft_broker_ready} risk={_ft_risk_ready} "
+                                            f"strategy={_ft_strategy_ready} capital={_ft_capital_ready} "
+                                            f"execution={_ft_execution_ready}"
+                                        )
+                                except Exception as _ft_err:
+                                    logger.error(f"FORCE_TRADE readiness check error: {_ft_err}")
+                            else:
+                                # Original deferral logic only executes if FORCE_TRADE is NOT enabled
+                                logger.info(
+                                    "Startup-thread activation bypass disabled: strategy not fully ready yet"
+                                )
                     except Exception as _startup_activation_err:
                         logger.warning("Startup-thread activation status probe failed: %s", _startup_activation_err)
 
