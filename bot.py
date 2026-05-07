@@ -209,7 +209,7 @@ def _reset_startup_events_for_fresh_attempt() -> None:
             _tl_ready = None  # type: ignore[assignment]
     if _tl_ready is not None:
         _tl_ready.clear()
-    logger.info("🔄 Cleared startup readiness/completion events for fresh bootstrap attempt")
+    logger.debug("🔄 Cleared startup readiness/completion events for fresh bootstrap attempt")
 
 
 def _set_bootstrap_owner_thread() -> None:
@@ -6352,6 +6352,8 @@ def main():
     # - Balance fetching
     # - Trading loop
     
+    _reset_startup_events_for_fresh_attempt()
+
     logger.info("=" * 70)
     logger.info("🚀 SPAWNING STARTUP THREAD")
     logger.info("=" * 70)
