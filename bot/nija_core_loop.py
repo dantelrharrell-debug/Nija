@@ -1813,8 +1813,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         TRADING_ENGINE_READY.set()
 
     logger.critical("🧵 WAITING FOR START SIGNAL")
-    TRADING_ENGINE_READY.wait()
+    while not TRADING_ENGINE_READY.is_set():
+        if not TRADING_ENGINE_READY.wait(timeout=30):
+            logger.critical("TIMEOUT_WAITING_FOR_TRADING_ENGINE_READY")
+            try:
+                from bot.bootstrap_utils import dump_startup_state
+            except ImportError:
+                try:
+                    from bootstrap_utils import dump_startup_state  # type: ignore[import]
+                except ImportError:
+                    dump_startup_state = None  # type: ignore[assignment]
+            if dump_startup_state is not None:
+                dump_startup_state("trading_engine_ready_wait")
     logger.critical("🟢 START SIGNAL RECEIVED — ENTERING LIVE LOOP")
+    try:
+        from bot.bootstrap_state_machine import get_bootstrap_fsm
+    except ImportError:
+        try:
+            from bootstrap_state_machine import get_bootstrap_fsm  # type: ignore[import]
+        except ImportError:
+            get_bootstrap_fsm = None  # type: ignore[assignment]
+    if get_bootstrap_fsm is not None:
+        assert get_bootstrap_fsm().execution_authority, "Bootstrap execution_authority is required before strategy loop"
     logger.critical("LIFECYCLE: entering strategy loop")
 
     # Supervisor-mode hard gate: only block execution when supervisor mode is
@@ -1991,6 +2011,15 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _activation_idle_timeout_s = float(os.getenv("NIJA_IDLE_ACTIVATION_TIMEOUT_S", "90") or 90)
 
         logger.critical("🚀 ENTERING ACTIVE TRADE LOOP")
+        try:
+            from bot.bootstrap_state_machine import get_bootstrap_fsm
+        except ImportError:
+            try:
+                from bootstrap_state_machine import get_bootstrap_fsm  # type: ignore[import]
+            except ImportError:
+                get_bootstrap_fsm = None  # type: ignore[assignment]
+        if get_bootstrap_fsm is not None:
+            assert get_bootstrap_fsm().execution_authority, "Bootstrap execution_authority is required before scheduler"
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:

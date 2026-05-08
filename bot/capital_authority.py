@@ -322,6 +322,16 @@ def wait_for_hydration(timeout_s: float = 30.0) -> None:
     """
     acquired = CAPITAL_HYDRATED_EVENT.wait(timeout=timeout_s)
     if not acquired:
+        logger.critical("TIMEOUT_WAITING_FOR_CAPITAL_HYDRATION")
+        try:
+            from bot.bootstrap_utils import dump_startup_state
+        except ImportError:
+            try:
+                from bootstrap_utils import dump_startup_state  # type: ignore[import]
+            except ImportError:
+                dump_startup_state = None  # type: ignore[assignment]
+        if dump_startup_state is not None:
+            dump_startup_state("capital_hydration_barrier")
         raise CapitalIntegrityError(
             f"Capital hydration barrier timed out after {timeout_s}s — "
             "CapitalAuthority has not received a broker snapshot. "
@@ -1536,7 +1546,19 @@ class CapitalAuthority:
         """
         if self._hydrated:
             return True
-        return CAPITAL_HYDRATED_EVENT.wait(timeout=timeout)
+        if not CAPITAL_HYDRATED_EVENT.wait(timeout=timeout):
+            logger.critical("TIMEOUT_WAITING_FOR_CAPITAL_HYDRATED")
+            try:
+                from bot.bootstrap_utils import dump_startup_state
+            except ImportError:
+                try:
+                    from bootstrap_utils import dump_startup_state  # type: ignore[import]
+                except ImportError:
+                    dump_startup_state = None  # type: ignore[assignment]
+            if dump_startup_state is not None:
+                dump_startup_state("capital_authority_block_until_hydrated")
+            return False
+        return True
 
     @property
     def state(self) -> CapitalLifecycleState:
@@ -2184,6 +2206,16 @@ def wait_for_capital_ready(timeout: float = CAPITAL_READY_TIMEOUT) -> bool:
     # (real_capital > 0 AND broker threshold met), so once the event fires
     # we are already in ACTIVE_CAPITAL — no polling required.
     if not CAPITAL_SYSTEM_READY.wait(timeout=timeout):
+        logger.critical("TIMEOUT_WAITING_FOR_CAPITAL_SYSTEM_READY")
+        try:
+            from bot.bootstrap_utils import dump_startup_state
+        except ImportError:
+            try:
+                from bootstrap_utils import dump_startup_state  # type: ignore[import]
+            except ImportError:
+                dump_startup_state = None  # type: ignore[assignment]
+        if dump_startup_state is not None:
+            dump_startup_state("capital_system_ready")
         raise RuntimeError(
             f"❌ CapitalAuthority never reached ACTIVE_CAPITAL after {timeout:.0f}s "
             "(real capital is zero or broker aggregation is incomplete)"
@@ -2217,10 +2249,19 @@ def wait_for_capital_hydrated(timeout: float = 30.0) -> bool:
         When *timeout* elapses without hydration (coordinator never ran).
     """
     if not CAPITAL_HYDRATED_EVENT.wait(timeout=timeout):
+        logger.critical("TIMEOUT_WAITING_FOR_CAPITAL_HYDRATED")
+        try:
+            from bot.bootstrap_utils import dump_startup_state
+        except ImportError:
+            try:
+                from bootstrap_utils import dump_startup_state  # type: ignore[import]
+            except ImportError:
+                dump_startup_state = None  # type: ignore[assignment]
+        if dump_startup_state is not None:
+            dump_startup_state("capital_hydrated")
         raise RuntimeError(
             f"❌ CapitalAuthority never reached HYDRATED state after {timeout:.0f}s "
             "(coordinator has not published any snapshot yet)"
         )
     logger.info("✅ CapitalAuthority HYDRATED confirmed — proceeding")
     return True
-
