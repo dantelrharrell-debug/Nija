@@ -367,17 +367,17 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
 
         _elapsed = time.monotonic() - _wait_started
 
-        if not _strategy_ready_event.wait(timeout=30):
-            logger.critical("TIMEOUT_WAITING_FOR_STRATEGY_READY")
-            try:
-                from bot.bootstrap_utils import dump_startup_state
-            except ImportError:
-                try:
-                    from bootstrap_utils import dump_startup_state  # type: ignore[import]
-                except ImportError:
-                    dump_startup_state = None  # type: ignore[assignment]
-            if dump_startup_state is not None:
-                dump_startup_state("strategy_ready_wait")
+        if not _wait_for_event_with_timeout(
+            _strategy_ready_event,
+            timeout_s=30,
+            timeout_label="STRATEGY_READY",
+        ):
+            logger.critical(
+                "WAIT_TIMEOUT_DIAGNOSTICS label=STRATEGY_READY reason=%s elapsed=%.1fs strategy_present=%s",
+                reason,
+                _elapsed,
+                _strategy is not None,
+            )
 
         if _elapsed - _last_wait_log >= 5.0:
             logger.warning(
@@ -432,11 +432,11 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
 
     try:
         try:
-            from bot.nija_core_loop import start_trading_engine as _start_trading_engine, TRADING_ENGINE_READY as _tl_ready
+            from bot.nija_core_loop import start_trading_engine as _start_trading_engine
         except ImportError:
-            from nija_core_loop import start_trading_engine as _start_trading_engine, TRADING_ENGINE_READY as _tl_ready  # type: ignore[import]
+            from nija_core_loop import start_trading_engine as _start_trading_engine  # type: ignore[import]
 
-        _tl_ready.set()
+        logger.critical("STRATEGY_LOOP_ENTRY marker=supervised_handoff reason=%s", reason)
         logger.critical("STARTING TRADING LOOP FROM SUPERVISED STATE (%s)", reason)
         _start_trading_engine(_strategy)
         # Mark bootstrap handoff so supervisor treats startup-thread exit as expected.
@@ -1475,6 +1475,31 @@ def _writer_lock_scope() -> str:
     return hashlib.sha256(_raw.encode("utf-8")).hexdigest()[:16]
 
 
+def _is_multi_instance_deployment_possible() -> bool:
+    """Best-effort detection that deployment may run multiple concurrent instances."""
+    _truthy = {"1", "true", "yes", "on", "enabled"}
+    if os.environ.get("NIJA_MULTI_INSTANCE_POSSIBLE", "").strip().lower() in _truthy:
+        return True
+
+    for _var in ("RAILWAY_REPLICA_ID", "K_SERVICE", "DYNO"):
+        if os.environ.get(_var, "").strip():
+            return True
+
+    try:
+        if int(os.environ.get("WEB_CONCURRENCY", "1") or "1") > 1:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        if int(os.environ.get("NIJA_EXPECTED_INSTANCES", "1") or "1") > 1:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    return False
+
+
 def _release_distributed_process_lock() -> None:
     """Release distributed single-writer lock iff this process still owns it."""
     global _distributed_writer_lock_client
@@ -1723,6 +1748,9 @@ def _acquire_distributed_process_lock() -> None:
         os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
         or _strict_lock_alias
     )
+    _multi_instance_possible = _is_multi_instance_deployment_possible()
+    if _multi_instance_possible:
+        _require_lock = True
     _disable_writer_lock_alias = os.environ.get("NIJA_DISABLE_WRITER_LOCK", "").strip().lower() in _truthy
     _unsafe_bypass = (
         os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
@@ -1737,6 +1765,11 @@ def _acquire_distributed_process_lock() -> None:
             print("🚨 UNSAFE MODE: NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true in LIVE mode.")
             print("   Distributed single-writer safety is DISABLED by explicit operator override.")
             print("   Use only when you are certain exactly one container/process can run.")
+
+    if _multi_instance_possible and _unsafe_bypass:
+        print("🚫 Multi-instance deployment detected; unsafe distributed-lock bypass is forbidden.")
+        print("   Disable NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK / NIJA_DISABLE_WRITER_LOCK and redeploy.")
+        sys.exit(1)
 
     _redis_url = get_redis_url()
     _redis_url_source = get_redis_url_source()
@@ -2034,6 +2067,10 @@ def _acquire_distributed_process_lock() -> None:
                 # In strict mode we must fail closed so activation cannot proceed without
                 # an acquired writer lock and fencing token.
                 _auto_degraded = _is_transient_error and not _allow_degraded and not _require_lock
+
+                if _multi_instance_possible:
+                    _allow_degraded = False
+                    _auto_degraded = False
                 
                 if _auto_degraded:
                     _allow_degraded = True
@@ -3473,8 +3510,11 @@ def _start_trader_thread(independent_trader, broker_type, broker):
 
     def _runner():
         logger.info("🚀 [Orchestrator] Trader thread started for %s", broker_name.upper())
+        cycle = 0
         while not stop_flag.is_set():
             try:
+                cycle += 1
+                logger.info("💓 CYCLE_HEARTBEAT mode=platform broker=%s cycle=%d", broker_name.upper(), cycle)
                 independent_trader.run_broker_trading_loop(broker_type, broker, stop_flag)
             except Exception as _loop_err:
                 if stop_flag.is_set():
@@ -3528,6 +3568,7 @@ def _start_single_broker_thread(strategy, cycle_secs):
         while not stop_flag.is_set():
             try:
                 cycle += 1
+                logger.info("💓 CYCLE_HEARTBEAT mode=single cycle=%d", cycle)
                 logger.info("🔁 [Orchestrator] Single-broker cycle #%d", cycle)
                 # Guard: skip cycle if state machine is not yet LIVE_ACTIVE.
                 # Uses a conditional check instead of assert to avoid raising
@@ -5303,6 +5344,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 logger.critical("STRATEGY_INIT_BEGIN")
                 _ts_init_start = time.time()
                 try:
+                    logger.critical("CONSTRUCTOR_STAGE stage=pre_constructor broker_bootstrap_done=%s", bool(_boot_broker_results))
                     logger.critical("STRATEGY_CONSTRUCTOR_ENTER")
                     logger.critical("PREFLIGHT: FSM BUILD START")
                     strategy = TradingStrategy(
@@ -5312,6 +5354,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     logger.critical("PREFLIGHT: FSM BUILD END")
                     logger.critical("STRATEGY_CONSTRUCTOR_EXIT")
                     _ts_init_elapsed = time.time() - _ts_init_start
+                    logger.critical("CONSTRUCTOR_STAGE stage=post_constructor elapsed=%.2fs", _ts_init_elapsed)
                     if _ts_init_elapsed > 5:
                         logger.critical(
                             "TRADING STRATEGY INIT TIMEOUT - FORCING CONTINUE "
@@ -5338,6 +5381,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         try:
                             _initialized_state["strategy"] = strategy
                             _initialized_state["risk_ready"] = True
+                            logger.critical("CONSTRUCTOR_STAGE stage=strategy_cached")
                             logger.critical("STRATEGY_ASSIGNED")
                         finally:
                             _initialized_state_lock.release()
@@ -6157,14 +6201,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             except Exception as _release_err:
                 logger.warning("Core loop ownership release handshake failed: %s", _release_err)
 
-            # Loop trigger: emit start signal at handoff so the execution loop
-            # cannot remain parked in supervisor-only mode.
-            try:
-                from bot.nija_core_loop import TRADING_ENGINE_READY as _TL_READY
-            except ImportError:
-                from nija_core_loop import TRADING_ENGINE_READY as _TL_READY  # type: ignore[import]
-            _TL_READY.set()
-            logger.critical("🚀 POST-HANDOFF LOOP TRIGGER EMITTED")
+            # Do not synthesize core-loop readiness here; startup readiness must
+            # be driven by real state transitions only.
+            logger.critical("READINESS_MUTATION_REMOVED marker=post_handoff_loop_trigger")
             # ── END CONNECTION → INIT HANDOFF ────────────────────────────────────
 
             # ═══════════════════════════════════════════════════════════════════════
@@ -6445,13 +6484,8 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 except Exception as _gate_signal_err:
                     logger.warning("⚠️ readiness gate signal failed at bootstrap completion: %s", _gate_signal_err)
             _emit_startup_orchestration_snapshot("bootstrap_complete")
-            try:
-                from bot.nija_core_loop import TRADING_ENGINE_READY
-            except ImportError:
-                from nija_core_loop import TRADING_ENGINE_READY  # type: ignore[import]
-            logger.critical("🚀 EMITTING START SIGNAL TO CORE LOOP")
-            TRADING_ENGINE_READY.set()
-            logger.info("✅ [Bootstrap] Core-loop start signal emitted — awaiting final supervisor handoff")
+            logger.critical("READINESS_MUTATION_REMOVED marker=bootstrap_core_loop_signal")
+            logger.info("✅ [Bootstrap] Core-loop signal mutation removed — awaiting final supervisor handoff")
             # ── HARD STARTUP BARRIER ─────────────────────────────────────────────
             # Enforce the startup invariant: _bootstrap_completed_event must only
             # be set AFTER all six conditions hold simultaneously (B1 preflight):
@@ -7006,6 +7040,7 @@ def main():
     print("🚀 ENTERING MAIN TRADING LOOP", flush=True)
     print("STEP 6: entering main trading loop...", flush=True)
     from bot.nija_core_loop import start_trading_engine
+    logger.critical("STRATEGY_LOOP_ENTRY marker=main_supervisor_handoff")
     start_trading_engine(strategy)
     logger.critical("✅ TradingLoop started via start_trading_engine()")
 
