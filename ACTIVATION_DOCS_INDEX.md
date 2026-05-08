@@ -19,6 +19,22 @@
 
 This activation package includes three complementary documents designed for different use cases:
 
+### 4. 🚦 Railway Startup Safety (Deploy Guardrail)
+**File**: `RAILWAY_STARTUP_SAFETY_CHECKLIST.md`
+
+**Use When**:
+- Deploying to Railway in live mode
+- Verifying Redis writer-lock configuration
+- Validating FORCE_TRADE and lock-safety settings
+- Triage after startup incidents
+
+**Contains**:
+- Redis URL/component validation checks
+- Distributed lock safety policy for live mode
+- FORCE_TRADE usage guardrails
+- Startup log acceptance/rejection criteria
+- Fast rollback triggers and 5-minute post-deploy verification
+
 ### 1. 📖 Comprehensive Checklist (Detailed)
 **File**: `MULTI_USER_TRADING_ACTIVATION_CHECKLIST.md`
 
