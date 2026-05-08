@@ -307,6 +307,10 @@ _resolve_redis_url() {
         _strip_wrapping_quotes "${NIJA_REDIS_URL}"
         return 0
     fi
+    if [ -n "${REDIS_TLS_URL:-}" ]; then
+        _strip_wrapping_quotes "${REDIS_TLS_URL}"
+        return 0
+    fi
     if [ -n "${REDIS_URL:-}" ]; then
         _strip_wrapping_quotes "${REDIS_URL}"
         return 0
@@ -355,6 +359,10 @@ _resolve_redis_url() {
 _resolve_redis_url_source() {
     if [ -n "${NIJA_REDIS_URL:-}" ]; then
         printf "%s" "NIJA_REDIS_URL"
+        return 0
+    fi
+    if [ -n "${REDIS_TLS_URL:-}" ]; then
+        printf "%s" "REDIS_TLS_URL"
         return 0
     fi
     if [ -n "${REDIS_URL:-}" ]; then
@@ -528,12 +536,60 @@ _validate_redis_url_or_exit() {
     local _has_proxy_fallback=false
     local _strict_single_redis=true
     local _strict_single_redis_raw
+    local _require_distributed_lock=false
+    local _component_host
+    local _component_port
+    local _component_source=""
+    local _component_port_valid=false
     _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
     _redis_source="$(_resolve_redis_url_source 2>/dev/null || true)"
     _strict_single_redis_raw=$(printf "%s" "${NIJA_STRICT_SINGLE_REDIS_URL:-true}" | tr '[:upper:]' '[:lower:]')
     if [ "${_strict_single_redis_raw}" = "0" ] || [ "${_strict_single_redis_raw}" = "false" ] || [ "${_strict_single_redis_raw}" = "no" ] || [ "${_strict_single_redis_raw}" = "off" ]; then
         _strict_single_redis=false
     fi
+
+    if [ "${_LIVE_MODE:-false}" = "true" ]; then
+        _require_distributed_lock=true
+    fi
+    if [ -n "${NIJA_REQUIRE_DISTRIBUTED_LOCK:-}" ] && printf "%s" "${NIJA_REQUIRE_DISTRIBUTED_LOCK}" | grep -Eiq '^(1|true|yes|on|enabled)$'; then
+        _require_distributed_lock=true
+    fi
+    if [ -n "${STRICT_REDIS_WRITER_LOCK:-}" ] && printf "%s" "${STRICT_REDIS_WRITER_LOCK}" | grep -Eiq '^(1|true|yes|on|enabled)$'; then
+        _require_distributed_lock=true
+    fi
+
+    _component_host="${RAILWAY_TCP_PROXY_DOMAIN:-${REDIS_HOST:-${REDISHOST:-}}}"
+    _component_port="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"
+    if [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] || [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; then
+        _component_source="RAILWAY_TCP_PROXY_DOMAIN+RAILWAY_TCP_PROXY_PORT"
+    elif [ -n "${REDIS_HOST:-${REDISHOST:-}}" ] || [ -n "${REDIS_PORT:-${REDISPORT:-}}" ]; then
+        _component_source="REDIS_HOST+REDIS_PORT"
+    fi
+    if [ -n "${_component_port}" ] && printf "%s" "${_component_port}" | grep -Eq '^[0-9]+$'; then
+        _component_port_valid=true
+    fi
+
+    if [ "${_require_distributed_lock}" = "true" ] && [ "${_UNSAFE_BYPASS:-false}" != "true" ] && [ -n "${_component_source}" ] && [ "${_component_port_valid}" != "true" ]; then
+        echo ""
+        echo "❌ CRITICAL: invalid Redis component configuration for distributed writer lock"
+        echo ""
+        echo "Detected source: ${_component_source}"
+        echo "Detected host:   ${_component_host:-<missing>}"
+        echo "Detected port:   ${_component_port:-<missing>}"
+        echo ""
+        echo "RAILWAY_TCP_PROXY_PORT / REDIS_PORT must be a numeric port from Railway Redis Connect."
+        echo "Example: rediss://default:<password>@maglev.proxy.rlwy.net:<PORT>/0"
+        echo ""
+        echo "🔧 SOLUTION:"
+        echo "   1. Open Railway Redis → Connect"
+        echo "   2. Copy the public proxy port and password"
+        echo "   3. Set NIJA_REDIS_URL (or REDIS_TLS_URL) to the full rediss:// URL"
+        echo "      OR fix ${_component_source} with numeric port + valid password"
+        echo "   4. Redeploy"
+        echo ""
+        exit_config_error
+    fi
+
     if [ -z "${_redis_url}" ]; then
         return 0
     fi
@@ -751,7 +807,7 @@ _maybe_force_nonce_resync() {
 
     # Redis nonce key cleanup (best effort).
     # Supports either NIJA_REDIS_URL or standard REDIS_URL variants.
-    local _redis_url="${NIJA_REDIS_URL:-${REDIS_URL:-${REDIS_PRIVATE_URL:-${REDIS_PUBLIC_URL:-}}}}"
+    local _redis_url="${NIJA_REDIS_URL:-${REDIS_TLS_URL:-${REDIS_URL:-${REDIS_PRIVATE_URL:-${REDIS_PUBLIC_URL:-}}}}}"
     if [ -n "${_redis_url}" ] && command -v redis-cli >/dev/null 2>&1; then
         if _redis_cli_run "${_redis_url}" DEL kraken_nonce >/dev/null 2>&1; then
             echo "   ✅ Redis key reset: kraken_nonce"
