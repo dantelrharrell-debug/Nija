@@ -6,7 +6,7 @@ Handles order execution and position management for Apex Strategy v7.1
 Enhanced with Execution Intelligence Layer for optimal trade execution.
 """
 
-from typing import Any, Dict, Optional, List, Set, Tuple
+from typing import Any, Dict, Optional, List, Set, Tuple, cast
 from datetime import datetime, timedelta
 import logging
 import sys
@@ -352,6 +352,7 @@ try:
 except ImportError:
     TRADE_LEDGER_ENABLED = False
     logger.warning("⚠️ Trade ledger database not available")
+    get_trade_ledger_db = None  # type: ignore
 
 # Import Recovery Controller for capital-first safety (NEW - Feb 2026)
 try:
@@ -385,18 +386,22 @@ except ImportError:
 
 # Import custom exceptions for safety checks
 try:
-    from bot.exceptions import (
-        ExecutionError, BrokerMismatchError, InvalidTxidError,
-        InvalidFillPriceError, OrderRejectedError, CapitalIntegrityError
-    )
+    import bot.exceptions as _exc_mod
 except ImportError:
     try:
-        from exceptions import (
-            ExecutionError, BrokerMismatchError, InvalidTxidError,
-            InvalidFillPriceError, OrderRejectedError, CapitalIntegrityError
-        )
+        import exceptions as _exc_mod
     except ImportError:
-        # Fallback: Define locally if import fails
+        _exc_mod = None
+
+if _exc_mod is not None:
+    ExecutionError = cast(Any, _exc_mod.ExecutionError)
+    BrokerMismatchError = cast(Any, _exc_mod.BrokerMismatchError)
+    InvalidTxidError = cast(Any, _exc_mod.InvalidTxidError)
+    InvalidFillPriceError = cast(Any, _exc_mod.InvalidFillPriceError)
+    OrderRejectedError = cast(Any, _exc_mod.OrderRejectedError)
+    CapitalIntegrityError = cast(Any, _exc_mod.CapitalIntegrityError)
+else:
+    # Fallback: Define locally if import fails
         class ExecutionError(Exception):
             pass
         class BrokerMismatchError(ExecutionError):
@@ -428,21 +433,32 @@ except ImportError:
 # Import restriction manager for geographic restriction handling
 try:
     from bot.restricted_symbols import (
-        add_restricted_symbol, is_geographic_restriction_error
+        add_restricted_symbol as _add_restricted_symbol_impl,
+        is_geographic_restriction_error as _is_geo_restriction_error_impl,
     )
     RESTRICTION_MANAGER_AVAILABLE = True
 except ImportError:
     try:
         from restricted_symbols import (
-            add_restricted_symbol, is_geographic_restriction_error
+            add_restricted_symbol as _add_restricted_symbol_impl,
+            is_geographic_restriction_error as _is_geo_restriction_error_impl,
         )
         RESTRICTION_MANAGER_AVAILABLE = True
     except ImportError:
         RESTRICTION_MANAGER_AVAILABLE = False
-        def add_restricted_symbol(symbol, reason=None):
-            pass
-        def is_geographic_restriction_error(error_msg):
-            return False
+        _add_restricted_symbol_impl = None
+        _is_geo_restriction_error_impl = None
+
+
+def add_restricted_symbol(symbol: str, reason: Optional[str] = None) -> None:
+    if callable(_add_restricted_symbol_impl):
+        _add_restricted_symbol_impl(symbol, reason or "")
+
+
+def is_geographic_restriction_error(error_message: str) -> bool:
+    if callable(_is_geo_restriction_error_impl):
+        return bool(_is_geo_restriction_error_impl(error_message))
+    return False
 
 # Import profit confirmation feature flag and logger
 try:
@@ -536,9 +552,10 @@ class ExecutionEngine:
         }
 
         # Initialize trade ledger database
-        if TRADE_LEDGER_ENABLED:
+        _trade_ledger_factory = globals().get("get_trade_ledger_db")
+        if TRADE_LEDGER_ENABLED and callable(_trade_ledger_factory):
             try:
-                self.trade_ledger = get_trade_ledger_db()
+                self.trade_ledger = _trade_ledger_factory()
                 logger.info("✅ Trade ledger database connected")
             except Exception as e:
                 logger.warning(f"⚠️ Could not connect to trade ledger: {e}")
@@ -547,7 +564,7 @@ class ExecutionEngine:
             self.trade_ledger = None
 
         # Initialize Execution Intelligence Layer
-        if EXECUTION_INTELLIGENCE_AVAILABLE:
+        if EXECUTION_INTELLIGENCE_AVAILABLE and callable(get_execution_intelligence):
             try:
                 self.execution_intelligence = get_execution_intelligence()
                 logger.info("✅ Execution Intelligence initialized - Elite optimization enabled")
@@ -558,7 +575,7 @@ class ExecutionEngine:
             self.execution_intelligence = None
         
         # Initialize Profit Confirmation Logger
-        if PROFIT_CONFIRMATION_AVAILABLE and PROFIT_LOGGER_AVAILABLE:
+        if PROFIT_CONFIRMATION_AVAILABLE and PROFIT_LOGGER_AVAILABLE and ProfitConfirmationLogger is not None:
             try:
                 self.profit_logger = ProfitConfirmationLogger(data_dir="./data")
                 logger.info("✅ Profit Confirmation Logger initialized - Enhanced profit tracking enabled")
@@ -808,6 +825,7 @@ class ExecutionEngine:
         # strict=True — blocking synchronization barrier.
         _deadline = _time.monotonic() + _STRICT_TIMEOUT
         _warned = False
+        _cbfsm = None
         while True:
             try:
                 _cbfsm = _get_fsm()
@@ -854,7 +872,7 @@ class ExecutionEngine:
         self._assert_bootstrap_ready_for_execution_locks(strict=True)
         return self._exit_lock
 
-    def _get_market_microstructure(self, symbol: str) -> Optional[MarketMicrostructure]:
+    def _get_market_microstructure(self, symbol: str) -> Any:
         """
         Get current market microstructure data for execution optimization.
 
@@ -864,7 +882,7 @@ class ExecutionEngine:
         Returns:
             MarketMicrostructure object or None if unavailable
         """
-        if not EXECUTION_INTELLIGENCE_AVAILABLE or not self.broker_client:
+        if not EXECUTION_INTELLIGENCE_AVAILABLE or not self.broker_client or MarketMicrostructure is None:
             return None
 
         try:
@@ -944,7 +962,7 @@ class ExecutionEngine:
         side: str,
         size_usd: float,
         urgency: float = 0.7
-    ) -> Optional[ExecutionPlan]:
+    ) -> Any:
         """
         Use Execution Intelligence to optimize order execution.
 
@@ -1104,8 +1122,9 @@ class ExecutionEngine:
         if not self.broker_client:
             return "unknown"
         broker_type = getattr(self.broker_client, "broker_type", None)
-        if hasattr(broker_type, "value"):
-            return str(broker_type.value).lower()
+        _broker_value = getattr(broker_type, "value", None)
+        if _broker_value is not None:
+            return str(_broker_value).lower()
         if isinstance(broker_type, str):
             return broker_type.lower()
         return type(self.broker_client).__name__.lower()
@@ -1560,15 +1579,29 @@ class ExecutionEngine:
         exc:
             Exception raised by the broker call if any (``None`` on success).
         """
-        if not _EXEC_RESULT_AVAILABLE:
+        _exec_result_cls = _ExecResult
+        _order_status_enum = _OrderStatus
+        _log_exec_fn = _log_exec_result
+        if (
+            not _EXEC_RESULT_AVAILABLE
+            or not callable(_exec_result_cls)
+            or _order_status_enum is None
+            or not callable(_log_exec_fn)
+        ):
+            return
+
+        _status_failed = getattr(_order_status_enum, "FAILED", None)
+        _status_rejected = getattr(_order_status_enum, "REJECTED", None)
+        _status_accepted = getattr(_order_status_enum, "ACCEPTED", None)
+        if _status_failed is None or _status_rejected is None or _status_accepted is None:
             return
 
         latency_ms = int((_time.monotonic() - t0) * 1000)
 
         if exc is not None:
             # Broker call raised — classify as FAILED
-            result = _ExecResult(
-                status=_OrderStatus.FAILED,
+            result = _exec_result_cls(
+                status=_status_failed,
                 symbol=symbol,
                 side=side,
                 exchange_order_id=None,
@@ -1579,8 +1612,8 @@ class ExecutionEngine:
             "error", "unfilled", "skipped", "rejected"
         }:
             details = self._extract_order_failure_details(broker_response=broker_response, exc=None)
-            result = _ExecResult(
-                status=_OrderStatus.REJECTED,
+            result = _exec_result_cls(
+                status=_status_rejected,
                 symbol=symbol,
                 side=side,
                 exchange_order_id=None,
@@ -1593,8 +1626,8 @@ class ExecutionEngine:
                 or broker_response.get("id")
                 or broker_response.get("client_order_id")
             )
-            result = _ExecResult(
-                status=_OrderStatus.ACCEPTED,
+            result = _exec_result_cls(
+                status=_status_accepted,
                 symbol=symbol,
                 side=side,
                 exchange_order_id=str(order_id) if order_id else None,
@@ -1602,7 +1635,7 @@ class ExecutionEngine:
                 latency_ms=latency_ms,
             )
 
-        _log_exec_result(result)
+        _log_exec_fn(result)
 
     def can_execute_trade(self, order_size_usd: float) -> bool:
         """
@@ -1668,7 +1701,7 @@ class ExecutionEngine:
 
         return True
 
-    def execute_entry(self, symbol: str, side: str, position_size: float,
+    def execute_entry(self, symbol: str, side: str, position_size: float,  # pyright: ignore[reportGeneralTypeIssues]
                      entry_price: float, stop_loss: float,
                      take_profit_levels: Dict[str, float]) -> Optional[Dict]:
         """
@@ -2307,55 +2340,55 @@ class ExecutionEngine:
                         _entry_exc: Optional[Exception] = None
                         try:
                             result = self._submit_limit_order_via_ecel(
-                            broker_client=self.broker_client,
-                            symbol=symbol,
-                            side=order_side,
-                            size_usd=position_size,
-                            limit_price=_limit_price,
-                            available_balance_usd=_available_usd,
-                            spendable_balance_usd=_spendable_usd,
-                            strategy_name=strategy_name if hasattr(self, "_strategy_name") else "ExecutionEngine",
-                        )
-                    except Exception as _limit_exc:
-                        logger.warning(
-                            f"   ⚠️ Limit order raised exception for {symbol}: {_limit_exc}, "
-                            f"falling back to market order"
-                        )
-                        _entry_exc = _limit_exc
-                        result = None
-                    # Emit result for the limit attempt (before fallback)
-                    self._emit_execution_result(symbol, order_side, result, _entry_t0, _entry_exc)
-                    # If the limit order fails or errors, fall back to a market order
-                    if result is None or self._normalized_order_status(result) in {'error', 'unfilled', 'skipped', 'rejected'}:
-                        logger.warning(
-                            f"   ⚠️ Limit order failed for {symbol}, "
-                            f"falling back to market order"
-                        )
-                        _entry_t0 = _time.monotonic()
-                        _fallback_exc: Optional[Exception] = None
-                        try:
-                            _fallback_qty = position_size / entry_price if entry_price > 0 else 0.0
-                            logger.critical(
-                                "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
-                                symbol,
-                                order_side,
-                                f"{_fallback_qty:.8f}",
-                                position_size,
-                            )
-                            result = self._submit_market_order_via_pipeline(
                                 broker_client=self.broker_client,
                                 symbol=symbol,
                                 side=order_side,
                                 size_usd=position_size,
-                                available_balance_usd=_spendable_usd or _available_usd,
-                                price_hint_usd=entry_price,
+                                limit_price=_limit_price,
+                                available_balance_usd=_available_usd,
+                                spendable_balance_usd=_spendable_usd,
+                                strategy_name=strategy_name if hasattr(self, "_strategy_name") else "ExecutionEngine",
                             )
-                        except Exception as _fb_exc:
-                            _fallback_exc = _fb_exc
+                        except Exception as _limit_exc:
+                            logger.warning(
+                                f"   ⚠️ Limit order raised exception for {symbol}: {_limit_exc}, "
+                                f"falling back to market order"
+                            )
+                            _entry_exc = _limit_exc
                             result = None
-                        self._emit_execution_result(symbol, order_side, result, _entry_t0, _fallback_exc)
-                        if _fallback_exc is not None:
-                            raise _fallback_exc
+                        # Emit result for the limit attempt (before fallback)
+                        self._emit_execution_result(symbol, order_side, result, _entry_t0, _entry_exc)
+                        # If the limit order fails or errors, fall back to a market order
+                        if result is None or self._normalized_order_status(result) in {'error', 'unfilled', 'skipped', 'rejected'}:
+                            logger.warning(
+                                f"   ⚠️ Limit order failed for {symbol}, "
+                                f"falling back to market order"
+                            )
+                            _entry_t0 = _time.monotonic()
+                            _fallback_exc: Optional[Exception] = None
+                            try:
+                                _fallback_qty = position_size / entry_price if entry_price > 0 else 0.0
+                                logger.critical(
+                                    "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                                    symbol,
+                                    order_side,
+                                    f"{_fallback_qty:.8f}",
+                                    position_size,
+                                )
+                                result = self._submit_market_order_via_pipeline(
+                                    broker_client=self.broker_client,
+                                    symbol=symbol,
+                                    side=order_side,
+                                    size_usd=position_size,
+                                    available_balance_usd=_spendable_usd or _available_usd,
+                                    price_hint_usd=entry_price,
+                                )
+                            except Exception as _fb_exc:
+                                _fallback_exc = _fb_exc
+                                result = None
+                            self._emit_execution_result(symbol, order_side, result, _entry_t0, _fallback_exc)
+                            if _fallback_exc is not None:
+                                raise _fallback_exc
                 else:
                     # Determine why market order is being used for the log message
                     if execution_plan is None:
@@ -2374,13 +2407,14 @@ class ExecutionEngine:
                         _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
 
                     _compiled_order = None
-                    if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc:
+                    _pricing_snapshot_cls = PricingSnapshot
+                    if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc and isinstance(_pricing_snapshot_cls, type):
                         try:
                             # Use cached balance snapshot (no exchange polling)
                             _available_balance = float(_available_usd or 0.0)
 
                             # Build pricing snapshot
-                            _pricing = PricingSnapshot(
+                            _pricing = _pricing_snapshot_cls(
                                 symbol=symbol,
                                 bid=entry_price * 0.999,  # Conservative bid (0.1% lower)
                                 ask=entry_price * 1.001,   # Conservative ask (0.1% higher)
@@ -2401,13 +2435,13 @@ class ExecutionEngine:
                                 "[EOC] ✅ Order compiled successfully: %s",
                                 _compiled_order,
                             )
-                        except OrderCompileError as _eoc_err:
-                            logger.error(
-                                "[EOC] ❌ ORDER COMPILATION FAILED: %s — trade REJECTED",
-                                _eoc_err,
-                            )
-                            return None
                         except Exception as _eoc_exc:
+                            if isinstance(OrderCompileError, type) and isinstance(_eoc_exc, OrderCompileError):
+                                logger.error(
+                                    "[EOC] ❌ ORDER COMPILATION FAILED: %s — trade REJECTED",
+                                    _eoc_exc,
+                                )
+                                return None
                             logger.warning(
                                 "[EOC] Warning: order compilation exception: %s — using fallback",
                                 _eoc_exc,
@@ -2835,6 +2869,7 @@ class ExecutionEngine:
                 self.active_exit_orders.add(symbol)
 
             try:
+                result = None
                 # Place exit order via broker
                 if self.broker_client:
                     order_side = 'sell' if position['side'] == 'long' else 'buy'
@@ -2846,7 +2881,8 @@ class ExecutionEngine:
                         _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
 
                     _exit_compiled_order = None
-                    if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc:
+                    _pricing_snapshot_cls = PricingSnapshot
+                    if EXCHANGE_ORDER_COMPILER_AVAILABLE and _eoc and isinstance(_pricing_snapshot_cls, type):
                         try:
                             # Get cached balance snapshot (no exchange polling)
                             _exit_available, _exit_total, _ = self._get_cached_balance_snapshot()
@@ -2857,7 +2893,7 @@ class ExecutionEngine:
                             )
 
                             # Build pricing snapshot for exit
-                            _exit_pricing = PricingSnapshot(
+                            _exit_pricing = _pricing_snapshot_cls(
                                 symbol=symbol,
                                 bid=exit_price * 0.999,  # Conservative bid
                                 ask=exit_price * 1.001,   # Conservative ask
@@ -2877,17 +2913,17 @@ class ExecutionEngine:
                             logger.info("[EOC] Exit order compiled: $%.2f (qty=%.8f)",
                                        _exit_compiled_order.size_usd,
                                        _exit_compiled_order.quantity)
-                        except OrderCompileError as _eoc_err:
-                            logger.error(
-                                "[EOC] ❌ EXIT ORDER COMPILATION FAILED: %s — trade REJECTED",
-                                _eoc_err,
-                            )
-                            with self._get_closing_lock():
-                                self.closing_positions.discard(symbol)
-                            with self._get_exit_lock():
-                                self.active_exit_orders.discard(symbol)
-                            return False
                         except Exception as _eoc_exc:
+                            if isinstance(OrderCompileError, type) and isinstance(_eoc_exc, OrderCompileError):
+                                logger.error(
+                                    "[EOC] ❌ EXIT ORDER COMPILATION FAILED: %s — trade REJECTED",
+                                    _eoc_exc,
+                                )
+                                with self._get_closing_lock():
+                                    self.closing_positions.discard(symbol)
+                                with self._get_exit_lock():
+                                    self.active_exit_orders.discard(symbol)
+                                return False
                             logger.warning(
                                 "[EOC] Exit compilation warning: %s — using fallback",
                                 _eoc_exc,
@@ -2921,7 +2957,7 @@ class ExecutionEngine:
                         result = self._confirm_order_fill(symbol, order_side, _exit_quantity, result)
 
                     if self._normalized_order_status(result) == 'error':
-                        error_msg = result.get('error')
+                        error_msg = result.get('error') if isinstance(result, dict) else 'unknown_error'
                         logger.error(f"Exit order failed: {error_msg}")
 
                         # FIX #1: Unlock on confirmed rejection
@@ -2938,19 +2974,23 @@ class ExecutionEngine:
                     exit_fee = exit_size * 0.006
 
                     # Record SELL in trade ledger database
-                    if self.trade_ledger:
+                    if self.trade_ledger and hasattr(self.trade_ledger, "record_sell"):
                         try:
-                            order_id = result.get('order_id') or result.get('id')
+                            _ledger = cast(Any, self.trade_ledger)
+                            _result_dict = result if isinstance(result, dict) else {}
+                            order_id = _result_dict.get('order_id') or _result_dict.get('id')
                             exit_quantity = position.get('quantity', exit_size / exit_price) * size_pct
+                            _position_id = str(position.get('position_id') or '')
+                            _order_id = str(order_id) if order_id else ''
 
-                            self.trade_ledger.record_sell(
+                            _ledger.record_sell(
                                 symbol=symbol,
                                 price=exit_price,
                                 quantity=exit_quantity,
                                 size_usd=exit_size,
                                 fee=exit_fee,
-                                order_id=str(order_id) if order_id else None,
-                                position_id=position.get('position_id'),
+                                order_id=_order_id,
+                                position_id=_position_id,
                                 user_id=self.user_id,
                                 notes=f"Exit: {reason}"
                             )
@@ -2966,10 +3006,11 @@ class ExecutionEngine:
                     position['closed_at'] = datetime.now()
 
                     # Close position in database
-                    if self.trade_ledger and position.get('position_id'):
+                    if self.trade_ledger and hasattr(self.trade_ledger, "close_position") and position.get('position_id'):
                         try:
+                            _ledger = cast(Any, self.trade_ledger)
                             exit_fee = exit_size * 0.006
-                            self.trade_ledger.close_position(
+                            _ledger.close_position(
                                 position_id=position['position_id'],
                                 exit_price=exit_price,
                                 exit_fee=exit_fee,
@@ -2982,6 +3023,7 @@ class ExecutionEngine:
                     
                     # Calculate and log explicit P&L with fees
                     entry_price = position.get('entry_price', 0)
+                    position_size_usd = float(position.get('position_size', 0.0) or 0.0)
                     if entry_price > 0:
                         if side == 'long':
                             gross_profit_pct = (exit_price - entry_price) / entry_price
@@ -3068,7 +3110,7 @@ class ExecutionEngine:
                             _pt_fees = _pt_pos_usd * _pt_fee_rate
 
                             # Compute slippage from actual fill vs. signal exit price
-                            _pt_actual_fill = self._extract_fill_price(result, symbol)
+                            _pt_actual_fill = self._extract_fill_price(result, symbol) if result else None
                             if _pt_actual_fill and _pt_actual_fill > 0 and exit_price > 0:
                                 if _pt_side == 'long':
                                     # Positive = we received more than expected (good)
@@ -3488,7 +3530,7 @@ class ExecutionEngine:
         """Get all open positions"""
         return {k: v for k, v in self.positions.items() if v['status'] == 'open'}
 
-    def log_position_profit_status(self, current_prices: Dict[str, float] = None):
+    def log_position_profit_status(self, current_prices: Optional[Dict[str, float]] = None):
         """
         Log summary of all positions and their profit status
 
