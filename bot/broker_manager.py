@@ -1256,6 +1256,8 @@ class KrakenStartupFSM:
         if self._failed.is_set():
             return False
         deadline = (time.monotonic() + timeout) if timeout is not None else None
+        _wait_started = time.monotonic()
+        _timeout_logged = False
         while True:
             remaining = (
                 max(0.0, deadline - time.monotonic())
@@ -1264,9 +1266,32 @@ class KrakenStartupFSM:
             )
             if self._connected.wait(timeout=min(remaining, 1.0)):
                 return True
+            if not _timeout_logged and (time.monotonic() - _wait_started) >= 30.0:
+                logger.critical("TIMEOUT_WAITING_FOR_BROKER_READY")
+                try:
+                    from bot.bootstrap_utils import dump_startup_state
+                except ImportError:
+                    try:
+                        from bootstrap_utils import dump_startup_state  # type: ignore[import]
+                    except ImportError:
+                        dump_startup_state = None  # type: ignore[assignment]
+                if dump_startup_state is not None:
+                    dump_startup_state("broker_wait_connected")
+                _timeout_logged = True
             if self._failed.is_set():
                 return False
             if deadline is not None and time.monotonic() >= deadline:
+                if not _timeout_logged:
+                    logger.critical("TIMEOUT_WAITING_FOR_BROKER_READY")
+                    try:
+                        from bot.bootstrap_utils import dump_startup_state
+                    except ImportError:
+                        try:
+                            from bootstrap_utils import dump_startup_state  # type: ignore[import]
+                        except ImportError:
+                            dump_startup_state = None  # type: ignore[assignment]
+                    if dump_startup_state is not None:
+                        dump_startup_state("broker_wait_connected")
                 return False
 
 

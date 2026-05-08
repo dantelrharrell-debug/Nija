@@ -2394,8 +2394,18 @@ class MultiAccountBrokerManager:
             _bootstrap_balance_probe = _resolve_bootstrap_balance_probe()
         except ImportError:
             _bootstrap_balance_probe = None
+        _shutdown_event = None
+        try:
+            from bot.bootstrap_utils import get_shutdown_event as _get_shutdown_event
+            _shutdown_event = _get_shutdown_event()
+        except ImportError:
+            try:
+                from bootstrap_utils import get_shutdown_event as _get_shutdown_event  # type: ignore[import]
+                _shutdown_event = _get_shutdown_event()
+            except ImportError:
+                _shutdown_event = None
 
-        while True:
+        while _shutdown_event is None or not _shutdown_event.is_set():
             if _bootstrap_balance_probe is not None and _bootstrap_balance_probe():
                 elapsed = time.monotonic() - start
                 logger.info("Stopping startup balance loop")
@@ -2486,6 +2496,16 @@ class MultiAccountBrokerManager:
                 max(self.MIN_STARTUP_CAPITAL_SLEEP_S, min(poll, remaining)),
             )
             time.sleep(sleep_for)
+
+        elapsed = time.monotonic() - start
+        logger.info("Stopping startup balance loop (shutdown)")
+        return {
+            "ready": float(snapshot.get("ready", 0.0)),
+            "total_capital": float(snapshot.get("total_capital", 0.0)),
+            "valid_brokers": float(snapshot.get("valid_brokers", 0.0)),
+            "attempts": float(attempts),
+            "elapsed_s": float(elapsed),
+        }
 
     @property
     def is_bootstrap_phase(self) -> bool:
@@ -3655,20 +3675,32 @@ class MultiAccountBrokerManager:
             f" (max {timeout}s)" if timeout > 0 else " (indefinite)",
         )
 
-        if timeout > 0:
-            remaining = max(0.0, timeout - (time.time() - start))
-            event.wait(timeout=remaining)
-        else:
-            event.wait()  # indefinite — unblocked only by _mark_platform_connected / mark_platform_failed
+        _wait_deadline = (start + timeout) if timeout > 0 else None
+        while True:
+            remaining = max(0.0, _wait_deadline - time.time()) if _wait_deadline is not None else 30.0
+            if event.wait(timeout=remaining):
+                break
+            logger.critical("TIMEOUT_WAITING_FOR_PLATFORM_READY")
+            try:
+                from bot.bootstrap_utils import dump_startup_state
+            except ImportError:
+                try:
+                    from bootstrap_utils import dump_startup_state  # type: ignore[import]
+                except ImportError:
+                    dump_startup_state = None  # type: ignore[assignment]
+            if dump_startup_state is not None:
+                dump_startup_state(f"platform_ready_wait:{broker_name}")
+            if _wait_deadline is not None and time.time() >= _wait_deadline:
+                break
 
-            if self._broker_ready_flag(broker):
-                logger.info(f"✅ Platform {broker_name} ready (ready flag set during wait)")
-                self._mark_platform_connected(broker_type)
-                return True
+        if self._broker_ready_flag(broker):
+            logger.info(f"✅ Platform {broker_name} ready (ready flag set during wait)")
+            self._mark_platform_connected(broker_type)
+            return True
 
-            if timeout > 0 and (time.time() - start) >= timeout:
-                logger.error(f"⛔ Timeout waiting for platform {broker_name} to become ready ({timeout}s)")
-                return False
+        if timeout > 0 and (time.time() - start) >= timeout:
+            logger.error(f"⛔ Timeout waiting for platform {broker_name} to become ready ({timeout}s)")
+            return False
         # ── Post-wait state check ─────────────────────────────────────────────
         state = self._platform_state.get(broker_type.value)
         if state == ConnectionState.CONNECTED:
