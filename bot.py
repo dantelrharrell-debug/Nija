@@ -23,7 +23,7 @@ import signal
 import threading
 import subprocess
 from urllib.parse import urlparse
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from bot.redis_env import (
     get_all_redis_urls,
@@ -716,6 +716,8 @@ def _hydrate_startup_balances(strategy) -> float:
         logger.warning("Startup hydration total is <= 0 in non-live mode; continuing")
 
     _balance_hydrated_event.set()
+    _capital_ready_event.set()
+    logger.critical("CAPITAL_READY_SET")
     return _hydrated_total_balance_usd
 
 # Single-owner bootstrap kernel lock.
@@ -744,11 +746,126 @@ _bootstrap_completed_event = threading.Event()
 # failure.  All three components (BootstrapFSM, supervisor, core loop) should
 # test this event to confirm that the strategy is truly initialised.
 _strategy_ready_event = threading.Event()
+_broker_ready_event = threading.Event()
+_execution_ready_event = threading.Event()
+_market_scanner_ready_event = threading.Event()
+_scheduler_ready_event = threading.Event()
+_websocket_ready_event = threading.Event()
+_capital_ready_event = threading.Event()
 _balance_hydrated_event = threading.Event()
 _hydrated_total_balance_usd = 0.0
 # Idempotency guard for FORCE_TRADE bootstrap handoff.
 # Set only after RUNNING_SUPERVISED handoff succeeds.
 _force_trade_handoff_complete_event = threading.Event()
+
+
+def dump_startup_state(context: str = "") -> None:
+    """Log a startup diagnostics snapshot for timeout and deadlock investigations."""
+    try:
+        _snapshot = _read_initialized_state_snapshot(context=f"startup dump: {context or 'no-context'}")
+    except Exception as _snapshot_err:
+        logger.critical("STARTUP_STATE_DUMP_FAILED context=%s err=%s", context or "no-context", _snapshot_err)
+        return
+
+    _strategy = _snapshot.get("strategy")
+    try:
+        (
+            _system_ready,
+            _broker_ready,
+            _risk_ready,
+            _strategy_ready,
+            _capital_ready,
+            _execution_ready,
+        ) = _compute_system_ready(_snapshot)
+    except Exception:
+        _system_ready = False
+        _broker_ready = False
+        _risk_ready = False
+        _strategy_ready = False
+        _capital_ready = False
+        _execution_ready = False
+
+    _bfsm_state = "UNAVAILABLE"
+    _bfsm_exec_authority = False
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        try:
+            _bfsm = _get_bootstrap_fsm()
+            _bfsm_state = getattr(getattr(_bfsm, "state", None), "value", str(getattr(_bfsm, "state", "UNAVAILABLE")))
+            _bfsm_exec_authority = bool(
+                _bfsm.has_execution_authority()
+                if hasattr(_bfsm, "has_execution_authority")
+                else getattr(_bfsm, "execution_authority", False)
+            )
+        except Exception:
+            pass
+
+    logger.critical(
+        "STARTUP_STATE_DUMP context=%s system_ready=%s broker_ready=%s risk_ready=%s strategy_ready=%s "
+        "capital_ready=%s execution_ready=%s strategy_present=%s bfsm_state=%s bfsm_execution_authority=%s "
+        "events(strategy=%s broker=%s execution=%s market_scanner=%s scheduler=%s websocket=%s capital=%s balance=%s)",
+        context or "no-context",
+        _system_ready,
+        _broker_ready,
+        _risk_ready,
+        _strategy_ready,
+        _capital_ready,
+        _execution_ready,
+        _strategy is not None,
+        _bfsm_state,
+        _bfsm_exec_authority,
+        _strategy_ready_event.is_set(),
+        _broker_ready_event.is_set(),
+        _execution_ready_event.is_set(),
+        _market_scanner_ready_event.is_set(),
+        _scheduler_ready_event.is_set(),
+        _websocket_ready_event.is_set(),
+        _capital_ready_event.is_set(),
+        _balance_hydrated_event.is_set(),
+    )
+
+
+def _wait_for_event_with_timeout(event: threading.Event, *, timeout_s: float, timeout_label: str) -> bool:
+    """Wait for an event and emit critical diagnostics on timeout."""
+    if event.wait(timeout=timeout_s):
+        return True
+    logger.critical("TIMEOUT_WAITING_FOR_%s", timeout_label)
+    dump_startup_state(f"TIMEOUT_WAITING_FOR_{timeout_label}")
+    return False
+
+
+def _wait_for_predicate_with_timeout(
+    *,
+    predicate: Callable[[], bool],
+    timeout_s: float,
+    timeout_label: str,
+    poll_interval_s: float = 0.5,
+) -> bool:
+    """Wait for a readiness predicate and emit diagnostics on timeout."""
+    _deadline = time.monotonic() + max(0.1, timeout_s)
+    while time.monotonic() < _deadline:
+        try:
+            if predicate():
+                return True
+        except Exception as _pred_err:
+            logger.debug("Predicate probe failed for %s: %s", timeout_label, _pred_err)
+        time.sleep(max(0.05, poll_interval_s))
+
+    logger.critical("TIMEOUT_WAITING_FOR_%s", timeout_label)
+    dump_startup_state(f"TIMEOUT_WAITING_FOR_{timeout_label}")
+    return False
+
+
+def _assert_bootstrap_execution_authority(context: str) -> None:
+    """Fail closed when lifecycle ownership has not been handed to runtime."""
+    if not (_BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None):
+        return
+    _bfsm = _get_bootstrap_fsm()
+    _has_authority = bool(
+        _bfsm.has_execution_authority()
+        if hasattr(_bfsm, "has_execution_authority")
+        else getattr(_bfsm, "execution_authority", False)
+    )
+    assert _has_authority, f"BOOTSTRAP_EXECUTION_AUTHORITY_REQUIRED: {context}"
 
 # Explicit lifecycle phases used by startup diagnostics.
 BOOTSTRAP_PHASES = [
