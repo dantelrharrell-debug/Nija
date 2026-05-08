@@ -5255,49 +5255,55 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     _boot_broker_results = {}
                     _boot_connected_users = {}
 
+                logger.critical("STRATEGY_INIT_BEGIN")
                 _ts_init_start = time.time()
-                logger.critical("PREFLIGHT: FSM BUILD START")
                 try:
+                    logger.critical("STRATEGY_CONSTRUCTOR_ENTER")
+                    logger.critical("PREFLIGHT: FSM BUILD START")
                     strategy = TradingStrategy(
                         broker_results=_boot_broker_results if _boot_broker_results else None,
                         connected_user_brokers=_boot_connected_users if _boot_connected_users else None,
                     )
                     logger.critical("PREFLIGHT: FSM BUILD END")
-                except Exception as e:
-                    logger.critical("❌ STRATEGY INIT CRASH: %s", e, exc_info=True)
-                    raise
-                _ts_init_elapsed = time.time() - _ts_init_start
-                if _ts_init_elapsed > 5:
-                    logger.critical(
-                        "TRADING STRATEGY INIT TIMEOUT - FORCING CONTINUE "
-                        "(elapsed=%.2fs > 5s threshold)", _ts_init_elapsed
-                    )
-                else:
-                    logger.critical("B3 after TradingStrategy() (elapsed=%.2fs)", _ts_init_elapsed)
-                if strategy is None:
-                    raise RuntimeError(
-                        "FATAL: TradingStrategy() returned None — "
-                        "strategy failed to initialize.  Check broker credentials "
-                        "and apex strategy import."
-                    )
-                _acquired = _acquire_init_lock_bootstrap_only(
-                    context="store strategy singleton",
-                    timeout_s=5.0,
-                )
-                if not _acquired:
-                    raise RuntimeError(
-                        "INIT_LOCK_TIMEOUT context=store strategy singleton — "
-                        "cannot persist strategy safely"
-                    )
-                else:
-                    try:
-                        _initialized_state["strategy"] = strategy
-                        _initialized_state["risk_ready"] = True
+                    logger.critical("STRATEGY_CONSTRUCTOR_EXIT")
+                    _ts_init_elapsed = time.time() - _ts_init_start
+                    if _ts_init_elapsed > 5:
                         logger.critical(
-                            "STRATEGY INITIALIZED — deferring strategy-ready event until hydrated runtime state is persisted"
+                            "TRADING STRATEGY INIT TIMEOUT - FORCING CONTINUE "
+                            "(elapsed=%.2fs > 5s threshold)", _ts_init_elapsed
                         )
-                    finally:
-                        _initialized_state_lock.release()
+                    else:
+                        logger.critical("B3 after TradingStrategy() (elapsed=%.2fs)", _ts_init_elapsed)
+                    if strategy is None:
+                        raise RuntimeError(
+                            "FATAL: TradingStrategy() returned None — "
+                            "strategy failed to initialize.  Check broker credentials "
+                            "and apex strategy import."
+                        )
+                    _acquired = _acquire_init_lock_bootstrap_only(
+                        context="store strategy singleton",
+                        timeout_s=5.0,
+                    )
+                    if not _acquired:
+                        raise RuntimeError(
+                            "INIT_LOCK_TIMEOUT context=store strategy singleton — "
+                            "cannot persist strategy safely"
+                        )
+                    else:
+                        try:
+                            _initialized_state["strategy"] = strategy
+                            _initialized_state["risk_ready"] = True
+                            logger.critical("STRATEGY_ASSIGNED")
+                        finally:
+                            _initialized_state_lock.release()
+                    _strategy_ready_event.set()
+                    logger.critical("STRATEGY_READY_SET")
+                    logger.critical(
+                        "STRATEGY INITIALIZED — strategy-ready event published; awaiting hydrated runtime state persistence"
+                    )
+                except Exception as e:
+                    logger.exception("STRATEGY_INIT_FAILED: %s", e)
+                    raise
                 logger.critical("🔥 INIT_A5: after TradingStrategy()")
                 logger.critical("🧠 STATE STORED — entering supervisor mode")
                 logger.critical("B3 after connect_brokers (TradingStrategy created)")
