@@ -91,7 +91,7 @@ except ImportError:
         _BPS_AVAILABLE = True
     except ImportError:
         _BPS_AVAILABLE = False
-        get_broker_performance_scorer = None  # type: ignore
+        get_broker_performance_scorer = None  # type: ignore[assignment]  # noqa: F841
         logger.warning(
             "⚠️  BrokerPerformanceScorer not available — "
             "capital shifter will hold equal allocations"
@@ -481,7 +481,7 @@ class AutoBrokerCapitalShifter:
     def _fetch_scores(self, brokers: List[str]) -> Dict[str, float]:
         """Fetch current composite scores for the given broker list."""
         scores: Dict[str, float] = {}
-        if _BPS_AVAILABLE:
+        if _BPS_AVAILABLE and callable(get_broker_performance_scorer):
             try:
                 scorer = get_broker_performance_scorer()
                 for b in brokers:
@@ -713,7 +713,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    if _BPS_AVAILABLE:
+    if _BPS_AVAILABLE and callable(get_broker_performance_scorer):
         scorer = get_broker_performance_scorer()
         random.seed(99)
         for _ in range(30):

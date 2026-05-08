@@ -12,12 +12,12 @@ import fcntl
 import signal
 import atexit
 from pathlib import Path
-from typing import Optional
+from typing import IO, Optional
 
 logger = logging.getLogger("nija.bootstrap_guard")
 
 # Global lock file handle — held for the lifetime of the process
-_GUARD_LOCK_HANDLE: Optional[object] = None
+_GUARD_LOCK_HANDLE: Optional[IO[str]] = None
 _GUARD_LOCK_PATH: str = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data",
