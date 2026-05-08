@@ -1768,8 +1768,11 @@ def _acquire_distributed_process_lock() -> None:
 
     if _multi_instance_possible and _unsafe_bypass:
         print("🚫 Multi-instance deployment detected; unsafe distributed-lock bypass is forbidden.")
-        print("   Disable NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK / NIJA_DISABLE_WRITER_LOCK and redeploy.")
-        sys.exit(1)
+        print("   Forcing fail-closed mode: distributed writer lock will remain enabled.")
+        os.environ["NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"] = "0"
+        os.environ["NIJA_DISABLE_WRITER_LOCK"] = "0"
+        _unsafe_bypass = False
+        _require_lock = True
 
     _redis_url = get_redis_url()
     _redis_url_source = get_redis_url_source()
