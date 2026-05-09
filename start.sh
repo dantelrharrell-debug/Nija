@@ -1407,7 +1407,6 @@ url = os.environ.get("NIJA_REDIS_URL", "").strip() or sys.argv[1]
 try:
     r = redis.Redis.from_url(
         url,
-        ssl=True,
         socket_timeout=5,
         socket_connect_timeout=5,
         retry_on_timeout=False,

@@ -1887,20 +1887,8 @@ def _acquire_distributed_process_lock() -> None:
                 raise RuntimeError("NIJA_REDIS_URL must include host and port")
             if not _parsed.password:
                 raise RuntimeError("NIJA_REDIS_URL must include password")
-            _username = _parsed.username or "default"
-            _db = 0
-            try:
-                _db = int((_parsed.path or "/0").lstrip("/") or "0")
-            except (TypeError, ValueError):
-                _db = 0
-            return redis.Redis(
-                host=_parsed.hostname,
-                port=_parsed.port,
-                username=_username,
-                password=_parsed.password,
-                db=_db,
-                ssl=_parsed.scheme == "rediss",
-                ssl_cert_reqs=None if _parsed.scheme == "rediss" else None,
+            return redis.Redis.from_url(
+                _url,
                 decode_responses=True,
                 socket_connect_timeout=3,
                 socket_timeout=3,
@@ -2391,42 +2379,41 @@ def _acquire_distributed_process_lock() -> None:
         # FSM SUCCESS STATE: Lock acquired — proceed to trading
         # ═══════════════════════════════════════════════════════════════════════════════════════
         if _fencing_token > 0:
-
-        _token = f"{_fencing_token}:{_owner}"
-        _distributed_writer_lock_client = _client
-        _distributed_writer_lock_key = _lock_key
-        _distributed_writer_lock_meta_key = _meta_key
-        _distributed_writer_lock_token = _token
-        _distributed_writer_fencing_key = _fencing_key
-        _distributed_writer_fencing_token = _fencing_token
-        _distributed_writer_lock_stop.clear()
-        _acquired_at = time.time()
-        os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(_acquired_at)
-        try:
-            _client.set(_meta_key, _build_writer_lock_meta_payload(
-                _fencing_token,
-                _instance_identity,
-                acquired_at=_acquired_at,
-                heartbeat_at=_acquired_at,
-            ), ex=_ttl_s)
-        except Exception as _meta_write_exc:
-            logger.warning("Unable to write distributed lock metadata key=%s: %s", _meta_key, _meta_write_exc)
-        _distributed_writer_lock_thread = threading.Thread(
-            target=_distributed_writer_lock_heartbeat,
-            args=(_ttl_s,),
-            daemon=True,
-            name="DistributedWriterLockHeartbeat",
-        )
-        _distributed_writer_lock_thread.start()
-        os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_fencing_token)
-        os.environ["NIJA_WRITER_LOCK_KEY"] = _lock_key
-        os.environ["NIJA_WRITER_LOCK_META_KEY"] = _meta_key
-        os.environ["NIJA_WRITER_LOCK_SCOPE"] = _scope
-        print("✅ WRITER LOCK ACQUIRED", flush=True)
-        print(
-            "🔒 Distributed writer lock acquired — "
-            f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
-        )
+            _token = f"{_fencing_token}:{_owner}"
+            _distributed_writer_lock_client = _client
+            _distributed_writer_lock_key = _lock_key
+            _distributed_writer_lock_meta_key = _meta_key
+            _distributed_writer_lock_token = _token
+            _distributed_writer_fencing_key = _fencing_key
+            _distributed_writer_fencing_token = _fencing_token
+            _distributed_writer_lock_stop.clear()
+            _acquired_at = time.time()
+            os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(_acquired_at)
+            try:
+                _client.set(_meta_key, _build_writer_lock_meta_payload(
+                    _fencing_token,
+                    _instance_identity,
+                    acquired_at=_acquired_at,
+                    heartbeat_at=_acquired_at,
+                ), ex=_ttl_s)
+            except Exception as _meta_write_exc:
+                logger.warning("Unable to write distributed lock metadata key=%s: %s", _meta_key, _meta_write_exc)
+            _distributed_writer_lock_thread = threading.Thread(
+                target=_distributed_writer_lock_heartbeat,
+                args=(_ttl_s,),
+                daemon=True,
+                name="DistributedWriterLockHeartbeat",
+            )
+            _distributed_writer_lock_thread.start()
+            os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_fencing_token)
+            os.environ["NIJA_WRITER_LOCK_KEY"] = _lock_key
+            os.environ["NIJA_WRITER_LOCK_META_KEY"] = _meta_key
+            os.environ["NIJA_WRITER_LOCK_SCOPE"] = _scope
+            print("✅ WRITER LOCK ACQUIRED", flush=True)
+            print(
+                "🔒 Distributed writer lock acquired — "
+                f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
+            )
     except Exception as _lock_exc:
         if _standby_retry_active:
             raise RuntimeError(str(_lock_exc))

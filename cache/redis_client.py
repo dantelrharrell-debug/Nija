@@ -85,7 +85,7 @@ def _build_strict_redis_client(
     socket_timeout: int,
     socket_connect_timeout: int,
 ) -> redis.Redis:
-    """Build a Redis client from explicit parsed URL components.
+    """Build a Redis client from URL.
 
     Railway production requires TLS and permissive cert validation for some
     managed proxy configurations.
@@ -104,21 +104,8 @@ def _build_strict_redis_client(
     if not parsed.password:
         raise ValueError("NIJA_REDIS_URL must include a password")
 
-    username = parsed.username or "default"
-    db = 0
-    try:
-        db = int((parsed.path or "/0").lstrip("/") or "0")
-    except (TypeError, ValueError):
-        db = 0
-
-    return redis.Redis(
-        host=parsed.hostname,
-        port=parsed.port,
-        username=username,
-        password=parsed.password,
-        db=db,
-        ssl=parsed.scheme == "rediss",
-        ssl_cert_reqs=None if parsed.scheme == "rediss" else None,
+    return redis.Redis.from_url(
+        raw_value,
         decode_responses=decode_responses,
         socket_timeout=socket_timeout,
         socket_connect_timeout=socket_connect_timeout,
