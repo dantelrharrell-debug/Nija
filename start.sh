@@ -191,6 +191,10 @@ if [ "${_UNSAFE_BYPASS}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
 fi
 
 if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
+    # Allow graceful standby retry instead of immediate exit when Redis is unreachable
+    # This lets the bot enter fail-closed standby and retry every 5s until Redis recovers
+    export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS="${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS:-false}"
+    
     # Fail-fast defaults for trading safety (override via env if needed).
     export NIJA_REDIS_LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-600000}"
     export NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S:-5}"
