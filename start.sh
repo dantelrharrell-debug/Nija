@@ -1431,6 +1431,13 @@ PY
     fi
 
     echo "=== REDIS PREFLIGHT HEALTH: ${_redis_health} ==="
+    
+    # Allow graceful standby retry instead of crash when Redis is unreachable
+    if [ "${_redis_health}" = "degraded" ]; then
+        export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=false
+        echo "   ℹ️  Redis degraded: entering fail-closed standby mode (retry-enabled)"
+        echo "      Bot will retry lock acquisition every 5s until Redis recovers"
+    fi
 elif [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then
     echo "ℹ️  Redis startup preflight disabled (NIJA_REDIS_STARTUP_CHECK=${NIJA_REDIS_STARTUP_CHECK:-false})"
 fi
