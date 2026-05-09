@@ -1694,7 +1694,10 @@ def _acquire_distributed_process_lock() -> None:
         _retry_sleep_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S", "5"
         ).strip()
-        _default_max_retry_attempts = "12" if _live_mode else "0"
+        _degraded_mode_requested = os.environ.get(
+            "NIJA_RUNTIME_DEGRADED_MODE", "0"
+        ).strip() == "1"
+        _default_max_retry_attempts = "0" if _degraded_mode_requested else ("12" if _live_mode else "0")
         _max_retry_attempts_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", _default_max_retry_attempts
         ).strip()
@@ -1842,7 +1845,10 @@ def _acquire_distributed_process_lock() -> None:
     _fail_closed_retry_enabled = os.environ.get(
         "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
     ).strip().lower() in _truthy
-    _default_fail_closed_max_retries = 12 if _live_mode else 0
+    _degraded_mode_requested = os.environ.get(
+        "NIJA_RUNTIME_DEGRADED_MODE", "0"
+    ).strip() == "1"
+    _default_fail_closed_max_retries = 0 if _degraded_mode_requested else (12 if _live_mode else 0)
     _fail_closed_max_retries_raw = os.environ.get(
         "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", str(_default_fail_closed_max_retries)
     ).strip()
