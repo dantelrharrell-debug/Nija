@@ -1694,8 +1694,9 @@ def _acquire_distributed_process_lock() -> None:
         _retry_sleep_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S", "5"
         ).strip()
+        _default_max_retry_attempts = "12" if _live_mode else "0"
         _max_retry_attempts_raw = os.environ.get(
-            "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", "0"
+            "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", _default_max_retry_attempts
         ).strip()
         try:
             _retry_sleep_s = max(5.0, float(_retry_sleep_raw or "5"))
@@ -1734,8 +1735,9 @@ def _acquire_distributed_process_lock() -> None:
             "\n     5. Single-instance bypass:    set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true (UNSAFE)"
         )
 
+        _default_exit_on_unreachable = "true" if _live_mode else "false"
         _exit_on_unreachable = os.environ.get(
-            "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS", "false"
+            "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS", _default_exit_on_unreachable
         ).strip().lower() in _truthy
         _preflight_timeout_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_REDIS_PREFLIGHT_TIMEOUT_S", "3"
@@ -1758,41 +1760,12 @@ def _acquire_distributed_process_lock() -> None:
             )
         )
         if _exit_on_unreachable and _connectivity_reason and _redis_url:
-            _probe_host = ""
-            _probe_port: int | None = None
-            try:
-                _probe_parsed = urlparse(_redis_url)
-                _probe_host = _probe_parsed.hostname or ""
-                _probe_port = _probe_parsed.port
-            except Exception:
-                _probe_host = ""
-                _probe_port = None
-
-            _probe_ok = False
-            _probe_error = "unknown"
-            if _probe_host and _probe_port:
-                try:
-                    with socket.create_connection((_probe_host, _probe_port), timeout=_preflight_timeout_s):
-                        _probe_ok = True
-                except Exception as _tcp_exc:
-                    _probe_error = str(_tcp_exc) or type(_tcp_exc).__name__
-            else:
-                _probe_error = "unable to parse Redis host/port from NIJA_REDIS_URL"
-
-            if not _probe_ok:
-                print("❌ Redis startup preflight failed: endpoint unreachable")
-                print(
-                    "   Redis endpoint: "
-                    f"{_probe_host or '<unknown>'}:{_probe_port if _probe_port is not None else '<unknown>'}"
-                )
-                print(f"   Probe timeout: {_preflight_timeout_s:.2f}s")
-                print(f"   Probe error: {_probe_error}")
-                print("   Exiting immediately due to NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true")
-                sys.exit(1)
-            print(
-                "ℹ️ Redis TCP preflight reachable, but lock acquisition still failed. "
-                "Continuing fail-closed standby retries."
-            )
+            print("❌ Redis startup preflight failed: endpoint unreachable")
+            print(f"   Redis source: {_redis_url_source or 'NIJA_REDIS_URL'}")
+            print(f"   Probe timeout: {_preflight_timeout_s:.2f}s")
+            print(f"   Probe error: {_reason}")
+            print("   Exiting immediately due to NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true")
+            sys.exit(1)
 
         os.environ["NIJA_STANDBY_RETRY_ACTIVE"] = "1"
 
@@ -1866,6 +1839,22 @@ def _acquire_distributed_process_lock() -> None:
     _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
     _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
     _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
+    _fail_closed_retry_enabled = os.environ.get(
+        "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
+    ).strip().lower() in _truthy
+    _default_fail_closed_max_retries = 12 if _live_mode else 0
+    _fail_closed_max_retries_raw = os.environ.get(
+        "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", str(_default_fail_closed_max_retries)
+    ).strip()
+    try:
+        _fail_closed_max_retries = max(0, int(_fail_closed_max_retries_raw or str(_default_fail_closed_max_retries)))
+    except (TypeError, ValueError):
+        _fail_closed_max_retries = _default_fail_closed_max_retries
+    _default_exit_unreachable = _live_mode
+    _fail_closed_exit_unreachable = os.environ.get(
+        "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS",
+        "true" if _default_exit_unreachable else "false",
+    ).strip().lower() in _truthy
     _kraken_buy_buffer_pct_raw = os.environ.get("KRAKEN_BUY_BUFFER_PCT", "0.004").strip() or "0.004"
     _kraken_buy_headroom_pct_raw = os.environ.get("NIJA_KRAKEN_BUY_HEADROOM_PCT", "0.005").strip() or "0.005"
     try:
@@ -1889,6 +1878,12 @@ def _acquire_distributed_process_lock() -> None:
         f"redis_force_tls={_force_redis_tls} "
         f"kraken_buy_buffer={_kraken_buy_buffer_pct * 100:.2f}% "
         f"kraken_buy_headroom={_kraken_buy_headroom_pct * 100:.2f}%"
+    )
+    print(
+        "🧯 Fail-closed config | "
+        f"retry_on_lock_failure={_fail_closed_retry_enabled} "
+        f"max_retry_attempts={_fail_closed_max_retries} "
+        f"exit_on_unreachable_redis={_fail_closed_exit_unreachable}"
     )
     if not _redis_url:
         _msg = (
@@ -1937,37 +1932,25 @@ def _acquire_distributed_process_lock() -> None:
             _trimmed = _raw_env_value.strip()
             if len(_trimmed) >= 2 and _trimmed[0] == _trimmed[-1] and _trimmed[0] in {'"', "'"}:
                 raise RuntimeError("NIJA_REDIS_URL must not include wrapping quotes")
-            # Warn when redis:// (non-TLS) is used against a Railway public proxy
-            # while TLS forcing is active.  The bot auto-upgrades the scheme, but
-            # an explicit warning helps operators fix the root-cause config.
-            try:
-                _parsed_check = urlparse(_trimmed)
-                _host_check = (_parsed_check.hostname or "").lower()
-                _force_tls_check = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
-                    "1", "true", "yes", "on", "enabled"
-                }
-                if (
-                    _parsed_check.scheme == "redis"
-                    and _force_tls_check
-                    and _host_check.endswith(".proxy.rlwy.net")
-                ):
-                    print(
-                        "⚠️  CONFIG WARNING: NIJA_REDIS_URL uses redis:// (plain) against a Railway "
-                        "public proxy endpoint while NIJA_REDIS_FORCE_TLS=true. "
-                        "The scheme will be upgraded to rediss:// automatically, but you should "
-                        "set rediss:// explicitly to avoid ambiguity: "
-                        f"  NIJA_REDIS_URL=rediss://{_parsed_check.netloc}{_parsed_check.path}",
-                        flush=True,
-                    )
-            except Exception:
-                pass
+            _force_tls_check = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
+                "1", "true", "yes", "on", "enabled"
+            }
+            if (
+                _trimmed.startswith("redis://")
+                and _force_tls_check
+                and ".proxy.rlwy.net" in _trimmed.lower()
+            ):
+                print(
+                    "⚠️  CONFIG WARNING: NIJA_REDIS_URL uses redis:// (plain) against a Railway "
+                    "public proxy endpoint while NIJA_REDIS_FORCE_TLS=true. "
+                    "Set NIJA_REDIS_URL explicitly to rediss:// for this endpoint.",
+                    flush=True,
+                )
 
         def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
             if not _allow_plain_redis_fallback:
                 return None
-            _parsed = urlparse(_url)
-            _host = (_parsed.hostname or "").lower()
-            if _parsed.scheme != "rediss" or not _host.endswith(".proxy.rlwy.net"):
+            if not _url.startswith("rediss://") or ".proxy.rlwy.net" not in _url.lower():
                 return None
             _msg = str(_exc).lower()
             if "timeout" not in _msg and "handshake" not in _msg and "ssl" not in _msg:
@@ -1988,18 +1971,18 @@ def _acquire_distributed_process_lock() -> None:
                 return None
 
         _validate_nija_redis_env()
-        _connect_timeout_raw = os.environ.get("NIJA_REDIS_CONNECT_TIMEOUT_S", "3").strip()
-        _socket_timeout_raw = os.environ.get("NIJA_REDIS_SOCKET_TIMEOUT_S", "3").strip()
+        _connect_timeout_raw = os.environ.get("NIJA_REDIS_CONNECT_TIMEOUT_S", "5").strip()
+        _socket_timeout_raw = os.environ.get("NIJA_REDIS_SOCKET_TIMEOUT_S", "5").strip()
         _ping_retries_raw = os.environ.get("NIJA_REDIS_STARTUP_PING_RETRIES", "5").strip()
         _ping_retry_delay_raw = os.environ.get("NIJA_REDIS_STARTUP_PING_RETRY_DELAY_S", "2").strip()
         try:
-            _redis_connect_timeout_s = min(max(float(_connect_timeout_raw or "3"), 1.0), 30.0)
+            _redis_connect_timeout_s = min(max(float(_connect_timeout_raw or "5"), 1.0), 30.0)
         except (TypeError, ValueError):
-            _redis_connect_timeout_s = 3.0
+            _redis_connect_timeout_s = 5.0
         try:
-            _redis_socket_timeout_s = min(max(float(_socket_timeout_raw or "3"), 1.0), 30.0)
+            _redis_socket_timeout_s = min(max(float(_socket_timeout_raw or "5"), 1.0), 30.0)
         except (TypeError, ValueError):
-            _redis_socket_timeout_s = 3.0
+            _redis_socket_timeout_s = 5.0
         try:
             _ping_retries = min(max(int(_ping_retries_raw or "5"), 1), 20)
         except (TypeError, ValueError):
@@ -2017,15 +2000,7 @@ def _acquire_distributed_process_lock() -> None:
         )
 
         def _build_strict_redis_client(_url: str):
-            _parsed = urlparse(_url)
-            if _parsed.scheme not in {"redis", "rediss"}:
-                raise RuntimeError(
-                    "NIJA_REDIS_URL must start with redis:// or rediss://"
-                )
-            if not _parsed.hostname or not _parsed.port:
-                raise RuntimeError("NIJA_REDIS_URL must include host and port")
-            if not _parsed.password:
-                raise RuntimeError("NIJA_REDIS_URL must include password")
+            assert _url.startswith("redis://") or _url.startswith("rediss://")
             return redis.Redis.from_url(
                 _url,
                 decode_responses=True,

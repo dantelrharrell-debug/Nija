@@ -188,7 +188,10 @@ python3 scripts/clear_redis_locks.py --clear
 | `NIJA_REDIS_URL` | ✅ Yes | `rediss://default:PWD@host:port/0` |
 | `NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK` | ❌ No (emergency only) | `true` |
 | `NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE` | ❌ No (default=true) | `true` |
-| `NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS` | ❌ No (default=infinite) | `0` |
+| `NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS` | ❌ No (default=12 in live mode, infinite otherwise) | `12` |
+| `NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS` | ❌ No (default=true in live mode, false otherwise) | `true` |
+| `NIJA_REDIS_CONNECT_TIMEOUT_S` | ❌ No (default=5) | `5` |
+| `NIJA_REDIS_SOCKET_TIMEOUT_S` | ❌ No (default=5) | `5` |
 
 ---
 

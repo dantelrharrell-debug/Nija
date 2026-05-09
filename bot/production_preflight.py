@@ -157,8 +157,7 @@ def _step1_redis_ping() -> "redis.Redis":  # type: ignore[name-defined]
     if not url:
         diagnostics = get_redis_resolution_diagnostics()
         _fail(
-            "No valid Redis URL configured. Set NIJA_REDIS_URL / REDIS_URL, or provide valid component vars "
-            "(for Railway: RAILWAY_TCP_PROXY_DOMAIN + numeric RAILWAY_TCP_PROXY_PORT + REDIS_PASSWORD)."
+            "No valid Redis URL configured. Set NIJA_REDIS_URL to a full redis:// or rediss:// URL."
         )
         log.info("Redis resolution diagnostics: %s", diagnostics)
         sys.exit(1)
