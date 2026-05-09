@@ -1679,9 +1679,22 @@ def _acquire_distributed_process_lock() -> None:
     except (TypeError, ValueError):
         _standby_retry_count = 0
 
+    def _is_nonrecoverable_redis_config_error(_reason: str) -> bool:
+        _reason_lc = str(_reason or "").lower()
+        return any(
+            _token in _reason_lc
+            for _token in (
+                "endpoint responded as http/non-redis",
+                "must not include wrapping quotes",
+                "contains leading or trailing whitespace",
+                "redis url not configured while distributed single-writer lock is required",
+            )
+        )
+
     def _enter_fail_closed_standby(_reason: str) -> None:
         """Block startup safely and retry lock acquisition instead of crash-looping."""
         nonlocal _standby_retry_count
+        _reason_lc = str(_reason or "").lower()
         _retry_enabled = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
         ).strip().lower() in _truthy
@@ -1735,6 +1748,21 @@ def _acquire_distributed_process_lock() -> None:
             "\n     5. Single-instance bypass:    set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true (UNSAFE)"
         )
 
+        _is_nonrecoverable_config_error = _is_nonrecoverable_redis_config_error(_reason)
+        _retry_on_nonrecoverable = os.environ.get(
+            "NIJA_FAIL_CLOSED_RETRY_ON_NONRECOVERABLE_REDIS_ERROR", "false"
+        ).strip().lower() in _truthy
+        if _is_nonrecoverable_config_error and not _retry_on_nonrecoverable:
+            print(
+                "❌ Non-recoverable Redis configuration error detected; "
+                "exiting immediately instead of retrying standby loop."
+            )
+            print(
+                "   Set NIJA_FAIL_CLOSED_RETRY_ON_NONRECOVERABLE_REDIS_ERROR=true "
+                "to keep retrying anyway."
+            )
+            sys.exit(1)
+
         _default_exit_on_unreachable = "true" if _live_mode else "false"
         _exit_on_unreachable = os.environ.get(
             "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS", _default_exit_on_unreachable
@@ -1747,7 +1775,7 @@ def _acquire_distributed_process_lock() -> None:
         except (TypeError, ValueError):
             _preflight_timeout_s = 3.0
         _connectivity_reason = any(
-            _token in _reason.lower()
+            _token in _reason_lc
             for _token in (
                 "timeout",
                 "unreachable",
@@ -1798,6 +1826,12 @@ def _acquire_distributed_process_lock() -> None:
                 raise
             except Exception as _standby_exc:
                 _msg = str(_standby_exc).splitlines()[0] if str(_standby_exc) else type(_standby_exc).__name__
+                if _is_nonrecoverable_redis_config_error(_msg) and not _retry_on_nonrecoverable:
+                    print(
+                        "❌ Non-recoverable Redis configuration error persisted during standby retry; "
+                        "exiting immediately."
+                    )
+                    sys.exit(1)
                 print(f"⚠️ Retry failed: {_msg}")
 
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
@@ -2562,6 +2596,11 @@ def _acquire_distributed_process_lock() -> None:
                 f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
             )
     except Exception as _lock_exc:
+        _retry_on_nonrecoverable = os.environ.get(
+            "NIJA_FAIL_CLOSED_RETRY_ON_NONRECOVERABLE_REDIS_ERROR", "false"
+        ).strip().lower() in _truthy
+        if _standby_retry_active and _is_nonrecoverable_redis_config_error(str(_lock_exc)) and not _retry_on_nonrecoverable:
+            raise SystemExit(1)
         if _standby_retry_active:
             raise RuntimeError(str(_lock_exc))
         _enter_fail_closed_standby(str(_lock_exc))
