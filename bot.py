@@ -2066,30 +2066,38 @@ def _acquire_distributed_process_lock() -> None:
                 socket_timeout=_redis_socket_timeout_s,
             )
 
+        _ping_exc = None
+        _client: Any
         _non_redis_hint = _detect_non_redis_http_endpoint(_redis_url)
         if _non_redis_hint:
-            raise RuntimeError(_non_redis_hint)
+            _ping_exc = RuntimeError(_non_redis_hint)
+            if _strict_single_redis:
+                raise _ping_exc
+            print(
+                "⚠️ Primary NIJA_REDIS_URL appears non-Redis; "
+                "strict_single_url=false so attempting configured fallback Redis URLs..."
+            )
+            _client = cast(Any, None)
+        else:
+            _client = _build_strict_redis_client(_redis_url)
 
-        _client = _build_strict_redis_client(_redis_url)
-
-        # Retry logic before any lock operations use Redis.
-        _max_retries = _ping_retries
-        _ping_exc = None
-        for _attempt in range(_max_retries):
-            try:
-                _client.ping()
-                _ping_exc = None
-                break
-            except Exception as _exc:
-                _ping_exc = _exc
-                if _attempt < _max_retries - 1:
-                    print(
-                        f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: "
-                        f"{_exc}. Retrying in {_ping_retry_delay_s:.2f}s..."
-                    )
-                    time.sleep(_ping_retry_delay_s)
-                else:
-                    print(f"❌ Redis connection failed after {_max_retries} attempts")
+            # Retry logic before any lock operations use Redis.
+            _max_retries = _ping_retries
+            for _attempt in range(_max_retries):
+                try:
+                    _client.ping()
+                    _ping_exc = None
+                    break
+                except Exception as _exc:
+                    _ping_exc = _exc
+                    if _attempt < _max_retries - 1:
+                        print(
+                            f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: "
+                            f"{_exc}. Retrying in {_ping_retry_delay_s:.2f}s..."
+                        )
+                        time.sleep(_ping_retry_delay_s)
+                    else:
+                        print(f"❌ Redis connection failed after {_max_retries} attempts")
 
         if _ping_exc:
             _fallback_client = _try_plain_railway_proxy_fallback(_redis_url, _ping_exc)
