@@ -4,14 +4,40 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import threading
 import time
 from types import FrameType
 from typing import Any, Callable, Iterable, Optional
+from urllib.parse import urlparse
 
 import redis  # type: ignore[import]
 
 from bot.redis_env import get_redis_url
+
+
+def _detect_non_redis_http_endpoint(url: str) -> str:
+    """Return error hint when endpoint looks like HTTP instead of Redis."""
+    try:
+        parsed = urlparse((url or "").strip())
+        host = parsed.hostname
+        port = parsed.port
+        if not host or port is None:
+            return ""
+        with socket.create_connection((host, int(port)), timeout=2.5) as sock:
+            sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+            data = sock.recv(128)
+        if not data:
+            return ""
+        head = data[:80].decode("latin-1", errors="ignore")
+        if data.startswith(b"HTTP/") or b"<!DOCTYPE HTML" in data or "Bad request syntax" in head:
+            return (
+                "Redis URL endpoint responded as HTTP/non-Redis. "
+                "Verify NIJA_REDIS_URL points to Railway Redis Connect URL."
+            )
+    except Exception:
+        return ""
+    return ""
 
 
 def create_redis(
@@ -68,21 +94,35 @@ def connect_redis_with_fallback(
     delay_s: float = 2.0,
     log: Callable[[str], None] = print,
 ) -> tuple[redis.Redis, str]:
-    """Connect to Redis with optional plain Railway fallback when explicitly enabled."""
+    """Connect to Redis with scheme fallback for Railway proxy endpoints."""
     primary_url = (url or get_redis_url()).strip()
     if not primary_url:
         raise RuntimeError("Redis URL is missing")
+
+    non_redis_hint = _detect_non_redis_http_endpoint(primary_url)
+    if non_redis_hint:
+        raise RuntimeError(non_redis_hint)
 
     candidates = [primary_url]
     allow_plain_fallback = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in {
         "1", "true", "yes", "on", "enabled"
     }
+    force_tls = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
+        "1", "true", "yes", "on", "enabled"
+    }
+    effective_allow_plain_fallback = allow_plain_fallback or (not force_tls)
     if (
-        allow_plain_fallback
+        effective_allow_plain_fallback
         and primary_url.startswith("rediss://")
         and ".proxy.rlwy.net" in primary_url.lower()
     ):
         candidates.append(primary_url.replace("rediss://", "redis://", 1))
+    if (
+        force_tls
+        and primary_url.startswith("redis://")
+        and ".proxy.rlwy.net" in primary_url.lower()
+    ):
+        candidates.append(primary_url.replace("redis://", "rediss://", 1))
 
     last_error: Optional[Exception] = None
     for idx, candidate_url in enumerate(candidates):
@@ -103,8 +143,8 @@ def connect_redis_with_fallback(
                 msg = str(exc).lower()
                 if "timeout" in msg or "handshake" in msg or "ssl" in msg:
                     log(
-                        "Redis TLS handshake timed out against Railway proxy; "
-                        "trying plain redis:// fallback for the same endpoint..."
+                        "Redis scheme mismatch suspected against Railway proxy; "
+                        "trying alternative redis URL scheme for the same endpoint..."
                     )
                     continue
                 break

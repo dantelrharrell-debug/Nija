@@ -172,7 +172,20 @@ def _step1_redis_ping() -> "redis.Redis":  # type: ignore[name-defined]
     except Exception:
         log.info("Redis URL        : <redacted>")
 
-    # CRITICAL FIX: Implement aggressive retry loop with exponential backoff
+    # Retry transient connectivity failures, but fail fast on permanent config errors.
+    def _is_nonrecoverable_redis_error(exc: Exception) -> bool:
+        msg = str(exc or "").lower()
+        return any(
+            token in msg
+            for token in (
+                "http/non-redis",
+                "endpoint responded as http",
+                "redis url endpoint responded as http",
+                "must not include wrapping quotes",
+                "contains leading or trailing whitespace",
+            )
+        )
+
     max_retries = 10
     base_delay = 1.0
     last_exc = None
@@ -209,6 +222,9 @@ def _step1_redis_ping() -> "redis.Redis":  # type: ignore[name-defined]
                     
         except Exception as exc:
             last_exc = exc
+            if _is_nonrecoverable_redis_error(exc):
+                _fail(f"❌ Non-recoverable Redis configuration error: {exc}")
+                sys.exit(1)
             if attempt < max_retries - 1:
                 delay = min(base_delay * (2 ** attempt), 10.0)
                 log.warning(

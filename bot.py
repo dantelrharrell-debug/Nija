@@ -1679,9 +1679,22 @@ def _acquire_distributed_process_lock() -> None:
     except (TypeError, ValueError):
         _standby_retry_count = 0
 
+    def _is_nonrecoverable_redis_config_error(_reason: str) -> bool:
+        _reason_lc = str(_reason or "").lower()
+        return any(
+            _token in _reason_lc
+            for _token in (
+                "endpoint responded as http/non-redis",
+                "must not include wrapping quotes",
+                "contains leading or trailing whitespace",
+                "redis url not configured while distributed single-writer lock is required",
+            )
+        )
+
     def _enter_fail_closed_standby(_reason: str) -> None:
         """Block startup safely and retry lock acquisition instead of crash-looping."""
         nonlocal _standby_retry_count
+        _reason_lc = str(_reason or "").lower()
         _retry_enabled = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
         ).strip().lower() in _truthy
@@ -1738,6 +1751,21 @@ def _acquire_distributed_process_lock() -> None:
             "\n     5. Single-instance bypass:    set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true (UNSAFE)"
         )
 
+        _is_nonrecoverable_config_error = _is_nonrecoverable_redis_config_error(_reason)
+        _retry_on_nonrecoverable = os.environ.get(
+            "NIJA_FAIL_CLOSED_RETRY_ON_NONRECOVERABLE_REDIS_ERROR", "false"
+        ).strip().lower() in _truthy
+        if _is_nonrecoverable_config_error and not _retry_on_nonrecoverable:
+            print(
+                "❌ Non-recoverable Redis configuration error detected; "
+                "exiting immediately instead of retrying standby loop."
+            )
+            print(
+                "   Set NIJA_FAIL_CLOSED_RETRY_ON_NONRECOVERABLE_REDIS_ERROR=true "
+                "to keep retrying anyway."
+            )
+            sys.exit(1)
+
         _default_exit_on_unreachable = "true" if _live_mode else "false"
         _exit_on_unreachable = os.environ.get(
             "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS", _default_exit_on_unreachable
@@ -1750,7 +1778,7 @@ def _acquire_distributed_process_lock() -> None:
         except (TypeError, ValueError):
             _preflight_timeout_s = 3.0
         _connectivity_reason = any(
-            _token in _reason.lower()
+            _token in _reason_lc
             for _token in (
                 "timeout",
                 "unreachable",
@@ -1801,6 +1829,12 @@ def _acquire_distributed_process_lock() -> None:
                 raise
             except Exception as _standby_exc:
                 _msg = str(_standby_exc).splitlines()[0] if str(_standby_exc) else type(_standby_exc).__name__
+                if _is_nonrecoverable_redis_config_error(_msg) and not _retry_on_nonrecoverable:
+                    print(
+                        "❌ Non-recoverable Redis configuration error persisted during standby retry; "
+                        "exiting immediately."
+                    )
+                    sys.exit(1)
                 print(f"⚠️ Retry failed: {_msg}")
 
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
@@ -1842,6 +1876,7 @@ def _acquire_distributed_process_lock() -> None:
     _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
     _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
     _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
+    _effective_allow_plain_redis_fallback = _allow_plain_redis_fallback or (not _force_redis_tls)
     _fail_closed_retry_enabled = os.environ.get(
         "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
     ).strip().lower() in _truthy
@@ -1875,7 +1910,7 @@ def _acquire_distributed_process_lock() -> None:
         "🔐 Writer lock mode | "
         f"live={_live_mode} required={_require_lock} unsafe_bypass={_unsafe_bypass} "
         f"redis_configured={bool(_redis_url)} source={_redis_url_source or 'unset'} "
-        f"strict_single_url={_strict_single_redis} plain_fallback={_allow_plain_redis_fallback}"
+        f"strict_single_url={_strict_single_redis} plain_fallback={_effective_allow_plain_redis_fallback}"
     )
     print(f"🔐 Redis env presence | {_redis_env_presence}")
     print(f"🔐 Redis resolution diag | {_redis_resolution_diag}")
@@ -1954,7 +1989,7 @@ def _acquire_distributed_process_lock() -> None:
                 )
 
         def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
-            if not _allow_plain_redis_fallback:
+            if not _effective_allow_plain_redis_fallback:
                 return None
             if not _url.startswith("rediss://") or ".proxy.rlwy.net" not in _url.lower():
                 return None
@@ -1975,6 +2010,29 @@ def _acquire_distributed_process_lock() -> None:
             except Exception as _plain_exc:
                 print(f"⚠️ Plain redis:// fallback also failed: {_plain_exc}")
                 return None
+
+        def _detect_non_redis_http_endpoint(_url: str) -> str:
+            """Return a direct operator-facing error when endpoint behaves like HTTP."""
+            try:
+                _parsed = urlparse(_url)
+                _host = _parsed.hostname
+                _port = _parsed.port
+                if not _host or _port is None:
+                    return ""
+                with socket.create_connection((_host, int(_port)), timeout=2.5) as _sock:
+                    _sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+                    _resp = _sock.recv(128)
+                if not _resp:
+                    return ""
+                _head = _resp[:80].decode("latin-1", errors="ignore")
+                if _resp.startswith(b"HTTP/") or b"<!DOCTYPE HTML" in _resp or "Bad request syntax" in _head:
+                    return (
+                        "NIJA_REDIS_URL endpoint responded as HTTP/non-Redis. "
+                        "Copy the Redis URL from Railway Redis service Connect tab and set NIJA_REDIS_URL to that exact value."
+                    )
+            except Exception:
+                return ""
+            return ""
 
         _validate_nija_redis_env()
         _connect_timeout_raw = os.environ.get("NIJA_REDIS_CONNECT_TIMEOUT_S", "5").strip()
@@ -2014,26 +2072,38 @@ def _acquire_distributed_process_lock() -> None:
                 socket_timeout=_redis_socket_timeout_s,
             )
 
-        _client = _build_strict_redis_client(_redis_url)
-
-        # Retry logic before any lock operations use Redis.
-        _max_retries = _ping_retries
         _ping_exc = None
-        for _attempt in range(_max_retries):
-            try:
-                _client.ping()
-                _ping_exc = None
-                break
-            except Exception as _exc:
-                _ping_exc = _exc
-                if _attempt < _max_retries - 1:
-                    print(
-                        f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: "
-                        f"{_exc}. Retrying in {_ping_retry_delay_s:.2f}s..."
-                    )
-                    time.sleep(_ping_retry_delay_s)
-                else:
-                    print(f"❌ Redis connection failed after {_max_retries} attempts")
+        _client: Any
+        _non_redis_hint = _detect_non_redis_http_endpoint(_redis_url)
+        if _non_redis_hint:
+            _ping_exc = RuntimeError(_non_redis_hint)
+            if _strict_single_redis:
+                raise _ping_exc
+            print(
+                "⚠️ Primary NIJA_REDIS_URL appears non-Redis; "
+                "strict_single_url=false so attempting configured fallback Redis URLs..."
+            )
+            _client = cast(Any, None)
+        else:
+            _client = _build_strict_redis_client(_redis_url)
+
+            # Retry logic before any lock operations use Redis.
+            _max_retries = _ping_retries
+            for _attempt in range(_max_retries):
+                try:
+                    _client.ping()
+                    _ping_exc = None
+                    break
+                except Exception as _exc:
+                    _ping_exc = _exc
+                    if _attempt < _max_retries - 1:
+                        print(
+                            f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: "
+                            f"{_exc}. Retrying in {_ping_retry_delay_s:.2f}s..."
+                        )
+                        time.sleep(_ping_retry_delay_s)
+                    else:
+                        print(f"❌ Redis connection failed after {_max_retries} attempts")
 
         if _ping_exc:
             _fallback_client = _try_plain_railway_proxy_fallback(_redis_url, _ping_exc)
@@ -2056,6 +2126,30 @@ def _acquire_distributed_process_lock() -> None:
                     return f"{_p.scheme}://***@{_p.hostname}:{_p.port}"
                 except Exception:
                     return "<unparseable>"
+
+            def _probe_non_redis_endpoint(u: str) -> str:
+                """Return a human-friendly hint if endpoint responds like HTTP/non-Redis."""
+                try:
+                    _p = urlparse(u)
+                    _host = _p.hostname
+                    _port = _p.port
+                    if not _host or not _port:
+                        return ""
+                    with socket.create_connection((_host, _port), timeout=2.5) as _sock:
+                        _sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+                        _data = _sock.recv(128)
+                    if not _data:
+                        return ""
+                    _head = _data[:64].decode("latin-1", errors="ignore").strip()
+                    if _data.startswith(b"HTTP/") or b"<!DOCTYPE HTML" in _data or "Bad request syntax" in _head:
+                        return (
+                            "\n  ⚠️  Endpoint appears to be an HTTP service, not Redis.\n"
+                            "     Verify NIJA_REDIS_URL was copied from Railway Redis → Connect tab\n"
+                            "     (not from an app/public HTTP endpoint)."
+                        )
+                except Exception:
+                    return ""
+                return ""
 
             _all_urls = get_all_redis_urls()
             _standby_log_every_raw = os.environ.get("NIJA_STANDBY_LOG_EVERY", "8").strip()
@@ -2129,6 +2223,10 @@ def _acquire_distributed_process_lock() -> None:
                         f"       4. To bypass the lock while Redis recovers (UNSAFE, single-instance only):\n"
                         f"          set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true and redeploy"
                     )
+                if not _railway_hint and _proxy_hosts:
+                    _probe_hint = _probe_non_redis_endpoint(_redis_url)
+                    if _probe_hint:
+                        _railway_hint = _probe_hint
                 if _standby_retry_active and not _verbose_standby:
                     _ping_err_msg = (
                         "Redis connectivity check failed for distributed writer lock: "
@@ -2512,6 +2610,11 @@ def _acquire_distributed_process_lock() -> None:
                 f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
             )
     except Exception as _lock_exc:
+        _retry_on_nonrecoverable = os.environ.get(
+            "NIJA_FAIL_CLOSED_RETRY_ON_NONRECOVERABLE_REDIS_ERROR", "false"
+        ).strip().lower() in _truthy
+        if _standby_retry_active and _is_nonrecoverable_redis_config_error(str(_lock_exc)) and not _retry_on_nonrecoverable:
+            raise SystemExit(1)
         if _standby_retry_active:
             raise RuntimeError(str(_lock_exc))
         _enter_fail_closed_standby(str(_lock_exc))

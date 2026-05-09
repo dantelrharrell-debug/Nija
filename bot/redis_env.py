@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import quote
 
 
 
@@ -14,6 +15,92 @@ _REDIS_URL_ENV_NAMES = (
     "REDIS_PUBLIC_URL",
 )
 
+_REDIS_COMPONENT_HOST_ENV_NAMES = (
+    "RAILWAY_TCP_PROXY_DOMAIN",
+    "REDISHOST",
+    "REDIS_HOST",
+)
+
+_REDIS_COMPONENT_PORT_ENV_NAMES = (
+    "RAILWAY_TCP_PROXY_PORT",
+    "REDISPORT",
+    "REDIS_PORT",
+)
+
+_REDIS_COMPONENT_PASSWORD_ENV_NAMES = (
+    "REDIS_PASSWORD",
+    "REDISPASSWORD",
+)
+
+_REDIS_COMPONENT_USER_ENV_NAMES = (
+    "REDISUSER",
+    "REDIS_USER",
+)
+
+_REDIS_COMPONENT_DB_ENV_NAMES = (
+    "REDIS_DB",
+    "REDISDB",
+)
+
+
+def _first_nonempty_env(names: tuple[str, ...]) -> tuple[str | None, str]:
+    """Return first configured env value and the env name it came from."""
+    for name in names:
+        value = _strip_wrapping_quotes(os.getenv(name, ""))
+        if value:
+            return name, value
+    return None, ""
+
+
+def _is_truthy(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _build_component_redis_url() -> tuple[str, dict[str, object]]:
+    """Build Redis URL from host/port/password style env vars when available."""
+    host_source, host = _first_nonempty_env(_REDIS_COMPONENT_HOST_ENV_NAMES)
+    port_source, port_raw = _first_nonempty_env(_REDIS_COMPONENT_PORT_ENV_NAMES)
+    password_source, password = _first_nonempty_env(_REDIS_COMPONENT_PASSWORD_ENV_NAMES)
+    user_source, user = _first_nonempty_env(_REDIS_COMPONENT_USER_ENV_NAMES)
+    _, db_raw = _first_nonempty_env(_REDIS_COMPONENT_DB_ENV_NAMES)
+
+    component_host_present = bool(host)
+    component_port_present = bool(port_raw)
+    component_port_valid = False
+    endpoint = None
+    built_url = ""
+
+    port = 0
+    if port_raw:
+        try:
+            port = int(port_raw)
+            component_port_valid = 1 <= port <= 65535
+        except (TypeError, ValueError):
+            component_port_valid = False
+
+    if component_host_present and component_port_valid:
+        scheme = "rediss" if _is_truthy(os.getenv("NIJA_REDIS_FORCE_TLS", "true")) else "redis"
+        endpoint = f"{host}:{port}"
+        username = user or "default"
+        db_value = db_raw or "0"
+        if password:
+            built_url = f"{scheme}://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}/{db_value}"
+        else:
+            built_url = f"{scheme}://{quote(username, safe='')}@{host}:{port}/{db_value}"
+
+    source_parts = [part for part in (host_source, port_source, password_source, user_source) if part]
+    component_source = "+".join(source_parts) if source_parts else None
+    if component_source is None and built_url:
+        component_source = "components"
+
+    return built_url, {
+        "component_host_present": component_host_present,
+        "component_port_present": component_port_present,
+        "component_port_valid": component_port_valid,
+        "component_source": component_source,
+        "component_endpoint": endpoint,
+    }
+
 
 def _strip_wrapping_quotes(value: str) -> str:
     """Trim matching single or double quotes from environment values."""
@@ -24,17 +111,16 @@ def _strip_wrapping_quotes(value: str) -> str:
 
 
 def get_redis_url() -> str:
-    """Return NIJA_REDIS_URL directly without reconstruction or host/port parsing."""
-    redis_url = os.getenv("NIJA_REDIS_URL")
-    if not redis_url:
-        return ""
-    assert redis_url.startswith("redis://") or redis_url.startswith("rediss://")
-    return redis_url
+    """Return the highest-priority configured Redis URL."""
+    configured = _iter_configured_redis_urls()
+    if configured:
+        return configured[0][1]
+    return ""
 
 
 def _get_redis_url_validated() -> str:
     """Best-effort validated Redis URL without raising AssertionError in production paths."""
-    redis_url = os.getenv("NIJA_REDIS_URL")
+    redis_url = get_redis_url()
     if not redis_url:
         return ""
     if not (redis_url.startswith("redis://") or redis_url.startswith("rediss://")):
@@ -48,20 +134,24 @@ def _normalize_source_name(name: str) -> str:
 
 
 def _iter_configured_redis_urls() -> list[tuple[str, str]]:
-    """Return configured URL env vars in priority order without rewriting values."""
+    """Return configured URL env vars (and component-derived URL) in priority order."""
     configured: list[tuple[str, str]] = []
     for name in _REDIS_URL_ENV_NAMES:
         value = _strip_wrapping_quotes(os.getenv(name, ""))
         if value and (value.startswith("redis://") or value.startswith("rediss://")):
             configured.append((_normalize_source_name(name), value))
+    component_url, component_diag = _build_component_redis_url()
+    if component_url:
+        component_source = str(component_diag.get("component_source") or "components")
+        configured.append((f"COMPONENTS[{component_source}]", component_url))
     return configured
 
 
 def get_redis_url_source() -> str:
     """Return the environment variable name supplying the current Redis URL."""
-    redis_url = _get_redis_url_validated()
-    if redis_url:
-        return "NIJA_REDIS_URL"
+    configured = _iter_configured_redis_urls()
+    if configured:
+        return configured[0][0]
     return ""
 
 
@@ -72,15 +162,18 @@ def get_redis_env_presence() -> dict[str, bool]:
 
 def get_redis_resolution_diagnostics() -> dict[str, object]:
     """Return Redis resolution diagnostics for startup logs."""
+    component_url, component_diag = _build_component_redis_url()
+    resolved_source = get_redis_url_source() or None
     return {
         "url_env_presence": get_redis_env_presence(),
-        "component_host_present": False,
-        "component_port_present": False,
-        "component_port_valid": False,
-        "component_source": None,
-        "component_endpoint": None,
+        "component_host_present": component_diag["component_host_present"],
+        "component_port_present": component_diag["component_port_present"],
+        "component_port_valid": component_diag["component_port_valid"],
+        "component_source": component_diag["component_source"],
+        "component_endpoint": component_diag["component_endpoint"],
+        "component_url_present": bool(component_url),
         "resolved_url_present": bool(_get_redis_url_validated()),
-        "resolved_source": get_redis_url_source() or None,
+        "resolved_source": resolved_source,
     }
 
 
