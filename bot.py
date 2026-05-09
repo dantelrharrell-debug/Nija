@@ -1876,7 +1876,11 @@ def _acquire_distributed_process_lock() -> None:
     _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
     _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
     _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
-    _effective_allow_plain_redis_fallback = _allow_plain_redis_fallback or (not _force_redis_tls)
+    _redis_primary_is_tls = _redis_url.startswith("rediss://")
+    _effective_allow_plain_redis_fallback = (
+        (not _redis_primary_is_tls)
+        and (_allow_plain_redis_fallback or (not _force_redis_tls))
+    )
     _fail_closed_retry_enabled = os.environ.get(
         "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
     ).strip().lower() in _truthy

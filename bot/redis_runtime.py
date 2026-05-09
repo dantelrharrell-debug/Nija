@@ -123,7 +123,8 @@ def connect_redis_with_fallback(
     force_tls = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
         "1", "true", "yes", "on", "enabled"
     }
-    effective_allow_plain_fallback = allow_plain_fallback or (not force_tls)
+    primary_is_tls = primary_url.startswith("rediss://")
+    effective_allow_plain_fallback = (not primary_is_tls) and (allow_plain_fallback or (not force_tls))
     if (
         effective_allow_plain_fallback
         and primary_url.startswith("rediss://")
