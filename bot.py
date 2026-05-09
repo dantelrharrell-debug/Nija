@@ -1760,41 +1760,12 @@ def _acquire_distributed_process_lock() -> None:
             )
         )
         if _exit_on_unreachable and _connectivity_reason and _redis_url:
-            _probe_host = ""
-            _probe_port: int | None = None
-            try:
-                _probe_parsed = urlparse(_redis_url)
-                _probe_host = _probe_parsed.hostname or ""
-                _probe_port = _probe_parsed.port
-            except Exception:
-                _probe_host = ""
-                _probe_port = None
-
-            _probe_ok = False
-            _probe_error = "unknown"
-            if _probe_host and _probe_port:
-                try:
-                    with socket.create_connection((_probe_host, _probe_port), timeout=_preflight_timeout_s):
-                        _probe_ok = True
-                except Exception as _tcp_exc:
-                    _probe_error = str(_tcp_exc) or type(_tcp_exc).__name__
-            else:
-                _probe_error = "unable to parse Redis host/port from NIJA_REDIS_URL"
-
-            if not _probe_ok:
-                print("❌ Redis startup preflight failed: endpoint unreachable")
-                print(
-                    "   Redis endpoint: "
-                    f"{_probe_host or '<unknown>'}:{_probe_port if _probe_port is not None else '<unknown>'}"
-                )
-                print(f"   Probe timeout: {_preflight_timeout_s:.2f}s")
-                print(f"   Probe error: {_probe_error}")
-                print("   Exiting immediately due to NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true")
-                sys.exit(1)
-            print(
-                "ℹ️ Redis TCP preflight reachable, but lock acquisition still failed. "
-                "Continuing fail-closed standby retries."
-            )
+            print("❌ Redis startup preflight failed: endpoint unreachable")
+            print(f"   Redis source: {_redis_url_source or 'NIJA_REDIS_URL'}")
+            print(f"   Probe timeout: {_preflight_timeout_s:.2f}s")
+            print(f"   Probe error: {_reason}")
+            print("   Exiting immediately due to NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true")
+            sys.exit(1)
 
         os.environ["NIJA_STANDBY_RETRY_ACTIVE"] = "1"
 
@@ -1961,37 +1932,25 @@ def _acquire_distributed_process_lock() -> None:
             _trimmed = _raw_env_value.strip()
             if len(_trimmed) >= 2 and _trimmed[0] == _trimmed[-1] and _trimmed[0] in {'"', "'"}:
                 raise RuntimeError("NIJA_REDIS_URL must not include wrapping quotes")
-            # Warn when redis:// (non-TLS) is used against a Railway public proxy
-            # while TLS forcing is active.  The bot auto-upgrades the scheme, but
-            # an explicit warning helps operators fix the root-cause config.
-            try:
-                _parsed_check = urlparse(_trimmed)
-                _host_check = (_parsed_check.hostname or "").lower()
-                _force_tls_check = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
-                    "1", "true", "yes", "on", "enabled"
-                }
-                if (
-                    _parsed_check.scheme == "redis"
-                    and _force_tls_check
-                    and _host_check.endswith(".proxy.rlwy.net")
-                ):
-                    print(
-                        "⚠️  CONFIG WARNING: NIJA_REDIS_URL uses redis:// (plain) against a Railway "
-                        "public proxy endpoint while NIJA_REDIS_FORCE_TLS=true. "
-                        "The scheme will be upgraded to rediss:// automatically, but you should "
-                        "set rediss:// explicitly to avoid ambiguity: "
-                        f"  NIJA_REDIS_URL=rediss://{_parsed_check.netloc}{_parsed_check.path}",
-                        flush=True,
-                    )
-            except Exception:
-                pass
+            _force_tls_check = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
+                "1", "true", "yes", "on", "enabled"
+            }
+            if (
+                _trimmed.startswith("redis://")
+                and _force_tls_check
+                and ".proxy.rlwy.net" in _trimmed.lower()
+            ):
+                print(
+                    "⚠️  CONFIG WARNING: NIJA_REDIS_URL uses redis:// (plain) against a Railway "
+                    "public proxy endpoint while NIJA_REDIS_FORCE_TLS=true. "
+                    "Set NIJA_REDIS_URL explicitly to rediss:// for this endpoint.",
+                    flush=True,
+                )
 
         def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
             if not _allow_plain_redis_fallback:
                 return None
-            _parsed = urlparse(_url)
-            _host = (_parsed.hostname or "").lower()
-            if _parsed.scheme != "rediss" or not _host.endswith(".proxy.rlwy.net"):
+            if not _url.startswith("rediss://") or ".proxy.rlwy.net" not in _url.lower():
                 return None
             _msg = str(_exc).lower()
             if "timeout" not in _msg and "handshake" not in _msg and "ssl" not in _msg:
@@ -2041,15 +2000,7 @@ def _acquire_distributed_process_lock() -> None:
         )
 
         def _build_strict_redis_client(_url: str):
-            _parsed = urlparse(_url)
-            if _parsed.scheme not in {"redis", "rediss"}:
-                raise RuntimeError(
-                    "NIJA_REDIS_URL must start with redis:// or rediss://"
-                )
-            if not _parsed.hostname or not _parsed.port:
-                raise RuntimeError("NIJA_REDIS_URL must include host and port")
-            if not _parsed.password:
-                raise RuntimeError("NIJA_REDIS_URL must include password")
+            assert _url.startswith("redis://") or _url.startswith("rediss://")
             return redis.Redis.from_url(
                 _url,
                 decode_responses=True,

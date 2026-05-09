@@ -4,45 +4,14 @@ from __future__ import annotations
 
 import os
 import signal
-import ssl
 import threading
 import time
 from types import FrameType
 from typing import Any, Callable, Iterable, Optional
-from urllib.parse import urlparse
 
 import redis  # type: ignore[import]
 
 from bot.redis_env import get_redis_url
-
-
-def _redis_tls_kwargs(parsed) -> dict[str, Any]:
-    """Return explicit TLS kwargs when using rediss:// URLs."""
-    if parsed.scheme != "rediss":
-        return {"ssl": False}
-
-    cert_reqs_env = os.getenv("NIJA_REDIS_TLS_CERT_REQS", "none").strip().lower()
-    cert_reqs_map = {
-        "none": ssl.CERT_NONE,
-        "optional": ssl.CERT_OPTIONAL,
-        "required": ssl.CERT_REQUIRED,
-    }
-    cert_reqs = cert_reqs_map.get(cert_reqs_env, ssl.CERT_NONE)
-    check_hostname = os.getenv("NIJA_REDIS_TLS_CHECK_HOSTNAME", "false").strip().lower() in {
-        "1", "true", "yes", "on", "enabled"
-    }
-
-    tls_kwargs: dict[str, Any] = {
-        "ssl": True,
-        "ssl_cert_reqs": cert_reqs,
-        "ssl_check_hostname": check_hostname,
-    }
-
-    ca_certs = os.getenv("NIJA_REDIS_TLS_CA_CERTS", "").strip()
-    if ca_certs:
-        tls_kwargs["ssl_ca_certs"] = ca_certs
-
-    return tls_kwargs
 
 
 def create_redis(
@@ -52,33 +21,18 @@ def create_redis(
     socket_timeout: int = 5,
     socket_connect_timeout: int = 5,
 ) -> redis.Redis:
-    """Create Redis client from URL with explicit parsed configuration."""
+    """Create Redis client from URL without host/port reconstruction."""
     raw_url = (url or get_redis_url()).strip()
     if not raw_url:
         raise RuntimeError("Redis URL is missing")
 
-    parsed = urlparse(raw_url)
-    if parsed.scheme not in {"redis", "rediss"}:
-        raise RuntimeError("Redis URL must start with redis:// or rediss://")
-    if not parsed.hostname or not parsed.port:
-        raise RuntimeError("Redis URL must include host and port")
+    assert raw_url.startswith("redis://") or raw_url.startswith("rediss://")
 
-    db = 0
-    try:
-        db = int((parsed.path or "/0").lstrip("/") or "0")
-    except (TypeError, ValueError):
-        db = 0
-
-    return redis.Redis(
-        host=parsed.hostname,
-        port=parsed.port,
-        username=parsed.username or "default",
-        password=parsed.password,
-        db=db,
+    return redis.Redis.from_url(
+        raw_url,
+        decode_responses=decode_responses,
         socket_timeout=socket_timeout,
         socket_connect_timeout=socket_connect_timeout,
-        decode_responses=decode_responses,
-        **_redis_tls_kwargs(parsed),
     )
 
 
@@ -123,11 +77,10 @@ def connect_redis_with_fallback(
     allow_plain_fallback = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in {
         "1", "true", "yes", "on", "enabled"
     }
-    parsed = urlparse(primary_url)
     if (
         allow_plain_fallback
-        and parsed.scheme == "rediss"
-        and (parsed.hostname or "").lower().endswith(".proxy.rlwy.net")
+        and primary_url.startswith("rediss://")
+        and ".proxy.rlwy.net" in primary_url.lower()
     ):
         candidates.append(primary_url.replace("rediss://", "redis://", 1))
 

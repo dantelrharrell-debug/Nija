@@ -51,7 +51,7 @@ def main():
     source = get_redis_url_source()
 
     if not url:
-        log.error("❌ No Redis URL configured. Set NIJA_REDIS_URL (or REDIS_URL)")
+        log.error("❌ No Redis URL configured. Set NIJA_REDIS_URL")
         sys.exit(1)
 
     log.info("📍 Redis URL source: %s", source)
