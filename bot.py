@@ -1839,6 +1839,7 @@ def _acquire_distributed_process_lock() -> None:
     _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
     _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
     _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
+    _effective_allow_plain_redis_fallback = _allow_plain_redis_fallback or (not _force_redis_tls)
     _fail_closed_retry_enabled = os.environ.get(
         "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
     ).strip().lower() in _truthy
@@ -1869,7 +1870,7 @@ def _acquire_distributed_process_lock() -> None:
         "🔐 Writer lock mode | "
         f"live={_live_mode} required={_require_lock} unsafe_bypass={_unsafe_bypass} "
         f"redis_configured={bool(_redis_url)} source={_redis_url_source or 'unset'} "
-        f"strict_single_url={_strict_single_redis} plain_fallback={_allow_plain_redis_fallback}"
+        f"strict_single_url={_strict_single_redis} plain_fallback={_effective_allow_plain_redis_fallback}"
     )
     print(f"🔐 Redis env presence | {_redis_env_presence}")
     print(f"🔐 Redis resolution diag | {_redis_resolution_diag}")
@@ -1948,7 +1949,7 @@ def _acquire_distributed_process_lock() -> None:
                 )
 
         def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
-            if not _allow_plain_redis_fallback:
+            if not _effective_allow_plain_redis_fallback:
                 return None
             if not _url.startswith("rediss://") or ".proxy.rlwy.net" not in _url.lower():
                 return None
