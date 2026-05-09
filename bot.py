@@ -1875,8 +1875,14 @@ def _acquire_distributed_process_lock() -> None:
     _redis_resolution_diag = get_redis_resolution_diagnostics()
     _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
     _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
-    _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
+    _force_redis_tls_env = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
     _redis_primary_is_tls = _redis_url.startswith("rediss://")
+    _force_redis_tls = _force_redis_tls_env or _redis_primary_is_tls
+    if _redis_primary_is_tls and not _force_redis_tls_env:
+        print(
+            "⚠️ NIJA_REDIS_FORCE_TLS=false ignored because NIJA_REDIS_URL uses rediss://; enforcing TLS.",
+            flush=True,
+        )
     _effective_allow_plain_redis_fallback = (
         (not _redis_primary_is_tls)
         and (_allow_plain_redis_fallback or (not _force_redis_tls))
@@ -1977,9 +1983,7 @@ def _acquire_distributed_process_lock() -> None:
             _trimmed = _raw_env_value.strip()
             if len(_trimmed) >= 2 and _trimmed[0] == _trimmed[-1] and _trimmed[0] in {'"', "'"}:
                 raise RuntimeError("NIJA_REDIS_URL must not include wrapping quotes")
-            _force_tls_check = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
-                "1", "true", "yes", "on", "enabled"
-            }
+            _force_tls_check = _force_redis_tls
             if (
                 _trimmed.startswith("redis://")
                 and _force_tls_check
@@ -2241,10 +2245,30 @@ def _acquire_distributed_process_lock() -> None:
                         f"       4. To bypass the lock while Redis recovers (UNSAFE, single-instance only):\n"
                         f"          set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true and redeploy"
                     )
+                elif _proxy_hosts and "record layer failure" in str(_ping_exc).lower():
+                    _railway_hint = (
+                        f"\n  ⚠️  Railway public proxy returned TLS record-layer failure "
+                        f"({', '.join(_proxy_hosts)}).\n"
+                        f"     This usually means wrong/stale Redis URL credentials or endpoint details.\n"
+                        f"     Steps to fix:\n"
+                        f"       1. Go to Railway → Redis service → Connect tab\n"
+                        f"       2. Copy the full PUBLIC proxy URL exactly as shown\n"
+                        f"       3. Set NIJA_REDIS_URL to that value in bot service Variables\n"
+                        f"       4. Set NIJA_REDIS_FORCE_TLS=true and NIJA_REDIS_TLS_INSECURE=true\n"
+                        f"       5. Remove conflicting vars: REDIS_URL / REDIS_PRIVATE_URL / REDIS_TLS_URL\n"
+                        f"       6. Redeploy the bot service"
+                    )
                 if not _railway_hint and _proxy_hosts:
                     _probe_hint = _probe_non_redis_endpoint(_redis_url)
                     if _probe_hint:
                         _railway_hint = _probe_hint
+                _tls_policy_hint = ""
+                if _redis_url.startswith("rediss://") and not _force_redis_tls:
+                    _tls_policy_hint = (
+                        "\n  ⚠️  TLS policy mismatch detected: NIJA_REDIS_URL uses rediss:// but "
+                        "redis_force_tls is false.\n"
+                        "     Set NIJA_REDIS_FORCE_TLS=true and redeploy."
+                    )
                 if _standby_retry_active and not _verbose_standby:
                     _ping_err_msg = (
                         "Redis connectivity check failed for distributed writer lock: "
@@ -2253,7 +2277,7 @@ def _acquire_distributed_process_lock() -> None:
                 else:
                     _ping_err_msg = (
                         f"Redis connectivity check failed for distributed writer lock: {_ping_exc}"
-                        f"{_railway_hint}\n"
+                        f"{_railway_hint}{_tls_policy_hint}\n"
                         f"  Primary source: {_redis_url_source or 'unset'}\n"
                         f"  Fallbacks tried: {_fallback_tried or 'none'}\n"
                         f"  Redis env presence: {_redis_env_presence}"
