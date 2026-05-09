@@ -1390,45 +1390,48 @@ fi
 if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_UNSAFE_BYPASS}" != "true" ]; then
     echo ""
     echo "=== REDIS PREFLIGHT START ==="
-
     _redis_url_for_ping="$(_resolve_redis_url 2>/dev/null || true)"
+    _redis_health="degraded"
 
-    set +e
-    bash scripts/redis_connectivity_check.sh
-    RC=$?
-    set -e
-
-    echo "=== REDIS PREFLIGHT EXIT CODE: $RC ==="
-
-    if [ $RC -ne 0 ]; then
-        echo "⚠️  Redis preflight script failed (rc=$RC); attempting Python fallback ping"
-        if [ -n "${_redis_url_for_ping}" ] && "$PY" - <<'PY' "${_redis_url_for_ping}"
+    if [ -n "${_redis_url_for_ping}" ] && "$PY" - <<'PY' "${_redis_url_for_ping}"
+import os
 import sys
 
 try:
     import redis
 except Exception as exc:
-    print(f"Python fallback unavailable: {exc}")
+    print(f"❌ Python redis import failed: {exc}")
     raise SystemExit(2)
 
-url = sys.argv[1]
+url = os.environ.get("NIJA_REDIS_URL", "").strip() or sys.argv[1]
 try:
-    client = redis.from_url(url, socket_connect_timeout=5, socket_timeout=5, retry_on_timeout=False)
-    client.ping()
-    print("✅ Python Redis ping fallback passed")
+    r = redis.Redis.from_url(
+        url,
+        ssl=True,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+        retry_on_timeout=False,
+    )
+    r.ping()
+    print("✅ redis_health=healthy (python_ping)")
 except Exception as exc:
-    print(f"❌ Python Redis ping fallback failed: {exc}")
+    print(f"⚠️ redis_health=degraded (python_ping_failed): {exc}")
     raise SystemExit(1)
 PY
-        then
-            echo "✅ Continuing startup after successful Python Redis fallback"
-        else
-            echo "⚠️  Redis preflight failed; continuing to runtime fail-closed lock standby"
-            echo "   Trading remains blocked until distributed writer lock can be acquired."
-        fi
+    then
+        _redis_health="healthy"
+        export NIJA_REDIS_HEALTH=healthy
+        echo "✅ Redis preflight passed (python ping)"
+    else
+        _redis_health="degraded"
+        export NIJA_REDIS_HEALTH=degraded
+        export NIJA_RUNTIME_DEGRADED_MODE=1
+        export NIJA_ALLOW_REDIS_DEGRADED=1
+        echo "⚠️  Redis preflight degraded (python ping failed); continuing startup in degraded lock mode"
+        echo "   Distributed lock may be unavailable until Redis recovers."
     fi
 
-    echo "✅ Redis preflight passed (Python client ping)"
+    echo "=== REDIS PREFLIGHT HEALTH: ${_redis_health} ==="
 elif [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then
     echo "ℹ️  Redis startup preflight disabled (NIJA_REDIS_STARTUP_CHECK=${NIJA_REDIS_STARTUP_CHECK:-false})"
 fi

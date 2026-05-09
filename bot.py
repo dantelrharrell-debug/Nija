@@ -2145,40 +2145,44 @@ def _acquire_distributed_process_lock() -> None:
         acquired = _fencing_token > 0
         print(f"=== LOCK ACQUIRED: {acquired} ===", flush=True)
 
-        # Hard singleton guard: retry with a generous wait interval for lock contention.
-        # The interval drives periodic warning/rescue checks; it is not a hard stop.
-        _default_wait_checkpoint_s = 30.0
-        _wait_interval_raw = os.environ.get("NIJA_WRITER_LOCK_WAIT_S", "").strip()
-        if not _wait_interval_raw:
-            _wait_interval_raw = os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "").strip()
+        # ═══════════════════════════════════════════════════════════════════════════════════════
+        # DETERMINISTIC LOCK ACQUISITION STATE MACHINE (FIX 4: No "retries indefinitely")
+        # ═══════════════════════════════════════════════════════════════════════════════════════
+        # Replaces dangerous infinite retry loop with explicit timeout + safe fallback states.
+        # State flow: ATTEMPTING → [ACQUIRED + proceed] or CONTENDING → TIMEOUT → [DEGRADED or EXIT]
+        
+        # Configure explicit timeout (FIX 4 requirement: deterministic, not indefinite)
+        # Live mode: 120s (allows time for stale-lock rescue over Railway transients)
+        # Non-live mode: 60s (faster fallback to degraded mode for testing)
+        _lock_acquire_timeout_s_raw = os.environ.get("NIJA_LOCK_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _wait_checkpoint_interval_s = (
-                float(_wait_interval_raw) if _wait_interval_raw else _default_wait_checkpoint_s
-            )
+            _lock_acquire_timeout_s = float(_lock_acquire_timeout_s_raw) if _lock_acquire_timeout_s_raw else (120.0 if _live_mode else 60.0)
         except (TypeError, ValueError):
-            _wait_checkpoint_interval_s = _default_wait_checkpoint_s
-        # Ensure minimum of 20s for live, 30s for standby
-        if _live_mode and _wait_checkpoint_interval_s < 20.0:
-            _wait_checkpoint_interval_s = 25.0
-        elif not _live_mode and _wait_checkpoint_interval_s < _default_wait_checkpoint_s:
-            _wait_checkpoint_interval_s = _default_wait_checkpoint_s
-        if _wait_checkpoint_interval_s < 0.5:
-            _wait_checkpoint_interval_s = 0.5
-        # Next warning + stale-lock rescue checkpoint for continuous waiting loop.
-        _next_wait_checkpoint = time.time() + _wait_checkpoint_interval_s
-        _lock_retry_interval = 0.5
-        _wait_log_interval_raw = os.environ.get("NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S", "").strip()
+            _lock_acquire_timeout_s = 120.0 if _live_mode else 60.0
+        
+        # Enforce minimum timeout: live mode 30s (time for Railway recovery + rescue), non-live 15s
+        if _live_mode:
+            _lock_acquire_timeout_s = max(_lock_acquire_timeout_s, 30.0)
+        else:
+            _lock_acquire_timeout_s = max(_lock_acquire_timeout_s, 15.0)
+        
+        # Checkpoint interval: emit warnings + attempt stale-lock rescue (FIX 4: explicit checkpoints)
+        _checkpoint_interval_s_raw = os.environ.get("NIJA_LOCK_CHECKPOINT_INTERVAL_S", "").strip()
         try:
-            _wait_log_interval_s = float(_wait_log_interval_raw) if _wait_log_interval_raw else 2.0
+            _checkpoint_interval_s = float(_checkpoint_interval_s_raw) if _checkpoint_interval_s_raw else 30.0
         except (TypeError, ValueError):
-            _wait_log_interval_s = 2.0
-        if _wait_log_interval_s < 0.5:
-            _wait_log_interval_s = 0.5
-        _next_wait_log = 0.0
+            _checkpoint_interval_s = 30.0
+        _checkpoint_interval_s = max(_checkpoint_interval_s, 5.0)  # Minimum 5s between checkpoints
+        
+        # Retry interval: time between lock acquisition attempts (FIX 4: bounded retry rate)
+        _lock_retry_interval = 0.5  # 500ms between retries
+        
+        # Initialize FSM state  
+        _wait_started_at = time.time()
+        _next_checkpoint = _wait_started_at + _checkpoint_interval_s
         _holder_info = parse_distributed_lock_holder(_holder)
         _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
         _holder_meta = _read_lock_meta()
-        _wait_started_at = time.time()
 
         try:
             _stale_heartbeat_timeout_s = max(
@@ -2197,6 +2201,7 @@ def _acquire_distributed_process_lock() -> None:
         }
 
         print(f"🔐 Writer instance | {format_instance_identity(_instance_identity)}")
+        print(f"🔐 Lock acquire timeout: {_lock_acquire_timeout_s:.0f}s (checkpoint interval: {_checkpoint_interval_s:.0f}s)")
         if _fencing_token <= 0:
             print(
                 "🔎 Writer lock inspector | "
@@ -2212,52 +2217,55 @@ def _acquire_distributed_process_lock() -> None:
                     f"holder_meta={_holder_meta.get('display', '<missing-meta>')} age={_heartbeat_age_txt}"
                 )
 
+        # ═══════════════════════════════════════════════════════════════════════════════════════
+        # FSM CONTENDING STATE: Loop with explicit timeout (FIX 4: bounded wait, not indefinite)
+        # ═══════════════════════════════════════════════════════════════════════════════════════
         while _fencing_token <= 0:
             _now = time.time()
-            if _now >= _next_wait_log:
-                _ttl_s_human = "unknown"
-                if _holder_pttl_ms >= 0:
-                    _ttl_s_human = f"{_holder_pttl_ms / 1000.0:.1f}s"
-                elif _holder_pttl_ms == -1:
-                    _ttl_s_human = "no-expiry"
-                elif _holder_pttl_ms == -2:
-                    _ttl_s_human = "missing"
-                print(
-                    "⏳ Waiting for distributed lock "
-                    f"(retry in {_lock_retry_interval}s, holder_ttl={_ttl_s_human}, "
-                    f"holder={_holder_info.get('display', _holder)}, "
-                    f"relationship={_holder_inspection.get('relationship', 'unknown')}, "
-                    f"heartbeat_age={_holder_meta.get('heartbeat_age_s', 'unknown')})..."
+            _total_waited_s = _now - _wait_started_at
+            
+            # FIX 4: CHECK TIMEOUT FIRST — Exit loop if we've exceeded max wait time
+            if _total_waited_s >= _lock_acquire_timeout_s:
+                print("\n" + "┏" + "━" * 78 + "┓")
+                print("┃ ⏱️  LOCK ACQUISITION TIMEOUT REACHED                                       ┃")
+                print(f"┃ Lock acquire timeout: {_lock_acquire_timeout_s:.0f}s | Elapsed: {_total_waited_s:.1f}s              ┃")
+                print(f"┃ Lock key: {_lock_key[-60:]:<60} ┃")
+                print(f"┃ Holder:   {_holder_info.get('display', _holder)[:60]:<60} ┃")
+                print("┗" + "━" * 78 + "┛\n")
+                print(f"   Current instance: {format_instance_identity(_instance_identity)}")
+                print(f"   Holder relationship: {_holder_inspection.get('relationship', 'unknown')}")
+                print(f"   Redis source: {_redis_url_source or 'unset'}")
+                logger.critical(
+                    "Lock acquisition timeout after %.1fs | holder=%s | redis_source=%s",
+                    _total_waited_s,
+                    _holder_info.get('display', _holder),
+                    _redis_url_source,
                 )
-                _next_wait_log = _now + _wait_log_interval_s
-
-            if _now > _next_wait_checkpoint:
-                total_wait_s = _now - _wait_started_at
+                # FIX 2: Timeout reached → enter explicit degraded mode (safe fallback)
+                break  # Exit loop and handle timeout in post-FSM state logic
+            
+            # Checkpoint: emit warnings and attempt stale-lock rescue
+            if _now >= _next_checkpoint:
                 logger.warning(
-                    "Distributed lock still unavailable (checkpoint_interval=%.1fs, total_wait=%.1fs); continuing to wait. "
-                    "holder=%s parsed_holder=%s holder_inspection=%s holder_meta=%s pttl_ms=%s",
-                    _wait_checkpoint_interval_s,
-                    total_wait_s,
+                    "Distributed lock still unavailable (timeout in %.1fs, elapsed=%.1fs). "
+                    "holder=%s parsed=%s inspection=%s pttl_ms=%s",
+                    max(0, _lock_acquire_timeout_s - _total_waited_s),
+                    _total_waited_s,
                     _holder,
                     _holder_info,
                     _holder_inspection,
-                    _holder_meta,
                     _holder_pttl_ms,
                 )
 
-                # Stale lock rescue: only delete when holder matches observed value
-                # and key has expired/no-expiry metadata suggesting stale state.
+                # Stale lock rescue: only delete when holder matches and lock appears stale
                 _rescued = 0
                 _allow_railway_rescue = False
-                _heartbeat_age_seconds = None
                 try:
                     _holder_token = str(_holder_info.get("token", "") or "")
                     _holder_deployment = str(_holder_info.get("deployment_id", "") or "")
                     _current_deployment = str(_instance_identity.get("deployment_id", "") or "")
                     _meta_token = str(_holder_meta.get("token", "") or "")
                     _heartbeat_age = _holder_meta.get("heartbeat_age_s")
-                    if isinstance(_heartbeat_age, (int, float)):
-                        _heartbeat_age_seconds = float(_heartbeat_age)
                     _heartbeat_is_stale = isinstance(_heartbeat_age, (int, float)) and float(_heartbeat_age) >= _stale_heartbeat_timeout_s
                     _cross_deployment = bool(
                         _current_deployment and _holder_deployment and _current_deployment != _holder_deployment
@@ -2273,21 +2281,17 @@ def _acquire_distributed_process_lock() -> None:
                         _client.eval(
                             """
                             local current = redis.call('GET', KEYS[1])
-                            if not current then
-                                return 0
-                            end
+                            if not current then return 0 end
                             local pttl = redis.call('PTTL', KEYS[1])
-                            if current ~= ARGV[1] then
-                                return 0
-                            end
+                            if current ~= ARGV[1] then return 0 end
                             local stale_by_ttl = (pttl == -1 or pttl <= 0)
                             local stale_by_heartbeat = (ARGV[2] == '1')
                             if stale_by_ttl or stale_by_heartbeat then
-                                local deleted = redis.call('DEL', KEYS[1])
+                                redis.call('DEL', KEYS[1])
                                 if KEYS[2] and KEYS[2] ~= '' then
                                     redis.call('DEL', KEYS[2])
                                 end
-                                return deleted
+                                return 1
                             end
                             return 0
                             """,
@@ -2303,96 +2307,90 @@ def _acquire_distributed_process_lock() -> None:
                     logger.warning("Stale-lock rescue check failed: %s", _stale_exc)
 
                 if _rescued == 1:
-                    _rescue_reason = "expired/no-expiry TTL"
-                    if _allow_railway_rescue:
-                        _rescue_reason = (
-                            "stale cross-deployment Railway holder "
-                            f"heartbeat_age={_heartbeat_age_seconds:.1f}s threshold={_stale_heartbeat_timeout_s:.1f}s"
-                        )
                     logger.critical(
-                        "🔓 Cleared stale writer lock key=%s; reason=%s; retrying acquire once",
-                        _lock_key,
-                        _rescue_reason,
+                        "🔓 Cleared and recovered stale writer lock; retrying acquire"
                     )
                     _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
                     _holder_info = parse_distributed_lock_holder(_holder)
                     _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
                     _holder_meta = _read_lock_meta()
-                    break
-
-                print("\n" + "┏" + "━" * 78 + "┓")
-                print("┃ 🚫 DISTRIBUTED WRITER LOCK UNAVAILABLE                                    ┃")
-                print("┃ Another writer is active or lock could not be safely recovered.          ┃")
-                print(f"┃ Lock key: {_lock_key[-58:]:<58} ┃")
-                print(f"┃ Holder:   {_holder_info.get('display', _holder)[:58]:<58} ┃")
-                _pttl_txt = str(_holder_pttl_ms)
-                print(f"┃ PTTL(ms): {_pttl_txt[:58]:<58} ┃")
-                print(f"┃ Waited:   {total_wait_s:.0f}s without acquiring the lock                  ┃")
-                print("┃ Action:   Continuing to wait for a safe single-writer hand-off.          ┃")
-                print("┗" + "━" * 78 + "┛\n")
-                print(f"   Redis URL source: {_redis_url_source or 'unset'}")
-                print(f"   Lock wait checkpoint interval: {_wait_checkpoint_interval_s:.0f}s")
-                print(f"   Current instance: {format_instance_identity(_instance_identity)}")
-                print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
-                print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
-                print(f"   Lock holder raw:  {_holder}")
-                print("\n   💡 TROUBLESHOOTING:")
-                print("      1. Check Redis connectivity: redis-cli -h <host> -p <port> -a \"$REDIS_PASSWORD\" --tls --insecure ping")
-                print("      2. List active locks: redis-cli -h <host> -p <port> -a \"$REDIS_PASSWORD\" --tls --insecure KEYS '*lock*'")
-                print("      3. Delete stale lock: redis-cli -h <host> -p <port> -a \"$REDIS_PASSWORD\" --tls --insecure DEL <lock-key>")
-                print("      4. Verify Redis URL format: should be rediss:// for Railway public proxy")
-                print("❌ FAILED TO ACQUIRE WRITER LOCK (waiting)", flush=True)
-                logger.warning(
-                    "Lock still held after %.1fs | holder=%s | redis_source=%s | deployment=%s",
-                    total_wait_s,
-                    _holder_info.get('display', _holder),
-                    _redis_url_source,
-                    _instance_identity.get('deployment_id', 'unknown')
-                )
-                _next_wait_checkpoint = time.time() + _wait_checkpoint_interval_s
-                continue
-
+                    if _fencing_token > 0:
+                        break  # Acquired after rescue — exit loop
+                
+                _next_checkpoint = time.time() + _checkpoint_interval_s
+                print(f"⏳ Awaiting lock release... (timeout in {max(0, _lock_acquire_timeout_s - _total_waited_s):.0f}s)")
+                print(f"   Holder: {_holder_info.get('display', _holder)}")
+                print(f"   Relationship: {_holder_inspection.get('relationship', 'unknown')}")
+            
+            # Sleep and retry lock acquisition
             time.sleep(_lock_retry_interval)
             try:
-                print("=== ATTEMPTING REDIS LOCK ===", flush=True)
                 _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
-                acquired = _fencing_token > 0
-                print(f"=== LOCK ACQUIRED: {acquired} ===", flush=True)
-                _holder_info = parse_distributed_lock_holder(_holder)
-                _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
-                _holder_meta = _read_lock_meta()
+                if _fencing_token > 0:
+                    _holder_info = parse_distributed_lock_holder(_holder)
+                    _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
+                    _holder_meta = _read_lock_meta()
+                    break  # Successfully acquired — exit loop
             except Exception as _retry_err:
                 logger.debug("Lock retry attempt failed: %s", _retry_err)
                 _fencing_token = 0
                 _holder_pttl_ms = -2
-                _holder = ""
-                _holder_info = parse_distributed_lock_holder("")
-                _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
-                _holder_meta = {"present": False, "display": "<missing-meta>"}
         
+        # ═══════════════════════════════════════════════════════════════════════════════════════
+        # FSM POST-LOOP: Handle exit condition — either ACQUIRED or TIMEOUT
+        # ═══════════════════════════════════════════════════════════════════════════════════════
         if _fencing_token <= 0:
+            # Lock acquisition timeout (FIX 2: explicit degraded mode fallback for resilience)
             print("\n" + "┏" + "━" * 78 + "┓")
-            print("┃ 🚫 DUPLICATE DEPLOYMENT BLOCKED                                           ┃")
-            print("┃ Another NIJA writer already holds the distributed runtime lock.          ┃")
-            print("┃ Single-writer invariant violated by deployment topology.                 ┃")
-            print(f"┃ Lock key: {_lock_key[-58:]:<58} ┃")
-            print(f"┃ Holder:   {_holder_info.get('display', _holder)[:58]:<58} ┃")
+            print("┃ ⏱️  LOCK ACQUISITION TIMEOUT — NO ACTIVE WRITER FOUND                       ┃")
+            print(f"┃ Another deployment may hold the lock, or Redis is unavailable.           ┃")
+            print(f"┃ Lock key: {_lock_key[-60:]:<60} ┃")
+            print(f"┃ Holder:   {_holder_info.get('display', _holder)[:60]:<60} ┃")
             print("┗" + "━" * 78 + "┛\n")
             print(f"   Current instance: {format_instance_identity(_instance_identity)}")
-            print(f"   Holder origin:    {_holder_inspection.get('relationship', 'unknown')}")
-            print(f"   Holder heartbeat: {_holder_meta.get('heartbeat_age_s', 'unknown')}")
-            print(f"   Lock holder raw:  {_holder}")
-            print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
-            logger.critical("Another instance is active — entering fail-closed standby")
+            print(f"   Holder relationship: {_holder_inspection.get('relationship', 'unknown')}")
+            print(f"   Lock holder raw: {_holder}")
+            print(f"   Redis URL source: {_redis_url_source or 'unset'}")
+            
+            # FIX 2: Decision tree for safe fallback
             if _live_mode and _require_lock and not _unsafe_bypass:
-                print(
-                    "🚫 LIVE MODE: duplicate distributed writer lock detected. "
-                    "Exiting immediately to prevent split-brain trading.",
-                    flush=True,
+                # LIVE + LOCK_REQUIRED + NO BYPASS: Fail-closed (safest, prevents split-brain)
+                print("❌ FAILED TO ACQUIRE WRITER LOCK (entering fail-closed standby)")
+                logger.critical(
+                    "Distributed writer lock timeout in live mode with lock required; "
+                    "entering fail-closed standby. This is safe — trading will be blocked until lock acquired."
                 )
-                sys.exit(1)
-            _enter_fail_closed_standby("Duplicate deployment detected — another writer already holds the lock")
+                _enter_fail_closed_standby(
+                    f"Lock acquisition timeout after {_lock_acquire_timeout_s:.0f}s "
+                    "(lock required in live mode)"
+                )
+                return
+            elif _live_mode and _require_lock and _unsafe_bypass:
+                # LIVE + LOCK_REQUIRED + UNSAFE_BYPASS: Trade locally (risky, only for single-instance)
+                print("⚠️  UNSAFE: Proceeding with UNSAFE lock bypass enabled (single-instance only)")
+                logger.warning(
+                    "Distributed writer lock timeout but UNSAFE bypass enabled; proceeding with local trading. "
+                    "DO NOT RUN MULTIPLE INSTANCES."
+                )
+                # Continue to live trading with local file-based locks
+            else:
+                # NON-LIVE or NOT_REQUIRED: Enter degraded mode (safe fallback for non-live testing)
+                print("⚠️  Non-live/non-required mode: Entering degraded lock mode")
+                print("   Trading will use file-based per-key locks (not distributed)")
+                logger.info(
+                    "Lock acquisition timeout in non-live or non-required mode; "
+                    "entering degraded trading mode with file-based locks"
+                )
+                _running_in_degraded_mode = True
+                os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+                os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+                # Continue to non-live trading with degraded lock mode
             return
+        
+        # ═══════════════════════════════════════════════════════════════════════════════════════
+        # FSM SUCCESS STATE: Lock acquired — proceed to trading
+        # ═══════════════════════════════════════════════════════════════════════════════════════
+        if _fencing_token > 0:
 
         _token = f"{_fencing_token}:{_owner}"
         _distributed_writer_lock_client = _client
