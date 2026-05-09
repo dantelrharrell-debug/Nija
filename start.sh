@@ -450,80 +450,6 @@ raise SystemExit(result.returncode)
 PY
 }
 
-_redis_cli_ping_safe() {
-    local _redis_url="$1"
-    if [ -z "${_redis_url}" ]; then
-        return 1
-    fi
-    python3 - <<'PY' "${_redis_url}"
-import re
-import subprocess
-import sys
-from urllib.parse import urlparse
-
-REDIS_CLI_TIMEOUT_S = 5
-raw = sys.argv[1]
-try:
-    parsed = urlparse(raw)
-except Exception:
-    safe = re.sub(r"(://)[^@]*@", r"\\1***@", raw)
-    print(f"WARN: Redis URL parse failed for CLI ping (url={safe})", file=sys.stderr)
-    raise SystemExit(1)
-
-host = parsed.hostname or ""
-port = parsed.port or ""
-scheme = (parsed.scheme or "").lower()
-user = parsed.username or ""
-password = parsed.password or ""
-db_raw = (parsed.path or "").lstrip("/")
-db = db_raw if db_raw.isdigit() else "0"
-
-if not host or not port:
-    print("WARN: Redis URL missing host or port for CLI ping", file=sys.stderr)
-    raise SystemExit(1)
-
-is_proxy = host.lower().endswith(".proxy.rlwy.net")
-use_tls = scheme == "rediss" or is_proxy
-
-cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", str(db)]
-if user:
-    cmd.extend(["--user", user])
-if password:
-    cmd.extend(["-a", password])
-if use_tls:
-    cmd.extend(["--tls", "--insecure"])
-cmd.append("ping")
-
-try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S)
-except subprocess.TimeoutExpired:
-    print("STDOUT: (empty)")
-    print(f"STDERR: redis-cli timed out after {REDIS_CLI_TIMEOUT_S}s")
-    print("RETURN CODE: 124")
-    print("❌ REDIS PREFLIGHT FAILED")
-    raise SystemExit(1)
-except FileNotFoundError:
-    print("STDOUT: (empty)")
-    print("STDERR: redis-cli not found")
-    print("RETURN CODE: 127")
-    print("❌ REDIS PREFLIGHT FAILED")
-    raise SystemExit(127)
-
-stdout = (result.stdout or "").strip()
-stderr = (result.stderr or "").strip()
-print(f"STDOUT: {stdout if stdout else '(empty)'}")
-print(f"STDERR: {stderr if stderr else '(empty)'}")
-print(f"RETURN CODE: {result.returncode}")
-
-if "PONG" in result.stdout:
-    print("✅ REDIS PREFLIGHT SUCCESS")
-    raise SystemExit(0)
-
-print("❌ REDIS PREFLIGHT FAILED")
-raise SystemExit(result.returncode or 1)
-PY
-}
-
 _validate_redis_url_or_exit() {
     # Skip Redis URL validation when the distributed-lock bypass is active;
     # Redis is not required in that mode so an invalid/missing URL is harmless.
@@ -1486,17 +1412,7 @@ PY
         fi
     fi
 
-    echo "✅ Redis preflight passed"
-
-    echo "=== TESTING REDIS DIRECTLY ==="
-    set +e
-    _redis_cli_ping_safe "${_redis_url_for_ping}"
-    _redis_cli_direct_rc=$?
-    set -e
-    echo "Redis CLI exit code: ${_redis_cli_direct_rc}"
-    if [ "${_redis_cli_direct_rc}" -ne 0 ]; then
-        echo "⚠️  Direct redis-cli test failed, but preflight already validated connectivity. Continuing startup."
-    fi
+    echo "✅ Redis preflight passed (Python client ping)"
 elif [ "${_REDIS_STARTUP_CHECK}" != "true" ]; then
     echo "ℹ️  Redis startup preflight disabled (NIJA_REDIS_STARTUP_CHECK=${NIJA_REDIS_STARTUP_CHECK:-false})"
 fi
