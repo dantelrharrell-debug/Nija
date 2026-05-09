@@ -199,6 +199,22 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     export NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S="${NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S:-0}"
     export NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS="${NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS:-250}"
 
+    # Normalize obviously invalid lease settings that can cause confusing runtime behavior/logs.
+    if ! printf "%s" "${NIJA_REDIS_LEASE_TTL_MS}" | grep -Eq '^[0-9]+$' || [ "${NIJA_REDIS_LEASE_TTL_MS}" -lt 10000 ]; then
+        echo "⚠️  Invalid NIJA_REDIS_LEASE_TTL_MS=${NIJA_REDIS_LEASE_TTL_MS}; forcing 600000"
+        export NIJA_REDIS_LEASE_TTL_MS=600000
+    fi
+    if ! printf "%s" "${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}" | grep -Eq '^[0-9]+([.][0-9]+)?$' || \
+       awk "BEGIN {exit !(${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S} <= 0)}"; then
+        echo "⚠️  Invalid NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S=${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}; forcing 5"
+        export NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S=5
+    fi
+    if ! printf "%s" "${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}" | grep -Eq '^[0-9]+([.][0-9]+)?$' || \
+       awk "BEGIN {exit !(${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S} <= 0)}"; then
+        echo "⚠️  Invalid NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S=${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}; forcing 5"
+        export NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S=5
+    fi
+
     _LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS}"
     _LEASE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}"
     _LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}"
@@ -1407,8 +1423,8 @@ PY
         then
             echo "✅ Continuing startup after successful Python Redis fallback"
         else
-            echo "❌ Redis preflight failed"
-            exit 1
+            echo "⚠️  Redis preflight failed; continuing to runtime fail-closed lock standby"
+            echo "   Trading remains blocked until distributed writer lock can be acquired."
         fi
     fi
 

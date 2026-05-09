@@ -319,81 +319,13 @@ except Exception as exc:
 PY
 }
 
-echo "[5/5] Running Redis ping with explicit TLS support"
-if command -v redis-cli >/dev/null 2>&1; then
-  echo "Using redis-cli for connectivity check..."
-  set +e
-  python3 - <<'PY' "${redis_host}" "${redis_port}" "${redis_db}" "${redis_user:-}" "${redis_password:-}" "${redis_scheme}"
-import subprocess
-import sys
-
-REDIS_CLI_TIMEOUT_S = 5
-
-host = sys.argv[1]
-port = sys.argv[2]
-db = sys.argv[3]
-user = sys.argv[4]
-password = sys.argv[5]
-scheme = sys.argv[6]
-is_proxy = host.lower().endswith(".proxy.rlwy.net")
-use_tls = scheme == "rediss" or is_proxy
-
-cmd = ["redis-cli", "-h", host, "-p", port, "-n", db]
-if user:
-    cmd.extend(["--user", user])
-if password:
-    cmd.extend(["-a", password])
-if use_tls:
-    cmd.extend(["--tls", "--insecure"])
-cmd.append("ping")
-
-try:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=REDIS_CLI_TIMEOUT_S)
-except subprocess.TimeoutExpired:
-    print("STDOUT: (empty)")
-    print(f"STDERR: redis-cli timed out after {REDIS_CLI_TIMEOUT_S}s")
-    print("RETURN CODE: 124")
-    print("❌ REDIS PREFLIGHT FAILED")
-    raise SystemExit(1)
-except FileNotFoundError:
-    print("STDOUT: (empty)")
-    print("STDERR: redis-cli not found")
-    print("RETURN CODE: 127")
-    print("❌ REDIS PREFLIGHT FAILED")
-    raise SystemExit(127)
-
-stdout = (result.stdout or "").strip()
-stderr = (result.stderr or "").strip()
-print(f"STDOUT: {stdout if stdout else '(empty)'}")
-print(f"STDERR: {stderr if stderr else '(empty)'}")
-print(f"RETURN CODE: {result.returncode}")
-
-if "PONG" in result.stdout:
-    print("✅ REDIS PREFLIGHT SUCCESS")
-    raise SystemExit(0)
-
-print("❌ REDIS PREFLIGHT FAILED")
-raise SystemExit(result.returncode or 1)
-PY
-  _rc=$?
-  set -e
-
-  if [ "$_rc" -eq 0 ]; then
-    echo "Connectivity check completed"
-    exit 0
-  fi
-
-  echo "WARN: redis-cli ping failed with rc=${_rc}; retrying with python redis client fallback"
-  if python_redis_ping_check; then
-    echo "✅ REDIS PREFLIGHT PASSED (python fallback)"
-    echo "Connectivity check completed"
-    exit 0
-  fi
-
+echo "[5/5] Running Redis ping with Python client"
+if python_redis_ping_check; then
+  echo "✅ REDIS PREFLIGHT PASSED (python client)"
   echo "Connectivity check completed"
-  exit "${_rc}"
+  exit 0
 fi
 
-echo "redis-cli not found; using Python redis client fallback..."
-python_redis_ping_check
+echo "❌ REDIS PREFLIGHT FAILED (python client)"
 echo "Connectivity check completed"
+exit 1
