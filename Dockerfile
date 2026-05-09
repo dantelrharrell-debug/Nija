@@ -30,10 +30,11 @@ RUN test -f /app/scripts/redis_connectivity_check.sh && chmod +x /app/scripts/re
 # Make other scripts executable when present in build context
 RUN if [ -d /app/scripts ]; then chmod +x /app/scripts/*.sh || true; fi
 
-# Build arguments for Git metadata (defaults reflect latest release; override via --build-arg at build time)
+# Build arguments for Git metadata. Keep defaults neutral so CI/runtime can
+# inject the true revision instead of inheriting stale hard-coded values.
 ARG GIT_BRANCH=main
-ARG GIT_COMMIT=f9856aa
-ARG BUILD_TIMESTAMP=2026-02-21T04:13:57Z
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIMESTAMP=unknown
 
 # Bake Git metadata into the image as runtime environment variables so
 # the values are available to start.sh and the bot at container startup

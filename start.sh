@@ -907,6 +907,15 @@ EOF
 
     echo "✅ Force nonce resync preflight complete"
     echo ""
+
+    # Prefer Railway runtime Git metadata when available so startup diagnostics
+    # always reflect the actual deployed revision.
+    if [ -n "${RAILWAY_GIT_BRANCH:-}" ]; then
+        export GIT_BRANCH="${RAILWAY_GIT_BRANCH}"
+    fi
+    if [ -n "${RAILWAY_GIT_COMMIT_SHA:-}" ]; then
+        export GIT_COMMIT="${RAILWAY_GIT_COMMIT_SHA}"
+    fi
 }
 
 _disable_nonce_ceiling_jump

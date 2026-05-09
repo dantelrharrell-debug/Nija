@@ -4843,9 +4843,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             logger.info("While this thread initializes, health server remains responsive")
             logger.info("")
             
-            # Get git metadata - try env vars first, then git commands
-            git_branch = os.getenv("GIT_BRANCH", "")
-            git_commit = os.getenv("GIT_COMMIT", "")
+            # Get git metadata: prefer Railway runtime vars, then baked vars,
+            # then local git as final fallback.
+            git_branch = os.getenv("RAILWAY_GIT_BRANCH", "") or os.getenv("GIT_BRANCH", "")
+            git_commit = os.getenv("RAILWAY_GIT_COMMIT_SHA", "") or os.getenv("GIT_COMMIT", "")
+            if len(git_commit) > 7:
+                git_commit = git_commit[:7]
 
             # Fallback to git commands if env vars not set
             if not git_branch:
