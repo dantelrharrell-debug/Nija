@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 import redis
 from redis.connection import ConnectionPool
 
-from bot.redis_env import get_redis_url as get_env_redis_url
+from bot.redis_env import get_redis_url as get_env_redis_url, get_redis_url_source
 from bot.redis_runtime import connect_redis_with_fallback
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,42 @@ logger = logging.getLogger(__name__)
 # Global Redis client
 _redis_client: Optional[redis.Redis] = None
 _connection_pool: Optional[ConnectionPool] = None
+
+
+def _safe_parse_redis_target(redis_url: str) -> Dict[str, str]:
+    """Return redacted Redis target diagnostics safe for logs."""
+    parsed = urlparse((redis_url or "").strip())
+
+    host = parsed.hostname or "<unknown-host>"
+    scheme = parsed.scheme or "<unknown-scheme>"
+
+    try:
+        port_value = parsed.port
+        port = str(port_value) if port_value is not None else "<unknown-port>"
+    except ValueError:
+        port = "<invalid-port>"
+
+    db = "0"
+    path = (parsed.path or "").strip()
+    if path:
+        try:
+            db = str(int(path.lstrip("/") or "0"))
+        except (TypeError, ValueError):
+            db = "<invalid-db>"
+
+    tls = "true" if scheme == "rediss" else "false"
+    username = parsed.username or "default"
+    auth = "set" if parsed.password else "missing"
+
+    return {
+        "scheme": scheme,
+        "host": host,
+        "port": port,
+        "db": db,
+        "tls": tls,
+        "username": username,
+        "auth": auth,
+    }
 
 
 def _redact_redis_url(url: str) -> str:
@@ -194,6 +230,7 @@ def init_redis(
         return
 
     # Get Redis URL
+    redis_url_from_arg = redis_url is not None
     if redis_url is None:
         redis_url = get_redis_url()
 
@@ -209,6 +246,19 @@ def init_redis(
             log=lambda msg: logger.warning(msg),
         )
 
+        parsed_target = _safe_parse_redis_target(redis_url)
+        redis_source = "argument" if redis_url_from_arg else (get_redis_url_source() or "auto")
+        logger.info(
+            "Redis target | source=%s scheme=%s host=%s port=%s db=%s tls=%s username=%s auth=%s",
+            redis_source,
+            parsed_target["scheme"],
+            parsed_target["host"],
+            parsed_target["port"],
+            parsed_target["db"],
+            parsed_target["tls"],
+            parsed_target["username"],
+            parsed_target["auth"],
+        )
         logger.info(f"Redis URL source (redacted): {_redact_redis_url(redis_url)}")
 
         logger.info("✅ Redis client initialized successfully")
