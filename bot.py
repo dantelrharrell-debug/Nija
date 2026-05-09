@@ -2015,6 +2015,10 @@ def _acquire_distributed_process_lock() -> None:
             """Return a direct operator-facing error when endpoint behaves like HTTP."""
             try:
                 _parsed = urlparse(_url)
+                # Do not plaintext-probe TLS Redis endpoints. A rediss:// proxy can
+                # legitimately reject plaintext probes and look like HTTP noise.
+                if (_parsed.scheme or "").lower() == "rediss":
+                    return ""
                 _host = _parsed.hostname
                 _port = _parsed.port
                 if not _host or _port is None:
@@ -2131,6 +2135,8 @@ def _acquire_distributed_process_lock() -> None:
                 """Return a human-friendly hint if endpoint responds like HTTP/non-Redis."""
                 try:
                     _p = urlparse(u)
+                    if (_p.scheme or "").lower() == "rediss":
+                        return ""
                     _host = _p.hostname
                     _port = _p.port
                     if not _host or not _port:

@@ -20,6 +20,10 @@ def _detect_non_redis_http_endpoint(url: str) -> str:
     """Return error hint when endpoint looks like HTTP instead of Redis."""
     try:
         parsed = urlparse((url or "").strip())
+        # Avoid plaintext probing TLS endpoints; rediss:// can reject the probe
+        # and mimic an HTTP response even when Redis is healthy.
+        if (parsed.scheme or "").lower() == "rediss":
+            return ""
         host = parsed.hostname
         port = parsed.port
         if not host or port is None:
