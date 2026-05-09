@@ -2069,12 +2069,20 @@ def _acquire_distributed_process_lock() -> None:
 
         def _build_strict_redis_client(_url: str):
             assert _url.startswith("redis://") or _url.startswith("rediss://")
-            return redis.Redis.from_url(
-                _url,
-                decode_responses=True,
-                socket_connect_timeout=_redis_connect_timeout_s,
-                socket_timeout=_redis_socket_timeout_s,
-            )
+            _kwargs: dict[str, Any] = {
+                "decode_responses": True,
+                "socket_connect_timeout": _redis_connect_timeout_s,
+                "socket_timeout": _redis_socket_timeout_s,
+            }
+            _parsed_url = urlparse(_url)
+            _tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
+            _tls_insecure = _tls_insecure_raw in _truthy
+            _tls_auto = _tls_insecure_raw in {"", "auto"}
+            if (_parsed_url.scheme or "").lower() == "rediss" and (
+                _tls_insecure or (_tls_auto and ".proxy.rlwy.net" in (_parsed_url.hostname or "").lower())
+            ):
+                _kwargs["ssl_cert_reqs"] = "none"
+            return redis.Redis.from_url(_url, **_kwargs)
 
         _ping_exc = None
         _client: Any

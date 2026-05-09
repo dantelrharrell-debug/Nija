@@ -55,6 +55,24 @@ def _allow_degraded_writer_authority() -> bool:
     )
 
 
+def _build_redis_client(redis_mod, redis_url: str, *, timeout_s: int = 2):
+    """Create a Redis client with Railway-compatible TLS behavior."""
+    kwargs = {
+        "decode_responses": True,
+        "socket_connect_timeout": timeout_s,
+        "socket_timeout": timeout_s,
+    }
+    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
+    tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
+    tls_auto = tls_insecure_raw in {"", "auto"}
+    lowered = (redis_url or "").lower()
+    if lowered.startswith("rediss://") and (
+        tls_insecure or (tls_auto and ".proxy.rlwy.net" in lowered)
+    ):
+        kwargs["ssl_cert_reqs"] = "none"
+    return redis_mod.Redis.from_url(redis_url, **kwargs)
+
+
 def assert_distributed_writer_authority() -> None:
     """Fail closed when this process no longer owns the distributed writer lock.
 
@@ -137,12 +155,7 @@ def assert_distributed_writer_authority() -> None:
     try:
         redis_mod = importlib.import_module("redis")
 
-        client = redis_mod.Redis.from_url(
-            redis_url,
-            decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
+        client = _build_redis_client(redis_mod, redis_url, timeout_s=2)
         current = client.get(lock_key)
         current_token = ""
         if isinstance(current, str) and current:
@@ -228,12 +241,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
     if redis_url:
         try:
             redis_mod = importlib.import_module("redis")
-            client = redis_mod.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_connect_timeout=2,
-                socket_timeout=2,
-            )
+            client = _build_redis_client(redis_mod, redis_url, timeout_s=2)
             current_holder_raw = str(client.get(lock_key) or "")
             current_holder_meta = parse_writer_lock_metadata(str(client.get(meta_key) or ""))
             current_holder = parse_distributed_lock_holder(current_holder_raw)

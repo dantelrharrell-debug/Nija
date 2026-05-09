@@ -58,12 +58,21 @@ def create_redis(
 
     assert raw_url.startswith("redis://") or raw_url.startswith("rediss://")
 
-    return redis.Redis.from_url(
-        raw_url,
-        decode_responses=decode_responses,
-        socket_timeout=socket_timeout,
-        socket_connect_timeout=socket_connect_timeout,
-    )
+    kwargs: dict[str, Any] = {
+        "decode_responses": decode_responses,
+        "socket_timeout": socket_timeout,
+        "socket_connect_timeout": socket_connect_timeout,
+    }
+    parsed = urlparse(raw_url)
+    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
+    tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
+    tls_auto = tls_insecure_raw in {"", "auto"}
+    if (parsed.scheme or "").lower() == "rediss" and (
+        tls_insecure or (tls_auto and ".proxy.rlwy.net" in (parsed.hostname or "").lower())
+    ):
+        kwargs["ssl_cert_reqs"] = "none"
+
+    return redis.Redis.from_url(raw_url, **kwargs)
 
 
 def wait_for_redis_ready(
