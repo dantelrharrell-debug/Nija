@@ -4,14 +4,40 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import threading
 import time
 from types import FrameType
 from typing import Any, Callable, Iterable, Optional
+from urllib.parse import urlparse
 
 import redis  # type: ignore[import]
 
 from bot.redis_env import get_redis_url
+
+
+def _detect_non_redis_http_endpoint(url: str) -> str:
+    """Return error hint when endpoint looks like HTTP instead of Redis."""
+    try:
+        parsed = urlparse((url or "").strip())
+        host = parsed.hostname
+        port = parsed.port
+        if not host or port is None:
+            return ""
+        with socket.create_connection((host, int(port)), timeout=2.5) as sock:
+            sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+            data = sock.recv(128)
+        if not data:
+            return ""
+        head = data[:80].decode("latin-1", errors="ignore")
+        if data.startswith(b"HTTP/") or b"<!DOCTYPE HTML" in data or "Bad request syntax" in head:
+            return (
+                "Redis URL endpoint responded as HTTP/non-Redis. "
+                "Verify NIJA_REDIS_URL points to Railway Redis Connect URL."
+            )
+    except Exception:
+        return ""
+    return ""
 
 
 def create_redis(
@@ -72,6 +98,10 @@ def connect_redis_with_fallback(
     primary_url = (url or get_redis_url()).strip()
     if not primary_url:
         raise RuntimeError("Redis URL is missing")
+
+    non_redis_hint = _detect_non_redis_http_endpoint(primary_url)
+    if non_redis_hint:
+        raise RuntimeError(non_redis_hint)
 
     candidates = [primary_url]
     allow_plain_fallback = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in {

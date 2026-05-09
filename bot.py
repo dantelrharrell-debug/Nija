@@ -1971,6 +1971,29 @@ def _acquire_distributed_process_lock() -> None:
                 print(f"⚠️ Plain redis:// fallback also failed: {_plain_exc}")
                 return None
 
+        def _detect_non_redis_http_endpoint(_url: str) -> str:
+            """Return a direct operator-facing error when endpoint behaves like HTTP."""
+            try:
+                _parsed = urlparse(_url)
+                _host = _parsed.hostname
+                _port = _parsed.port
+                if not _host or _port is None:
+                    return ""
+                with socket.create_connection((_host, int(_port)), timeout=2.5) as _sock:
+                    _sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+                    _resp = _sock.recv(128)
+                if not _resp:
+                    return ""
+                _head = _resp[:80].decode("latin-1", errors="ignore")
+                if _resp.startswith(b"HTTP/") or b"<!DOCTYPE HTML" in _resp or "Bad request syntax" in _head:
+                    return (
+                        "NIJA_REDIS_URL endpoint responded as HTTP/non-Redis. "
+                        "Copy the Redis URL from Railway Redis service Connect tab and set NIJA_REDIS_URL to that exact value."
+                    )
+            except Exception:
+                return ""
+            return ""
+
         _validate_nija_redis_env()
         _connect_timeout_raw = os.environ.get("NIJA_REDIS_CONNECT_TIMEOUT_S", "5").strip()
         _socket_timeout_raw = os.environ.get("NIJA_REDIS_SOCKET_TIMEOUT_S", "5").strip()
@@ -2008,6 +2031,10 @@ def _acquire_distributed_process_lock() -> None:
                 socket_connect_timeout=_redis_connect_timeout_s,
                 socket_timeout=_redis_socket_timeout_s,
             )
+
+        _non_redis_hint = _detect_non_redis_http_endpoint(_redis_url)
+        if _non_redis_hint:
+            raise RuntimeError(_non_redis_hint)
 
         _client = _build_strict_redis_client(_redis_url)
 
@@ -2051,6 +2078,30 @@ def _acquire_distributed_process_lock() -> None:
                     return f"{_p.scheme}://***@{_p.hostname}:{_p.port}"
                 except Exception:
                     return "<unparseable>"
+
+            def _probe_non_redis_endpoint(u: str) -> str:
+                """Return a human-friendly hint if endpoint responds like HTTP/non-Redis."""
+                try:
+                    _p = urlparse(u)
+                    _host = _p.hostname
+                    _port = _p.port
+                    if not _host or not _port:
+                        return ""
+                    with socket.create_connection((_host, _port), timeout=2.5) as _sock:
+                        _sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+                        _data = _sock.recv(128)
+                    if not _data:
+                        return ""
+                    _head = _data[:64].decode("latin-1", errors="ignore").strip()
+                    if _data.startswith(b"HTTP/") or b"<!DOCTYPE HTML" in _data or "Bad request syntax" in _head:
+                        return (
+                            "\n  ⚠️  Endpoint appears to be an HTTP service, not Redis.\n"
+                            "     Verify NIJA_REDIS_URL was copied from Railway Redis → Connect tab\n"
+                            "     (not from an app/public HTTP endpoint)."
+                        )
+                except Exception:
+                    return ""
+                return ""
 
             _all_urls = get_all_redis_urls()
             _standby_log_every_raw = os.environ.get("NIJA_STANDBY_LOG_EVERY", "8").strip()
@@ -2124,6 +2175,10 @@ def _acquire_distributed_process_lock() -> None:
                         f"       4. To bypass the lock while Redis recovers (UNSAFE, single-instance only):\n"
                         f"          set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true and redeploy"
                     )
+                if not _railway_hint and _proxy_hosts:
+                    _probe_hint = _probe_non_redis_endpoint(_redis_url)
+                    if _probe_hint:
+                        _railway_hint = _probe_hint
                 if _standby_retry_active and not _verbose_standby:
                     _ping_err_msg = (
                         "Redis connectivity check failed for distributed writer lock: "
