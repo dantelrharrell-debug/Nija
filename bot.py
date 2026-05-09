@@ -1694,8 +1694,9 @@ def _acquire_distributed_process_lock() -> None:
         _retry_sleep_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S", "5"
         ).strip()
+        _default_max_retry_attempts = "12" if _live_mode else "0"
         _max_retry_attempts_raw = os.environ.get(
-            "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", "0"
+            "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", _default_max_retry_attempts
         ).strip()
         try:
             _retry_sleep_s = max(5.0, float(_retry_sleep_raw or "5"))
@@ -1734,8 +1735,9 @@ def _acquire_distributed_process_lock() -> None:
             "\n     5. Single-instance bypass:    set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true (UNSAFE)"
         )
 
+        _default_exit_on_unreachable = "true" if _live_mode else "false"
         _exit_on_unreachable = os.environ.get(
-            "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS", "false"
+            "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS", _default_exit_on_unreachable
         ).strip().lower() in _truthy
         _preflight_timeout_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_REDIS_PREFLIGHT_TIMEOUT_S", "3"
@@ -1866,6 +1868,22 @@ def _acquire_distributed_process_lock() -> None:
     _strict_single_redis = os.environ.get("NIJA_STRICT_SINGLE_REDIS_URL", "true").strip().lower() in _truthy
     _allow_plain_redis_fallback = os.environ.get("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in _truthy
     _force_redis_tls = os.environ.get("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in _truthy
+    _fail_closed_retry_enabled = os.environ.get(
+        "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
+    ).strip().lower() in _truthy
+    _default_fail_closed_max_retries = 12 if _live_mode else 0
+    _fail_closed_max_retries_raw = os.environ.get(
+        "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", str(_default_fail_closed_max_retries)
+    ).strip()
+    try:
+        _fail_closed_max_retries = max(0, int(_fail_closed_max_retries_raw or str(_default_fail_closed_max_retries)))
+    except (TypeError, ValueError):
+        _fail_closed_max_retries = _default_fail_closed_max_retries
+    _default_exit_unreachable = _live_mode
+    _fail_closed_exit_unreachable = os.environ.get(
+        "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS",
+        "true" if _default_exit_unreachable else "false",
+    ).strip().lower() in _truthy
     _kraken_buy_buffer_pct_raw = os.environ.get("KRAKEN_BUY_BUFFER_PCT", "0.004").strip() or "0.004"
     _kraken_buy_headroom_pct_raw = os.environ.get("NIJA_KRAKEN_BUY_HEADROOM_PCT", "0.005").strip() or "0.005"
     try:
@@ -1889,6 +1907,12 @@ def _acquire_distributed_process_lock() -> None:
         f"redis_force_tls={_force_redis_tls} "
         f"kraken_buy_buffer={_kraken_buy_buffer_pct * 100:.2f}% "
         f"kraken_buy_headroom={_kraken_buy_headroom_pct * 100:.2f}%"
+    )
+    print(
+        "🧯 Fail-closed config | "
+        f"retry_on_lock_failure={_fail_closed_retry_enabled} "
+        f"max_retry_attempts={_fail_closed_max_retries} "
+        f"exit_on_unreachable_redis={_fail_closed_exit_unreachable}"
     )
     if not _redis_url:
         _msg = (
@@ -1988,18 +2012,18 @@ def _acquire_distributed_process_lock() -> None:
                 return None
 
         _validate_nija_redis_env()
-        _connect_timeout_raw = os.environ.get("NIJA_REDIS_CONNECT_TIMEOUT_S", "3").strip()
-        _socket_timeout_raw = os.environ.get("NIJA_REDIS_SOCKET_TIMEOUT_S", "3").strip()
+        _connect_timeout_raw = os.environ.get("NIJA_REDIS_CONNECT_TIMEOUT_S", "5").strip()
+        _socket_timeout_raw = os.environ.get("NIJA_REDIS_SOCKET_TIMEOUT_S", "5").strip()
         _ping_retries_raw = os.environ.get("NIJA_REDIS_STARTUP_PING_RETRIES", "5").strip()
         _ping_retry_delay_raw = os.environ.get("NIJA_REDIS_STARTUP_PING_RETRY_DELAY_S", "2").strip()
         try:
-            _redis_connect_timeout_s = min(max(float(_connect_timeout_raw or "3"), 1.0), 30.0)
+            _redis_connect_timeout_s = min(max(float(_connect_timeout_raw or "5"), 1.0), 30.0)
         except (TypeError, ValueError):
-            _redis_connect_timeout_s = 3.0
+            _redis_connect_timeout_s = 5.0
         try:
-            _redis_socket_timeout_s = min(max(float(_socket_timeout_raw or "3"), 1.0), 30.0)
+            _redis_socket_timeout_s = min(max(float(_socket_timeout_raw or "5"), 1.0), 30.0)
         except (TypeError, ValueError):
-            _redis_socket_timeout_s = 3.0
+            _redis_socket_timeout_s = 5.0
         try:
             _ping_retries = min(max(int(_ping_retries_raw or "5"), 1), 20)
         except (TypeError, ValueError):

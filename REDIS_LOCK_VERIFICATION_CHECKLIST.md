@@ -67,6 +67,8 @@
 Go to NIJA service → Logs and verify these messages appear:
 
 - [ ] `✅ Redis connection established` (or similar)
+- [ ] `🧯 Fail-closed config | ...` appears at startup
+- [ ] In live mode, `max_retry_attempts=12` unless intentionally overridden
 - [ ] `✅ Distributed writer lock acquired` (or similar)
 - [ ] `✅ Distributed writer lock ready`
 - [ ] `✅ Live trading approved: LIVE_CAPITAL_VERIFIED=true`
@@ -79,6 +81,7 @@ Verify these error patterns do NOT appear:
 - [ ] NO `❌ FAILED TO ACQUIRE WRITER LOCK`
 - [ ] NO `🛑 FAIL-CLOSED STANDBY ACTIVE`
 - [ ] NO `Timeout connecting to server`
+- [ ] If Redis is unreachable in live mode, process exits after retry cap (no infinite standby loop)
 
 ### Check 4: Trading Activity
 - [ ] Bot has started market scanning
