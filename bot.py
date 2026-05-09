@@ -1694,10 +1694,17 @@ def _acquire_distributed_process_lock() -> None:
         _retry_sleep_raw = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S", "5"
         ).strip()
+        _max_retry_attempts_raw = os.environ.get(
+            "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", "0"
+        ).strip()
         try:
             _retry_sleep_s = max(5.0, float(_retry_sleep_raw or "5"))
         except (TypeError, ValueError):
             _retry_sleep_s = 5.0
+        try:
+            _max_retry_attempts = max(0, int(_max_retry_attempts_raw or "0"))
+        except (TypeError, ValueError):
+            _max_retry_attempts = 0
         print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
         print(f"❌ Failed to acquire distributed single-writer lock: {_reason}")
         print(
@@ -1707,6 +1714,17 @@ def _acquire_distributed_process_lock() -> None:
             f"   Retrying distributed lock acquisition every {_retry_sleep_s:.0f}s "
             "until acquired (set NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=false to exit instead)."
         )
+        if _max_retry_attempts > 0:
+            print(
+                "   Standby retry cap enabled: "
+                f"NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS={_max_retry_attempts}. "
+                "Startup will exit 1 after the cap is reached."
+            )
+        else:
+            print(
+                "   Standby retry cap disabled: "
+                "set NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS>0 to stop infinite retries."
+            )
         print(
             "   DIAGNOSTIC STEPS:"
             "\n     1. Verify Redis URL scheme:  rediss:// for Railway proxy, redis:// for local"
@@ -1716,9 +1734,76 @@ def _acquire_distributed_process_lock() -> None:
             "\n     5. Single-instance bypass:    set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true (UNSAFE)"
         )
 
+        _exit_on_unreachable = os.environ.get(
+            "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS", "false"
+        ).strip().lower() in _truthy
+        _preflight_timeout_raw = os.environ.get(
+            "NIJA_FAIL_CLOSED_REDIS_PREFLIGHT_TIMEOUT_S", "3"
+        ).strip()
+        try:
+            _preflight_timeout_s = min(max(float(_preflight_timeout_raw or "3"), 0.5), 15.0)
+        except (TypeError, ValueError):
+            _preflight_timeout_s = 3.0
+        _connectivity_reason = any(
+            _token in _reason.lower()
+            for _token in (
+                "timeout",
+                "unreachable",
+                "connection reset",
+                "connection refused",
+                "network",
+                "no route",
+                "handshake",
+                "ssl",
+            )
+        )
+        if _exit_on_unreachable and _connectivity_reason and _redis_url:
+            _probe_host = ""
+            _probe_port: int | None = None
+            try:
+                _probe_parsed = urlparse(_redis_url)
+                _probe_host = _probe_parsed.hostname or ""
+                _probe_port = _probe_parsed.port
+            except Exception:
+                _probe_host = ""
+                _probe_port = None
+
+            _probe_ok = False
+            _probe_error = "unknown"
+            if _probe_host and _probe_port:
+                try:
+                    with socket.create_connection((_probe_host, _probe_port), timeout=_preflight_timeout_s):
+                        _probe_ok = True
+                except Exception as _tcp_exc:
+                    _probe_error = str(_tcp_exc) or type(_tcp_exc).__name__
+            else:
+                _probe_error = "unable to parse Redis host/port from NIJA_REDIS_URL"
+
+            if not _probe_ok:
+                print("❌ Redis startup preflight failed: endpoint unreachable")
+                print(
+                    "   Redis endpoint: "
+                    f"{_probe_host or '<unknown>'}:{_probe_port if _probe_port is not None else '<unknown>'}"
+                )
+                print(f"   Probe timeout: {_preflight_timeout_s:.2f}s")
+                print(f"   Probe error: {_probe_error}")
+                print("   Exiting immediately due to NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true")
+                sys.exit(1)
+            print(
+                "ℹ️ Redis TCP preflight reachable, but lock acquisition still failed. "
+                "Continuing fail-closed standby retries."
+            )
+
         os.environ["NIJA_STANDBY_RETRY_ACTIVE"] = "1"
 
         while True:
+            if _max_retry_attempts > 0 and _standby_retry_count >= _max_retry_attempts:
+                print(
+                    "❌ FAIL-CLOSED STANDBY RETRY CAP REACHED: "
+                    f"attempts={_standby_retry_count} "
+                    f"max={_max_retry_attempts}. Exiting with code 1."
+                )
+                sys.exit(1)
             print("⏳ Waiting for Redis lock...", flush=True)
             time.sleep(_retry_sleep_s)
             _standby_retry_count += 1
@@ -1877,23 +1962,6 @@ def _acquire_distributed_process_lock() -> None:
             except Exception:
                 pass
 
-        def _build_strict_redis_client(_url: str):
-            _parsed = urlparse(_url)
-            if _parsed.scheme not in {"redis", "rediss"}:
-                raise RuntimeError(
-                    "NIJA_REDIS_URL must start with redis:// or rediss://"
-                )
-            if not _parsed.hostname or not _parsed.port:
-                raise RuntimeError("NIJA_REDIS_URL must include host and port")
-            if not _parsed.password:
-                raise RuntimeError("NIJA_REDIS_URL must include password")
-            return redis.Redis.from_url(
-                _url,
-                decode_responses=True,
-                socket_connect_timeout=3,
-                socket_timeout=3,
-            )
-
         def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
             if not _allow_plain_redis_fallback:
                 return None
@@ -1920,10 +1988,55 @@ def _acquire_distributed_process_lock() -> None:
                 return None
 
         _validate_nija_redis_env()
+        _connect_timeout_raw = os.environ.get("NIJA_REDIS_CONNECT_TIMEOUT_S", "3").strip()
+        _socket_timeout_raw = os.environ.get("NIJA_REDIS_SOCKET_TIMEOUT_S", "3").strip()
+        _ping_retries_raw = os.environ.get("NIJA_REDIS_STARTUP_PING_RETRIES", "5").strip()
+        _ping_retry_delay_raw = os.environ.get("NIJA_REDIS_STARTUP_PING_RETRY_DELAY_S", "2").strip()
+        try:
+            _redis_connect_timeout_s = min(max(float(_connect_timeout_raw or "3"), 1.0), 30.0)
+        except (TypeError, ValueError):
+            _redis_connect_timeout_s = 3.0
+        try:
+            _redis_socket_timeout_s = min(max(float(_socket_timeout_raw or "3"), 1.0), 30.0)
+        except (TypeError, ValueError):
+            _redis_socket_timeout_s = 3.0
+        try:
+            _ping_retries = min(max(int(_ping_retries_raw or "5"), 1), 20)
+        except (TypeError, ValueError):
+            _ping_retries = 5
+        try:
+            _ping_retry_delay_s = min(max(float(_ping_retry_delay_raw or "2"), 0.25), 30.0)
+        except (TypeError, ValueError):
+            _ping_retry_delay_s = 2.0
+        print(
+            "🔐 Redis startup connectivity | "
+            f"connect_timeout={_redis_connect_timeout_s:.2f}s "
+            f"socket_timeout={_redis_socket_timeout_s:.2f}s "
+            f"ping_retries={_ping_retries} "
+            f"retry_delay={_ping_retry_delay_s:.2f}s"
+        )
+
+        def _build_strict_redis_client(_url: str):
+            _parsed = urlparse(_url)
+            if _parsed.scheme not in {"redis", "rediss"}:
+                raise RuntimeError(
+                    "NIJA_REDIS_URL must start with redis:// or rediss://"
+                )
+            if not _parsed.hostname or not _parsed.port:
+                raise RuntimeError("NIJA_REDIS_URL must include host and port")
+            if not _parsed.password:
+                raise RuntimeError("NIJA_REDIS_URL must include password")
+            return redis.Redis.from_url(
+                _url,
+                decode_responses=True,
+                socket_connect_timeout=_redis_connect_timeout_s,
+                socket_timeout=_redis_socket_timeout_s,
+            )
+
         _client = _build_strict_redis_client(_redis_url)
 
         # Retry logic before any lock operations use Redis.
-        _max_retries = 5
+        _max_retries = _ping_retries
         _ping_exc = None
         for _attempt in range(_max_retries):
             try:
@@ -1933,8 +2046,11 @@ def _acquire_distributed_process_lock() -> None:
             except Exception as _exc:
                 _ping_exc = _exc
                 if _attempt < _max_retries - 1:
-                    print(f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: {_exc}. Retrying in 2s...")
-                    time.sleep(2)
+                    print(
+                        f"⚠️ Redis connection attempt {_attempt + 1}/{_max_retries} failed: "
+                        f"{_exc}. Retrying in {_ping_retry_delay_s:.2f}s..."
+                    )
+                    time.sleep(_ping_retry_delay_s)
                 else:
                     print(f"❌ Redis connection failed after {_max_retries} attempts")
 
