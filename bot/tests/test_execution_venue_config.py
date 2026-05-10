@@ -1,28 +1,29 @@
 import unittest
 
 from bot.execution_venue_config import (
-    _is_enabled,
+    _parse_bool_flag,
+    get_coinbase_platform_skip_reasons,
     get_preferred_execution_venue,
     should_initialize_coinbase_platform,
 )
 
 
 class ExecutionVenueConfigTests(unittest.TestCase):
-    def test_is_enabled_handles_empty_values(self):
-        self.assertTrue(_is_enabled(None))
-        self.assertTrue(_is_enabled(""))
-        self.assertFalse(_is_enabled(None, default=False))
-        self.assertFalse(_is_enabled("   ", default=False))
+    def test_parse_bool_flag_handles_empty_values(self):
+        self.assertTrue(_parse_bool_flag(None))
+        self.assertTrue(_parse_bool_flag(""))
+        self.assertFalse(_parse_bool_flag(None, default=False))
+        self.assertFalse(_parse_bool_flag("   ", default=False))
 
-    def test_is_enabled_handles_falsey_strings(self):
+    def test_parse_bool_flag_handles_falsey_strings(self):
         for value in ("0", "false", "False", "no", "off"):
             with self.subTest(value=value):
-                self.assertFalse(_is_enabled(value))
+                self.assertFalse(_parse_bool_flag(value))
 
-    def test_is_enabled_handles_truthy_strings(self):
+    def test_parse_bool_flag_handles_truthy_strings(self):
         for value in ("1", "true", "yes", "on"):
             with self.subTest(value=value):
-                self.assertTrue(_is_enabled(value, default=False))
+                self.assertTrue(_parse_bool_flag(value, default=False))
 
     def test_coinbase_platform_allowed_with_kraken_primary(self):
         env = {
@@ -49,6 +50,13 @@ class ExecutionVenueConfigTests(unittest.TestCase):
             "NIJA_DISABLE_COINBASE": "true",
         }
         self.assertFalse(should_initialize_coinbase_platform(env))
+
+    def test_coinbase_platform_skip_reasons(self):
+        env = {"ENABLE_COINBASE": "false", "ENABLE_COINBASE_TRADING": "false"}
+        self.assertEqual(
+            get_coinbase_platform_skip_reasons(env),
+            ["ENABLE_COINBASE=false", "ENABLE_COINBASE_TRADING!=true"],
+        )
 
     def test_coinbase_platform_env_matrix(self):
         cases = (

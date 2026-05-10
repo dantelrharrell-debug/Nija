@@ -104,11 +104,18 @@ except ImportError:
         get_platform_account_layer = None
 
 try:
-    from bot.execution_venue_config import should_initialize_coinbase_platform
+    from bot.execution_venue_config import (
+        get_coinbase_platform_skip_reasons,
+        should_initialize_coinbase_platform,
+    )
 except ImportError:
     try:
-        from execution_venue_config import should_initialize_coinbase_platform
+        from execution_venue_config import (  # type: ignore[no-redef]
+            get_coinbase_platform_skip_reasons,
+            should_initialize_coinbase_platform,
+        )
     except ImportError:
+        get_coinbase_platform_skip_reasons = None  # type: ignore[assignment]
         should_initialize_coinbase_platform = None  # type: ignore[assignment]
 
 # Import CapitalAuthority singleton for unified multi-broker capital readiness
@@ -5529,11 +5536,14 @@ class MultiAccountBrokerManager:
             else False
         )
         if not _coinbase_allowed:
+            _skip_reasons = (
+                get_coinbase_platform_skip_reasons(os.environ)
+                if get_coinbase_platform_skip_reasons is not None
+                else []
+            )
             logger.info(
-                "⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s)",
-                os.environ.get("NIJA_DISABLE_COINBASE", "<unset>"),
-                os.environ.get("ENABLE_COINBASE", "<unset>"),
-                os.environ.get("ENABLE_COINBASE_TRADING", "<unset>"),
+                "⏭️  Coinbase PLATFORM skipped (%s)",
+                ", ".join(_skip_reasons) if _skip_reasons else "coinbase platform gate closed",
             )
         else:
             logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)…")
