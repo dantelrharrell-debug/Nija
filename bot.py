@@ -491,10 +491,9 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
         if strategy is not None:
             for _manager_attr in ("broker_manager", "multi_account_manager"):
                 _manager = getattr(strategy, _manager_attr, None)
-                _manager_id = id(_manager) if _manager is not None else None
-                if _manager is not None and _manager_id not in _seen_manager_ids:
+                if _manager is not None and id(_manager) not in _seen_manager_ids:
                     _manager_candidates.append(_manager)
-                    _seen_manager_ids.add(_manager_id)
+                    _seen_manager_ids.add(id(_manager))
 
         for _manager in _manager_candidates:
             _brokers_by_id: dict[int, Any] = {}
@@ -513,7 +512,10 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                             #   1) (account_id, broker) tuples (MultiAccountBrokerManager), or
                             #   2) plain broker objects (legacy/custom managers).
                             # Normalize both formats to a broker object.
-                            _broker = _entry[1] if isinstance(_entry, tuple) and len(_entry) >= 2 else _entry
+                            if isinstance(_entry, tuple) and len(_entry) >= 2:
+                                _broker = _entry[1]
+                            else:
+                                _broker = _entry
                             _brokers_by_id[id(_broker)] = _broker
                 except Exception:
                     pass
@@ -536,7 +538,13 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                 _is_execution_eligible = getattr(_manager, "is_execution_eligible", None)
                 if callable(_is_execution_eligible) and _connected:
                     try:
-                        _eligible_count = sum(1 for _broker in _connected if _is_execution_eligible(_broker))
+                        _eligible_count = 0
+                        for _broker in _connected:
+                            try:
+                                if _is_execution_eligible(_broker):
+                                    _eligible_count += 1
+                            except Exception:
+                                continue
                     except Exception:
                         _eligible_count = 0
 
