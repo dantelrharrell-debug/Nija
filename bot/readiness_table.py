@@ -110,19 +110,22 @@ def mark_not_applicable(component: str, *, reason: str = "not configured") -> No
 def is_ready() -> bool:
     """Return True when every key in the table is True.
 
-    CPython bool reads are atomic; no lock is required.
+    Acquires the lock to produce a consistent view across all keys.
     """
-    return all(_TABLE.values())
+    with _LOCK:
+        return all(_TABLE.values())
 
 
 def snapshot() -> Dict[str, bool]:
     """Return a copy of the truth table for diagnostics."""
-    return dict(_TABLE)
+    with _LOCK:
+        return dict(_TABLE)
 
 
 def pending() -> list[str]:
     """Return the sorted list of keys that are still False."""
-    return sorted(k for k, v in _TABLE.items() if not v)
+    with _LOCK:
+        return sorted(k for k, v in _TABLE.items() if not v)
 
 
 # ---------------------------------------------------------------------------

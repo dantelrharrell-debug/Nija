@@ -355,7 +355,9 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     # This prevents a partially persisted strategy object from bypassing the
     # real startup readiness contract. This wait is intentionally unbounded:
     # startup must fail closed rather than degrade into a forced-ready bypass.
-    _strategy_ready_in_table = lambda: bool(_rt_snapshot().get("strategy_ready", False))
+    def _strategy_ready_in_table() -> bool:
+        return bool(_rt_snapshot().get("strategy_ready", False))
+
     while _strategy is None or not _strategy_ready_in_table():
         _state_snapshot = dict(_initialized_state)
         _strategy = _state_snapshot.get("strategy")
@@ -452,6 +454,11 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     Delegates to the readiness truth table as the single source of truth.
     The ``state_snapshot`` argument is accepted for backward compatibility with
     call sites that still pass it; it is no longer used to derive readiness.
+
+    Note: ``risk_ready`` is reported as a separate flag but is intentionally
+    excluded from the ``system_ready`` AND-expression, matching the previous
+    implementation.  Risk subsystem initialization is coupled to
+    ``strategy_ready``; both must be True for the trading loop to start.
     """
     _tbl = _rt_snapshot()
     broker_ready = bool(_tbl.get("broker_connected", False))
@@ -459,6 +466,7 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     strategy_ready = bool(_tbl.get("strategy_ready", False))
     capital_ready = bool(_tbl.get("capital_ready", False))
     execution_ready = bool(_tbl.get("execution_ready", False))
+    # risk_ready is not included here; it gates _require_startup_ready_or_raise.
     system_ready = broker_ready and strategy_ready and capital_ready and execution_ready
     return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
 

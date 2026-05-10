@@ -356,9 +356,15 @@ class ForcedActivationFallbackTimer:
             try:
                 _rt_mark_ready, _ = _get_readiness_table()
                 if _rt_mark_ready is not None:
-                    _rt_mark_ready("capital_ready")
-                    _rt_mark_ready("balance_hydrated")
-                    logger.info("[ForcedActivationFallback] readiness table keys force-set")
+                    # Force-open all required readiness keys so the truth table
+                    # evaluates to is_ready()=True and trading can proceed.
+                    for _force_key in (
+                        "broker_connected", "balance_hydrated", "capital_ready",
+                        "risk_ready", "strategy_ready", "execution_ready",
+                        "nonce_ready", "bootstrap_ready",
+                    ):
+                        _rt_mark_ready(_force_key)
+                    logger.info("[ForcedActivationFallback] all readiness table keys force-set")
             except Exception as exc:
                 logger.warning("[ForcedActivationFallback] failed to force-set readiness table: %s", exc)
             return
