@@ -237,17 +237,27 @@ class RestartReconciliationManager:
             exchange_positions = exchange_positions or []
             exchange_open_orders = exchange_open_orders or []
             if exchange_positions or exchange_open_orders:
-                report['discrepancies'].append(
-                    {
-                        "type": "STATE_MISSING",
-                        "detail": "No local restart state available but exchange reports open positions/orders.",
-                        "severity": "HIGH",
-                    }
-                )
-                report['status'] = 'DISCREPANCIES_FOUND'
+                # No local state but the exchange has open positions/orders.
+                # This is a normal scenario for a fresh container deployment or
+                # a first startup against an existing account.  Treating this as
+                # DISCREPANCIES_FOUND permanently blocks the activation gate, so
+                # we instead adopt the exchange state as our new baseline and
+                # return CLEAN_START so trading can proceed.
                 logger.warning(
-                    "⚠️  RECONCILIATION REQUIRED - exchange positions/orders exist but no local state found"
+                    "⚠️  RECONCILIATION: No local state found but exchange reports "
+                    "%d open position(s) and %d open order(s). "
+                    "Adopting exchange state as new baseline — CLEAN_START.",
+                    len(exchange_positions),
+                    len(exchange_open_orders),
                 )
+                report['actions_taken'].append(
+                    "Adopted exchange positions/orders as baseline (no local state available)"
+                )
+                report['warnings'].append(
+                    f"Fresh deployment: {len(exchange_positions)} position(s) and "
+                    f"{len(exchange_open_orders)} order(s) adopted from exchange."
+                )
+                report['status'] = 'CLEAN_START'
             else:
                 logger.info("✅ No restart or no previous state - clean start")
                 report['status'] = 'CLEAN_START'

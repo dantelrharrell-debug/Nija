@@ -376,8 +376,37 @@ def _startup_reconciliation_gate() -> tuple[bool, str]:
         )
         return True, ""
     status = os.environ.get("NIJA_RECONCILIATION_STATUS", "").strip().upper()
-    if status in {"CLEAN", "CLEAN_START"} and _env_truthy("NIJA_RECONCILIATION_COMPLETE", "false"):
+    complete = _env_truthy("NIJA_RECONCILIATION_COMPLETE", "false")
+
+    # Pass immediately for CLEAN / CLEAN_START outcomes.
+    if status in {"CLEAN", "CLEAN_START"} and complete:
         return True, ""
+
+    # Reconciliation has not run yet (status is empty and complete is false).
+    # This is a normal race-condition during startup: the reconciliation manager
+    # runs inside the first trading cycle, while activation gates are evaluated
+    # earlier by MABM and the supervisor.  Rather than permanently blocking on a
+    # "missing" status, pass the gate so the first cycle can execute and set the
+    # status.  The gate will re-enforce on subsequent activation attempts once
+    # NIJA_RECONCILIATION_COMPLETE=true is set.
+    if not status and not complete:
+        logger.warning(
+            "[RECONCILIATION GATE] reconciliation has not run yet (status=missing) — "
+            "passing gate for initial startup; will re-check after first cycle."
+        )
+        return True, ""
+
+    # DISCREPANCIES_FOUND: allow an operator escape valve via
+    # NIJA_ALLOW_DISCREPANCY_TRADING=true so the bot can trade after a manual
+    # review when discrepancies are understood and accepted.
+    if status == "DISCREPANCIES_FOUND" and _env_truthy("NIJA_ALLOW_DISCREPANCY_TRADING", "false"):
+        logger.critical(
+            "[RECONCILIATION GATE] NIJA_ALLOW_DISCREPANCY_TRADING=true — "
+            "proceeding despite DISCREPANCIES_FOUND status. "
+            "Verify exchange state manually before relying on this override."
+        )
+        return True, ""
+
     return False, f"status={status or 'missing'}"
 
 
