@@ -1,0 +1,12 @@
+{
+  "current_state": "EMERGENCY_STOP",
+  "history": [
+    {
+      "from": "OFF",
+      "to": "EMERGENCY_STOP",
+      "reason": "Kill switch activated: unit test",
+      "timestamp": "2026-05-10T15:58:40.742865"
+    }
+  ],
+  "last_updated": "2026-05-10T15:58:40.742885"
+}
