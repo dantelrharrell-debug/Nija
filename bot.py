@@ -487,11 +487,14 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
 
     try:
         _manager_candidates = []
+        _seen_manager_ids: set[int] = set()
         if strategy is not None:
             for _manager_attr in ("broker_manager", "multi_account_manager"):
                 _manager = getattr(strategy, _manager_attr, None)
-                if _manager is not None and _manager not in _manager_candidates:
+                _manager_id = id(_manager) if _manager is not None else None
+                if _manager is not None and _manager_id not in _seen_manager_ids:
                     _manager_candidates.append(_manager)
+                    _seen_manager_ids.add(_manager_id)
 
         for _manager in _manager_candidates:
             _brokers_by_id: dict[int, Any] = {}
@@ -506,6 +509,8 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                     _all_brokers = _get_all_brokers()
                     if isinstance(_all_brokers, (list, tuple, set, frozenset)):
                         for _entry in _all_brokers:
+                            # MultiAccountBrokerManager returns (account_id, broker)
+                            # tuples; tolerate plain broker entries for compatibility.
                             _broker = _entry[1] if isinstance(_entry, tuple) and len(_entry) >= 2 else _entry
                             _brokers_by_id[id(_broker)] = _broker
                 except Exception:
