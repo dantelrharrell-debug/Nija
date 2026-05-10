@@ -228,12 +228,12 @@ _REGIME_PROFILE: Dict[str, StratProfile] = {
 }
 
 # Cooldown seconds per activity band.
-# Reduced normal/low from 60s→30s: small accounts need faster compounding cycles.
+# Reduced normal/low from 60s→30s, then slightly to 25s for balanced aggressiveness.
 # High-activity (>3 trades/hr) stays at 20s to prevent over-trading.
 _COOLDOWN_TABLE: Dict[str, int] = {
     "high":   20,   # >3 trades/hr
-    "normal": 30,   # 1–3 trades/hr  (was 60)
-    "low":    30,   # <1 trade/hr    (was 60)
+    "normal": 25,   # 1–3 trades/hr
+    "low":    25,   # <1 trade/hr
 }
 
 

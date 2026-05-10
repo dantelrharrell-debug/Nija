@@ -197,19 +197,19 @@ _PARAMS_RANGING = RegimeTradingParams(
     ),
     rsi_long_min=20, rsi_long_max=38,   # buy deep oversold (mean-reversion)
     rsi_short_min=62, rsi_short_max=80, # sell deep overbought
-    confidence_delta=0.0,
-    position_size_multiplier=0.85,
-    risk_per_trade_pct=1.2,
+    confidence_delta=-0.01,           # slightly easier entries in low-vol ranges
+    position_size_multiplier=0.90,    # reduced conservatism for better capital deployment
+    risk_per_trade_pct=1.3,           # modest risk bump while staying well below hard caps
     stop_loss_atr_multiplier=1.2,       # tight stop — range has defined bounds
     take_profit_atr_multiplier=2.0,     # take profit at range midpoint
     take_profit_multiplier=0.85,        # lower TP — market won't run far
     trailing_stop_atr_multiplier=1.0,
     min_trades_per_hour=2.5,            # more frequent in ranges
     min_trades_per_day=22.0,
-    min_entry_score=4,                  # require higher quality in chop
+    min_entry_score=3,                  # majority confirmation (3/5) instead of stricter 4/5
     # Market condition tuning
     scan_interval_secs=180.0,    # slower scanning — setups need to mature
-    cooldown_secs=45.0,          # longer cooldown — avoid thrashing in chop
+    cooldown_secs=35.0,          # keep safeguard active, but reduce artificial silence
     daily_loss_limit_pct=3.0,    # tighter loss limit — ranging eats fees
     volume_gate_multiplier=0.65, # require decent volume — avoid false breakouts
 )
@@ -249,19 +249,19 @@ _PARAMS_MEAN_REVERSION = RegimeTradingParams(
     ),
     rsi_long_min=22, rsi_long_max=40,
     rsi_short_min=60, rsi_short_max=78,
-    confidence_delta=0.0,
-    position_size_multiplier=0.90,
-    risk_per_trade_pct=1.2,
+    confidence_delta=-0.01,           # slightly easier entries in quieter reversal phases
+    position_size_multiplier=0.95,    # modestly less conservative sizing
+    risk_per_trade_pct=1.3,           # modest risk bump while preserving structural limits
     stop_loss_atr_multiplier=1.3,
     take_profit_atr_multiplier=2.2,
     take_profit_multiplier=0.90,
     trailing_stop_atr_multiplier=1.2,
     min_trades_per_hour=2.0,
     min_trades_per_day=20.0,
-    min_entry_score=4,
+    min_entry_score=3,                # shift from strict to majority-strength requirement
     # Market condition tuning
     scan_interval_secs=180.0,    # patient scanning — reversals take time to set up
-    cooldown_secs=45.0,          # avoid re-entry on same failed reversal
+    cooldown_secs=35.0,          # keep cooldown active with faster cadence
     daily_loss_limit_pct=3.0,    # tight loss budget — reversals can fail violently
     volume_gate_multiplier=0.65, # require volume confirmation for reversals
 )
@@ -279,8 +279,8 @@ _PARAMS_CONSOLIDATION = RegimeTradingParams(
     rsi_long_min=30, rsi_long_max=52,   # buy any reasonable dip
     rsi_short_min=48, rsi_short_max=70, # short any reasonable peak
     confidence_delta=-0.06,             # loosen gate — scalp anything
-    position_size_multiplier=0.75,      # smaller size — faster churn
-    risk_per_trade_pct=1.0,             # tighter risk — scalps are small
+    position_size_multiplier=0.80,      # slightly less conservative in low-vol scalp regime
+    risk_per_trade_pct=1.1,             # modest risk increase for better deployment
     stop_loss_atr_multiplier=0.8,       # very tight stop
     take_profit_atr_multiplier=1.2,     # small, quick TP
     take_profit_multiplier=0.70,        # take profit early
@@ -290,7 +290,7 @@ _PARAMS_CONSOLIDATION = RegimeTradingParams(
     min_entry_score=2,                  # lower bar — volume compensates
     # Market condition tuning
     scan_interval_secs=90.0,     # fast scanning — scalp setups appear and vanish quickly
-    cooldown_secs=15.0,          # short cooldown — scalp mode = high frequency
+    cooldown_secs=12.0,          # keep active, slightly faster re-entry cadence
     daily_loss_limit_pct=4.0,    # moderate limit — many small trades accumulate losses fast
     volume_gate_multiplier=0.70, # require solid volume — scalps need tight spreads
 )

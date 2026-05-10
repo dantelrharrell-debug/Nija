@@ -71,7 +71,7 @@ logger = logging.getLogger("nija.confidence_engine")
 # Constants
 # ---------------------------------------------------------------------------
 
-CONFIDENCE_THRESHOLD: float = 54.0   # minimum score to recommend execution (lowered 58→54; effective SKIP floor: 54×0.80≈43.2)
+CONFIDENCE_THRESHOLD: float = 52.0   # minimum score to recommend execution (slightly lowered 54→52 for balanced frequency)
 MAX_SCORE: float = 100.0
 
 _COMPONENT_MAX = {
