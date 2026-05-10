@@ -296,38 +296,32 @@ def _nonce_sync_gate() -> tuple[bool, str]:
 
 
 def _strategy_ready_gate() -> tuple[bool, str]:
-    """Report whether the StartupReadinessGate has opened.
+    """Report whether the readiness truth table is fully set.
 
     Returns
     -------
     (ok, detail)
-        ok=True when the readiness gate is open.
-        ok=False when the gate is closed or its status cannot be determined.
-        detail provides a short reason (e.g., pending components) when ok=False.
+        ok=True when all keys in the readiness table are True.
+        ok=False when any key is still False or the table is unavailable.
+        detail provides a short reason when ok=False.
     """
     try:
         try:
-            from bot.startup_readiness_gate import get_startup_readiness_gate
+            from bot.readiness_table import is_ready as _rt_is_ready, pending as _rt_pending
         except ImportError:
-            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
+            from readiness_table import is_ready as _rt_is_ready, pending as _rt_pending  # type: ignore[import]
     except ImportError:
-        return False, "startup_readiness_gate_module_missing"
+        return False, "readiness_table_module_missing"
 
     try:
-        gate = get_startup_readiness_gate()
-    except Exception as exc:
-        return False, f"startup_gate_unavailable: {exc}"
-
-    try:
-        if gate.is_ready():
+        if _rt_is_ready():
             return True, ""
-        status = gate.get_status()
-        pending = status.get("pending_components") if isinstance(status, dict) else []
-        if pending:
-            return False, f"pending={','.join(sorted(pending))}"
+        _pend = _rt_pending()
+        if _pend:
+            return False, f"pending={','.join(sorted(_pend))}"
         return False, "not_ready"
     except Exception as exc:
-        return False, f"startup_gate_status_unavailable: {exc}"
+        return False, f"readiness_table_unavailable: {exc}"
 
 
 def _safe_start_gate() -> tuple[bool, str]:

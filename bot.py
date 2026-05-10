@@ -208,14 +208,12 @@ def _format_startup_phase_tag() -> str:
 
 
 def _reset_startup_events_for_fresh_attempt() -> None:
-    """Clear module-level startup events before a non-fast-path bootstrap attempt.
+    """Reset readiness table and completion events before a fresh bootstrap attempt.
 
-    These events persist for the lifetime of the process. When a startup attempt
-    fails before full handoff, the next retry must not inherit stale readiness
-    or completion signals from the previous attempt.
+    When a startup attempt fails before full handoff, the next retry must not
+    inherit stale readiness signals from the previous attempt.
     """
-    _strategy_ready_event.clear()
-    _balance_hydrated_event.clear()
+    _rt_reset()
     _bootstrap_complete_flag.clear()
     _bootstrap_completed_event.clear()
     _force_trade_handoff_complete_event.clear()
@@ -228,7 +226,7 @@ def _reset_startup_events_for_fresh_attempt() -> None:
             _tl_ready = None  # type: ignore[assignment]
     if _tl_ready is not None:
         _tl_ready.clear()
-    logger.debug("🔄 Cleared startup readiness/completion events for fresh bootstrap attempt")
+    logger.debug("🔄 Reset readiness table and completion events for fresh bootstrap attempt")
 
 
 def _set_bootstrap_owner_thread() -> None:
@@ -353,28 +351,32 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
 
     # Hard requirement: do NOT start the trading loop until BOTH conditions hold:
     #   1. the cached strategy object is present in initialized state
-    #   2. bootstrap has emitted the global strategy-ready event
+    #   2. strategy_ready is set in the readiness truth table
     # This prevents a partially persisted strategy object from bypassing the
     # real startup readiness contract. This wait is intentionally unbounded:
     # startup must fail closed rather than degrade into a forced-ready bypass.
-    while _strategy is None or not _strategy_ready_event.is_set():
+    def _strategy_ready_in_table() -> bool:
+        return bool(_rt_snapshot().get("strategy_ready", False))
+
+    while _strategy is None or not _strategy_ready_in_table():
         _state_snapshot = dict(_initialized_state)
         _strategy = _state_snapshot.get("strategy")
-        if _strategy is not None and _strategy_ready_event.is_set():
+        if _strategy is not None and _strategy_ready_in_table():
             break
 
         _elapsed = time.monotonic() - _wait_started
 
-        if not _wait_for_event_with_timeout(
-            _strategy_ready_event,
-            timeout_s=30,
-            timeout_label="STRATEGY_READY",
-        ):
+        # Poll with a short sleep rather than blocking on an event.
+        _poll_deadline = time.monotonic() + 30.0
+        while not _strategy_ready_in_table() and time.monotonic() < _poll_deadline:
+            time.sleep(0.25)
+        if not _strategy_ready_in_table():
             logger.critical(
-                "WAIT_TIMEOUT_DIAGNOSTICS label=STRATEGY_READY reason=%s elapsed=%.1fs strategy_present=%s",
+                "WAIT_TIMEOUT_DIAGNOSTICS label=STRATEGY_READY reason=%s elapsed=%.1fs strategy_present=%s table=%s",
                 reason,
                 _elapsed,
                 _strategy is not None,
+                _rt_snapshot(),
             )
 
         if _elapsed - _last_wait_log >= 5.0:
@@ -449,197 +451,22 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
 def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
     """Return (system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready).
 
-    All required readiness gates must be true before the trading loop may start.
+    Delegates to the readiness truth table as the single source of truth.
+    The ``state_snapshot`` argument is accepted for backward compatibility with
+    call sites that still pass it; it is no longer used to derive readiness.
 
-    Broker readiness is strict and fail-closed:
-    - Kraken startup FSM must report CONNECTED when Kraken is configured.
-    - At least one connected broker must exist.
-    - At least one execution-eligible broker must exist.
-
-    FORCE_TRADE bypass is handled by the gate evaluator, not by synthesizing
-    readiness here.
+    Note: ``risk_ready`` is reported as a separate flag but is intentionally
+    excluded from the ``system_ready`` AND-expression, matching the previous
+    implementation.  Risk subsystem initialization is coupled to
+    ``strategy_ready``; both must be True for the trading loop to start.
     """
-    strategy = state_snapshot.get("strategy")
-
-    strategy_ready = strategy is not None and _strategy_ready_event.is_set()
-    connected_brokers = 0
-    eligible_brokers = 0
-    # Only require the Kraken startup FSM to be connected when Kraken
-    # credentials are actually configured.  For Coinbase-only (or other
-    # non-Kraken) deployments the FSM stays in its initial IDLE/not-connected
-    # state, which would permanently block broker_ready even though the real
-    # broker (Coinbase) is fully operational.
-    _kraken_creds_configured = bool(
-        (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
-        and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
-    )
-    kraken_connected = True
-    if _kraken_creds_configured:
-        try:
-            try:
-                from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm
-            except ImportError:
-                from broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm  # type: ignore[import]
-            if _kraken_startup_fsm is not None:
-                kraken_connected = bool(_kraken_startup_fsm.is_connected)
-        except Exception:
-            kraken_connected = False
-
-    try:
-        _manager_candidates = []
-        _seen_manager_ids: set[int] = set()
-        if strategy is not None:
-            for _manager_attr in ("broker_manager", "multi_account_manager"):
-                _manager = getattr(strategy, _manager_attr, None)
-                if _manager is not None and id(_manager) not in _seen_manager_ids:
-                    _manager_candidates.append(_manager)
-                    _seen_manager_ids.add(id(_manager))
-
-        for _manager in _manager_candidates:
-            _brokers_by_id: dict[int, Any] = {}
-            _raw_brokers = getattr(_manager, "brokers", None)
-            if isinstance(_raw_brokers, dict):
-                for _broker in _raw_brokers.values():
-                    _brokers_by_id[id(_broker)] = _broker
-
-            _get_all_brokers = getattr(_manager, "get_all_brokers", None)
-            if callable(_get_all_brokers):
-                try:
-                    _all_brokers = _get_all_brokers()
-                    if isinstance(_all_brokers, (list, tuple, set, frozenset)):
-                        for _entry in _all_brokers:
-                            # get_all_brokers() may return either:
-                            #   1) (account_id, broker) tuples (MultiAccountBrokerManager), or
-                            #   2) plain broker objects (legacy/custom managers).
-                            # Normalize both formats to a broker object.
-                            if isinstance(_entry, tuple) and len(_entry) >= 2:
-                                _broker = _entry[1]
-                            else:
-                                _broker = _entry
-                            _brokers_by_id[id(_broker)] = _broker
-                except Exception as _all_brokers_err:
-                    logger.debug("Broker discovery via get_all_brokers failed: %s", _all_brokers_err)
-
-            _brokers = list(_brokers_by_id.values())
-            _connected = [_broker for _broker in _brokers if getattr(_broker, "connected", False)]
-            connected_brokers = max(connected_brokers, len(_connected))
-
-            _eligible_count = 0
-            _eligible = getattr(_manager, "get_eligible_brokers", None)
-            if callable(_eligible):
-                try:
-                    _eligible_snapshot = _eligible()
-                    if isinstance(_eligible_snapshot, (dict, list, tuple, set, frozenset)):
-                        _eligible_count = len(_eligible_snapshot)
-                except Exception as _eligible_snapshot_err:
-                    logger.debug(
-                        "Broker eligibility snapshot lookup failed: %s",
-                        _eligible_snapshot_err,
-                    )
-
-            if _eligible_count == 0:
-                _is_execution_eligible = getattr(_manager, "is_execution_eligible", None)
-                if callable(_is_execution_eligible) and _connected:
-                    try:
-                        _eligible_count = 0
-                        for _broker in _connected:
-                            try:
-                                if _is_execution_eligible(_broker):
-                                    _eligible_count += 1
-                            except Exception as _eligible_err:
-                                logger.debug(
-                                    "Execution eligibility probe failed for broker %s: %s",
-                                    getattr(_broker, "broker_type", type(_broker).__name__),
-                                    _eligible_err,
-                                )
-                                continue
-                    except Exception as _eligibility_scan_err:
-                        logger.debug(
-                            "Execution eligibility scan failed for manager %s: %s",
-                            type(_manager).__name__,
-                            _eligibility_scan_err,
-                        )
-
-            if _eligible_count == 0 and _connected:
-                # Fallback for manager variants that do not expose explicit
-                # execution-eligibility helpers.
-                logger.info(
-                    "Broker eligibility fallback in use for manager %s: treating connected brokers as eligible",
-                    type(_manager).__name__,
-                )
-                _eligible_count = len(_connected)
-
-            eligible_brokers = max(eligible_brokers, _eligible_count)
-    except Exception:
-        connected_brokers = 0
-        eligible_brokers = 0
-
-    broker_ready = kraken_connected and connected_brokers >= 1 and eligible_brokers >= 1
-
-    # Risk stack is partially lazy-initialized in this codebase. Treat strategy
-    # registration itself as the canonical risk-readiness milestone unless an
-    # explicit risk_ready flag is already persisted in initialized state.
-    risk_ready = bool(state_snapshot.get("risk_ready", strategy_ready))
-
-    # capital_ready: Prefer BootstrapFSM state, but fall back to CapitalAuthority
-    # readiness gates to avoid a false-negative race when FSM lag/availability
-    # does not reflect already-open capital authority gates.
-    capital_ready = False
-    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-        try:
-            _bfsm = _get_bootstrap_fsm()
-            _bfsm_state = _bfsm.state
-            _capital_states = {
-                "CAPITAL_READY", "INIT_COMPLETE", "THREADS_STARTING", "RUNNING_SUPERVISED",
-            }
-            capital_ready = getattr(_bfsm_state, "value", str(_bfsm_state)) in _capital_states
-        except Exception:
-            capital_ready = False
-
-    if not capital_ready:
-        try:
-            try:
-                from bot.capital_authority import (
-                    get_capital_authority as _get_capital_authority,
-                    get_capital_hydrated_gate as _get_capital_hydrated_gate,
-                    get_startup_lock as _get_startup_lock,
-                )
-            except ImportError:
-                from capital_authority import (  # type: ignore[import]
-                    get_capital_authority as _get_capital_authority,
-                    get_capital_hydrated_gate as _get_capital_hydrated_gate,
-                    get_startup_lock as _get_startup_lock,
-                )
-
-            _ca = _get_capital_authority()
-            _startup_lock_open = bool(_get_startup_lock().is_set())
-            _hydrated_gate_open = bool(_get_capital_hydrated_gate().is_set())
-            _ca_hydrated = bool(getattr(_ca, "is_hydrated", False))
-
-            _ca_ready_method = getattr(_ca, "is_ready", None)
-            _ca_ready = bool(_ca_ready_method()) if callable(_ca_ready_method) else False
-
-            # Canonical authority gate: startup lock released and at least one
-            # hydration/ready signal present.
-            capital_ready = _startup_lock_open and (
-                _ca_hydrated or _hydrated_gate_open or _ca_ready
-            )
-        except Exception:
-            # Keep default False if authority introspection is unavailable.
-            pass
-
-    # execution_ready: strategy must have a live execution engine.
-    # TradingStrategy exposes execution_engine as a property that proxies
-    # strategy.apex.execution_engine.  Check both paths for safety.
-    _exec_engine = None
-    if strategy is not None:
-        _exec_engine = getattr(strategy, "execution_engine", None)
-        if _exec_engine is None:
-            _apex = getattr(strategy, "apex", None)
-            if _apex is not None:
-                _exec_engine = getattr(_apex, "execution_engine", None)
-    execution_ready = _exec_engine is not None
-
+    _tbl = _rt_snapshot()
+    broker_ready = bool(_tbl.get("broker_connected", False))
+    risk_ready = bool(_tbl.get("risk_ready", False))
+    strategy_ready = bool(_tbl.get("strategy_ready", False))
+    capital_ready = bool(_tbl.get("capital_ready", False))
+    execution_ready = bool(_tbl.get("execution_ready", False))
+    # risk_ready is not included here; it gates _require_startup_ready_or_raise.
     system_ready = broker_ready and strategy_ready and capital_ready and execution_ready
     return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
 
@@ -657,7 +484,8 @@ def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tu
             f"BLOCKED: System not fully initialized ({context}) "
             f"broker_ready={broker_ready} risk_ready={risk_ready} "
             f"strategy_ready={strategy_ready} capital_ready={capital_ready} "
-            f"execution_ready={execution_ready}"
+            f"execution_ready={execution_ready} "
+            f"table={_rt_snapshot()}"
         )
     return (
         system_ready,
@@ -671,7 +499,7 @@ def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tu
 
 def _is_balance_hydrated_ready() -> bool:
     """True only after startup balance hydration has completed."""
-    if _balance_hydrated_event.is_set():
+    if bool(_rt_snapshot().get("balance_hydrated", False)):
         return True
 
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
@@ -723,7 +551,8 @@ def _hydrate_startup_balances(strategy) -> float:
             if _override > 0:
                 _hydrated_total_balance_usd = _override
                 os.environ["ACCOUNT_BALANCE"] = f"{_override:.8f}"
-                _balance_hydrated_event.set()
+                _rt_mark_ready("balance_hydrated")
+                _rt_mark_ready("capital_ready")
                 logger.critical(
                     "⚠️ ACCOUNT_BALANCE_OVERRIDE active: forcing startup balance to $%.2f",
                     _override,
@@ -785,8 +614,8 @@ def _hydrate_startup_balances(strategy) -> float:
     if (not _is_live) and _hydrated_total_balance_usd <= 0:
         logger.warning("Startup hydration total is <= 0 in non-live mode; continuing")
 
-    _balance_hydrated_event.set()
-    _capital_ready_event.set()
+    _rt_mark_ready("balance_hydrated")
+    _rt_mark_ready("capital_ready")
     logger.critical("CAPITAL_READY_SET")
     return _hydrated_total_balance_usd
 
@@ -809,20 +638,41 @@ _bootstrap_complete_flag = threading.Event()
 # thread hands off, so trader threads can keep running without interruption.
 _bootstrap_completed_event = threading.Event()
 
-# Single-source strategy-ready event — set ONLY on the success path, after
-# _initialized_state is fully populated (strategy + active_threads + all
-# metadata) and BEFORE _rerun_supervisor_loop is called.  Distinct from
-# _bootstrap_completed_event which is also set in the finally block on
-# failure.  All three components (BootstrapFSM, supervisor, core loop) should
-# test this event to confirm that the strategy is truly initialised.
-_strategy_ready_event = threading.Event()
-_broker_ready_event = threading.Event()
-_execution_ready_event = threading.Event()
-_market_scanner_ready_event = threading.Event()
-_scheduler_ready_event = threading.Event()
-_websocket_ready_event = threading.Event()
-_capital_ready_event = threading.Event()
-_balance_hydrated_event = threading.Event()
+# ---------------------------------------------------------------------------
+# Startup readiness truth table — single source of truth for all readiness
+# state.  Replaces the previous 8 threading.Event objects, the
+# StartupReadinessGate, and the _compute_system_ready re-derivation.
+# ---------------------------------------------------------------------------
+try:
+    from bot.readiness_table import (
+        is_ready as _rt_is_ready,
+        mark_ready as _rt_mark_ready,
+        mark_not_applicable as _rt_mark_not_applicable,
+        pending as _rt_pending,
+        reset as _rt_reset,
+        snapshot as _rt_snapshot,
+    )
+    _READINESS_TABLE_AVAILABLE = True
+except ImportError:
+    try:
+        from readiness_table import (  # type: ignore[import]
+            is_ready as _rt_is_ready,
+            mark_ready as _rt_mark_ready,
+            mark_not_applicable as _rt_mark_not_applicable,
+            pending as _rt_pending,
+            reset as _rt_reset,
+            snapshot as _rt_snapshot,
+        )
+        _READINESS_TABLE_AVAILABLE = True
+    except ImportError:
+        _READINESS_TABLE_AVAILABLE = False
+        _rt_is_ready = lambda: False  # type: ignore[assignment]
+        _rt_mark_ready = lambda _k: None  # type: ignore[assignment]
+        _rt_mark_not_applicable = lambda _k, **_kw: None  # type: ignore[assignment]
+        _rt_pending = lambda: []  # type: ignore[assignment]
+        _rt_reset = lambda: None  # type: ignore[assignment]
+        _rt_snapshot = lambda: {}  # type: ignore[assignment]
+
 _hydrated_total_balance_usd = 0.0
 # Idempotency guard for FORCE_TRADE bootstrap handoff.
 # Set only after RUNNING_SUPERVISED handoff succeeds.
@@ -872,7 +722,7 @@ def dump_startup_state(context: str = "") -> None:
     logger.critical(
         "STARTUP_STATE_DUMP context=%s system_ready=%s broker_ready=%s risk_ready=%s strategy_ready=%s "
         "capital_ready=%s execution_ready=%s strategy_present=%s bfsm_state=%s bfsm_execution_authority=%s "
-        "events(strategy=%s broker=%s execution=%s market_scanner=%s scheduler=%s websocket=%s capital=%s balance=%s)",
+        "readiness_table=%s",
         context or "no-context",
         _system_ready,
         _broker_ready,
@@ -883,14 +733,7 @@ def dump_startup_state(context: str = "") -> None:
         _strategy is not None,
         _bfsm_state,
         _bfsm_exec_authority,
-        _strategy_ready_event.is_set(),
-        _broker_ready_event.is_set(),
-        _execution_ready_event.is_set(),
-        _market_scanner_ready_event.is_set(),
-        _scheduler_ready_event.is_set(),
-        _websocket_ready_event.is_set(),
-        _capital_ready_event.is_set(),
-        _balance_hydrated_event.is_set(),
+        _rt_snapshot(),
     )
 
 
@@ -954,117 +797,14 @@ BOOTSTRAP_PHASES = [
 _nonce_bootstrap_jump_done = False
 _nonce_bootstrap_jump_lock = threading.Lock()
 
-# Startup readiness gate naming contract
-# - bootstrap_ready: bootstrap kernel completed core init
-# - capital_ready: capital hydration gate open
-# - strategy_ready: TradingStrategy fully initialised
-# - execution_ready: execution engine wired and ready for dispatch
-_STARTUP_READINESS_COMPONENTS = (
-    "bootstrap_ready",
-    "capital_ready",
-    "strategy_ready",
-    "execution_ready",
-)
-_startup_readiness_registered = False
 # Startup strategy publication lock timeout (seconds) used by fallback/republish paths.
 _INIT_LOCK_PUBLISH_TIMEOUT_S = 5.0
 # Supervisor grace window before degraded fallback strategy construction (seconds).
 _STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
 
 
-def _register_startup_readiness_components(context: str) -> None:
-    """Register the canonical startup readiness gate components.
-
-    After registering every required component, an event-driven catch-up
-    pass replays any readiness signal that fired before this call.  This
-    closes the ordering race where a component signals the gate *before*
-    ``register_component`` has been called — in particular the
-    ``execution_ready`` signal, which is silently skipped inside
-    ``_publish_strategy_runtime_readiness`` when the execution engine is
-    ``None`` at strategy-publish time but gets wired to the strategy before
-    the pre-thread-launch invariant check runs.
-
-    Without this catch-up the gate waits forever for ``execution_ready``
-    and the trading threads never start.
-    """
-    global _startup_readiness_registered
-    try:
-        from bot.startup_readiness_gate import get_startup_readiness_gate
-    except ImportError:
-        try:
-            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
-        except ImportError:
-            logger.debug("StartupReadinessGate unavailable; registration skipped (%s)", context)
-            return
-
-    try:
-        gate = get_startup_readiness_gate()
-        for name in _STARTUP_READINESS_COMPONENTS:
-            gate.register_component(name)
-        if not _startup_readiness_registered:
-            logger.critical(
-                "✅ Startup readiness gate registered (%s): %s",
-                context,
-                ", ".join(_STARTUP_READINESS_COMPONENTS),
-            )
-        _startup_readiness_registered = True
-    except Exception as exc:
-        logger.warning("Startup readiness gate registration failed (%s): %s", context, exc)
-        return
-
-    # ── Event-driven catch-up ──────────────────────────────────────────────────
-    # Replay readiness signals for any component whose underlying threading.Event
-    # fired before this registration call.  signal_ready() is idempotent, so
-    # replaying an already-open signal is safe.
-    #
-    # execution_ready is special: if the execution engine was None when
-    # _publish_strategy_runtime_readiness ran, _execution_ready_event was never
-    # set even though the engine may have been wired to the strategy shortly
-    # afterwards.  We probe _initialized_state directly as a fallback so the
-    # gate never stalls permanently in that ordering.
-    try:
-        # Components that have a 1-to-1 threading.Event.
-        _catchup_event_map: dict[str, threading.Event] = {
-            "strategy_ready": _strategy_ready_event,
-            "capital_ready": _capital_ready_event,
-        }
-        for _comp_name, _comp_event in _catchup_event_map.items():
-            if _comp_event.is_set():
-                logger.debug(
-                    "READINESS_CATCHUP: replaying signal for %s (%s)", _comp_name, context
-                )
-                gate.signal_ready(_comp_name)
-
-        # execution_ready: prefer the event; fall back to inspecting the
-        # cached strategy when the event was never set (engine wired after
-        # _publish_strategy_runtime_readiness fired).
-        if not _execution_ready_event.is_set():
-            _cached_strategy = _initialized_state.get("strategy")
-            if _cached_strategy is not None:
-                _cached_apex = getattr(_cached_strategy, "apex", None)
-                _cached_exec = getattr(_cached_strategy, "execution_engine", None) or (
-                    getattr(_cached_apex, "execution_engine", None)
-                    if _cached_apex is not None
-                    else None
-                )
-                if _cached_exec is not None:
-                    # Sync the event so downstream predicates stay consistent.
-                    _execution_ready_event.set()
-                    logger.info(
-                        "READINESS_CATCHUP: execution engine found in cached strategy "
-                        "— syncing _execution_ready_event and signalling gate (%s)",
-                        context,
-                    )
-        if _execution_ready_event.is_set():
-            gate.signal_ready("execution_ready")
-    except Exception as _catchup_err:
-        logger.warning(
-            "Startup readiness catch-up failed (%s): %s", context, _catchup_err
-        )
-
-
 def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> bool:
-    """Persist strategy singleton and publish strategy/execution readiness signals."""
+    """Persist strategy singleton and mark strategy/execution ready in the truth table."""
     try:
         _initialized_state["strategy"] = strategy_obj
         # Preserve existing startup contract: once TradingStrategy is cached,
@@ -1076,10 +816,11 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
         logger.warning("Strategy publish failed (%s): %s", context, exc)
         return False
 
-    _strategy_ready_event.set()
+    _rt_mark_ready("strategy_ready")
+    _rt_mark_ready("risk_ready")
     logger.critical("STRATEGY_READY_SET")
     logger.critical(
-        "STRATEGY INITIALIZED — strategy-ready event published; awaiting hydrated runtime state persistence"
+        "STRATEGY INITIALIZED — strategy-ready marked in truth table; awaiting hydrated runtime state persistence"
     )
 
     _exec_engine = getattr(strategy_obj, "execution_engine", None)
@@ -1087,30 +828,10 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
         _apex = getattr(strategy_obj, "apex", None)
         _exec_engine = getattr(_apex, "execution_engine", None) if _apex is not None else None
     if _exec_engine is not None:
-        _execution_ready_event.set()
+        _rt_mark_ready("execution_ready")
         logger.critical("EXECUTION_READY_SET")
     else:
         logger.warning("Execution engine not yet available during strategy publish (%s)", context)
-
-    try:
-        from bot.startup_readiness_gate import get_startup_readiness_gate
-    except ImportError:
-        try:
-            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
-        except ImportError:
-            get_startup_readiness_gate = None  # type: ignore[assignment]
-    if get_startup_readiness_gate is not None:
-        try:
-            gate = get_startup_readiness_gate()
-            gate.signal_ready("strategy_ready")
-            if _exec_engine is not None:
-                gate.signal_ready("execution_ready")
-        except Exception as _gate_signal_err:
-            logger.warning(
-                "Startup readiness signal failed (strategy/execution) (%s): %s",
-                context,
-                _gate_signal_err,
-            )
 
     return True
 
@@ -1120,8 +841,8 @@ def _ensure_strategy_fallback_published(*, context: str) -> bool:
     _state_snapshot = _read_initialized_state_snapshot(context=f"{context}: pre-fallback probe")
     _strategy = _state_snapshot.get("strategy")
     if _strategy is not None:
-        if not _strategy_ready_event.is_set():
-            logger.warning("Strategy present without strategy_ready event; publishing readiness (%s)", context)
+        if not bool(_rt_snapshot().get("strategy_ready", False)):
+            logger.warning("Strategy present without strategy_ready in table; publishing readiness (%s)", context)
             _acquired = _initialized_state_lock.acquire(timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S)
             if not _acquired:
                 logger.warning("Readiness republish skipped: INIT lock unavailable (%s)", context)
@@ -1366,26 +1087,8 @@ def _emit_startup_orchestration_snapshot(context: str) -> None:
         except Exception:
             bootstrap_state = "ERROR"
 
-    gate_ready = None
-    gate_detail = ""
-    try:
-        from bot.startup_readiness_gate import get_startup_readiness_gate
-    except ImportError:
-        try:
-            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
-        except ImportError:
-            get_startup_readiness_gate = None  # type: ignore[assignment]
-    if get_startup_readiness_gate is not None:
-        try:
-            gate = get_startup_readiness_gate()
-            gate_ready = bool(gate.is_ready())
-            if not gate_ready:
-                status = gate.get_status()
-                pending = status.get("pending_components", []) if isinstance(status, dict) else []
-                gate_detail = f"pending={','.join(sorted(pending))}" if pending else "pending=unknown"
-        except Exception as exc:
-            gate_ready = False
-            gate_detail = f"error={exc}"
+    gate_ready = _rt_is_ready()
+    gate_detail = "" if gate_ready else f"pending={_rt_pending()}"
 
     env_flags = {
         "AUTO_ACTIVATE": os.getenv("AUTO_ACTIVATE", "false"),
@@ -5357,7 +5060,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     try:
                         from bot.trading_state_machine import get_state_machine as _get_tsm_startup
 
-                        if _strategy_ready_event.is_set():
+                        if bool(_rt_snapshot().get("strategy_ready", False)):
                             _tsm_startup = _get_tsm_startup()
                             _startup_state = _tsm_startup.get_current_state()
                             logger.info(
@@ -6414,19 +6117,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         f"startup capital confirmed: ${_total_capital:.2f}",
                     )
                     try:
-                        from bot.startup_readiness_gate import get_startup_readiness_gate
-                    except ImportError:
-                        try:
-                            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
-                        except ImportError:
-                            get_startup_readiness_gate = None  # type: ignore[assignment]
-                    if get_startup_readiness_gate is not None:
-                        try:
-                            get_startup_readiness_gate().signal_ready("capital_ready")
-                        except Exception as _gate_signal_err:
-                            logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
+                        _rt_mark_ready("capital_ready")
+                    except Exception as _gate_signal_err:
+                        logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
                     break
-                elif _ca_gate_ready and not _ca_gate_hydrated:
                     logger.warning(
                         "[CapGate] CA is_ready=True but is_hydrated=False — "
                         "waiting for publish_snapshot/refresh to commit hydration"
@@ -6447,17 +6141,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         "capital gate timeout — proceeding in degraded mode",
                     )
                     try:
-                        from bot.startup_readiness_gate import get_startup_readiness_gate
-                    except ImportError:
-                        try:
-                            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
-                        except ImportError:
-                            get_startup_readiness_gate = None  # type: ignore[assignment]
-                    if get_startup_readiness_gate is not None:
-                        try:
-                            get_startup_readiness_gate().signal_ready("capital_ready")
-                        except Exception as _gate_signal_err:
-                            logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
+                        _rt_mark_ready("capital_ready")
+                    except Exception as _gate_signal_err:
+                        logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
                     break
 
                 capital_gate_checks += 1
@@ -6773,61 +6459,15 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # and before RUN loop thread launch.
             _bootstrap_nonce_reset_once()
 
-            _prelaunch_state_snapshot = {"strategy": strategy}
-            (
-                _prelaunch_system_ready,
-                _prelaunch_broker_ready,
-                _prelaunch_risk_ready,
-                _prelaunch_strategy_ready,
-                _prelaunch_capital_ready,
-                _prelaunch_execution_ready,
-            ) = _require_startup_ready_or_raise(
-                context="pre-thread launch",
-                state_snapshot=_prelaunch_state_snapshot,
-            )
-            _prelaunch_balance_ready = _is_balance_hydrated_ready()
-            try:
-                from bot.broker_manager import _KRAKEN_STARTUP_FSM as _prelaunch_kraken_fsm
-            except Exception:
-                _prelaunch_kraken_fsm = None  # type: ignore[assignment]
-            # Nonce readiness is only enforced when Kraken is configured.
-            # For Coinbase-only deployments the Kraken FSM stays idle and
-            # is_nonce_ready() always returns False, which would block startup
-            # even though nonce management is irrelevant for Coinbase.
-            _prelaunch_kraken_configured = bool(
-                (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
-                and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
-            )
-            _prelaunch_nonce_ready = (
-                bool(_prelaunch_kraken_fsm.is_nonce_ready())
-                if (_prelaunch_kraken_configured and _prelaunch_kraken_fsm is not None)
-                else True
-            )
-
-            if not all([
-                _prelaunch_nonce_ready,
-                _prelaunch_broker_ready,
-                _prelaunch_balance_ready,
-                _prelaunch_capital_ready,
-                _prelaunch_risk_ready,
-                _prelaunch_strategy_ready,
-                _prelaunch_execution_ready,
-            ]):
+            if not _rt_is_ready():
                 raise RuntimeError(
                     "STARTUP_ORDER_BLOCKED before THREADS_STARTING: "
-                    f"nonce_ready={_prelaunch_nonce_ready} "
-                    f"broker_ready={_prelaunch_broker_ready} "
-                    f"balance_ready={_prelaunch_balance_ready} "
-                    f"capital_ready={_prelaunch_capital_ready} "
-                    f"risk_ready={_prelaunch_risk_ready} "
-                    f"strategy_ready={_prelaunch_strategy_ready} "
-                    f"execution_ready={_prelaunch_execution_ready}"
+                    f"readiness_table={_rt_snapshot()}"
                 )
 
-            # Advance bootstrap FSM to THREADS_STARTING only after LIVE_ACTIVE is
-            # confirmed so that any failure above leaves the FSM at INIT_COMPLETE
-            # (from which reset_for_retry can reach BOOT_FAILED_RETRY).
-            _register_startup_readiness_components("pre-thread launch")
+            # Advance bootstrap FSM to THREADS_STARTING only after all readiness
+            # conditions are confirmed so that any failure above leaves the FSM at
+            # INIT_COMPLETE (from which reset_for_retry can reach BOOT_FAILED_RETRY).
             if _BOOTSTRAP_FSM_AVAILABLE:
                 _bfsm_transition(
                     _BootstrapState.THREADS_STARTING,
@@ -6988,22 +6628,13 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 except Exception as _capital_running_err:
                     logger.warning("Capital bootstrap RUNNING transition failed: %s", _capital_running_err)
             try:
-                from bot.startup_readiness_gate import get_startup_readiness_gate
-            except ImportError:
-                try:
-                    from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
-                except ImportError:
-                    get_startup_readiness_gate = None  # type: ignore[assignment]
-            if get_startup_readiness_gate is not None:
-                try:
-                    gate = get_startup_readiness_gate()
-                    gate.signal_ready("bootstrap_ready")
-                    _barrier_state = gate.get_status()
-                    logger.critical("🚧 BARRIER STATE: %s", _barrier_state)
-                    if not gate.is_ready():
-                        logger.critical("❌ BARRIER STILL BLOCKING EXECUTION LOOP")
-                except Exception as _gate_signal_err:
-                    logger.warning("⚠️ readiness gate signal failed at bootstrap completion: %s", _gate_signal_err)
+                _rt_mark_ready("bootstrap_ready")
+                _barrier_state = _rt_snapshot()
+                logger.critical("🚧 BARRIER STATE: %s", _barrier_state)
+                if not _rt_is_ready():
+                    logger.critical("❌ BARRIER STILL BLOCKING EXECUTION LOOP")
+            except Exception as _gate_signal_err:
+                logger.warning("⚠️ readiness table signal failed at bootstrap completion: %s", _gate_signal_err)
             _emit_startup_orchestration_snapshot("bootstrap_complete")
             logger.critical("READINESS_MUTATION_REMOVED marker=bootstrap_core_loop_signal")
             logger.info("✅ [Bootstrap] Core-loop signal mutation removed — awaiting final supervisor handoff")

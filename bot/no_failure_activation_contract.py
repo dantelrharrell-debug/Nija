@@ -98,17 +98,17 @@ def _get_startup_lock() -> threading.Event:
         return STARTUP_LOCK
 
 
-def _get_startup_readiness_gate():
-    """Return the process-wide StartupReadinessGate singleton."""
+def _get_readiness_table():
+    """Return the readiness_table module, or None if unavailable."""
     try:
-        from startup_readiness_gate import get_startup_readiness_gate
-        return get_startup_readiness_gate()
+        from bot.readiness_table import mark_ready, snapshot
+        return mark_ready, snapshot
     except ImportError:
         try:
-            from bot.startup_readiness_gate import get_startup_readiness_gate  # type: ignore[no-redef]
-            return get_startup_readiness_gate()
-        except Exception:
-            return None
+            from readiness_table import mark_ready, snapshot  # type: ignore[import]
+            return mark_ready, snapshot
+        except ImportError:
+            return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -354,12 +354,19 @@ class ForcedActivationFallbackTimer:
             except Exception as exc:
                 logger.warning("[ForcedActivationFallback] failed to set STARTUP_LOCK: %s", exc)
             try:
-                gate = _get_startup_readiness_gate()
-                if gate is not None:
-                    gate.force_open("FORCE_TRADE active — forced activation fallback")
-                    logger.info("[ForcedActivationFallback] StartupReadinessGate force-opened")
+                _rt_mark_ready, _ = _get_readiness_table()
+                if _rt_mark_ready is not None:
+                    # Force-open all required readiness keys so the truth table
+                    # evaluates to is_ready()=True and trading can proceed.
+                    for _force_key in (
+                        "broker_connected", "balance_hydrated", "capital_ready",
+                        "risk_ready", "strategy_ready", "execution_ready",
+                        "nonce_ready", "bootstrap_ready",
+                    ):
+                        _rt_mark_ready(_force_key)
+                    logger.info("[ForcedActivationFallback] all readiness table keys force-set")
             except Exception as exc:
-                logger.warning("[ForcedActivationFallback] failed to force-open StartupReadinessGate: %s", exc)
+                logger.warning("[ForcedActivationFallback] failed to force-set readiness table: %s", exc)
             return
 
         # Fail closed: do not force-open any startup gates.

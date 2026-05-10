@@ -104,11 +104,15 @@ except ImportError:
     logger.warning("⚠️  trading_state_machine not importable — state-machine checks skipped")
 
 try:
-    from startup_readiness_gate import get_startup_readiness_gate
-    _READINESS_GATE_AVAILABLE = True
+    from bot.readiness_table import mark_ready as _rt_mark_ready_shs
+    _READINESS_TABLE_SHS_AVAILABLE = True
 except ImportError:
-    _READINESS_GATE_AVAILABLE = False
-    get_startup_readiness_gate = None  # type: ignore[assignment]
+    try:
+        from readiness_table import mark_ready as _rt_mark_ready_shs  # type: ignore[import]
+        _READINESS_TABLE_SHS_AVAILABLE = True
+    except ImportError:
+        _READINESS_TABLE_SHS_AVAILABLE = False
+        _rt_mark_ready_shs = lambda _k: None  # type: ignore[assignment]
 
 try:
     from capital_authority import get_capital_authority as _get_capital_authority
@@ -1093,7 +1097,7 @@ class SelfHealingStartup:
     3. **Nonce escalation** — run CeilingJumpEscalator from the recommended tier.
     4. **Broker connection** — connect via BrokerFallbackController.
     5. **Watchdog registration** — register broker-health watchdog with PreHaltAlertEngine.
-    6. **Readiness gate** — signal startup_readiness_gate (if available).
+    6. **Readiness table** — mark broker_connected in the readiness truth table.
 
     Usage::
 
@@ -1242,13 +1246,12 @@ class SelfHealingStartup:
             self.pre_halt_engine.start()
             logger.info("PreHaltAlertEngine: watchdog started for %s", startup_result.broker_name)
 
-        # Step 6: Signal readiness gate
-        if startup_result.ok and _READINESS_GATE_AVAILABLE and get_startup_readiness_gate is not None:
+        # Step 6: Signal readiness table
+        if startup_result.ok and _READINESS_TABLE_SHS_AVAILABLE:
             try:
-                gate = get_startup_readiness_gate()
-                gate.signal_ready("self_healing_startup")
+                _rt_mark_ready_shs("broker_connected")
             except Exception as exc:
-                logger.debug("SelfHealingStartup: readiness gate signal failed (%s)", exc)
+                logger.debug("SelfHealingStartup: readiness table signal failed (%s)", exc)
 
         # Step 7: HARD POST-CONNECTION READINESS LOOP
         # Repeatedly refresh CapitalAuthority and step the state machine until

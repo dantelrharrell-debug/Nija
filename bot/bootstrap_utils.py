@@ -60,7 +60,7 @@ def dump_startup_state(context: str = "") -> None:
             snapshot["capital_state_error"] = str(exc)
 
     module = None
-    for module_name in ("bot.startup_readiness_gate", "startup_readiness_gate"):
+    for module_name in ("bot.readiness_table", "readiness_table"):
         try:
             module = importlib.import_module(module_name)
             break
@@ -68,12 +68,10 @@ def dump_startup_state(context: str = "") -> None:
             continue
     if module is not None:
         try:
-            _gate = getattr(module, "get_startup_readiness_gate", lambda: None)()
-            snapshot["readiness_gate"] = (
-                _gate.get_status() if _gate is not None and hasattr(_gate, "get_status") else None
-            )
+            _rt_snap = getattr(module, "snapshot", lambda: None)()
+            snapshot["readiness_table"] = _rt_snap
         except Exception as exc:
-            snapshot["readiness_gate_error"] = str(exc)
+            snapshot["readiness_table_error"] = str(exc)
 
     module = None
     for module_name in ("bot.nija_core_loop", "nija_core_loop"):

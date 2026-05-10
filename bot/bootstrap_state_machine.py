@@ -753,21 +753,20 @@ class BootstrapStateMachine:
             )
 
     def assert_invariant_i5_readiness_gate(self) -> None:
-        """I5 — trading loops illegal before StartupReadinessGate is open."""
+        """I5 — trading loops illegal before the readiness truth table is fully set."""
         try:
-            from bot.startup_readiness_gate import get_startup_readiness_gate
-        except ImportError:
             try:
-                from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
+                from bot.readiness_table import is_ready as _rt_is_ready, pending as _rt_pending
             except ImportError:
-                logger.debug("[BootstrapFSM] I5: StartupReadinessGate unavailable — skipping check")
-                return
-        gate = get_startup_readiness_gate()
-        if not gate.is_ready():
+                from readiness_table import is_ready as _rt_is_ready, pending as _rt_pending  # type: ignore[import]
+        except ImportError:
+            logger.debug("[BootstrapFSM] I5: readiness_table unavailable — skipping check")
+            return
+        if not _rt_is_ready():
             raise BootstrapInvariantError(
                 "I5_READINESS_GATE",
-                "Trading loops requested but StartupReadinessGate is not open. "
-                "Wait for all registered components to signal ready.",
+                f"Trading loops requested but readiness truth table is not fully set. "
+                f"Pending keys: {_rt_pending()}",
             )
 
     def assert_invariant_i6_mode_safety(self) -> None:
