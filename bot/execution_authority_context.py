@@ -78,6 +78,36 @@ def _build_redis_client(redis_mod, redis_url: str, *, timeout_s: int = 2):
     return redis_mod.Redis.from_url(redis_url, **kwargs)
 
 
+def _recover_fencing_token_from_lock(redis_url: str, lock_key: str) -> str:
+    """Recover fencing token from Redis lock when holder is this instance."""
+    if not redis_url or not lock_key:
+        return ""
+    try:
+        redis_mod = importlib.import_module("redis")
+        client = _build_redis_client(redis_mod, redis_url, timeout_s=2)
+        current_holder_raw = str(client.get(lock_key) or "")
+        current_holder = parse_distributed_lock_holder(current_holder_raw)
+        inspection = inspect_lock_holder(current_instance_identity(), current_holder)
+        relationship = str(inspection.get("relationship", ""))
+        if relationship not in {"same-instance", "same-replica"}:
+            return ""
+        token = str(current_holder.get("token", "") or "").strip()
+        if not token:
+            return ""
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = token
+        logger.warning(
+            "Recovered NIJA_WRITER_FENCING_TOKEN from Redis lock holder "
+            "(relationship=%s lock_key=%s token_prefix=%s)",
+            relationship,
+            lock_key,
+            token[:8],
+        )
+        return token
+    except Exception as exc:
+        logger.warning("Unable to recover fencing token from Redis lock: %s", exc)
+        return ""
+
+
 def assert_distributed_writer_authority() -> None:
     """Fail closed when this process no longer owns the distributed writer lock.
 
@@ -110,7 +140,24 @@ def assert_distributed_writer_authority() -> None:
             )
             _DEGRADED_WRITER_AUTH_WARNED = True
 
+    redis_url = get_redis_url()
+    scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
+    if not scope:
+        raw = (
+            os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+            or os.environ.get("KRAKEN_API_KEY", "").strip()
+            or "default"
+        )
+        # Keep parity with startup lock scope derivation shape when explicit key isn't set.
+        import hashlib
+        scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
+    meta_key = os.getenv("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{scope}"
+
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    if not token and redis_url:
+        token = _recover_fencing_token_from_lock(redis_url, lock_key)
     if not token:
         if strict_required:
             raise RuntimeError("distributed writer fencing token missing in strict/live mode")
@@ -130,21 +177,6 @@ def assert_distributed_writer_authority() -> None:
             if _FENCE_LAST_OK:
                 return
             raise RuntimeError(_FENCE_LAST_ERR or "distributed writer fence verification cached failure")
-
-    redis_url = get_redis_url()
-    scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
-    if not scope:
-        raw = (
-            os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
-            or os.environ.get("KRAKEN_API_KEY", "").strip()
-            or "default"
-        )
-        # Keep parity with startup lock scope derivation shape when explicit key isn't set.
-        import hashlib
-        scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-    lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
-    meta_key = os.getenv("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{scope}"
 
     fail_closed_verify = _env_truthy("NIJA_WRITER_RUNTIME_VERIFY_FAIL_CLOSED") or strict_required
     if not redis_url:
@@ -228,6 +260,9 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
     lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
     meta_key = os.getenv("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{scope}"
+
+    if not token and redis_url:
+        token = _recover_fencing_token_from_lock(redis_url, lock_key)
 
     if force_refresh:
         with _FENCE_VERIFY_LOCK:

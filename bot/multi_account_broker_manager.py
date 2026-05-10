@@ -686,6 +686,7 @@ class MultiAccountBrokerManager:
 
         # Step 2: hydrate balances from exchanges.
         _balances = self.get_all_balances()
+        logger.info("BALANCE RESPONSE RAW: %s", str(_balances)[:1600])
         _total_usd = 0.0
         try:
             from bot.balance_utils import sum_nested_balances as _sum_nested_balances  # type: ignore[import]

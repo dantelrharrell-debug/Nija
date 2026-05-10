@@ -320,6 +320,17 @@ def wait_for_hydration(timeout_s: float = 30.0) -> None:
         If :data:`CAPITAL_HYDRATED_EVENT` is not set within *timeout_s*
         seconds.  The trading loop must not start until this barrier clears.
     """
+    _force_ready = str(os.getenv("FORCE_SYSTEM_READY", "")).strip().lower() in {
+        "1", "true", "yes", "on", "enabled"
+    }
+    if _force_ready:
+        CAPITAL_HYDRATED_EVENT.set()
+        CAPITAL_SYSTEM_READY.set()
+        logger.warning(
+            "FORCE_SYSTEM_READY enabled: bypassing capital hydration barrier for debug run"
+        )
+        return
+
     acquired = CAPITAL_HYDRATED_EVENT.wait(timeout=timeout_s)
     if not acquired:
         logger.critical("TIMEOUT_WAITING_FOR_CAPITAL_HYDRATION")

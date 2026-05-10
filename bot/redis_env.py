@@ -9,9 +9,9 @@ from urllib.parse import urlparse
 
 
 _REDIS_URL_ENV_NAMES = (
+    "REDIS_URL",
     "NIJA_REDIS_URL",
     "REDIS_TLS_URL",
-    "REDIS_URL",
     "REDIS_PRIVATE_URL",
     "REDIS_PUBLIC_URL",
 )

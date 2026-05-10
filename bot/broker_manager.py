@@ -3424,6 +3424,8 @@ class CoinbaseBroker(BaseBroker):
                 self._accounts_cache = resp
                 self._accounts_cache_time = time.time()
 
+            logging.info("BALANCE RESPONSE RAW: %s", str(resp)[:1200])
+
             accounts = getattr(resp, 'accounts', []) or (resp.get('accounts', []) if isinstance(resp, dict) else [])
 
             # IMPROVEMENT #2: Validate API permissions
@@ -9118,6 +9120,7 @@ class KrakenBroker(BaseBroker):
                 self.account_identifier,
                 type(balance).__name__,
             )
+            logger.info("BALANCE RESPONSE RAW: %s", str(balance)[:1200])
 
             if balance and 'error' in balance and balance['error']:
                 error_msgs = ', '.join(balance['error'])
@@ -9201,6 +9204,7 @@ class KrakenBroker(BaseBroker):
                 # Use MONITORING category for balance checks (conservative rate limiting)
                 balance_category = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
                 trade_balance = self._kraken_private_call('TradeBalance', {'asset': 'ZUSD'}, category=balance_category)
+                logger.info("BALANCE RESPONSE RAW: %s", str(trade_balance)[:1200])
                 held_amount = 0.0
                 trade_balance_equity_usd = 0.0
 
@@ -12290,6 +12294,18 @@ class BrokerManager:
         # force capital gate closed regardless of prior readiness state.
         if platform_brokers and stale_count == len(platform_brokers):
             capital_ok = False
+
+        _force_ready = str(os.getenv("FORCE_SYSTEM_READY", "")).strip().lower() in {
+            "1", "true", "yes", "on", "enabled"
+        }
+        if _force_ready:
+            logger.warning(
+                "FORCE_SYSTEM_READY enabled: overriding readiness gates "
+                "(nonce/platform/capital=True) for debug run"
+            )
+            nonce_ok = True
+            platform_ok = True
+            capital_ok = True
 
         logger.info(
             f"[SYSTEM READY CHECK] "
