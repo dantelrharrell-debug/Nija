@@ -531,8 +531,11 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                     _eligible_snapshot = _eligible()
                     if isinstance(_eligible_snapshot, (dict, list, tuple, set, frozenset)):
                         _eligible_count = len(_eligible_snapshot)
-                except Exception:
-                    pass
+                except Exception as _eligible_snapshot_err:
+                    logger.debug(
+                        "Broker eligibility snapshot lookup failed: %s",
+                        _eligible_snapshot_err,
+                    )
 
             if _eligible_count == 0:
                 _is_execution_eligible = getattr(_manager, "is_execution_eligible", None)
@@ -550,12 +553,20 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                                     _eligible_err,
                                 )
                                 continue
-                    except Exception:
-                        pass
+                    except Exception as _eligibility_scan_err:
+                        logger.debug(
+                            "Execution eligibility scan failed for manager %s: %s",
+                            type(_manager).__name__,
+                            _eligibility_scan_err,
+                        )
 
             if _eligible_count == 0 and _connected:
                 # Fallback for manager variants that do not expose explicit
                 # execution-eligibility helpers.
+                logger.info(
+                    "Broker eligibility fallback in use for manager %s: treating connected brokers as eligible",
+                    type(_manager).__name__,
+                )
                 _eligible_count = len(_connected)
 
             eligible_brokers = max(eligible_brokers, _eligible_count)
