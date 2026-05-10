@@ -1906,6 +1906,20 @@ def _acquire_distributed_process_lock() -> None:
         "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS",
         "true" if _default_exit_unreachable else "false",
     ).strip().lower() in _truthy
+    _allow_local_lock_fallback = os.environ.get(
+        "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK", "false"
+    ).strip().lower() in _truthy
+    if _allow_local_lock_fallback and _multi_instance_possible:
+        print(
+            "🚫 Multi-instance deployment detected; local writer-lock fallback is forbidden.",
+            flush=True,
+        )
+        print(
+            "   Forcing NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK=false to preserve single-writer safety.",
+            flush=True,
+        )
+        os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
+        _allow_local_lock_fallback = False
     _kraken_buy_buffer_pct_raw = os.environ.get("KRAKEN_BUY_BUFFER_PCT", "0.004").strip() or "0.004"
     _kraken_buy_headroom_pct_raw = os.environ.get("NIJA_KRAKEN_BUY_HEADROOM_PCT", "0.005").strip() or "0.005"
     try:
@@ -1934,7 +1948,8 @@ def _acquire_distributed_process_lock() -> None:
         "🧯 Fail-closed config | "
         f"retry_on_lock_failure={_fail_closed_retry_enabled} "
         f"max_retry_attempts={_fail_closed_max_retries} "
-        f"exit_on_unreachable_redis={_fail_closed_exit_unreachable}"
+        f"exit_on_unreachable_redis={_fail_closed_exit_unreachable} "
+        f"local_fallback={_allow_local_lock_fallback}"
     )
     if not _redis_url:
         _msg = (
@@ -2213,6 +2228,18 @@ def _acquire_distributed_process_lock() -> None:
                     if _verbose_standby:
                         print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
+                if _allow_local_lock_fallback and not _multi_instance_possible:
+                    print(
+                        "🚨 LOCAL WRITER LOCK FALLBACK ACTIVE: Redis lock is unreachable; "
+                        "continuing without distributed lock because NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK=true.",
+                        flush=True,
+                    )
+                    print(
+                        "⚠️ Use this only for confirmed single-instance deployments. "
+                        "Re-enable distributed lock after Redis recovery.",
+                        flush=True,
+                    )
+                    return
                 # Check if all URLs point to Railway internal networking
                 _internal_hosts = [
                     _src for _src, _u in _all_urls
