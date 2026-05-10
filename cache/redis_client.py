@@ -105,8 +105,10 @@ def _build_strict_redis_client(
     tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
     tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
     tls_auto = tls_insecure_raw in {"", "auto"}
+    # Extend permissive cert validation to all rlwy.net domains (not just .proxy.rlwy.net)
+    # because Railway-managed Redis endpoints use self-signed or internal certs.
     if (parsed.scheme or "").lower() == "rediss" and (
-        tls_insecure or (tls_auto and ".proxy.rlwy.net" in (parsed.hostname or "").lower())
+        tls_insecure or (tls_auto and ".rlwy.net" in (parsed.hostname or "").lower())
     ):
         kwargs["ssl_cert_reqs"] = "none"
 
@@ -121,22 +123,24 @@ def _try_plain_railway_proxy_fallback(
     socket_connect_timeout: int,
 ) -> tuple[redis.Redis, str] | None:
     """Try plain redis:// against Railway proxy after TLS timeout/handshake failure."""
-    allow_plain_fallback = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in {
-        "1", "true", "yes", "on", "enabled"
-    }
-    if not allow_plain_fallback:
+    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "auto").strip().lower()
+    allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
+    allow_plain_fallback_auto = allow_plain_fallback_raw in {"", "auto"}
+
+    if not redis_url.startswith("rediss://"):
         return None
 
-    if not redis_url.startswith("rediss://") or ".proxy.rlwy.net" not in redis_url.lower():
+    is_railway_host = ".rlwy.net" in redis_url.lower()
+    if not is_railway_host or not (allow_plain_fallback or allow_plain_fallback_auto):
         return None
 
     message = str(exc).lower()
-    if "timeout" not in message and "handshake" not in message and "ssl" not in message:
+    if "timeout" not in message and "handshake" not in message and "ssl" not in message and "record layer" not in message:
         return None
 
     plain_url = redis_url.replace("rediss://", "redis://", 1)
     logger.warning(
-        "Redis TLS handshake timed out against Railway proxy; trying plain redis:// fallback"
+        "Redis TLS failure against Railway proxy; trying plain redis:// fallback"
     )
     plain_client = _build_strict_redis_client(
         redis_url=plain_url,
