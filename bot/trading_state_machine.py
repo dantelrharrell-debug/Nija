@@ -122,6 +122,20 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     if not _env_truthy("NIJA_ENFORCE_REDIS_WRITER_LOCK", "true"):
         return True, ""
 
+    # Degraded runtime mode means startup explicitly accepted running without
+    # Redis-backed distributed lock authority (single-instance safety required).
+    # Keep activation gates aligned with that decision to avoid deadlocking
+    # LIVE_PENDING_CONFIRMATION on a missing fencing token.
+    if _env_truthy("NIJA_RUNTIME_DEGRADED_MODE", "false") and (
+        _env_truthy("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY", "false")
+        or _env_truthy("NIJA_ALLOW_REDIS_DEGRADED", "false")
+    ):
+        logger.critical(
+            "[WRITER AUTHORITY DEGRADED OVERRIDE] runtime degraded mode active; "
+            "distributed writer authority gate bypassed for activation."
+        )
+        return True, ""
+
     if _emergency_local_fallback_active():
         logger.critical(
             "[WRITER AUTHORITY EMERGENCY OVERRIDE] local writer-lock fallback active; "
