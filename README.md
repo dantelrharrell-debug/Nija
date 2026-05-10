@@ -39,6 +39,8 @@ cp .env.example .env
 # Step 3: Set the live-trading authorization flags (already set to true in .env.example)
 #   LIVE_CAPITAL_VERIFIED=true
 #   LIVE_TRADING=1
+#   ENABLE_COINBASE_TRADING=true            # if you want Coinbase execution enabled
+#   PRIMARY_EXECUTION_VENUE=multi_venue     # or "coinbase" to force Coinbase
 
 # Step 4: Start the bot
 bash start.sh
@@ -68,6 +70,18 @@ BASE_CAPITAL=500            # Your starting capital in USD (default: 100)
 COMPOUNDING_STRATEGY=aggressive  # Options: conservative | moderate | aggressive
 DAILY_PROFIT_TARGET_USD=50  # Slow-down mode threshold (default: 25)
 ```
+
+### Multi-Venue Broker Routing
+
+To keep Coinbase live alongside Kraken and let NIJA route across enabled brokers:
+
+```bash
+ENABLE_COINBASE_TRADING=true   # required opt-in for Coinbase execution
+PRIMARY_EXECUTION_VENUE=multi_venue
+MULTI_BROKER_INDEPENDENT=true
+```
+
+Use `PRIMARY_EXECUTION_VENUE=coinbase` when you want to force Coinbase as the single preferred execution venue.
 
 ### Positive Expectancy Controls
 

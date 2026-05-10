@@ -26,6 +26,14 @@ except ImportError:
         get_execution_pipeline = None  # type: ignore
         PipelineRequest = None         # type: ignore
 
+try:
+    from bot.execution_venue_config import get_preferred_execution_venue
+except ImportError:
+    try:
+        from execution_venue_config import get_preferred_execution_venue
+    except ImportError:
+        get_preferred_execution_venue = None  # type: ignore[assignment]
+
 # ── ECEL: mandatory pre-trade choke point ─────────────────────────────────────
 try:
     from bot.ecel_execution_compiler import (
@@ -628,8 +636,12 @@ class ExecutionEngine:
             pass
 
         # Honor explicit execution-venue preference in live incidents.
-        _preferred_env = os.getenv("PRIMARY_EXECUTION_VENUE", "").strip().lower()
-        if _preferred_env in {"kraken", "coinbase", "okx", "binance", "alpaca"}:
+        _preferred_env = (
+            get_preferred_execution_venue(os.environ)
+            if get_preferred_execution_venue is not None
+            else None
+        )
+        if _preferred_env is not None:
             preferred_broker = _preferred_env
 
         res = get_execution_pipeline().execute(

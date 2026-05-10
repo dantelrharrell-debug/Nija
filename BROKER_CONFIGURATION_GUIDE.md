@@ -202,6 +202,12 @@ NIJA supports independent trading across multiple brokers simultaneously:
 ```bash
 # Enable multi-broker independent trading
 MULTI_BROKER_INDEPENDENT=true
+
+# Keep Coinbase executable alongside Kraken (explicit opt-in required)
+ENABLE_COINBASE_TRADING=true
+
+# Let the router allocate across all enabled venues
+PRIMARY_EXECUTION_VENUE=multi_venue
 ```
 
 ### Recommended Broker Allocation
