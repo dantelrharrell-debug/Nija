@@ -2257,6 +2257,20 @@ def _acquire_distributed_process_lock() -> None:
                         "Re-enable distributed lock after Redis recovery.",
                         flush=True,
                     )
+                    # Emergency outage mode: publish a scoped marker that
+                    # downstream activation gates can honor for this startup.
+                    # This flag will auto-clear when distributed writer authority recovers.
+                    os.environ["NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"] = "1"
+                    os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+                    os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+                    os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
+                    if _force_local_lock_fallback:
+                        os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
+                        print(
+                            "🚨 UNSAFE EMERGENCY OVERRIDE: forcing live activation gates to fail-open "
+                            "under local writer-lock fallback.",
+                            flush=True,
+                        )
                     return
                 # Check if all URLs point to Railway internal networking
                 _internal_hosts = [

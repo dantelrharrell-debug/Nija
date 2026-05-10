@@ -100,6 +100,13 @@ def _heartbeat_verified() -> bool:
         return False
 
 
+def _emergency_local_fallback_active() -> bool:
+    """True when startup switched to emergency local writer-lock fallback mode."""
+    return _env_truthy("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE", "false") and _env_truthy(
+        "NIJA_RUNTIME_DEGRADED_MODE", "false"
+    )
+
+
 def _distributed_writer_authority_gate() -> tuple[bool, str]:
     """Verify this process still owns distributed writer authority.
 
@@ -113,6 +120,13 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     # Allow operators to disable strict Redis writer lock enforcement in
     # controlled single-writer deployments.
     if not _env_truthy("NIJA_ENFORCE_REDIS_WRITER_LOCK", "true"):
+        return True, ""
+
+    if _emergency_local_fallback_active():
+        logger.critical(
+            "[WRITER AUTHORITY EMERGENCY OVERRIDE] local writer-lock fallback active; "
+            "distributed writer authority gate bypassed for this process startup."
+        )
         return True, ""
 
     retries = max(1, int(os.environ.get("NIJA_REDIS_LOCK_RETRIES", "3") or "3"))
@@ -334,6 +348,13 @@ def _safe_start_gate() -> tuple[bool, str]:
 
 def _startup_reconciliation_gate() -> tuple[bool, str]:
     """Require startup reconciliation to complete before LIVE activation."""
+    if _emergency_local_fallback_active():
+        logger.critical(
+            "[RECONCILIATION EMERGENCY OVERRIDE] local writer-lock fallback active; "
+            "startup reconciliation gate bypassed for this process startup."
+        )
+        return True, ""
+
     if _env_truthy("NIJA_BYPASS_STARTUP_RECONCILIATION", "false"):
         if not _env_truthy("NIJA_CONFIRM_BYPASS_RISKS", "false"):
             logger.warning(
@@ -1242,7 +1263,7 @@ class TradingStateMachine:
         )
 
         # Final consolidated gate diagnostic — single source of truth for activation state.
-        _live_verified_bool = lcv in ("true", "1", "yes", "enabled")
+        _live_verified_bool = bool(_lcv_quick)
         commit_activation(
             kill=kill_state,
             capital_ready=_cap_ready,

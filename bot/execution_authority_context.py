@@ -176,6 +176,14 @@ def assert_distributed_writer_authority() -> None:
 
         if not ok:
             raise RuntimeError(err)
+
+        # Auto-recovery: clear emergency fallback flag if Redis lock is now verified
+        if _env_truthy("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"):
+            logger.critical(
+                "[EMERGENCY FALLBACK AUTO-RECOVERY] distributed writer lock recovered; "
+                "clearing NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE flag. Normal operation resumes."
+            )
+            os.environ["NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"] = "0"
     except Exception as exc:
         if fail_closed_verify:
             with _FENCE_VERIFY_LOCK:
