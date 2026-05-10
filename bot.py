@@ -4981,12 +4981,21 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _BootstrapState.PLATFORM_CONNECTING,
                         "startup_validation passed during retry; re-enter platform connecting",
                     )
+                elif _bfsm_state_now == _BootstrapState.ENV_VERIFIED:
+                    _bfsm_transition(
+                        _BootstrapState.STARTUP_VALIDATED,
+                        "startup_validation passed all pre-flight checks",
+                    )
                 elif _bfsm_state_now in {
                     _BootstrapState.BOOT_INIT,
                     _BootstrapState.LOCK_ACQUIRED,
                     _BootstrapState.HEALTH_BOUND,
-                    _BootstrapState.ENV_VERIFIED,
                 }:
+                    # Must pass through ENV_VERIFIED before STARTUP_VALIDATED.
+                    _bfsm_transition(
+                        _BootstrapState.ENV_VERIFIED,
+                        "startup_validation: env verified (intermediate step)",
+                    )
                     _bfsm_transition(
                         _BootstrapState.STARTUP_VALIDATED,
                         "startup_validation passed all pre-flight checks",

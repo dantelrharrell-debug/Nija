@@ -67,12 +67,15 @@ def create_redis(
     tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
     tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
     tls_auto = tls_insecure_raw in {"", "auto"}
-    # Extend permissive cert validation to all rlwy.net domains (not just .proxy.rlwy.net)
-    # because Railway-managed Redis endpoints use self-signed or internal certs.
+    is_railway_host = ".rlwy.net" in (parsed.hostname or "").lower()
     if (parsed.scheme or "").lower() == "rediss" and (
-        tls_insecure or (tls_auto and ".rlwy.net" in (parsed.hostname or "").lower())
+        tls_insecure or (tls_auto and is_railway_host)
     ):
+        # Railway viaduct proxy uses a self-signed / mismatched certificate.
+        # Disable both cert chain and hostname verification so TLS still
+        # encrypts the channel without failing the handshake.
         kwargs["ssl_cert_reqs"] = "none"
+        kwargs["ssl_check_hostname"] = False
 
     return redis.Redis.from_url(raw_url, **kwargs)
 
@@ -123,25 +126,20 @@ def connect_redis_with_fallback(
     allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
     allow_plain_fallback_auto = allow_plain_fallback_raw in {"", "auto"}
     primary_is_tls = primary_url.startswith("rediss://")
+    primary_hostname = (urlparse(primary_url).hostname or "").lower()
+    is_railway_host = ".rlwy.net" in primary_hostname
+    is_railway_proxy = ".proxy.rlwy.net" in primary_hostname
     force_tls_env = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
         "1", "true", "yes", "on", "enabled"
     }
-    force_tls = force_tls_env or primary_is_tls
-    is_railway_host = ".rlwy.net" in primary_url.lower()
-
-    # Downgrade: rediss:// -> redis:// for Railway proxy endpoints on SSL failure.
-    # Enabled explicitly via NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true, or automatically
-    # (auto/unset) for Railway proxy hosts where a TLS record-layer mismatch is common.
+    # For Railway-managed Redis hosts (*.rlwy.net), allow a controlled rediss://
+    # -> redis:// downgrade when fallback is explicitly enabled or left at auto.
+    # For Railway viaduct proxy endpoints (*.proxy.rlwy.net), also try rediss://
+    # when the primary URL is plain redis:// and TLS is forced.
     allow_tls_downgrade = is_railway_host and (allow_plain_fallback or allow_plain_fallback_auto)
     if primary_is_tls and allow_tls_downgrade:
         candidates.append(primary_url.replace("rediss://", "redis://", 1))
-
-    # Upgrade: redis:// -> rediss:// for Railway proxy endpoints when TLS is forced.
-    if (
-        force_tls
-        and primary_url.startswith("redis://")
-        and ".proxy.rlwy.net" in primary_url.lower()
-    ):
+    elif not primary_is_tls and is_railway_proxy and force_tls_env:
         candidates.append(primary_url.replace("redis://", "rediss://", 1))
 
     last_error: Optional[Exception] = None

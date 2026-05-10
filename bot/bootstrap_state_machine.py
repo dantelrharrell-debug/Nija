@@ -83,6 +83,7 @@ Global invariants
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -574,6 +575,39 @@ class BootstrapStateMachine:
                     self._state.value,
                 )
                 return False
+
+            # Fix 4: Redis degraded-mode gate — block LIVE_ACTIVE when Redis is
+            # unreachable unless the operator explicitly opts in.
+            # NIJA_ALLOW_REDIS_DEGRADED=true means Redis is not guaranteed; we must
+            # verify the connection is actually available before granting execution
+            # authority.  Set NIJA_REQUIRE_REDIS_FOR_LIVE=false to bypass this gate
+            # only when you intentionally accept the risk of operating without Redis.
+            _truthy = {"1", "true", "yes", "on", "enabled"}
+            _redis_degraded = os.getenv("NIJA_ALLOW_REDIS_DEGRADED", "").strip().lower() in _truthy
+            _require_redis = os.getenv("NIJA_REQUIRE_REDIS_FOR_LIVE", "true").strip().lower() not in {"0", "false", "no", "off", "disabled"}
+            if _redis_degraded and _require_redis:
+                # Attempt a live Redis PING to confirm the connection is recovered.
+                _redis_ok = False
+                try:
+                    from bot.redis_runtime import connect_redis_with_fallback  # noqa: PLC0415
+                    _redis_url = (
+                        os.getenv("NIJA_REDIS_URL")
+                        or os.getenv("REDIS_TLS_URL")
+                        or os.getenv("REDIS_URL")
+                        or ""
+                    )
+                    if _redis_url:
+                        _rc = connect_redis_with_fallback(_redis_url)
+                        _redis_ok = bool(_rc and _rc.ping())
+                except Exception as _ping_err:
+                    logger.warning("[BootstrapFSM] finalize_boot Redis PING failed: %s", _ping_err)
+                if not _redis_ok:
+                    logger.error(
+                        "❌ [BootstrapFSM] finalize_boot BLOCKED: NIJA_ALLOW_REDIS_DEGRADED=true "
+                        "and Redis is unreachable — refusing to grant execution authority. "
+                        "Fix the Redis connection or set NIJA_REQUIRE_REDIS_FOR_LIVE=false to bypass."
+                    )
+                    return False
 
             _from_state = self._state
             self._state = BootstrapState.RUNNING_SUPERVISED
