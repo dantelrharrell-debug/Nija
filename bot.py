@@ -71,6 +71,10 @@ if "ENABLE_COINBASE" in os.environ:
         os.environ.setdefault("NIJA_DISABLE_COINBASE", "true")
     else:
         os.environ.setdefault("ENABLE_COINBASE_TRADING", "true")
+        # Allow Coinbase to connect when ENABLE_COINBASE=true.  The defensive
+        # guard in _connect_and_register defaults NIJA_DISABLE_COINBASE to
+        # "true" when the variable is absent, so we must explicitly unlock it.
+        os.environ.setdefault("NIJA_DISABLE_COINBASE", "false")
 
 # Small-order mode bridge:
 #   ALLOW_SMALL_ORDERS=true + MIN_NOTIONAL_OVERRIDE=3.50
@@ -466,16 +470,26 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     strategy_ready = strategy is not None and _strategy_ready_event.is_set()
     connected_brokers = 0
     eligible_brokers = 0
+    # Only require the Kraken startup FSM to be connected when Kraken
+    # credentials are actually configured.  For Coinbase-only (or other
+    # non-Kraken) deployments the FSM stays in its initial IDLE/not-connected
+    # state, which would permanently block broker_ready even though the real
+    # broker (Coinbase) is fully operational.
+    _kraken_creds_configured = bool(
+        (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+        and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
+    )
     kraken_connected = True
-    try:
+    if _kraken_creds_configured:
         try:
-            from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm
-        except ImportError:
-            from broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm  # type: ignore[import]
-        if _kraken_startup_fsm is not None:
-            kraken_connected = bool(_kraken_startup_fsm.is_connected)
-    except Exception:
-        kraken_connected = False
+            try:
+                from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm
+            except ImportError:
+                from broker_manager import _KRAKEN_STARTUP_FSM as _kraken_startup_fsm  # type: ignore[import]
+            if _kraken_startup_fsm is not None:
+                kraken_connected = bool(_kraken_startup_fsm.is_connected)
+        except Exception:
+            kraken_connected = False
 
     try:
         _manager = getattr(strategy, "multi_account_manager", None) if strategy is not None else None
@@ -4141,40 +4155,50 @@ def _verify_startup_truth_conditions(
     """
     Enforce startup truth conditions before entering supervised loop.
     Raises RuntimeError when any required condition is not met.
+
+    Kraken-specific checks (Condition A) are skipped when Kraken credentials
+    are not configured so that Coinbase-only deployments are not blocked.
     """
-    # Condition A — Kraken credentials valid (loaded + structurally valid)
-    if not kraken_credentials_valid:
-        raise RuntimeError(
-            "Condition A failed: Kraken credentials are not valid/loaded. "
-            "Set valid KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET (or legacy pair)."
-        )
+    # Determine whether Kraken is actually configured for this deployment.
+    _kraken_configured = bool(
+        (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+        and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
+    )
 
-    # Condition A — Kraken operational (connection succeeded and no permission cache failure)
-    _kraken_connected = False
-    _mam = getattr(strategy, "multi_account_manager", None)
-    if _mam and hasattr(_mam, "platform_brokers"):
-        for _bt, _broker in (_mam.platform_brokers or {}).items():
-            _name = getattr(_bt, "value", str(_bt)).lower()
-            if _name == "kraken" and bool(getattr(_broker, "connected", False)):
-                _kraken_connected = True
-                break
-    if not _kraken_connected:
-        raise RuntimeError(
-            "Condition A failed: Kraken broker is not operational. "
-            "Verify API key permissions include query + trade."
-        )
-
-    try:
-        from bot.broker_manager import KrakenBroker as _KB
-        if "PLATFORM" in getattr(_KB, "_permission_failed_accounts", set()):
+    if _kraken_configured:
+        # Condition A — Kraken credentials valid (loaded + structurally valid)
+        if not kraken_credentials_valid:
             raise RuntimeError(
-                "Condition A failed: Kraken PLATFORM permission check previously failed. "
-                "Fix API key permissions (query + trade)."
+                "Condition A failed: Kraken credentials are not valid/loaded. "
+                "Set valid KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET (or legacy pair)."
             )
-    except RuntimeError:
-        raise
-    except Exception:
-        pass
+
+        # Condition A — Kraken operational (connection succeeded and no permission cache failure)
+        _kraken_connected = False
+        _mam = getattr(strategy, "multi_account_manager", None)
+        if _mam and hasattr(_mam, "platform_brokers"):
+            for _bt, _broker in (_mam.platform_brokers or {}).items():
+                _name = getattr(_bt, "value", str(_bt)).lower()
+                if _name == "kraken" and bool(getattr(_broker, "connected", False)):
+                    _kraken_connected = True
+                    break
+        if not _kraken_connected:
+            raise RuntimeError(
+                "Condition A failed: Kraken broker is not operational. "
+                "Verify API key permissions include query + trade."
+            )
+
+        try:
+            from bot.broker_manager import KrakenBroker as _KB
+            if "PLATFORM" in getattr(_KB, "_permission_failed_accounts", set()):
+                raise RuntimeError(
+                    "Condition A failed: Kraken PLATFORM permission check previously failed. "
+                    "Fix API key permissions (query + trade)."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
 
     # Required by new requirement: BrokerManager initialized
     if getattr(strategy, "broker_manager", None) is None:
@@ -6572,7 +6596,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 from bot.broker_manager import _KRAKEN_STARTUP_FSM as _prelaunch_kraken_fsm
             except Exception:
                 _prelaunch_kraken_fsm = None  # type: ignore[assignment]
-            _prelaunch_nonce_ready = bool(_prelaunch_kraken_fsm.is_nonce_ready()) if _prelaunch_kraken_fsm is not None else True
+            # Nonce readiness is only enforced when Kraken is configured.
+            # For Coinbase-only deployments the Kraken FSM stays idle and
+            # is_nonce_ready() always returns False, which would block startup
+            # even though nonce management is irrelevant for Coinbase.
+            _prelaunch_kraken_configured = bool(
+                (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
+                and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
+            )
+            _prelaunch_nonce_ready = (
+                bool(_prelaunch_kraken_fsm.is_nonce_ready())
+                if (_prelaunch_kraken_configured and _prelaunch_kraken_fsm is not None)
+                else True
+            )
 
             _force_trade_active = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
             if not _force_trade_active and not all([
