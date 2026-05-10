@@ -509,8 +509,10 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                     _all_brokers = _get_all_brokers()
                     if isinstance(_all_brokers, (list, tuple, set, frozenset)):
                         for _entry in _all_brokers:
-                            # MultiAccountBrokerManager returns (account_id, broker)
-                            # tuples; tolerate plain broker entries for compatibility.
+                            # get_all_brokers() may return either:
+                            #   1) (account_id, broker) tuples (MultiAccountBrokerManager), or
+                            #   2) plain broker objects (legacy/custom managers).
+                            # Normalize both formats to a broker object.
                             _broker = _entry[1] if isinstance(_entry, tuple) and len(_entry) >= 2 else _entry
                             _brokers_by_id[id(_broker)] = _broker
                 except Exception:
