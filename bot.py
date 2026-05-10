@@ -893,6 +893,8 @@ _STARTUP_READINESS_COMPONENTS = (
     "execution_ready",
 )
 _startup_readiness_registered = False
+_INIT_LOCK_PUBLISH_TIMEOUT_S = 5.0
+_STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
 
 
 def _register_startup_readiness_components(context: str) -> None:
@@ -945,6 +947,9 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
         _exec_engine = getattr(_apex, "execution_engine", None) if _apex is not None else None
     if _exec_engine is not None:
         _execution_ready_event.set()
+        logger.critical("EXECUTION_READY_SET")
+    else:
+        logger.warning("Execution engine not yet available during strategy publish (%s)", context)
 
     try:
         from bot.startup_readiness_gate import get_startup_readiness_gate
@@ -976,7 +981,7 @@ def _ensure_strategy_fallback_published(*, context: str) -> bool:
     if _strategy is not None:
         if not _strategy_ready_event.is_set():
             logger.warning("Strategy present without strategy_ready event; publishing readiness (%s)", context)
-            _acquired = _initialized_state_lock.acquire(timeout=5.0)
+            _acquired = _initialized_state_lock.acquire(timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S)
             if not _acquired:
                 logger.warning("Readiness republish skipped: INIT lock unavailable (%s)", context)
                 return False
@@ -988,12 +993,15 @@ def _ensure_strategy_fallback_published(*, context: str) -> bool:
 
     logger.warning("No strategy published yet — attempting default strategy fallback (%s)", context)
     try:
-        _fallback_strategy = TradingStrategy()
+        _fallback_strategy = TradingStrategy(
+            broker_results=None,
+            connected_user_brokers=None,
+        )
     except Exception as exc:
         logger.exception("Default strategy fallback construction failed (%s): %s", context, exc)
         return False
 
-    _acquired = _initialized_state_lock.acquire(timeout=5.0)
+    _acquired = _initialized_state_lock.acquire(timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S)
     if not _acquired:
         logger.warning("Fallback publish skipped: INIT lock unavailable (%s)", context)
         return False
@@ -7378,6 +7386,7 @@ def main():
             "⏳ strategy not yet initialized; waiting until startup thread publishes strategy"
         )
         _last_strategy_wait_log = 0.0
+        _strategy_wait_started = time.monotonic()
         _fallback_attempted = False
         while strategy is None:
             _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait")
@@ -7387,7 +7396,10 @@ def main():
                 break
 
             _now = time.monotonic()
-            if not _fallback_attempted:
+            if (
+                not _fallback_attempted
+                and (_now - _strategy_wait_started) >= _STRATEGY_FALLBACK_GRACE_PERIOD_S
+            ):
                 _fallback_attempted = True
                 _ensure_strategy_fallback_published(context="supervisor degraded strategy wait")
                 _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait_post_fallback")
