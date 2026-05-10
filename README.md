@@ -76,7 +76,7 @@ DAILY_PROFIT_TARGET_USD=50  # Slow-down mode threshold (default: 25)
 To keep Coinbase live alongside Kraken and let NIJA route across enabled brokers:
 
 ```bash
-ENABLE_COINBASE_TRADING=true
+ENABLE_COINBASE_TRADING=true   # required opt-in for Coinbase execution
 PRIMARY_EXECUTION_VENUE=multi_venue
 MULTI_BROKER_INDEPENDENT=true
 ```

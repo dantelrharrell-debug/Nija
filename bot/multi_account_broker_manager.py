@@ -5530,11 +5530,10 @@ class MultiAccountBrokerManager:
         )
         if not _coinbase_allowed:
             logger.info(
-                "⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s PRIMARY_EXECUTION_VENUE=%s)",
+                "⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s)",
                 os.environ.get("NIJA_DISABLE_COINBASE", "<unset>"),
                 os.environ.get("ENABLE_COINBASE", "<unset>"),
                 os.environ.get("ENABLE_COINBASE_TRADING", "<unset>"),
-                os.environ.get("PRIMARY_EXECUTION_VENUE", "") or "<unset>",
             )
         else:
             logger.info("📊 Attempting to connect Coinbase Advanced Trade (PLATFORM)…")

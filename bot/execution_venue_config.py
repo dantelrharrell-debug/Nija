@@ -22,11 +22,11 @@ def _is_enabled(value: Optional[str], *, default: bool = True) -> bool:
 
 
 def should_initialize_coinbase_platform(env: Optional[Mapping[str, str]] = None) -> bool:
-    """Return True when Coinbase should be connected as an execution venue."""
+    """Return True when Coinbase is explicitly opted in for execution routing."""
     source = _env(env)
-    coinbase_disabled = _is_enabled(source.get("NIJA_DISABLE_COINBASE", ""), default=False)
+    coinbase_disabled_via_flag = _is_enabled(source.get("NIJA_DISABLE_COINBASE", ""), default=False)
     return (
-        not coinbase_disabled
+        not coinbase_disabled_via_flag
         and _is_enabled(source.get("ENABLE_COINBASE", ""), default=True)
         and _is_enabled(source.get("ENABLE_COINBASE_TRADING", ""), default=False)
     )
