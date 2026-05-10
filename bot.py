@@ -517,8 +517,8 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                             else:
                                 _broker = _entry
                             _brokers_by_id[id(_broker)] = _broker
-                except Exception:
-                    pass
+                except Exception as _all_brokers_err:
+                    logger.debug("Broker discovery via get_all_brokers failed: %s", _all_brokers_err)
 
             _brokers = list(_brokers_by_id.values())
             _connected = [_broker for _broker in _brokers if getattr(_broker, "connected", False)]
@@ -543,7 +543,12 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                             try:
                                 if _is_execution_eligible(_broker):
                                     _eligible_count += 1
-                            except Exception:
+                            except Exception as _eligible_err:
+                                logger.debug(
+                                    "Execution eligibility probe failed for broker %s: %s",
+                                    getattr(_broker, "broker_type", type(_broker).__name__),
+                                    _eligible_err,
+                                )
                                 continue
                     except Exception:
                         _eligible_count = 0
@@ -5253,14 +5258,14 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _ft_execution_ready,
                     ) = _compute_system_ready(_ft_state_snapshot)
 
-                    _ft_banner = (
+                    _readiness_banner = (
                         "🚀 SYSTEM READY STATE:\n"
                         if _ft_system_ready
                         else "🧭 STARTUP PRE-INIT READINESS SNAPSHOT:\n"
                     )
-                    _ft_log = logger.critical if _ft_system_ready else logger.info
-                    _ft_log(
-                        _ft_banner
+                    _readiness_log = logger.critical if _ft_system_ready else logger.info
+                    _readiness_log(
+                        _readiness_banner
                         + "  broker_ready=%s\n"
                         + "  risk_ready=%s\n"
                         + "  strategy_ready=%s\n"
