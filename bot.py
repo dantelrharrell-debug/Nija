@@ -1856,6 +1856,19 @@ def _acquire_distributed_process_lock() -> None:
         )
         os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
         _allow_local_lock_fallback = False
+    if _live_mode and _require_lock and _allow_local_lock_fallback and not _unsafe_bypass:
+        print(
+            "🚫 LIVE mode with distributed lock required forbids local writer-lock fallback.",
+            flush=True,
+        )
+        print(
+            "   Set NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true only if you intentionally accept single-instance risk.",
+            flush=True,
+        )
+        os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
+        os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
+        _allow_local_lock_fallback = False
+        _force_local_lock_fallback = False
     elif _allow_local_lock_fallback and _multi_instance_possible and _force_local_lock_fallback:
         print(
             "🚨 UNSAFE MODE: forcing local writer-lock fallback while multi-instance risk is detected.",
@@ -1968,8 +1981,8 @@ def _acquire_distributed_process_lock() -> None:
 
             _plain_url = _url.replace("rediss://", "redis://", 1)
             print(
-                "⚠️ Redis TLS handshake timed out against Railway proxy; "
-                "trying plain redis:// fallback for the same endpoint..."
+                "⚠️ Redis TLS handshake timed out against Railway proxy and "
+                "NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true; trying plain redis:// fallback..."
             )
             try:
                 _plain_client = _build_strict_redis_client(_plain_url)
@@ -2175,6 +2188,11 @@ def _acquire_distributed_process_lock() -> None:
                         print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
                 if _allow_local_lock_fallback and (not _multi_instance_possible or _force_local_lock_fallback):
+                    if _live_mode and _require_lock and not _unsafe_bypass:
+                        raise RuntimeError(
+                            "Redis unreachable in LIVE mode with distributed lock required; "
+                            "local writer-lock fallback is blocked"
+                        ) from _ping_exc
                     print(
                         "🚨 LOCAL WRITER LOCK FALLBACK ACTIVE: Redis lock is unreachable; "
                         "continuing without distributed lock because NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK=true.",

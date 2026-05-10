@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from urllib.parse import quote
+from urllib.parse import urlparse
 
 
 
@@ -169,6 +170,15 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
     """Return Redis resolution diagnostics for startup logs."""
     component_url, component_diag = _build_component_redis_url()
     resolved_source = get_redis_url_source() or None
+    resolved_url = _get_redis_url_validated()
+    parsed = urlparse(resolved_url) if resolved_url else None
+    hostname = (parsed.hostname or "").lower() if parsed else ""
+    scheme = (parsed.scheme or "").lower() if parsed else ""
+    is_railway_proxy = ".proxy.rlwy.net" in hostname
+    is_railway_internal = ".railway.internal" in hostname
+    tls_required_hint = bool(is_railway_proxy)
+    tls_configured = scheme == "rediss"
+    tls_mismatch = bool(resolved_url) and tls_required_hint and not tls_configured
     return {
         "url_env_presence": get_redis_env_presence(),
         "component_host_present": component_diag["component_host_present"],
@@ -177,8 +187,15 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
         "component_source": component_diag["component_source"],
         "component_endpoint": component_diag["component_endpoint"],
         "component_url_present": bool(component_url),
-        "resolved_url_present": bool(_get_redis_url_validated()),
+        "resolved_url_present": bool(resolved_url),
         "resolved_source": resolved_source,
+        "resolved_scheme": scheme or None,
+        "resolved_host": hostname or None,
+        "is_railway_proxy": is_railway_proxy,
+        "is_railway_internal": is_railway_internal,
+        "tls_required_hint": tls_required_hint,
+        "tls_configured": tls_configured,
+        "tls_mismatch": tls_mismatch,
     }
 
 

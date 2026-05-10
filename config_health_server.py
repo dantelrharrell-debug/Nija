@@ -77,6 +77,7 @@ class ConfigHealthHandler(BaseHTTPRequestHandler):
     
     def _get_system_status(self):
         """Determine system status: blocked, ready, or error"""
+        from bot.redis_env import get_redis_resolution_diagnostics, get_redis_url
 
         def _is_truthy(value):
             return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
@@ -120,16 +121,24 @@ class ConfigHealthHandler(BaseHTTPRequestHandler):
         live_mode = (not dry_run) and (not paper_mode)
         redis_required = live_mode and strict_lease and (not unsafe_bypass)
 
-        resolved_redis = os.getenv("NIJA_REDIS_URL", "")
+        resolved_redis = get_redis_url()
+        redis_diag = get_redis_resolution_diagnostics()
         has_any_redis = _valid_redis_url(resolved_redis)
         internal_only_redis = bool(str(resolved_redis).strip()) and _is_railway_internal_url(resolved_redis)
+        tls_mismatch = bool(redis_diag.get("tls_mismatch"))
 
-        if redis_required and (not has_any_redis or internal_only_redis):
+        if redis_required and (not has_any_redis or internal_only_redis or tls_mismatch):
             if internal_only_redis:
                 message = "NIJA_REDIS_URL uses Railway internal hostname"
                 action = "Set NIJA_REDIS_URL to Railway public proxy URL and redeploy"
                 required = {
                     "NIJA_REDIS_URL": "Railway public proxy URL (rediss://default:PASSWORD@maglev.proxy.rlwy.net:PORT/0)",
+                }
+            elif tls_mismatch:
+                message = "Resolved Redis URL uses redis:// against a Railway public proxy"
+                action = "Use the exact Railway Redis public URL with rediss:// or disable TLS fallback assumptions"
+                required = {
+                    "NIJA_REDIS_URL": "Railway public proxy URL copied exactly from Connect tab (typically rediss://...)",
                 }
             else:
                 message = "Distributed writer lock requires Redis configuration in live mode"
@@ -144,6 +153,7 @@ class ConfigHealthHandler(BaseHTTPRequestHandler):
                 "message": message,
                 "config_status": "missing_redis_for_writer_lock",
                 "required": required,
+                "redis_diagnostics": redis_diag,
                 "action_required": action
             }
 

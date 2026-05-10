@@ -122,9 +122,8 @@ def connect_redis_with_fallback(
         raise RuntimeError(non_redis_hint)
 
     candidates = [primary_url]
-    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "auto").strip().lower()
+    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower()
     allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
-    allow_plain_fallback_auto = allow_plain_fallback_raw in {"", "auto"}
     primary_is_tls = primary_url.startswith("rediss://")
     primary_hostname = (urlparse(primary_url).hostname or "").lower()
     is_railway_host = ".rlwy.net" in primary_hostname
@@ -132,11 +131,10 @@ def connect_redis_with_fallback(
     force_tls_env = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
         "1", "true", "yes", "on", "enabled"
     }
-    # For Railway-managed Redis hosts (*.rlwy.net), allow a controlled rediss://
-    # -> redis:// downgrade when fallback is explicitly enabled or left at auto.
-    # For Railway viaduct proxy endpoints (*.proxy.rlwy.net), also try rediss://
-    # when the primary URL is plain redis:// and TLS is forced.
-    allow_tls_downgrade = is_railway_host and (allow_plain_fallback or allow_plain_fallback_auto)
+    # Downgrade: rediss:// -> redis:// for Railway proxy endpoints on SSL failure.
+    # This is unsafe as a default because it can mask a real TLS configuration mismatch,
+    # so it must be explicitly enabled by the operator.
+    allow_tls_downgrade = is_railway_host and allow_plain_fallback
     if primary_is_tls and allow_tls_downgrade:
         candidates.append(primary_url.replace("rediss://", "redis://", 1))
     elif not primary_is_tls and is_railway_proxy and force_tls_env:
@@ -162,7 +160,7 @@ def connect_redis_with_fallback(
                 if "timeout" in msg or "handshake" in msg or "ssl" in msg or "record layer" in msg:
                     log(
                         "Redis TLS/scheme mismatch suspected against Railway proxy; "
-                        "trying alternative redis URL scheme for the same endpoint..."
+                        "plain fallback is explicitly enabled, trying redis:// for the same endpoint..."
                     )
                     continue
                 break

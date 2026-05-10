@@ -4438,6 +4438,22 @@ class CoinbaseBroker(BaseBroker):
             if side.lower() == 'buy' and not (force_liquidate or ignore_balance):
                 balance_data = self._get_account_balance_detailed()
                 trading_balance = float(balance_data.get('trading_balance', 0.0))
+                try:
+                    min_trade_floor = max(
+                        1.0,
+                        float(
+                            os.getenv('MIN_TRADE_USD')
+                            or os.getenv('MIN_NOTIONAL_OVERRIDE')
+                            or os.getenv('MIN_NOTIONAL_USD')
+                            or '5.0'
+                        ),
+                    )
+                except (TypeError, ValueError):
+                    min_trade_floor = 5.0
+                try:
+                    allocation_pct = float(os.getenv('MAX_TRADE_PERCENT', '0.10')) * 100.0
+                except (TypeError, ValueError):
+                    allocation_pct = 10.0
 
                 logger.info(f"💰 Pre-flight balance check for {symbol}:")
                 logger.info(f"   Available: ${trading_balance:.2f}")
@@ -4451,6 +4467,13 @@ class CoinbaseBroker(BaseBroker):
                     error_msg = f"Insufficient funds: ${trading_balance:.2f} available, ${required_with_buffer:.2f} required (with 2% fee buffer)"
                     logger.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
                     logger.error(f"   Bot detected ${trading_balance:.2f} but needs ${required_with_buffer:.2f} for this order")
+                    logger.error(
+                        "   Sizing diagnostics: order=$%.2f fee_buffer=$%.2f min_trade_usd=$%.2f allocation_pct=%.2f%%",
+                        quantity,
+                        safety_buffer,
+                        min_trade_floor,
+                        allocation_pct,
+                    )
 
                     # Log USD/USDC inventory for debugging
                     logger.error(f"   Account inventory:")
@@ -10203,6 +10226,22 @@ class KrakenBroker(BaseBroker):
                 balance_data = self.get_account_balance_detailed()
                 if balance_data and not balance_data.get('error', False):
                     trading_balance = float(balance_data.get('trading_balance', 0.0))
+                    try:
+                        min_trade_floor = max(
+                            1.0,
+                            float(
+                                os.getenv('MIN_TRADE_USD')
+                                or os.getenv('MIN_NOTIONAL_OVERRIDE')
+                                or os.getenv('MIN_NOTIONAL_USD')
+                                or '5.0'
+                            ),
+                        )
+                    except (TypeError, ValueError):
+                        min_trade_floor = 5.0
+                    try:
+                        allocation_pct = float(os.getenv('MAX_TRADE_PERCENT', '0.10')) * 100.0
+                    except (TypeError, ValueError):
+                        allocation_pct = 10.0
 
                     logging.info(f"💰 Pre-flight balance check for {symbol}:")
                     logging.info(f"   Available: ${trading_balance:.2f}")
@@ -10217,6 +10256,13 @@ class KrakenBroker(BaseBroker):
                         logging.error(f"❌ PRE-FLIGHT CHECK FAILED: {error_msg}")
                         logging.error(f"   Bot detected ${trading_balance:.2f} but needs ${required_with_buffer:.2f} for this order")
                         logging.error(f"   This prevents 'EOrder:Insufficient funds' rejection from Kraken API")
+                        logging.error(
+                            "   Sizing diagnostics: order=$%.2f fee_buffer=$%.2f min_trade_usd=$%.2f allocation_pct=%.2f%%",
+                            quantity,
+                            safety_buffer,
+                            min_trade_floor,
+                            allocation_pct,
+                        )
 
                         # Return unfilled status to prevent API call
                         return {

@@ -123,15 +123,14 @@ def _try_plain_railway_proxy_fallback(
     socket_connect_timeout: int,
 ) -> tuple[redis.Redis, str] | None:
     """Try plain redis:// against Railway proxy after TLS timeout/handshake failure."""
-    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "auto").strip().lower()
+    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower()
     allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
-    allow_plain_fallback_auto = allow_plain_fallback_raw in {"", "auto"}
 
     if not redis_url.startswith("rediss://"):
         return None
 
     is_railway_host = ".rlwy.net" in redis_url.lower()
-    if not is_railway_host or not (allow_plain_fallback or allow_plain_fallback_auto):
+    if not is_railway_host or not allow_plain_fallback:
         return None
 
     message = str(exc).lower()
@@ -140,7 +139,7 @@ def _try_plain_railway_proxy_fallback(
 
     plain_url = redis_url.replace("rediss://", "redis://", 1)
     logger.warning(
-        "Redis TLS failure against Railway proxy; trying plain redis:// fallback"
+        "Redis TLS failure against Railway proxy; plain fallback explicitly enabled, trying redis://"
     )
     plain_client = _build_strict_redis_client(
         redis_url=plain_url,
