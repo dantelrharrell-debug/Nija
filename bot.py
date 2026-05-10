@@ -1036,25 +1036,23 @@ def _register_startup_readiness_components(context: str) -> None:
                 gate.signal_ready(_comp_name)
 
         # execution_ready: prefer the event; fall back to inspecting the
-        # cached strategy when the event was never set.
+        # cached strategy when the event was never set (engine wired after
+        # _publish_strategy_runtime_readiness fired).
         if not _execution_ready_event.is_set():
             _cached_strategy = _initialized_state.get("strategy")
             if _cached_strategy is not None:
-                _cached_exec = getattr(_cached_strategy, "execution_engine", None)
-                if _cached_exec is None:
-                    _cached_apex = getattr(_cached_strategy, "apex", None)
-                    _cached_exec = (
-                        getattr(_cached_apex, "execution_engine", None)
-                        if _cached_apex is not None
-                        else None
-                    )
+                _cached_apex = getattr(_cached_strategy, "apex", None)
+                _cached_exec = getattr(_cached_strategy, "execution_engine", None) or (
+                    getattr(_cached_apex, "execution_engine", None)
+                    if _cached_apex is not None
+                    else None
+                )
                 if _cached_exec is not None:
-                    # The engine is live — sync the event so every downstream
-                    # predicate that reads _execution_ready_event is consistent.
+                    # Sync the event so downstream predicates stay consistent.
                     _execution_ready_event.set()
-                    logger.critical(
-                        "READINESS_CATCHUP: execution engine detected in cached strategy "
-                        "— setting _execution_ready_event and signalling gate (%s)",
+                    logger.info(
+                        "READINESS_CATCHUP: execution engine found in cached strategy "
+                        "— syncing _execution_ready_event and signalling gate (%s)",
                         context,
                     )
         if _execution_ready_event.is_set():
