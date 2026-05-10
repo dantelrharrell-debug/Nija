@@ -14,7 +14,7 @@ def _env(source: Optional[Mapping[str, str]] = None) -> Mapping[str, str]:
     return source if source is not None else os.environ
 
 
-def _is_enabled(value: str, *, default: bool = True) -> bool:
+def _is_enabled(value: Optional[str], *, default: bool = True) -> bool:
     raw = str(value or "").strip().lower()
     if not raw:
         return default
@@ -24,8 +24,9 @@ def _is_enabled(value: str, *, default: bool = True) -> bool:
 def should_initialize_coinbase_platform(env: Optional[Mapping[str, str]] = None) -> bool:
     """Return True when Coinbase should be connected as an execution venue."""
     source = _env(env)
+    coinbase_disabled_by_env = _is_enabled(source.get("NIJA_DISABLE_COINBASE", ""), default=False)
     return (
-        not _is_enabled(source.get("NIJA_DISABLE_COINBASE", ""), default=False)
+        not coinbase_disabled_by_env
         and _is_enabled(source.get("ENABLE_COINBASE", ""), default=True)
         and _is_enabled(source.get("ENABLE_COINBASE_TRADING", ""), default=True)
     )
