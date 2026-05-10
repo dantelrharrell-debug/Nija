@@ -19,6 +19,11 @@ class ExecutionVenueConfigTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertFalse(_is_enabled(value))
 
+    def test_is_enabled_handles_truthy_strings(self):
+        for value in ("1", "true", "yes", "on"):
+            with self.subTest(value=value):
+                self.assertTrue(_is_enabled(value, default=False))
+
     def test_coinbase_platform_allowed_with_kraken_primary(self):
         env = {
             "ENABLE_COINBASE_TRADING": "true",
@@ -45,6 +50,26 @@ class ExecutionVenueConfigTests(unittest.TestCase):
         }
         self.assertFalse(should_initialize_coinbase_platform(env))
 
+    def test_coinbase_platform_env_matrix(self):
+        cases = (
+            ({}, False),
+            ({"ENABLE_COINBASE_TRADING": "true"}, True),
+            ({"ENABLE_COINBASE": "true", "ENABLE_COINBASE_TRADING": "true"}, True),
+            ({"ENABLE_COINBASE": "false", "ENABLE_COINBASE_TRADING": "true"}, False),
+            ({"NIJA_DISABLE_COINBASE": "true", "ENABLE_COINBASE_TRADING": "true"}, False),
+            (
+                {
+                    "NIJA_DISABLE_COINBASE": "true",
+                    "ENABLE_COINBASE": "true",
+                    "ENABLE_COINBASE_TRADING": "true",
+                },
+                False,
+            ),
+        )
+        for env, expected in cases:
+            with self.subTest(env=env):
+                self.assertEqual(should_initialize_coinbase_platform(env), expected)
+
     def test_preferred_execution_venue_forces_single_broker(self):
         for venue in ("coinbase", "kraken", "okx", "binance", "alpaca"):
             with self.subTest(venue=venue):
@@ -52,7 +77,7 @@ class ExecutionVenueConfigTests(unittest.TestCase):
                 self.assertEqual(get_preferred_execution_venue(env), venue)
 
     def test_multi_venue_markers_do_not_force_single_broker(self):
-        for marker in ("", "multi_venue", "multi-venue", "auto", "all"):
+        for marker in ("", "multi_venue", "multi-venue", "auto", "all", "best"):
             with self.subTest(marker=marker):
                 env = {"PRIMARY_EXECUTION_VENUE": marker}
                 self.assertIsNone(get_preferred_execution_venue(env))
