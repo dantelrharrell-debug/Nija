@@ -973,7 +973,20 @@ _STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
 
 
 def _register_startup_readiness_components(context: str) -> None:
-    """Register the canonical startup readiness gate components."""
+    """Register the canonical startup readiness gate components.
+
+    After registering every required component, an event-driven catch-up
+    pass replays any readiness signal that fired before this call.  This
+    closes the ordering race where a component signals the gate *before*
+    ``register_component`` has been called — in particular the
+    ``execution_ready`` signal, which is silently skipped inside
+    ``_publish_strategy_runtime_readiness`` when the execution engine is
+    ``None`` at strategy-publish time but gets wired to the strategy before
+    the pre-thread-launch invariant check runs.
+
+    Without this catch-up the gate waits forever for ``execution_ready``
+    and the trading threads never start.
+    """
     global _startup_readiness_registered
     try:
         from bot.startup_readiness_gate import get_startup_readiness_gate
@@ -997,6 +1010,57 @@ def _register_startup_readiness_components(context: str) -> None:
         _startup_readiness_registered = True
     except Exception as exc:
         logger.warning("Startup readiness gate registration failed (%s): %s", context, exc)
+        return
+
+    # ── Event-driven catch-up ──────────────────────────────────────────────────
+    # Replay readiness signals for any component whose underlying threading.Event
+    # fired before this registration call.  signal_ready() is idempotent, so
+    # replaying an already-open signal is safe.
+    #
+    # execution_ready is special: if the execution engine was None when
+    # _publish_strategy_runtime_readiness ran, _execution_ready_event was never
+    # set even though the engine may have been wired to the strategy shortly
+    # afterwards.  We probe _initialized_state directly as a fallback so the
+    # gate never stalls permanently in that ordering.
+    try:
+        # Components that have a 1-to-1 threading.Event.
+        _catchup_event_map: dict[str, threading.Event] = {
+            "strategy_ready": _strategy_ready_event,
+            "capital_ready": _capital_ready_event,
+        }
+        for _comp_name, _comp_event in _catchup_event_map.items():
+            if _comp_event.is_set():
+                logger.debug(
+                    "READINESS_CATCHUP: replaying signal for %s (%s)", _comp_name, context
+                )
+                gate.signal_ready(_comp_name)
+
+        # execution_ready: prefer the event; fall back to inspecting the
+        # cached strategy when the event was never set (engine wired after
+        # _publish_strategy_runtime_readiness fired).
+        if not _execution_ready_event.is_set():
+            _cached_strategy = _initialized_state.get("strategy")
+            if _cached_strategy is not None:
+                _cached_apex = getattr(_cached_strategy, "apex", None)
+                _cached_exec = getattr(_cached_strategy, "execution_engine", None) or (
+                    getattr(_cached_apex, "execution_engine", None)
+                    if _cached_apex is not None
+                    else None
+                )
+                if _cached_exec is not None:
+                    # Sync the event so downstream predicates stay consistent.
+                    _execution_ready_event.set()
+                    logger.info(
+                        "READINESS_CATCHUP: execution engine found in cached strategy "
+                        "— syncing _execution_ready_event and signalling gate (%s)",
+                        context,
+                    )
+        if _execution_ready_event.is_set():
+            gate.signal_ready("execution_ready")
+    except Exception as _catchup_err:
+        logger.warning(
+            "Startup readiness catch-up failed (%s): %s", context, _catchup_err
+        )
 
 
 def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> bool:
