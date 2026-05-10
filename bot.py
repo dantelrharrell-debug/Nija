@@ -486,17 +486,59 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
             kraken_connected = False
 
     try:
-        _manager = getattr(strategy, "multi_account_manager", None) if strategy is not None else None
-        if _manager is not None:
-            _brokers = list(getattr(_manager, "brokers", {}).values())
-            connected_brokers = sum(1 for _broker in _brokers if getattr(_broker, "connected", False))
+        _manager_candidates = []
+        if strategy is not None:
+            for _manager_attr in ("broker_manager", "multi_account_manager"):
+                _manager = getattr(strategy, _manager_attr, None)
+                if _manager is not None and _manager not in _manager_candidates:
+                    _manager_candidates.append(_manager)
+
+        for _manager in _manager_candidates:
+            _brokers_by_id: dict[int, Any] = {}
+            _raw_brokers = getattr(_manager, "brokers", None)
+            if isinstance(_raw_brokers, dict):
+                for _broker in _raw_brokers.values():
+                    _brokers_by_id[id(_broker)] = _broker
+
+            _get_all_brokers = getattr(_manager, "get_all_brokers", None)
+            if callable(_get_all_brokers):
+                try:
+                    _all_brokers = _get_all_brokers()
+                    if isinstance(_all_brokers, (list, tuple, set, frozenset)):
+                        for _entry in _all_brokers:
+                            _broker = _entry[1] if isinstance(_entry, tuple) and len(_entry) >= 2 else _entry
+                            _brokers_by_id[id(_broker)] = _broker
+                except Exception:
+                    pass
+
+            _brokers = list(_brokers_by_id.values())
+            _connected = [_broker for _broker in _brokers if getattr(_broker, "connected", False)]
+            connected_brokers = max(connected_brokers, len(_connected))
+
+            _eligible_count = 0
             _eligible = getattr(_manager, "get_eligible_brokers", None)
             if callable(_eligible):
-                _eligible_snapshot = _eligible()
-                if isinstance(_eligible_snapshot, (dict, list, tuple, set, frozenset)):
-                    eligible_brokers = len(_eligible_snapshot)
-                else:
-                    eligible_brokers = 0
+                try:
+                    _eligible_snapshot = _eligible()
+                    if isinstance(_eligible_snapshot, (dict, list, tuple, set, frozenset)):
+                        _eligible_count = len(_eligible_snapshot)
+                except Exception:
+                    _eligible_count = 0
+
+            if _eligible_count == 0:
+                _is_execution_eligible = getattr(_manager, "is_execution_eligible", None)
+                if callable(_is_execution_eligible) and _connected:
+                    try:
+                        _eligible_count = sum(1 for _broker in _connected if _is_execution_eligible(_broker))
+                    except Exception:
+                        _eligible_count = 0
+
+            if _eligible_count == 0 and _connected:
+                # Fallback for manager variants that do not expose explicit
+                # execution-eligibility helpers.
+                _eligible_count = len(_connected)
+
+            eligible_brokers = max(eligible_brokers, _eligible_count)
     except Exception:
         connected_brokers = 0
         eligible_brokers = 0
@@ -5196,13 +5238,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _ft_execution_ready,
                     ) = _compute_system_ready(_ft_state_snapshot)
 
-                    logger.critical(
+                    _ft_banner = (
                         "🚀 SYSTEM READY STATE:\n"
-                        "  broker_ready=%s\n"
-                        "  risk_ready=%s\n"
-                        "  strategy_ready=%s\n"
-                        "  capital_ready=%s\n"
-                        "  execution_ready=%s",
+                        if _ft_system_ready
+                        else "🧭 STARTUP PRE-INIT READINESS SNAPSHOT:\n"
+                    )
+                    _ft_log = logger.critical if _ft_system_ready else logger.info
+                    _ft_log(
+                        _ft_banner
+                        + "  broker_ready=%s\n"
+                        + "  risk_ready=%s\n"
+                        + "  strategy_ready=%s\n"
+                        + "  capital_ready=%s\n"
+                        + "  execution_ready=%s",
                         _ft_broker_ready,
                         _ft_risk_ready,
                         _ft_strategy_ready,
