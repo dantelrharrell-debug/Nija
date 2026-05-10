@@ -55,6 +55,21 @@ def _allow_degraded_writer_authority() -> bool:
     )
 
 
+def _single_instance_lock_opt_out(live_mode: bool) -> bool:
+    """True when operator explicitly allows single-instance live mode without strict lock."""
+    if not live_mode:
+        return False
+    if _env_truthy("NIJA_MULTI_INSTANCE_POSSIBLE"):
+        return False
+    if not _env_truthy("NIJA_ASSUME_SINGLE_INSTANCE"):
+        return False
+    if _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK"):
+        return False
+    if _env_truthy("STRICT_REDIS_WRITER_LOCK"):
+        return False
+    return True
+
+
 def _build_redis_client(redis_mod, redis_url: str, *, timeout_s: int = 2):
     """Create a Redis client with Railway-compatible TLS behavior."""
     kwargs = {
@@ -123,10 +138,11 @@ def assert_distributed_writer_authority() -> None:
 
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
     unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
+    single_instance_opt_out = _single_instance_lock_opt_out(live_mode)
     strict_required = (
         _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK")
         or _env_truthy("STRICT_REDIS_WRITER_LOCK")
-        or live_mode
+        or (live_mode and not single_instance_opt_out)
     ) and not unsafe_bypass
     degraded_override = _allow_degraded_writer_authority()
 
@@ -240,10 +256,11 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
 
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
     unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
+    single_instance_opt_out = _single_instance_lock_opt_out(live_mode)
     strict_required = (
         _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK")
         or _env_truthy("STRICT_REDIS_WRITER_LOCK")
-        or live_mode
+        or (live_mode and not single_instance_opt_out)
     ) and not unsafe_bypass
     degraded_override = _allow_degraded_writer_authority()
     effective_strict_required = strict_required and not degraded_override
@@ -314,6 +331,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         "effective_strict_required": bool(effective_strict_required),
         "degraded_override_enabled": bool(degraded_override),
         "unsafe_bypass_enabled": bool(unsafe_bypass),
+        "single_instance_lock_opt_out": bool(single_instance_opt_out),
         "live_mode": bool(live_mode),
         "redis_configured": bool(redis_url),
         "token_present": bool(token),

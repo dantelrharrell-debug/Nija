@@ -509,9 +509,33 @@ def _is_balance_hydrated_ready() -> bool:
                 return bool(_bootstrap_fsm.is_balance_hydrated())
             _state_value = getattr(_bootstrap_fsm.state, "value", "")
             return _state_value in _BALANCE_HYDRATED_STATE_VALUES
-        except Exception:
+        except Exception as _fsm_err:
+            os.environ["NIJA_BALANCE_HYDRATION_LAST_ERROR"] = f"bootstrap_fsm_check_failed:{_fsm_err}"
             return False
     return False
+
+
+def _balance_hydration_debug_status() -> dict:
+    """Return compact diagnostics for startup hydration gate failures."""
+    _rt = _rt_snapshot()
+    _state_value = "UNAVAILABLE"
+    _fsm_error = ""
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        try:
+            _bootstrap_fsm = _get_bootstrap_fsm()
+            _state_value = str(getattr(getattr(_bootstrap_fsm, "state", None), "value", "UNKNOWN"))
+        except Exception as _err:
+            _fsm_error = str(_err)
+    return {
+        "balance_hydrated": bool(_rt.get("balance_hydrated", False)),
+        "capital_ready": bool(_rt.get("capital_ready", False)),
+        "broker_ready": bool(_rt.get("broker_ready", False)),
+        "strategy_ready": bool(_rt.get("strategy_ready", False)),
+        "execution_ready": bool(_rt.get("execution_ready", False)),
+        "bootstrap_fsm_state": _state_value,
+        "bootstrap_fsm_error": _fsm_error,
+        "last_error": os.environ.get("NIJA_BALANCE_HYDRATION_LAST_ERROR", ""),
+    }
 
 
 def _sum_nested_balances(balance_payload) -> float:
@@ -601,6 +625,7 @@ def _hydrate_startup_balances(strategy) -> float:
             logger.error("Hydration fallback failed: %s", _fallback_err)
 
     if balances is None:
+        os.environ["NIJA_BALANCE_HYDRATION_LAST_ERROR"] = "no_balance_provider_available"
         raise RuntimeError("CRITICAL: Balance hydration failed (no balance provider available)")
 
     total_balance = _sum_nested_balances(balances)
@@ -608,6 +633,7 @@ def _hydrate_startup_balances(strategy) -> float:
     os.environ["ACCOUNT_BALANCE"] = f"{_hydrated_total_balance_usd:.8f}"
 
     logger.critical("💰 HYDRATION COMPLETE: total_balance=$%.2f", _hydrated_total_balance_usd)
+    os.environ.pop("NIJA_BALANCE_HYDRATION_LAST_ERROR", None)
 
     if _is_live and _hydrated_total_balance_usd <= 0:
         raise RuntimeError("LIVE mode requires valid balance")
@@ -1791,10 +1817,10 @@ def _acquire_distributed_process_lock() -> None:
 
     _live_mode = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
     _strict_lock_alias = os.environ.get("STRICT_REDIS_WRITER_LOCK", "").strip().lower() in _truthy
-    _require_lock = (
-        os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
-        or _strict_lock_alias
-    )
+    _require_lock_env = os.environ.get("NIJA_REQUIRE_DISTRIBUTED_LOCK", "").strip().lower()
+    _require_lock_from_env = _require_lock_env in _truthy
+    _single_instance_assumed = os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _truthy
+    _require_lock = _require_lock_from_env or _strict_lock_alias
     _multi_instance_possible = _is_multi_instance_deployment_possible()
     if _multi_instance_possible:
         _require_lock = True
@@ -1803,8 +1829,28 @@ def _acquire_distributed_process_lock() -> None:
         os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _truthy
         or _disable_writer_lock_alias
     )
-    if _live_mode:
+    _single_instance_lock_opt_out = (
+        _live_mode
+        and _single_instance_assumed
+        and not _multi_instance_possible
+        and not _require_lock_from_env
+        and not _strict_lock_alias
+    )
+
+    if _live_mode and not _single_instance_lock_opt_out:
         _require_lock = True
+    elif _single_instance_lock_opt_out:
+        print(
+            "⚠️ Single-instance live mode detected with NIJA_REQUIRE_DISTRIBUTED_LOCK disabled; "
+            "distributed writer lock is optional by operator choice.",
+            flush=True,
+        )
+        print(
+            "   Keep only one NIJA instance active for this API key.",
+            flush=True,
+        )
+
+    if _live_mode:
         if _unsafe_bypass:
             _require_lock = False
             if _disable_writer_lock_alias:
@@ -3448,7 +3494,9 @@ def _bootstrap_hydrate_account_balances() -> dict:
         }
         
     except Exception as _bootstrap_err:
+        os.environ["NIJA_BALANCE_HYDRATION_LAST_ERROR"] = str(_bootstrap_err)
         print(f"❌ BOOTSTRAP BALANCE HYDRATION FAILED: {_bootstrap_err}")
+        print("   Verify exchange API key/secret, key permissions, and IP restrictions.")
         raise
 
 
@@ -4280,7 +4328,11 @@ def _ensure_state_machine_loop_started() -> None:
 
     with _sm_loop_lock:
         if not _is_balance_hydrated_ready():
-            logger.critical("🚫 FSM BLOCKED: waiting for balance hydration")
+            _hydration_diag = _balance_hydration_debug_status()
+            logger.critical(
+                "🚫 FSM BLOCKED: waiting for balance hydration | diag=%s",
+                _hydration_diag,
+            )
             return
 
         # Only skip if a thread exists AND is actually alive
