@@ -13,7 +13,57 @@ from urllib.parse import urlparse
 
 import redis  # type: ignore[import]
 
-from bot.redis_env import get_redis_url
+from bot.redis_env import get_all_redis_urls, get_redis_url
+
+
+def _is_tlsish_connection_error(exc: Exception) -> bool:
+    """Return True when exception text suggests TLS/scheme mismatch."""
+    msg = str(exc).lower()
+    return (
+        "timeout" in msg
+        or "handshake" in msg
+        or "ssl" in msg
+        or "record layer" in msg
+        or "wrong version number" in msg
+    )
+
+
+def _redact_url_for_log(url: str) -> str:
+    """Redact auth details for safe logs."""
+    parsed = urlparse((url or "").strip())
+    host = parsed.hostname or "<unknown-host>"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return f"{parsed.scheme}://***@{host}:{port or '<unknown-port>'}"
+
+
+def _prioritized_alt_urls(primary_url: str) -> list[str]:
+    """Return non-primary configured Redis URLs, preferring non-proxy endpoints."""
+    primary = (primary_url or "").strip()
+    configured_urls = [url for _, url in get_all_redis_urls() if url]
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in configured_urls:
+        raw = candidate.strip()
+        if not raw or raw == primary or raw in seen:
+            continue
+        seen.add(raw)
+        unique.append(raw)
+
+    def _priority(url: str) -> tuple[int, str]:
+        host = (urlparse(url).hostname or "").lower()
+        if host.endswith(".railway.internal"):
+            return (0, host)
+        if host.endswith(".proxy.rlwy.net"):
+            return (3, host)
+        if ".rlwy.net" in host:
+            return (2, host)
+        return (1, host)
+
+    return sorted(unique, key=_priority)
 
 
 def _detect_non_redis_http_endpoint(url: str) -> str:
@@ -112,7 +162,7 @@ def connect_redis_with_fallback(
     delay_s: float = 2.0,
     log: Callable[[str], None] = print,
 ) -> tuple[redis.Redis, str]:
-    """Connect to Redis with scheme fallback for Railway proxy endpoints."""
+    """Connect to Redis with bounded fallback across configured endpoints."""
     primary_url = (url or get_redis_url()).strip()
     if not primary_url:
         raise RuntimeError("Redis URL is missing")
@@ -121,7 +171,8 @@ def connect_redis_with_fallback(
     if non_redis_hint:
         raise RuntimeError(non_redis_hint)
 
-    candidates = [primary_url]
+    # candidate tuple: (url, requires_tlsish_error)
+    candidates: list[tuple[str, bool]] = [(primary_url, False)]
     allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower()
     allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
     primary_is_tls = primary_url.startswith("rediss://")
@@ -136,12 +187,17 @@ def connect_redis_with_fallback(
     # so it must be explicitly enabled by the operator.
     allow_tls_downgrade = is_railway_host and allow_plain_fallback
     if primary_is_tls and allow_tls_downgrade:
-        candidates.append(primary_url.replace("rediss://", "redis://", 1))
+        candidates.append((primary_url.replace("rediss://", "redis://", 1), True))
     elif not primary_is_tls and is_railway_proxy and force_tls_env:
-        candidates.append(primary_url.replace("redis://", "rediss://", 1))
+        candidates.append((primary_url.replace("redis://", "rediss://", 1), True))
+
+    # If proxy/TLS path fails, try alternate configured URLs (internal/private first,
+    # then non-proxy native endpoints, and finally other Railway managed hostnames).
+    for alt_url in _prioritized_alt_urls(primary_url):
+        candidates.append((alt_url, False))
 
     last_error: Optional[Exception] = None
-    for idx, candidate_url in enumerate(candidates):
+    for idx, (candidate_url, requires_tlsish_error) in enumerate(candidates):
         try:
             client = create_redis(
                 candidate_url,
@@ -151,19 +207,32 @@ def connect_redis_with_fallback(
             )
             wait_for_redis_ready(client, retries=retries, delay_s=delay_s, log=log)
             if idx > 0:
-                log("Redis Railway proxy reachable via plain redis:// fallback")
+                log(f"Redis connected using fallback candidate: {_redact_url_for_log(candidate_url)}")
             return client, candidate_url
         except Exception as exc:
             last_error = exc
-            if idx == 0 and len(candidates) > 1:
-                msg = str(exc).lower()
-                if "timeout" in msg or "handshake" in msg or "ssl" in msg or "record layer" in msg:
-                    log(
-                        "Redis TLS/scheme mismatch suspected against Railway proxy; "
-                        "plain fallback is explicitly enabled, trying redis:// for the same endpoint..."
-                    )
-                    continue
+            has_more_candidates = idx < len(candidates) - 1
+            if not has_more_candidates:
                 break
+
+            if requires_tlsish_error and not _is_tlsish_connection_error(exc):
+                log(
+                    "Skipping scheme fallback candidate because failure did not look TLS-related; "
+                    "continuing to next configured Redis endpoint..."
+                )
+                continue
+
+            if requires_tlsish_error:
+                log(
+                    "Redis TLS/scheme mismatch suspected against Railway proxy; "
+                    "trying scheme fallback candidate..."
+                )
+            else:
+                log(
+                    "Redis candidate failed; trying next configured endpoint: "
+                    f"{_redact_url_for_log(candidate_url)}"
+                )
+            continue
 
     raise RuntimeError("Redis never became available") from last_error
 

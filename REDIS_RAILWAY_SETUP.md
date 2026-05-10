@@ -4,9 +4,16 @@
 
 The distributed writer lock uses Redis to prevent multiple bot instances from trading simultaneously. **If your Redis URL is incorrect or uses the internal Railway domain (`redis://nija.railway.internal:6379`), you WILL experience lock failures and trade execution failures.**
 
-## ✅ Solution: Use Railway TCP Proxy
+## ✅ Recommended: Start with Railway TCP Proxy (TLS)
 
-Railway provides a TCP proxy to access Redis from external services. This is **required** for NIJA to work reliably.
+Railway TCP proxy is the recommended external endpoint for NIJA.
+Use `rediss://` for proxy hosts and verify `PING` succeeds.
+
+If proxy TLS fails in your environment, NIJA now falls back to other configured Redis URLs in this order:
+
+1. Railway internal/private host (`*.railway.internal`) when available
+2. Native/non-proxy Redis endpoint
+3. Other configured Railway hostnames
 
 ## ✅ Step 0: Enable Redis persistence (AOF or RDB)
 
@@ -119,6 +126,12 @@ Command:
 bash scripts/redis_connectivity_check.sh
 ```
 
+One-command winner probe (shows whether proxy TLS or fallback endpoint was selected):
+
+```bash
+python3 scripts/redis_endpoint_probe.py
+```
+
 ### Check 1/5: Redis URL + TLS sanity
 
 Expected pass indicators:
@@ -178,6 +191,19 @@ Expected fail indicators:
 
 - `ERROR: Redis connectivity check failed: ...`
 
+### Proxy TLS Confirmation + Fallback Decision
+
+- If host is `*.proxy.rlwy.net` and `rediss://` ping succeeds, keep proxy TLS.
+- If host is `*.proxy.rlwy.net` and TLS ping fails, switch to private/internal or native non-proxy Redis.
+- Option A: `REDIS_PRIVATE_URL=redis://<service>.railway.internal:6379/0` (same Railway project/network)
+- Option B: `NIJA_REDIS_URL=redis://<native-host>:6379/0` (native non-proxy Redis)
+
+Connection runtime behavior:
+
+- NIJA first tries the primary configured URL.
+- If that fails, NIJA automatically tries alternate configured URLs (internal/private and non-proxy first).
+- Optional same-endpoint TLS downgrade (`rediss://` → `redis://`) remains opt-in via `NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true`.
+
 ### Exit code quick map
 
 - `1`: Redis ping/connectivity failure
@@ -189,11 +215,10 @@ Expected fail indicators:
 
 ## ❌ What NOT to Do
 
-**❌ Do NOT use:** `redis://nija.railway.internal:6379`
+### Do NOT use internal hosts from outside Railway private networking
 
-- This is Railway's internal network, only accessible within the same private network
-- External connections will fail
-- Bot will hang or crash with lock contention errors
+- `redis://<service>.railway.internal:6379` only works when NIJA and Redis are in the same Railway project/network.
+- From external networks, use a public endpoint (Railway proxy `rediss://` or a native Redis provider).
 
 **❌ Do NOT use:** Insufficient Redis allocations
 
@@ -235,6 +260,7 @@ Expected fail indicators:
 
 For production resilience (failover + reset recovery + zero-downtime steps), see:
 `PRODUCTION_REDIS_RESILIENCE_RUNBOOK.md`.
+
 ## 📋 Configuration Priority
 
 NIJA checks for Redis URLs in this order:
