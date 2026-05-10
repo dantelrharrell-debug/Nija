@@ -831,7 +831,26 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
         _rt_mark_ready("execution_ready")
         logger.critical("EXECUTION_READY_SET")
     else:
-        logger.warning("Execution engine not yet available during strategy publish (%s)", context)
+        # Execution engine not yet attached.  When NIJA_REQUIRE_EXECUTION_ENGINE=false
+        # (the default) we still mark execution_ready so the FSM can complete its
+        # transition — the engine may be initialised lazily inside the strategy.
+        # Set NIJA_REQUIRE_EXECUTION_ENGINE=true to keep the strict gate.
+        _require_engine = os.environ.get("NIJA_REQUIRE_EXECUTION_ENGINE", "false").strip().lower() in (
+            "1", "true", "yes", "on", "enabled"
+        )
+        if not _require_engine:
+            _rt_mark_ready("execution_ready")
+            logger.critical(
+                "EXECUTION_READY_SET (no execution_engine attr found on strategy; "
+                "set NIJA_REQUIRE_EXECUTION_ENGINE=true to keep strict gate) context=%s",
+                context,
+            )
+        else:
+            logger.warning(
+                "Execution engine not yet available during strategy publish (%s); "
+                "execution_ready remains unset (NIJA_REQUIRE_EXECUTION_ENGINE=true)",
+                context,
+            )
 
     return True
 

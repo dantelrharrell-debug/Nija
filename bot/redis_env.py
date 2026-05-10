@@ -116,11 +116,24 @@ def _strip_wrapping_quotes(value: str) -> str:
     return value
 
 
+def _maybe_strip_tls(url: str) -> str:
+    """Downgrade rediss:// → redis:// when NIJA_REDIS_STRIP_TLS=true.
+
+    Railway's internal (private) Redis endpoint does not support TLS, but
+    some env vars (REDIS_TLS_URL) ship with the rediss:// scheme.  Setting
+    NIJA_REDIS_STRIP_TLS=true converts the scheme so the bot can connect
+    without a TLS handshake while keeping all other URL parts intact.
+    """
+    if _is_truthy(os.getenv("NIJA_REDIS_STRIP_TLS", "false")) and url.startswith("rediss://"):
+        url = "redis://" + url[len("rediss://"):]
+    return url
+
+
 def get_redis_url() -> str:
     """Return the highest-priority configured Redis URL."""
     configured = _iter_configured_redis_urls()
     if configured:
-        return configured[0][1]
+        return _maybe_strip_tls(configured[0][1])
     return ""
 
 
