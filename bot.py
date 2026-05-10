@@ -532,7 +532,7 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                     if isinstance(_eligible_snapshot, (dict, list, tuple, set, frozenset)):
                         _eligible_count = len(_eligible_snapshot)
                 except Exception:
-                    _eligible_count = 0
+                    pass
 
             if _eligible_count == 0:
                 _is_execution_eligible = getattr(_manager, "is_execution_eligible", None)
@@ -551,7 +551,7 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
                                 )
                                 continue
                     except Exception:
-                        _eligible_count = 0
+                        pass
 
             if _eligible_count == 0 and _connected:
                 # Fallback for manager variants that do not expose explicit
