@@ -103,6 +103,14 @@ except ImportError:
     except ImportError:
         get_platform_account_layer = None
 
+try:
+    from bot.execution_venue_config import should_initialize_coinbase_platform
+except ImportError:
+    try:
+        from execution_venue_config import should_initialize_coinbase_platform
+    except ImportError:
+        should_initialize_coinbase_platform = None  # type: ignore[assignment]
+
 # Import CapitalAuthority singleton for unified multi-broker capital readiness
 try:
     from bot.capital_authority import get_capital_authority, STARTUP_LOCK
@@ -5515,20 +5523,20 @@ class MultiAccountBrokerManager:
         time.sleep(2.0)  # Separate Kraken nonce window from next broker
 
         # ── Coinbase ─────────────────────────────────────────────────────────
-        _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "true").strip().lower() in ("1", "true", "yes")
+        _coinbase_allowed = (
+            should_initialize_coinbase_platform(os.environ)
+            if should_initialize_coinbase_platform is not None
+            else False
+        )
+        _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in ("1", "true", "yes")
         _enable_coinbase_raw = os.environ.get("ENABLE_COINBASE", "").strip().lower()
         _enable_coinbase_flag = _enable_coinbase_raw not in ("0", "false", "no", "off") if _enable_coinbase_raw else True
-        _enable_coinbase_trading = os.environ.get("ENABLE_COINBASE_TRADING", "false").strip().lower() not in (
+        _enable_coinbase_trading = os.environ.get("ENABLE_COINBASE_TRADING", "true").strip().lower() not in (
             "0", "false", "no", "off"
         )
         _primary_exec_venue = os.environ.get("PRIMARY_EXECUTION_VENUE", "").strip().lower()
 
-        if (
-            _disable_coinbase
-            or (not _enable_coinbase_flag)
-            or (not _enable_coinbase_trading)
-            or (_primary_exec_venue == "kraken")
-        ):
+        if not _coinbase_allowed:
             logger.info(
                 "⏭️  Coinbase PLATFORM skipped (NIJA_DISABLE_COINBASE=%s ENABLE_COINBASE=%s ENABLE_COINBASE_TRADING=%s PRIMARY_EXECUTION_VENUE=%s)",
                 _disable_coinbase,
