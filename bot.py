@@ -288,12 +288,6 @@ def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool
         logger.warning("Skipping INIT lock - already in LIVE mode (context=%s)", context)
         return False
 
-    # FORCE_TRADE bypass: skip INIT lock entirely when FORCE_TRADE is enabled
-    _force_trade = _is_truthy(os.environ.get("FORCE_TRADE", "")) or _is_truthy(os.environ.get("FORCE_TRADE_MODE", ""))
-    if _force_trade:
-        logger.warning("⚡ FORCE_TRADE enabled — skipping INIT lock acquisition; proceeding directly")
-        return True  # Pretend lock was acquired
-
     print("INIT_LOCK_ATTEMPT", flush=True)
     acquired = _initialized_state_lock.acquire(timeout=timeout_s)
     if acquired:
@@ -580,22 +574,11 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
 def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
     """Fail closed unless the startup readiness contract is fully satisfied.
 
-    When FORCE_TRADE=true (or FORCE_TRADE_MODE=true), the strict gate check is
-    skipped so the caller proceeds directly to the trading loop without
-    synthesizing readiness.
+    FORCE_TRADE does not bypass this startup contract; startup must satisfy the
+    full readiness handshake before trading proceeds.
     """
     system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
         _compute_system_ready(state_snapshot)
-    if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
-        logger.warning("FORCE_TRADE active — bypassing readiness enforcement only")
-        return (
-            system_ready,
-            broker_ready,
-            risk_ready,
-            strategy_ready,
-            capital_ready,
-            execution_ready,
-        )
     if not all([broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready]):
         raise RuntimeError(
             f"BLOCKED: System not fully initialized ({context}) "
@@ -910,6 +893,10 @@ _STARTUP_READINESS_COMPONENTS = (
     "execution_ready",
 )
 _startup_readiness_registered = False
+# Startup strategy publication lock timeout (seconds) used by fallback/republish paths.
+_INIT_LOCK_PUBLISH_TIMEOUT_S = 5.0
+# Supervisor grace window before degraded fallback strategy construction (seconds).
+_STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
 
 
 def _register_startup_readiness_components(context: str) -> None:
@@ -937,6 +924,93 @@ def _register_startup_readiness_components(context: str) -> None:
         _startup_readiness_registered = True
     except Exception as exc:
         logger.warning("Startup readiness gate registration failed (%s): %s", context, exc)
+
+
+def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> bool:
+    """Persist strategy singleton and publish strategy/execution readiness signals."""
+    try:
+        _initialized_state["strategy"] = strategy_obj
+        # Preserve existing startup contract: once TradingStrategy is cached,
+        # risk subsystem is considered initialized for startup gating.
+        _initialized_state["risk_ready"] = True
+        _initialized_state["strategy_initialized"] = True
+        logger.critical("STRATEGY_ASSIGNED")
+    except Exception as exc:
+        logger.warning("Strategy publish failed (%s): %s", context, exc)
+        return False
+
+    _strategy_ready_event.set()
+    logger.critical("STRATEGY_READY_SET")
+    logger.critical(
+        "STRATEGY INITIALIZED — strategy-ready event published; awaiting hydrated runtime state persistence"
+    )
+
+    _exec_engine = getattr(strategy_obj, "execution_engine", None)
+    if _exec_engine is None:
+        _apex = getattr(strategy_obj, "apex", None)
+        _exec_engine = getattr(_apex, "execution_engine", None) if _apex is not None else None
+    if _exec_engine is not None:
+        _execution_ready_event.set()
+        logger.critical("EXECUTION_READY_SET")
+    else:
+        logger.warning("Execution engine not yet available during strategy publish (%s)", context)
+
+    try:
+        from bot.startup_readiness_gate import get_startup_readiness_gate
+    except ImportError:
+        try:
+            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
+        except ImportError:
+            get_startup_readiness_gate = None  # type: ignore[assignment]
+    if get_startup_readiness_gate is not None:
+        try:
+            gate = get_startup_readiness_gate()
+            gate.signal_ready("strategy_ready")
+            if _exec_engine is not None:
+                gate.signal_ready("execution_ready")
+        except Exception as _gate_signal_err:
+            logger.warning(
+                "Startup readiness signal failed (strategy/execution) (%s): %s",
+                context,
+                _gate_signal_err,
+            )
+
+    return True
+
+
+def _ensure_strategy_fallback_published(*, context: str) -> bool:
+    """Load a default strategy and publish readiness if strategy is missing."""
+    _state_snapshot = _read_initialized_state_snapshot(context=f"{context}: pre-fallback probe")
+    _strategy = _state_snapshot.get("strategy")
+    if _strategy is not None:
+        if not _strategy_ready_event.is_set():
+            logger.warning("Strategy present without strategy_ready event; publishing readiness (%s)", context)
+            _acquired = _initialized_state_lock.acquire(timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S)
+            if not _acquired:
+                logger.warning("Readiness republish skipped: INIT lock unavailable (%s)", context)
+                return False
+            try:
+                return _publish_strategy_runtime_readiness(_strategy, context=f"{context}: existing-strategy")
+            finally:
+                _initialized_state_lock.release()
+        return True
+
+    logger.warning("No strategy published yet — attempting default strategy fallback (%s)", context)
+    logger.warning("Fallback uses TradingStrategy default constructor in degraded startup mode (%s)", context)
+    try:
+        _fallback_strategy = TradingStrategy()
+    except Exception as exc:
+        logger.exception("Default strategy fallback construction failed (%s): %s", context, exc)
+        return False
+
+    _acquired = _initialized_state_lock.acquire(timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S)
+    if not _acquired:
+        logger.warning("Fallback publish skipped: INIT lock unavailable (%s)", context)
+        return False
+    try:
+        return _publish_strategy_runtime_readiness(_fallback_strategy, context=f"{context}: fallback-strategy")
+    finally:
+        _initialized_state_lock.release()
 
 
 def _ensure_running_supervised(active_threads: dict, *, context: str) -> None:
@@ -5695,36 +5769,13 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         )
                     else:
                         try:
-                            _initialized_state["strategy"] = strategy
-                            _initialized_state["risk_ready"] = True
+                            _publish_strategy_runtime_readiness(
+                                strategy,
+                                context="startup constructor path",
+                            )
                             logger.critical("CONSTRUCTOR_STAGE stage=strategy_cached")
-                            logger.critical("STRATEGY_ASSIGNED")
                         finally:
                             _initialized_state_lock.release()
-                    _strategy_ready_event.set()
-                    logger.critical("STRATEGY_READY_SET")
-                    logger.critical(
-                        "STRATEGY INITIALIZED — strategy-ready event published; awaiting hydrated runtime state persistence"
-                    )
-                    try:
-                        from bot.startup_readiness_gate import get_startup_readiness_gate
-                    except ImportError:
-                        try:
-                            from startup_readiness_gate import get_startup_readiness_gate  # type: ignore[import]
-                        except ImportError:
-                            get_startup_readiness_gate = None  # type: ignore[assignment]
-                    if get_startup_readiness_gate is not None:
-                        try:
-                            gate = get_startup_readiness_gate()
-                            gate.signal_ready("strategy_ready")
-                            _exec_engine = getattr(strategy, "execution_engine", None)
-                            if _exec_engine is None:
-                                _apex = getattr(strategy, "apex", None)
-                                _exec_engine = getattr(_apex, "execution_engine", None) if _apex is not None else None
-                            if _exec_engine is not None:
-                                gate.signal_ready("execution_ready")
-                        except Exception as _gate_signal_err:
-                            logger.warning("Startup readiness signal failed (strategy/execution): %s", _gate_signal_err)
                 except Exception as e:
                     logger.exception("STRATEGY_INIT_FAILED: %s", e)
                     raise
@@ -6610,8 +6661,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 else True
             )
 
-            _force_trade_active = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
-            if not _force_trade_active and not all([
+            if not all([
                 _prelaunch_nonce_ready,
                 _prelaunch_broker_ready,
                 _prelaunch_balance_ready,
@@ -7291,26 +7341,14 @@ def main():
     #   capital_ready    — BootstrapFSM has reached CAPITAL_READY or beyond
     #   execution_ready  — strategy.execution_engine is not None
     #
-    # FORCE_TRADE bypass: when FORCE_TRADE=true (or FORCE_TRADE_MODE=true) the
-    # barrier is skipped entirely and the bot proceeds directly to the trading
-    # loop without synthesizing readiness state.
+    # FORCE_TRADE does not bypass this startup readiness handshake.
     # ─────────────────────────────────────────────────────────────────────────
     logger.critical("🧭 BEFORE system_ready wait")
-    _force_trade_active = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
-    if _force_trade_active:
-        logger.warning(
-            "⚡ FORCE_TRADE active — skipping strict system_ready barrier; "
-            "proceeding directly to trading loop"
-        )
+    if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
+        logger.warning("FORCE_TRADE active — startup readiness barrier remains enforced")
     strategy = None
     _last_system_ready_log = 0.0
     while True:
-        # FORCE_TRADE bypass: skip the strict readiness gate check
-        _force_trade = _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")
-        if _force_trade:
-            logger.warning("⚡ FORCE_TRADE active — skipping strict system_ready barrier; proceeding directly to trading loop")
-            break  # Exit the system_ready barrier loop immediately
-
         _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
 
         strategy = _state_snapshot.get("strategy")
@@ -7350,6 +7388,8 @@ def main():
             "⏳ strategy not yet initialized; waiting until startup thread publishes strategy"
         )
         _last_strategy_wait_log = 0.0
+        _strategy_wait_started = time.monotonic()
+        _fallback_attempted = False
         while strategy is None:
             _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait")
             strategy = _state_snapshot.get("strategy")
@@ -7358,6 +7398,18 @@ def main():
                 break
 
             _now = time.monotonic()
+            if (
+                not _fallback_attempted
+                and (_now - _strategy_wait_started) >= _STRATEGY_FALLBACK_GRACE_PERIOD_S
+            ):
+                _fallback_attempted = True
+                _ensure_strategy_fallback_published(context="supervisor degraded strategy wait")
+                _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait_post_fallback")
+                strategy = _state_snapshot.get("strategy")
+                if strategy is not None:
+                    logger.critical("✅ strategy fallback published — continuing startup")
+                    break
+
             if _now - _last_strategy_wait_log >= 60.0:
                 logger.warning(
                     "⏳ still waiting for strategy publication (process stays alive; health server remains ready)"
