@@ -67,8 +67,10 @@ def create_redis(
     tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
     tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
     tls_auto = tls_insecure_raw in {"", "auto"}
+    # Extend permissive cert validation to all rlwy.net domains (not just .proxy.rlwy.net)
+    # because Railway-managed Redis endpoints use self-signed or internal certs.
     if (parsed.scheme or "").lower() == "rediss" and (
-        tls_insecure or (tls_auto and ".proxy.rlwy.net" in (parsed.hostname or "").lower())
+        tls_insecure or (tls_auto and ".rlwy.net" in (parsed.hostname or "").lower())
     ):
         kwargs["ssl_cert_reqs"] = "none"
 
@@ -117,21 +119,24 @@ def connect_redis_with_fallback(
         raise RuntimeError(non_redis_hint)
 
     candidates = [primary_url]
-    allow_plain_fallback = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower() in {
-        "1", "true", "yes", "on", "enabled"
-    }
+    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "auto").strip().lower()
+    allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
+    allow_plain_fallback_auto = allow_plain_fallback_raw in {"", "auto"}
     primary_is_tls = primary_url.startswith("rediss://")
     force_tls_env = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
         "1", "true", "yes", "on", "enabled"
     }
     force_tls = force_tls_env or primary_is_tls
-    effective_allow_plain_fallback = (not primary_is_tls) and (allow_plain_fallback or (not force_tls))
-    if (
-        effective_allow_plain_fallback
-        and primary_url.startswith("rediss://")
-        and ".proxy.rlwy.net" in primary_url.lower()
-    ):
+    is_railway_host = ".rlwy.net" in primary_url.lower()
+
+    # Downgrade: rediss:// -> redis:// for Railway proxy endpoints on SSL failure.
+    # Enabled explicitly via NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true, or automatically
+    # (auto/unset) for Railway proxy hosts where a TLS record-layer mismatch is common.
+    allow_tls_downgrade = allow_plain_fallback or (allow_plain_fallback_auto and is_railway_host)
+    if primary_is_tls and allow_tls_downgrade and is_railway_host:
         candidates.append(primary_url.replace("rediss://", "redis://", 1))
+
+    # Upgrade: redis:// -> rediss:// for Railway proxy endpoints when TLS is forced.
     if (
         force_tls
         and primary_url.startswith("redis://")
@@ -156,9 +161,9 @@ def connect_redis_with_fallback(
             last_error = exc
             if idx == 0 and len(candidates) > 1:
                 msg = str(exc).lower()
-                if "timeout" in msg or "handshake" in msg or "ssl" in msg:
+                if "timeout" in msg or "handshake" in msg or "ssl" in msg or "record layer" in msg:
                     log(
-                        "Redis scheme mismatch suspected against Railway proxy; "
+                        "Redis TLS/scheme mismatch suspected against Railway proxy; "
                         "trying alternative redis URL scheme for the same endpoint..."
                     )
                     continue
