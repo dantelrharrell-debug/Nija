@@ -1481,7 +1481,12 @@ def _is_multi_instance_deployment_possible() -> bool:
     if os.environ.get("NIJA_MULTI_INSTANCE_POSSIBLE", "").strip().lower() in _truthy:
         return True
 
-    for _var in ("RAILWAY_REPLICA_ID", "K_SERVICE", "DYNO"):
+    # Operator override for confirmed singleton deployments.
+    # This is intentionally lower precedence than NIJA_MULTI_INSTANCE_POSSIBLE.
+    if os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _truthy:
+        return False
+
+    for _var in ("K_SERVICE", "DYNO"):
         if os.environ.get(_var, "").strip():
             return True
 
@@ -1909,7 +1914,10 @@ def _acquire_distributed_process_lock() -> None:
     _allow_local_lock_fallback = os.environ.get(
         "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK", "false"
     ).strip().lower() in _truthy
-    if _allow_local_lock_fallback and _multi_instance_possible:
+    _force_local_lock_fallback = os.environ.get(
+        "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "false"
+    ).strip().lower() in _truthy
+    if _allow_local_lock_fallback and _multi_instance_possible and not _force_local_lock_fallback:
         print(
             "🚫 Multi-instance deployment detected; local writer-lock fallback is forbidden.",
             flush=True,
@@ -1920,6 +1928,15 @@ def _acquire_distributed_process_lock() -> None:
         )
         os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
         _allow_local_lock_fallback = False
+    elif _allow_local_lock_fallback and _multi_instance_possible and _force_local_lock_fallback:
+        print(
+            "🚨 UNSAFE MODE: forcing local writer-lock fallback while multi-instance risk is detected.",
+            flush=True,
+        )
+        print(
+            "   This can allow duplicate writers. Use only as a temporary emergency override.",
+            flush=True,
+        )
     _kraken_buy_buffer_pct_raw = os.environ.get("KRAKEN_BUY_BUFFER_PCT", "0.004").strip() or "0.004"
     _kraken_buy_headroom_pct_raw = os.environ.get("NIJA_KRAKEN_BUY_HEADROOM_PCT", "0.005").strip() or "0.005"
     try:
@@ -1949,7 +1966,8 @@ def _acquire_distributed_process_lock() -> None:
         f"retry_on_lock_failure={_fail_closed_retry_enabled} "
         f"max_retry_attempts={_fail_closed_max_retries} "
         f"exit_on_unreachable_redis={_fail_closed_exit_unreachable} "
-        f"local_fallback={_allow_local_lock_fallback}"
+        f"local_fallback={_allow_local_lock_fallback} "
+        f"force_local_fallback={_force_local_lock_fallback}"
     )
     if not _redis_url:
         _msg = (
@@ -2228,7 +2246,7 @@ def _acquire_distributed_process_lock() -> None:
                     if _verbose_standby:
                         print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
-                if _allow_local_lock_fallback and not _multi_instance_possible:
+                if _allow_local_lock_fallback and (not _multi_instance_possible or _force_local_lock_fallback):
                     print(
                         "🚨 LOCAL WRITER LOCK FALLBACK ACTIVE: Redis lock is unreachable; "
                         "continuing without distributed lock because NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK=true.",
