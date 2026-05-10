@@ -31,16 +31,40 @@ class RecordingEvent:
         return self._is_set
 
 
-def test_live_mode_blocked_without_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_mode_passes_when_reconciliation_not_yet_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reconciliation gate should pass (not block) when reconciliation has not run
+    yet (status=missing, complete=false).  This avoids the startup race condition where
+    MABM tries to activate the state machine before the first trading cycle — and
+    therefore before reconciliation has had a chance to run and set the status."""
     monkeypatch.setenv("NIJA_REQUIRE_STARTUP_RECONCILIATION", "true")
     monkeypatch.setenv("NIJA_RECONCILIATION_OVERRIDE", "false")
     monkeypatch.setenv("NIJA_RECONCILIATION_COMPLETE", "false")
     monkeypatch.setenv("NIJA_RECONCILIATION_STATUS", "")
     monkeypatch.setenv("NIJA_SAFE_START_REQUIRED", "false")
+    monkeypatch.setenv("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE", "false")
+    monkeypatch.setenv("NIJA_RUNTIME_DEGRADED_MODE", "false")
+    monkeypatch.setenv("NIJA_BYPASS_STARTUP_RECONCILIATION", "false")
 
-    ok, reason = tsm._live_activation_gate()
+    ok, _ = tsm._startup_reconciliation_gate()
+    assert ok, "Gate should pass when reconciliation has not run yet (initial startup)"
+
+
+def test_live_mode_blocked_with_discrepancies_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reconciliation gate must block when reconciliation completed with
+    DISCREPANCIES_FOUND and the operator escape valve is not set."""
+    monkeypatch.setenv("NIJA_REQUIRE_STARTUP_RECONCILIATION", "true")
+    monkeypatch.setenv("NIJA_RECONCILIATION_OVERRIDE", "false")
+    monkeypatch.setenv("NIJA_RECONCILIATION_COMPLETE", "true")
+    monkeypatch.setenv("NIJA_RECONCILIATION_STATUS", "DISCREPANCIES_FOUND")
+    monkeypatch.setenv("NIJA_SAFE_START_REQUIRED", "false")
+    monkeypatch.setenv("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE", "false")
+    monkeypatch.setenv("NIJA_RUNTIME_DEGRADED_MODE", "false")
+    monkeypatch.setenv("NIJA_BYPASS_STARTUP_RECONCILIATION", "false")
+    monkeypatch.setenv("NIJA_ALLOW_DISCREPANCY_TRADING", "false")
+
+    ok, reason = tsm._startup_reconciliation_gate()
     assert not ok
-    assert "STARTUP_RECONCILIATION" in reason
+    assert "DISCREPANCIES_FOUND" in reason
 
 
 def test_heartbeat_executes_once(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
