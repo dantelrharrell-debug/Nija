@@ -4747,7 +4747,7 @@ def _force_trade_readiness_handoff(
         logger.debug("FORCE_TRADE handoff already complete — skipping duplicate readiness handoff")
         return
     logger.warning(
-        "FORCE_TRADE active — bypassing readiness enforcement only (context=%s)",
+        "FORCE_TRADE active — readiness barrier remains enforced (context=%s)",
         context,
     )
     _force_trade_handoff_complete_event.set()
@@ -4885,7 +4885,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # FORCE_TRADE/FORCE_TRADE_MODE: bypass readiness enforcement only
     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
         logger.warning(
-            "FORCE_TRADE active — bypassing readiness enforcement only (startup)",
+            "FORCE_TRADE active — startup readiness barrier remains enforced (startup)",
         )
 
     elif _is_live_trading_active_now():
@@ -4959,7 +4959,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             logger.info("🧵 STARTUP THREAD: Beginning bot initialization")
             logger.info("=" * 70)
             logger.info("While this thread initializes, health server remains responsive")
-            logger.info("")
             
             # Get git metadata: prefer Railway runtime vars, then baked vars,
             # then local git as final fallback.
@@ -5126,7 +5125,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     logger.warning("⚠️  Trading capability verification found issues")
                     logger.warning("   Bot may not function correctly")
                 else:
-                    logger.info("✅ Trading capability verified — bot ready to execute trades")
+                    logger.info(
+                        "✅ Trading capability checks passed — continuing bootstrap "
+                        "(startup readiness gate still applies)"
+                    )
 
                     _ft_state_snapshot = _read_initialized_state_snapshot(context="post-capability-verification")
                     (
@@ -5189,7 +5191,8 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
 
                     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
                         logger.warning(
-                            "FORCE_TRADE active — bypassing readiness enforcement only (post-capability)"
+                            "FORCE_TRADE active — capability checks bypassed where applicable; "
+                            "startup readiness barrier remains enforced (post-capability)"
                         )
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
