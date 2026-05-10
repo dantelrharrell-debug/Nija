@@ -387,23 +387,30 @@ def _startup_reconciliation_gate() -> tuple[bool, str]:
     # runs inside the first trading cycle, while activation gates are evaluated
     # earlier by MABM and the supervisor.  Rather than permanently blocking on a
     # "missing" status, pass the gate so the first cycle can execute and set the
-    # status.  The gate will re-enforce on subsequent activation attempts once
-    # NIJA_RECONCILIATION_COMPLETE=true is set.
+    # status.  The gate is automatically re-evaluated on every subsequent
+    # commit_activation() call; once the reconciliation manager sets
+    # NIJA_RECONCILIATION_COMPLETE=true (at the end of its first run), this
+    # branch is no longer reachable and the status check above takes effect.
     if not status and not complete:
         logger.warning(
             "[RECONCILIATION GATE] reconciliation has not run yet (status=missing) — "
-            "passing gate for initial startup; will re-check after first cycle."
+            "passing gate for initial startup. Gate will re-enforce once "
+            "NIJA_RECONCILIATION_COMPLETE=true is set by the first trading cycle."
         )
         return True, ""
 
     # DISCREPANCIES_FOUND: allow an operator escape valve via
     # NIJA_ALLOW_DISCREPANCY_TRADING=true so the bot can trade after a manual
     # review when discrepancies are understood and accepted.
+    # WARNING: enabling this override bypasses position-integrity protection.
+    # Set it only after verifying the exchange state manually, and remove it
+    # as soon as the underlying discrepancy is resolved.
     if status == "DISCREPANCIES_FOUND" and _env_truthy("NIJA_ALLOW_DISCREPANCY_TRADING", "false"):
         logger.critical(
             "[RECONCILIATION GATE] NIJA_ALLOW_DISCREPANCY_TRADING=true — "
             "proceeding despite DISCREPANCIES_FOUND status. "
-            "Verify exchange state manually before relying on this override."
+            "WARNING: position-integrity protection is bypassed. "
+            "Verify exchange state manually and remove this override once resolved."
         )
         return True, ""
 
