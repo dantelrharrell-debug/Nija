@@ -893,7 +893,9 @@ _STARTUP_READINESS_COMPONENTS = (
     "execution_ready",
 )
 _startup_readiness_registered = False
+# Startup strategy publication lock timeout (seconds) used by fallback/republish paths.
 _INIT_LOCK_PUBLISH_TIMEOUT_S = 5.0
+# Supervisor grace window before degraded fallback strategy construction (seconds).
 _STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
 
 
@@ -928,6 +930,8 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
     """Persist strategy singleton and publish strategy/execution readiness signals."""
     try:
         _initialized_state["strategy"] = strategy_obj
+        # Preserve existing startup contract: once TradingStrategy is cached,
+        # risk subsystem is considered initialized for startup gating.
         _initialized_state["risk_ready"] = True
         _initialized_state["strategy_initialized"] = True
         logger.critical("STRATEGY_ASSIGNED")
@@ -992,11 +996,9 @@ def _ensure_strategy_fallback_published(*, context: str) -> bool:
         return True
 
     logger.warning("No strategy published yet — attempting default strategy fallback (%s)", context)
+    logger.warning("Fallback uses TradingStrategy default constructor in degraded startup mode (%s)", context)
     try:
-        _fallback_strategy = TradingStrategy(
-            broker_results=None,
-            connected_user_brokers=None,
-        )
+        _fallback_strategy = TradingStrategy()
     except Exception as exc:
         logger.exception("Default strategy fallback construction failed (%s): %s", context, exc)
         return False
