@@ -132,8 +132,8 @@ def connect_redis_with_fallback(
     # Downgrade: rediss:// -> redis:// for Railway proxy endpoints on SSL failure.
     # Enabled explicitly via NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true, or automatically
     # (auto/unset) for Railway proxy hosts where a TLS record-layer mismatch is common.
-    allow_tls_downgrade = allow_plain_fallback or (allow_plain_fallback_auto and is_railway_host)
-    if primary_is_tls and allow_tls_downgrade and is_railway_host:
+    allow_tls_downgrade = is_railway_host and (allow_plain_fallback or allow_plain_fallback_auto)
+    if primary_is_tls and allow_tls_downgrade:
         candidates.append(primary_url.replace("rediss://", "redis://", 1))
 
     # Upgrade: redis:// -> rediss:// for Railway proxy endpoints when TLS is forced.

@@ -131,10 +131,7 @@ def _try_plain_railway_proxy_fallback(
         return None
 
     is_railway_host = ".rlwy.net" in redis_url.lower()
-    if not (allow_plain_fallback or (allow_plain_fallback_auto and is_railway_host)):
-        return None
-
-    if not is_railway_host:
+    if not is_railway_host or not (allow_plain_fallback or allow_plain_fallback_auto):
         return None
 
     message = str(exc).lower()
