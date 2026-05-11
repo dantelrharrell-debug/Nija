@@ -2424,6 +2424,19 @@ class MultiAccountBrokerManager:
         self._bootstrap_contract_ok = False
         self._bootstrap_contract_last_error = ""
 
+        # If bootstrap lock state has not propagated yet, defer contract checks.
+        # Treat this as a temporary pending condition (not a hard failure),
+        # otherwise early startup races consume attempts and can set halt flags
+        # before LOCK_ACQUIRED is visible to the FSM.
+        if not self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
+            _state = self._get_system_bootstrap_state_name()
+            self._bootstrap_contract_last_error = f"pre_lock_deferred(state={_state})"
+            logger.info(
+                "[BootstrapContract] deferred until LOCK_ACQUIRED (state=%s)",
+                _state,
+            )
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
+
         for attempt in range(1, max(1, int(max_attempts)) + 1):
             try:
                 canonical_manager = get_broker_manager()
@@ -5906,13 +5919,20 @@ class MultiAccountBrokerManager:
                     self._get_system_bootstrap_state_name(),
                 )
         else:
-            logger.error(
-                "⛔ CapitalAuthority NOT READY at startup (brokers=%d total=$%.2f) "
-                "— trading must remain gated until watchdog recovery",
-                int(_startup_cap.get("valid_brokers", 0.0)),
-                float(_startup_cap.get("total_capital", 0.0)),
-            )
-            self._trading_halted_due_to_capital = True
+            if not self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
+                logger.warning(
+                    "[MABM] startup capital readiness deferred before LOCK_ACQUIRED "
+                    "(state=%s) — watchdog recovery path remains active",
+                    self._get_system_bootstrap_state_name(),
+                )
+            else:
+                logger.error(
+                    "⛔ CapitalAuthority NOT READY at startup (brokers=%d total=$%.2f) "
+                    "— trading must remain gated until watchdog recovery",
+                    int(_startup_cap.get("valid_brokers", 0.0)),
+                    float(_startup_cap.get("total_capital", 0.0)),
+                )
+                self._trading_halted_due_to_capital = True
         self._start_capital_watchdog()
 
         # Mark init complete and cache results for idempotency guard.
