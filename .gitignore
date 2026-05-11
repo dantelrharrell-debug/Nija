@@ -392,6 +392,7 @@ test_*.py
 !bot/test_*.py  # Keep bot tests
 !bot/test_production_preflight.py
 !bot/tests/test_*.py  # Keep bot/tests directory tests
+!bot/tests/test_startup_env.py
 !bot/tests/test_delisted_asset_registry.py
 !scripts/chaos/test_*.py  # Keep chaos testing scripts
 !bot/tests/test_safety_gates.py
