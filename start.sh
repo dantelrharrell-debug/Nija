@@ -196,9 +196,16 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS="${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS:-false}"
     
     # Fail-fast defaults for trading safety (override via env if needed).
-    export NIJA_REDIS_LEASE_TTL_MS="${NIJA_REDIS_LEASE_TTL_MS:-600000}"
-    export NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S="${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S:-5}"
-    export NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S="${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S:-5}"
+    # Always set defaults first to handle empty/unset values
+    if [ -z "${NIJA_REDIS_LEASE_TTL_MS}" ] || [ "${NIJA_REDIS_LEASE_TTL_MS}" = "0" ]; then
+        export NIJA_REDIS_LEASE_TTL_MS="600000"
+    fi
+    if [ -z "${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}" ] || [ "${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}" = "0" ]; then
+        export NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S="5"
+    fi
+    if [ -z "${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}" ] || [ "${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}" = "0" ]; then
+        export NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S="5"
+    fi
     export NIJA_REDIS_LEASE_FORCE_TAKEOVER="${NIJA_REDIS_LEASE_FORCE_TAKEOVER:-0}"
     export NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S="${NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S:-0}"
     export NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS="${NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS:-250}"
@@ -722,6 +729,36 @@ fi
 _validate_redis_url_or_exit
 _log_redis_lock_source_hint
 
+_validate_redis_not_http_endpoint() {
+    local _redis_url
+    _redis_url="$(_resolve_redis_url 2>/dev/null || true)"
+    
+    if [ -z "${_redis_url}" ]; then
+        return 0
+    fi
+    
+    # Check if URL starts with http:// or https:// (invalid for Redis)
+    if printf "%s" "${_redis_url}" | grep -qE '^https?://'; then
+        echo ""
+        echo "❌ CRITICAL: NIJA_REDIS_URL points to an HTTP endpoint, not a Redis service"
+        echo ""
+        echo "   Current value: ${_redis_url}"
+        echo ""
+        echo "🔧 SOLUTION:"
+        echo "   1. Open Railway dashboard → Your project → Redis service"
+        echo "   2. Click the 'Connect' tab"
+        echo "   3. If TCP Proxy is not enabled, enable it first"
+        echo "   4. Copy the complete 'Redis URL' (starts with rediss://default:...@...)"
+        echo "   5. Set NIJA_REDIS_URL to that exact URL"
+        echo "   6. Restart the NIJA service"
+        echo ""
+        echo "   Format should be:"
+        echo "   NIJA_REDIS_URL=rediss://default:PASSWORD@HOST:PORT/0"
+        echo ""
+        exit_config_error
+    fi
+}
+
 _disable_nonce_ceiling_jump() {
     local _truthy="1|true|yes|enabled|on"
     local _jump_raw="${NIJA_NONCE_CEILING_JUMP:-}"
@@ -918,6 +955,7 @@ EOF
     fi
 }
 
+_validate_redis_not_http_endpoint
 _disable_nonce_ceiling_jump
 
 _maybe_force_clear_writer_lock() {
