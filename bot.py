@@ -517,7 +517,13 @@ def _is_balance_hydrated_ready() -> bool:
 
 
 def _nonce_readiness_required_for_startup() -> bool:
-    """Return True when startup must require Kraken nonce readiness."""
+    """Return True when startup must require Kraken nonce readiness.
+
+    Cases:
+    1) Degraded Redis writer-authority mode is active and allowed -> nonce gate is bypassed.
+    2) Kraken platform credentials are present -> nonce gate is required.
+    3) No Kraken platform credentials (Coinbase-only) -> nonce gate is not required.
+    """
     _truthy = {"1", "true", "yes", "on", "enabled"}
     _runtime_degraded = os.environ.get("NIJA_RUNTIME_DEGRADED_MODE", "0").strip().lower() in _truthy
     _degraded_allowed = (
@@ -525,12 +531,15 @@ def _nonce_readiness_required_for_startup() -> bool:
         or os.environ.get("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY", "0").strip().lower() in _truthy
         or os.environ.get("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE", "0").strip().lower() in _truthy
     )
+    # Explicit degraded startup mode: distributed Redis authority is intentionally
+    # bypassed for this process, so nonce-readiness must not deadlock startup.
     if _runtime_degraded and _degraded_allowed:
         return False
     _kraken_platform_key = (
         os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
         or os.environ.get("KRAKEN_API_KEY", "").strip()
     )
+    # Kraken key configured => nonce readiness is mandatory.
     return bool(_kraken_platform_key)
 
 
@@ -6490,6 +6499,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _b1_nonce_ready = bool(_kfsm_b1.is_nonce_ready())
                     except ImportError:
                         _b1_nonce_ready = False
+                        logger.warning(
+                            "[B1-Guard] nonce_ready required but Kraken startup FSM import failed"
+                        )
                     except Exception as _b1_nr_err:
                         _b1_nonce_ready = False  # probe failed on present module
                         logger.warning("[B1-Guard] nonce_ready probe failed (fail-closed False): %s", _b1_nr_err)
