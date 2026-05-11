@@ -549,7 +549,7 @@ def get_max_trade_size(tier: TradingTier, balance: float, is_platform: bool = Fa
     config = get_tier_config(tier)
 
     # PLATFORM BALLER tier with low balance: use dynamic maximums
-    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+    if is_platform and tier == TradingTier.BALLER and balance < 25000.0:
         if balance < 100.0:
             flexible_max = balance * 0.50  # 50% max for very small balances
         elif balance < 1000.0:
@@ -589,7 +589,7 @@ def get_min_trade_size(tier: TradingTier, balance: float, is_platform: bool = Fa
     exchange_min = get_exchange_min_trade_size(exchange)
 
     # PLATFORM BALLER tier with low balance: use dynamic minimums
-    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+    if is_platform and tier == TradingTier.BALLER and balance < 25000.0:
         if balance < 100.0:
             flexible_min = max(balance * 0.15, exchange_min)  # 15% or exchange min
         elif balance < 1000.0:
@@ -746,7 +746,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
             exchange_min = 10.50 if exchange.lower() == 'kraken' else 2.00
 
     # Calculate tier-based maximum
-    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+    if is_platform and tier == TradingTier.BALLER and balance < 25000.0:
         # Platform account with low balance - use flexible max
         max_risk_pct = 50.0 if balance < 100.0 else 25.0
         tier_max = balance * (max_risk_pct / 100.0)
@@ -756,7 +756,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
         tier_max = config.trade_size_max
 
         # Also check max risk percentage
-        max_risk_pct = 25.0 if (is_master and balance < 1000.0) else config.risk_per_trade_pct[1]
+        max_risk_pct = 25.0 if (is_platform and balance < 1000.0) else config.risk_per_trade_pct[1]
         max_by_risk = balance * (max_risk_pct / 100.0)
 
         # Use the more restrictive limit
@@ -764,7 +764,7 @@ def auto_resize_trade(trade_size: float, tier: TradingTier, balance: float,
 
     # Calculate tier minimum
     # PLATFORM BALLER tier with low balance: use flexible minimums (same logic as get_min_trade_size)
-    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+    if is_platform and tier == TradingTier.BALLER and balance < 25000.0:
         if balance < 100.0:
             flexible_min = max(balance * 0.15, exchange_min)  # 15% or exchange min
         elif balance < 1000.0:
@@ -845,7 +845,7 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
 
     # PLATFORM ACCOUNT SPECIAL HANDLING FOR BALLER TIER
     # If platform account with BALLER tier and low balance, use dynamic minimums
-    if is_master and tier == TradingTier.BALLER and balance < 25000.0:
+    if is_platform and tier == TradingTier.BALLER and balance < 25000.0:
         # For platform accounts under $25k, use flexible minimums based on balance
         # This keeps master in full control while ensuring safety
 
@@ -910,7 +910,7 @@ def validate_trade_size(trade_size: float, tier: TradingTier, balance: float,
 
     # Check if trade size is reasonable relative to balance
     # For master with low balance, allow up to 25% risk (more flexible)
-    max_risk_pct = 25.0 if (is_master and balance < 1000.0) else config.risk_per_trade_pct[1]
+    max_risk_pct = 25.0 if (is_platform and balance < 1000.0) else config.risk_per_trade_pct[1]
 
     risk_pct = (trade_size / balance) * 100 if balance > 0 else 0
     # Add small tolerance (0.01%) for floating point precision
