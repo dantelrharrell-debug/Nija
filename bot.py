@@ -6644,6 +6644,11 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 elif hasattr(_bms_mabm, "all_brokers_fully_ready"):
                     if bool(_bms_mabm.all_brokers_fully_ready()):
                         _rt_mark_ready("broker_connected")
+                    else:
+                        logger.info(
+                            "Startup readiness broker gate pending; "
+                            "leaving broker_connected unset (fail-closed)"
+                        )
                 else:
                     logger.warning(
                         "Startup readiness probe missing all_brokers_fully_ready; "
