@@ -6632,6 +6632,39 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # and before RUN loop thread launch.
             _bootstrap_nonce_reset_once()
 
+            # Publish readiness-table signals that are validated by B1 probes.
+            # This keeps the truth-table gate aligned with actual startup checks
+            # before THREADS_STARTING.
+            try:
+                _gate_brokers_ready = True
+                if _bms_mabm is not None and hasattr(_bms_mabm, "all_brokers_fully_ready"):
+                    _gate_brokers_ready = bool(_bms_mabm.all_brokers_fully_ready())
+                if _gate_brokers_ready:
+                    if _bms_mabm is None:
+                        _rt_mark_not_applicable(
+                            "broker_connected",
+                            reason="MABM unavailable in this deployment",
+                        )
+                    else:
+                        _rt_mark_ready("broker_connected")
+            except Exception as _gate_broker_err:
+                logger.warning("Startup readiness signal failed (broker_connected): %s", _gate_broker_err)
+
+            try:
+                try:
+                    from bot.broker_manager import _KRAKEN_STARTUP_FSM as _gate_kraken_fsm
+                except ImportError:
+                    _gate_kraken_fsm = None  # type: ignore[assignment]
+                if _gate_kraken_fsm is None:
+                    _rt_mark_not_applicable(
+                        "nonce_ready",
+                        reason="Kraken startup FSM unavailable (Coinbase-only deployment)",
+                    )
+                elif bool(_gate_kraken_fsm.is_nonce_ready()):
+                    _rt_mark_ready("nonce_ready")
+            except Exception as _gate_nonce_err:
+                logger.warning("Startup readiness signal failed (nonce_ready): %s", _gate_nonce_err)
+
             if not _rt_is_ready():
                 raise RuntimeError(
                     "STARTUP_ORDER_BLOCKED before THREADS_STARTING: "
