@@ -387,13 +387,14 @@ example_*.py
 !test_mvp_components.py  # Keep MVP test suite
 !test_dry_run_mode.py  # Keep dry-run mode test (operational test)
 test_*.py
-!test_kraken_connection.py  # Keep Kraken connection tester (operational tool)
+# Keep specific checked-in tests and operational scripts
+!test_kraken_connection.py
 !test_v2_balance.py
-!bot/test_*.py  # Keep bot tests
+!bot/test_*.py
 !bot/test_production_preflight.py
-!bot/tests/test_*.py  # Keep bot/tests directory tests
+!bot/tests/test_*.py
 !bot/tests/test_delisted_asset_registry.py
-!scripts/chaos/test_*.py  # Keep chaos testing scripts
+!scripts/chaos/test_*.py
 !bot/tests/test_safety_gates.py
 
 # Temporary text/config files
