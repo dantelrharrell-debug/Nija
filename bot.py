@@ -32,6 +32,7 @@ from bot.redis_env import (
     get_redis_url,
     get_redis_url_source,
 )
+from bot.startup_env import resolve_coinbase_retail_portfolio_id
 from bot.instance_identity import (
     current_instance_identity,
     format_instance_identity,
@@ -5415,7 +5416,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 logger.debug("Preflight: entering next stage after nonce")
 
                 # Portfolio override visibility at startup
-                portfolio_id = os.environ.get("COINBASE_RETAIL_PORTFOLIO_ID")
+                portfolio_id = resolve_coinbase_retail_portfolio_id()
                 if portfolio_id:
                     logger.info("🔧 Portfolio override in use: %s", portfolio_id)
                 else:
