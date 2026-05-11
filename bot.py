@@ -516,6 +516,24 @@ def _is_balance_hydrated_ready() -> bool:
     return False
 
 
+def _nonce_readiness_required_for_startup() -> bool:
+    """Return True when startup must require Kraken nonce readiness."""
+    _truthy = {"1", "true", "yes", "on", "enabled"}
+    _runtime_degraded = os.environ.get("NIJA_RUNTIME_DEGRADED_MODE", "0").strip().lower() in _truthy
+    _degraded_allowed = (
+        os.environ.get("NIJA_ALLOW_REDIS_DEGRADED", "0").strip().lower() in _truthy
+        or os.environ.get("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY", "0").strip().lower() in _truthy
+        or os.environ.get("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE", "0").strip().lower() in _truthy
+    )
+    if _runtime_degraded and _degraded_allowed:
+        return False
+    _kraken_platform_key = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+    )
+    return bool(_kraken_platform_key)
+
+
 def _balance_hydration_debug_status() -> dict:
     """Return compact diagnostics for startup hydration gate failures."""
     _rt = _rt_snapshot()
@@ -6465,15 +6483,16 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     _b1_aggregation_normalized = False  # probe failed on present module
                     logger.warning("[B1-Guard] aggregation_normalized probe failed (fail-closed False): %s", _b1_an_err)
 
-                _b1_nonce_ready = True  # True when Kraken FSM absent (Coinbase-only deployment)
-                try:
-                    from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kfsm_b1
-                    _b1_nonce_ready = bool(_kfsm_b1.is_nonce_ready())
-                except ImportError:
-                    pass  # no Kraken → nonce not required
-                except Exception as _b1_nr_err:
-                    _b1_nonce_ready = False  # probe failed on present module
-                    logger.warning("[B1-Guard] nonce_ready probe failed (fail-closed False): %s", _b1_nr_err)
+                _b1_nonce_ready = True
+                if _nonce_readiness_required_for_startup():
+                    try:
+                        from bot.broker_manager import _KRAKEN_STARTUP_FSM as _kfsm_b1
+                        _b1_nonce_ready = bool(_kfsm_b1.is_nonce_ready())
+                    except ImportError:
+                        _b1_nonce_ready = False
+                    except Exception as _b1_nr_err:
+                        _b1_nonce_ready = False  # probe failed on present module
+                        logger.warning("[B1-Guard] nonce_ready probe failed (fail-closed False): %s", _b1_nr_err)
 
                 logger.info("B1 preflight conditions: %s", {
                     "brokers_ready": _b1_brokers_ready,
@@ -6658,21 +6677,27 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 logger.warning("Startup readiness signal failed (broker_connected): %s", _gate_broker_err)
 
             try:
-                try:
-                    from bot.broker_manager import _KRAKEN_STARTUP_FSM as _gate_kraken_fsm
-                except ImportError:
-                    _gate_kraken_fsm = None
-                if _gate_kraken_fsm is None:
+                if not _nonce_readiness_required_for_startup():
                     _rt_mark_not_applicable(
                         "nonce_ready",
-                        reason="Kraken startup FSM unavailable (Coinbase-only deployment)",
+                        reason="Kraken nonce readiness not required in this startup mode",
                     )
-                elif bool(_gate_kraken_fsm.is_nonce_ready()):
-                    _rt_mark_ready("nonce_ready")
                 else:
-                    logger.info(
-                        "Startup readiness nonce gate pending; leaving nonce_ready unset (fail-closed)"
-                    )
+                    try:
+                        from bot.broker_manager import _KRAKEN_STARTUP_FSM as _gate_kraken_fsm
+                    except ImportError:
+                        _gate_kraken_fsm = None
+                    if _gate_kraken_fsm is None:
+                        _rt_mark_not_applicable(
+                            "nonce_ready",
+                            reason="Kraken startup FSM unavailable (Coinbase-only deployment)",
+                        )
+                    elif bool(_gate_kraken_fsm.is_nonce_ready()):
+                        _rt_mark_ready("nonce_ready")
+                    else:
+                        logger.info(
+                            "Startup readiness nonce gate pending; leaving nonce_ready unset (fail-closed)"
+                        )
             except Exception as _gate_nonce_err:
                 logger.warning("Startup readiness signal failed (nonce_ready): %s", _gate_nonce_err)
 
