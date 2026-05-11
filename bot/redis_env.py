@@ -192,6 +192,7 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
     tls_required_hint = bool(is_railway_proxy)
     tls_configured = scheme == "rediss"
     tls_mismatch = bool(resolved_url) and tls_required_hint and not tls_configured
+    nija_url_format_error = get_nija_url_format_error()
     return {
         "url_env_presence": get_redis_env_presence(),
         "component_host_present": component_diag["component_host_present"],
@@ -209,9 +210,37 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
         "tls_required_hint": tls_required_hint,
         "tls_configured": tls_configured,
         "tls_mismatch": tls_mismatch,
+        "nija_url_invalid_format": bool(nija_url_format_error),
+        "nija_url_format_error": nija_url_format_error or None,
     }
 
 
 def get_all_redis_urls() -> list[tuple[str, str]]:
     """Return configured Redis URLs in priority order without rewriting values."""
     return _iter_configured_redis_urls()
+
+
+def get_nija_url_format_error() -> str:
+    """Return a non-empty error string when NIJA_REDIS_URL is set but not a valid Redis URL.
+
+    Returns ``""`` when the variable is unset, empty, or already a valid ``redis://``
+    / ``rediss://`` URL so that callers can do a simple truthiness check.
+    """
+    raw = _strip_wrapping_quotes(os.getenv("NIJA_REDIS_URL", ""))
+    if not raw:
+        return ""
+    if raw.startswith("redis://") or raw.startswith("rediss://"):
+        return ""
+    # Redact potential credentials before including the value in the message.
+    # If the raw value contains '@', show only the portion after it (the host).
+    # Otherwise truncate to avoid accidental secret exposure.
+    if "@" in raw:
+        _display = "<redacted>@" + raw.split("@", 1)[1]
+    else:
+        _display = raw[:80] + ("..." if len(raw) > 80 else "")
+    return (
+        f"NIJA_REDIS_URL is set to {_display!r}, which is not a valid Redis connection URL. "
+        "In Railway, copy the full Connect URL from the Redis service Connect tab "
+        "(format: rediss://default:PASSWORD@<host>.proxy.rlwy.net:PORT) "
+        "and set that exact value as NIJA_REDIS_URL."
+    )

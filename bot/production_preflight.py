@@ -145,10 +145,15 @@ def _step1_redis_ping() -> "redis.Redis":  # type: ignore[name-defined]
     _step(1, "Redis PING confirmation")
 
     try:
-        from bot.redis_env import get_redis_resolution_diagnostics, get_redis_url, get_redis_url_source
+        from bot.redis_env import get_redis_resolution_diagnostics, get_redis_url, get_redis_url_source, get_nija_url_format_error
         from bot.redis_runtime import connect_redis_with_fallback
     except ImportError as exc:
         _fail(f"Cannot import Redis helpers: {exc}")
+        sys.exit(1)
+
+    nija_format_error = get_nija_url_format_error()
+    if nija_format_error:
+        _fail(nija_format_error)
         sys.exit(1)
 
     url = get_redis_url()
