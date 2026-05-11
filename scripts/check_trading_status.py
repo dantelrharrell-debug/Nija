@@ -34,6 +34,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _normalize_user_tokens(user_id: str) -> tuple[str, str]:
+    """Return (firstname_token, full_token) for env-var credential lookup."""
+    normalized = str(user_id or "").strip().lower()
+    parts = [p for p in normalized.split('_') if p]
+    first = (parts[0] if parts else normalized).upper()
+    full = "_".join(parts).upper() if parts else normalized.upper()
+    return first, full
+
+
+def _resolve_user_env_pair(user_id: str, broker_prefix: str) -> tuple[str, str]:
+    """Resolve user credential env names with full-name fallback support."""
+    first, full = _normalize_user_tokens(user_id)
+    candidates = [
+        (f"{broker_prefix}_USER_{full}_API_KEY", f"{broker_prefix}_USER_{full}_API_SECRET"),
+        (f"{broker_prefix}_USER_{first}_API_KEY", f"{broker_prefix}_USER_{first}_API_SECRET"),
+    ]
+    for key_name, sec_name in candidates:
+        if os.getenv(key_name) and os.getenv(sec_name):
+            return key_name, sec_name
+    return candidates[-1]
+
+
 def load_env_from_file(path: str = ".env") -> None:
     """Load environment variables from .env file."""
     if not os.path.isfile(path):
@@ -66,7 +88,7 @@ def check_master_credentials() -> dict:
     }
 
     # Coinbase
-    if os.getenv('COINBASE_API_KEY') and os.getenv('COINBASE_API_SECRET'):
+    if os.getenv('COINBASE_API_KEY') and (os.getenv('COINBASE_API_SECRET') or os.getenv('COINBASE_PEM_CONTENT')):
         credentials['coinbase'] = True
 
     # Kraken
@@ -129,19 +151,15 @@ def check_user_credentials() -> dict:
 
     # Check credentials for each user
     for user_id in list(users.keys()):
-        user_firstname = user_id.split('_')[0].upper()
-
         # Check Kraken credentials
         if 'kraken' in users[user_id]:
-            kraken_key = f'KRAKEN_USER_{user_firstname}_API_KEY'
-            kraken_secret = f'KRAKEN_USER_{user_firstname}_API_SECRET'
+            kraken_key, kraken_secret = _resolve_user_env_pair(user_id, 'KRAKEN')
             if os.getenv(kraken_key) and os.getenv(kraken_secret):
                 users[user_id]['kraken'] = True
 
         # Check Alpaca credentials
         if 'alpaca' in users[user_id]:
-            alpaca_key = f'ALPACA_USER_{user_firstname}_API_KEY'
-            alpaca_secret = f'ALPACA_USER_{user_firstname}_API_SECRET'
+            alpaca_key, alpaca_secret = _resolve_user_env_pair(user_id, 'ALPACA')
             if os.getenv(alpaca_key) and os.getenv(alpaca_secret):
                 users[user_id]['alpaca'] = True
 
@@ -158,7 +176,7 @@ def get_coinbase_balance() -> float:
             return None
 
         api_key = os.getenv('COINBASE_API_KEY')
-        api_secret = os.getenv('COINBASE_API_SECRET')
+        api_secret = os.getenv('COINBASE_API_SECRET') or os.getenv('COINBASE_PEM_CONTENT')
 
         if not api_key or not api_secret:
             return None
@@ -183,6 +201,39 @@ def get_coinbase_balance() -> float:
     except Exception as e:
         logger.error(f"Error getting Coinbase balance: {e}")
         return None
+
+
+def get_kraken_balance(api_key: str, api_secret: str) -> float:
+    """Fetch Kraken USD/USDC available balance via krakenex."""
+    if not api_key or not api_secret:
+        return None
+    try:
+        import krakenex  # type: ignore
+
+        client = krakenex.API(key=api_key, secret=api_secret)
+        resp = client.query_private("Balance")
+        if isinstance(resp, dict) and resp.get("error"):
+            return None
+        result = (resp or {}).get("result", {}) if isinstance(resp, dict) else {}
+        usd = float(result.get("ZUSD") or result.get("USD") or 0.0)
+        usdc = float(result.get("USDC") or 0.0)
+        return usd + usdc
+    except Exception as e:
+        logger.warning(f"Error getting Kraken balance: {e}")
+        return None
+
+
+def get_platform_kraken_balance() -> float:
+    """Fetch platform Kraken balance from platform/legacy env vars."""
+    api_key = os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY")
+    api_secret = os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET")
+    return get_kraken_balance(api_key, api_secret)
+
+
+def get_user_kraken_balance(user_id: str) -> float:
+    """Fetch Kraken balance for a specific configured user account."""
+    key_name, sec_name = _resolve_user_env_pair(user_id, "KRAKEN")
+    return get_kraken_balance(os.getenv(key_name), os.getenv(sec_name))
 
 
 # Constants
@@ -310,6 +361,14 @@ def main():
         else:
             print("   ⚠️  Could not retrieve balance")
 
+    if master_creds['kraken']:
+        print("\n💰 Platform Account Balance (Kraken):")
+        kraken_balance = get_platform_kraken_balance()
+        if kraken_balance is not None:
+            print(f"   Total: ${kraken_balance:,.2f} USD")
+        else:
+            print("   ⚠️  Could not retrieve balance")
+
     # Check user accounts
     print_section_header("USER ACCOUNTS")
     user_creds = check_user_credentials()
@@ -327,6 +386,13 @@ def main():
             print(f"   {status} {broker.upper()}: {status_text}")
             if has_creds:
                 user_has_connection = True
+
+        if brokers.get('kraken'):
+            user_balance = get_user_kraken_balance(user_id)
+            if user_balance is not None:
+                print(f"   💰 KRAKEN BALANCE: ${user_balance:,.2f} USD")
+            else:
+                print("   ⚠️  KRAKEN BALANCE: unavailable")
 
         if user_has_connection:
             total_users_trading += 1

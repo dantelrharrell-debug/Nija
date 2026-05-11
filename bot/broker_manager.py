@@ -2387,7 +2387,10 @@ class CoinbaseBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from position_tracker import PositionTracker
+            try:
+                from bot.position_tracker import PositionTracker
+            except ImportError:
+                from position_tracker import PositionTracker  # type: ignore[import]
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
@@ -6116,7 +6119,10 @@ class AlpacaBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from position_tracker import PositionTracker
+            try:
+                from bot.position_tracker import PositionTracker
+            except ImportError:
+                from position_tracker import PositionTracker  # type: ignore[import]
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
@@ -6694,7 +6700,10 @@ class BinanceBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from position_tracker import PositionTracker
+            try:
+                from bot.position_tracker import PositionTracker
+            except ImportError:
+                from position_tracker import PositionTracker  # type: ignore[import]
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
@@ -7381,7 +7390,10 @@ class KrakenBroker(BaseBroker):
         # Initialize position tracker for profit-based exits
         # 🔒 CAPITAL PROTECTION: Position tracker is MANDATORY - no silent fallback
         try:
-            from position_tracker import PositionTracker
+            try:
+                from bot.position_tracker import PositionTracker
+            except ImportError:
+                from position_tracker import PositionTracker  # type: ignore[import]
             self.position_tracker = PositionTracker(storage_file="data/positions.json")
             logger.info("✅ Position tracker initialized for profit-based exits")
         except Exception as e:
@@ -11356,7 +11368,10 @@ class OKXBroker(BaseBroker):
         # instance into degraded mode rather than crashing startup entirely.
         self.position_tracker = None
         try:
-            from position_tracker import PositionTracker
+            try:
+                from bot.position_tracker import PositionTracker
+            except ImportError:
+                from position_tracker import PositionTracker  # type: ignore[import]
             # Resolve an absolute path for the data directory so the tracker works
             # regardless of the current working directory, and create it with
             # restrictive permissions (0o750) to prevent world-readable config files.
