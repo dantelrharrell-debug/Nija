@@ -73,6 +73,9 @@ data/kraken_nonce.txt
 data/kraken_nonce_*.txt
 data/kraken_nonce.state
 data/kraken_nonce.state.*
+data/kraken_nonce_*.state
+data/kraken_nonce_*.state.*
+data/kraken_nonce_*.state*
 data/kraken_nonce_offsets.json
 
 # User management data files (test data, should not be committed)
