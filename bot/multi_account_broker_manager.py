@@ -2437,14 +2437,24 @@ class MultiAccountBrokerManager:
             )
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
 
-        for attempt in range(1, max(1, int(max_attempts)) + 1):
+        # Pending-aware retry: attempts blocked by FSM pre-lock state do NOT
+        # consume a retry slot.  We extend the window with additional pending
+        # waits (up to _BOOTSTRAP_PENDING_MAX_WAITS) so the contract survives
+        # a slow bootstrap without exhausting max_attempts prematurely.
+        _BOOTSTRAP_PENDING_MAX_WAITS = 30  # up to 30 s of additional pending waits
+        _BOOTSTRAP_PENDING_DELAY_S = 1.0
+        _pending_waits = 0
+        attempt = 0
+        _max_attempts = max(1, int(max_attempts))
+        while attempt < _max_attempts:
+            attempt += 1
             try:
                 canonical_manager = get_broker_manager()
                 if self is not canonical_manager:
                     self._bootstrap_contract_last_error = "singleton_mismatch"
                     logger.critical(
                         "[BootstrapContract] attempt=%d/%d failed: singleton mismatch",
-                        attempt, max_attempts,
+                        attempt, _max_attempts,
                     )
                     with self._capital_state_lock:
                         self._trading_halted_due_to_capital = True
@@ -2454,6 +2464,26 @@ class MultiAccountBrokerManager:
                 last_snapshot = self.refresh_capital_authority(
                     trigger=f"bootstrap_contract:{attempt}"
                 )
+
+                # If the refresh was blocked because the FSM hasn't reached
+                # LOCK_ACQUIRED yet, treat this as a pending state rather than
+                # a real failed attempt.  Rewind the attempt counter and retry
+                # after a short wait so a slow bootstrap doesn't burn through
+                # max_attempts before any real capital data is available.
+                if bool(last_snapshot.get("pending", 0.0)) and _pending_waits < _BOOTSTRAP_PENDING_MAX_WAITS:
+                    _pending_waits += 1
+                    attempt -= 1  # reclaim this slot — not a real attempt
+                    _state = self._get_system_bootstrap_state_name()
+                    logger.info(
+                        "[BootstrapContract] attempt=%d/%d pending (pre-lock state=%s) "
+                        "— waiting %ds (pending_wait %d/%d)",
+                        attempt, _max_attempts, _state,
+                        int(_BOOTSTRAP_PENDING_DELAY_S),
+                        _pending_waits, _BOOTSTRAP_PENDING_MAX_WAITS,
+                    )
+                    time.sleep(_BOOTSTRAP_PENDING_DELAY_S)
+                    continue
+
                 ready = bool(last_snapshot.get("ready", 0.0))
                 valid_brokers = int(last_snapshot.get("valid_brokers", 0.0))
                 total_capital = float(last_snapshot.get("total_capital", 0.0))
@@ -2466,7 +2496,7 @@ class MultiAccountBrokerManager:
                     logger.info(
                         "[BootstrapContract] satisfied on attempt %d/%d "
                         "(valid_brokers=%d total_capital=$%.2f ready=%s)",
-                        attempt, max_attempts, valid_brokers, total_capital, ready,
+                        attempt, _max_attempts, valid_brokers, total_capital, ready,
                     )
                     return last_snapshot
 
@@ -2475,23 +2505,23 @@ class MultiAccountBrokerManager:
                 )
                 logger.warning(
                     "[BootstrapContract] attempt=%d/%d not ready: %s",
-                    attempt, max_attempts, self._bootstrap_contract_last_error,
+                    attempt, _max_attempts, self._bootstrap_contract_last_error,
                 )
             except Exception as exc:
                 self._bootstrap_contract_last_error = f"exception:{exc}"
                 logger.error(
                     "[BootstrapContract] attempt=%d/%d error: %s",
-                    attempt, max_attempts, exc,
+                    attempt, _max_attempts, exc,
                 )
 
-            if attempt < max_attempts:
+            if attempt < _max_attempts:
                 time.sleep(max(0.0, float(retry_delay_s)))
 
         with self._capital_state_lock:
             self._trading_halted_due_to_capital = True
         logger.critical(
             "[BootstrapContract] FAILED after %d attempts — trading remains halted. last_error=%s",
-            max_attempts, self._bootstrap_contract_last_error or "unknown",
+            _max_attempts, self._bootstrap_contract_last_error or "unknown",
         )
         return last_snapshot
 
