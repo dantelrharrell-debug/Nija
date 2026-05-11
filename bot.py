@@ -6644,6 +6644,11 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 elif hasattr(_bms_mabm, "all_brokers_fully_ready"):
                     if bool(_bms_mabm.all_brokers_fully_ready()):
                         _rt_mark_ready("broker_connected")
+                else:
+                    logger.warning(
+                        "Startup readiness probe missing all_brokers_fully_ready; "
+                        "leaving broker_connected unset (fail-closed)"
+                    )
             except Exception as _gate_broker_err:
                 logger.warning("Startup readiness signal failed (broker_connected): %s", _gate_broker_err)
 
@@ -6651,7 +6656,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 try:
                     from bot.broker_manager import _KRAKEN_STARTUP_FSM as _gate_kraken_fsm
                 except ImportError:
-                    _gate_kraken_fsm = None  # type: ignore[assignment]
+                    _gate_kraken_fsm = None
                 if _gate_kraken_fsm is None:
                     _rt_mark_not_applicable(
                         "nonce_ready",
@@ -6659,6 +6664,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     )
                 elif bool(_gate_kraken_fsm.is_nonce_ready()):
                     _rt_mark_ready("nonce_ready")
+                else:
+                    logger.info(
+                        "Startup readiness nonce gate pending; leaving nonce_ready unset (fail-closed)"
+                    )
             except Exception as _gate_nonce_err:
                 logger.warning("Startup readiness signal failed (nonce_ready): %s", _gate_nonce_err)
 
