@@ -2154,6 +2154,12 @@ def _acquire_distributed_process_lock() -> None:
         _non_redis_hint = _detect_non_redis_http_endpoint(_redis_url)
         if _non_redis_hint:
             _ping_exc = RuntimeError(_non_redis_hint)
+            _primary_source_is_nija = (_redis_url_source or "").strip().upper() == "NIJA_REDIS_URL"
+            if _live_mode and _primary_source_is_nija and not _unsafe_bypass:
+                raise RuntimeError(
+                    "LIVE mode fail-closed: primary NIJA_REDIS_URL endpoint appears HTTP/non-Redis. "
+                    "Update NIJA_REDIS_URL to the exact Railway Redis Connect URL before trading."
+                ) from _ping_exc
             if _strict_single_redis:
                 raise _ping_exc
             print(

@@ -569,6 +569,22 @@ _GLOBAL_COINBASE_CASH_LOW_NEXT_AT: Dict[str, float] = {}
 _GLOBAL_COINBASE_CASH_LOW_LOCK = threading.Lock()
 
 
+def _get_balance_raw_log_interval_s() -> float:
+    """Return dedupe interval for raw balance diagnostics."""
+    try:
+        return max(1.0, float(os.getenv("NIJA_BALANCE_RAW_LOG_INTERVAL_S", "300")))
+    except Exception:
+        return 300.0
+
+
+def _get_balance_snapshot_log_interval_s() -> float:
+    """Return dedupe interval for informational balance snapshots."""
+    try:
+        return max(1.0, float(os.getenv("NIJA_BALANCE_SNAPSHOT_LOG_INTERVAL_S", "120")))
+    except Exception:
+        return 120.0
+
+
 def _log_balance_snapshot(
     account_label: str,
     source: str,
@@ -586,28 +602,33 @@ def _log_balance_snapshot(
     total_held = float(usd_held) + float(secondary_held)
     total_funds = trading_balance + total_held
 
-    if emit_info:
-        logging.info("-" * 70)
-        logging.info(f"💼 Balance Snapshot: {account_label}")
-        logging.info(f"   💰 Available USD (portfolio):  ${float(usd_available):.2f}")
-        logging.info(
+    if emit_info and _should_emit_critical_log(
+        f"balance_snapshot_info:{account_label}:{source}",
+        _get_balance_snapshot_log_interval_s(),
+    ):
+        logger.info("-" * 70)
+        logger.info(f"💼 Balance Snapshot: {account_label}")
+        logger.info(f"   💰 Available USD (portfolio):  ${float(usd_available):.2f}")
+        logger.info(
             f"   💰 Available {secondary_label} (portfolio): ${float(secondary_available):.2f}"
         )
-        logging.info(f"   💰 Total Available: ${trading_balance:.2f}")
+        logger.info(f"   💰 Total Available: ${trading_balance:.2f}")
         if total_held > 0:
-            logging.info(f"   🔒 Held USD:  ${float(usd_held):.2f} (in open orders/positions)")
-            logging.info(
+            logger.info(f"   🔒 Held USD:  ${float(usd_held):.2f} (in open orders/positions)")
+            logger.info(
                 f"   🔒 Held {secondary_label}: ${float(secondary_held):.2f} "
                 "(in open orders/positions)"
             )
-            logging.info(f"   🔒 Total Held: ${total_held:.2f}")
-            logging.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
-        logging.info(f"   (Source: {source})")
-        logging.info("-" * 70)
+            logger.info(f"   🔒 Total Held: ${total_held:.2f}")
+            logger.info(f"   💎 TOTAL FUNDS (Available + Held): ${total_funds:.2f}")
+        logger.info(f"   (Source: {source})")
+        logger.info("-" * 70)
 
     if emit_critical and raw_balances is not None:
-        logging.critical(f"=== RAW BALANCES [{account_label}] === {raw_balances}")
-        logging.critical(f"=== USD AVAILABLE [{account_label}] === {float(usd_available)}")
+        dedupe_key = f"raw_balance_snapshot:{account_label}"
+        if _should_emit_critical_log(dedupe_key, _get_balance_raw_log_interval_s()):
+            logger.info(f"=== RAW BALANCES [{account_label}] === {raw_balances}")
+            logger.info(f"=== USD AVAILABLE [{account_label}] === {float(usd_available)}")
 
 
 def _reject_if_unauthorized_order_submit(
