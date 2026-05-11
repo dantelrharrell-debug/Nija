@@ -690,11 +690,50 @@ class MultiAccountBrokerManager:
         2) Balance hydration
         3) Risk/activation gates
         """
+        def _process_lock_is_held() -> bool:
+            """Best-effort check for the process-level startup lock ownership.
+
+            The composite BootstrapFSM may still be in BOOT_INIT during very
+            early startup even though the PID/process lock has already been
+            acquired in bot.py. Treat that lock as authoritative for the
+            lock-first hydration invariant.
+            """
+            # Distributed lock acquisition timestamp (set when lock path succeeds).
+            _writer_acquired_at = os.environ.get("NIJA_WRITER_LOCK_ACQUIRED_AT", "").strip()
+            if _writer_acquired_at:
+                try:
+                    if float(_writer_acquired_at) > 0.0:
+                        return True
+                except (TypeError, ValueError):
+                    pass
+
+            # Local PID lock ownership check (single-instance fallback mode).
+            try:
+                _pid_file = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "..", "data", "nija.pid"
+                )
+                _pid_file = os.path.abspath(_pid_file)
+                if not os.path.exists(_pid_file):
+                    return False
+                with open(_pid_file, "r", encoding="utf-8") as _pf:
+                    _pid_line = (_pf.readline() or "").strip()
+                return bool(_pid_line) and int(_pid_line) == os.getpid()
+            except Exception:
+                return False
+
         _bootstrap_state = self._get_system_bootstrap_state_name()
-        if not self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
+        _fsm_lock_ready = self._is_system_bootstrap_at_least("LOCK_ACQUIRED")
+        _process_lock_ready = _process_lock_is_held()
+        if not _fsm_lock_ready and not _process_lock_ready:
             raise RuntimeError(
                 "Pre-activation balance hydration blocked until BootstrapFSM reaches LOCK_ACQUIRED "
                 f"(current_state={_bootstrap_state})"
+            )
+        if not _fsm_lock_ready and _process_lock_ready:
+            logger.info(
+                "[MABM.initialize] hydration proceeding with process lock ownership while "
+                "BootstrapFSM is still pre-lock (state=%s)",
+                _bootstrap_state,
             )
 
         logger.info("[MABM.initialize] pre-activation balance hydration started")
@@ -711,25 +750,127 @@ class MultiAccountBrokerManager:
             ", ".join(_connected_platforms) if _connected_platforms else "none",
         )
 
+        def _connected_platform_labels_live() -> List[str]:
+            _labels: List[str] = []
+            for _bt, _broker in self._platform_brokers.items():
+                if bool(getattr(_broker, "connected", False)):
+                    _labels.append(_bt.value if hasattr(_bt, "value") else str(_bt))
+            return sorted(set(_labels))
+
+        _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {
+            "1", "true", "yes", "enabled", "on"
+        }
+        try:
+            _retry_attempts = int(
+                os.environ.get(
+                    "NIJA_BOOTSTRAP_BALANCE_RETRY_ATTEMPTS",
+                    "8" if _is_live else "1",
+                )
+            )
+        except (TypeError, ValueError):
+            _retry_attempts = 8 if _is_live else 1
+        _retry_attempts = max(1, _retry_attempts)
+        try:
+            _retry_sleep_s = float(
+                os.environ.get("NIJA_BOOTSTRAP_BALANCE_RETRY_SLEEP_S", "2.0")
+            )
+        except (TypeError, ValueError):
+            _retry_sleep_s = 2.0
+        _retry_sleep_s = max(0.2, _retry_sleep_s)
+
         # Step 2: hydrate balances from exchanges.
-        _balances = self.get_all_balances()
-        logger.info("BALANCE RESPONSE RAW: %s", str(_balances)[:1600])
+        _balances: Any = {}
         _total_usd = 0.0
+
+        def _sum_local(payload: Any) -> float:
+            if isinstance(payload, dict):
+                return float(sum(_sum_local(v) for v in payload.values()))
+            if isinstance(payload, (list, tuple, set)):
+                return float(sum(_sum_local(v) for v in payload))
+            try:
+                return float(payload)
+            except (TypeError, ValueError):
+                return 0.0
+
+        _sum_nested_balances = None
         try:
             from bot.balance_utils import sum_nested_balances as _sum_nested_balances  # type: ignore[import]
-            _total_usd = float(_sum_nested_balances(_balances))
         except Exception:
-            # Fallback local recursive sum to avoid import coupling.
-            def _sum_local(payload: Any) -> float:
-                if isinstance(payload, dict):
-                    return float(sum(_sum_local(v) for v in payload.values()))
-                if isinstance(payload, (list, tuple, set)):
-                    return float(sum(_sum_local(v) for v in payload))
+            _sum_nested_balances = None
+
+        for _attempt in range(1, _retry_attempts + 1):
+            # Re-run platform broker bootstrap between attempts so transient
+            # startup races (credentials/API warm-up/network) can recover.
+            if _attempt > 1:
                 try:
-                    return float(payload)
-                except (TypeError, ValueError):
-                    return 0.0
-            _total_usd = float(_sum_local(_balances))
+                    self.initialize_platform_brokers()
+                except Exception as _reinit_err:
+                    logger.debug(
+                        "[MABM.initialize] platform reinit before hydration attempt %d failed: %s",
+                        _attempt,
+                        _reinit_err,
+                    )
+
+            _connected_now = _connected_platform_labels_live()
+            _balances = self.get_all_balances()
+            logger.info(
+                "BALANCE RESPONSE RAW (attempt %d/%d, connected=%d:%s): %s",
+                _attempt,
+                _retry_attempts,
+                len(_connected_now),
+                ",".join(_connected_now) if _connected_now else "none",
+                str(_balances)[:1600],
+            )
+            try:
+                if _sum_nested_balances is not None:
+                    _total_usd = float(_sum_nested_balances(_balances))
+                else:
+                    _total_usd = float(_sum_local(_balances))
+            except Exception:
+                _total_usd = float(_sum_local(_balances))
+
+            if _total_usd > 0.0:
+                break
+
+            if _attempt < _retry_attempts:
+                logger.warning(
+                    "[MABM.initialize] bootstrap hydration attempt %d/%d produced $%.2f; "
+                    "connected=%d:%s; retrying in %.1fs",
+                    _attempt,
+                    _retry_attempts,
+                    _total_usd,
+                    len(_connected_now),
+                    ",".join(_connected_now) if _connected_now else "none",
+                    _retry_sleep_s,
+                )
+                time.sleep(_retry_sleep_s)
+
+        # Live-mode direct fallback: if aggregate hydration is still empty, try
+        # direct Kraken PLATFORM balance so startup does not fail on transient
+        # non-primary broker payload lag.
+        if _is_live and _total_usd <= 0.0:
+            try:
+                _kraken = self._platform_brokers.get(BrokerType.KRAKEN)
+                if _kraken is not None and getattr(_kraken, "connected", False):
+                    _kraken_balance = _kraken.get_account_balance()
+                    if _kraken_balance is not None:
+                        _kraken_total = float(_sum_local({"platform": {"kraken": _kraken_balance}}))
+                        if _kraken_total > 0.0:
+                            _total_usd = _kraken_total
+                            _balances = {
+                                "platform": {"kraken": _kraken_balance},
+                                "users": {},
+                                "source": "kraken_direct_fallback",
+                            }
+                            logger.info(
+                                "[MABM.initialize] LIVE fallback accepted direct Kraken balance: $%.2f",
+                                _total_usd,
+                            )
+            except Exception as _kraken_err:
+                logger.warning(
+                    "[MABM.initialize] direct Kraken fallback failed: %s",
+                    _kraken_err,
+                )
 
         os.environ["ACCOUNT_BALANCE"] = f"{_total_usd:.8f}"
         os.environ["ACCOUNT_EQUITY"] = f"{_total_usd:.8f}"
@@ -737,11 +878,22 @@ class MultiAccountBrokerManager:
         self.bootstrap_balance_usd = _total_usd
 
         # Hard fail in live mode if no real exchange balance is available.
-        _is_live = os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {
-            "1", "true", "yes", "enabled", "on"
-        }
         if _is_live and _total_usd <= 0:
-            raise RuntimeError("No exchange balance available")
+            _connected_now = _connected_platform_labels_live()
+            _primary_connected = [
+                _name for _name in _connected_now if _name in {"kraken", "coinbase"}
+            ]
+            _reason = (
+                "NO_PRIMARY_PLATFORM_CONNECTED"
+                if not _primary_connected
+                else "ZERO_BALANCE_AFTER_RETRIES"
+            )
+            raise RuntimeError(
+                "No exchange balance available after bootstrap hydration retries "
+                f"(reason={_reason}, attempts={_retry_attempts}, "
+                f"connected_platforms={len(_connected_now)}:{','.join(_connected_now) if _connected_now else 'none'}, "
+                f"connected_primary={','.join(_primary_connected) if _primary_connected else 'none'})"
+            )
 
         logger.info(
             "[MABM.initialize] pre-activation hydration complete: total_usd=%.2f",
