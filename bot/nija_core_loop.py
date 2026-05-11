@@ -1814,6 +1814,17 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
     logger.critical("🧵 WAITING FOR START SIGNAL")
     while not TRADING_ENGINE_READY.is_set():
+        try:
+            if _SM_AVAILABLE and _get_state_machine is not None:
+                _wait_sm = _get_state_machine()
+                if _wait_sm.is_live_trading_active():
+                    logger.critical(
+                        "LIVE_ACTIVE detected while waiting for TRADING_ENGINE_READY — releasing start gate"
+                    )
+                    TRADING_ENGINE_READY.set()
+                    break
+        except Exception as _wait_gate_err:
+            logger.debug("TRADING_ENGINE_READY wait probe failed: %s", _wait_gate_err)
         if not TRADING_ENGINE_READY.wait(timeout=30):
             logger.critical("TIMEOUT_WAITING_FOR_TRADING_ENGINE_READY")
             try:

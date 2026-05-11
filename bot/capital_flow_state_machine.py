@@ -1199,12 +1199,19 @@ class CapitalRefreshCoordinator:
             else:
                 try:
                     bootstrap_fsm = get_bootstrap_fsm()
-                    advanced = bootstrap_fsm.transition(
-                        BootstrapState.BALANCE_HYDRATED,
-                        reason="initial balances fetched successfully",
-                    )
-                    if advanced:
-                        logger.info("FSM ADVANCED: %s", bootstrap_fsm.state.value)
+                    current_state = bootstrap_fsm.state
+                    if current_state == BootstrapState.PLATFORM_READY:
+                        advanced = bootstrap_fsm.transition(
+                            BootstrapState.BALANCE_HYDRATED,
+                            reason="initial balances fetched successfully",
+                        )
+                        if advanced:
+                            logger.info("FSM ADVANCED: %s", bootstrap_fsm.state.value)
+                    else:
+                        logger.info(
+                            "[Coordinator] deferring BALANCE_HYDRATED transition: current bootstrap state=%s",
+                            current_state.value,
+                        )
                 except Exception as exc:
                     logger.warning(
                         "[Coordinator] balance hydration bootstrap transition failed: %s",

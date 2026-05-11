@@ -77,6 +77,15 @@ from contextlib import contextmanager
 
 logger = logging.getLogger("nija.execution_pipeline")
 
+_RETRYABLE_EXCHANGE_ERROR_KEYWORDS = (
+    "rate limit",
+    "too many requests",
+    "too many errors",
+    "429",
+    "temporarily unavailable",
+    "try again",
+)
+
 try:
     from bot.execution_authority_context import (
         execution_authority_scope,
@@ -529,7 +538,7 @@ class ExecutionPipeline:
         # ECEL pre-trade compile: schema checks, step-size compiler, reservation.
         if self._ecel is not None:
             try:
-                broker_hint = (request.preferred_broker or "coinbase").lower()
+                broker_hint = (working_request.preferred_broker or "coinbase").lower()
                 compile_req = self._ecel_mod.CompileRequest(  # type: ignore[attr-defined]
                     broker=broker_hint,
                     symbol=working_request.symbol,
@@ -617,6 +626,15 @@ class ExecutionPipeline:
 
         with execution_authority_scope():
             result = self._dispatch(effective_request, t_start)
+
+        if not result.success and self._is_retryable_exchange_rejection(result.error):
+            logger.warning(
+                "ExecutionPipeline: classifying exchange rejection as throttled | symbol=%s broker=%s error=%s",
+                effective_request.symbol,
+                effective_request.preferred_broker or "",
+                result.error,
+            )
+            result.throttled = True
 
         if not result.success and not result.throttled:
             self._on_order_rejected(result.error or "unknown exchange rejection")
@@ -880,6 +898,13 @@ class ExecutionPipeline:
         if s in ("short", "sell"):
             return "sell"
         return s
+
+    @staticmethod
+    def _is_retryable_exchange_rejection(error: str) -> bool:
+        if not error:
+            return False
+        error_lower = error.lower()
+        return any(keyword in error_lower for keyword in _RETRYABLE_EXCHANGE_ERROR_KEYWORDS)
 
     @staticmethod
     def _load_throttler():

@@ -58,6 +58,7 @@ class TestLegalTransitions(unittest.TestCase):
         BootstrapState.MODE_GATED,
         BootstrapState.PLATFORM_CONNECTING,
         BootstrapState.PLATFORM_READY,
+        BootstrapState.BALANCE_HYDRATED,
         BootstrapState.CAPITAL_REFRESHING,
         BootstrapState.CAPITAL_READY,
         BootstrapState.THREADS_STARTING,
@@ -145,6 +146,22 @@ class TestIllegalTransitions(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(fsm.state, BootstrapState.HEALTH_BOUND)
 
+    def test_balance_hydrated_requires_platform_ready(self):
+        """Jumping PLATFORM_CONNECTING → BALANCE_HYDRATED is illegal."""
+        fsm = _fresh()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+        )
+        result = fsm.transition(BootstrapState.BALANCE_HYDRATED, "skip platform_ready")
+        self.assertFalse(result)
+        self.assertEqual(fsm.state, BootstrapState.PLATFORM_CONNECTING)
+
     def test_shutdown_is_terminal(self):
         """No transition from SHUTDOWN is legal."""
         fsm = _fresh()
@@ -190,6 +207,7 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
             BootstrapState.THREADS_STARTING,
@@ -210,6 +228,7 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
         )
@@ -228,6 +247,7 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
         )
         fsm.reset_for_retry("failure at PLATFORM_READY")
         self.assertEqual(fsm.state, BootstrapState.BOOT_FAILED_RETRY)
@@ -244,6 +264,7 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
         )
@@ -255,6 +276,7 @@ class TestResetForRetry(unittest.TestCase):
             fsm,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
             BootstrapState.THREADS_STARTING,
