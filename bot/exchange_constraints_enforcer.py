@@ -43,7 +43,7 @@ COINBASE_MIN_ORDER_USD = float(
 COINBASE_FEE_BUFFER = 0.02  # 2% conservative fee buffer
 
 # Universal soft minimum (policy floor, not exchange constraint)
-GLOBAL_MIN_ORDER_USD = float(os.getenv("MIN_NOTIONAL_USD", "5.50"))
+GLOBAL_MIN_ORDER_USD = float(os.getenv("MIN_NOTIONAL_USD", "11.00"))
 
 # Per-symbol precision minimums (base currency, in crypto units)
 # These prevent dust orders that fail due to quantity precision too low

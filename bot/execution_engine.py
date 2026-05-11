@@ -270,6 +270,8 @@ DRY_RUN_MODE: bool = os.getenv("DRY_RUN_MODE", "false").lower() == "true"
 
 # ─── FIX 5: Force trade mode — bypasses all signal filters to confirm pipeline
 # Supports both FORCE_TRADE and FORCE_TRADE_MODE for compatibility.
+# FORCE_TRADE bypasses expectancy/edge/regime gates — keep false in production
+# to avoid rapid order spam that triggers exchange rate limiting.
 FORCE_TRADE_MODE: bool = (
     os.getenv("FORCE_TRADE", "false").lower() == "true"
     or os.getenv("FORCE_TRADE_MODE", "false").lower() == "true"

@@ -57,7 +57,7 @@ class BrokerCircuitBreaker:
                  failure_threshold: int = 5,
                  recovery_timeout: float = 60.0,
                  success_threshold: int = 2,
-                 max_retry_delay: float = 30.0):
+                 max_retry_delay: float = 60.0):
         """
         Initialize circuit breaker.
         
@@ -214,9 +214,9 @@ class BrokerCircuitBreaker:
             )
         
         # Execute function with exponential backoff
-        delay = 2.0  # Start with 2s delay
+        delay = 5.0  # Start with 5s delay to respect exchange rate limits
         attempt = 0
-        max_attempts = 3
+        max_attempts = 5
         
         while attempt < max_attempts:
             try:
