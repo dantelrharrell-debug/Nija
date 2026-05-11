@@ -43,6 +43,25 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+# Minimal fallback parser so .env is still loaded when python-dotenv is absent.
+def _load_env_file_fallback(path: str = ".env") -> None:
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception:
+        # Keep test behavior non-fatal if env parsing fails.
+        return
+
 # ---------------------------------------------------------------------------
 # Auto-load .env (project root) so the script works without exporting vars
 # ---------------------------------------------------------------------------
@@ -50,7 +69,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed — rely on env already being set
+    _load_env_file_fallback()
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -364,9 +383,20 @@ def _run_capital_authority_reconciliation(
 
     ca = get_capital_authority()
 
-    # Feed each fetched balance directly (no live API re-call)
+    # CapitalAuthority enforces strict feed order:
+    # 1) finalize broker registration gate,
+    # 2) register broker source(s),
+    # 3) feed balances.
+    try:
+        ca.finalize_broker_registration()
+    except Exception:
+        # Safe to continue in environments where the gate is already open.
+        pass
+
+    # Register and feed each fetched balance directly (no live API re-call).
     for broker_key, balance in balances.items():
         if balance is not None and balance > 0:
+            ca.register_source(broker_key, lambda _b=balance: _b)
             ca.feed_broker_balance(broker_key, balance)
             ca.set_broker_role(broker_key, BROKER_ROLE_PRIMARY)
 
