@@ -6636,16 +6636,13 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # This keeps the truth-table gate aligned with actual startup checks
             # before THREADS_STARTING.
             try:
-                _gate_brokers_ready = True
-                if _bms_mabm is not None and hasattr(_bms_mabm, "all_brokers_fully_ready"):
-                    _gate_brokers_ready = bool(_bms_mabm.all_brokers_fully_ready())
-                if _gate_brokers_ready:
-                    if _bms_mabm is None:
-                        _rt_mark_not_applicable(
-                            "broker_connected",
-                            reason="MABM unavailable in this deployment",
-                        )
-                    else:
+                if _bms_mabm is None:
+                    _rt_mark_not_applicable(
+                        "broker_connected",
+                        reason="MABM unavailable in this deployment",
+                    )
+                elif hasattr(_bms_mabm, "all_brokers_fully_ready"):
+                    if bool(_bms_mabm.all_brokers_fully_ready()):
                         _rt_mark_ready("broker_connected")
             except Exception as _gate_broker_err:
                 logger.warning("Startup readiness signal failed (broker_connected): %s", _gate_broker_err)
