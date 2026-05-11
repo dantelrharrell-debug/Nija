@@ -1685,6 +1685,7 @@ def _acquire_distributed_process_lock() -> None:
                 "must not include wrapping quotes",
                 "contains leading or trailing whitespace",
                 "redis url not configured while distributed single-writer lock is required",
+                "is not a valid redis connection url",
             )
         )
 
@@ -2041,6 +2042,13 @@ def _acquire_distributed_process_lock() -> None:
             _trimmed = _raw_env_value.strip()
             if len(_trimmed) >= 2 and _trimmed[0] == _trimmed[-1] and _trimmed[0] in {'"', "'"}:
                 raise RuntimeError("NIJA_REDIS_URL must not include wrapping quotes")
+            if not (_trimmed.startswith("redis://") or _trimmed.startswith("rediss://")):
+                raise RuntimeError(
+                    f"NIJA_REDIS_URL is set to {_trimmed!r}, which is not a valid Redis connection URL. "
+                    "In Railway, copy the full Connect URL from the Redis service Connect tab "
+                    "(format: rediss://default:PASSWORD@<host>.proxy.rlwy.net:PORT) "
+                    "and set that exact value as NIJA_REDIS_URL."
+                )
             _force_tls_check = _force_redis_tls
             if (
                 _trimmed.startswith("redis://")
