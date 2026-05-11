@@ -54,11 +54,12 @@ class TestLegalTransitions(unittest.TestCase):
         BootstrapState.LOCK_ACQUIRED,
         BootstrapState.HEALTH_BOUND,
         BootstrapState.ENV_VERIFIED,
-        BootstrapState.STARTUP_VALIDATED,
         BootstrapState.MODE_GATED,
         BootstrapState.PLATFORM_CONNECTING,
         BootstrapState.PLATFORM_READY,
         BootstrapState.BALANCE_HYDRATED,
+        BootstrapState.CAPABILITY_VERIFIED,
+        BootstrapState.STARTUP_VALIDATED,
         BootstrapState.CAPITAL_REFRESHING,
         BootstrapState.CAPITAL_READY,
         BootstrapState.THREADS_STARTING,
@@ -93,7 +94,6 @@ class TestLegalTransitions(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.EXTERNAL_RESTART_REQUIRED,
@@ -109,10 +109,18 @@ class TestLegalTransitions(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
             BootstrapState.STARTUP_VALIDATED,
             BootstrapState.BOOT_FAILED_RETRY,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
             BootstrapState.THREADS_STARTING,
@@ -134,6 +142,23 @@ class TestIllegalTransitions(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(fsm.state, BootstrapState.BOOT_INIT)
 
+    def test_startup_validated_requires_capability_verified(self):
+        """BALANCE_HYDRATED → STARTUP_VALIDATED must be rejected without capability gate."""
+        fsm = _fresh()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
+        )
+        result = fsm.transition(BootstrapState.STARTUP_VALIDATED, "skip capability")
+        self.assertFalse(result)
+        self.assertEqual(fsm.state, BootstrapState.BALANCE_HYDRATED)
+
     def test_backward_transition(self):
         """Going HEALTH_BOUND → BOOT_INIT is illegal."""
         fsm = _fresh()
@@ -154,7 +179,6 @@ class TestIllegalTransitions(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
         )
@@ -203,11 +227,12 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
             BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
             BootstrapState.THREADS_STARTING,
@@ -224,11 +249,12 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
             BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
         )
@@ -243,7 +269,6 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
@@ -260,11 +285,12 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
             BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
         )
@@ -277,6 +303,8 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
             BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
             BootstrapState.THREADS_STARTING,
@@ -462,10 +490,12 @@ class TestInvariantI8(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
             BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
             BootstrapState.THREADS_STARTING,
@@ -568,7 +598,6 @@ class TestStatusAndHistory(unittest.TestCase):
             BootstrapState.LOCK_ACQUIRED,
             BootstrapState.HEALTH_BOUND,
             BootstrapState.ENV_VERIFIED,
-            BootstrapState.STARTUP_VALIDATED,
             BootstrapState.MODE_GATED,
             BootstrapState.PLATFORM_CONNECTING,
         )

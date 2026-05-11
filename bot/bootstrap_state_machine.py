@@ -9,17 +9,18 @@ that advances the boot sequence must call :meth:`BootstrapStateMachine.transitio
 illegal transitions are rejected and logged instead of propagating as silent
 side-effects.
 
-States (17 total)
+States (18 total)
 -----------------
   BOOT_INIT              – initial state when the process starts
   LOCK_ACQUIRED          – process/distributed writer lock held
   HEALTH_BOUND           – HTTP health server bound and accepting connections
   ENV_VERIFIED           – environment variables checked; ≥1 credential present
-  STARTUP_VALIDATED      – startup_validation.py passed all pre-flight checks
   MODE_GATED             – trading state machine confirmed a legal mode
   PLATFORM_CONNECTING    – platform broker connection(s) in progress
   PLATFORM_READY         – at least one platform broker connected
     BALANCE_HYDRATED       – startup balance sync completed (authoritative)
+    CAPABILITY_VERIFIED    – runtime/exchange capabilities validated for startup
+    STARTUP_VALIDATED      – startup_validation.py passed all pre-flight checks
   CAPITAL_REFRESHING     – capital authority refresh in progress
   CAPITAL_READY          – capital > 0 confirmed; trading gate open
   INIT_COMPLETE          – all initialization locked; execution logic ready
@@ -34,13 +35,14 @@ Allowed transitions
 -------------------
   BOOT_INIT              → LOCK_ACQUIRED
   LOCK_ACQUIRED          → HEALTH_BOUND
-  HEALTH_BOUND           → ENV_VERIFIED
-  ENV_VERIFIED           → STARTUP_VALIDATED | CONFIG_ERROR_KEEPALIVE
-  STARTUP_VALIDATED      → MODE_GATED | BOOT_FAILED_RETRY
-  MODE_GATED             → PLATFORM_CONNECTING
+    HEALTH_BOUND           → ENV_VERIFIED
+    ENV_VERIFIED           → MODE_GATED | CONFIG_ERROR_KEEPALIVE
+    MODE_GATED             → PLATFORM_CONNECTING
     PLATFORM_CONNECTING    → PLATFORM_READY | BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED
     PLATFORM_READY         → BALANCE_HYDRATED | BOOT_FAILED_RETRY
-    BALANCE_HYDRATED       → CAPITAL_REFRESHING | BOOT_FAILED_RETRY
+        BALANCE_HYDRATED       → CAPABILITY_VERIFIED | BOOT_FAILED_RETRY
+    CAPABILITY_VERIFIED    → STARTUP_VALIDATED | BOOT_FAILED_RETRY
+    STARTUP_VALIDATED      → CAPITAL_REFRESHING | BOOT_FAILED_RETRY
   CAPITAL_REFRESHING     → CAPITAL_READY | BOOT_FAILED_RETRY
   CAPITAL_READY          → INIT_COMPLETE
   INIT_COMPLETE          → THREADS_STARTING
@@ -109,6 +111,7 @@ class BootstrapState(str, Enum):
     LOCK_ACQUIRED = "LOCK_ACQUIRED"
     HEALTH_BOUND = "HEALTH_BOUND"
     ENV_VERIFIED = "ENV_VERIFIED"
+    CAPABILITY_VERIFIED = "CAPABILITY_VERIFIED"
     STARTUP_VALIDATED = "STARTUP_VALIDATED"
     MODE_GATED = "MODE_GATED"
     PLATFORM_CONNECTING = "PLATFORM_CONNECTING"
@@ -140,6 +143,8 @@ _STRATEGY_ARM_ALLOWED_STATES = frozenset({
 # ---------------------------------------------------------------------------
 _BALANCE_POLLING_DISABLED_STATES = frozenset({
     BootstrapState.BALANCE_HYDRATED,
+    BootstrapState.CAPABILITY_VERIFIED,
+    BootstrapState.STARTUP_VALIDATED,
     BootstrapState.CAPITAL_REFRESHING,
     BootstrapState.CAPITAL_READY,
     BootstrapState.INIT_COMPLETE,
@@ -177,12 +182,8 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
         BootstrapState.ENV_VERIFIED,
     ],
     BootstrapState.ENV_VERIFIED: [
-        BootstrapState.STARTUP_VALIDATED,
-        BootstrapState.CONFIG_ERROR_KEEPALIVE,
-    ],
-    BootstrapState.STARTUP_VALIDATED: [
         BootstrapState.MODE_GATED,
-        BootstrapState.BOOT_FAILED_RETRY,
+        BootstrapState.CONFIG_ERROR_KEEPALIVE,
     ],
     BootstrapState.MODE_GATED: [
         BootstrapState.PLATFORM_CONNECTING,
@@ -197,6 +198,14 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
         BootstrapState.BOOT_FAILED_RETRY,
     ],
     BootstrapState.BALANCE_HYDRATED: [
+        BootstrapState.CAPABILITY_VERIFIED,
+        BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.CAPABILITY_VERIFIED: [
+        BootstrapState.STARTUP_VALIDATED,
+        BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.STARTUP_VALIDATED: [
         BootstrapState.CAPITAL_REFRESHING,
         BootstrapState.BOOT_FAILED_RETRY,
     ],
@@ -245,11 +254,12 @@ _HAPPY_PATH_TO_CAPITAL_READY: List[BootstrapState] = [
     BootstrapState.LOCK_ACQUIRED,
     BootstrapState.HEALTH_BOUND,
     BootstrapState.ENV_VERIFIED,
-    BootstrapState.STARTUP_VALIDATED,
     BootstrapState.MODE_GATED,
     BootstrapState.PLATFORM_CONNECTING,
     BootstrapState.PLATFORM_READY,
     BootstrapState.BALANCE_HYDRATED,
+    BootstrapState.CAPABILITY_VERIFIED,
+    BootstrapState.STARTUP_VALIDATED,
     BootstrapState.CAPITAL_REFRESHING,
     BootstrapState.CAPITAL_READY,
     BootstrapState.INIT_COMPLETE,
@@ -456,6 +466,18 @@ class BootstrapStateMachine:
                 return False
 
             current = self._state
+            if new_state == BootstrapState.BALANCE_HYDRATED and current in {
+                BootstrapState.BOOT_INIT,
+            }:
+                msg = (
+                    "Balance hydration blocked: LOCK_ACQUIRED has not been reached "
+                    f"(current_state={current.value}, reason={reason!r})."
+                )
+                logger.error("❌ [BootstrapFSM] %s", msg)
+                if raise_on_invalid:
+                    raise BootstrapInvariantError("FSM_TRANSITION", msg)
+                return False
+
             allowed = _VALID_TRANSITIONS.get(current, [])
             if new_state not in allowed:
                 msg = (
@@ -597,7 +619,7 @@ class BootstrapStateMachine:
                         or ""
                     )
                     if _redis_url:
-                        _rc = connect_redis_with_fallback(_redis_url)
+                        _rc, _ = connect_redis_with_fallback(url=_redis_url)
                         _redis_ok = bool(_rc and _rc.ping())
                 except Exception as _ping_err:
                     logger.warning("[BootstrapFSM] finalize_boot Redis PING failed: %s", _ping_err)

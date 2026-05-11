@@ -346,6 +346,26 @@ class MultiAccountBrokerManager:
         # Same rationale: must use FSM probe logic while bootstrap is in progress.
         "bootstrap_contract",
     }
+    _SYSTEM_BOOTSTRAP_ORDER = (
+        "BOOT_INIT",
+        "LOCK_ACQUIRED",
+        "HEALTH_BOUND",
+        "ENV_VERIFIED",
+        "MODE_GATED",
+        "PLATFORM_CONNECTING",
+        "PLATFORM_READY",
+        "BALANCE_HYDRATED",
+        "CAPABILITY_VERIFIED",
+        "STARTUP_VALIDATED",
+        "CAPITAL_REFRESHING",
+        "CAPITAL_READY",
+        "INIT_COMPLETE",
+        "THREADS_STARTING",
+        "RUNNING_SUPERVISED",
+    )
+    _SYSTEM_BOOTSTRAP_INDEX = {
+        _state: _idx for _idx, _state in enumerate(_SYSTEM_BOOTSTRAP_ORDER)
+    }
     # CRITICAL FIX (Jan 19, 2026): Balance cache for Kraken sequential API calls
     # Railway Golden Rule #3: Kraken = sequential API calls with delay + caching
     # Problem: Sequential balance calls cause 1-1.2s delay per user
@@ -670,6 +690,13 @@ class MultiAccountBrokerManager:
         2) Balance hydration
         3) Risk/activation gates
         """
+        _bootstrap_state = self._get_system_bootstrap_state_name()
+        if not self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
+            raise RuntimeError(
+                "Pre-activation balance hydration blocked until BootstrapFSM reaches LOCK_ACQUIRED "
+                f"(current_state={_bootstrap_state})"
+            )
+
         logger.info("[MABM.initialize] pre-activation balance hydration started")
 
         # Step 1: ensure platform exchange clients are created/connected first.
@@ -1164,6 +1191,34 @@ class MultiAccountBrokerManager:
         """
         return STARTUP_LOCK is not None and STARTUP_LOCK.is_set()
 
+    def _get_system_bootstrap_state_name(self) -> str:
+        """Best-effort read of the composite BootstrapFSM state name."""
+        try:
+            _get_fsm = None
+            for _mod in ("bot.bootstrap_state_machine", "bootstrap_state_machine"):
+                try:
+                    _get_fsm = importlib.import_module(_mod).get_bootstrap_fsm
+                    break
+                except (ImportError, AttributeError):
+                    continue
+            if _get_fsm is None:
+                return "UNAVAILABLE"
+            _fsm = _get_fsm()
+            return str(getattr(getattr(_fsm, "state", None), "value", "UNAVAILABLE"))
+        except Exception:
+            return "UNAVAILABLE"
+
+    def _is_system_bootstrap_at_least(self, min_state: str) -> bool:
+        """Return True when system BootstrapFSM is at least *min_state*."""
+        _current = self._get_system_bootstrap_state_name()
+        if _current == "UNAVAILABLE":
+            return True
+        _current_idx = self._SYSTEM_BOOTSTRAP_INDEX.get(_current)
+        _target_idx = self._SYSTEM_BOOTSTRAP_INDEX.get(min_state)
+        if _current_idx is None or _target_idx is None:
+            return False
+        return _current_idx >= _target_idx
+
     def finalize_bootstrap_ready(self) -> None:
         """Release the global startup lock after full system sync is confirmed.
 
@@ -1199,6 +1254,19 @@ class MultiAccountBrokerManager:
             if not self._startup_lock_released:
                 self._startup_lock_released = True  # sync local flag to event state
             logger.debug("[MABM] finalize_bootstrap_ready: startup lock already released — no-op")
+            return
+        _bootstrap_state = self._get_system_bootstrap_state_name()
+        if not self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
+            logger.warning(
+                "[MABM] finalize_bootstrap_ready blocked: bootstrap state=%s is before LOCK_ACQUIRED",
+                _bootstrap_state,
+            )
+            return
+        if not self._is_system_bootstrap_at_least("STARTUP_VALIDATED"):
+            logger.info(
+                "[MABM] finalize_bootstrap_ready deferred: bootstrap state=%s is before STARTUP_VALIDATED",
+                _bootstrap_state,
+            )
             return
         # Verify prerequisite: broker registration must be complete.
         if not self._broker_registration_complete.is_set():
@@ -1525,6 +1593,14 @@ class MultiAccountBrokerManager:
             with self._capital_state_lock:
                 self._capital_ready = False
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0}
+
+        if not self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
+            logger.info(
+                "⏳ [CapitalAuthorityRefresh] trigger=%s blocked — bootstrap state=%s before LOCK_ACQUIRED",
+                trigger,
+                self._get_system_bootstrap_state_name(),
+            )
+            return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
 
         # ── Pre-flight broker-registration gates (A + B) ──────────────────────
         # HARD ordering barrier: do not run ANY refresh path — including the
@@ -5665,11 +5741,18 @@ class MultiAccountBrokerManager:
                 retry_delay_s=0.0,
             )
         if bool(_startup_cap.get("ready", 0.0)):
-            logger.info(
-                "✅ CapitalAuthority READY at startup (brokers=%d total=$%.2f)",
-                int(_startup_cap.get("valid_brokers", 0.0)),
-                float(_startup_cap.get("total_capital", 0.0)),
-            )
+            if self._is_system_bootstrap_at_least("LOCK_ACQUIRED"):
+                logger.info(
+                    "✅ CapitalAuthority READY at startup (brokers=%d total=$%.2f)",
+                    int(_startup_cap.get("valid_brokers", 0.0)),
+                    float(_startup_cap.get("total_capital", 0.0)),
+                )
+            else:
+                logger.warning(
+                    "[MABM] CapitalAuthority ready snapshot observed before LOCK_ACQUIRED "
+                    "(state=%s); startup-ready signal deferred",
+                    self._get_system_bootstrap_state_name(),
+                )
         else:
             logger.error(
                 "⛔ CapitalAuthority NOT READY at startup (brokers=%d total=$%.2f) "

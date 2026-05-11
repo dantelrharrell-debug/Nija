@@ -550,9 +550,26 @@ def _sum_nested_balances(balance_payload) -> float:
         return 0.0
 
 
+def _is_bootstrap_lock_acquired() -> bool:
+    """Return True only after BootstrapFSM reaches LOCK_ACQUIRED or later."""
+    if not (_BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None):
+        return True
+    try:
+        _bfsm = _get_bootstrap_fsm()
+        _state_value = getattr(getattr(_bfsm, "state", None), "value", "")
+        return _state_value in _BOOTSTRAP_LOCK_READY_STATE_VALUES
+    except Exception:
+        return True
+
+
 def _hydrate_startup_balances(strategy) -> float:
     """Force a startup balance sync and return the authoritative total USD balance."""
     global _hydrated_total_balance_usd
+
+    if not _is_bootstrap_lock_acquired():
+        raise RuntimeError(
+            "Balance hydration blocked: BootstrapFSM must reach LOCK_ACQUIRED first"
+        )
 
     logger.info("💰 Hydration phase: starting balance sync")
 
@@ -809,6 +826,7 @@ def _assert_bootstrap_execution_authority(context: str) -> None:
 # Explicit lifecycle phases used by startup diagnostics.
 BOOTSTRAP_PHASES = [
     "ENV_VERIFIED",
+    "CAPABILITY_VERIFIED",
     "STARTUP_VALIDATED",
     "LOCK_ACQUIRED",
     "HEALTH_BOUND",
@@ -3086,6 +3104,22 @@ _BALANCE_HYDRATED_STATE_VALUES = {
     "THREADS_STARTING",
     "RUNNING_SUPERVISED",
 }
+_BOOTSTRAP_LOCK_READY_STATE_VALUES = {
+    "LOCK_ACQUIRED",
+    "HEALTH_BOUND",
+    "ENV_VERIFIED",
+    "CAPABILITY_VERIFIED",
+    "STARTUP_VALIDATED",
+    "MODE_GATED",
+    "PLATFORM_CONNECTING",
+    "PLATFORM_READY",
+    "BALANCE_HYDRATED",
+    "CAPITAL_REFRESHING",
+    "CAPITAL_READY",
+    "INIT_COMPLETE",
+    "THREADS_STARTING",
+    "RUNNING_SUPERVISED",
+}
 try:
     _bfsm_mod = importlib.import_module("bot.bootstrap_state_machine")
     _BootstrapState = cast(Any, getattr(_bfsm_mod, "BootstrapState"))
@@ -3100,6 +3134,7 @@ except ImportError:
         LOCK_ACQUIRED = "LOCK_ACQUIRED"
         HEALTH_BOUND = "HEALTH_BOUND"
         ENV_VERIFIED = "ENV_VERIFIED"
+        CAPABILITY_VERIFIED = "CAPABILITY_VERIFIED"
         STARTUP_VALIDATED = "STARTUP_VALIDATED"
         MODE_GATED = "MODE_GATED"
         PLATFORM_CONNECTING = "PLATFORM_CONNECTING"
@@ -3954,6 +3989,26 @@ def _run_preflight_check() -> bool:
             "ℹ️  NIJA_REDIS_STARTUP_CHECK=false — skipping production preflight Redis gate",
             flush=True,
         )
+        _truthy = {"1", "true", "yes", "on", "enabled"}
+        _single_instance_assumed = (
+            os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _truthy
+        )
+        _multi_instance_possible = _is_multi_instance_deployment_possible()
+        if _multi_instance_possible and not _single_instance_assumed:
+            print(
+                "❌ NIJA_REDIS_STARTUP_CHECK=false requires explicit single-instance mode "
+                "or distributed locking. Set NIJA_ASSUME_SINGLE_INSTANCE=true for "
+                "single-instance deployments, or re-enable Redis startup check.",
+                flush=True,
+            )
+            return False
+        if not _single_instance_assumed:
+            os.environ["NIJA_ASSUME_SINGLE_INSTANCE"] = "true"
+            print(
+                "ℹ️  NIJA_REDIS_STARTUP_CHECK=false with singleton topology detected; "
+                "auto-setting NIJA_ASSUME_SINGLE_INSTANCE=true",
+                flush=True,
+            )
 
     SEP = "═" * 70
     checks = []   # list of (label, passed: bool, detail: str)
@@ -4786,11 +4841,12 @@ def _try_finalize_running_supervised_handoff(
                 _BootstrapState.LOCK_ACQUIRED,
                 _BootstrapState.HEALTH_BOUND,
                 _BootstrapState.ENV_VERIFIED,
-                _BootstrapState.STARTUP_VALIDATED,
                 _BootstrapState.MODE_GATED,
                 _BootstrapState.PLATFORM_CONNECTING,
                 _BootstrapState.PLATFORM_READY,
                 _BootstrapState.BALANCE_HYDRATED,
+                _BootstrapState.CAPABILITY_VERIFIED,
+                _BootstrapState.STARTUP_VALIDATED,
                 _BootstrapState.CAPITAL_REFRESHING,
                 _BootstrapState.CAPITAL_READY,
                 _BootstrapState.INIT_COMPLETE,
@@ -5074,23 +5130,20 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         "startup_validation passed during retry; re-enter platform connecting",
                     )
                 elif _bfsm_state_now == _BootstrapState.ENV_VERIFIED:
-                    _bfsm_transition(
-                        _BootstrapState.STARTUP_VALIDATED,
-                        "startup_validation passed all pre-flight checks",
+                    logger.debug(
+                        "[BootstrapFSM] startup validation complete; deferring CAPABILITY_VERIFIED/"
+                        "STARTUP_VALIDATED until post-hydration (state=%s)",
+                        getattr(_bfsm_state_now, "value", str(_bfsm_state_now)),
                     )
                 elif _bfsm_state_now in {
                     _BootstrapState.BOOT_INIT,
                     _BootstrapState.LOCK_ACQUIRED,
                     _BootstrapState.HEALTH_BOUND,
                 }:
-                    # Must pass through ENV_VERIFIED before STARTUP_VALIDATED.
+                    # Must pass through ENV_VERIFIED before broker startup.
                     _bfsm_transition(
                         _BootstrapState.ENV_VERIFIED,
                         "startup_validation: env verified (intermediate step)",
-                    )
-                    _bfsm_transition(
-                        _BootstrapState.STARTUP_VALIDATED,
-                        "startup_validation passed all pre-flight checks",
                     )
                 else:
                     logger.info(
@@ -5565,10 +5618,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     _boot_fsm.assert_invariant_i2_liveness_first()
                 except Exception as _inv_err:
                     logger.warning("⚠️  Bootstrap invariant I2 violation: %s", _inv_err)
-                # Advance FSM: STARTUP_VALIDATED → MODE_GATED → PLATFORM_CONNECTING
+                # Advance FSM: ENV_VERIFIED → MODE_GATED → PLATFORM_CONNECTING
                 # On retry the FSM is already in BOOT_FAILED_RETRY; skip MODE_GATED.
                 _cur = _boot_fsm.state
-                if _cur == _BootstrapState.STARTUP_VALIDATED:
+                if _cur == _BootstrapState.ENV_VERIFIED:
                     _bfsm_transition(
                         _BootstrapState.MODE_GATED,
                         "trading state machine mode confirmed",
@@ -5747,6 +5800,14 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _bfsm_transition(
                     _BootstrapState.BALANCE_HYDRATED,
                     f"startup balance hydration complete: ${_total_balance:.2f}",
+                )
+                _bfsm_transition(
+                    _BootstrapState.CAPABILITY_VERIFIED,
+                    "startup capability checks passed after hydration",
+                )
+                _bfsm_transition(
+                    _BootstrapState.STARTUP_VALIDATED,
+                    "startup_validation passed all pre-flight checks",
                 )
             logger.info(
                 "LIFECYCLE: balance hydration complete - FSM state=%s",
