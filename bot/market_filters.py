@@ -31,7 +31,7 @@ def _parse_symbols_env(var_name: str) -> set:
 
     Returns:
         set: Uppercased symbols parsed from ``VAR=a,b,c`` style input.
-        Example value: `BTC-USD,ETH-USD,SOL-USD`.
+        Example environment variable value: `BTC-USD,ETH-USD,SOL-USD`.
     """
     raw = os.getenv(var_name, "")
     if not raw:
