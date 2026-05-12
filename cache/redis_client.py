@@ -111,6 +111,7 @@ def _build_strict_redis_client(
         tls_insecure or (tls_auto and ".rlwy.net" in (parsed.hostname or "").lower())
     ):
         kwargs["ssl_cert_reqs"] = "none"
+        kwargs["ssl_check_hostname"] = False
 
     return redis.Redis.from_url(raw_value, **kwargs)
 
