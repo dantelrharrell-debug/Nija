@@ -8,19 +8,16 @@ Each gate contributes weighted points.  An entry is permitted when the
 total gate score meets the minimum threshold — no single gate can veto a
 trade on its own (except VOLATILITY_EXPLOSION, which always hard-blocks).
 
-Gate weights (total = 9 points)
+Gate weights (total = 7 points + informational regime label)
 ---------------------------------
 Gate 1 — AI Predictive Score         3 pts  (signal quality)
 Gate 2 — Volume / Liquidity          2 pts  (execution safety)
 Gate 3 — Volatility Range            1 pt   (market conditions)
 Gate 4 — Spread / Slippage           1 pt   (cost safety)
-Gate 5 — Regime Confirmation         2 pts  (market context)
+Gate 5 — Regime Classification       0 pts  (informational context only)
 
-Pass threshold: 3.5 / 9 (≈ 39 %, temporarily loosened for more trades).  This means:
-  - Gate 1 alone                   → 3 pts → PASS  (AI score sufficient)
-  - Gate 1 + Gate 2                → 5 pts → PASS
-  - Gate 2 + Gate 3 + Gate 4      → 4 pts → PASS  (volume + conditions)
-  - Gate 2 + Gate 3 + Gate 4 + Gate 5 → 6 pts → PASS (even without perfect AI score)
+Pass threshold is adaptive and applied inside ``AIEntryGate.check()``.
+Gate 5 does not add or remove points (informational only).
 
   AI + Volume alone can now trigger a trade even if volume is weak.
   Still respects the hard-block: VOLATILITY_EXPLOSION regime.
@@ -218,16 +215,16 @@ _GATE_WEIGHTS: Dict[str, int] = {
     "gate2_volume":     2,   # liquidity / execution safety
     "gate3_volatility": 1,   # market conditions
     "gate4_spread":     1,   # cost safety
-    "gate5_regime":     2,   # market context
+    "gate5_regime":     0,   # market context label only (no scoring)
 }
-_GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 9
+_GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # auto-summed (currently 7)
 
 # Mutable base threshold — lowered to 1.6 to maximize confirmation trades in
 # current market conditions.  Any gate combination scoring ≥ 1.6 pts passes
 # (Gate 2+3 = 2+1 = 3 pts → PASS; Gate 1 alone = 3 pts → PASS; Gate 3+4 = 2 pts → PASS).
 # Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
 # via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
-BASE_ENTRY_SCORE_THRESHOLD: float = 1.6  # out of 9 — lowered 2.6 → 2.0 → 1.6 for confirmation-trade mode
+BASE_ENTRY_SCORE_THRESHOLD: float = 1.6  # base threshold on the 7-point scoring domain
 
 # ── ATR-based volatility dampening constants ─────────────────────────────────
 # When the market is actively moving the gate pass-threshold is relaxed
@@ -664,13 +661,13 @@ class AIEntryGate:
 
     @staticmethod
     def _gate_regime(regime_key: str, entry_type: str, side: str) -> GateCheck:
-        """Gate 5: Regime compatibility with graded scoring.
+        """Gate 5: Regime compatibility classification (informational only).
 
-        Full match  (+2 pts): entry_type is in the primary allowed set for this regime.
-        Partial     (+1 pt) : entry_type is in the adjacent set — positive edge but weaker.
-        Mismatch    (−2 pts): entry_type conflicts — applies a score penalty so the signal
-                              must be stronger elsewhere to pass.  Does NOT hard-block
-                              (a high-scoring signal still clears the threshold).
+        This gate no longer adds or subtracts score because trend/regime validity
+        is already established upstream in ``nija_apex_strategy_v71`` via
+        ``check_market_filter`` plus the regime-aware scoring path
+        (``check_entry_with_enhanced_scoring`` / Nija AI engine). It only reports
+        compatibility context.
         """
         if _DISABLE_REGIME_GATE:
             return GateCheck(
@@ -683,35 +680,33 @@ class AIEntryGate:
             )
         allowed  = _REGIME_ALLOWED_ENTRIES.get(regime_key, _REGIME_ALLOWED_DEFAULT)
         adjacent = _REGIME_ADJACENT_ENTRIES.get(regime_key, set())
-        w = _GATE_WEIGHTS["gate5_regime"]   # 2
-
         if entry_type in allowed:
             return GateCheck(
                 passed=True,
                 name="Regime",
                 detail=(
                     f"regime={regime_key.upper()} permits {entry_type} {side} "
-                    f"(+{w} pts)"
+                    "(informational)"
                 ),
             )
         elif entry_type in adjacent:
             return GateCheck(
-                passed=False,
+                passed=True,
                 name="Regime",
-                partial_credit=0.5,   # earns 1 of 2 pts — positive but not ideal edge
+                partial_credit=0.0,
                 detail=(
                     f"regime={regime_key.upper()} partially supports {entry_type} {side} "
-                    f"(+{w * 0.5:.0f} partial pts)"
+                    "(informational)"
                 ),
             )
         else:
             return GateCheck(
-                passed=False,
+                passed=True,
                 name="Regime",
-                partial_credit=-0.5,  # reduced penalty: −1 pt (was −2 pts) — discourages mismatch without hard-blocking
+                partial_credit=0.0,
                 detail=(
                     f"regime={regime_key.upper()} conflicts with {entry_type} {side} "
-                    f"(−{w * 0.5:.0f} pts penalty; strong signals still pass)"
+                    "(informational)"
                 ),
             )
 
