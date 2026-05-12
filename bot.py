@@ -748,7 +748,7 @@ _hydrated_total_balance_usd = 0.0
 # Idempotency guard for FORCE_TRADE bootstrap handoff.
 # Set only after RUNNING_SUPERVISED handoff succeeds.
 _force_trade_handoff_complete_event = threading.Event()
-_POST_UNLOCK_MINIMUM_TRADING_BALANCE = "1"
+_post_unlock_minimum_trading_balance = "1"
 
 
 def dump_startup_state(context: str = "") -> None:
@@ -1051,7 +1051,8 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
         def _bootstrap_unlock_ready() -> bool:
             try:
                 _bfsm = _get_bootstrap_fsm()
-                _state = getattr(getattr(_bfsm, "state", None), "value", "")
+                _state_obj = getattr(_bfsm, "state", None)
+                _state = getattr(_state_obj, "value", "") if _state_obj is not None else ""
                 _authority = bool(
                     _bfsm.has_execution_authority()
                     if hasattr(_bfsm, "has_execution_authority")
@@ -1104,7 +1105,7 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
     os.environ["SUPERVISOR_MODE"] = "false"
     # Keep the post-unlock balance floor at the runtime minimum ($1) so the
     # supervised handoff does not immediately re-block on the same guard.
-    os.environ["MINIMUM_TRADING_BALANCE"] = _POST_UNLOCK_MINIMUM_TRADING_BALANCE
+    os.environ["MINIMUM_TRADING_BALANCE"] = _post_unlock_minimum_trading_balance
 
     try:
         if os.getenv("LIVE_CAPITAL_VERIFIED", "").lower() == "true":

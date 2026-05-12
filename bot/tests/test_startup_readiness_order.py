@@ -131,6 +131,7 @@ class TestStartupReadinessOrder(unittest.TestCase):
                     if (
                         isinstance(second_stmt, ast.If)
                         and isinstance(second_stmt.test, ast.UnaryOp)
+                        and isinstance(second_stmt.test.op, ast.Not)
                         and isinstance(second_stmt.test.operand, ast.Call)
                         and isinstance(second_stmt.test.operand.func, ast.Name)
                         and second_stmt.test.operand.func.id == "_enable_execution_after_bootstrap_supervised"
@@ -139,8 +140,6 @@ class TestStartupReadinessOrder(unittest.TestCase):
                         break
                 if adjacent_pair_found:
                     break
-            if adjacent_pair_found:
-                break
 
         self.assertTrue(
             adjacent_pair_found,
