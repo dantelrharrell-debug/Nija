@@ -93,13 +93,34 @@ def _build_redis_client(redis_mod, redis_url: str, *, timeout_s: int = 2):
     return redis_mod.Redis.from_url(redis_url, **kwargs)
 
 
+def _connect_redis_for_authority(redis_url: str, *, timeout_s: int = 2):
+    """Build Redis client with startup fallback logic where available."""
+    redis_mod = importlib.import_module("redis")
+    try:
+        try:
+            from bot.redis_runtime import connect_redis_with_fallback
+        except ImportError:
+            from redis_runtime import connect_redis_with_fallback  # type: ignore[import]
+        client, _ = connect_redis_with_fallback(
+            url=redis_url,
+            decode_responses=True,
+            socket_timeout=timeout_s,
+            socket_connect_timeout=timeout_s,
+            retries=1,
+            delay_s=0.0,
+            log=lambda msg: logger.debug("authority redis connect fallback: %s", msg),
+        )
+        return client
+    except Exception:
+        return _build_redis_client(redis_mod, redis_url, timeout_s=timeout_s)
+
+
 def _recover_fencing_token_from_lock(redis_url: str, lock_key: str) -> str:
     """Recover fencing token from Redis lock when holder is this instance."""
     if not redis_url or not lock_key:
         return ""
     try:
-        redis_mod = importlib.import_module("redis")
-        client = _build_redis_client(redis_mod, redis_url, timeout_s=2)
+        client = _connect_redis_for_authority(redis_url, timeout_s=2)
         current_holder_raw = str(client.get(lock_key) or "")
         current_holder = parse_distributed_lock_holder(current_holder_raw)
         inspection = inspect_lock_holder(current_instance_identity(), current_holder)
@@ -206,9 +227,7 @@ def assert_distributed_writer_authority() -> None:
         return
 
     try:
-        redis_mod = importlib.import_module("redis")
-
-        client = _build_redis_client(redis_mod, redis_url, timeout_s=2)
+        client = _connect_redis_for_authority(redis_url, timeout_s=2)
         current = client.get(lock_key)
         current_token = ""
         if isinstance(current, str) and current:
@@ -305,8 +324,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
     holder_inspection = inspect_lock_holder(current_instance, current_holder)
     if redis_url:
         try:
-            redis_mod = importlib.import_module("redis")
-            client = _build_redis_client(redis_mod, redis_url, timeout_s=2)
+            client = _connect_redis_for_authority(redis_url, timeout_s=2)
             current_holder_raw = str(client.get(lock_key) or "")
             current_holder_meta = parse_writer_lock_metadata(str(client.get(meta_key) or ""))
             current_holder = parse_distributed_lock_holder(current_holder_raw)
