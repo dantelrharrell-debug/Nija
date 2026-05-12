@@ -18,6 +18,9 @@ from enum import Enum
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija")
+# Execution unlock timeout guardrails:
+# - minimum 1s avoids zero/negative no-wait unlock paths
+# - maximum 300s avoids long silent startup stalls due to bad configuration
 MIN_EXECUTION_UNLOCK_TIMEOUT_S = 1.0
 MAX_EXECUTION_UNLOCK_TIMEOUT_S = 300.0
 

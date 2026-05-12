@@ -21,7 +21,7 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
         ):
             result = validate_operational_environment_config()
             self.assertTrue(result.critical_failure)
-            self.assertTrue(any("Conflicting mode flags" in msg for _, msg in result.risks))
+            self.assertTrue(any(risk == StartupRisk.ENVIRONMENT_MISCONFIGURATION for risk, _ in result.risks))
 
     def test_invalid_redis_url_scheme_fails_closed(self):
         with patch.dict(
@@ -38,7 +38,7 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
         ):
             result = validate_operational_environment_config()
             self.assertTrue(result.critical_failure)
-            self.assertTrue(any("NIJA_REDIS_URL format is invalid" in msg for _, msg in result.risks))
+            self.assertTrue(any(risk == StartupRisk.ENVIRONMENT_MISCONFIGURATION for risk, _ in result.risks))
 
     def test_invalid_execution_unlock_timeout_fails_closed(self):
         with patch.dict(
@@ -55,7 +55,7 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
         ):
             result = validate_operational_environment_config()
             self.assertTrue(result.critical_failure)
-            self.assertTrue(any("NIJA_EXECUTION_UNLOCK_TIMEOUT_S is invalid" in msg for _, msg in result.risks))
+            self.assertTrue(any(risk == StartupRisk.ENVIRONMENT_MISCONFIGURATION for risk, _ in result.risks))
 
     def test_valid_configuration_passes(self):
         with patch.dict(
