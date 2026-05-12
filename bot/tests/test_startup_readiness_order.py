@@ -74,6 +74,44 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "bootstrap_ready must be marked before the pre-thread readiness barrier",
         )
 
+    def test_execution_enablement_waits_for_running_supervised(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        startup_fn = None
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "_run_bot_startup_and_trading":
+                startup_fn = node
+                break
+
+        if startup_fn is None:
+            self.fail("Expected _run_bot_startup_and_trading() in bot.py")
+
+        running_supervised_calls = []
+        execution_unlock_calls = []
+        for node in ast.walk(startup_fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "_ensure_running_supervised":
+                    running_supervised_calls.append(node)
+                elif node.func.id == "_enable_execution_after_bootstrap_unlock":
+                    execution_unlock_calls.append(node)
+
+        if len(running_supervised_calls) != 1:
+            self.fail("Expected exactly one _ensure_running_supervised() call in _run_bot_startup_and_trading")
+        if len(execution_unlock_calls) != 1:
+            self.fail(
+                "Expected exactly one _enable_execution_after_bootstrap_unlock() call in "
+                "_run_bot_startup_and_trading"
+            )
+
+        self.assertGreater(
+            execution_unlock_calls[0].lineno,
+            running_supervised_calls[0].lineno,
+            "execution enablement must occur after the RUNNING_SUPERVISED handoff",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

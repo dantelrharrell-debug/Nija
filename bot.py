@@ -1013,6 +1013,110 @@ def _ensure_running_supervised(active_threads: dict, *, context: str) -> None:
         logger.warning("RUNNING_SUPERVISED safeguard failed (%s): %s", context, exc)
 
 
+def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
+    """Enable runtime execution only after BootstrapFSM reaches RUNNING_SUPERVISED."""
+    try:
+        from bot.trading_state_machine import (
+            TradingState as _TSMState,
+            get_state_machine as _get_tsm_unlock,
+        )
+    except ImportError:
+        from trading_state_machine import (  # type: ignore[import]
+            TradingState as _TSMState,
+            get_state_machine as _get_tsm_unlock,
+        )
+
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        _unlock_timeout_s = max(
+            1.0,
+            float(os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "15.0")),
+        )
+
+        def _bootstrap_unlock_ready() -> bool:
+            try:
+                _bfsm = _get_bootstrap_fsm()
+                _state = getattr(getattr(_bfsm, "state", None), "value", "")
+                _authority = bool(
+                    _bfsm.has_execution_authority()
+                    if hasattr(_bfsm, "has_execution_authority")
+                    else getattr(_bfsm, "execution_authority", False)
+                )
+                return _state == "RUNNING_SUPERVISED" and _authority
+            except Exception:
+                return False
+
+        if not _wait_for_predicate_with_timeout(
+            predicate=_bootstrap_unlock_ready,
+            timeout_s=_unlock_timeout_s,
+            timeout_label="FINAL_BOOTSTRAP_UNLOCK_BEFORE_EXECUTION_ENABLE",
+            poll_interval_s=0.25,
+        ):
+            logger.critical(
+                "EXECUTION ENABLE BLOCKED: final bootstrap unlock never reached (%s)",
+                context,
+            )
+            return False
+
+    _bootstrap_state_name = "UNAVAILABLE"
+    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        try:
+            _bootstrap_state_name = getattr(_get_bootstrap_fsm().state, "value", "unknown")
+        except Exception:
+            _bootstrap_state_name = "unknown"
+
+    _tsm_unlock = _get_tsm_unlock()
+    logger.info(
+        "BOOTSTRAP EXECUTION UNLOCK CONFIRMED: bootstrap_state=%s trading_state=%s context=%s",
+        _bootstrap_state_name,
+        _tsm_unlock.get_current_state().value,
+        context,
+    )
+
+    os.environ["LIVE_CAPITAL_VERIFIED"] = "true"
+    os.environ["LIVE_TRADING"] = "1"
+    os.environ["ALLOW_EXECUTION"] = "true"
+    os.environ["BLOCK_EXECUTION"] = "false"
+    os.environ["DRY_RUN_MODE"] = "false"
+    os.environ["SUPERVISOR_MODE"] = "false"
+    os.environ["MINIMUM_TRADING_BALANCE"] = "1"
+
+    try:
+        if os.getenv("LIVE_CAPITAL_VERIFIED", "").lower() == "true":
+            _activated_now = False
+            if hasattr(_tsm_unlock, "activate_live_trading"):
+                _activated_now = bool(
+                    _tsm_unlock.activate_live_trading(
+                        reason=f"bootstrap unlock confirmed ({context})"
+                    )
+                )
+            if (not _activated_now) and _tsm_unlock.get_current_state() == _TSMState.OFF:
+                _tsm_unlock.transition_to(
+                    _TSMState.LIVE_ACTIVE,
+                    f"bootstrap unlock confirmed ({context})",
+                )
+                logger.info("✅ Forced state transition: OFF -> LIVE_ACTIVE")
+    except Exception as _force_transition_err:
+        logger.warning(
+            "Force LIVE_ACTIVE transition failed after bootstrap unlock (%s): %s",
+            context,
+            _force_transition_err,
+        )
+
+    try:
+        if hasattr(_tsm_unlock, "release_core_loop_ownership"):
+            _tsm_unlock.release_core_loop_ownership(
+                f"bootstrap unlock complete ({context})"
+            )
+    except Exception as _release_err:
+        logger.warning(
+            "Core loop ownership release handshake failed after bootstrap unlock (%s): %s",
+            context,
+            _release_err,
+        )
+
+    return True
+
+
 def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> tuple[dict, bool]:
     """Start trading threads and return (active_threads, use_independent_trading)."""
     _active_threads: dict = {}
@@ -6529,8 +6633,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # ── B: Phase 3 → 4 (strategy engine ready; execution layer may begin) ──
             logger.info("Lifecycle: entering signal generation")
             if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                assert _get_bootstrap_fsm().execution_authority, (
-                    "Bootstrap execution_authority is required before execution engine activation"
+                logger.info(
+                    "Execution enablement deferred until final bootstrap unlock "
+                    "(state=%s)",
+                    getattr(_get_bootstrap_fsm().state, "value", "unknown"),
                 )
             logger.info("Lifecycle: entering order execution coordinator")
             _advance_phase(_Phase.EXECUTION_LAYER, reason="startup capital confirmed; strategy engine ready")
@@ -6644,7 +6750,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # state machine transitions to LIVE_ACTIVE.  Calling it here caused
             # race conditions when CA hydration happened after bootstrap but
             # before the loop first ran.
-            from bot.trading_state_machine import get_state_machine as _get_tsm_init, TradingState as _TSMState
+            from bot.trading_state_machine import get_state_machine as _get_tsm_init
             _tsm_init = _get_tsm_init()
             logger.info(
                 "BOOTSTRAP SM STATE: %s (LIVE_CAPITAL_VERIFIED=%r) — core loop will activate",
@@ -6652,52 +6758,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 os.environ.get("LIVE_CAPITAL_VERIFIED", ""),
             )
 
-            # Minimal runtime control-point unblock toggles (post-boot only).
-            os.environ["LIVE_CAPITAL_VERIFIED"] = "true"
-            os.environ["LIVE_TRADING"] = "1"
-            os.environ["ALLOW_EXECUTION"] = "true"
-            os.environ["BLOCK_EXECUTION"] = "false"
-            os.environ["DRY_RUN_MODE"] = "false"
-            os.environ["SUPERVISOR_MODE"] = "false"
-            os.environ["MINIMUM_TRADING_BALANCE"] = "1"
-
-            # Critical transition unblock: if operator has verified live capital,
-            # force OFF -> LIVE_ACTIVE here so runtime cannot stall in OFF.
-            try:
-                if os.getenv("LIVE_CAPITAL_VERIFIED", "").lower() == "true":
-                    _activated_now = False
-                    if hasattr(_tsm_init, "activate_live_trading"):
-                        _activated_now = bool(
-                            _tsm_init.activate_live_trading(reason="force start")
-                        )
-                    if (not _activated_now) and _tsm_init.get_current_state() == _TSMState.OFF:
-                        _tsm_init.transition_to(
-                            _TSMState.LIVE_ACTIVE,
-                            "bootstrap handoff: LIVE_CAPITAL_VERIFIED=true",
-                        )
-                        logger.info("✅ Forced state transition: OFF -> LIVE_ACTIVE")
-            except Exception as _force_transition_err:
-                logger.warning("Force LIVE_ACTIVE transition failed: %s", _force_transition_err)
-
-            # Handshake 1: force bootstrap FSM runtime completion and grant
-            # execution authority so the execution gate can open.
-            if _BOOTSTRAP_FSM_AVAILABLE:
-                try:
-                    _bfsm = _get_bootstrap_fsm()
-                    if hasattr(_bfsm, "force_start"):
-                        _bfsm.force_start("bootstrap handoff to runtime core loop")
-                    elif hasattr(_bfsm, "finalize_boot"):
-                        _bfsm.finalize_boot("bootstrap handoff to runtime core loop")
-                except Exception as _boot_finalize_err:
-                    logger.warning("Bootstrap finalize_boot handshake failed: %s", _boot_finalize_err)
-
-            # Handshake 2: release core-loop execution ownership lock and allow
-            # dispatch in the trading state machine.
-            try:
-                if hasattr(_tsm_init, "release_core_loop_ownership"):
-                    _tsm_init.release_core_loop_ownership("bootstrap handoff complete")
-            except Exception as _release_err:
-                logger.warning("Core loop ownership release handshake failed: %s", _release_err)
+            logger.info(
+                "Execution handoff deferred until BootstrapFSM reaches RUNNING_SUPERVISED"
+            )
 
             # Do not synthesize core-loop readiness here; startup readiness must
             # be driven by real state transitions only.
@@ -6942,6 +7005,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             )
 
             _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
+            if not _enable_execution_after_bootstrap_unlock(
+                context="threads live (pre-handoff)"
+            ):
+                raise RuntimeError(
+                    "Startup blocked: final bootstrap unlock did not complete before enabling execution"
+                )
 
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
             # Delegates to _rerun_supervisor_loop so the supervisor logic lives
