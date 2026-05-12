@@ -21,7 +21,8 @@ import os
 
 from indicators import (
     calculate_vwap, calculate_ema, calculate_rsi, calculate_macd,
-    calculate_atr, calculate_adx, calculate_bollinger_bands, scalar
+    calculate_atr, calculate_adx, calculate_bollinger_bands, scalar,
+    calculate_supertrend,
 )
 from risk_manager import RiskManager, EXTREME_VOLATILITY_ATR_PCT, _ATR_POSITION_SIZE_REFERENCE
 from execution_engine import ExecutionEngine
@@ -1437,7 +1438,12 @@ class NIJAApexStrategyV71:
             'ema_sequence': ema9 > ema21 > ema50,
             'macd_positive': macd_hist > 0,
             'adx_strong': adx > _eff_adx,
-            'volume_ok': volume_ratio >= _eff_vol
+            'volume_ok': volume_ratio >= _eff_vol,
+            # Supertrend (+1 = bullish) adds a 6th confirmation from ATR-dynamic support
+            'supertrend_bull': (
+                indicators.get('supertrend_direction') is not None
+                and int(scalar(indicators['supertrend_direction'].iloc[-1])) == 1
+            ),
         }
 
         # Check for downtrend
@@ -1446,38 +1452,56 @@ class NIJAApexStrategyV71:
             'ema_sequence': ema9 < ema21 < ema50,
             'macd_negative': macd_hist < 0,
             'adx_strong': adx > _eff_adx,
-            'volume_ok': volume_ratio >= _eff_vol
+            'volume_ok': volume_ratio >= _eff_vol,
+            # Supertrend (-1 = bearish) adds a 6th confirmation
+            'supertrend_bear': (
+                indicators.get('supertrend_direction') is not None
+                and int(scalar(indicators['supertrend_direction'].iloc[-1])) == -1
+            ),
         }
 
         # Score-based direction selection — no binary minimum threshold.
-        # market_strength (0.0–1.0 = score/5) flows downstream to modulate gate
-        # thresholds rather than hard-blocking the signal.
+        # market_strength (0.0–1.0 = score/max_conditions) flows downstream to
+        # modulate gate thresholds rather than hard-blocking the signal.
         # Only a true "zero signal" (score=0 on BOTH sides) results in hold.
+        _max_conditions = len(uptrend_conditions)   # 6 (5 legacy + Supertrend)
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
 
         # Log details for debugging
-        logger.debug(f"Market filter - Uptrend: {uptrend_score}/5, Downtrend: {downtrend_score}/5")
+        _st_dir = (
+            int(scalar(indicators['supertrend_direction'].iloc[-1]))
+            if indicators.get('supertrend_direction') is not None
+            else 'N/A'
+        )
+        logger.debug(
+            f"Market filter - Uptrend: {uptrend_score}/{_max_conditions}, "
+            f"Downtrend: {downtrend_score}/{_max_conditions}"
+        )
         logger.debug(f"  Price vs VWAP: {current_price:.4f} vs {vwap:.4f}")
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
-        logger.debug(f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, Vol ratio: {volume_ratio:.2f}")
+        logger.debug(
+            f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, "
+            f"Vol ratio: {volume_ratio:.2f}, Supertrend dir: {_st_dir}"
+        )
 
         if uptrend_score >= downtrend_score and uptrend_score > 0:
-            _mkt_strength = uptrend_score / 5.0
+            _mkt_strength = uptrend_score / _max_conditions
             return (True, 'uptrend',
-                    f'Uptrend ({uptrend_score}/5 — strength={_mkt_strength:.1f}, '
-                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)',
+                    f'Uptrend ({uptrend_score}/{_max_conditions} — strength={_mkt_strength:.2f}, '
+                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%, ST={_st_dir})',
                     _mkt_strength)
         elif downtrend_score > 0:
-            _mkt_strength = downtrend_score / 5.0
+            _mkt_strength = downtrend_score / _max_conditions
             return (True, 'downtrend',
-                    f'Downtrend ({downtrend_score}/5 — strength={_mkt_strength:.1f}, '
-                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%)',
+                    f'Downtrend ({downtrend_score}/{_max_conditions} — strength={_mkt_strength:.2f}, '
+                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%, ST={_st_dir})',
                     _mkt_strength)
         else:
             logger.debug(f"  → Market filter: zero conditions met in either direction")
             return (False, 'none',
-                    f'No trend signal (Up:{uptrend_score}/5, Down:{downtrend_score}/5)',
+                    f'No trend signal (Up:{uptrend_score}/{_max_conditions}, '
+                    f'Down:{downtrend_score}/{_max_conditions})',
                     0.0)
 
     def check_long_entry(self, df: pd.DataFrame, indicators: Dict) -> Tuple[bool, int, str]:
@@ -1586,7 +1610,15 @@ class NIJAApexStrategyV71:
         avg_volume_2 = df['volume'].iloc[-3:-1].mean()
         conditions['volume'] = current['volume'] >= avg_volume_2 * ENTRY_VOLUME_MIN_MULTIPLIER
 
+        # 6. Supertrend bullish confirmation (direction = +1).
+        # Provides an ATR-dynamic support floor that confirms the overall trend direction.
+        # Only scored when the indicator is available; skipped gracefully otherwise.
+        _st_dir_series_long = indicators.get('supertrend_direction')
+        if _st_dir_series_long is not None:
+            conditions['supertrend'] = int(scalar(_st_dir_series_long.iloc[-1])) == 1
+
         # Calculate score
+        _max_long_conditions = len(conditions)
         score = sum(conditions.values())
         signal = score >= LEGACY_SIGNAL_THRESHOLD
 
@@ -1605,7 +1637,11 @@ class NIJAApexStrategyV71:
                 logger.debug(f"  EntryOptimizer (long) error: {exc}")
         optimized_score = score + opt_delta
 
-        base_reason = f"Long score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Long score: 0/5"
+        base_reason = (
+            f"Long score: {score}/{_max_long_conditions} "
+            f"({', '.join([k for k, v in conditions.items() if v])})"
+            if conditions else f"Long score: 0/{_max_long_conditions}"
+        )
         reason = f"{base_reason} | opt: {opt_reason} (+{opt_delta:.1f})" if opt_delta > 0 else base_reason
 
         if score > 0:
@@ -1719,7 +1755,15 @@ class NIJAApexStrategyV71:
         avg_volume_2 = df['volume'].iloc[-3:-1].mean()
         conditions['volume'] = current['volume'] >= avg_volume_2 * ENTRY_VOLUME_MIN_MULTIPLIER
 
+        # 6. Supertrend bearish confirmation (direction = -1).
+        # Provides an ATR-dynamic resistance ceiling that confirms the overall trend direction.
+        # Only scored when the indicator is available; skipped gracefully otherwise.
+        _st_dir_series_short = indicators.get('supertrend_direction')
+        if _st_dir_series_short is not None:
+            conditions['supertrend'] = int(scalar(_st_dir_series_short.iloc[-1])) == -1
+
         # Calculate score
+        _max_short_conditions = len(conditions)
         score = sum(conditions.values())
         signal = score >= LEGACY_SIGNAL_THRESHOLD
 
@@ -1735,7 +1779,11 @@ class NIJAApexStrategyV71:
                 logger.debug(f"  EntryOptimizer (short) error: {exc}")
         optimized_score = score + opt_delta
 
-        base_reason = f"Short score: {score}/5 ({', '.join([k for k, v in conditions.items() if v])})" if conditions else "Short score: 0/5"
+        base_reason = (
+            f"Short score: {score}/{_max_short_conditions} "
+            f"({', '.join([k for k, v in conditions.items() if v])})"
+            if conditions else f"Short score: 0/{_max_short_conditions}"
+        )
         reason = f"{base_reason} | opt: {opt_reason} (+{opt_delta:.1f})" if opt_delta > 0 else base_reason
 
         if score > 0:
@@ -2437,6 +2485,19 @@ class NIJAApexStrategyV71:
         indicators['bb_middle'] = bb_middle
         indicators['bb_lower'] = bb_lower
         indicators['bb_bandwidth'] = bb_bandwidth  # Normalized volatility measure for adaptive targets
+
+        # Supertrend (period=10, multiplier=3.0) — 2025 high-win-rate crypto indicator.
+        # Provides a single +1 / -1 direction signal that confirms trend with ATR-dynamic
+        # support/resistance bands.  Combined with VWAP and RSI confluence this is one of
+        # the most reliable setups for scalping crypto markets.
+        try:
+            st_line, st_direction = calculate_supertrend(df, period=10, multiplier=3.0)
+            indicators['supertrend_line'] = st_line
+            indicators['supertrend_direction'] = st_direction
+        except Exception as _st_err:
+            logger.debug("Supertrend calculation failed (skipping): %s", _st_err)
+            indicators['supertrend_line'] = None
+            indicators['supertrend_direction'] = None
 
         return indicators
 
