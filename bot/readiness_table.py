@@ -30,7 +30,7 @@ Keys
 ``strategy_ready``    — TradingStrategy singleton published
 ``execution_ready``   — execution engine wired to strategy
 ``nonce_ready``       — Kraken nonce FSM authorized (auto-True for Coinbase-only)
-``bootstrap_ready``   — bootstrap kernel reached RUNNING_SUPERVISED handoff
+``bootstrap_ready``   — bootstrap kernel reached INIT_COMPLETE and cleared the pre-thread handoff barrier
 """
 
 from __future__ import annotations

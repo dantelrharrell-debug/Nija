@@ -6756,6 +6756,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     _BootstrapState.INIT_COMPLETE,
                     "all initialization locked; execution logic ready",
                 )
+            _rt_mark_ready("bootstrap_ready")
 
             # Bootstrap-owned NONCE phase: execute after INIT_COMPLETE boundary
             # and before RUN loop thread launch.
@@ -6983,7 +6984,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 except Exception as _capital_running_err:
                     logger.warning("Capital bootstrap RUNNING transition failed: %s", _capital_running_err)
             try:
-                _rt_mark_ready("bootstrap_ready")
                 _barrier_state = _rt_snapshot()
                 logger.info("Barrier state: %s", _barrier_state)
                 if not _rt_is_ready():
