@@ -18,6 +18,8 @@ from enum import Enum
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija")
+MIN_EXECUTION_UNLOCK_TIMEOUT_S = 1.0
+MAX_EXECUTION_UNLOCK_TIMEOUT_S = 300.0
 
 try:
     from bot.runtime_mode import resolve_runtime_mode
@@ -847,13 +849,22 @@ def validate_operational_environment_config() -> StartupValidationResult:
     unlock_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "").strip()
     if unlock_timeout_raw:
         try:
-            unlock_timeout_s = float(unlock_timeout_raw)
+            try:
+                unlock_timeout_s = float(unlock_timeout_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Value must be a valid number") from exc
             if not math.isfinite(unlock_timeout_s):
-                raise ValueError("Timeout is not finite")
+                raise ValueError("Value must be a finite number (not infinity or NaN)")
             # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
             # non-wait startup path, and at most 300s to avoid long silent stalls.
-            if unlock_timeout_s < 1.0 or unlock_timeout_s > 300.0:
-                raise ValueError("Timeout must be between 1.0 and 300.0 seconds")
+            if (
+                unlock_timeout_s < MIN_EXECUTION_UNLOCK_TIMEOUT_S
+                or unlock_timeout_s > MAX_EXECUTION_UNLOCK_TIMEOUT_S
+            ):
+                raise ValueError(
+                    f"Timeout must be between {MIN_EXECUTION_UNLOCK_TIMEOUT_S:.1f} and "
+                    f"{MAX_EXECUTION_UNLOCK_TIMEOUT_S:.1f} seconds"
+                )
             result.add_info(
                 f"✅ NIJA_EXECUTION_UNLOCK_TIMEOUT_S valid: {unlock_timeout_s:.3f}s"
             )
