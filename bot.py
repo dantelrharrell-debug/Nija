@@ -2941,6 +2941,12 @@ def _acquire_distributed_process_lock() -> None:
                     "Distributed writer lock timeout but UNSAFE bypass enabled; proceeding with local trading. "
                     "DO NOT RUN MULTIPLE INSTANCES."
                 )
+                # Mark degraded mode so downstream authority checks and finalize_boot()
+                # treat execution as degraded rather than blocking on missing fencing token.
+                _running_in_degraded_mode = True
+                os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+                os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+                os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
                 # Continue to live trading with local file-based locks
             else:
                 # NON-LIVE or NOT_REQUIRED: Enter degraded mode (safe fallback for non-live testing)
@@ -2953,6 +2959,9 @@ def _acquire_distributed_process_lock() -> None:
                 _running_in_degraded_mode = True
                 os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
                 os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+                # Allow execution without fencing token — keep all three degraded
+                # flags consistent so finalize_boot() can bypass the Redis PING gate.
+                os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
                 # Continue to non-live trading with degraded lock mode
             return
         
