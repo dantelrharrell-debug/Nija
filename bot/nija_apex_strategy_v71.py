@@ -1464,16 +1464,18 @@ class NIJAApexStrategyV71:
         # market_strength (0.0–1.0 = score/max_conditions) flows downstream to
         # modulate gate thresholds rather than hard-blocking the signal.
         # Only a true "zero signal" (score=0 on BOTH sides) results in hold.
-        _max_conditions = len(uptrend_conditions)   # 6 (5 legacy + Supertrend)
+        _max_conditions = len(uptrend_conditions)
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
 
         # Log details for debugging
-        _st_dir = (
-            int(scalar(indicators['supertrend_direction'].iloc[-1]))
-            if indicators.get('supertrend_direction') is not None
-            else 'N/A'
+        _st_dir_series = indicators.get('supertrend_direction')
+        _st_dir: Optional[int] = (
+            int(scalar(_st_dir_series.iloc[-1]))
+            if _st_dir_series is not None
+            else None
         )
+        _st_dir_str = str(_st_dir) if _st_dir is not None else 'N/A'
         logger.debug(
             f"Market filter - Uptrend: {uptrend_score}/{_max_conditions}, "
             f"Downtrend: {downtrend_score}/{_max_conditions}"
@@ -1482,20 +1484,20 @@ class NIJAApexStrategyV71:
         logger.debug(f"  EMA sequence: {ema9:.4f} vs {ema21:.4f} vs {ema50:.4f}")
         logger.debug(
             f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, "
-            f"Vol ratio: {volume_ratio:.2f}, Supertrend dir: {_st_dir}"
+            f"Vol ratio: {volume_ratio:.2f}, Supertrend dir: {_st_dir_str}"
         )
 
         if uptrend_score >= downtrend_score and uptrend_score > 0:
             _mkt_strength = uptrend_score / _max_conditions
             return (True, 'uptrend',
                     f'Uptrend ({uptrend_score}/{_max_conditions} — strength={_mkt_strength:.2f}, '
-                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%, ST={_st_dir})',
+                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%, ST={_st_dir_str})',
                     _mkt_strength)
         elif downtrend_score > 0:
             _mkt_strength = downtrend_score / _max_conditions
             return (True, 'downtrend',
                     f'Downtrend ({downtrend_score}/{_max_conditions} — strength={_mkt_strength:.2f}, '
-                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%, ST={_st_dir})',
+                    f'ADX={adx:.1f}, Vol={volume_ratio*100:.0f}%, ST={_st_dir_str})',
                     _mkt_strength)
         else:
             logger.debug(f"  → Market filter: zero conditions met in either direction")
@@ -2494,7 +2496,7 @@ class NIJAApexStrategyV71:
             st_line, st_direction = calculate_supertrend(df, period=10, multiplier=3.0)
             indicators['supertrend_line'] = st_line
             indicators['supertrend_direction'] = st_direction
-        except Exception as _st_err:
+        except (ValueError, KeyError, IndexError, ArithmeticError) as _st_err:
             logger.debug("Supertrend calculation failed (skipping): %s", _st_err)
             indicators['supertrend_line'] = None
             indicators['supertrend_direction'] = None

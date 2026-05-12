@@ -1059,9 +1059,9 @@ def calculate_supertrend(df, period=10, multiplier=3.0):
     """
     Calculate Supertrend indicator for trend direction confirmation.
 
-    Supertrend is one of the highest-accuracy trend indicators for crypto
-    scalping (2024-2025 research). It uses ATR to build dynamic upper/lower
-    bands and flips direction when price closes on the opposite side.
+    Supertrend is a widely-used trend direction indicator for crypto
+    scalping that uses ATR to build dynamic upper/lower bands and flips
+    direction when price closes on the opposite side.
 
     Formula:
         Basic Upper Band = (high + low) / 2 + multiplier * ATR
