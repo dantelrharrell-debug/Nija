@@ -798,7 +798,7 @@ class MultiAccountBrokerManager:
         except Exception:
             _sum_nested_balances = None
 
-        def _attempt_startup_coordinator_refresh(attempt: int) -> Optional[float]:
+        def _execute_startup_coordinator_refresh(attempt: int) -> Optional[float]:
             """Run one synchronous startup refresh and wait up to BALANCE_FETCH_TIMEOUT for hydration."""
             if self._capital_coordinator is None:
                 return None
@@ -845,7 +845,6 @@ class MultiAccountBrokerManager:
                 return None
 
             _coordinator_total = float(getattr(_snapshot, "real_capital", 0.0) or 0.0)
-            self.bootstrap_balance_usd = _coordinator_total
 
             _hydrated = bool(getattr(self._capital_coordinator, "balance_hydrated", False))
             if not _hydrated:
@@ -903,7 +902,7 @@ class MultiAccountBrokerManager:
             except Exception:
                 _total_usd = float(_sum_local(_balances))
 
-            _coordinator_total = _attempt_startup_coordinator_refresh(_attempt)
+            _coordinator_total = _execute_startup_coordinator_refresh(_attempt)
             if _coordinator_total is not None:
                 _total_usd = max(_total_usd, _coordinator_total)
                 self.bootstrap_balance_usd = _total_usd
