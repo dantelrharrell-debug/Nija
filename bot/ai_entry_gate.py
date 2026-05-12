@@ -16,10 +16,8 @@ Gate 3 — Volatility Range            1 pt   (market conditions)
 Gate 4 — Spread / Slippage           1 pt   (cost safety)
 Gate 5 — Regime Classification       0 pts  (informational context only)
 
-Pass threshold: base 1.6 / 7 (effective minimum currently 2 points after floor logic).  This means:
-  - Gate 1 alone                   → 3 pts → PASS  (AI score sufficient)
-  - Gate 2 + Gate 3 + Gate 4      → 4 pts → PASS  (volume + conditions)
-  - Gate 5 does not add or remove points (informational only)
+Pass threshold is adaptive and applied inside ``AIEntryGate.check()``.
+Gate 5 does not add or remove points (informational only).
 
   AI + Volume alone can now trigger a trade even if volume is weak.
   Still respects the hard-block: VOLATILITY_EXPLOSION regime.
@@ -226,7 +224,7 @@ _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # auto-summed (currently 7)
 # (Gate 2+3 = 2+1 = 3 pts → PASS; Gate 1 alone = 3 pts → PASS; Gate 3+4 = 2 pts → PASS).
 # Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
 # via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
-BASE_ENTRY_SCORE_THRESHOLD: float = 1.6  # base out of 7; check() enforces effective_threshold floor of 2
+BASE_ENTRY_SCORE_THRESHOLD: float = 1.6  # base threshold on the 7-point scoring domain
 
 # ── ATR-based volatility dampening constants ─────────────────────────────────
 # When the market is actively moving the gate pass-threshold is relaxed
