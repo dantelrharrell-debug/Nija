@@ -2011,7 +2011,7 @@ class NIJAApexStrategyV71:
             score_reduction = max(score_reduction, float(drought.score_reduction))
 
         effective_score = int(max(2.0, float(ENTRY_GATE_MIN_SCORE) - score_reduction))
-        return min(ENTRY_GATE_MIN_SCORE, effective_score)
+        return effective_score
 
     def _calculate_entry_gate_score(
         self,
