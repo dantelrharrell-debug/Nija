@@ -1027,10 +1027,15 @@ def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
         )
 
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-        _unlock_timeout_s = max(
-            1.0,
-            float(os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "15.0")),
-        )
+        _unlock_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "15.0")
+        try:
+            _unlock_timeout_s = max(1.0, float(_unlock_timeout_raw))
+        except ValueError:
+            logger.warning(
+                "Invalid NIJA_EXECUTION_UNLOCK_TIMEOUT_S=%r; using default 15.0s",
+                _unlock_timeout_raw,
+            )
+            _unlock_timeout_s = 15.0
 
         def _bootstrap_unlock_ready() -> bool:
             try:
@@ -1051,8 +1056,16 @@ def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
             timeout_label="FINAL_BOOTSTRAP_UNLOCK_BEFORE_EXECUTION_ENABLE",
             poll_interval_s=0.25,
         ):
+            _last_bootstrap_state = "unknown"
+            try:
+                _last_bootstrap_state = getattr(_get_bootstrap_fsm().state, "value", "unknown")
+            except Exception:
+                pass
             logger.critical(
-                "EXECUTION ENABLE BLOCKED: final bootstrap unlock never reached (%s)",
+                "EXECUTION ENABLE BLOCKED: final bootstrap unlock never reached "
+                "(timeout=%.2fs state=%s context=%s)",
+                _unlock_timeout_s,
+                _last_bootstrap_state,
                 context,
             )
             return False
@@ -1078,6 +1091,8 @@ def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
     os.environ["BLOCK_EXECUTION"] = "false"
     os.environ["DRY_RUN_MODE"] = "false"
     os.environ["SUPERVISOR_MODE"] = "false"
+    # Keep the post-unlock balance floor permissive so the runtime gate does not
+    # immediately re-block after the supervised handoff completes.
     os.environ["MINIMUM_TRADING_BALANCE"] = "1"
 
     try:

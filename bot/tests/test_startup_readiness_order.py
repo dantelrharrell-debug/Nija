@@ -112,6 +112,38 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "execution enablement must occur after the RUNNING_SUPERVISED handoff",
         )
 
+        call_sequence = []
+        for node in ast.walk(startup_fn):
+            for field_name in ("body", "orelse", "finalbody"):
+                statements = getattr(node, field_name, None)
+                if not isinstance(statements, list):
+                    continue
+                for stmt in statements:
+                    if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                        call = stmt.value
+                        if isinstance(call.func, ast.Name) and call.func.id in {
+                            "_ensure_running_supervised",
+                            "_enable_execution_after_bootstrap_unlock",
+                        }:
+                            call_sequence.append((call.func.id, stmt.lineno))
+                    elif isinstance(stmt, ast.If) and isinstance(stmt.test, ast.UnaryOp):
+                        operand = stmt.test.operand
+                        if (
+                            isinstance(operand, ast.Call)
+                            and isinstance(operand.func, ast.Name)
+                            and operand.func.id == "_enable_execution_after_bootstrap_unlock"
+                        ):
+                            call_sequence.append((operand.func.id, stmt.lineno))
+
+        self.assertIn(
+            [
+                ("_ensure_running_supervised", running_supervised_calls[0].lineno),
+                ("_enable_execution_after_bootstrap_unlock", execution_unlock_calls[0].lineno),
+            ],
+            [call_sequence[idx : idx + 2] for idx in range(len(call_sequence) - 1)],
+            "execution enablement must be checked immediately after _ensure_running_supervised in the same control-flow block",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
