@@ -219,7 +219,7 @@ _GATE_WEIGHTS: Dict[str, int] = {
     "gate4_spread":     1,   # cost safety
     "gate5_regime":     0,   # market context label only (no scoring)
 }
-_GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # 7
+_GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # auto-summed (currently 7)
 
 # Mutable base threshold — lowered to 1.6 to maximize confirmation trades in
 # current market conditions.  Any gate combination scoring ≥ 1.6 pts passes
@@ -666,7 +666,10 @@ class AIEntryGate:
         """Gate 5: Regime compatibility classification (informational only).
 
         This gate no longer adds or subtracts score because trend/regime validity
-        is already established upstream.  It only reports compatibility context.
+        is already established upstream in ``nija_apex_strategy_v71`` via
+        ``check_market_filter`` plus the regime-aware scoring path
+        (``check_entry_with_enhanced_scoring`` / Nija AI engine). It only reports
+        compatibility context.
         """
         if _DISABLE_REGIME_GATE:
             return GateCheck(
