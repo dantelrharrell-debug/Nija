@@ -2025,16 +2025,14 @@ except ImportError:
 load_dotenv()
 
 # ============================================================================
-# TEMPORARILY DISABLED LAYERS
-# These systems are disabled for lean single-account operation.
-# To re-enable a layer, remove its override line (or set the flag to True).
+# LAYER OVERRIDES
+# Layers that remain disabled because they require multi-account / multi-broker
+# infrastructure not present in single-account operation.
+# All other layers (AI-Evolution, TradeCluster, SectorAlloc, VolRouter) are
+# allowed to be enabled by their import blocks above.
 # ============================================================================
-AI_STRATEGY_EVOLUTION_AVAILABLE   = False  # ❌ AI Strategy Evolution Engine
-TRADE_CLUSTER_AVAILABLE           = False  # ❌ Trade Cluster Engine
-CROSS_BROKER_ARB_AVAILABLE        = False  # ❌ Cross-Exchange Arbitrage
-ACCOUNT_FLOW_AVAILABLE            = False  # ❌ Multi-account capital routing
-SECTOR_TAXONOMY_AVAILABLE         = False  # ❌ Sector allocation engine
-VOLATILITY_CAPITAL_ROUTER_AVAILABLE = False  # ❌ Volatility-weighted capital router
+CROSS_BROKER_ARB_AVAILABLE        = False  # ❌ Cross-Exchange Arbitrage — requires multiple brokers
+ACCOUNT_FLOW_AVAILABLE            = False  # ❌ Multi-account capital routing — single-account only
 KELLY_SIZING_ENABLED              = False  # ❌ Kelly sizing (too aggressive for small accounts)
 # ARB_BEST_EXEC_AVAILABLE is set by the import block above; do not override here.
 
