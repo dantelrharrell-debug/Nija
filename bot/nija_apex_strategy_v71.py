@@ -2004,13 +2004,15 @@ class NIJAApexStrategyV71:
         if drought is None:
             return ENTRY_GATE_MIN_SCORE
 
-        score_reduction = 0.0
+        score_reduction = 0
+        # ENTRY_GATE_FALLBACK_WINDOW_SECS can trigger before full drought mode,
+        # so both checks may overlap; we use max() to avoid stacking reductions.
         if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS:
-            score_reduction = max(score_reduction, 1.0)
+            score_reduction = max(score_reduction, 1)
         if drought.active:
-            score_reduction = max(score_reduction, float(drought.score_reduction))
+            score_reduction = max(score_reduction, int(drought.score_reduction))
 
-        effective_score = int(max(2.0, float(ENTRY_GATE_MIN_SCORE) - score_reduction))
+        effective_score = max(2, ENTRY_GATE_MIN_SCORE - score_reduction)
         return effective_score
 
     def _calculate_entry_gate_score(
