@@ -905,7 +905,6 @@ class MultiAccountBrokerManager:
             _coordinator_total = _execute_startup_coordinator_refresh(_attempt)
             if _coordinator_total is not None:
                 _total_usd = max(_total_usd, _coordinator_total)
-                self.bootstrap_balance_usd = _total_usd
 
             if _total_usd > 0.0:
                 break
