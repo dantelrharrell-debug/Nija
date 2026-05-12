@@ -95,14 +95,14 @@ class TestStartupReadinessOrder(unittest.TestCase):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 if node.func.id == "_ensure_running_supervised":
                     running_supervised_calls.append(node)
-                elif node.func.id == "_enable_execution_after_bootstrap_unlock":
+                elif node.func.id == "_enable_execution_after_bootstrap_supervised":
                     execution_unlock_calls.append(node)
 
         if len(running_supervised_calls) != 1:
             self.fail("Expected exactly one _ensure_running_supervised() call in _run_bot_startup_and_trading")
         if len(execution_unlock_calls) != 1:
             self.fail(
-                "Expected exactly one _enable_execution_after_bootstrap_unlock() call in "
+                "Expected exactly one _enable_execution_after_bootstrap_supervised() call in "
                 "_run_bot_startup_and_trading"
             )
 
@@ -133,7 +133,7 @@ class TestStartupReadinessOrder(unittest.TestCase):
                         and isinstance(second_stmt.test, ast.UnaryOp)
                         and isinstance(second_stmt.test.operand, ast.Call)
                         and isinstance(second_stmt.test.operand.func, ast.Name)
-                        and second_stmt.test.operand.func.id == "_enable_execution_after_bootstrap_unlock"
+                        and second_stmt.test.operand.func.id == "_enable_execution_after_bootstrap_supervised"
                     ):
                         adjacent_pair_found = True
                         break

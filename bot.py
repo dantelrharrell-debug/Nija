@@ -1013,7 +1013,7 @@ def _ensure_running_supervised(active_threads: dict, *, context: str) -> None:
         logger.warning("RUNNING_SUPERVISED safeguard failed (%s): %s", context, exc)
 
 
-def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
+def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
     """Enable runtime execution only after BootstrapFSM reaches RUNNING_SUPERVISED."""
     try:
         from bot.trading_state_machine import (
@@ -1027,6 +1027,8 @@ def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
         )
 
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+        # Give the thread-launch/supervisor handoff a short bounded window to
+        # commit RUNNING_SUPERVISED before execution is enabled.
         _unlock_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "15.0")
         try:
             _unlock_timeout_s = max(1.0, float(_unlock_timeout_raw))
@@ -1091,8 +1093,8 @@ def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
     os.environ["BLOCK_EXECUTION"] = "false"
     os.environ["DRY_RUN_MODE"] = "false"
     os.environ["SUPERVISOR_MODE"] = "false"
-    # Keep the post-unlock balance floor permissive so the runtime gate does not
-    # immediately re-block after the supervised handoff completes.
+    # Keep the post-unlock balance floor at the runtime minimum ($1) so the
+    # supervised handoff does not immediately re-block on the same guard.
     os.environ["MINIMUM_TRADING_BALANCE"] = "1"
 
     try:
@@ -7020,7 +7022,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             )
 
             _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
-            if not _enable_execution_after_bootstrap_unlock(
+            if not _enable_execution_after_bootstrap_supervised(
                 context="threads live (pre-handoff)"
             ):
                 raise RuntimeError(
