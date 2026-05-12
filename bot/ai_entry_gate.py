@@ -16,7 +16,7 @@ Gate 3 — Volatility Range            1 pt   (market conditions)
 Gate 4 — Spread / Slippage           1 pt   (cost safety)
 Gate 5 — Regime Classification       0 pts  (informational context only)
 
-Pass threshold: 2 / 7 effective minimum (temporarily loosened for more trades).  This means:
+Pass threshold: base 1.6 / 7 (effective minimum currently 2 points after floor logic).  This means:
   - Gate 1 alone                   → 3 pts → PASS  (AI score sufficient)
   - Gate 2 + Gate 3 + Gate 4      → 4 pts → PASS  (volume + conditions)
   - Gate 5 does not add or remove points (informational only)
