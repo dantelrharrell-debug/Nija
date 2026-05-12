@@ -298,6 +298,33 @@ class BootstrapStateMachine:
     _created: bool = False
     _created_lock = threading.Lock()
 
+    @classmethod
+    def _reset_for_testing(cls) -> None:
+        """⚠️ TEST-ONLY — reset the singleton guard so a fresh instance can be created.
+
+        Also clears the module-level cached singleton so ``get_bootstrap_fsm()``
+        returns a newly constructed instance on its next call.  Must never be
+        called from production code paths.
+
+        Raises ``RuntimeError`` if called outside of a recognised test execution
+        context (pytest sets ``PYTEST_CURRENT_TEST``; unittest-only runs may set
+        ``UNITTEST_RUNNING=1``).
+        """
+        import os
+        if not (
+            os.environ.get("PYTEST_CURRENT_TEST")
+            or os.environ.get("UNITTEST_RUNNING")
+        ):
+            raise RuntimeError(
+                "BootstrapStateMachine._reset_for_testing() must only be called "
+                "from test code (PYTEST_CURRENT_TEST or UNITTEST_RUNNING must be set)"
+            )
+        global _bootstrap_fsm  # noqa: PLW0603
+        with cls._created_lock:
+            cls._created = False
+        with _bootstrap_fsm_lock:
+            _bootstrap_fsm = None
+
     def __init__(self) -> None:
         with self._created_lock:
             if self.__class__._created:
