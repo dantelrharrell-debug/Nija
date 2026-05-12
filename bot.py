@@ -1053,7 +1053,7 @@ def _enable_execution_after_bootstrap_unlock(*, context: str) -> bool:
         if not _wait_for_predicate_with_timeout(
             predicate=_bootstrap_unlock_ready,
             timeout_s=_unlock_timeout_s,
-            timeout_label="FINAL_BOOTSTRAP_UNLOCK_BEFORE_EXECUTION_ENABLE",
+            timeout_label="EXECUTION_ENABLE_WAITING_FOR_BOOTSTRAP_SUPERVISED",
             poll_interval_s=0.25,
         ):
             _last_bootstrap_state = "unknown"
