@@ -77,30 +77,30 @@ class TestReadinessBrokerGate(unittest.TestCase):
     # Simulate the bootstrap broker_connected gate logic
     # ------------------------------------------------------------------
 
-    def _simulate_broker_gate(self, mabm, *, timeout_s: float = 2.0):
+    def _simulate_broker_gate(self, broker_manager, *, timeout_s: float = 2.0):
         """
         Mirrors the broker_connected gate logic introduced in bot.py.
 
         Parameters
         ----------
-        mabm : object or None
+        broker_manager : object or None
             Fake MABM with all_brokers_fully_ready().
         timeout_s : float
             Maximum seconds to wait for readiness (shortened for tests).
         """
-        if mabm is None:
+        if broker_manager is None:
             readiness_table.mark_not_applicable(
                 "broker_connected",
                 reason="MABM unavailable in this deployment",
             )
-        elif hasattr(mabm, "all_brokers_fully_ready"):
+        elif hasattr(broker_manager, "all_brokers_fully_ready"):
             deadline = time.monotonic() + timeout_s
             while (
-                not bool(mabm.all_brokers_fully_ready())
+                not bool(broker_manager.all_brokers_fully_ready())
                 and time.monotonic() < deadline
             ):
                 time.sleep(0.05)
-            if bool(mabm.all_brokers_fully_ready()):
+            if bool(broker_manager.all_brokers_fully_ready()):
                 readiness_table.mark_ready("broker_connected")
             else:
                 readiness_table.mark_not_applicable(
