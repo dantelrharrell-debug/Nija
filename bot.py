@@ -1719,6 +1719,16 @@ def _acquire_distributed_process_lock() -> None:
     def _enter_fail_closed_standby(_reason: str) -> None:
         """Block startup safely and retry lock acquisition instead of crash-looping."""
         nonlocal _standby_retry_count
+        if not _require_lock:
+            print(
+                "⚠️ Fail-closed standby skipped because distributed writer lock is optional in this mode.",
+                flush=True,
+            )
+            print(f"   Lock error: {_reason}", flush=True)
+            os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+            os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+            os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
+            return
         _reason_lc = str(_reason or "").lower()
         _retry_enabled = os.environ.get(
             "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
@@ -2022,6 +2032,70 @@ def _acquire_distributed_process_lock() -> None:
         f"local_fallback={_allow_local_lock_fallback} "
         f"force_local_fallback={_force_local_lock_fallback}"
     )
+
+    def _validate_primary_redis_url_shape() -> str:
+        if not _redis_url:
+            return ""
+        try:
+            _parsed_primary = urlparse(_redis_url)
+        except Exception:
+            return "Primary Redis URL is not parseable"
+
+        _scheme = (_parsed_primary.scheme or "").lower()
+        _host = (_parsed_primary.hostname or "").lower()
+        _source = (_redis_url_source or "").strip().upper()
+
+        if _scheme in {"http", "https"}:
+            return (
+                "Primary Redis URL uses HTTP(S), not Redis protocol. "
+                "Set NIJA_REDIS_URL to the exact Redis Connect URL from Railway Redis service."
+            )
+        if _scheme not in {"redis", "rediss"}:
+            return (
+                f"Primary Redis URL uses unsupported scheme '{_scheme or 'missing'}'. "
+                "Expected redis:// or rediss://."
+            )
+        if not _parsed_primary.hostname or _parsed_primary.port is None:
+            return "Primary Redis URL is missing host or port"
+        if (
+            _source == "NIJA_REDIS_URL"
+            and ".proxy.rlwy.net" in _host
+            and _scheme != "rediss"
+            and _force_redis_tls
+        ):
+            return (
+                "Primary NIJA_REDIS_URL points to Railway proxy with redis:// while TLS is required. "
+                "Use rediss:// from Railway Redis Connect tab."
+            )
+        return ""
+
+    _primary_url_shape_error = _validate_primary_redis_url_shape()
+    if _primary_url_shape_error:
+        _shape_msg = (
+            f"Invalid primary Redis URL ({_redis_url_source or 'unset'}): {_primary_url_shape_error}"
+        )
+        print("❌ REDIS URL VALIDATION FAILED")
+        print(f"   {_shape_msg}")
+        print("   Steps:")
+        print("     1. Open Railway -> Redis service -> Connect tab")
+        print("     2. Copy the full Redis URL exactly as provided")
+        print("     3. Set NIJA_REDIS_URL to that exact value")
+        print("     4. Redeploy bot service")
+        if _live_mode and _require_lock and not _unsafe_bypass:
+            if _standby_retry_active:
+                raise RuntimeError(_shape_msg)
+            _enter_fail_closed_standby(_shape_msg)
+            return
+        print(
+            "⚠️ Distributed lock is optional in this mode; continuing in degraded writer mode.",
+            flush=True,
+        )
+        _running_in_degraded_mode = True
+        os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+        os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+        os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
+        return
+
     if not _redis_url:
         _msg = (
             "⚠️ Distributed single-writer lock disabled "
@@ -2196,7 +2270,7 @@ def _acquire_distributed_process_lock() -> None:
         if _non_redis_hint:
             _ping_exc = RuntimeError(_non_redis_hint)
             _primary_source_is_nija = (_redis_url_source or "").strip().upper() == "NIJA_REDIS_URL"
-            if _live_mode and _primary_source_is_nija and not _unsafe_bypass:
+            if _live_mode and _require_lock and _primary_source_is_nija and not _unsafe_bypass:
                 raise RuntimeError(
                     "LIVE mode fail-closed: primary NIJA_REDIS_URL endpoint appears HTTP/non-Redis. "
                     "Update NIJA_REDIS_URL to the exact Railway Redis Connect URL before trading."
@@ -2798,6 +2872,17 @@ def _acquire_distributed_process_lock() -> None:
             raise SystemExit(1)
         if _standby_retry_active:
             raise RuntimeError(str(_lock_exc))
+        if not _require_lock:
+            print(
+                "⚠️ Distributed writer lock unavailable, but lock is optional in this mode; continuing without standby loop.",
+                flush=True,
+            )
+            print(f"   Lock error: {_lock_exc}", flush=True)
+            _running_in_degraded_mode = True
+            os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+            os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+            os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
+            return
         _enter_fail_closed_standby(str(_lock_exc))
 
 
