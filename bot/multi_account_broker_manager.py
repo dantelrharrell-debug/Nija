@@ -798,8 +798,8 @@ class MultiAccountBrokerManager:
         except Exception:
             _sum_nested_balances = None
 
-        def _refresh_startup_snapshot_once(attempt: int) -> Optional[float]:
-            """Run one synchronous coordinator refresh during startup hydration."""
+        def _attempt_startup_coordinator_refresh(attempt: int) -> Optional[float]:
+            """Run one synchronous startup refresh and wait up to BALANCE_FETCH_TIMEOUT for hydration."""
             if self._capital_coordinator is None:
                 return None
 
@@ -809,8 +809,9 @@ class MultiAccountBrokerManager:
                     continue
                 _eligible = bool(getattr(_broker, "connected", False))
                 if not _eligible:
+                    _ready_probe = getattr(_broker, "is_ready_for_capital", None)
                     try:
-                        _eligible = bool(getattr(_broker, "is_ready_for_capital", lambda: False)())
+                        _eligible = bool(_ready_probe()) if callable(_ready_probe) else False
                     except Exception:
                         _eligible = False
                 if _eligible:
@@ -826,7 +827,7 @@ class MultiAccountBrokerManager:
             try:
                 _snapshot = self._capital_coordinator.execute_refresh(
                     broker_map=_startup_broker_map,
-                    trigger=f"mabm_initialize_startup_hydration_attempt_{attempt}",
+                    trigger=f"startup_hydration_refresh_attempt_{attempt}",
                 )
             except Exception as _refresh_err:
                 logger.warning(
@@ -902,9 +903,10 @@ class MultiAccountBrokerManager:
             except Exception:
                 _total_usd = float(_sum_local(_balances))
 
-            _coordinator_total = _refresh_startup_snapshot_once(_attempt)
+            _coordinator_total = _attempt_startup_coordinator_refresh(_attempt)
             if _coordinator_total is not None:
                 _total_usd = max(_total_usd, _coordinator_total)
+                self.bootstrap_balance_usd = _total_usd
 
             if _total_usd > 0.0:
                 break
