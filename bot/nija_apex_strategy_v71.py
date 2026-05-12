@@ -1469,6 +1469,7 @@ class NIJAApexStrategyV71:
         _max_conditions = len(uptrend_conditions)
         uptrend_score = sum(uptrend_conditions.values())
         downtrend_score = sum(downtrend_conditions.values())
+        _required_score = 1
 
         # Log details for debugging
         _st_dir_series = indicators.get('supertrend_direction')
@@ -1487,6 +1488,20 @@ class NIJAApexStrategyV71:
         logger.debug(
             f"  MACD histogram: {macd_hist:.6f}, ADX: {adx:.1f}, "
             f"Vol ratio: {volume_ratio:.2f}, Supertrend dir: {_st_dir_str}"
+        )
+        logger.debug(
+            "Market filter diagnostics | up_conditions=%s down_conditions=%s "
+            "up_score=%d/%d down_score=%d/%d required=%d adx=%.1f volume_ratio=%.2f supertrend_dir=%s",
+            uptrend_conditions,
+            downtrend_conditions,
+            uptrend_score,
+            _max_conditions,
+            downtrend_score,
+            _max_conditions,
+            _required_score,
+            adx,
+            volume_ratio,
+            _st_dir_str,
         )
 
         if uptrend_score >= downtrend_score and uptrend_score > 0:
@@ -1625,6 +1640,13 @@ class NIJAApexStrategyV71:
         _max_long_conditions = len(conditions)
         score = sum(conditions.values())
         signal = score >= LEGACY_SIGNAL_THRESHOLD
+        _st_dir_value_long: Optional[int] = (
+            int(scalar(_st_dir_series_long.iloc[-1]))
+            if _st_dir_series_long is not None
+            else None
+        )
+        _st_dir_str_long = str(_st_dir_value_long) if _st_dir_value_long is not None else "N/A"
+        volume_ratio = current['volume'] / avg_volume_2 if avg_volume_2 > 0 else 0.0
 
         # Apply entry optimizer bonus (RSI divergence, BB zone, volume pattern)
         # The bonus is additive and raises the effective score for high-quality setups,
@@ -1648,6 +1670,18 @@ class NIJAApexStrategyV71:
         )
         reason = f"{base_reason} | opt: {opt_reason} (+{opt_delta:.1f})" if opt_delta > 0 else base_reason
 
+        logger.debug(
+            "Long entry diagnostics | conditions=%s score=%d/%d required=%d pass=%s "
+            "adx=%.1f volume_ratio=%.2f supertrend_dir=%s",
+            conditions,
+            score,
+            _max_long_conditions,
+            LEGACY_SIGNAL_THRESHOLD,
+            signal,
+            adx,
+            volume_ratio,
+            _st_dir_str_long,
+        )
         if score > 0:
             logger.debug(f"  Long entry check: {reason}")
 
@@ -1770,6 +1804,13 @@ class NIJAApexStrategyV71:
         _max_short_conditions = len(conditions)
         score = sum(conditions.values())
         signal = score >= LEGACY_SIGNAL_THRESHOLD
+        _st_dir_value_short: Optional[int] = (
+            int(scalar(_st_dir_series_short.iloc[-1]))
+            if _st_dir_series_short is not None
+            else None
+        )
+        _st_dir_str_short = str(_st_dir_value_short) if _st_dir_value_short is not None else "N/A"
+        volume_ratio = current['volume'] / avg_volume_2 if avg_volume_2 > 0 else 0.0
 
         # Apply entry optimizer bonus (RSI divergence, BB zone, volume pattern)
         opt_delta = 0.0
@@ -1790,6 +1831,18 @@ class NIJAApexStrategyV71:
         )
         reason = f"{base_reason} | opt: {opt_reason} (+{opt_delta:.1f})" if opt_delta > 0 else base_reason
 
+        logger.debug(
+            "Short entry diagnostics | conditions=%s score=%d/%d required=%d pass=%s "
+            "adx=%.1f volume_ratio=%.2f supertrend_dir=%s",
+            conditions,
+            score,
+            _max_short_conditions,
+            LEGACY_SIGNAL_THRESHOLD,
+            signal,
+            adx,
+            volume_ratio,
+            _st_dir_str_short,
+        )
         if score > 0:
             logger.debug(f"  Short entry check: {reason}")
 

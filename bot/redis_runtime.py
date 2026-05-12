@@ -70,13 +70,19 @@ def _detect_non_redis_http_endpoint(url: str) -> str:
     """Return error hint when endpoint looks like HTTP instead of Redis."""
     try:
         parsed = urlparse((url or "").strip())
+        scheme = (parsed.scheme or "").lower()
         # Avoid plaintext probing TLS endpoints; rediss:// can reject the probe
         # and mimic an HTTP response even when Redis is healthy.
-        if (parsed.scheme or "").lower() == "rediss":
+        if scheme == "rediss":
             return ""
         host = parsed.hostname
         port = parsed.port
         if not host or port is None:
+            return ""
+        # Railway public proxy endpoints can emit HTTP-like errors when a plain
+        # redis:// probe is sent to a TLS-only listener; that is a scheme/TLS
+        # mismatch, not proof that the endpoint is non-Redis.
+        if ".proxy.rlwy.net" in host.lower():
             return ""
         with socket.create_connection((host, int(port)), timeout=2.5) as sock:
             sock.sendall(b"*1\r\n$4\r\nPING\r\n")
