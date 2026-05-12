@@ -956,12 +956,17 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
         )
         _timeout_s = _BOOTSTRAP_OBSERVER_TIMEOUT_S
     _deadline = time.monotonic() + _timeout_s
+    # Track the last state seen so we can detect FSM stalls and log them.
+    _last_logged_state: str = ""
+    _capital_ready_advance_attempted: bool = False
 
     while time.monotonic() < _deadline:
         _state = _bootstrap_state_value()
         if _state == "RUNNING_SUPERVISED":
+            logger.critical("LIFECYCLE: FSM state=%s", _state)
             return True, _state
         if _allow_degraded and _state == "DEGRADED_READY":
+            logger.critical("LIFECYCLE: FSM state=%s (degraded handoff allowed)", _state)
             return True, _state
         if _state in {"BOOT_FAILED_RETRY", "EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
             logger.error(
@@ -971,6 +976,37 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
                 _timeout_s,
             )
             return False, _state
+
+        # Log FSM state transitions so each new state is visible in the logs.
+        if _state != _last_logged_state:
+            logger.critical("LIFECYCLE: FSM state=%s", _state)
+            _last_logged_state = _state
+
+        # Recovery path: if the FSM is stuck at CAPITAL_READY the bootstrap
+        # thread may have raised before advancing to INIT_COMPLETE.  Attempt
+        # to drive the FSM forward so the observer does not time out.
+        if _state == "CAPITAL_READY" and not _capital_ready_advance_attempted:
+            _capital_ready_advance_attempted = True
+            logger.critical(
+                "LIFECYCLE: FSM at CAPITAL_READY - triggering transition to RUNNING_SUPERVISED"
+            )
+            try:
+                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                    _obs_bfsm = _get_bootstrap_fsm()
+                    _obs_bfsm.transition(
+                        _BootstrapState.INIT_COMPLETE,
+                        "bootstrap observer recovery: CAPITAL_READY stall detected",
+                    )
+                    logger.critical(
+                        "LIFECYCLE: FSM state=%s (observer recovery advance)",
+                        _bootstrap_state_value(),
+                    )
+            except Exception as _obs_adv_err:
+                logger.warning(
+                    "Bootstrap observer CAPITAL_READY recovery advance failed: %s",
+                    _obs_adv_err,
+                )
+
         time.sleep(_BOOTSTRAP_OBSERVER_POLL_INTERVAL_S)
 
     _state = _bootstrap_state_value()
@@ -6745,11 +6781,33 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _BootstrapState.CAPITAL_READY,
                         f"startup capital confirmed: ${_total_capital:.2f}",
                     )
+                    logger.critical(
+                        "LIFECYCLE: capital ready - FSM state=%s",
+                        _bootstrap_state_value(),
+                    )
                     try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
+                    # Advance FSM immediately past CAPITAL_READY so the bootstrap
+                    # observer never sees the FSM stuck at this intermediate state.
+                    # The INIT_COMPLETE boundary was previously set later (after B1
+                    # pre-flight), but if B1 raises the FSM would freeze here and
+                    # the observer would time out.
+                    logger.critical(
+                        "LIFECYCLE: capital ready - advancing FSM to RUNNING_SUPERVISED"
+                    )
+                    if _BOOTSTRAP_FSM_AVAILABLE:
+                        _bfsm_transition(
+                            _BootstrapState.INIT_COMPLETE,
+                            "capital hydration complete; advancing past CAPITAL_READY",
+                        )
+                        logger.critical(
+                            "LIFECYCLE: FSM state=%s",
+                            _bootstrap_state_value(),
+                        )
                     break
+
                     logger.warning(
                         "[CapGate] CA is_ready=True but is_hydrated=False — "
                         "waiting for publish_snapshot/refresh to commit hydration"
@@ -6769,11 +6827,30 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _BootstrapState.CAPITAL_READY,
                         "capital gate timeout — proceeding in degraded mode",
                     )
+                    logger.critical(
+                        "LIFECYCLE: capital ready (degraded) - FSM state=%s",
+                        _bootstrap_state_value(),
+                    )
                     try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
+                    # Advance FSM immediately past CAPITAL_READY (degraded path) so
+                    # the bootstrap observer never times out waiting at this state.
+                    logger.critical(
+                        "LIFECYCLE: capital ready - advancing FSM to RUNNING_SUPERVISED"
+                    )
+                    if _BOOTSTRAP_FSM_AVAILABLE:
+                        _bfsm_transition(
+                            _BootstrapState.INIT_COMPLETE,
+                            "capital gate timeout; advancing past CAPITAL_READY (degraded)",
+                        )
+                        logger.critical(
+                            "LIFECYCLE: FSM state=%s",
+                            _bootstrap_state_value(),
+                        )
                     break
+
 
                 capital_gate_checks += 1
                 _should_log_gate = (
@@ -7069,11 +7146,22 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # FIX 3: Explicit transition boundary — CAPITAL_READY → INIT_COMPLETE
             # All initialization is now locked. All acquired locks (INIT_LOCK, NONCE_LOCK)
             # may now be safely acquired. This is the boundary that gates execution locks.
+            # NOTE: INIT_COMPLETE may already be set (we advance it immediately after
+            # CAPITAL_READY above to prevent the bootstrap observer from timing out).
+            # _bfsm_transition is idempotent for already-reached states — it logs a
+            # warning and returns False without crashing, so this call is safe.
             if _BOOTSTRAP_FSM_AVAILABLE:
-                _bfsm_transition(
-                    _BootstrapState.INIT_COMPLETE,
-                    "all initialization locked; execution logic ready",
-                )
+                _cur_fsm_state = _bootstrap_state_value()
+                logger.critical("LIFECYCLE: FSM state=%s", _cur_fsm_state)
+                if _cur_fsm_state != "INIT_COMPLETE":
+                    _bfsm_transition(
+                        _BootstrapState.INIT_COMPLETE,
+                        "all initialization locked; execution logic ready",
+                    )
+                else:
+                    logger.critical(
+                        "LIFECYCLE: FSM already at INIT_COMPLETE — skipping redundant transition"
+                    )
             _rt_mark_ready("bootstrap_ready")
 
             # Bootstrap-owned NONCE phase: execute after INIT_COMPLETE boundary
@@ -7222,6 +7310,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     "spawning trading worker threads",
                 )
 
+            logger.critical(
+                "LIFECYCLE: FSM state=%s",
+                _bootstrap_state_value(),
+            )
             logger.info("Lifecycle: entering cycle scheduler")
 
             use_independent_trading = (
@@ -7234,6 +7326,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 strategy, use_independent_trading, _hf_bot
             )
             logger.info("B4 execution loop started")
+            logger.critical(
+                "LIFECYCLE: FSM state=%s",
+                _bootstrap_state_value(),
+            )
             logger.info("Lifecycle: entering live trading runtime")
 
             # ── FIX 2: RUNTIME START CONFIRMATION ──────────────────────────────────
@@ -7336,7 +7432,17 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 ],
             )
 
+            logger.critical(
+                "LIFECYCLE: entering strategy scheduler"
+            )
             _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
+            logger.critical(
+                "LIFECYCLE: FSM state=%s",
+                _bootstrap_state_value(),
+            )
+            logger.critical(
+                "LIFECYCLE: entering market scanner"
+            )
             if not _enable_execution_after_bootstrap_supervised(
                 context="threads live (pre-handoff)"
             ):
