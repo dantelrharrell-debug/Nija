@@ -2002,17 +2002,18 @@ class NIJAApexStrategyV71:
         Safety remains active (floor = 2/5), but after prolonged no-trade periods
         the hard requirement is eased by up to the configured drought reduction
         so valid setups are not suppressed by stacked conservative checks.
+
+        Returns an integer in [ENTRY_GATE_SAFETY_FLOOR, ENTRY_GATE_MIN_SCORE].
+        Reads these fields from drought: secs_since_last_trade, active, score_reduction.
         """
         if drought is None:
             return ENTRY_GATE_MIN_SCORE
 
-        score_reduction = 1 if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS else 0
-        # ENTRY_GATE_FALLBACK_WINDOW_SECS can trigger before full drought mode.
-        # If both conditions are true we apply only the strongest configured
-        # reduction (not additive stacking), preserving the safety floor.
+        time_based_reduction = 1 if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS else 0
+        active_drought_reduction = 0
         if drought.active:
-            drought_reduction = max(0, math.ceil(drought.score_reduction))
-            score_reduction = max(score_reduction, drought_reduction)
+            active_drought_reduction = math.ceil(max(0.0, drought.score_reduction))
+        score_reduction = max(time_based_reduction, active_drought_reduction)
 
         effective_score = max(ENTRY_GATE_SAFETY_FLOOR, ENTRY_GATE_MIN_SCORE - score_reduction)
         return effective_score
