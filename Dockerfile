@@ -1,6 +1,4 @@
-# Use Python 3.11 slim image from the public ECR mirror to avoid Docker Hub
-# metadata/rate-limit stalls on some remote builders.
-FROM public.ecr.aws/docker/library/python:3.11-slim
+FROM python:3.11-slim
 
 # Install git and redis-cli for runtime diagnostics
 RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/lists/*
