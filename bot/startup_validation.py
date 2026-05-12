@@ -25,6 +25,15 @@ except ImportError:
     from runtime_mode import resolve_runtime_mode  # type: ignore[import]
 
 
+def _import_redis_env_helpers():
+    """Import Redis env helper functions with package/local fallback."""
+    try:
+        from bot.redis_env import get_nija_url_format_error, get_redis_url, get_redis_url_source
+    except ImportError:
+        from redis_env import get_nija_url_format_error, get_redis_url, get_redis_url_source  # type: ignore[import]
+    return get_nija_url_format_error, get_redis_url, get_redis_url_source
+
+
 class StartupRisk(Enum):
     """Categories of startup risks"""
     GIT_METADATA_UNKNOWN = "git_metadata_unknown"
@@ -758,11 +767,7 @@ def validate_operational_environment_config() -> StartupValidationResult:
         )
 
     try:
-        try:
-            from bot.redis_env import get_nija_url_format_error, get_redis_url, get_redis_url_source
-        except ImportError:
-            from redis_env import get_nija_url_format_error, get_redis_url, get_redis_url_source  # type: ignore[import]
-
+        get_nija_url_format_error, get_redis_url, get_redis_url_source = _import_redis_env_helpers()
         nija_format_error = get_nija_url_format_error()
         if nija_format_error:
             result.add_risk(
@@ -792,17 +797,38 @@ def validate_operational_environment_config() -> StartupValidationResult:
         elif redis_url:
             parsed = urlparse(redis_url)
             scheme = (parsed.scheme or "").lower()
-            if scheme not in {"redis", "rediss"} or not parsed.hostname or parsed.port is None:
+            if scheme not in {"redis", "rediss"}:
                 result.add_risk(
                     StartupRisk.ENVIRONMENT_MISCONFIGURATION,
-                    f"Resolved Redis URL from {redis_source} is malformed",
+                    f"Resolved Redis URL from {redis_source} has unsupported scheme '{scheme or 'missing'}'",
                 )
                 result.add_warning(
-                    "❌ REDIS MISCONFIGURATION: resolved Redis URL must include a valid redis:// or "
-                    "rediss:// scheme, host, and port."
+                    "❌ REDIS MISCONFIGURATION: resolved Redis URL must use redis:// or rediss://."
                 )
                 result.mark_critical_failure(
-                    f"Resolved Redis URL from {redis_source} is malformed."
+                    f"Resolved Redis URL from {redis_source} uses unsupported scheme '{scheme or 'missing'}'."
+                )
+            if not parsed.hostname:
+                result.add_risk(
+                    StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                    f"Resolved Redis URL from {redis_source} is missing host",
+                )
+                result.add_warning(
+                    "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing hostname."
+                )
+                result.mark_critical_failure(
+                    f"Resolved Redis URL from {redis_source} is missing hostname."
+                )
+            if parsed.port is None:
+                result.add_risk(
+                    StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                    f"Resolved Redis URL from {redis_source} is missing port",
+                )
+                result.add_warning(
+                    "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing port."
+                )
+                result.mark_critical_failure(
+                    f"Resolved Redis URL from {redis_source} is missing port."
                 )
     except Exception as exc:
         result.add_risk(
@@ -821,9 +847,9 @@ def validate_operational_environment_config() -> StartupValidationResult:
         try:
             unlock_timeout_s = float(unlock_timeout_raw)
             if not math.isfinite(unlock_timeout_s):
-                raise ValueError("timeout is not finite")
+                raise ValueError("Timeout is not finite")
             if unlock_timeout_s < 1.0 or unlock_timeout_s > 300.0:
-                raise ValueError("timeout must be between 1.0 and 300.0 seconds")
+                raise ValueError("Timeout must be between 1.0 and 300.0 seconds")
             result.add_info(
                 f"✅ NIJA_EXECUTION_UNLOCK_TIMEOUT_S valid: {unlock_timeout_s:.3f}s"
             )
