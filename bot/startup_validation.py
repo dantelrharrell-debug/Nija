@@ -846,27 +846,7 @@ def validate_operational_environment_config() -> StartupValidationResult:
 
     unlock_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "").strip()
     if unlock_timeout_raw:
-        try:
-            unlock_timeout_s = float(unlock_timeout_raw)
-            if not math.isfinite(unlock_timeout_s):
-                raise ValueError("Value must be a finite number (not infinity or NaN)")
-            # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
-            # non-wait startup path, and at most 300s to avoid long silent stalls.
-            if (
-                unlock_timeout_s < MIN_EXECUTION_UNLOCK_TIMEOUT_S
-                or unlock_timeout_s > MAX_EXECUTION_UNLOCK_TIMEOUT_S
-            ):
-                raise ValueError(
-                    f"Timeout must be between {MIN_EXECUTION_UNLOCK_TIMEOUT_S:.1f} and "
-                    f"{MAX_EXECUTION_UNLOCK_TIMEOUT_S:.1f} seconds"
-                )
-            result.add_info(
-                f"✅ NIJA_EXECUTION_UNLOCK_TIMEOUT_S valid: {unlock_timeout_s:.3f}s"
-            )
-        except (TypeError, ValueError) as exc:
-            err_message = str(exc)
-            if "could not convert string to float" in err_message.lower():
-                err_message = "Value must be a valid number"
+        def _record_unlock_timeout_error(err_message: str) -> None:
             result.add_risk(
                 StartupRisk.ENVIRONMENT_MISCONFIGURATION,
                 "NIJA_EXECUTION_UNLOCK_TIMEOUT_S is invalid",
@@ -878,6 +858,28 @@ def validate_operational_environment_config() -> StartupValidationResult:
             result.mark_critical_failure(
                 "Invalid NIJA_EXECUTION_UNLOCK_TIMEOUT_S. Set a finite value between 1 and 300 seconds."
             )
+
+        try:
+            unlock_timeout_s = float(unlock_timeout_raw)
+        except (TypeError, ValueError):
+            _record_unlock_timeout_error("Value must be a valid number")
+        else:
+            if not math.isfinite(unlock_timeout_s):
+                _record_unlock_timeout_error("Value must be a finite number (not infinity or NaN)")
+            # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
+            # no-wait startup path, and at most 300s to avoid long silent stalls.
+            elif (
+                unlock_timeout_s < MIN_EXECUTION_UNLOCK_TIMEOUT_S
+                or unlock_timeout_s > MAX_EXECUTION_UNLOCK_TIMEOUT_S
+            ):
+                _record_unlock_timeout_error(
+                    f"Timeout must be between {MIN_EXECUTION_UNLOCK_TIMEOUT_S:.1f} and "
+                    f"{MAX_EXECUTION_UNLOCK_TIMEOUT_S:.1f} seconds"
+                )
+            else:
+                result.add_info(
+                    f"✅ NIJA_EXECUTION_UNLOCK_TIMEOUT_S valid: {unlock_timeout_s:.3f}s"
+                )
     else:
         result.add_info(
             "ℹ️ NIJA_EXECUTION_UNLOCK_TIMEOUT_S not set — using default runtime timeout"
