@@ -855,9 +855,11 @@ def validate_operational_environment_config() -> StartupValidationResult:
             unlock_timeout_s = float(unlock_timeout_raw)
         except (TypeError, ValueError):
             _record_invalid_unlock_timeout("Value must be a valid number")
+            return result
         else:
             if not math.isfinite(unlock_timeout_s):
                 _record_invalid_unlock_timeout("Value must be a finite number (not infinity or NaN)")
+                return result
             # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
             # no-wait startup path, and at most 300s to avoid long silent stalls.
             elif (
@@ -868,6 +870,7 @@ def validate_operational_environment_config() -> StartupValidationResult:
                     f"Timeout must be between {MIN_EXECUTION_UNLOCK_TIMEOUT_S:.1f} and "
                     f"{MAX_EXECUTION_UNLOCK_TIMEOUT_S:.1f} seconds"
                 )
+                return result
             else:
                 result.add_info(
                     f"✅ NIJA_EXECUTION_UNLOCK_TIMEOUT_S valid: {unlock_timeout_s:.3f}s"
