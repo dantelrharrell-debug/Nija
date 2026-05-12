@@ -12,15 +12,31 @@ This module provides validation for:
 import os
 import re
 import logging
+import math
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
+from urllib.parse import urlparse
 
 logger = logging.getLogger("nija")
+# Execution unlock timeout guardrails:
+# - minimum 1s avoids zero/negative no-wait unlock paths
+# - maximum 300s avoids long silent startup stalls due to bad configuration
+MIN_EXECUTION_UNLOCK_TIMEOUT_S = 1.0
+MAX_EXECUTION_UNLOCK_TIMEOUT_S = 300.0
 
 try:
     from bot.runtime_mode import resolve_runtime_mode
 except ImportError:
     from runtime_mode import resolve_runtime_mode  # type: ignore[import]
+
+
+def _import_redis_env_helpers():
+    """Import Redis env helper functions with package/local fallback."""
+    try:
+        from bot.redis_env import get_nija_url_format_error, get_redis_url, get_redis_url_source
+    except ImportError:
+        from redis_env import get_nija_url_format_error, get_redis_url, get_redis_url_source  # type: ignore[import]
+    return get_nija_url_format_error, get_redis_url, get_redis_url_source
 
 
 class StartupRisk(Enum):
@@ -33,6 +49,7 @@ class StartupRisk(Enum):
     PLATFORM_NOT_CONFIGURED_FIRST = "platform_not_configured_first"
     NTP_CLOCK_DRIFT = "ntp_clock_drift"
     DATA_DIR_UNAVAILABLE = "data_dir_unavailable"
+    ENVIRONMENT_MISCONFIGURATION = "environment_misconfiguration"
 
 
 class StartupValidationResult:
@@ -726,6 +743,146 @@ def validate_data_directory() -> StartupValidationResult:
     return result
 
 
+def validate_operational_environment_config() -> StartupValidationResult:
+    """
+    Validate high-impact operational environment settings.
+
+    This check fail-closes startup on environment misconfiguration that can
+    silently alter safety behavior:
+      1) contradictory runtime mode flags
+      2) invalid/missing Redis URL in live-authorized mode
+      3) invalid execution unlock timeout
+    """
+    result = StartupValidationResult()
+
+    runtime_mode = resolve_runtime_mode()
+    if runtime_mode.conflicts:
+        conflict_list = ", ".join(runtime_mode.conflicts)
+        result.add_risk(
+            StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+            f"Conflicting mode flags detected: {conflict_list}",
+        )
+        result.add_warning(
+            "❌ MODE FLAG MISCONFIGURATION: resolve conflicting mode flags before startup "
+            f"(conflicts: {conflict_list})."
+        )
+        result.mark_critical_failure(
+            f"Contradictory runtime mode flags: {conflict_list}. "
+            "Set only one operational mode (dry-run, paper, or live)."
+        )
+
+    try:
+        get_nija_url_format_error, get_redis_url, get_redis_url_source = _import_redis_env_helpers()
+        nija_format_error = get_nija_url_format_error()
+        if nija_format_error:
+            result.add_risk(
+                StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                "NIJA_REDIS_URL format is invalid",
+            )
+            result.add_warning(f"❌ REDIS URL MISCONFIGURATION: {nija_format_error}")
+            result.mark_critical_failure(
+                "Invalid NIJA_REDIS_URL format. Set NIJA_REDIS_URL to a valid redis:// or rediss:// URL."
+            )
+        else:
+            redis_url = get_redis_url()
+            redis_source = get_redis_url_source() or "unset"
+            if runtime_mode.live_authorized and not redis_url:
+                result.add_risk(
+                    StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                    "Live-authorized mode requires a valid Redis URL",
+                )
+                result.add_warning(
+                    "❌ REDIS MISCONFIGURATION: LIVE_CAPITAL_VERIFIED/LIVE_TRADING is enabled but no "
+                    "valid Redis URL could be resolved."
+                )
+                result.mark_critical_failure(
+                    "Live-authorized mode requires Redis lock configuration. "
+                    "Set NIJA_REDIS_URL (or valid Redis component env vars) before startup."
+                )
+            elif redis_url:
+                parsed = urlparse(redis_url)
+                scheme = (parsed.scheme or "").lower()
+                if scheme not in {"redis", "rediss"}:
+                    result.add_risk(
+                        StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                        f"Resolved Redis URL from {redis_source} has unsupported scheme '{scheme or 'missing'}'",
+                    )
+                    result.add_warning(
+                        "❌ REDIS MISCONFIGURATION: resolved Redis URL must use redis:// or rediss://."
+                    )
+                    result.mark_critical_failure(
+                        f"Resolved Redis URL from {redis_source} uses unsupported scheme '{scheme or 'missing'}'."
+                    )
+                if not parsed.hostname:
+                    result.add_risk(
+                        StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                        f"Resolved Redis URL from {redis_source} is missing host",
+                    )
+                    result.add_warning(
+                        "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing hostname."
+                    )
+                    result.mark_critical_failure(
+                        f"Resolved Redis URL from {redis_source} is missing hostname."
+                    )
+    except Exception as exc:
+        result.add_risk(
+            StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+            "Operational Redis configuration validation failed to run",
+        )
+        result.add_warning(
+            f"❌ REDIS VALIDATION ERROR: unable to validate Redis configuration ({exc})"
+        )
+        result.mark_critical_failure(
+            "Could not validate Redis environment configuration."
+        )
+
+    unlock_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "").strip()
+    if unlock_timeout_raw:
+        def _record_invalid_unlock_timeout(err_message: str) -> None:
+            result.add_risk(
+                StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                "NIJA_EXECUTION_UNLOCK_TIMEOUT_S is invalid",
+            )
+            result.add_warning(
+                "❌ EXECUTION UNLOCK TIMEOUT MISCONFIGURATION: "
+                f"NIJA_EXECUTION_UNLOCK_TIMEOUT_S={unlock_timeout_raw!r} ({err_message})"
+            )
+            result.mark_critical_failure(
+                "Invalid NIJA_EXECUTION_UNLOCK_TIMEOUT_S. Set a finite value between 1 and 300 seconds."
+            )
+
+        try:
+            unlock_timeout_s = float(unlock_timeout_raw)
+        except (TypeError, ValueError):
+            _record_invalid_unlock_timeout("Value must be a valid number")
+            return result
+        else:
+            if not math.isfinite(unlock_timeout_s):
+                _record_invalid_unlock_timeout("Value must be a finite number (not infinity or NaN)")
+                return result
+            # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
+            # no-wait startup path, and at most 300s to avoid long silent stalls.
+            elif (
+                unlock_timeout_s < MIN_EXECUTION_UNLOCK_TIMEOUT_S
+                or unlock_timeout_s > MAX_EXECUTION_UNLOCK_TIMEOUT_S
+            ):
+                _record_invalid_unlock_timeout(
+                    f"Timeout must be between {MIN_EXECUTION_UNLOCK_TIMEOUT_S:.1f} and "
+                    f"{MAX_EXECUTION_UNLOCK_TIMEOUT_S:.1f} seconds"
+                )
+                return result
+            else:
+                result.add_info(
+                    f"✅ NIJA_EXECUTION_UNLOCK_TIMEOUT_S valid: {unlock_timeout_s:.3f}s"
+                )
+    else:
+        result.add_info(
+            "ℹ️ NIJA_EXECUTION_UNLOCK_TIMEOUT_S not set — using default runtime timeout"
+        )
+
+    return result
+
+
 def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationResult:
     """
     Run all startup validations and combine results.
@@ -787,7 +944,15 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
     if data_dir_result.critical_failure:
         combined.mark_critical_failure(data_dir_result.failure_reason)
 
-    # 7. Combined check: escalate to critical failure when live trading with unknown git metadata.
+    # 7. Validate high-impact operational environment configuration.
+    env_result = validate_operational_environment_config()
+    combined.risks.extend(env_result.risks)
+    combined.warnings.extend(env_result.warnings)
+    combined.info.extend(env_result.info)
+    if env_result.critical_failure:
+        combined.mark_critical_failure(env_result.failure_reason)
+
+    # 8. Combined check: escalate to critical failure when live trading with unknown git metadata.
     # Running untraceable code in live mode is prohibited for auditability.
     live_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes")
     dry_run = os.getenv("DRY_RUN_MODE", "false").lower() in ("true", "1", "yes")
