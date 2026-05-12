@@ -9,7 +9,7 @@ that advances the boot sequence must call :meth:`BootstrapStateMachine.transitio
 illegal transitions are rejected and logged instead of propagating as silent
 side-effects.
 
-States (18 total)
+States (19 total)
 -----------------
   BOOT_INIT              – initial state when the process starts
   LOCK_ACQUIRED          – process/distributed writer lock held
@@ -24,6 +24,7 @@ States (18 total)
   CAPITAL_REFRESHING     – capital authority refresh in progress
   CAPITAL_READY          – capital > 0 confirmed; trading gate open
   INIT_COMPLETE          – all initialization locked; execution logic ready
+  DEGRADED_READY         – optional startup criteria timed out; proceeding degraded
   THREADS_STARTING       – trading worker threads being spawned
   RUNNING_SUPERVISED     – trading threads live; supervisor loop active (resumable)
   CONFIG_ERROR_KEEPALIVE – no exchange credentials; process alive for monitoring
@@ -45,7 +46,8 @@ Allowed transitions
     STARTUP_VALIDATED      → CAPITAL_REFRESHING | BOOT_FAILED_RETRY
   CAPITAL_REFRESHING     → CAPITAL_READY | BOOT_FAILED_RETRY
   CAPITAL_READY          → INIT_COMPLETE
-  INIT_COMPLETE          → THREADS_STARTING
+  INIT_COMPLETE          → THREADS_STARTING | DEGRADED_READY | BOOT_FAILED_RETRY
+  DEGRADED_READY         → THREADS_STARTING | BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED
   THREADS_STARTING       → RUNNING_SUPERVISED | BOOT_FAILED_RETRY
   RUNNING_SUPERVISED     → BOOT_FAILED_RETRY | EXTERNAL_RESTART_REQUIRED | SHUTDOWN
   BOOT_FAILED_RETRY      → PLATFORM_CONNECTING | EXTERNAL_RESTART_REQUIRED
@@ -120,6 +122,7 @@ class BootstrapState(str, Enum):
     CAPITAL_REFRESHING = "CAPITAL_REFRESHING"
     CAPITAL_READY = "CAPITAL_READY"
     INIT_COMPLETE = "INIT_COMPLETE"
+    DEGRADED_READY = "DEGRADED_READY"
     THREADS_STARTING = "THREADS_STARTING"
     RUNNING_SUPERVISED = "RUNNING_SUPERVISED"
     CONFIG_ERROR_KEEPALIVE = "CONFIG_ERROR_KEEPALIVE"
@@ -134,6 +137,7 @@ class BootstrapState(str, Enum):
 _STRATEGY_ARM_ALLOWED_STATES = frozenset({
     BootstrapState.CAPITAL_READY,
     BootstrapState.INIT_COMPLETE,
+    BootstrapState.DEGRADED_READY,
     BootstrapState.THREADS_STARTING,
     BootstrapState.RUNNING_SUPERVISED,
 })
@@ -148,6 +152,7 @@ _BALANCE_POLLING_DISABLED_STATES = frozenset({
     BootstrapState.CAPITAL_REFRESHING,
     BootstrapState.CAPITAL_READY,
     BootstrapState.INIT_COMPLETE,
+    BootstrapState.DEGRADED_READY,
     BootstrapState.THREADS_STARTING,
     BootstrapState.RUNNING_SUPERVISED,
     BootstrapState.CONFIG_ERROR_KEEPALIVE,
@@ -219,7 +224,13 @@ _VALID_TRANSITIONS: Dict[BootstrapState, List[BootstrapState]] = {
     ],
     BootstrapState.INIT_COMPLETE: [
         BootstrapState.THREADS_STARTING,
+        BootstrapState.DEGRADED_READY,
         BootstrapState.BOOT_FAILED_RETRY,
+    ],
+    BootstrapState.DEGRADED_READY: [
+        BootstrapState.THREADS_STARTING,
+        BootstrapState.BOOT_FAILED_RETRY,
+        BootstrapState.EXTERNAL_RESTART_REQUIRED,
     ],
     BootstrapState.THREADS_STARTING: [
         BootstrapState.RUNNING_SUPERVISED,
