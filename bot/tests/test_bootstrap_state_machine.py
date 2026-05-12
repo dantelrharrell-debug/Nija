@@ -29,7 +29,12 @@ from bot.bootstrap_state_machine import (
 # ---------------------------------------------------------------------------
 
 def _fresh() -> BootstrapStateMachine:
-    """Return a brand-new FSM starting at BOOT_INIT."""
+    """Return a brand-new FSM starting at BOOT_INIT.
+
+    Resets the singleton guard before construction so each test gets an
+    isolated instance regardless of test ordering.
+    """
+    BootstrapStateMachine._reset_for_testing()
     return BootstrapStateMachine()
 
 
@@ -62,6 +67,7 @@ class TestLegalTransitions(unittest.TestCase):
         BootstrapState.STARTUP_VALIDATED,
         BootstrapState.CAPITAL_REFRESHING,
         BootstrapState.CAPITAL_READY,
+        BootstrapState.INIT_COMPLETE,
         BootstrapState.THREADS_STARTING,
         BootstrapState.RUNNING_SUPERVISED,
         BootstrapState.SHUTDOWN,
@@ -123,6 +129,7 @@ class TestLegalTransitions(unittest.TestCase):
             BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
+            BootstrapState.INIT_COMPLETE,
             BootstrapState.THREADS_STARTING,
             BootstrapState.RUNNING_SUPERVISED,
         )
@@ -235,6 +242,7 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
+            BootstrapState.INIT_COMPLETE,
             BootstrapState.THREADS_STARTING,
             BootstrapState.RUNNING_SUPERVISED,
         )
@@ -307,6 +315,7 @@ class TestResetForRetry(unittest.TestCase):
             BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
+            BootstrapState.INIT_COMPLETE,
             BootstrapState.THREADS_STARTING,
             BootstrapState.RUNNING_SUPERVISED,
         )
@@ -498,6 +507,7 @@ class TestInvariantI8(unittest.TestCase):
             BootstrapState.STARTUP_VALIDATED,
             BootstrapState.CAPITAL_REFRESHING,
             BootstrapState.CAPITAL_READY,
+            BootstrapState.INIT_COMPLETE,
             BootstrapState.THREADS_STARTING,
             BootstrapState.RUNNING_SUPERVISED,
         )
@@ -615,6 +625,9 @@ class TestStatusAndHistory(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestSingleton(unittest.TestCase):
+
+    def setUp(self):
+        BootstrapStateMachine._reset_for_testing()
 
     def test_same_instance_returned(self):
         a = get_bootstrap_fsm()
