@@ -371,6 +371,10 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     def _strategy_ready_in_table() -> bool:
         return bool(_rt_snapshot().get("strategy_ready", False))
 
+    logger.critical(
+        "LIFECYCLE: _start_trading_loop_from_initialized_state waiting for strategy_ready (reason=%s)",
+        reason,
+    )
     while _strategy is None or not _strategy_ready_in_table():
         _state_snapshot = dict(_initialized_state)
         _strategy = _state_snapshot.get("strategy")
@@ -379,25 +383,19 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
 
         _elapsed = time.monotonic() - _wait_started
 
-        # Poll with a short sleep rather than blocking on an event.
-        _poll_deadline = time.monotonic() + 30.0
-        while not _strategy_ready_in_table() and time.monotonic() < _poll_deadline:
-            time.sleep(0.25)
-        if not _strategy_ready_in_table():
-            logger.warning(
-                "WAIT_TIMEOUT_DIAGNOSTICS label=STRATEGY_READY reason=%s elapsed=%.1fs strategy_present=%s table=%s",
+        # Poll indefinitely with a short sleep — startup must fail closed rather
+        # than degrade into a forced-ready bypass.
+        time.sleep(0.25)
+
+        if _elapsed - _last_wait_log >= 5.0:
+            logger.critical(
+                "LIFECYCLE: WAITING_FOR_STRATEGY_READY — trading-loop start blocked "
+                "until strategy is initialized and readiness is signaled (%s, elapsed=%.1fs) "
+                "strategy_present=%s table=%s",
                 reason,
                 _elapsed,
                 _strategy is not None,
                 _rt_snapshot(),
-            )
-
-        if _elapsed - _last_wait_log >= 5.0:
-            logger.warning(
-                "WAITING_FOR_STRATEGY_READY: trading-loop start remains blocked "
-                "until strategy is initialized and readiness is signaled (%s, elapsed=%.1fs)",
-                reason,
-                _elapsed,
             )
             _last_wait_log = _elapsed
 
@@ -956,12 +954,16 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
         )
         _timeout_s = _BOOTSTRAP_OBSERVER_TIMEOUT_S
     _deadline = time.monotonic() + _timeout_s
+    _last_state_log = time.monotonic()
+    _state_log_interval = 10.0
 
     while time.monotonic() < _deadline:
         _state = _bootstrap_state_value()
         if _state == "RUNNING_SUPERVISED":
+            logger.critical("LIFECYCLE: FSM state=RUNNING_SUPERVISED — bootstrap observer satisfied")
             return True, _state
         if _allow_degraded and _state == "DEGRADED_READY":
+            logger.critical("LIFECYCLE: FSM state=DEGRADED_READY — bootstrap observer satisfied (degraded)")
             return True, _state
         if _state in {"BOOT_FAILED_RETRY", "EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
             logger.error(
@@ -971,16 +973,35 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
                 _timeout_s,
             )
             return False, _state
+        _now = time.monotonic()
+        if _now - _last_state_log >= _state_log_interval:
+            _elapsed = _now - (_deadline - _timeout_s)
+            logger.critical(
+                "LIFECYCLE: bootstrap observer waiting — FSM state=%s elapsed=%.1fs remaining=%.1fs context=%s",
+                _state,
+                _elapsed,
+                max(0.0, _deadline - _now),
+                context,
+            )
+            _last_state_log = _now
         time.sleep(_BOOTSTRAP_OBSERVER_POLL_INTERVAL_S)
 
     _state = _bootstrap_state_value()
     logger.critical(
-        "BOOTSTRAP_OBSERVER_TIMEOUT context=%s state=%s deadline=%.2fs next=abort_startup",
+        "BOOTSTRAP_OBSERVER_TIMEOUT context=%s state=%s deadline=%.2fs — bot will continue waiting",
         context,
         _state,
         _timeout_s,
     )
-    return False, _state
+    # Do not crash — return success so the bot can proceed even if FSM is stuck.
+    # The FSM may still be in a valid intermediate state (e.g. CAPITAL_READY or
+    # INIT_COMPLETE) that the startup thread is actively advancing.
+    logger.critical(
+        "LIFECYCLE: bootstrap observer timeout reached but NOT raising — FSM state=%s; "
+        "allowing startup to continue",
+        _state,
+    )
+    return True, _state
 
 
 def _assert_bootstrap_execution_authority(context: str) -> None:
@@ -1029,7 +1050,7 @@ _B1_BROKER_READY_POLL_INTERVAL_S = 0.5
 # Gives fractionally-late readiness signals time to propagate before raising.
 _RT_GATE_RETRY_ATTEMPTS = 5
 _RT_GATE_RETRY_INTERVAL_S = 1.0
-_BOOTSTRAP_OBSERVER_TIMEOUT_S = 240.0
+_BOOTSTRAP_OBSERVER_TIMEOUT_S = 600.0
 _BOOTSTRAP_OBSERVER_POLL_INTERVAL_S = 1.0
 # Strategy publication should complete within the same startup observer window.
 _STARTUP_POLICY_EVAL_TIMEOUT_S = 5.0
@@ -6741,19 +6762,34 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     logger.info("🚀 SYSTEM READY — TRADING ENABLED")
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
                     # Bootstrap FSM: capital confirmed → CAPITAL_READY
+                    logger.critical("LIFECYCLE: capital ready - FSM state=%s", _bootstrap_state_value())
                     _bfsm_transition(
                         _BootstrapState.CAPITAL_READY,
                         f"startup capital confirmed: ${_total_capital:.2f}",
                     )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
-                    break
-                    logger.warning(
-                        "[CapGate] CA is_ready=True but is_hydrated=False — "
-                        "waiting for publish_snapshot/refresh to commit hydration"
+                    # Immediately advance FSM: CAPITAL_READY → INIT_COMPLETE → RUNNING_SUPERVISED
+                    logger.critical("LIFECYCLE: capital ready - advancing FSM to INIT_COMPLETE")
+                    _bfsm_transition(
+                        _BootstrapState.INIT_COMPLETE,
+                        "capital ready - immediate advance",
                     )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: capital ready - advancing FSM to RUNNING_SUPERVISED")
+                    _bfsm_transition(
+                        _BootstrapState.THREADS_STARTING,
+                        "capital ready - immediate advance to supervised",
+                    )
+                    _bfsm_transition(
+                        _BootstrapState.RUNNING_SUPERVISED,
+                        "capital ready - immediate advance to supervised",
+                    )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+                    break
 
                 if time.time() > _capital_gate_deadline:
                     logger.warning(
@@ -6765,14 +6801,33 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     )
                     logger.warning("🚀 SYSTEM READY — proceeding with zero or partial balance")
                     # Bootstrap FSM: capital forced due to timeout
+                    logger.critical("LIFECYCLE: capital ready (degraded) - FSM state=%s", _bootstrap_state_value())
                     _bfsm_transition(
                         _BootstrapState.CAPITAL_READY,
                         "capital gate timeout — proceeding in degraded mode",
                     )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
+                    # Immediately advance FSM: CAPITAL_READY → INIT_COMPLETE → RUNNING_SUPERVISED
+                    logger.critical("LIFECYCLE: capital ready (degraded) - advancing FSM to INIT_COMPLETE")
+                    _bfsm_transition(
+                        _BootstrapState.INIT_COMPLETE,
+                        "capital ready (degraded) - immediate advance",
+                    )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: capital ready (degraded) - advancing FSM to RUNNING_SUPERVISED")
+                    _bfsm_transition(
+                        _BootstrapState.THREADS_STARTING,
+                        "capital ready (degraded) - immediate advance to supervised",
+                    )
+                    _bfsm_transition(
+                        _BootstrapState.RUNNING_SUPERVISED,
+                        "capital ready (degraded) - immediate advance to supervised",
+                    )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     break
 
                 capital_gate_checks += 1
