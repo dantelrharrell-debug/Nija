@@ -197,6 +197,8 @@ def connect_redis_with_fallback(
         # because the initial failure did not look TLS-related.  We now make
         # rediss:// the first thing tried; the original plain URL is kept as a
         # last-resort fallback only when NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true.
+        #
+        # candidates[0] is always the primary_url element added two lines above.
         tls_url = primary_url.replace("redis://", "rediss://", 1)
         candidates[0] = (tls_url, False)
         if allow_plain_fallback:
