@@ -852,6 +852,137 @@ def _wait_for_predicate_with_timeout(
     return False
 
 
+def _bootstrap_state_value() -> str:
+    """Return BootstrapFSM state value or 'UNAVAILABLE' when not importable."""
+    if not (_BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None):
+        return "UNAVAILABLE"
+    try:
+        _state = _get_bootstrap_fsm().state
+        return str(getattr(_state, "value", _state))
+    except Exception as _state_err:
+        logger.debug("Bootstrap state probe failed: %s", _state_err)
+        return "UNKNOWN"
+
+
+def _env_truthy(name: str, default: str = "false") -> bool:
+    """Parse a boolean-like env flag using project-wide truthy semantics."""
+    return os.getenv(name, default).strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _startup_readiness_policy() -> dict[str, bool]:
+    """Return required/optional policy for startup readiness criteria."""
+    _nonce_required_default = _nonce_readiness_required_for_startup()
+    return {
+        "broker_connected": _env_truthy("NIJA_STARTUP_REQUIRE_BROKER_CONNECTED", "false"),
+        "nonce_ready": _env_truthy(
+            "NIJA_STARTUP_REQUIRE_NONCE_READY",
+            "true" if _nonce_required_default else "false",
+        ),
+        "first_snap": _env_truthy("NIJA_STARTUP_REQUIRE_FIRST_SNAP", "false"),
+    }
+
+
+def _probe_first_snap_accepted() -> bool:
+    """Best-effort probe for first snapshot acceptance."""
+    try:
+        from bot.trading_state_machine import get_state_machine as _get_tsm_probe
+    except ImportError:
+        try:
+            from trading_state_machine import get_state_machine as _get_tsm_probe  # type: ignore[import]
+        except ImportError:
+            return False
+    try:
+        return bool(_get_tsm_probe().get_first_snap_accepted())
+    except Exception as _first_snap_err:
+        logger.debug("first_snap probe failed: %s", _first_snap_err)
+        return False
+
+
+def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tuple[dict[str, bool], list[str], list[str], float]:
+    """Evaluate startup readiness criteria under required/optional policy."""
+    _policy = _startup_readiness_policy()
+    _deadline = time.monotonic() + max(0.0, timeout_s)
+
+    while time.monotonic() < _deadline:
+        _table = _rt_snapshot()
+        _criteria = {
+            "broker_connected": bool(_table.get("broker_connected", False)),
+            "nonce_ready": bool(_table.get("nonce_ready", False)),
+            "first_snap": _probe_first_snap_accepted(),
+        }
+        _required_missing = sorted(k for k, v in _criteria.items() if _policy.get(k, False) and not v)
+        if not _required_missing:
+            _optional_missing = sorted(k for k, v in _criteria.items() if (not _policy.get(k, False)) and not v)
+            logger.info(
+                "STARTUP_POLICY_EVAL context=%s criteria=%s required_missing=%s optional_missing=%s deadline_in=%.2fs",
+                context,
+                _criteria,
+                _required_missing,
+                _optional_missing,
+                max(0.0, _deadline - time.monotonic()),
+            )
+            return _criteria, _required_missing, _optional_missing, _deadline
+        time.sleep(0.25)
+
+    _table = _rt_snapshot()
+    _criteria = {
+        "broker_connected": bool(_table.get("broker_connected", False)),
+        "nonce_ready": bool(_table.get("nonce_ready", False)),
+        "first_snap": _probe_first_snap_accepted(),
+    }
+    _required_missing = sorted(k for k, v in _criteria.items() if _policy.get(k, False) and not v)
+    _optional_missing = sorted(k for k, v in _criteria.items() if (not _policy.get(k, False)) and not v)
+    logger.info(
+        "STARTUP_POLICY_EVAL context=%s criteria=%s required_missing=%s optional_missing=%s deadline_in=0.00s",
+        context,
+        _criteria,
+        _required_missing,
+        _optional_missing,
+    )
+    return _criteria, _required_missing, _optional_missing, _deadline
+
+
+def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
+    """Single observer API for main-thread startup wait with bounded timeout."""
+    _allow_degraded = _env_truthy("NIJA_ALLOW_DEGRADED_STARTUP_HANDOFF", "true")
+    _timeout_raw = os.getenv("NIJA_BOOTSTRAP_OBSERVER_TIMEOUT_S", f"{_BOOTSTRAP_OBSERVER_TIMEOUT_S:.1f}")
+    try:
+        _timeout_s = max(1.0, float(_timeout_raw))
+    except ValueError:
+        logger.warning(
+            "Invalid NIJA_BOOTSTRAP_OBSERVER_TIMEOUT_S=%r; using default %.1fs",
+            _timeout_raw,
+            _BOOTSTRAP_OBSERVER_TIMEOUT_S,
+        )
+        _timeout_s = _BOOTSTRAP_OBSERVER_TIMEOUT_S
+    _deadline = time.monotonic() + _timeout_s
+
+    while time.monotonic() < _deadline:
+        _state = _bootstrap_state_value()
+        if _state == "RUNNING_SUPERVISED":
+            return True, _state
+        if _allow_degraded and _state == "DEGRADED_READY":
+            return True, _state
+        if _state in {"BOOT_FAILED_RETRY", "EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
+            logger.error(
+                "BOOTSTRAP_OBSERVER_BLOCKED context=%s state=%s deadline=%.2fs next=abort_startup",
+                context,
+                _state,
+                _timeout_s,
+            )
+            return False, _state
+        time.sleep(_BOOTSTRAP_OBSERVER_POLL_INTERVAL_S)
+
+    _state = _bootstrap_state_value()
+    logger.critical(
+        "BOOTSTRAP_OBSERVER_TIMEOUT context=%s state=%s deadline=%.2fs next=abort_startup",
+        context,
+        _state,
+        _timeout_s,
+    )
+    return False, _state
+
+
 def _assert_bootstrap_execution_authority(context: str) -> None:
     """Fail closed when lifecycle ownership has not been handed to runtime."""
     if not (_BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None):
@@ -898,6 +1029,12 @@ _B1_BROKER_READY_POLL_INTERVAL_S = 0.5
 # Gives fractionally-late readiness signals time to propagate before raising.
 _RT_GATE_RETRY_ATTEMPTS = 5
 _RT_GATE_RETRY_INTERVAL_S = 1.0
+_BOOTSTRAP_OBSERVER_TIMEOUT_S = 240.0
+_BOOTSTRAP_OBSERVER_POLL_INTERVAL_S = 1.0
+# Strategy publication should complete within the same startup observer window.
+_STARTUP_POLICY_EVAL_TIMEOUT_S = 5.0
+_STRATEGY_PUBLICATION_TIMEOUT_S = _BOOTSTRAP_OBSERVER_TIMEOUT_S
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on", "enabled"}
 
 
 def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> bool:
@@ -7038,46 +7175,43 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 except Exception:
                     pass
 
-            _pending_keys = _rt_snapshot()
-            logger.info(
-                "READINESS TABLE before THREADS_STARTING gate: %s",
-                _pending_keys,
+            logger.info("READINESS TABLE before THREADS_STARTING gate (diagnostic): %s", _rt_snapshot())
+            _criteria, _required_missing, _optional_missing, _policy_deadline = _evaluate_startup_readiness_policy(
+                context="init_complete->threads_starting",
+                timeout_s=_STARTUP_POLICY_EVAL_TIMEOUT_S,
             )
-            if not _rt_is_ready():
-                # Short retry loop: give slow readiness signals (e.g. from async broker
-                # callbacks) up to _RT_GATE_RETRY_ATTEMPTS extra seconds to propagate
-                # before blocking startup.  This avoids an unnecessary retry cycle when
-                # a flag arrives fractionally late relative to the gate check.
-                _rt_gate_ready = False
-                for _rt_gate_attempt in range(_RT_GATE_RETRY_ATTEMPTS):
-                    time.sleep(_RT_GATE_RETRY_INTERVAL_S)
-                    if _rt_is_ready():
-                        _rt_gate_ready = True
-                        logger.info(
-                            "Readiness gate passed after %d s extra wait",
-                            _rt_gate_attempt + 1,
-                        )
-                        break
-                    _still_pending_now = _rt_pending()
-                    logger.info(
-                        "Readiness gate retry %d/%d — still pending: %s",
-                        _rt_gate_attempt + 1,
-                        _RT_GATE_RETRY_ATTEMPTS,
-                        _still_pending_now,
+            if _required_missing:
+                logger.critical(
+                    "STARTUP_POLICY_BLOCKED context=init_complete->threads_starting state=%s "
+                    "required_missing=%s optional_missing=%s criteria=%s deadline=%.2f next=BOOT_FAILED_RETRY",
+                    _bootstrap_state_value(),
+                    _required_missing,
+                    _optional_missing,
+                    _criteria,
+                    max(0.0, _policy_deadline - time.monotonic()),
+                )
+                if _BOOTSTRAP_FSM_AVAILABLE:
+                    _bfsm_transition(
+                        _BootstrapState.BOOT_FAILED_RETRY,
+                        f"required startup criteria missing before THREADS_STARTING: {_required_missing}",
                     )
-                if not _rt_gate_ready:
-                    _pending_keys = _rt_snapshot()
-                    _still_pending = [k for k, v in _pending_keys.items() if not v]
-                    logger.critical(
-                        "STARTUP_ORDER_BLOCKED before THREADS_STARTING — "
-                        "pending keys: %s  full_table=%s",
-                        _still_pending,
-                        _pending_keys,
-                    )
-                    raise RuntimeError(
-                        "STARTUP_ORDER_BLOCKED before THREADS_STARTING: "
-                        f"readiness_table={_pending_keys}"
-                    )
+                raise RuntimeError(
+                    "STARTUP_POLICY_BLOCKED before THREADS_STARTING: "
+                    f"required_missing={_required_missing} criteria={_criteria}"
+                )
+            if _optional_missing and _BOOTSTRAP_FSM_AVAILABLE:
+                logger.warning(
+                    "STARTUP_POLICY_DEGRADED context=init_complete->threads_starting state=%s "
+                    "optional_missing=%s criteria=%s deadline=%.2f next=DEGRADED_READY",
+                    _bootstrap_state_value(),
+                    _optional_missing,
+                    _criteria,
+                    max(0.0, _policy_deadline - time.monotonic()),
+                )
+                _bfsm_transition(
+                    _BootstrapState.DEGRADED_READY,
+                    f"optional startup criteria timed out before THREADS_STARTING: {_optional_missing}",
+                )
 
             # Advance bootstrap FSM to THREADS_STARTING only after all readiness
             # conditions are confirmed so that any failure above leaves the FSM at
@@ -7400,17 +7534,24 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         )
                         break
                     if time.monotonic() >= _bce_deadline:
-                        logger.critical(
-                            "CRITICAL B1 RESULT: FAIL (timeout) — "
+                        logger.warning(
+                            "B1 barrier timeout converted to diagnostics-only gate — "
                             "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
-                            "capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s — "
-                            "failing closed and retrying bootstrap",
-                            _bce_first_snap, _bce_brokers_ready, _bce_capital_fsm_ready,
-                            _bce_capital_hydrated, _bce_aggregation_normalized, _bce_nonce_ready,
+                            "capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s "
+                            "next=continue_startup_degraded",
+                            _bce_first_snap,
+                            _bce_brokers_ready,
+                            _bce_capital_fsm_ready,
+                            _bce_capital_hydrated,
+                            _bce_aggregation_normalized,
+                            _bce_nonce_ready,
                         )
-                        raise RuntimeError(
-                            "B1 preflight timed out before nonce sync / broker readiness / capital hydration completed"
-                        )
+                        if _BOOTSTRAP_FSM_AVAILABLE:
+                            _bfsm_transition(
+                                _BootstrapState.DEGRADED_READY,
+                                "B1 diagnostics barrier timeout — continuing degraded",
+                            )
+                        break
                     logger.warning(
                         "⏳ [Bootstrap] Waiting for B1 preflight — "
                         "first_snap=%s brokers_ready=%s capital_fsm_ready=%s "
@@ -7729,17 +7870,10 @@ def main():
         ]
     )
     
-    # ── SYSTEM_READY BARRIER ─────────────────────────────────────────────────
-    # Hard gate: ALL five conditions must be True before the trading loop starts.
-    #   strategy_ready   — strategy object fully initialised
-    #   broker_ready     — at least one platform broker connected
-    #   risk_ready       — risk / execution engine present on strategy
-    #   capital_ready    — BootstrapFSM has reached CAPITAL_READY or beyond
-    #   execution_ready  — strategy.execution_engine is not None
-    #
-    # FORCE_TRADE does not bypass this startup readiness handshake.
-    # ─────────────────────────────────────────────────────────────────────────
-    logger.info("🧭 Before system_ready wait")
+    # ── BOOTSTRAP OBSERVER BARRIER ────────────────────────────────────────────
+    # Single authoritative wait: main thread observes BootstrapFSM progression
+    # with a bounded timeout and explicit failure state handling.
+    logger.info("🧭 Before bootstrap observer wait")
     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
         logger.warning("FORCE_TRADE active — startup readiness barrier remains enforced")
 
@@ -7767,39 +7901,28 @@ def main():
         logger.debug("READINESS DEBUG snapshot failed (non-fatal): %s", _pre_snap_err)
 
     strategy = None
-    _last_system_ready_log = 0.0
-    while True:
-        _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
-
-        strategy = _state_snapshot.get("strategy")
-        system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
-            _compute_system_ready(_state_snapshot)
-
-        if system_ready:
-            logger.info(
-                "✅ SYSTEM READY: broker_ready=%s risk_ready=%s strategy_ready=%s "
-                "capital_ready=%s execution_ready=%s",
-                broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
-            )
-            logger.info(
-                f"FSM READY STATE | "
-                f"broker={broker_ready} "
-                f"risk={risk_ready} "
-                f"strategy={strategy_ready} "
-                f"capital={capital_ready} "
-                f"execution={execution_ready}"
-            )
-            break
-
-        _now = time.monotonic()
-        if _now - _last_system_ready_log >= 5.0:
-            logger.info(
-                "⏳ Waiting for strict system_ready: broker_ready=%s risk_ready=%s strategy_ready=%s "
-                "capital_ready=%s execution_ready=%s",
-                broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready,
-            )
-            _last_system_ready_log = _now
-        time.sleep(1.0)
+    _observer_ok, _observer_state = _wait_for_bootstrap_observer_ready(
+        context="main startup observer wait",
+    )
+    if not _observer_ok:
+        dump_startup_state("BOOTSTRAP_OBSERVER_FAILED")
+        raise RuntimeError(
+            f"Startup blocked: bootstrap observer timed out/failed (state={_observer_state})"
+        )
+    _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
+    strategy = _state_snapshot.get("strategy")
+    system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
+        _compute_system_ready(_state_snapshot)
+    logger.info(
+        "✅ BOOTSTRAP OBSERVER READY: state=%s broker_ready=%s risk_ready=%s strategy_ready=%s "
+        "capital_ready=%s execution_ready=%s",
+        _observer_state,
+        broker_ready,
+        risk_ready,
+        strategy_ready,
+        capital_ready,
+        execution_ready,
+    )
 
     # ── HARD GUARD: never enter trading loop without a valid strategy ─────────
     if strategy is None:
@@ -7808,6 +7931,7 @@ def main():
         )
         _last_strategy_wait_log = 0.0
         _strategy_wait_started = time.monotonic()
+        _strategy_wait_deadline = _strategy_wait_started + _STRATEGY_PUBLICATION_TIMEOUT_S
         _fallback_attempted = False
         while strategy is None:
             _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait")
@@ -7817,6 +7941,10 @@ def main():
                 break
 
             _now = time.monotonic()
+            if _now >= _strategy_wait_deadline:
+                raise RuntimeError(
+                    "Startup blocked: strategy publication timed out after bootstrap observer readiness"
+                )
             if (
                 not _fallback_attempted
                 and (_now - _strategy_wait_started) >= _STRATEGY_FALLBACK_GRACE_PERIOD_S
