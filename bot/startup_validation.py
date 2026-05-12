@@ -771,8 +771,6 @@ def validate_operational_environment_config() -> StartupValidationResult:
     try:
         get_nija_url_format_error, get_redis_url, get_redis_url_source = _import_redis_env_helpers()
         nija_format_error = get_nija_url_format_error()
-        redis_url = ""
-        redis_source = "unset"
         if nija_format_error:
             result.add_risk(
                 StartupRisk.ENVIRONMENT_MISCONFIGURATION,
@@ -785,55 +783,55 @@ def validate_operational_environment_config() -> StartupValidationResult:
         else:
             redis_url = get_redis_url()
             redis_source = get_redis_url_source() or "unset"
-        if runtime_mode.live_authorized and not redis_url:
-            result.add_risk(
-                StartupRisk.ENVIRONMENT_MISCONFIGURATION,
-                "Live-authorized mode requires a valid Redis URL",
-            )
-            result.add_warning(
-                "❌ REDIS MISCONFIGURATION: LIVE_CAPITAL_VERIFIED/LIVE_TRADING is enabled but no "
-                "valid Redis URL could be resolved."
-            )
-            result.mark_critical_failure(
-                "Live-authorized mode requires Redis lock configuration. "
-                "Set NIJA_REDIS_URL (or valid Redis component env vars) before startup."
-            )
-        elif redis_url:
-            parsed = urlparse(redis_url)
-            scheme = (parsed.scheme or "").lower()
-            if scheme not in {"redis", "rediss"}:
+            if runtime_mode.live_authorized and not redis_url:
                 result.add_risk(
                     StartupRisk.ENVIRONMENT_MISCONFIGURATION,
-                    f"Resolved Redis URL from {redis_source} has unsupported scheme '{scheme or 'missing'}'",
+                    "Live-authorized mode requires a valid Redis URL",
                 )
                 result.add_warning(
-                    "❌ REDIS MISCONFIGURATION: resolved Redis URL must use redis:// or rediss://."
+                    "❌ REDIS MISCONFIGURATION: LIVE_CAPITAL_VERIFIED/LIVE_TRADING is enabled but no "
+                    "valid Redis URL could be resolved."
                 )
                 result.mark_critical_failure(
-                    f"Resolved Redis URL from {redis_source} uses unsupported scheme '{scheme or 'missing'}'."
+                    "Live-authorized mode requires Redis lock configuration. "
+                    "Set NIJA_REDIS_URL (or valid Redis component env vars) before startup."
                 )
-            if not parsed.hostname:
-                result.add_risk(
-                    StartupRisk.ENVIRONMENT_MISCONFIGURATION,
-                    f"Resolved Redis URL from {redis_source} is missing host",
-                )
-                result.add_warning(
-                    "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing hostname."
-                )
-                result.mark_critical_failure(
-                    f"Resolved Redis URL from {redis_source} is missing hostname."
-                )
-            if parsed.port is None:
-                result.add_risk(
-                    StartupRisk.ENVIRONMENT_MISCONFIGURATION,
-                    f"Resolved Redis URL from {redis_source} is missing port",
-                )
-                result.add_warning(
-                    "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing port."
-                )
-                result.mark_critical_failure(
-                    f"Resolved Redis URL from {redis_source} is missing port."
-                )
+            elif redis_url:
+                parsed = urlparse(redis_url)
+                scheme = (parsed.scheme or "").lower()
+                if scheme not in {"redis", "rediss"}:
+                    result.add_risk(
+                        StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                        f"Resolved Redis URL from {redis_source} has unsupported scheme '{scheme or 'missing'}'",
+                    )
+                    result.add_warning(
+                        "❌ REDIS MISCONFIGURATION: resolved Redis URL must use redis:// or rediss://."
+                    )
+                    result.mark_critical_failure(
+                        f"Resolved Redis URL from {redis_source} uses unsupported scheme '{scheme or 'missing'}'."
+                    )
+                if not parsed.hostname:
+                    result.add_risk(
+                        StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                        f"Resolved Redis URL from {redis_source} is missing host",
+                    )
+                    result.add_warning(
+                        "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing hostname."
+                    )
+                    result.mark_critical_failure(
+                        f"Resolved Redis URL from {redis_source} is missing hostname."
+                    )
+                if parsed.port is None:
+                    result.add_risk(
+                        StartupRisk.ENVIRONMENT_MISCONFIGURATION,
+                        f"Resolved Redis URL from {redis_source} is missing port",
+                    )
+                    result.add_warning(
+                        "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing port."
+                    )
+                    result.mark_critical_failure(
+                        f"Resolved Redis URL from {redis_source} is missing port."
+                    )
     except Exception as exc:
         result.add_risk(
             StartupRisk.ENVIRONMENT_MISCONFIGURATION,
@@ -849,10 +847,7 @@ def validate_operational_environment_config() -> StartupValidationResult:
     unlock_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "").strip()
     if unlock_timeout_raw:
         try:
-            try:
-                unlock_timeout_s = float(unlock_timeout_raw)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("Value must be a valid number") from exc
+            unlock_timeout_s = float(unlock_timeout_raw)
             if not math.isfinite(unlock_timeout_s):
                 raise ValueError("Value must be a finite number (not infinity or NaN)")
             # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
@@ -869,13 +864,16 @@ def validate_operational_environment_config() -> StartupValidationResult:
                 f"✅ NIJA_EXECUTION_UNLOCK_TIMEOUT_S valid: {unlock_timeout_s:.3f}s"
             )
         except (TypeError, ValueError) as exc:
+            err_message = str(exc)
+            if "could not convert string to float" in err_message.lower():
+                err_message = "Value must be a valid number"
             result.add_risk(
                 StartupRisk.ENVIRONMENT_MISCONFIGURATION,
                 "NIJA_EXECUTION_UNLOCK_TIMEOUT_S is invalid",
             )
             result.add_warning(
                 "❌ EXECUTION UNLOCK TIMEOUT MISCONFIGURATION: "
-                f"NIJA_EXECUTION_UNLOCK_TIMEOUT_S={unlock_timeout_raw!r} ({exc})"
+                f"NIJA_EXECUTION_UNLOCK_TIMEOUT_S={unlock_timeout_raw!r} ({err_message})"
             )
             result.mark_critical_failure(
                 "Invalid NIJA_EXECUTION_UNLOCK_TIMEOUT_S. Set a finite value between 1 and 300 seconds."
