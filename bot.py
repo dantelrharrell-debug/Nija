@@ -227,6 +227,16 @@ def _reset_startup_events_for_fresh_attempt() -> None:
             _tl_ready = None  # type: ignore[assignment]
     if _tl_ready is not None:
         _tl_ready.clear()
+    # Reset init-once guard for TradingStrategy so that if TradingStrategy()
+    # construction failed on a previous attempt, a clean retry is possible.
+    # Without this reset the guard permanently blocks re-creation and leaves
+    # all readiness flags False on every subsequent attempt.
+    try:
+        from bot.init_once_guard import get_init_registry as _get_init_reg_reset
+        _get_init_reg_reset().reset("trading_strategy")
+        logger.debug("🔄 Init-once guard reset for 'trading_strategy' (fresh attempt)")
+    except Exception as _guard_reset_err:
+        logger.debug("Init-once guard reset unavailable (non-fatal): %s", _guard_reset_err)
     logger.debug("🔄 Reset readiness table and completion events for fresh bootstrap attempt")
 
 
@@ -5921,6 +5931,36 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             if _existing_strategy is not None:
                 logger.info("♻️  Reusing existing TradingStrategy instance from previous attempt")
                 strategy = _existing_strategy
+                # Re-publish strategy/risk/execution readiness that was cleared by
+                # _reset_startup_events_for_fresh_attempt() on this retry.  Without
+                # this, strategy_ready, risk_ready, and execution_ready remain False
+                # after the reset and system_ready never becomes True in the main-thread
+                # wait loop — the root cause of the "stuck at readiness gating" bug.
+                if not bool(_rt_snapshot().get("strategy_ready", False)):
+                    logger.info(
+                        "♻️  Re-publishing strategy readiness after retry reset "
+                        "(strategy_ready was False after readiness table reset)"
+                    )
+                    _reuse_lock_acquired = _initialized_state_lock.acquire(
+                        timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S
+                    )
+                    if _reuse_lock_acquired:
+                        try:
+                            _publish_strategy_runtime_readiness(
+                                strategy,
+                                context="startup-retry-reuse-existing",
+                            )
+                        finally:
+                            _initialized_state_lock.release()
+                    else:
+                        logger.warning(
+                            "Reuse-path readiness re-publish skipped: INIT lock unavailable; "
+                            "attempting direct mark_ready fallback"
+                        )
+                        # Direct fallback so the startup can continue even without the lock
+                        _rt_mark_ready("strategy_ready")
+                        _rt_mark_ready("risk_ready")
+                        _rt_mark_ready("execution_ready")
             else:
                 # ── B: enforce ordering — env must be validated before broker init ──
                 # Non-blocking observable check: warn and continue with degraded
@@ -6712,7 +6752,34 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     if _bms_mabm is None:
                         _b1_brokers_ready = True  # no MABM → not a requirement in this deployment
                     elif hasattr(_bms_mabm, "all_brokers_fully_ready"):
-                        _b1_brokers_ready = bool(_bms_mabm.all_brokers_fully_ready())
+                        # Poll for up to 10 s so that async broker initialisation (e.g.
+                        # Coinbase balance-payload fetch) can complete before B1 runs.
+                        # A single-shot check at B1 time is too early: initialize_platform_brokers()
+                        # may still be delivering the first balance snapshot when we reach this
+                        # guard.  If brokers are still not ready after the poll, mark N/A when
+                        # no platform brokers are registered (nothing to be "ready").
+                        _b1_br_deadline = time.monotonic() + 10.0
+                        while time.monotonic() < _b1_br_deadline:
+                            if bool(_bms_mabm.all_brokers_fully_ready()):
+                                _b1_brokers_ready = True
+                                break
+                            time.sleep(0.5)
+                        if not _b1_brokers_ready:
+                            # No registered platform brokers → not a blocking requirement
+                            _b1_platform_brokers = list(
+                                getattr(_bms_mabm, "_platform_brokers", {}).values()
+                            )
+                            if not _b1_platform_brokers:
+                                _b1_brokers_ready = True
+                                logger.info(
+                                    "[B1-Guard] No platform brokers registered — treating brokers_ready as N/A"
+                                )
+                            else:
+                                logger.warning(
+                                    "[B1-Guard] Brokers not fully ready after 10 s poll "
+                                    "(registered=%d) — B1 will be marked failed",
+                                    len(_b1_platform_brokers),
+                                )
                 except Exception as _b1_br_err:
                     logger.warning("[B1-Guard] brokers_ready probe failed (fail-closed False): %s", _b1_br_err)
 
@@ -6966,17 +7033,39 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _pending_keys,
             )
             if not _rt_is_ready():
-                _still_pending = [k for k, v in _pending_keys.items() if not v]
-                logger.critical(
-                    "STARTUP_ORDER_BLOCKED before THREADS_STARTING — "
-                    "pending keys: %s  full_table=%s",
-                    _still_pending,
-                    _pending_keys,
-                )
-                raise RuntimeError(
-                    "STARTUP_ORDER_BLOCKED before THREADS_STARTING: "
-                    f"readiness_table={_pending_keys}"
-                )
+                # Short retry loop: give slow readiness signals (e.g. from async broker
+                # callbacks) up to 5 extra seconds to propagate before blocking startup.
+                # This avoids an unnecessary retry cycle when a flag arrives fractionally
+                # late relative to the gate check.
+                _rt_gate_ready = False
+                for _rt_gate_attempt in range(5):
+                    time.sleep(1.0)
+                    if _rt_is_ready():
+                        _rt_gate_ready = True
+                        logger.info(
+                            "Readiness gate passed after %d s extra wait",
+                            _rt_gate_attempt + 1,
+                        )
+                        break
+                    _still_pending_now = _rt_pending()
+                    logger.info(
+                        "Readiness gate retry %d/5 — still pending: %s",
+                        _rt_gate_attempt + 1,
+                        _still_pending_now,
+                    )
+                if not _rt_gate_ready:
+                    _pending_keys = _rt_snapshot()
+                    _still_pending = [k for k, v in _pending_keys.items() if not v]
+                    logger.critical(
+                        "STARTUP_ORDER_BLOCKED before THREADS_STARTING — "
+                        "pending keys: %s  full_table=%s",
+                        _still_pending,
+                        _pending_keys,
+                    )
+                    raise RuntimeError(
+                        "STARTUP_ORDER_BLOCKED before THREADS_STARTING: "
+                        f"readiness_table={_pending_keys}"
+                    )
 
             # Advance bootstrap FSM to THREADS_STARTING only after all readiness
             # conditions are confirmed so that any failure above leaves the FSM at
