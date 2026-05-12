@@ -235,8 +235,10 @@ def _reset_startup_events_for_fresh_attempt() -> None:
         from bot.init_once_guard import get_init_registry as _get_init_reg_reset
         _get_init_reg_reset().reset("trading_strategy")
         logger.debug("🔄 Init-once guard reset for 'trading_strategy' (fresh attempt)")
+    except ImportError:
+        logger.debug("Init-once guard module unavailable — reset skipped (non-fatal)")
     except Exception as _guard_reset_err:
-        logger.debug("Init-once guard reset unavailable (non-fatal): %s", _guard_reset_err)
+        logger.warning("Init-once guard reset failed (non-fatal): %s", _guard_reset_err)
     logger.debug("🔄 Reset readiness table and completion events for fresh bootstrap attempt")
 
 
@@ -888,6 +890,14 @@ _STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
 # INIT_COMPLETE → THREADS_STARTING readiness gate.  After this timeout the
 # gate uses mark_not_applicable so startup is never permanently blocked.
 _BROKER_CONNECTED_READY_TIMEOUT_S = 30.0
+# Seconds the B1 preflight guard polls all_brokers_fully_ready() before
+# giving up.  Allows async balance-payload fetch to complete before B1 runs.
+_B1_BROKER_READY_POLL_TIMEOUT_S = 10.0
+_B1_BROKER_READY_POLL_INTERVAL_S = 0.5
+# Retry parameters for the _rt_is_ready() THREADS_STARTING gate.
+# Gives fractionally-late readiness signals time to propagate before raising.
+_RT_GATE_RETRY_ATTEMPTS = 5
+_RT_GATE_RETRY_INTERVAL_S = 1.0
 
 
 def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> bool:
@@ -6752,33 +6762,34 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     if _bms_mabm is None:
                         _b1_brokers_ready = True  # no MABM → not a requirement in this deployment
                     elif hasattr(_bms_mabm, "all_brokers_fully_ready"):
-                        # Poll for up to 10 s so that async broker initialisation (e.g.
-                        # Coinbase balance-payload fetch) can complete before B1 runs.
-                        # A single-shot check at B1 time is too early: initialize_platform_brokers()
-                        # may still be delivering the first balance snapshot when we reach this
-                        # guard.  If brokers are still not ready after the poll, mark N/A when
-                        # no platform brokers are registered (nothing to be "ready").
-                        _b1_br_deadline = time.monotonic() + 10.0
+                        # Poll so that async broker initialisation (e.g. Coinbase balance-payload
+                        # fetch) can complete before B1 runs.  A single-shot check at B1 time is
+                        # too early: initialize_platform_brokers() may still be delivering the
+                        # first balance snapshot.  If brokers are still not ready after the poll,
+                        # mark N/A when no platform brokers are registered at all.
+                        _b1_br_deadline = time.monotonic() + _B1_BROKER_READY_POLL_TIMEOUT_S
                         while time.monotonic() < _b1_br_deadline:
                             if bool(_bms_mabm.all_brokers_fully_ready()):
                                 _b1_brokers_ready = True
                                 break
-                            time.sleep(0.5)
+                            time.sleep(_B1_BROKER_READY_POLL_INTERVAL_S)
                         if not _b1_brokers_ready:
-                            # No registered platform brokers → not a blocking requirement
-                            _b1_platform_brokers = list(
-                                getattr(_bms_mabm, "_platform_brokers", {}).values()
+                            # Use the public has_registered_brokers() method to check
+                            # whether any platform brokers are registered at all.
+                            _b1_has_brokers = bool(
+                                _bms_mabm.has_registered_brokers()
+                                if hasattr(_bms_mabm, "has_registered_brokers")
+                                else True  # assume present if method missing
                             )
-                            if not _b1_platform_brokers:
+                            if not _b1_has_brokers:
                                 _b1_brokers_ready = True
                                 logger.info(
                                     "[B1-Guard] No platform brokers registered — treating brokers_ready as N/A"
                                 )
                             else:
                                 logger.warning(
-                                    "[B1-Guard] Brokers not fully ready after 10 s poll "
-                                    "(registered=%d) — B1 will be marked failed",
-                                    len(_b1_platform_brokers),
+                                    "[B1-Guard] Brokers not fully ready after %.0f s poll — B1 will be marked failed",
+                                    _B1_BROKER_READY_POLL_TIMEOUT_S,
                                 )
                 except Exception as _b1_br_err:
                     logger.warning("[B1-Guard] brokers_ready probe failed (fail-closed False): %s", _b1_br_err)
@@ -7034,12 +7045,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             )
             if not _rt_is_ready():
                 # Short retry loop: give slow readiness signals (e.g. from async broker
-                # callbacks) up to 5 extra seconds to propagate before blocking startup.
-                # This avoids an unnecessary retry cycle when a flag arrives fractionally
-                # late relative to the gate check.
+                # callbacks) up to _RT_GATE_RETRY_ATTEMPTS extra seconds to propagate
+                # before blocking startup.  This avoids an unnecessary retry cycle when
+                # a flag arrives fractionally late relative to the gate check.
                 _rt_gate_ready = False
-                for _rt_gate_attempt in range(5):
-                    time.sleep(1.0)
+                for _rt_gate_attempt in range(_RT_GATE_RETRY_ATTEMPTS):
+                    time.sleep(_RT_GATE_RETRY_INTERVAL_S)
                     if _rt_is_ready():
                         _rt_gate_ready = True
                         logger.info(
@@ -7049,8 +7060,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         break
                     _still_pending_now = _rt_pending()
                     logger.info(
-                        "Readiness gate retry %d/5 — still pending: %s",
+                        "Readiness gate retry %d/%d — still pending: %s",
                         _rt_gate_attempt + 1,
+                        _RT_GATE_RETRY_ATTEMPTS,
                         _still_pending_now,
                     )
                 if not _rt_gate_ready:
