@@ -23,7 +23,7 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
             self.assertTrue(result.critical_failure)
             self.assertTrue(any("Conflicting mode flags" in msg for _, msg in result.risks))
 
-    def test_invalid_redis_url_fails_closed(self):
+    def test_invalid_redis_url_scheme_fails_closed(self):
         with patch.dict(
             os.environ,
             {

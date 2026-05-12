@@ -821,17 +821,6 @@ def validate_operational_environment_config() -> StartupValidationResult:
                     result.mark_critical_failure(
                         f"Resolved Redis URL from {redis_source} is missing hostname."
                     )
-                if parsed.port is None:
-                    result.add_risk(
-                        StartupRisk.ENVIRONMENT_MISCONFIGURATION,
-                        f"Resolved Redis URL from {redis_source} is missing port",
-                    )
-                    result.add_warning(
-                        "❌ REDIS MISCONFIGURATION: resolved Redis URL is missing port."
-                    )
-                    result.mark_critical_failure(
-                        f"Resolved Redis URL from {redis_source} is missing port."
-                    )
     except Exception as exc:
         result.add_risk(
             StartupRisk.ENVIRONMENT_MISCONFIGURATION,
@@ -846,7 +835,7 @@ def validate_operational_environment_config() -> StartupValidationResult:
 
     unlock_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_TIMEOUT_S", "").strip()
     if unlock_timeout_raw:
-        def _record_unlock_timeout_error(err_message: str) -> None:
+        def _record_invalid_unlock_timeout(err_message: str) -> None:
             result.add_risk(
                 StartupRisk.ENVIRONMENT_MISCONFIGURATION,
                 "NIJA_EXECUTION_UNLOCK_TIMEOUT_S is invalid",
@@ -862,17 +851,17 @@ def validate_operational_environment_config() -> StartupValidationResult:
         try:
             unlock_timeout_s = float(unlock_timeout_raw)
         except (TypeError, ValueError):
-            _record_unlock_timeout_error("Value must be a valid number")
+            _record_invalid_unlock_timeout("Value must be a valid number")
         else:
             if not math.isfinite(unlock_timeout_s):
-                _record_unlock_timeout_error("Value must be a finite number (not infinity or NaN)")
+                _record_invalid_unlock_timeout("Value must be a finite number (not infinity or NaN)")
             # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
             # no-wait startup path, and at most 300s to avoid long silent stalls.
             elif (
                 unlock_timeout_s < MIN_EXECUTION_UNLOCK_TIMEOUT_S
                 or unlock_timeout_s > MAX_EXECUTION_UNLOCK_TIMEOUT_S
             ):
-                _record_unlock_timeout_error(
+                _record_invalid_unlock_timeout(
                     f"Timeout must be between {MIN_EXECUTION_UNLOCK_TIMEOUT_S:.1f} and "
                     f"{MAX_EXECUTION_UNLOCK_TIMEOUT_S:.1f} seconds"
                 )
