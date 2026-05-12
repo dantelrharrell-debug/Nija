@@ -2008,10 +2008,10 @@ class NIJAApexStrategyV71:
 
         score_reduction = 1 if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS else 0
         # ENTRY_GATE_FALLBACK_WINDOW_SECS can trigger before full drought mode.
-        # If both conditions are true we use the stronger single reduction only,
-        # preserving safety by preventing multi-point threshold collapse.
+        # If both conditions are true we apply only the strongest configured
+        # reduction (not additive stacking), preserving the safety floor.
         if drought.active:
-            drought_reduction = max(0, math.ceil(float(drought.score_reduction)))
+            drought_reduction = max(0, math.ceil(drought.score_reduction))
             score_reduction = max(score_reduction, drought_reduction)
 
         effective_score = max(ENTRY_GATE_SAFETY_FLOOR, ENTRY_GATE_MIN_SCORE - score_reduction)
