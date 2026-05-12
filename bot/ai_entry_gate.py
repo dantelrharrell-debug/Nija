@@ -226,7 +226,7 @@ _GATE_MAX_SCORE: int = sum(_GATE_WEIGHTS.values())  # auto-summed (currently 7)
 # (Gate 2+3 = 2+1 = 3 pts → PASS; Gate 1 alone = 3 pts → PASS; Gate 3+4 = 2 pts → PASS).
 # Restored to 5.0 once the account balance reaches TARGET_BALANCE ($100)
 # via ``set_gate_pass_threshold`` / ``TradeFrequencyController.check_balance_and_adjust_threshold``.
-BASE_ENTRY_SCORE_THRESHOLD: float = 1.6  # out of 7 — lowered 2.6 → 2.0 → 1.6 for confirmation-trade mode
+BASE_ENTRY_SCORE_THRESHOLD: float = 1.6  # out of 7 (current confirmation-trade mode baseline)
 
 # ── ATR-based volatility dampening constants ─────────────────────────────────
 # When the market is actively moving the gate pass-threshold is relaxed
@@ -693,7 +693,7 @@ class AIEntryGate:
             )
         elif entry_type in adjacent:
             return GateCheck(
-                passed=False,
+                passed=True,
                 name="Regime",
                 detail=(
                     f"regime={regime_key.upper()} partially supports {entry_type} {side} "
@@ -702,7 +702,7 @@ class AIEntryGate:
             )
         else:
             return GateCheck(
-                passed=False,
+                passed=True,
                 name="Regime",
                 detail=(
                     f"regime={regime_key.upper()} conflicts with {entry_type} {side} "
