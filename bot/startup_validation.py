@@ -769,6 +769,8 @@ def validate_operational_environment_config() -> StartupValidationResult:
     try:
         get_nija_url_format_error, get_redis_url, get_redis_url_source = _import_redis_env_helpers()
         nija_format_error = get_nija_url_format_error()
+        redis_url = ""
+        redis_source = "unset"
         if nija_format_error:
             result.add_risk(
                 StartupRisk.ENVIRONMENT_MISCONFIGURATION,
@@ -778,9 +780,9 @@ def validate_operational_environment_config() -> StartupValidationResult:
             result.mark_critical_failure(
                 "Invalid NIJA_REDIS_URL format. Set NIJA_REDIS_URL to a valid redis:// or rediss:// URL."
             )
-
-        redis_url = get_redis_url()
-        redis_source = get_redis_url_source() or "unset"
+        else:
+            redis_url = get_redis_url()
+            redis_source = get_redis_url_source() or "unset"
         if runtime_mode.live_authorized and not redis_url:
             result.add_risk(
                 StartupRisk.ENVIRONMENT_MISCONFIGURATION,
@@ -848,6 +850,8 @@ def validate_operational_environment_config() -> StartupValidationResult:
             unlock_timeout_s = float(unlock_timeout_raw)
             if not math.isfinite(unlock_timeout_s):
                 raise ValueError("Timeout is not finite")
+            # Keep unlock timeout bounded: at least 1s to prevent a zero/negative
+            # non-wait startup path, and at most 300s to avoid long silent stalls.
             if unlock_timeout_s < 1.0 or unlock_timeout_s > 300.0:
                 raise ValueError("Timeout must be between 1.0 and 300.0 seconds")
             result.add_info(

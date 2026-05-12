@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from bot.startup_validation import validate_operational_environment_config
+from bot.startup_validation import StartupRisk, validate_operational_environment_config
 
 
 class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
@@ -72,7 +72,7 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
         ):
             result = validate_operational_environment_config()
             self.assertFalse(result.critical_failure)
-            self.assertFalse(any(risk.value == "environment_misconfiguration" for risk, _ in result.risks))
+            self.assertFalse(any(risk == StartupRisk.ENVIRONMENT_MISCONFIGURATION for risk, _ in result.risks))
 
 
 if __name__ == "__main__":
