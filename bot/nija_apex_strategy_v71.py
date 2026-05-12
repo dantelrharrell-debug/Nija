@@ -1993,6 +1993,26 @@ class NIJAApexStrategyV71:
 
         return threshold_conf, threshold_adx, threshold_vol
 
+    def _get_entry_gate_min_score(self, drought: Optional['DroughtRelaxation']) -> int:
+        """
+        Return the required 5-point gate pass count with low-frequency relaxation.
+
+        Safety remains active (floor = 2/5), but after prolonged no-trade periods
+        the hard requirement is eased by one point so valid setups are not
+        suppressed by stacked conservative checks.
+        """
+        if drought is None:
+            return ENTRY_GATE_MIN_SCORE
+
+        score_reduction = 0.0
+        if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS:
+            score_reduction = max(score_reduction, 1.0)
+        if drought.active:
+            score_reduction = max(score_reduction, float(drought.score_reduction))
+
+        effective_score = int(max(2.0, float(ENTRY_GATE_MIN_SCORE) - score_reduction))
+        return min(ENTRY_GATE_MIN_SCORE, effective_score)
+
     def _calculate_entry_gate_score(
         self,
         confidence: float,
@@ -2027,6 +2047,7 @@ class NIJAApexStrategyV71:
         threshold_adx: float,
         threshold_vol: float,
         gate_score: int,
+        min_score_required: int,
     ) -> None:
         """Log entry gate thresholds and pass count for no-trade diagnostics."""
         logger.info(
@@ -2034,7 +2055,7 @@ class NIJAApexStrategyV71:
             f"confidence={confidence:.2f} (need ≥ {threshold_conf})\n"
             f"adx={adx:.2f} (need ≥ {threshold_adx})\n"
             f"volume={volume_ratio:.3f} (need ≥ {threshold_vol})\n"
-            f"passed={gate_score}/5\n"
+            f"passed={gate_score}/5 (need ≥ {min_score_required})\n"
         )
 
     def _entry_gate_rsi_signal(self, indicators: Dict, side: str, adx: float) -> bool:
@@ -2948,6 +2969,7 @@ class NIJAApexStrategyV71:
                         self._freq_ctrl.get_drought_relaxation()
                         if self._freq_ctrl is not None else None
                     )
+                    _min_gate_score_l = self._get_entry_gate_min_score(_drought_l)
                     _threshold_conf, _threshold_adx, _threshold_vol = self._get_entry_gate_thresholds(_drought_l)
                     _confidence = self._calculate_entry_confidence(score, metadata)
                     _avg_vol_5 = df['volume'].iloc[-5:].mean()
@@ -2964,7 +2986,7 @@ class NIJAApexStrategyV71:
                         _threshold_adx,
                         _threshold_vol,
                     )
-                    if _gate_score < ENTRY_GATE_MIN_SCORE:
+                    if _gate_score < _min_gate_score_l:
                         self._log_entry_gate_diagnostics(
                             _confidence,
                             adx,
@@ -2973,8 +2995,9 @@ class NIJAApexStrategyV71:
                             _threshold_adx,
                             _threshold_vol,
                             _gate_score,
+                            _min_gate_score_l,
                         )
-                        reject_reason = f"Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}"
+                        reject_reason = f"Entry gate score {_gate_score}/5 < {_min_gate_score_l}"
                         _regime_label = str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN")
                         logger.info(
                             "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
@@ -3583,6 +3606,7 @@ class NIJAApexStrategyV71:
                         self._freq_ctrl.get_drought_relaxation()
                         if self._freq_ctrl is not None else None
                     )
+                    _min_gate_score_s = self._get_entry_gate_min_score(_drought_s)
                     _threshold_conf, _threshold_adx, _threshold_vol = self._get_entry_gate_thresholds(_drought_s)
                     _confidence = self._calculate_entry_confidence(score, metadata)
                     _avg_vol_5 = df['volume'].iloc[-5:].mean()
@@ -3599,7 +3623,7 @@ class NIJAApexStrategyV71:
                         _threshold_adx,
                         _threshold_vol,
                     )
-                    if _gate_score < ENTRY_GATE_MIN_SCORE:
+                    if _gate_score < _min_gate_score_s:
                         self._log_entry_gate_diagnostics(
                             _confidence,
                             adx,
@@ -3608,8 +3632,9 @@ class NIJAApexStrategyV71:
                             _threshold_adx,
                             _threshold_vol,
                             _gate_score,
+                            _min_gate_score_s,
                         )
-                        reject_reason = f"Entry gate score {_gate_score}/5 < {ENTRY_GATE_MIN_SCORE}"
+                        reject_reason = f"Entry gate score {_gate_score}/5 < {_min_gate_score_s}"
                         _regime_label = str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN")
                         logger.info(
                             "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
