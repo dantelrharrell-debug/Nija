@@ -798,6 +798,79 @@ class MultiAccountBrokerManager:
         except Exception:
             _sum_nested_balances = None
 
+        def _execute_startup_coordinator_refresh(attempt: int) -> Optional[float]:
+            """Run one synchronous startup refresh and wait up to BALANCE_FETCH_TIMEOUT for hydration."""
+            if self._capital_coordinator is None:
+                return None
+
+            _startup_broker_map: Dict[str, BaseBroker] = {}
+            for _broker_type, _broker in self._platform_brokers.items():
+                if _broker is None:
+                    continue
+                _eligible = bool(getattr(_broker, "connected", False))
+                if not _eligible:
+                    _ready_probe = getattr(_broker, "is_ready_for_capital", None)
+                    try:
+                        _eligible = bool(_ready_probe()) if callable(_ready_probe) else False
+                    except Exception:
+                        _eligible = False
+                if _eligible:
+                    _startup_broker_map[_broker_type.value] = _broker
+
+            if not _startup_broker_map:
+                logger.warning(
+                    "[MABM.initialize] startup coordinator refresh skipped on attempt %d: no eligible brokers",
+                    attempt,
+                )
+                return None
+
+            try:
+                _snapshot = self._capital_coordinator.execute_refresh(
+                    broker_map=_startup_broker_map,
+                    trigger=f"startup_hydration_refresh_attempt_{attempt}",
+                )
+            except Exception as _refresh_err:
+                logger.warning(
+                    "[MABM.initialize] startup coordinator refresh failed on attempt %d: %s",
+                    attempt,
+                    _refresh_err,
+                )
+                return None
+
+            if _snapshot is None:
+                logger.warning(
+                    "[MABM.initialize] startup coordinator refresh returned no snapshot on attempt %d",
+                    attempt,
+                )
+                return None
+
+            _coordinator_total = float(getattr(_snapshot, "real_capital", 0.0) or 0.0)
+
+            _hydrated = bool(getattr(self._capital_coordinator, "balance_hydrated", False))
+            if not _hydrated:
+                _wait_for_hydration = getattr(
+                    self._capital_coordinator,
+                    "wait_for_balance_hydration",
+                    None,
+                )
+                if callable(_wait_for_hydration):
+                    _hydrated = bool(_wait_for_hydration(timeout=self.BALANCE_FETCH_TIMEOUT))
+
+            if _hydrated:
+                logger.info(
+                    "[MABM.initialize] startup coordinator refresh complete on attempt %d: total=$%.2f (hydrated=true)",
+                    attempt,
+                    _coordinator_total,
+                )
+            else:
+                logger.warning(
+                    "[MABM.initialize] startup coordinator refresh did not set hydration on attempt %d "
+                    "(total=$%.2f) — continuing retries",
+                    attempt,
+                    _coordinator_total,
+                )
+            return _coordinator_total
+
         for _attempt in range(1, _retry_attempts + 1):
             # Re-run platform broker bootstrap between attempts so transient
             # startup races (credentials/API warm-up/network) can recover.
@@ -828,6 +901,10 @@ class MultiAccountBrokerManager:
                     _total_usd = float(_sum_local(_balances))
             except Exception:
                 _total_usd = float(_sum_local(_balances))
+
+            _coordinator_total = _execute_startup_coordinator_refresh(_attempt)
+            if _coordinator_total is not None:
+                _total_usd = max(_total_usd, _coordinator_total)
 
             if _total_usd > 0.0:
                 break
