@@ -35,6 +35,7 @@ _FENCE_VERIFY_LOCK = threading.Lock()
 _FENCE_LAST_CHECK_TS: float = 0.0
 _FENCE_LAST_OK: bool = False
 _FENCE_LAST_ERR: str = ""
+_FENCE_RECOVER_NEXT_ATTEMPT_TS: float = 0.0
 _DEGRADED_WRITER_AUTH_WARNED: bool = False
 
 logger = logging.getLogger("nija.execution_authority")
@@ -117,8 +118,24 @@ def _connect_redis_for_authority(redis_url: str, *, timeout_s: int = 2):
 
 def _recover_fencing_token_from_lock(redis_url: str, lock_key: str) -> str:
     """Recover fencing token from Redis lock when holder is this instance."""
+    global _FENCE_RECOVER_NEXT_ATTEMPT_TS
+
     if not redis_url or not lock_key:
         return ""
+
+    try:
+        recover_cooldown_s = max(
+            1.0,
+            float(os.getenv("NIJA_WRITER_TOKEN_RECOVERY_COOLDOWN_S", "30") or 30.0),
+        )
+    except (TypeError, ValueError):
+        recover_cooldown_s = 30.0
+
+    now = time.monotonic()
+    with _FENCE_VERIFY_LOCK:
+        if now < _FENCE_RECOVER_NEXT_ATTEMPT_TS:
+            return ""
+
     try:
         client = _connect_redis_for_authority(redis_url, timeout_s=2)
         current_holder_raw = str(client.get(lock_key) or "")
@@ -126,11 +143,17 @@ def _recover_fencing_token_from_lock(redis_url: str, lock_key: str) -> str:
         inspection = inspect_lock_holder(current_instance_identity(), current_holder)
         relationship = str(inspection.get("relationship", ""))
         if relationship not in {"same-instance", "same-replica"}:
+            with _FENCE_VERIFY_LOCK:
+                _FENCE_RECOVER_NEXT_ATTEMPT_TS = time.monotonic() + recover_cooldown_s
             return ""
         token = str(current_holder.get("token", "") or "").strip()
         if not token:
+            with _FENCE_VERIFY_LOCK:
+                _FENCE_RECOVER_NEXT_ATTEMPT_TS = time.monotonic() + recover_cooldown_s
             return ""
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = token
+        with _FENCE_VERIFY_LOCK:
+            _FENCE_RECOVER_NEXT_ATTEMPT_TS = 0.0
         logger.warning(
             "Recovered NIJA_WRITER_FENCING_TOKEN from Redis lock holder "
             "(relationship=%s lock_key=%s token_prefix=%s)",
@@ -140,7 +163,14 @@ def _recover_fencing_token_from_lock(redis_url: str, lock_key: str) -> str:
         )
         return token
     except Exception as exc:
-        logger.warning("Unable to recover fencing token from Redis lock: %s", exc)
+        with _FENCE_VERIFY_LOCK:
+            _FENCE_RECOVER_NEXT_ATTEMPT_TS = time.monotonic() + recover_cooldown_s
+        live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
+        degraded_or_opt_out = _allow_degraded_writer_authority() or _single_instance_lock_opt_out(live_mode)
+        if degraded_or_opt_out:
+            logger.info("Unable to recover fencing token from Redis lock (degraded/opt-out): %s", exc)
+        else:
+            logger.warning("Unable to recover fencing token from Redis lock: %s", exc)
         return ""
 
 

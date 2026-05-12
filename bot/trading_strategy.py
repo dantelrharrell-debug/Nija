@@ -25,6 +25,15 @@ import pandas as pd
 # Initialize logger early to avoid NameError in import fallback handlers
 logger = logging.getLogger("nija")
 
+
+def _info_once(marker: str, message: str, *args) -> None:
+    """Emit an INFO log once per process, even if module is imported via aliases."""
+    env_key = f"NIJA_LOG_ONCE_{marker}"
+    if os.environ.get(env_key) == "1":
+        return
+    os.environ[env_key] = "1"
+    logger.info(message, *args)
+
 # Import execution visibility module for comprehensive logging
 try:
     from execution_visibility import (
@@ -1262,17 +1271,19 @@ except ImportError:
 try:
     from pair_performance_optimizer import get_pair_performance_optimizer
     PAIR_PERF_OPTIMIZER_AVAILABLE = True
-    logger.info(
+    _info_once(
+        "PAIR_PERF_OPTIMIZER_LOADED",
         "✅ Pair Performance Optimizer loaded — "
-        "underperformer kill + top-pair size boost active"
+        "underperformer kill + top-pair size boost active",
     )
 except ImportError:
     try:
         from bot.pair_performance_optimizer import get_pair_performance_optimizer
         PAIR_PERF_OPTIMIZER_AVAILABLE = True
-        logger.info(
+        _info_once(
+            "PAIR_PERF_OPTIMIZER_LOADED",
             "✅ Pair Performance Optimizer loaded — "
-            "underperformer kill + top-pair size boost active"
+            "underperformer kill + top-pair size boost active",
         )
     except ImportError:
         PAIR_PERF_OPTIMIZER_AVAILABLE = False
@@ -1286,17 +1297,19 @@ except ImportError:
 try:
     from loss_control_tuner import get_loss_control_tuner
     LOSS_CONTROL_TUNER_AVAILABLE = True
-    logger.info(
+    _info_once(
+        "LOSS_CONTROL_TUNER_LOADED",
         "✅ Loss Control Tuner loaded — "
-        "drawdown-triggered filter tightening + aggression reduction active"
+        "drawdown-triggered filter tightening + aggression reduction active",
     )
 except ImportError:
     try:
         from bot.loss_control_tuner import get_loss_control_tuner
         LOSS_CONTROL_TUNER_AVAILABLE = True
-        logger.info(
+        _info_once(
+            "LOSS_CONTROL_TUNER_LOADED",
             "✅ Loss Control Tuner loaded — "
-            "drawdown-triggered filter tightening + aggression reduction active"
+            "drawdown-triggered filter tightening + aggression reduction active",
         )
     except ImportError:
         LOSS_CONTROL_TUNER_AVAILABLE = False
@@ -2056,7 +2069,7 @@ _disabled_layers = [
     ] if not enabled
 ]
 if _disabled_layers:
-    logger.info("⚙️  DISABLED LAYERS: %s", " | ".join(_disabled_layers))
+    _info_once("DISABLED_LAYERS", "⚙️  DISABLED LAYERS: %s", " | ".join(_disabled_layers))
 # ============================================================================
 # GLOBAL MINIMUM TRADE SIZE
 # Single source of truth referenced by BROKER_MIN_BALANCE, MIN_POSITION_USD,
@@ -2255,7 +2268,11 @@ try:
     _restriction_mgr = get_restriction_manager()
     _restricted_symbols = _restriction_mgr.get_all_restricted_symbols()
     if _restricted_symbols:
-        logger.info(f"📋 Loaded {len(_restricted_symbols)} geographically restricted symbols")
+        _info_once(
+            "RESTRICTED_SYMBOLS_LOADED",
+            "📋 Loaded %d geographically restricted symbols",
+            len(_restricted_symbols),
+        )
         DISABLED_PAIRS.extend(_restricted_symbols)
 except ImportError:
     try:
@@ -2263,7 +2280,11 @@ except ImportError:
         _restriction_mgr = get_restriction_manager()
         _restricted_symbols = _restriction_mgr.get_all_restricted_symbols()
         if _restricted_symbols:
-            logger.info(f"📋 Loaded {len(_restricted_symbols)} geographically restricted symbols")
+            _info_once(
+                "RESTRICTED_SYMBOLS_LOADED",
+                "📋 Loaded %d geographically restricted symbols",
+                len(_restricted_symbols),
+            )
             DISABLED_PAIRS.extend(_restricted_symbols)
     except ImportError as e:
         logger.debug(f"Note: Could not load restriction blacklist: {e}")
@@ -3307,7 +3328,11 @@ else:
 if HEARTBEAT_REQUIRED_FIRST_ACTIVATION:
     logger.info(f"❤️  HEARTBEAT REQUIRED ON FIRST ACTIVATION (marker={HEARTBEAT_MARKER_PATH})")
 if HEARTBEAT_ONESHOT_ENABLED:
-    logger.info(f"❤️  HEARTBEAT ONESHOT LOCK ENABLED (marker={HEARTBEAT_ONESHOT_LOCK_PATH})")
+    _info_once(
+        "HEARTBEAT_ONESHOT_LOCK",
+        "❤️  HEARTBEAT ONESHOT LOCK ENABLED (marker=%s)",
+        HEARTBEAT_ONESHOT_LOCK_PATH,
+    )
 
 def call_with_timeout(func, args=(), kwargs=None, timeout_seconds=60):
     """

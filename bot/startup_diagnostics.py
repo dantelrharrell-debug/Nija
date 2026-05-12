@@ -42,6 +42,11 @@ def display_feature_flag_banner():
     # Check for dry-run mode FIRST and display banner if enabled
     dry_run_str = os.getenv("DRY_RUN_MODE", "false").lower()
     dry_run_mode = dry_run_str in ("true", "1", "yes")
+
+    if os.getenv("NIJA_FEATURE_FLAGS_BANNER_EMITTED", "0") == "1":
+        logger.info("ℹ️ Feature flag banner already emitted for this process; skipping duplicate output")
+        return
+    os.environ["NIJA_FEATURE_FLAGS_BANNER_EMITTED"] = "1"
     
     if dry_run_mode:
         # Import and display dry-run banner
@@ -53,10 +58,6 @@ def display_feature_flag_banner():
     
     # Display institutional disclaimer
     print_validation_banner()
-    
-    logger.info("=" * 70)
-    logger.info("🏁 FEATURE FLAGS STATUS")
-    logger.info("=" * 70)
     
     # Import and check all feature flags
     flags = {}
@@ -114,6 +115,9 @@ def display_feature_flag_banner():
         logger.info("=" * 70)
     except ImportError:
         # Fallback: per-line output when startup_event_buffer is unavailable
+        logger.info("=" * 70)
+        logger.info("🏁 FEATURE FLAGS STATUS")
+        logger.info("=" * 70)
         for feature_name, is_enabled in flags.items():
             if feature_name == 'Dry-Run Mode (Paper Trading)':
                 status_icon = "🟡" if is_enabled else "⚪"

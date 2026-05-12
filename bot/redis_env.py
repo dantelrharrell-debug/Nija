@@ -129,11 +129,30 @@ def _maybe_strip_tls(url: str) -> str:
     return url
 
 
+def _maybe_promote_proxy_tls(url: str) -> str:
+    """Promote Railway proxy redis:// URLs to rediss:// by default.
+
+    Railway public proxy Redis endpoints require TLS in normal operation.
+    If a proxy URL is configured as plain redis://, upgrade it to rediss://
+    during resolution to avoid startup degradation due to protocol mismatch.
+    Operators can still opt out by setting NIJA_REDIS_STRIP_TLS=true.
+    """
+    if not url:
+        return url
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    if scheme == "redis" and ".proxy.rlwy.net" in host:
+        return "rediss://" + url[len("redis://"):]
+    return url
+
+
 def get_redis_url() -> str:
     """Return the highest-priority configured Redis URL."""
     configured = _iter_configured_redis_urls()
     if configured:
-        return _maybe_strip_tls(configured[0][1])
+        resolved = _maybe_promote_proxy_tls(configured[0][1])
+        return _maybe_strip_tls(resolved)
     return ""
 
 

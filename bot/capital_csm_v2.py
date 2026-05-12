@@ -84,20 +84,26 @@ import logging
 import os
 import threading
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # Import CapitalIntegrityError from the canonical exceptions module so that
 # ``from bot.exceptions import CapitalIntegrityError`` and
 # ``from bot.capital_csm_v2 import CapitalIntegrityError`` resolve to the same
 # class and can be caught interchangeably.
-try:
-    from bot.exceptions import CapitalIntegrityError  # noqa: F401  (re-export)
-except ImportError:
+if TYPE_CHECKING:
     try:
-        from exceptions import CapitalIntegrityError  # type: ignore[no-redef]  # noqa: F401
+        from bot.exceptions import CapitalIntegrityError
     except ImportError:
-        class CapitalIntegrityError(RuntimeError):  # type: ignore[no-redef]
-            """Raised when a capital safety invariant is violated."""
+        from exceptions import CapitalIntegrityError  # type: ignore[reportMissingImports]
+else:
+    try:
+        from bot.exceptions import CapitalIntegrityError
+    except ImportError:
+        try:
+            from exceptions import CapitalIntegrityError
+        except ImportError:
+            class CapitalIntegrityError(RuntimeError):
+                """Raised when a capital safety invariant is violated."""
 
 logger = logging.getLogger("nija.capital_csm_v2")
 
@@ -277,12 +283,16 @@ class CapitalCSMv2:
             )
         else:
             new_state = CapitalCSMState.DEGRADED
-            new_reason = (
-                f"capital=${real_capital:.2f} "
-                f"confidence={confidence_score:.3f} "
-                f"(below MEDIUM={_MEDIUM_CONFIDENCE_THRESHOLD}) "
-                f"stale={is_stale}"
-            )
+            reason_parts = [
+                f"capital=${real_capital:.2f}",
+                f"confidence={confidence_score:.3f}",
+                f"stale={is_stale}",
+            ]
+            if confidence_score < _MEDIUM_CONFIDENCE_THRESHOLD:
+                reason_parts.append(f"below MEDIUM={_MEDIUM_CONFIDENCE_THRESHOLD}")
+            if is_stale:
+                reason_parts.append("snapshot stale")
+            new_reason = " ".join(reason_parts)
 
         # ── Atomic state update ───────────────────────────────────────────────
         with self._lock:
