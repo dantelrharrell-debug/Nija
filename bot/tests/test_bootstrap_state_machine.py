@@ -811,5 +811,91 @@ class TestOwnershipEnforcement(unittest.TestCase):
         self.assertEqual(fsm.state, BootstrapState.BOOT_INIT)
 
 
+class TestFinalizeBootDegradedMode(unittest.TestCase):
+    """finalize_boot() must grant execution authority in degraded mode without Redis."""
+
+    def _fsm_at_threads_starting(self) -> BootstrapStateMachine:
+        """Return a fresh FSM advanced to THREADS_STARTING."""
+        fsm = _fresh()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
+            BootstrapState.CAPITAL_REFRESHING,
+            BootstrapState.CAPITAL_READY,
+            BootstrapState.INIT_COMPLETE,
+            BootstrapState.THREADS_STARTING,
+        )
+        return fsm
+
+    def test_finalize_boot_succeeds_without_redis_degraded(self):
+        """finalize_boot() succeeds normally when Redis degraded flags are not set."""
+        fsm = self._fsm_at_threads_starting()
+        with patch.dict("os.environ", {
+            "NIJA_ALLOW_REDIS_DEGRADED": "",
+            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "",
+        }, clear=False):
+            ok = fsm.finalize_boot("test: no degraded flags")
+        self.assertTrue(ok)
+        self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
+        self.assertTrue(fsm.execution_authority)
+
+    def test_finalize_boot_bypasses_redis_ping_when_degraded_writer_authority_set(self):
+        """When NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 is set alongside
+        NIJA_ALLOW_REDIS_DEGRADED=1, finalize_boot() must skip the Redis PING
+        gate and grant execution authority even when Redis is unreachable."""
+        fsm = self._fsm_at_threads_starting()
+        with patch.dict("os.environ", {
+            "NIJA_ALLOW_REDIS_DEGRADED": "1",
+            "NIJA_REQUIRE_REDIS_FOR_LIVE": "true",
+            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "1",
+        }, clear=False):
+            ok = fsm.finalize_boot("test: degraded writer authority bypass")
+        self.assertTrue(ok, "finalize_boot should succeed when degraded writer authority is set")
+        self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
+        self.assertTrue(fsm.execution_authority)
+        self.assertTrue(fsm.boot_complete)
+
+    def test_finalize_boot_blocked_when_degraded_but_no_writer_authority_and_redis_unreachable(self):
+        """When NIJA_ALLOW_REDIS_DEGRADED=1 but NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY is
+        NOT set and Redis is unreachable (no URL configured), finalize_boot() must
+        remain blocked (fail-closed)."""
+        fsm = self._fsm_at_threads_starting()
+        # Simulate Redis being unreachable by clearing all Redis URL env vars.
+        # When no URL is configured _redis_ok stays False, triggering the gate.
+        with patch.dict("os.environ", {
+            "NIJA_ALLOW_REDIS_DEGRADED": "1",
+            "NIJA_REQUIRE_REDIS_FOR_LIVE": "true",
+            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "",
+            "NIJA_REDIS_URL": "",
+            "REDIS_TLS_URL": "",
+            "REDIS_URL": "",
+        }, clear=False):
+            ok = fsm.finalize_boot("test: redis unreachable, no degraded writer authority")
+        self.assertFalse(ok, "finalize_boot must be blocked when Redis is unreachable without degraded writer authority")
+        self.assertNotEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
+        self.assertFalse(fsm.execution_authority)
+
+    def test_finalize_boot_require_redis_false_bypasses_gate(self):
+        """Setting NIJA_REQUIRE_REDIS_FOR_LIVE=false bypasses the Redis PING gate."""
+        fsm = self._fsm_at_threads_starting()
+        with patch.dict("os.environ", {
+            "NIJA_ALLOW_REDIS_DEGRADED": "1",
+            "NIJA_REQUIRE_REDIS_FOR_LIVE": "false",
+            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "",
+        }, clear=False):
+            ok = fsm.finalize_boot("test: require redis false")
+        self.assertTrue(ok)
+        self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
+        self.assertTrue(fsm.execution_authority)
+
+
 if __name__ == "__main__":
     unittest.main()
