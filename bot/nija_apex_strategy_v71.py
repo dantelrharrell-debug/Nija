@@ -14,6 +14,7 @@ ENHANCEMENTS:
 
 import pandas as pd
 import numpy as np
+import math
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple, List
 import logging
@@ -1999,20 +2000,19 @@ class NIJAApexStrategyV71:
         Return the required 5-point gate pass count with low-frequency relaxation.
 
         Safety remains active (floor = 2/5), but after prolonged no-trade periods
-        the hard requirement is eased by one point so valid setups are not
-        suppressed by stacked conservative checks.
+        the hard requirement is eased by up to the configured drought reduction
+        so valid setups are not suppressed by stacked conservative checks.
         """
         if drought is None:
             return ENTRY_GATE_MIN_SCORE
 
-        score_reduction = 0
+        score_reduction = 1 if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS else 0
         # ENTRY_GATE_FALLBACK_WINDOW_SECS can trigger before full drought mode.
         # If both conditions are true we use the stronger single reduction only,
         # preserving safety by preventing multi-point threshold collapse.
-        if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS:
-            score_reduction = max(score_reduction, 1)
         if drought.active:
-            score_reduction = max(score_reduction, int(drought.score_reduction))
+            drought_reduction = max(0, math.ceil(float(drought.score_reduction)))
+            score_reduction = max(score_reduction, drought_reduction)
 
         effective_score = max(ENTRY_GATE_SAFETY_FLOOR, ENTRY_GATE_MIN_SCORE - score_reduction)
         return effective_score
