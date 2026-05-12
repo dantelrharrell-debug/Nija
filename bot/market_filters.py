@@ -7,12 +7,13 @@ Advanced market filtering to avoid low-quality trading conditions:
 - First seconds of candle filtering
 - News event filtering (skeleton for future implementation)
 - Spread and slippage checks
-- Top-10 high-liquidity symbol filter (locked setting)
+- Optional high-liquidity symbol filter (env-configured; disabled by default)
 - Momentum universe filter: Top-20 volume × Top-20 volatility × Top-10 trend strength
 """
 
 import heapq
 import logging
+import os
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -20,25 +21,27 @@ from typing import Dict, List, Tuple
 
 logger = logging.getLogger('nija.market_filters')
 
-# Top 10 high-liquidity Coinbase pairs by 24h volume.
-# Only these symbols are eligible for entry to ensure tight spreads,
-# deep order books, and reliable price action.
-TOP_10_HIGH_LIQUIDITY_SYMBOLS = {
-    "BTC-USD",   # Bitcoin            – #1 by volume on Coinbase
-    "ETH-USD",   # Ethereum           – #2 by volume
-    "SOL-USD",   # Solana             – high-growth L1
-    "XRP-USD",   # XRP                – high-volume, fast transactions
-    "DOGE-USD",  # Dogecoin           – high retail volume
-    "ADA-USD",   # Cardano            – blue-chip altcoin
-    "AVAX-USD",  # Avalanche          – high-liquidity L1
-    "LINK-USD",  # Chainlink          – blue-chip DeFi oracle
-    "DOT-USD",   # Polkadot           – interoperability leader
-    "MATIC-USD", # Polygon            – Ethereum L2 leader
-    "LTC-USD",   # Litecoin           – long-established, liquid
-    "BCH-USD",   # Bitcoin Cash       – high-liquidity Bitcoin fork
-    "UNI-USD",   # Uniswap            – leading DeFi protocol
-    "ATOM-USD",  # Cosmos             – interchain hub
-}
+def _parse_symbols_env(var_name: str) -> set:
+    """
+    Parse an uppercase comma-separated symbol list from an env variable.
+
+    Args:
+        var_name: Environment variable name (for example,
+            ``"NIJA_HIGH_LIQUIDITY_SYMBOLS"``).
+
+    Returns:
+        set: Uppercased symbols parsed from ``VAR=a,b,c`` style input.
+        Example environment variable value: ``BTC-USD,ETH-USD,SOL-USD``.
+    """
+    raw = os.getenv(var_name, "")
+    if not raw:
+        return set()
+    return {s.strip().upper() for s in raw.split(",") if s.strip()}
+
+
+# Optional high-liquidity allowlist. Disabled by default to avoid hidden
+# symbol narrowing; set NIJA_HIGH_LIQUIDITY_SYMBOLS to enable explicitly.
+TOP_10_HIGH_LIQUIDITY_SYMBOLS = _parse_symbols_env("NIJA_HIGH_LIQUIDITY_SYMBOLS")
 
 # Backward-compatible alias (kept for any external references)
 TOP_20_HIGH_LIQUIDITY_SYMBOLS = TOP_10_HIGH_LIQUIDITY_SYMBOLS
@@ -80,14 +83,18 @@ MIN_VOLUME_BY_SYMBOL: Dict[str, float] = {
 
 def is_high_liquidity_symbol(symbol: str) -> bool:
     """
-    Return True if *symbol* is in the top-10 high-liquidity list.
+    Return True when symbol filtering allows *symbol*.
 
     Args:
         symbol: Trading pair symbol, e.g. 'BTC-USD'
 
     Returns:
-        bool: True if symbol is eligible for entry
+        bool: True if symbol is eligible for entry.
+        When ``TOP_10_HIGH_LIQUIDITY_SYMBOLS`` is empty (default), returns
+        True for every symbol (filter disabled).
     """
+    if not TOP_10_HIGH_LIQUIDITY_SYMBOLS:
+        return True
     return symbol in TOP_10_HIGH_LIQUIDITY_SYMBOLS
 
 # Import scalar helper to prevent tuple comparison crashes

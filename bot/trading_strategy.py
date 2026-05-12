@@ -8232,6 +8232,15 @@ class TradingStrategy:
         Returns:
             Subset of markets for this cycle
         """
+        if not all_markets:
+            return []
+
+        # Default behavior: do not narrow symbols in strategy-level selection.
+        # Set NIJA_ENABLE_DEFAULT_BATCH_NARROWING=true to opt into legacy
+        # rotation + batch-size narrowing.
+        if os.getenv("NIJA_ENABLE_DEFAULT_BATCH_NARROWING", "false").lower() not in ("true", "1", "yes"):
+            return list(all_markets)
+
         # --- Determine idle_cycles and active trade count for dynamic scaling ---
         _idle_cycles = 0
         try:
@@ -8521,29 +8530,8 @@ class TradingStrategy:
                 logger.warning("   ❤️  Heartbeat trade skipped: no markets available")
                 return False
             
-            # Select a liquid, low-volatility market for heartbeat (prefer BTC-USD or ETH-USD)
-            # Try multiple symbol format variations to match broker's format
-            preferred_symbols = ['BTC-USD', 'BTCUSD', 'ETH-USD', 'ETHUSD', 'BTC/USD', 'ETH/USD']
-            heartbeat_symbol = None
-            
-            for symbol in preferred_symbols:
-                # Try exact match first
-                if symbol in markets:
-                    heartbeat_symbol = symbol
-                    break
-                # Try format variations
-                symbol_dash = symbol.replace('/', '-')
-                symbol_slash = symbol.replace('-', '/')
-                if symbol_dash in markets:
-                    heartbeat_symbol = symbol_dash
-                    break
-                if symbol_slash in markets:
-                    heartbeat_symbol = symbol_slash
-                    break
-            
-            # Fallback to first available market
-            if not heartbeat_symbol and markets:
-                heartbeat_symbol = markets[0]
+            # Select a deterministic symbol without hidden BTC/ETH preference.
+            heartbeat_symbol = sorted(markets)[0] if markets else None
             
             if not heartbeat_symbol:
                 logger.warning("   ❤️  Heartbeat trade skipped: no suitable symbol found")
@@ -13116,27 +13104,8 @@ class TradingStrategy:
                                 )
                                 break
 
-                            # HIGH-LIQUIDITY FILTER - Only trade top 20 pairs by volume
-                            # Ensures tight spreads, deep order books, and reliable price action
-                            # Softened: hard-reject only when zero_signal_streak is below fallback
-                            # threshold — on a prolonged dry streak allow wider symbol universe
-                            # (score-ranking will naturally favour the higher-quality setups).
-                            if TOP_20_HIGH_LIQUIDITY_SYMBOLS and not is_high_liquidity_symbol(symbol):
-                                filter_stats['low_quality'] = filter_stats.get('low_quality', 0) + 1
-                                if self._zero_signal_streak < FORCED_ENTRY_FALLBACK_CYCLES:
-                                    logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in top-20 high-liquidity list")
-                                    continue
-                                # Streak is high — allow through, scoring will penalise rank
-                                logger.debug(
-                                    f"   ⚡ {symbol}: low-liquidity allowed (dry streak={self._zero_signal_streak} ≥ {FORCED_ENTRY_FALLBACK_CYCLES})",
-                                )
-
-                            # WHITELIST CHECK - Only trade whitelisted symbols if whitelist is enabled
-                            if WHITELIST_ENABLED:
-                                broker_name = self._get_broker_name(active_broker)
-                                if not is_whitelisted_symbol(symbol, broker_name):
-                                    logger.debug(f"   ⏭️  SKIPPING {symbol}: Not in whitelist (only trading {', '.join(WHITELISTED_ASSETS)})")
-                                    continue
+                            # Do not apply strategy-level symbol filtering here.
+                            # Feature layers should run on concrete signals later in the flow.
 
                             # Rate-limit guard: only sleep before a live API call; skip the delay
                             # when candle data is already in the local cache (no network request
