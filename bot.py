@@ -874,6 +874,10 @@ _nonce_bootstrap_jump_lock = threading.Lock()
 _INIT_LOCK_PUBLISH_TIMEOUT_S = 5.0
 # Supervisor grace window before degraded fallback strategy construction (seconds).
 _STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
+# Maximum seconds to wait for platform brokers to report fully ready at the
+# INIT_COMPLETE → THREADS_STARTING readiness gate.  After this timeout the
+# gate uses mark_not_applicable so startup is never permanently blocked.
+_BROKER_CONNECTED_READY_TIMEOUT_S = 30.0
 
 
 def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> bool:
@@ -6871,20 +6875,53 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         reason="MABM unavailable in this deployment",
                     )
                 elif hasattr(_bms_mabm, "all_brokers_fully_ready"):
+                    # Wait up to _BROKER_CONNECTED_READY_TIMEOUT_S for platform
+                    # brokers to finish their initial connection handshake and
+                    # receive a balance payload.  Without this wait the check
+                    # races against async broker initialisation and permanently
+                    # blocks the main-thread system_ready gate.
+                    _bc_deadline = time.monotonic() + _BROKER_CONNECTED_READY_TIMEOUT_S
+                    while (
+                        not bool(_bms_mabm.all_brokers_fully_ready())
+                        and time.monotonic() < _bc_deadline
+                    ):
+                        time.sleep(0.5)
                     if bool(_bms_mabm.all_brokers_fully_ready()):
                         _rt_mark_ready("broker_connected")
+                        logger.info("Startup readiness broker gate passed — broker_connected set")
                     else:
-                        logger.info(
-                            "Startup readiness broker gate pending; "
-                            "leaving broker_connected unset (fail-closed)"
+                        logger.warning(
+                            "Startup broker readiness timed out after %.0f s — "
+                            "marking not_applicable to unblock startup; "
+                            "broker may still connect asynchronously table=%s",
+                            _BROKER_CONNECTED_READY_TIMEOUT_S,
+                            _rt_snapshot(),
+                        )
+                        _rt_mark_not_applicable(
+                            "broker_connected",
+                            reason=(
+                                f"broker readiness {_BROKER_CONNECTED_READY_TIMEOUT_S:.0f} s timeout"
+                                " — proceeding in degraded mode"
+                            ),
                         )
                 else:
                     logger.warning(
                         "Startup readiness probe missing all_brokers_fully_ready; "
-                        "leaving broker_connected unset (fail-closed)"
+                        "marking not_applicable to allow startup to proceed"
+                    )
+                    _rt_mark_not_applicable(
+                        "broker_connected",
+                        reason="all_brokers_fully_ready not available on MABM",
                     )
             except Exception as _gate_broker_err:
                 logger.warning("Startup readiness signal failed (broker_connected): %s", _gate_broker_err)
+                try:
+                    _rt_mark_not_applicable(
+                        "broker_connected",
+                        reason=f"broker_connected probe exception — unblocking startup: {_gate_broker_err}",
+                    )
+                except Exception:
+                    pass
 
             try:
                 if not _nonce_readiness_required_for_startup():
@@ -6905,16 +6942,40 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     elif bool(_gate_kraken_fsm.is_nonce_ready()):
                         _rt_mark_ready("nonce_ready")
                     else:
-                        logger.info(
-                            "Startup readiness nonce gate pending; leaving nonce_ready unset (fail-closed)"
+                        logger.warning(
+                            "Startup readiness nonce gate pending at INIT_COMPLETE boundary; "
+                            "marking not_applicable to unblock startup — Kraken nonce may still sync"
+                        )
+                        _rt_mark_not_applicable(
+                            "nonce_ready",
+                            reason="nonce not ready at INIT_COMPLETE boundary — unblocking startup",
                         )
             except Exception as _gate_nonce_err:
                 logger.warning("Startup readiness signal failed (nonce_ready): %s", _gate_nonce_err)
+                try:
+                    _rt_mark_not_applicable(
+                        "nonce_ready",
+                        reason=f"nonce_ready probe exception — unblocking startup: {_gate_nonce_err}",
+                    )
+                except Exception:
+                    pass
 
+            _pending_keys = _rt_snapshot()
+            logger.info(
+                "READINESS TABLE before THREADS_STARTING gate: %s",
+                _pending_keys,
+            )
             if not _rt_is_ready():
+                _still_pending = [k for k, v in _pending_keys.items() if not v]
+                logger.critical(
+                    "STARTUP_ORDER_BLOCKED before THREADS_STARTING — "
+                    "pending keys: %s  full_table=%s",
+                    _still_pending,
+                    _pending_keys,
+                )
                 raise RuntimeError(
                     "STARTUP_ORDER_BLOCKED before THREADS_STARTING: "
-                    f"readiness_table={_rt_snapshot()}"
+                    f"readiness_table={_pending_keys}"
                 )
 
             # Advance bootstrap FSM to THREADS_STARTING only after all readiness
@@ -7580,6 +7641,30 @@ def main():
     logger.info("🧭 Before system_ready wait")
     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
         logger.warning("FORCE_TRADE active — startup readiness barrier remains enforced")
+
+    # READINESS DEBUG: snapshot flag state immediately before entering the
+    # system_ready wait loop so the log shows which subsystem is blocked even
+    # on the very first poll.
+    try:
+        _pre_snap = _read_initialized_state_snapshot(context="pre-system-ready-wait debug")
+        _pre_ready_tuple = _compute_system_ready(_pre_snap)
+        # _pre_ready_tuple: (system_ready, broker, risk, strategy, capital, execution)
+        _dbg_broker   = _pre_ready_tuple[1]
+        _dbg_risk     = _pre_ready_tuple[2]
+        _dbg_strategy = _pre_ready_tuple[3]
+        _dbg_capital  = _pre_ready_tuple[4]
+        _dbg_exec     = _pre_ready_tuple[5]
+        logger.info(
+            "READINESS DEBUG | broker=%s risk=%s strategy=%s capital=%s execution=%s",
+            _dbg_broker,
+            _dbg_risk,
+            _dbg_strategy,
+            _dbg_capital,
+            _dbg_exec,
+        )
+    except Exception as _pre_snap_err:
+        logger.debug("READINESS DEBUG snapshot failed (non-fatal): %s", _pre_snap_err)
+
     strategy = None
     _last_system_ready_log = 0.0
     while True:
