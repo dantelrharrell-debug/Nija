@@ -103,6 +103,7 @@ ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.25
 ENTRY_GATE_ADX_THRESHOLD = 7.0
 ENTRY_GATE_VOLUME_THRESHOLD = 0.01
 ENTRY_GATE_MIN_SCORE = 3
+ENTRY_GATE_SAFETY_FLOOR = 2
 ENTRY_GATE_FALLBACK_CONFIDENCE = 0.22
 ENTRY_GATE_FALLBACK_ADX = 6.0
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
@@ -2005,14 +2006,15 @@ class NIJAApexStrategyV71:
             return ENTRY_GATE_MIN_SCORE
 
         score_reduction = 0
-        # ENTRY_GATE_FALLBACK_WINDOW_SECS can trigger before full drought mode,
-        # so both checks may overlap; we use max() to avoid stacking reductions.
+        # ENTRY_GATE_FALLBACK_WINDOW_SECS can trigger before full drought mode.
+        # If both conditions are true we use the stronger single reduction only,
+        # preserving safety by preventing multi-point threshold collapse.
         if drought.secs_since_last_trade >= ENTRY_GATE_FALLBACK_WINDOW_SECS:
             score_reduction = max(score_reduction, 1)
         if drought.active:
             score_reduction = max(score_reduction, int(drought.score_reduction))
 
-        effective_score = max(2, ENTRY_GATE_MIN_SCORE - score_reduction)
+        effective_score = max(ENTRY_GATE_SAFETY_FLOOR, ENTRY_GATE_MIN_SCORE - score_reduction)
         return effective_score
 
     def _calculate_entry_gate_score(
