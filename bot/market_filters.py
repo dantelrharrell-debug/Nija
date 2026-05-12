@@ -22,7 +22,17 @@ from typing import Dict, List, Tuple
 logger = logging.getLogger('nija.market_filters')
 
 def _parse_symbols_env(var_name: str) -> set:
-    """Parse an uppercase comma-separated symbol list from environment."""
+    """
+    Parse an uppercase comma-separated symbol list from an env variable.
+
+    Args:
+        var_name: Environment variable name (for example,
+            ``"NIJA_HIGH_LIQUIDITY_SYMBOLS"``).
+
+    Returns:
+        set: Uppercased symbols parsed from ``VAR=a,b,c`` style input.
+        Example value: ``BTC-USD,ETH-USD,SOL-USD``.
+    """
     raw = os.getenv(var_name, "")
     if not raw:
         return set()
@@ -73,13 +83,15 @@ MIN_VOLUME_BY_SYMBOL: Dict[str, float] = {
 
 def is_high_liquidity_symbol(symbol: str) -> bool:
     """
-    Return True if *symbol* is in the top-10 high-liquidity list.
+    Return True when symbol filtering allows *symbol*.
 
     Args:
         symbol: Trading pair symbol, e.g. 'BTC-USD'
 
     Returns:
-        bool: True if symbol is eligible for entry
+        bool: True if symbol is eligible for entry.
+        When ``TOP_10_HIGH_LIQUIDITY_SYMBOLS`` is empty (default), returns
+        True for every symbol (filter disabled).
     """
     if not TOP_10_HIGH_LIQUIDITY_SYMBOLS:
         return True
