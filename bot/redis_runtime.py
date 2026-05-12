@@ -189,7 +189,20 @@ def connect_redis_with_fallback(
     if primary_is_tls and allow_tls_downgrade:
         candidates.append((primary_url.replace("rediss://", "redis://", 1), True))
     elif not primary_is_tls and is_railway_proxy and force_tls_env:
-        candidates.append((primary_url.replace("redis://", "rediss://", 1), True))
+        # Eagerly promote the TLS-upgraded URL to be the primary candidate.
+        # When a plain redis:// URL is used against a TLS-only Railway proxy the
+        # server responds with a protocol error (connection reset / EOF), NOT an
+        # SSL handshake error.  The old code appended the rediss:// upgrade with
+        # requires_tlsish_error=True, which caused it to be silently skipped
+        # because the initial failure did not look TLS-related.  We now make
+        # rediss:// the first thing tried; the original plain URL is kept as a
+        # last-resort fallback only when NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true.
+        #
+        # candidates[0] is always the primary_url element added two lines above.
+        tls_url = primary_url.replace("redis://", "rediss://", 1)
+        candidates[0] = (tls_url, False)
+        if allow_plain_fallback:
+            candidates.append((primary_url, True))
 
     # If proxy/TLS path fails, try alternate configured URLs (internal/private first,
     # then non-proxy native endpoints, and finally other Railway managed hostnames).
