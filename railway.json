@@ -19,5 +19,11 @@
     "restartPolicyMaxRetries": 3,
     "healthCheckPath": "/healthz",
     "healthCheckTimeout": 10
+  },
+  "variables": {
+    "NIJA_ALLOW_REDIS_DEGRADED": "true",
+    "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK": "true",
+    "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK": "true",
+    "NIJA_ASSUME_SINGLE_INSTANCE": "true"
   }
 }
