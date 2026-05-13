@@ -1507,6 +1507,15 @@ if [ ! -f "./bot.py" ]; then
     exit 1
 fi
 
+# Runtime syntax guard: fail fast with explicit diagnostics if the deployed
+# entrypoint files are malformed (prevents opaque restart loops).
+if ! $PY -m py_compile ./main.py ./bot.py 2>/tmp/nija_syntax_check.err; then
+    echo "❌ Python syntax preflight failed for main.py/bot.py"
+    cat /tmp/nija_syntax_check.err || true
+    echo "   This usually indicates a stale/corrupted deployment artifact."
+    exit 1
+fi
+
 # Sleep briefly to ensure all bash output is flushed before Python starts
 # This prevents log message interleaving between bash and Python stdout
 sleep 0.1

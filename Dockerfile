@@ -22,6 +22,10 @@ COPY scripts/ scripts/
 # Copy application code
 COPY . .
 
+# Fail the image build immediately if entrypoint Python files are syntactically invalid.
+# This prevents deploying stale/corrupted images that crash at runtime with SyntaxError.
+RUN python -m py_compile /app/main.py /app/bot.py
+
 # Ensure Redis connectivity preflight script is present and executable.
 RUN test -f /app/scripts/redis_connectivity_check.sh && chmod +x /app/scripts/redis_connectivity_check.sh && \
     if [ -f /app/scripts/debug_startup_safe_mode.sh ]; then chmod +x /app/scripts/debug_startup_safe_mode.sh; fi
