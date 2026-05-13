@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Regression tests for dict-based broker balance payload normalization."""
 
 import unittest

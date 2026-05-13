@@ -4617,6 +4617,7 @@ class MultiAccountBrokerManager:
                                 return float(nested_value)
                             except (TypeError, ValueError):
                                 continue
+                        continue
                     try:
                         return float(value)
                     except (TypeError, ValueError):
