@@ -553,3 +553,4 @@ data/accounting/
 # Profit-stack engine runtime state files (bot/data, never commit)
 bot/data/*.json
 bot/data/*.jsonl
+.nija_trading_state.json
