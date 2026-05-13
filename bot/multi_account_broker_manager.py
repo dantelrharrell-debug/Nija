@@ -4610,6 +4610,11 @@ class MultiAccountBrokerManager:
                                     return float(nested_value)
                                 except (TypeError, ValueError):
                                     continue
+                        for nested_value in value.values():
+                            try:
+                                return float(nested_value)
+                            except (TypeError, ValueError):
+                                continue
                     try:
                         return float(value)
                     except (TypeError, ValueError):

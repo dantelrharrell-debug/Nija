@@ -51,6 +51,16 @@ class TestBalanceNormalization(unittest.TestCase):
         value = manager._normalize_balance_value({"available_balance": {"value": "42.5"}})
         self.assertEqual(value, 42.5)
 
+    def test_normalize_balance_value_supports_nested_total_key(self):
+        manager = MultiAccountBrokerManager()
+        value = manager._normalize_balance_value({"available_balance": {"total": "31.25"}})
+        self.assertEqual(value, 31.25)
+
+    def test_normalize_balance_value_supports_unknown_nested_numeric_key(self):
+        manager = MultiAccountBrokerManager()
+        value = manager._normalize_balance_value({"available_balance": {"balance_value": "19.75"}})
+        self.assertEqual(value, 19.75)
+
     def test_aggregated_breakdown_counts_dict_balances(self):
         manager = MultiAccountBrokerManager()
 
