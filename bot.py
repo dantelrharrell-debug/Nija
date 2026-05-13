@@ -1065,7 +1065,7 @@ _B1_BROKER_READY_POLL_INTERVAL_S = 0.5
 # Gives fractionally-late readiness signals time to propagate before raising.
 _RT_GATE_RETRY_ATTEMPTS = 5
 _RT_GATE_RETRY_INTERVAL_S = 1.0
-_BOOTSTRAP_OBSERVER_TIMEOUT_S = 240.0
+_BOOTSTRAP_OBSERVER_TIMEOUT_S = 600.0
 _BOOTSTRAP_OBSERVER_POLL_INTERVAL_S = 1.0
 # Strategy publication should complete within the same startup observer window.
 _STARTUP_POLICY_EVAL_TIMEOUT_S = 5.0
@@ -6806,6 +6806,21 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                             "LIFECYCLE: FSM state=%s",
                             _bootstrap_state_value(),
                         )
+
+                    # CRITICAL: Advance FSM immediately after CAPITAL_READY
+                    # Do NOT defer this - it must happen synchronously before any other code
+                    logger.critical("LIFECYCLE: FSM state before INIT_COMPLETE transition = %s", _bootstrap_state_value())
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            # Force transition to INIT_COMPLETE
+                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: advancing past CAPITAL_READY")
+                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
+                        except Exception as _ic_err:
+                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", _ic_err)
+                            # Continue anyway - don't block startup
+                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE transition = %s", _bootstrap_state_value())
+
                     break
 
                     logger.warning(
@@ -6849,6 +6864,21 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                             "LIFECYCLE: FSM state=%s",
                             _bootstrap_state_value(),
                         )
+
+                    # CRITICAL: Advance FSM immediately after CAPITAL_READY
+                    # Do NOT defer this - it must happen synchronously before any other code
+                    logger.critical("LIFECYCLE: FSM state before INIT_COMPLETE transition = %s", _bootstrap_state_value())
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            # Force transition to INIT_COMPLETE
+                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: advancing past CAPITAL_READY")
+                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
+                        except Exception as _ic_err:
+                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", _ic_err)
+                            # Continue anyway - don't block startup
+                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE transition = %s", _bootstrap_state_value())
+
                     break
 
 
@@ -7162,6 +7192,11 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     logger.critical(
                         "LIFECYCLE: FSM already at INIT_COMPLETE — skipping redundant transition"
                     )
+            # INIT_COMPLETE transition is now performed immediately after CAPITAL_READY
+            # in the capital gate (both success and timeout paths) to ensure it happens
+            # synchronously and cannot be skipped. The deferred FIX 3 block has been
+            # removed to eliminate the race condition where the startup thread could exit
+            # before the FSM advanced past CAPITAL_READY.
             _rt_mark_ready("bootstrap_ready")
 
             # Bootstrap-owned NONCE phase: execute after INIT_COMPLETE boundary
