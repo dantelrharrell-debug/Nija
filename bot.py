@@ -8085,6 +8085,57 @@ def main():
 
             _now = time.monotonic()
             if _now >= _strategy_wait_deadline:
+                # ── DEGRADED-MODE FALLBACK ────────────────────────────────────
+                # Strategy publication timed out — most commonly caused by Redis
+                # SSL connection failures blocking the distributed writer lock.
+                # When degraded mode is permitted (NIJA_ALLOW_REDIS_DEGRADED or
+                # NIJA_ASSUME_SINGLE_INSTANCE), attempt one final fallback
+                # strategy construction and proceed in local-only mode rather
+                # than crashing the process.
+                _degraded_allowed = (
+                    os.environ.get("NIJA_ALLOW_REDIS_DEGRADED", "").strip().lower() in _TRUTHY_ENV_VALUES
+                    or os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _TRUTHY_ENV_VALUES
+                    or os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _TRUTHY_ENV_VALUES
+                    or os.environ.get("NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in _TRUTHY_ENV_VALUES
+                )
+                if _degraded_allowed:
+                    logger.warning(
+                        "⚠️  Strategy publication timed out after %.1fs — "
+                        "proceeding in degraded/local-only mode (Redis unavailable). "
+                        "Distributed locking is disabled for this session.",
+                        _STRATEGY_PUBLICATION_TIMEOUT_S,
+                    )
+                    # Activate degraded-mode flags so downstream subsystems
+                    # (writer authority, execution engine) skip Redis checks.
+                    os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
+                    os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
+                    os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
+                    os.environ["NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"] = "1"
+                    # One final attempt to construct a fallback strategy before
+                    # entering the trading loop without a published strategy.
+                    if not _fallback_attempted:
+                        _ensure_strategy_fallback_published(
+                            context="supervisor degraded timeout fallback"
+                        )
+                        _state_snapshot = _read_initialized_state_snapshot(
+                            context="degraded_timeout_fallback"
+                        )
+                        strategy = _state_snapshot.get("strategy")
+                    if strategy is not None:
+                        logger.warning(
+                            "✅ Degraded fallback strategy constructed — entering trading loop "
+                            "in local-only mode (no distributed lock)"
+                        )
+                        break
+                    # Strategy construction also failed — log and break out so
+                    # the trading loop can handle a None strategy gracefully
+                    # rather than blocking the process indefinitely.
+                    logger.error(
+                        "❌ Degraded fallback strategy construction failed — "
+                        "entering trading loop with no strategy object. "
+                        "Bot will operate in safe/no-trade mode until strategy recovers."
+                    )
+                    break
                 raise RuntimeError(
                     "Startup blocked: strategy publication timed out after bootstrap observer readiness"
                 )
