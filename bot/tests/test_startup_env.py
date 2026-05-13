@@ -14,6 +14,10 @@ class TestStartupEnv(unittest.TestCase):
         with patch.dict(os.environ, {"COINBASE_RETAIL_PORTFOLIO_ID": "  portfolio-123  "}):
             self.assertEqual(resolve_coinbase_retail_portfolio_id(), "portfolio-123")
 
+    def test_resolve_coinbase_retail_portfolio_id_filters_non_printable_chars(self):
+        with patch.dict(os.environ, {"COINBASE_RETAIL_PORTFOLIO_ID": "\u200bportfolio-123\u200b"}):
+            self.assertEqual(resolve_coinbase_retail_portfolio_id(), "portfolio-123")
+
 
 if __name__ == "__main__":
     unittest.main()
