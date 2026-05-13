@@ -4602,7 +4602,7 @@ class MultiAccountBrokerManager:
                 value = balance.get(key)
                 if value is not None:
                     if isinstance(value, dict):
-                        # Preserve a deterministic priority for nested balance payloads.
+                        # Preserves a deterministic priority for nested balance payloads.
                         for nested_key in ("value", "amount", "total", "available"):
                             nested_value = value.get(nested_key)
                             if nested_value is not None:
@@ -4610,6 +4610,8 @@ class MultiAccountBrokerManager:
                                     return float(nested_value)
                                 except (TypeError, ValueError):
                                     continue
+                        # Fallback: when no known nested keys are present, any numeric
+                        # nested scalar is accepted as usable balance.
                         for nested_value in value.values():
                             try:
                                 return float(nested_value)
