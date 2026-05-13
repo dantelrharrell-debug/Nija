@@ -4246,7 +4246,7 @@ class MultiAccountBrokerManager:
                 return _stale_bal  # Always return cached value — 0.0 only if no cache
             return 0.0
 
-        balance = value
+        balance = self._normalize_balance_value(value)
 
         # Cache the result
         self._balance_cache[cache_key] = (balance, time.time())
@@ -4313,7 +4313,7 @@ class MultiAccountBrokerManager:
             if broker_type == BrokerType.KRAKEN:
                 return self._get_cached_balance('platform', 'platform', broker_type, broker)
 
-            return broker.get_account_balance()
+            return self._normalize_balance_value(broker.get_account_balance())
 
         # Total across all master brokers
         total = 0.0
@@ -4322,7 +4322,7 @@ class MultiAccountBrokerManager:
                 if broker_type == BrokerType.KRAKEN:
                     total += self._get_cached_balance('platform', 'platform', broker_type, broker)
                 else:
-                    total += broker.get_account_balance()
+                    total += self._normalize_balance_value(broker.get_account_balance())
         return total
 
     def get_aggregated_balance_breakdown(self, include_all_subaccounts: bool = True) -> Dict[str, Any]:
@@ -4360,9 +4360,11 @@ class MultiAccountBrokerManager:
                 continue
             try:
                 if broker_type == BrokerType.KRAKEN:
-                    balance = self._get_cached_balance('platform', 'platform', broker_type, broker)
+                    balance = self._normalize_balance_value(
+                        self._get_cached_balance('platform', 'platform', broker_type, broker)
+                    )
                 else:
-                    balance = float(broker.get_account_balance() or 0.0)
+                    balance = self._normalize_balance_value(broker.get_account_balance())
             except Exception as exc:
                 logger.debug("Failed platform balance for %s: %s", broker_type.value, exc)
                 balance = 0.0
@@ -4382,9 +4384,11 @@ class MultiAccountBrokerManager:
                         continue
                     try:
                         if broker_type == BrokerType.KRAKEN:
-                            balance = self._get_cached_balance('user', user_id, broker_type, broker)
+                            balance = self._normalize_balance_value(
+                                self._get_cached_balance('user', user_id, broker_type, broker)
+                            )
                         else:
-                            balance = float(broker.get_account_balance() or 0.0)
+                            balance = self._normalize_balance_value(broker.get_account_balance())
                     except Exception as exc:
                         logger.debug("Failed user balance for %s/%s: %s", user_id, broker_type.value, exc)
                         balance = 0.0
@@ -4450,7 +4454,7 @@ class MultiAccountBrokerManager:
                 if broker_type == BrokerType.KRAKEN:
                     balance = self._get_cached_balance('user', user_id, broker_type, broker)
                 else:
-                    balance = broker.get_account_balance()
+                    balance = self._normalize_balance_value(broker.get_account_balance())
                 
                 # Record success with isolation manager
                 if self.isolation_manager:
@@ -4488,7 +4492,7 @@ class MultiAccountBrokerManager:
                         if broker_type == BrokerType.KRAKEN:
                             total += self._get_cached_balance('user', user_id, broker_type, broker)
                         else:
-                            total += broker.get_account_balance()
+                            total += self._normalize_balance_value(broker.get_account_balance())
                         
                         # Record success
                         if self.isolation_manager:
@@ -4597,6 +4601,23 @@ class MultiAccountBrokerManager:
             ):
                 value = balance.get(key)
                 if value is not None:
+                    if isinstance(value, dict):
+                        # Preserves a deterministic priority for nested balance payloads.
+                        for nested_key in ("value", "amount", "total", "available"):
+                            nested_value = value.get(nested_key)
+                            if nested_value is not None:
+                                try:
+                                    return float(nested_value)
+                                except (TypeError, ValueError):
+                                    continue
+                        # Fallback: when no known nested keys are present, any numeric
+                        # nested scalar is accepted as usable balance.
+                        for nested_value in value.values():
+                            try:
+                                return float(nested_value)
+                            except (TypeError, ValueError):
+                                continue
+                        continue
                     try:
                         return float(value)
                     except (TypeError, ValueError):
