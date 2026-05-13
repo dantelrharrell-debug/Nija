@@ -7,7 +7,8 @@ import os
 
 def _normalized_optional_env(name: str) -> str | None:
     """Return a stripped env value or `None` when effectively unset."""
-    value = os.environ.get(name, "").strip()
+    raw_value = os.environ.get(name, "")
+    value = "".join(ch for ch in raw_value if ch.isprintable()).strip()
     return value or None
 
 
