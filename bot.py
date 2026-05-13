@@ -7895,9 +7895,13 @@ def main():
 
         _writer_lock_status = get_distributed_writer_authority_status(force_refresh=True)
         logger.info(
-            "🔐 WRITER LOCK SELF-TEST | ok=%s strict_required=%s live_mode=%s redis_configured=%s token_present=%s",
+            "🔐 WRITER LOCK SELF-TEST | ok=%s strict_required=%s effective_strict_required=%s "
+            "degraded_override=%s unsafe_bypass=%s live_mode=%s redis_configured=%s token_present=%s",
             _writer_lock_status.get("ok"),
             _writer_lock_status.get("strict_required"),
+            _writer_lock_status.get("effective_strict_required"),
+            _writer_lock_status.get("degraded_override_enabled"),
+            _writer_lock_status.get("unsafe_bypass_enabled"),
             _writer_lock_status.get("live_mode"),
             _writer_lock_status.get("redis_configured"),
             _writer_lock_status.get("token_present"),

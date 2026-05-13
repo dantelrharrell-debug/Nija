@@ -151,9 +151,17 @@ def get_redis_url() -> str:
     """Return the highest-priority configured Redis URL."""
     configured = _iter_configured_redis_urls()
     if configured:
-        resolved = _maybe_promote_proxy_tls(configured[0][1])
-        return _maybe_strip_tls(resolved)
+        return _normalize_runtime_redis_url(configured[0][1])
     return ""
+
+
+def _normalize_runtime_redis_url(url: str) -> str:
+    """Normalize Redis URL for runtime usage.
+
+    - Promote Railway proxy redis:// URLs to rediss:// by default.
+    - Apply optional NIJA_REDIS_STRIP_TLS downgrade only when explicitly set.
+    """
+    return _maybe_strip_tls(_maybe_promote_proxy_tls(url))
 
 
 def _get_redis_url_validated() -> str:
@@ -235,8 +243,22 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
 
 
 def get_all_redis_urls() -> list[tuple[str, str]]:
-    """Return configured Redis URLs in priority order without rewriting values."""
-    return _iter_configured_redis_urls()
+    """Return configured Redis URLs in priority order for runtime fallback.
+
+    URLs are normalized with the same runtime rules as ``get_redis_url`` so
+    callers do not retry the same endpoint with conflicting schemes
+    (e.g. rediss:// then redis:// on Railway proxy hosts).
+    """
+    configured = _iter_configured_redis_urls()
+    normalized: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for source, url in configured:
+        resolved = _normalize_runtime_redis_url(url)
+        if not resolved or resolved in seen:
+            continue
+        seen.add(resolved)
+        normalized.append((source, resolved))
+    return normalized
 
 
 def get_nija_url_format_error() -> str:
