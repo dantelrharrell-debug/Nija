@@ -6829,6 +6829,22 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _BootstrapState.THREADS_STARTING,
                         "capital ready - immediate advance to supervised",
                     )
+                    # CRITICAL: Advance FSM immediately after CAPITAL_READY
+                    # Do NOT defer this - it must happen synchronously before any other code
+                    logger.critical("LIFECYCLE: FSM state before INIT_COMPLETE transition = %s", _bootstrap_state_value())
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            # Force transition to INIT_COMPLETE
+                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: advancing past CAPITAL_READY")
+                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
+                        except Exception as _ic_err:
+                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", _ic_err)
+                            # Continue anyway - don't block startup
+                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE transition = %s", _bootstrap_state_value())
+
+                    break
+
                     _bfsm_transition(
                         _BootstrapState.RUNNING_SUPERVISED,
                         "capital ready - immediate advance to supervised",
