@@ -6823,7 +6823,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                             logger.critical("LIFECYCLE: FSM transition to RUNNING_SUPERVISED failed: %s", e)
 
                     logger.critical("LIFECYCLE: FSM state after RUNNING_SUPERVISED = %s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: capital ready - advancing FSM to RUNNING_SUPERVISED")
+                    _bfsm_transition(
+                        _BootstrapState.THREADS_STARTING,
+                        "capital ready - immediate advance to supervised",
+                    )
+                    _bfsm_transition(
+                        _BootstrapState.RUNNING_SUPERVISED,
+                        "capital ready - immediate advance to supervised",
+                    )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     break
+
 
                 if time.time() > _capital_gate_deadline:
                     logger.warning(
@@ -6869,7 +6881,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                             logger.critical("LIFECYCLE: FSM transition to RUNNING_SUPERVISED failed: %s", e)
 
                     logger.critical("LIFECYCLE: FSM state after RUNNING_SUPERVISED = %s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     break
+
 
 
                 capital_gate_checks += 1
