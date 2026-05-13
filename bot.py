@@ -6842,26 +6842,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     _bfsm_transition(
                         _BootstrapState.THREADS_STARTING,
                         "capital ready - immediate advance to supervised",
-
-                    # CRITICAL: Advance FSM immediately after CAPITAL_READY
-                    # Do NOT defer this - it must happen synchronously before any other code
-                    logger.critical("LIFECYCLE: FSM state before INIT_COMPLETE transition = %s", _bootstrap_state_value())
-                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                        try:
-                            _bfsm = _get_bootstrap_fsm()
-                            # Force transition to INIT_COMPLETE
-                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: advancing past CAPITAL_READY")
-                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
-                        except Exception as _ic_err:
-                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", _ic_err)
-                            # Continue anyway - don't block startup
-                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE transition = %s", _bootstrap_state_value())
-
-                    break
-
-                    logger.warning(
-                        "[CapGate] CA is_ready=True but is_hydrated=False — "
-                        "waiting for publish_snapshot/refresh to commit hydration"
                     )
                     _bfsm_transition(
                         _BootstrapState.RUNNING_SUPERVISED,
@@ -6869,6 +6849,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     )
                     logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     break
+
 
                 if time.time() > _capital_gate_deadline:
                     logger.warning(
@@ -6925,22 +6906,8 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         "capital ready (degraded) - immediate advance to supervised",
                     )
                     logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
-
-                    # CRITICAL: Advance FSM immediately after CAPITAL_READY
-                    # Do NOT defer this - it must happen synchronously before any other code
-                    logger.critical("LIFECYCLE: FSM state before INIT_COMPLETE transition = %s", _bootstrap_state_value())
-                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                        try:
-                            _bfsm = _get_bootstrap_fsm()
-                            # Force transition to INIT_COMPLETE
-                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: advancing past CAPITAL_READY")
-                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
-                        except Exception as _ic_err:
-                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", _ic_err)
-                            # Continue anyway - don't block startup
-                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE transition = %s", _bootstrap_state_value())
-
                     break
+
 
 
                 capital_gate_checks += 1
