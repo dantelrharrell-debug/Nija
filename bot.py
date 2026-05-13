@@ -956,7 +956,6 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
     _deadline = time.monotonic() + _timeout_s
     # Track the last state seen so we can detect FSM stalls and log them.
     _last_logged_state: str = ""
-    _capital_ready_advance_attempted: bool = False
     _last_state_log = time.monotonic()
     _state_log_interval = 10.0
 
@@ -985,31 +984,6 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
         if _state != _last_logged_state:
             logger.critical("LIFECYCLE: FSM state=%s", _state)
             _last_logged_state = _state
-
-        # Recovery path: if the FSM is stuck at CAPITAL_READY the bootstrap
-        # thread may have raised before advancing to INIT_COMPLETE.  Attempt
-        # to drive the FSM forward so the observer does not time out.
-        if _state == "CAPITAL_READY" and not _capital_ready_advance_attempted:
-            _capital_ready_advance_attempted = True
-            logger.critical(
-                "LIFECYCLE: FSM at CAPITAL_READY - triggering transition to RUNNING_SUPERVISED"
-            )
-            try:
-                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
-                    _obs_bfsm = _get_bootstrap_fsm()
-                    _obs_bfsm.transition(
-                        _BootstrapState.INIT_COMPLETE,
-                        "bootstrap observer recovery: CAPITAL_READY stall detected",
-                    )
-                    logger.critical(
-                        "LIFECYCLE: FSM state=%s (observer recovery advance)",
-                        _bootstrap_state_value(),
-                    )
-            except Exception as _obs_adv_err:
-                logger.warning(
-                    "Bootstrap observer CAPITAL_READY recovery advance failed: %s",
-                    _obs_adv_err,
-                )
 
         _now = time.monotonic()
         if _now - _last_state_log >= _state_log_interval:
@@ -1088,7 +1062,7 @@ _B1_BROKER_READY_POLL_INTERVAL_S = 0.5
 # Gives fractionally-late readiness signals time to propagate before raising.
 _RT_GATE_RETRY_ATTEMPTS = 5
 _RT_GATE_RETRY_INTERVAL_S = 1.0
-_BOOTSTRAP_OBSERVER_TIMEOUT_S = 600.0
+_BOOTSTRAP_OBSERVER_TIMEOUT_S = 240.0
 _BOOTSTRAP_OBSERVER_POLL_INTERVAL_S = 1.0
 # Strategy publication should complete within the same startup observer window.
 _STARTUP_POLICY_EVAL_TIMEOUT_S = 5.0
@@ -5090,6 +5064,21 @@ def _rerun_supervisor_loop(state: dict) -> None:
                 if use_independent_trading and strategy.independent_trader:
                     strategy.log_multi_broker_status()
 
+            # STRATEGY HEARTBEAT — emitted every supervisor cycle to prove the
+            # trading loop is alive and actively running.
+            _symbols_count = 0
+            try:
+                _symbols_count = len(getattr(strategy, "symbols", None) or [])
+            except Exception:
+                pass
+            _runtime_s = _orch_cycle * 10.0
+            logger.info(
+                "STRATEGY HEARTBEAT | cycle=%d symbols=%d runtime=%.1fs",
+                _orch_cycle,
+                _symbols_count,
+                _runtime_s,
+            )
+
             time.sleep(10)
 
         except KeyboardInterrupt:
@@ -6799,39 +6788,70 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     )
                     logger.info("🚀 SYSTEM READY — TRADING ENABLED")
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
-                    # Bootstrap FSM: capital confirmed → CAPITAL_READY
-                    logger.critical("LIFECYCLE: capital ready - FSM state=%s", _bootstrap_state_value())
-                    _bfsm_transition(
-                        _BootstrapState.CAPITAL_READY,
-                        f"startup capital confirmed: ${_total_capital:.2f}",
-                    )
-                    logger.critical(
-                        "LIFECYCLE: capital ready - FSM state=%s",
-                        _bootstrap_state_value(),
-                    )
-                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
-                    # Advance FSM: CAPITAL_READY → INIT_COMPLETE → THREADS_STARTING → RUNNING_SUPERVISED
-                    if _BOOTSTRAP_FSM_AVAILABLE:
-                        _bfsm_transition(
-                            _BootstrapState.INIT_COMPLETE,
-                            "capital hydration complete; advancing past CAPITAL_READY",
-                        )
-                        logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
-                        _bfsm_transition(
-                            _BootstrapState.THREADS_STARTING,
-                            "capital ready - advancing to THREADS_STARTING",
-                        )
-                        logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
-                        _bfsm_transition(
-                            _BootstrapState.RUNNING_SUPERVISED,
-                            "capital ready - advancing to RUNNING_SUPERVISED",
-                        )
-                        logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+
+                    # Capital gate: when capital is ready, advance FSM synchronously
+                    logger.critical("LIFECYCLE: Capital ready - FSM state before transitions = %s", _bootstrap_state_value())
+
+                    # Transition 1: → CAPITAL_READY
+                    _bfsm_transition(
+                        _BootstrapState.CAPITAL_READY,
+                        f"startup capital confirmed: ${_total_capital:.2f}",
+                    )
+
+                    # Transition 2: CAPITAL_READY → INIT_COMPLETE
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: capital ready")
+                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
+                        except Exception as e:
+                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", e)
+
+                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE = %s", _bootstrap_state_value())
+
+                    # Transition 3: INIT_COMPLETE → RUNNING_SUPERVISED
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            _bfsm.transition(_BootstrapState.RUNNING_SUPERVISED, "capital gate: advancing to supervised")
+                            logger.critical("LIFECYCLE: FSM transitioned to RUNNING_SUPERVISED")
+                        except Exception as e:
+                            logger.critical("LIFECYCLE: FSM transition to RUNNING_SUPERVISED failed: %s", e)
+
+                    logger.critical("LIFECYCLE: FSM state after RUNNING_SUPERVISED = %s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: capital ready - advancing FSM to RUNNING_SUPERVISED")
+                    _bfsm_transition(
+                        _BootstrapState.THREADS_STARTING,
+                        "capital ready - immediate advance to supervised",
+                    )
+                    # CRITICAL: Advance FSM immediately after CAPITAL_READY
+                    # Do NOT defer this - it must happen synchronously before any other code
+                    logger.critical("LIFECYCLE: FSM state before INIT_COMPLETE transition = %s", _bootstrap_state_value())
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            # Force transition to INIT_COMPLETE
+                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: advancing past CAPITAL_READY")
+                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
+                        except Exception as _ic_err:
+                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", _ic_err)
+                            # Continue anyway - don't block startup
+                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE transition = %s", _bootstrap_state_value())
+
                     break
+
+                    _bfsm_transition(
+                        _BootstrapState.RUNNING_SUPERVISED,
+                        "capital ready - immediate advance to supervised",
+                    )
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+                    break
+
 
                 if time.time() > _capital_gate_deadline:
                     logger.warning(
@@ -6842,39 +6862,44 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         "✅ CAPITAL GATE FORCED (DEGRADED) — core systems initialized"
                     )
                     logger.warning("🚀 SYSTEM READY — proceeding with zero or partial balance")
-                    # Bootstrap FSM: capital forced due to timeout
-                    logger.critical("LIFECYCLE: capital ready (degraded) - FSM state=%s", _bootstrap_state_value())
-                    _bfsm_transition(
-                        _BootstrapState.CAPITAL_READY,
-                        "capital gate timeout — proceeding in degraded mode",
-                    )
-                    logger.critical(
-                        "LIFECYCLE: capital ready (degraded) - FSM state=%s",
-                        _bootstrap_state_value(),
-                    )
-                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
-                    # Advance FSM: CAPITAL_READY → INIT_COMPLETE → THREADS_STARTING → RUNNING_SUPERVISED
-                    if _BOOTSTRAP_FSM_AVAILABLE:
-                        _bfsm_transition(
-                            _BootstrapState.INIT_COMPLETE,
-                            "capital gate timeout; advancing past CAPITAL_READY (degraded)",
-                        )
-                        logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
-                        _bfsm_transition(
-                            _BootstrapState.THREADS_STARTING,
-                            "capital ready (degraded) - advancing to THREADS_STARTING",
-                        )
-                        logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
-                        _bfsm_transition(
-                            _BootstrapState.RUNNING_SUPERVISED,
-                            "capital ready (degraded) - advancing to RUNNING_SUPERVISED",
-                        )
-                        logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+
+                    # Capital gate (degraded): advance FSM synchronously
+                    logger.critical("LIFECYCLE: Capital ready (degraded) - FSM state before transitions = %s", _bootstrap_state_value())
+
+                    # Transition 1: → CAPITAL_READY
+                    _bfsm_transition(
+                        _BootstrapState.CAPITAL_READY,
+                        "capital gate timeout — proceeding in degraded mode",
+                    )
+
+                    # Transition 2: CAPITAL_READY → INIT_COMPLETE
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            _bfsm.transition(_BootstrapState.INIT_COMPLETE, "capital gate: capital ready (degraded)")
+                            logger.critical("LIFECYCLE: FSM transitioned to INIT_COMPLETE")
+                        except Exception as e:
+                            logger.critical("LIFECYCLE: FSM transition to INIT_COMPLETE failed: %s", e)
+
+                    logger.critical("LIFECYCLE: FSM state after INIT_COMPLETE = %s", _bootstrap_state_value())
+
+                    # Transition 3: INIT_COMPLETE → RUNNING_SUPERVISED
+                    if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                        try:
+                            _bfsm = _get_bootstrap_fsm()
+                            _bfsm.transition(_BootstrapState.RUNNING_SUPERVISED, "capital gate: advancing to supervised (degraded)")
+                            logger.critical("LIFECYCLE: FSM transitioned to RUNNING_SUPERVISED")
+                        except Exception as e:
+                            logger.critical("LIFECYCLE: FSM transition to RUNNING_SUPERVISED failed: %s", e)
+
+                    logger.critical("LIFECYCLE: FSM state after RUNNING_SUPERVISED = %s", _bootstrap_state_value())
+                    logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
                     break
+
 
 
                 capital_gate_checks += 1
@@ -7168,11 +7193,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _tsm.get_current_state().value,
             )
 
-            # INIT_COMPLETE → THREADS_STARTING → RUNNING_SUPERVISED transitions are
-            # driven synchronously inside the capital gate (both success and timeout paths)
-            # before the gate exits.  Log current FSM state for observability only.
-            if _BOOTSTRAP_FSM_AVAILABLE:
-                logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
+            # INIT_COMPLETE and RUNNING_SUPERVISED transitions are performed
+            # immediately after CAPITAL_READY in the capital gate (both success
+            # and timeout paths) to ensure they happen synchronously.
+            # Log current FSM state for diagnostics only — do not attempt any
+            # further transitions here as the capital gate already advanced the FSM.
+            logger.critical("LIFECYCLE: FSM state at thread-launch boundary = %s", _bootstrap_state_value())
             _rt_mark_ready("bootstrap_ready")
 
             # Bootstrap-owned NONCE phase: execute after INIT_COMPLETE boundary
