@@ -2,6 +2,7 @@
 """Regression tests for dict-based broker balance payload normalization."""
 
 import unittest
+from typing import Any, Dict, Optional
 
 from bot.broker_manager import AccountType, BaseBroker, BrokerType
 from bot.multi_account_broker_manager import MultiAccountBrokerManager
@@ -10,7 +11,13 @@ from bot.multi_account_broker_manager import MultiAccountBrokerManager
 class DictBalanceBroker(BaseBroker):
     """Test broker returning dict-shaped balances."""
 
-    def __init__(self, broker_type: BrokerType, account_type: AccountType, user_id: str = None, balance=None):
+    def __init__(
+        self,
+        broker_type: BrokerType,
+        account_type: AccountType,
+        user_id: Optional[str] = None,
+        balance: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(broker_type, account_type, user_id)
         self.connected = True
         self._balance = balance or {"available_balance": {"value": "0.0"}}

@@ -4602,6 +4602,7 @@ class MultiAccountBrokerManager:
                 value = balance.get(key)
                 if value is not None:
                     if isinstance(value, dict):
+                        # Preserve a deterministic priority for nested balance payloads.
                         for nested_key in ("value", "amount", "total", "available"):
                             nested_value = value.get(nested_key)
                             if nested_value is not None:
