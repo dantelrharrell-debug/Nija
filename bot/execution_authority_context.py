@@ -84,8 +84,8 @@ def _build_redis_client(redis_mod, redis_url: str, *, timeout_s: int = 2):
         except ImportError:
             from redis_runtime import get_redis_tls_kwargs  # type: ignore[import]
         kwargs.update(get_redis_tls_kwargs(redis_url))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("authority redis tls kwargs unavailable; continuing with defaults: %s", exc)
     return redis_mod.Redis.from_url(redis_url, **kwargs)
 
 

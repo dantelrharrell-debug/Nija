@@ -41,7 +41,20 @@ def _redact_url_for_log(url: str) -> str:
 
 
 def get_redis_tls_kwargs(url: str) -> dict[str, Any]:
-    """Return Redis TLS kwargs with strict-by-default policy and Railway compatibility."""
+    """Return TLS keyword args for ``redis.Redis.from_url``.
+
+    Parameters
+    ----------
+    url:
+        Redis connection URL. TLS kwargs are returned only for ``rediss://`` URLs.
+
+    Returns
+    -------
+    dict[str, Any]
+        SSL/TLS keyword arguments suitable for redis-py connection creation.
+        Policy is strict-by-default, with optional CA pinning and Railway
+        compatibility auto-mode.
+    """
     raw_url = (url or "").strip()
     parsed = urlparse(raw_url)
     if (parsed.scheme or "").lower() != "rediss":

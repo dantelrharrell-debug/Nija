@@ -19,6 +19,8 @@ from capital_flow_state_machine import (
 
 
 class _StubAuthority:
+    """CapitalAuthority stub with configurable previous per-broker value."""
+
     def __init__(self, previous: float = 0.0) -> None:
         self._previous = previous
         self.reserve_pct = 0.10
@@ -36,16 +38,22 @@ class _StubAuthority:
 
 
 class _ZeroBalanceBroker:
+    """Broker stub that returns an explicit zero balance."""
+
     def get_account_balance(self):
         return 0.0
 
 
 class _FailingBroker:
+    """Broker stub that always raises during balance fetch."""
+
     def get_account_balance(self):
         raise RuntimeError("balance fetch failed")
 
 
 class _PositiveBroker:
+    """Broker stub that returns a fixed positive balance."""
+
     def __init__(self, balance: float) -> None:
         self._balance = balance
 
