@@ -151,20 +151,16 @@ def create_redis(
     socket_connect_timeout: int = 5,
 ) -> redis.Redis:
     """Create Redis client from URL without host/port reconstruction."""
-    raw_url = (url or get_redis_url()).strip()
-    if not raw_url:
-        raise RuntimeError("Redis URL is missing")
-
-    assert raw_url.startswith("redis://") or raw_url.startswith("rediss://")
-
-    kwargs: dict[str, Any] = {
-        "decode_responses": decode_responses,
-        "socket_timeout": socket_timeout,
-        "socket_connect_timeout": socket_connect_timeout,
-    }
-    kwargs.update(get_redis_tls_kwargs(raw_url))
-
-    return redis.Redis.from_url(raw_url, **kwargs)
+    import redis as _redis
+    r = _redis.Redis.from_url(
+        os.environ["NIJA_REDIS_URL"],
+        decode_responses=True,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+        health_check_interval=30,
+        retry_on_timeout=True,
+    )
+    return r
 
 
 def wait_for_redis_ready(

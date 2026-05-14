@@ -1350,18 +1350,18 @@ def get_distributed_nonce_manager(
             redis_url = get_redis_url()
             if redis_url:
                 try:
-                    redis_client, _candidate_url = connect_redis_with_fallback(
-                        url=redis_url,
+                    import redis as _redis
+                    redis_client = _redis.Redis.from_url(
+                        os.environ["NIJA_REDIS_URL"],
                         decode_responses=True,
-                        socket_timeout=2,
-                        socket_connect_timeout=2,
-                        retries=5,
-                        delay_s=2.0,
-                        log=lambda msg: _logger.warning("DistributedNonceManager: %s", msg),
+                        socket_timeout=5,
+                        socket_connect_timeout=5,
+                        health_check_interval=30,
+                        retry_on_timeout=True,
                     )
                     _logger.info(
                         "DistributedNonceManager: auto-connecting to Redis at %s",
-                        _redact_redis_url(_candidate_url),
+                        _redact_redis_url(redis_url),
                     )
                 except Exception as exc:
                     _logger.warning(
