@@ -5778,7 +5778,7 @@ class MultiAccountBrokerManager:
             # Defensive hard-stop for Coinbase in case any future path calls
             # this helper despite startup gating declaring Coinbase disabled.
             if broker_type == BrokerType.COINBASE:
-                _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "true").strip().lower() in (
+                _disable_coinbase = os.environ.get("NIJA_DISABLE_COINBASE", "false").strip().lower() in (
                     "1",
                     "true",
                     "yes",
@@ -5791,7 +5791,7 @@ class MultiAccountBrokerManager:
                 )
                 _enable_coinbase_trading = os.environ.get(
                     "ENABLE_COINBASE_TRADING",
-                    "false",
+                    "true",
                 ).strip().lower() not in ("0", "false", "no", "off")
                 if _disable_coinbase or (not _enable_coinbase_flag) or (not _enable_coinbase_trading):
                     logger.warning(

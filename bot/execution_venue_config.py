@@ -33,7 +33,7 @@ def get_coinbase_platform_skip_reasons(env: Optional[Mapping[str, str]] = None) 
         reasons.append("NIJA_DISABLE_COINBASE=true")
     if not _parse_bool_flag(source.get("ENABLE_COINBASE", ""), default=True):
         reasons.append("ENABLE_COINBASE=false")
-    if not _parse_bool_flag(source.get("ENABLE_COINBASE_TRADING", ""), default=False):
+    if not _parse_bool_flag(source.get("ENABLE_COINBASE_TRADING", ""), default=True):
         reasons.append("ENABLE_COINBASE_TRADING!=true")
     return reasons
 
