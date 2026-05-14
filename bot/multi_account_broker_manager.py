@@ -755,6 +755,17 @@ class MultiAccountBrokerManager:
         try:
             _connected_users = self.connect_users_from_config()
             _connected_user_count = sum(len(_users) for _users in (_connected_users or {}).values())
+            _registered_user_broker_count = sum(
+                len(_broker_dict) for _broker_dict in self.user_brokers.values()
+            )
+            logger.info(
+                "[MABM.initialize] user broker registry after init: connected=%d registered=%d "
+                "tracked=%d total_brokers=%d",
+                _connected_user_count,
+                _registered_user_broker_count,
+                len(self._all_user_brokers),
+                len(self.get_all_brokers()),
+            )
             if _connected_user_count > 0:
                 logger.info(
                     "[MABM.initialize] user init complete before hydration: connected=%d (%s)",
@@ -5806,6 +5817,19 @@ class MultiAccountBrokerManager:
             # Idempotency: skip connect() if the lifecycle already ran.
             with _PLATFORM_BROKER_REGISTRY_LOCK:
                 already_connected = _PLATFORM_BROKER_CONNECTED.get(key, False)
+            _registered_user_broker_count = sum(
+                len(_broker_dict) for _broker_dict in self.user_brokers.values()
+            )
+            logger.debug(
+                "[MABM._connect_and_register] broker=%s key=%s guard_connected=%s "
+                "broker_connected=%s platform_registered=%d user_registered=%d",
+                broker_type.value,
+                key,
+                already_connected,
+                getattr(broker, "connected", False),
+                len(self._platform_brokers),
+                _registered_user_broker_count,
+            )
             if already_connected:
                 logger.info(
                     "🔒 Platform %s connect() already completed — skipping duplicate",
