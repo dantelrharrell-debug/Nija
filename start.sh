@@ -1447,6 +1447,7 @@ if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ]
     if [ -n "${_redis_url_for_ping}" ] && "$PY" - <<'PY' "${_redis_url_for_ping}"
 import os
 import sys
+from urllib.parse import urlparse
 
 try:
     import redis
@@ -1456,11 +1457,30 @@ except Exception as exc:
 
 url = os.environ.get("NIJA_REDIS_URL", "").strip() or sys.argv[1]
 try:
+    kwargs = {
+        "socket_timeout": 5,
+        "socket_connect_timeout": 5,
+        "retry_on_timeout": False,
+    }
+    parsed = urlparse(url or "")
+    if (parsed.scheme or "").lower() == "rediss":
+        host = (parsed.hostname or "").lower()
+        is_railway_host = ".rlwy.net" in host
+        tls_ca_certs = os.environ.get("NIJA_REDIS_TLS_CA_CERT", "").strip()
+        tls_insecure_raw = os.environ.get("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
+        tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
+        tls_auto = tls_insecure_raw in {"", "auto"}
+        if tls_ca_certs:
+            kwargs["ssl_cert_reqs"] = "required"
+            kwargs["ssl_ca_certs"] = tls_ca_certs
+        elif tls_insecure or (tls_auto and is_railway_host):
+            kwargs["ssl_cert_reqs"] = "none"
+            kwargs["ssl_check_hostname"] = False
+        else:
+            kwargs["ssl_cert_reqs"] = "required"
     r = redis.Redis.from_url(
         url,
-        socket_timeout=5,
-        socket_connect_timeout=5,
-        retry_on_timeout=False,
+        **kwargs,
     )
     r.ping()
     print("✅ redis_health=healthy (python_ping)")

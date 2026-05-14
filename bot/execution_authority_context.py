@@ -78,19 +78,14 @@ def _build_redis_client(redis_mod, redis_url: str, *, timeout_s: int = 2):
         "socket_connect_timeout": timeout_s,
         "socket_timeout": timeout_s,
     }
-    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
-    tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
-    tls_auto = tls_insecure_raw in {"", "auto"}
-    lowered = (redis_url or "").lower()
-    is_railway_proxy = ".proxy.rlwy.net" in lowered
-    if lowered.startswith("rediss://") and (
-        tls_insecure or (tls_auto and is_railway_proxy)
-    ):
-        # Railway viaduct proxy uses a self-signed / mismatched certificate.
-        # Disable both cert chain and hostname verification so TLS still
-        # encrypts the channel without failing the handshake.
-        kwargs["ssl_cert_reqs"] = "none"
-        kwargs["ssl_check_hostname"] = False
+    try:
+        try:
+            from bot.redis_runtime import get_redis_tls_kwargs
+        except ImportError:
+            from redis_runtime import get_redis_tls_kwargs  # type: ignore[import]
+        kwargs.update(get_redis_tls_kwargs(redis_url))
+    except Exception:
+        pass
     return redis_mod.Redis.from_url(redis_url, **kwargs)
 
 

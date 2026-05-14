@@ -23,7 +23,7 @@ import redis
 from redis.connection import ConnectionPool
 
 from bot.redis_env import get_redis_url as get_env_redis_url, get_redis_url_source
-from bot.redis_runtime import connect_redis_with_fallback
+from bot.redis_runtime import connect_redis_with_fallback, get_redis_tls_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -101,17 +101,7 @@ def _build_strict_redis_client(
         "socket_timeout": socket_timeout,
         "socket_connect_timeout": socket_connect_timeout,
     }
-    parsed = urlparse(raw_value)
-    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
-    tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
-    tls_auto = tls_insecure_raw in {"", "auto"}
-    # Extend permissive cert validation to all rlwy.net domains (not just .proxy.rlwy.net)
-    # because Railway-managed Redis endpoints use self-signed or internal certs.
-    if (parsed.scheme or "").lower() == "rediss" and (
-        tls_insecure or (tls_auto and ".rlwy.net" in (parsed.hostname or "").lower())
-    ):
-        kwargs["ssl_cert_reqs"] = "none"
-        kwargs["ssl_check_hostname"] = False
+    kwargs.update(get_redis_tls_kwargs(raw_value))
 
     return redis.Redis.from_url(raw_value, **kwargs)
 
