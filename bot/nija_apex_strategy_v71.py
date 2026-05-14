@@ -86,7 +86,9 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-MIN_CONFIDENCE = 0.25  # Confidence floor aligned with ENTRY_GATE_CONFIDENCE_THRESHOLD
+# THRESHOLD REDUCTION (May 2026): Lowered 0.25 → 0.22 per funnel diagnostics showing
+# confidence gate was the primary bottleneck filtering out valid signals.
+MIN_CONFIDENCE = 0.22  # Confidence floor aligned with ENTRY_GATE_CONFIDENCE_THRESHOLD
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Short-term fallback thresholds (idle > 10 minutes)
@@ -101,10 +103,13 @@ MIN_RISK_SCORE_FOR_ANCHOR = 3
 # Diagnostics window
 VOLUME_RATIO_WINDOW = 5
 # Entry gate thresholds (weighted scoring)
-ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.25
+# Confidence threshold lowered from 0.25 → 0.22 (May 2026) per funnel diagnostics.
+ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.22
 ENTRY_GATE_ADX_THRESHOLD = 7.0
 ENTRY_GATE_VOLUME_THRESHOLD = 0.01
-ENTRY_GATE_MIN_SCORE = 3
+# Gate score reduced from 3 → 2 (May 2026): require 2/5 conditions instead of 3/5
+# so borderline signals aren't blocked when most but not all conditions align.
+ENTRY_GATE_MIN_SCORE = 2
 ENTRY_GATE_SAFETY_FLOOR = 2
 ENTRY_GATE_FALLBACK_CONFIDENCE = 0.22
 ENTRY_GATE_FALLBACK_ADX = 6.0
@@ -416,6 +421,22 @@ except ImportError:
         NijaCoreLoop = None  # type: ignore
         NIJA_CORE_LOOP_AVAILABLE = False
         logger.warning("⚠️ Nija Core Loop not available — using legacy run_cycle dispatch")
+
+# ── Signal Funnel Diagnostics — per-pair pass/fail counters + shadow-paper ────
+try:
+    from bot.signal_funnel_diagnostics import get_signal_funnel, SignalFunnelDiagnostics
+    SIGNAL_FUNNEL_AVAILABLE = True
+    logger.info("✅ Signal Funnel Diagnostics loaded — per-pair funnel tracking active")
+except ImportError:
+    try:
+        from signal_funnel_diagnostics import get_signal_funnel, SignalFunnelDiagnostics
+        SIGNAL_FUNNEL_AVAILABLE = True
+        logger.info("✅ Signal Funnel Diagnostics loaded — per-pair funnel tracking active")
+    except ImportError:
+        get_signal_funnel = None  # type: ignore
+        SignalFunnelDiagnostics = None  # type: ignore
+        SIGNAL_FUNNEL_AVAILABLE = False
+        logger.warning("⚠️ Signal Funnel Diagnostics not available — no funnel tracking")
 
 # ── Trade Frequency Controller — minimum trade safeguard ─────────────────────
 # Tracks trade cadence and relaxes filters when no trade in drought_window hours.
@@ -2618,6 +2639,14 @@ class NIJAApexStrategyV71:
         """
         try:
             print("📊 Evaluating market conditions...")
+            # Record that this pair's signal was evaluated (funnel stage 0)
+            if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                try:
+                    _funnel = get_signal_funnel()
+                    _funnel.record_signal_seen(symbol)
+                    _funnel.maybe_report_and_reset()
+                except Exception:
+                    pass
             # Require minimum data
             if len(df) < 100:
                 logger.debug(f"   {symbol}: Insufficient data ({len(df)} candles)")
@@ -3118,6 +3147,20 @@ class NIJAApexStrategyV71:
                     _volume_ratio = float(df['volume'].iloc[-1]) / _avg_vol_5 if _avg_vol_5 > 0 else 0.0
                     _rsi_signal = self._entry_gate_rsi_signal(indicators, "long", adx)
                     _trend_alignment = trend == 'uptrend'
+
+                    # ── Funnel stage tracking: record individual gate outcomes ──
+                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                        try:
+                            _funnel_l = get_signal_funnel()
+                            if _confidence >= _threshold_conf:
+                                _funnel_l.record_confidence_pass(symbol)
+                            if adx >= _threshold_adx:
+                                _funnel_l.record_adx_pass(symbol)
+                            if _volume_ratio >= _threshold_vol:
+                                _funnel_l.record_volume_pass(symbol)
+                        except Exception:
+                            pass
+
                     _gate_score = self._calculate_entry_gate_score(
                         _confidence,
                         adx,
@@ -3154,6 +3197,19 @@ class NIJAApexStrategyV71:
                             symbol,
                             reject_reason,
                         )
+                        # ── Structured REJECTED_SIGNAL log ────────────────────
+                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                            try:
+                                get_signal_funnel().record_rejected(
+                                    symbol,
+                                    confidence=_confidence,
+                                    threshold=_threshold_conf,
+                                    adx=adx,
+                                    volume=_volume_ratio,
+                                    reason=f"entry_gate_score_{_gate_score}_of_5",
+                                )
+                            except Exception:
+                                pass
                         return {
                             'action': 'hold',
                             'reason': reject_reason,
@@ -3232,6 +3288,18 @@ class NIJAApexStrategyV71:
                                         symbol,
                                         reject_reason,
                                     )
+                                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                        try:
+                                            get_signal_funnel().record_rejected(
+                                                symbol,
+                                                confidence=_confidence,
+                                                threshold=_threshold_conf,
+                                                adx=adx,
+                                                volume=_volume_ratio,
+                                                reason="volatility_explosion_long",
+                                            )
+                                        except Exception:
+                                            pass
                                     self._log_final_decision(
                                         score=risk_score,
                                         confidence=entry_confidence,
@@ -3258,6 +3326,35 @@ class NIJAApexStrategyV71:
                                     f"ADVISORY (AIEntryGate soft-fail, proceeding) → reason={_gate_result_l.reason}"
                                     f" score={_gate_result_l.gate_score} conf={score}"
                                 )
+                                if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                    try:
+                                        get_signal_funnel().record_rejected(
+                                            symbol,
+                                            confidence=_confidence,
+                                            threshold=_threshold_conf,
+                                            adx=adx,
+                                            volume=_volume_ratio,
+                                            reason=f"ai_gate_soft_fail_long_score_{_gate_result_l.gate_score:.1f}",
+                                        )
+                                    except Exception:
+                                        pass
+                            else:
+                                # AI gate passed — record funnel stage
+                                if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                    try:
+                                        get_signal_funnel().record_ai_gate_pass(symbol)
+                                        get_signal_funnel().record_shadow_entry(
+                                            pair=symbol,
+                                            side='long',
+                                            entry_price=float(df['close'].iloc[-1]),
+                                            confidence=_confidence,
+                                            adx=adx,
+                                            volume_ratio=_volume_ratio,
+                                            gate_score=_gate_result_l.gate_score,
+                                            executed=False,  # updated to True on execution
+                                        )
+                                    except Exception:
+                                        pass
                         except Exception as _gate_l_err:
                             logger.debug("AI Entry Gate error (long): %s", _gate_l_err)
 
@@ -3676,6 +3773,17 @@ class NIJAApexStrategyV71:
                         decision='TRADE',
                         reason=reason,
                     )
+                    # ── Funnel: record execution (LONG) ────────────────────
+                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                        try:
+                            _funnel_exec_l = get_signal_funnel()
+                            _funnel_exec_l.record_execution_pass(symbol)
+                            for _st_l in reversed(getattr(_funnel_exec_l, '_shadow_trades', [])):
+                                if _st_l.pair == symbol and not _st_l.executed:
+                                    _st_l.executed = True
+                                    break
+                        except Exception:
+                            pass
                     return result
 
             elif trend == 'downtrend':
@@ -3755,6 +3863,20 @@ class NIJAApexStrategyV71:
                     _volume_ratio = float(df['volume'].iloc[-1]) / _avg_vol_5 if _avg_vol_5 > 0 else 0.0
                     _rsi_signal = self._entry_gate_rsi_signal(indicators, "short", adx)
                     _trend_alignment = trend == 'downtrend'
+
+                    # ── Funnel stage tracking: record individual gate outcomes (SHORT) ──
+                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                        try:
+                            _funnel_s = get_signal_funnel()
+                            if _confidence >= _threshold_conf:
+                                _funnel_s.record_confidence_pass(symbol)
+                            if adx >= _threshold_adx:
+                                _funnel_s.record_adx_pass(symbol)
+                            if _volume_ratio >= _threshold_vol:
+                                _funnel_s.record_volume_pass(symbol)
+                        except Exception:
+                            pass
+
                     _gate_score = self._calculate_entry_gate_score(
                         _confidence,
                         adx,
@@ -3791,6 +3913,19 @@ class NIJAApexStrategyV71:
                             symbol,
                             reject_reason,
                         )
+                        # ── Structured REJECTED_SIGNAL log (SHORT) ────────────
+                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                            try:
+                                get_signal_funnel().record_rejected(
+                                    symbol,
+                                    confidence=_confidence,
+                                    threshold=_threshold_conf,
+                                    adx=adx,
+                                    volume=_volume_ratio,
+                                    reason=f"entry_gate_score_{_gate_score}_of_5_short",
+                                )
+                            except Exception:
+                                pass
                         return {
                             'action': 'hold',
                             'reason': reject_reason,
@@ -3863,6 +3998,18 @@ class NIJAApexStrategyV71:
                                         symbol,
                                         reject_reason,
                                     )
+                                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                        try:
+                                            get_signal_funnel().record_rejected(
+                                                symbol,
+                                                confidence=_confidence,
+                                                threshold=_threshold_conf,
+                                                adx=adx,
+                                                volume=_volume_ratio,
+                                                reason="volatility_explosion_short",
+                                            )
+                                        except Exception:
+                                            pass
                                     self._log_final_decision(
                                         score=risk_score,
                                         confidence=entry_confidence,
@@ -3889,6 +4036,35 @@ class NIJAApexStrategyV71:
                                     f"ADVISORY (AIEntryGate SHORT soft-fail, proceeding) → reason={_gate_result_s.reason}"
                                     f" score={_gate_result_s.gate_score} conf={score}"
                                 )
+                                if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                    try:
+                                        get_signal_funnel().record_rejected(
+                                            symbol,
+                                            confidence=_confidence,
+                                            threshold=_threshold_conf,
+                                            adx=adx,
+                                            volume=_volume_ratio,
+                                            reason=f"ai_gate_soft_fail_short_score_{_gate_result_s.gate_score:.1f}",
+                                        )
+                                    except Exception:
+                                        pass
+                            else:
+                                # AI gate passed — record funnel stage (SHORT)
+                                if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                    try:
+                                        get_signal_funnel().record_ai_gate_pass(symbol)
+                                        get_signal_funnel().record_shadow_entry(
+                                            pair=symbol,
+                                            side='short',
+                                            entry_price=float(df['close'].iloc[-1]),
+                                            confidence=_confidence,
+                                            adx=adx,
+                                            volume_ratio=_volume_ratio,
+                                            gate_score=_gate_result_s.gate_score,
+                                            executed=False,
+                                        )
+                                    except Exception:
+                                        pass
                         except Exception as _gate_s_err:
                             logger.debug("AI Entry Gate error (short): %s", _gate_s_err)
 
@@ -4305,9 +4481,18 @@ class NIJAApexStrategyV71:
                         decision='TRADE',
                         reason=reason,
                     )
+                    # ── Funnel: record execution (SHORT) ───────────────────
+                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                        try:
+                            _funnel_exec_s = get_signal_funnel()
+                            _funnel_exec_s.record_execution_pass(symbol)
+                            for _st_s in reversed(getattr(_funnel_exec_s, '_shadow_trades', [])):
+                                if _st_s.pair == symbol and not _st_s.executed:
+                                    _st_s.executed = True
+                                    break
+                        except Exception:
+                            pass
                     return result
-
-            no_entry_reason = f'No entry signal ({trend})'
             self._log_final_decision(
                 score=0.0,
                 confidence=0.0,
