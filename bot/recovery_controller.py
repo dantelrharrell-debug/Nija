@@ -530,7 +530,7 @@ class RecoveryController:
                     return False, f"Capital safety level {self._capital_safety_level.value} - entries blocked"
                 
                 if self._capital_safety_level == CapitalSafetyLevel.WARNING:
-                    return False, "Capital safety warning - entries reduced"
+                    return False, "Capital safety WARNING - entries blocked (reduce risk before resuming)"
             
             # Degraded state - allow entries when capital is safe or caution
             if self._current_state == FailureState.DEGRADED:
