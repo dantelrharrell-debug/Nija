@@ -282,13 +282,17 @@ def assert_distributed_writer_authority() -> None:
             )
             os.environ["NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"] = "0"
     except Exception as exc:
+        redis_failed = True
+        if redis_failed:
+            raise RuntimeError(
+                "LIVE TRADING BLOCKED: Redis execution authority unavailable"
+            )
         if fail_closed_verify:
             with _FENCE_VERIFY_LOCK:
                 _FENCE_LAST_CHECK_TS = time.monotonic()
                 _FENCE_LAST_OK = False
                 _FENCE_LAST_ERR = str(exc)
             raise RuntimeError(str(exc)) from exc
-        logger.warning("distributed writer runtime verification degraded (fail-open): %s", exc)
 
 
 def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict:
