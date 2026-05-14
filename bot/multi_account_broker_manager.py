@@ -750,6 +750,30 @@ class MultiAccountBrokerManager:
             ", ".join(_connected_platforms) if _connected_platforms else "none",
         )
 
+        # Connect configured user accounts before the first aggregate balance
+        # snapshot so startup hydration reflects the full visible account set.
+        try:
+            _connected_users = self.connect_users_from_config()
+            _connected_user_count = sum(len(_users) for _users in (_connected_users or {}).values())
+            if _connected_user_count > 0:
+                logger.info(
+                    "[MABM.initialize] user init complete before hydration: connected=%d (%s)",
+                    _connected_user_count,
+                    ", ".join(
+                        f"{_broker}:{len(_users)}"
+                        for _broker, _users in sorted((_connected_users or {}).items())
+                    ),
+                )
+            else:
+                logger.info(
+                    "[MABM.initialize] user init complete before hydration: connected=0"
+                )
+        except Exception as _user_init_err:
+            logger.warning(
+                "[MABM.initialize] user init before hydration failed: %s",
+                _user_init_err,
+            )
+
         def _connected_platform_labels_live() -> List[str]:
             _labels: List[str] = []
             for _bt, _broker in self._platform_brokers.items():
