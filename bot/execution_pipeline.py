@@ -612,6 +612,15 @@ class ExecutionPipeline:
                 logger.warning("ExecutionPipeline: throttler check failed: %s", exc)
 
         # ── Route to execution ───────────────────────────────────────────
+        live_mode = os.getenv("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {
+            "1", "true", "yes", "enabled", "on"
+        }
+        fencing_token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+        if live_mode and not fencing_token:
+            raise RuntimeError(
+                "LIVE EXECUTION DISABLED: Missing fencing token"
+            )
+
         try:
             assert_distributed_writer_authority()
         except Exception as exc:
