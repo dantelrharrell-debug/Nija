@@ -2068,9 +2068,25 @@ class NIJAApexStrategyV71:
             return False, f"waiting for candle close ({remaining:.0f}s remaining)"
         return True, "candle closed"
     def _calculate_entry_confidence(self, score: float, metadata: Dict) -> float:
-        """Return normalized confidence (0–1) from the legacy entry score."""
-        legacy_score = metadata.get('legacy_score', score) if metadata else score
-        return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
+        """Return normalized confidence (0–1) from the best available entry score.
+
+        Prefers AI composite / enhanced score (0-100 scale) so that valid
+        signals with a low legacy score (strict pullback / candle conditions
+        not met) are not unfairly penalised in the internal 5-point entry gate.
+        Falls back to the legacy 0-5 score when no AI score is present.
+        """
+        if metadata:
+            # Prefer AI composite / enhanced score (0-100 scale)
+            for _key in ('enhanced_score', 'composite_score'):
+                _val = metadata.get(_key)
+                if _val is not None:
+                    return min(float(_val) / 100.0, 1.0)
+            # Fall back to legacy score (0-5 scale)
+            _legacy = metadata.get('legacy_score')
+            if _legacy is not None:
+                return min(float(_legacy) / MAX_ENTRY_SCORE, 1.0)
+        # score may be AI composite (>MAX_ENTRY_SCORE) or legacy (<=MAX_ENTRY_SCORE)
+        return min(float(score) / (100.0 if score > MAX_ENTRY_SCORE else MAX_ENTRY_SCORE), 1.0)
 
     def _get_entry_gate_thresholds(self, drought: Optional['DroughtRelaxation']) -> Tuple[float, float, float]:
         """
@@ -2348,7 +2364,12 @@ class NIJAApexStrategyV71:
             enhanced_score, score_breakdown = 50.0, {"quality": "Fair"}
 
         should_enter_enhanced = self.entry_scorer.should_enter_trade(enhanced_score)
-        should_enter = legacy_signal and should_enter_enhanced
+        # Path B: do not require legacy_signal — the EnhancedEntryScorer is already
+        # AI-based and provides independent signal quality validation.  Requiring
+        # both legacy_signal AND should_enter_enhanced double-gates the entry and
+        # suppresses valid signals when the strict legacy pullback/candle conditions
+        # are not met (common in strongly trending markets).
+        should_enter = should_enter_enhanced
 
         regime_str = regime.value if hasattr(regime, "value") else str(regime or "")
         reason = (
@@ -3234,7 +3255,7 @@ class NIJAApexStrategyV71:
                                     _gate_result_l.reason,
                                 )
                                 logger.info(
-                                    f"TRADE REJECTED → reason={_gate_result_l.reason}"
+                                    f"ADVISORY (AIEntryGate soft-fail, proceeding) → reason={_gate_result_l.reason}"
                                     f" score={_gate_result_l.gate_score} conf={score}"
                                 )
                         except Exception as _gate_l_err:
@@ -3374,7 +3395,7 @@ class NIJAApexStrategyV71:
                                 symbol, ai_eval.ai_reason
                             )
                             logger.info(
-                                f"TRADE REJECTED → reason=AI Hub: {ai_eval.ai_reason}"
+                                f"ADVISORY (AI Hub soft-fail, proceeding) → reason=AI Hub: {ai_eval.ai_reason}"
                                 f" score={score} conf={score}"
                             )
                         # Use AI-adjusted position size (correlation + regime)
@@ -3459,7 +3480,7 @@ class NIJAApexStrategyV71:
                             f" (proceeding): {validation['reason']}"
                         )
                         logger.info(
-                            f"TRADE REJECTED → reason={validation['reason']}"
+                            f"ADVISORY (validation advisory, proceeding) → reason={validation['reason']}"
                             f" score={score} conf={score}"
                         )
                     if not eligibility['eligible']:
@@ -3468,7 +3489,7 @@ class NIJAApexStrategyV71:
                             f" (proceeding): {eligibility['reason']}"
                         )
                         logger.info(
-                            f"TRADE REJECTED → reason={eligibility['reason']}"
+                            f"ADVISORY (eligibility advisory, proceeding) → reason={eligibility['reason']}"
                             f" score={score} conf={score}"
                         )
                     
@@ -3588,7 +3609,7 @@ class NIJAApexStrategyV71:
                                 f" below {MIN_ACCEPTABLE_RATIO} (proceeding)"
                             )
                             logger.info(
-                                f"TRADE REJECTED → reason=Poor trade math: {trade_ratio:.2f}:1"
+                                f"ADVISORY (poor trade math, proceeding) → reason=Poor trade math: {trade_ratio:.2f}:1"
                                 f" score={score} conf={score}"
                             )
 
@@ -3865,7 +3886,7 @@ class NIJAApexStrategyV71:
                                     _gate_result_s.reason,
                                 )
                                 logger.info(
-                                    f"TRADE REJECTED → reason={_gate_result_s.reason}"
+                                    f"ADVISORY (AIEntryGate SHORT soft-fail, proceeding) → reason={_gate_result_s.reason}"
                                     f" score={_gate_result_s.gate_score} conf={score}"
                                 )
                         except Exception as _gate_s_err:
@@ -4001,7 +4022,7 @@ class NIJAApexStrategyV71:
                                 symbol, ai_eval.ai_reason
                             )
                             logger.info(
-                                f"TRADE REJECTED → reason=AI Hub: {ai_eval.ai_reason}"
+                                f"ADVISORY (AI Hub soft-fail, proceeding) → reason=AI Hub: {ai_eval.ai_reason}"
                                 f" score={score} conf={score}"
                             )
                         # Use AI-adjusted position size (correlation + regime)
@@ -4086,7 +4107,7 @@ class NIJAApexStrategyV71:
                             f" (proceeding): {validation['reason']}"
                         )
                         logger.info(
-                            f"TRADE REJECTED → reason={validation['reason']}"
+                            f"ADVISORY (validation advisory, proceeding) → reason={validation['reason']}"
                             f" score={score} conf={score}"
                         )
 
@@ -4102,7 +4123,7 @@ class NIJAApexStrategyV71:
                             f" (proceeding): {eligibility['reason']}"
                         )
                         logger.info(
-                            f"TRADE REJECTED → reason={eligibility['reason']}"
+                            f"ADVISORY (eligibility advisory, proceeding) → reason={eligibility['reason']}"
                             f" score={score} conf={score}"
                         )
                     
@@ -4217,7 +4238,7 @@ class NIJAApexStrategyV71:
                                 f" below {MIN_ACCEPTABLE_RATIO} (proceeding)"
                             )
                             logger.info(
-                                f"TRADE REJECTED → reason=Poor trade math: {trade_ratio:.2f}:1"
+                                f"ADVISORY (poor trade math, proceeding) → reason=Poor trade math: {trade_ratio:.2f}:1"
                                 f" score={score} conf={score}"
                             )
 
