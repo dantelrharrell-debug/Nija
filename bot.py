@@ -476,10 +476,11 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
     broker_ready = bool(_tbl.get("broker_connected", False))
     risk_ready = bool(_tbl.get("risk_ready", False))
     strategy_ready = bool(_tbl.get("strategy_ready", False))
+    authority_ready = bool(_tbl.get("authority_ready", False))
     capital_ready = bool(_tbl.get("capital_ready", False))
     execution_ready = bool(_tbl.get("execution_ready", False))
     # risk_ready is not included here; it gates _require_startup_ready_or_raise.
-    system_ready = broker_ready and strategy_ready and capital_ready and execution_ready
+    system_ready = broker_ready and strategy_ready and authority_ready and capital_ready and execution_ready
     return system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready
 
 
@@ -491,11 +492,12 @@ def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tu
     """
     system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
         _compute_system_ready(state_snapshot)
-    if not all([broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready]):
+    authority_ready = bool(_rt_snapshot().get("authority_ready", False))
+    if not all([broker_ready, risk_ready, strategy_ready, authority_ready, capital_ready, execution_ready]):
         raise RuntimeError(
             f"BLOCKED: System not fully initialized ({context}) "
             f"broker_ready={broker_ready} risk_ready={risk_ready} "
-            f"strategy_ready={strategy_ready} capital_ready={capital_ready} "
+            f"strategy_ready={strategy_ready} authority_ready={authority_ready} capital_ready={capital_ready} "
             f"execution_ready={execution_ready} "
             f"table={_rt_snapshot()}"
         )
@@ -567,6 +569,7 @@ def _balance_hydration_debug_status() -> dict:
             _fsm_error = str(_err)
     return {
         "balance_hydrated": bool(_rt.get("balance_hydrated", False)),
+        "authority_ready": bool(_rt.get("authority_ready", False)),
         "capital_ready": bool(_rt.get("capital_ready", False)),
         "broker_ready": bool(_rt.get("broker_ready", False)),
         "strategy_ready": bool(_rt.get("strategy_ready", False)),
@@ -575,6 +578,36 @@ def _balance_hydration_debug_status() -> dict:
         "bootstrap_fsm_error": _fsm_error,
         "last_error": os.environ.get("NIJA_BALANCE_HYDRATION_LAST_ERROR", ""),
     }
+
+
+def _startup_execution_authority_status(*, context: str, force_refresh: bool = False) -> dict:
+    """Return startup execution-authority prerequisite status."""
+    try:
+        try:
+            from bot.execution_authority_context import get_startup_execution_authority_prerequisites
+        except ImportError:
+            from execution_authority_context import get_startup_execution_authority_prerequisites  # type: ignore[import]
+        _status = get_startup_execution_authority_prerequisites(force_refresh=force_refresh)
+    except Exception as exc:
+        raise RuntimeError(f"execution authority status unavailable ({context}): {exc}") from exc
+
+    if _status.get("ready"):
+        if not bool(_rt_snapshot().get("authority_ready", False)):
+            _rt_mark_ready("authority_ready")
+    return _status
+
+
+def _require_startup_execution_authority(*, context: str, force_refresh: bool = False) -> dict:
+    """Fail closed unless startup execution authority prerequisites are satisfied."""
+    try:
+        try:
+            from bot.execution_authority_context import require_startup_execution_authority
+        except ImportError:
+            from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
+        require_startup_execution_authority(context=context, force_refresh=force_refresh)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
+    return _startup_execution_authority_status(context=context, force_refresh=False)
 
 
 def _sum_nested_balances(balance_payload) -> float:
@@ -632,6 +665,10 @@ def _hydrate_startup_balances(strategy) -> float:
                 _hydrated_total_balance_usd = _override
                 os.environ["ACCOUNT_BALANCE"] = f"{_override:.8f}"
                 _rt_mark_ready("balance_hydrated")
+                _require_startup_execution_authority(
+                    context="hydrate_startup_balances: ACCOUNT_BALANCE_OVERRIDE",
+                    force_refresh=True,
+                )
                 _rt_mark_ready("capital_ready")
                 logger.warning(
                     "⚠️ ACCOUNT_BALANCE_OVERRIDE active: forcing startup balance to $%.2f",
@@ -697,6 +734,10 @@ def _hydrate_startup_balances(strategy) -> float:
         logger.warning("Startup hydration total is <= 0 in non-live mode; continuing")
 
     _rt_mark_ready("balance_hydrated")
+    _require_startup_execution_authority(
+        context="hydrate_startup_balances",
+        force_refresh=True,
+    )
     _rt_mark_ready("capital_ready")
     logger.info("CAPITAL_READY_SET")
     return _hydrated_total_balance_usd
@@ -1082,6 +1123,15 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
         logger.info("STRATEGY_ASSIGNED")
     except Exception as exc:
         logger.warning("Strategy publish failed (%s): %s", context, exc)
+        return False
+
+    try:
+        _require_startup_execution_authority(
+            context=f"publish_strategy_runtime_readiness:{context}",
+            force_refresh=True,
+        )
+    except Exception as exc:
+        logger.error("Strategy readiness blocked (%s): %s", context, exc)
         return False
 
     _rt_mark_ready("strategy_ready")
@@ -1808,6 +1858,8 @@ _distributed_writer_fencing_token = 0
 _distributed_writer_lock_stop = threading.Event()
 _distributed_writer_lock_thread = None
 _running_in_degraded_mode = False  # True if bot runs without Redis distributed lock safety
+os.environ.setdefault("NIJA_WRITER_LEASE_ACQUIRED", "0")
+os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
 
 
 def _writer_lock_scope() -> str:
@@ -1893,6 +1945,8 @@ def _release_distributed_process_lock() -> None:
         _distributed_writer_lock_token = ""
         _distributed_writer_fencing_key = ""
         _distributed_writer_fencing_token = 0
+        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+        os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
 
 
 def _release_nonce_writer_lease() -> None:
@@ -1943,6 +1997,8 @@ def _build_writer_lock_meta_payload(
 def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
     """Keep the distributed writer lock alive; fail closed if ownership is lost."""
     _interval = max(3, ttl_s // 3)
+    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+    os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = str(time.time())
     try:
         _max_failures = max(3, int(os.environ.get("NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES", "12")))
     except (TypeError, ValueError):
@@ -1986,6 +2042,7 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                 ),
             )
             if int(_result or 0) != 1:
+                os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
                 print(
                     "\n🚫 Distributed single-writer lock lost; "
                     "another NIJA writer may be active. Exiting for safety.",
@@ -1995,6 +2052,7 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                 _release_distributed_process_lock()
                 os._exit(1)
             _failure_streak = 0
+            os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = str(time.time())
         except Exception as _hb_exc:
             _failure_streak += 1
             if _failure_streak == 1 or _failure_streak % 3 == 0:
@@ -2004,6 +2062,7 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                     flush=True,
                 )
             if _failure_streak >= _max_failures:
+                os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
                 print(
                     f"\n🚫 Distributed lock heartbeat failed {_failure_streak}x ({_hb_exc}); "
                     "exiting to preserve single-writer invariant.",
@@ -2012,6 +2071,7 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                 _distributed_writer_lock_stop.set()
                 _release_distributed_process_lock()
                 os._exit(1)
+    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
 
 
 def _acquire_distributed_process_lock() -> None:
@@ -2021,6 +2081,9 @@ def _acquire_distributed_process_lock() -> None:
     global _distributed_writer_fencing_key, _distributed_writer_fencing_token
     global _distributed_writer_lock_thread
     global _running_in_degraded_mode
+
+    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
 
     _truthy = ("1", "true", "yes", "enabled", "on")
     _standby_retry_active = os.environ.get("NIJA_STANDBY_RETRY_ACTIVE", "0").strip() == "1"
@@ -3181,6 +3244,8 @@ def _acquire_distributed_process_lock() -> None:
             _distributed_writer_lock_stop.clear()
             _acquired_at = time.time()
             os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(_acquired_at)
+            os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+            os.environ["NIJA_WRITER_LOCK_TTL_S"] = str(_ttl_s)
             try:
                 _client.set(_meta_key, _build_writer_lock_meta_payload(
                     _fencing_token,
@@ -6149,21 +6214,20 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     )
                     if _reuse_lock_acquired:
                         try:
-                            _publish_strategy_runtime_readiness(
+                            if not _publish_strategy_runtime_readiness(
                                 strategy,
                                 context="startup-retry-reuse-existing",
-                            )
+                            ):
+                                raise RuntimeError(
+                                    "startup retry strategy readiness blocked pending execution authority"
+                                )
                         finally:
                             _initialized_state_lock.release()
                     else:
-                        logger.warning(
-                            "Reuse-path readiness re-publish skipped: INIT lock unavailable; "
-                            "attempting direct mark_ready fallback"
+                        raise RuntimeError(
+                            "Reuse-path readiness re-publish requires INIT lock; "
+                            "direct mark_ready fallback disabled"
                         )
-                        # Direct fallback so the startup can continue even without the lock
-                        _rt_mark_ready("strategy_ready")
-                        _rt_mark_ready("risk_ready")
-                        _rt_mark_ready("execution_ready")
             else:
                 # ── B: enforce ordering — env must be validated before broker init ──
                 # Non-blocking observable check: warn and continue with degraded
@@ -6294,10 +6358,13 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         )
                     else:
                         try:
-                            _publish_strategy_runtime_readiness(
+                            if not _publish_strategy_runtime_readiness(
                                 strategy,
                                 context="startup constructor path",
-                            )
+                            ):
+                                raise RuntimeError(
+                                    "startup constructor strategy readiness blocked pending execution authority"
+                                )
                             logger.debug("Constructor stage=strategy_cached")
                         finally:
                             _initialized_state_lock.release()
@@ -6797,9 +6864,15 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     logger.info("🚀 SYSTEM READY — TRADING ENABLED")
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
                     try:
+                        _require_startup_execution_authority(
+                            context="capital_gate: capital_ready",
+                            force_refresh=True,
+                        )
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
-                        logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
+                        raise RuntimeError(
+                            f"Startup readiness signal failed (capital_ready): {_gate_signal_err}"
+                        ) from _gate_signal_err
 
                     # Capital gate: when capital is ready, advance FSM synchronously
                     logger.critical("LIFECYCLE: Capital ready - FSM state before transitions = %s", _bootstrap_state_value())
@@ -6871,9 +6944,15 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     )
                     logger.warning("🚀 SYSTEM READY — proceeding with zero or partial balance")
                     try:
+                        _require_startup_execution_authority(
+                            context="capital_gate: degraded capital_ready",
+                            force_refresh=True,
+                        )
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
-                        logger.warning("Startup readiness signal failed (capital_ready): %s", _gate_signal_err)
+                        raise RuntimeError(
+                            f"Startup readiness signal failed (capital_ready): {_gate_signal_err}"
+                        ) from _gate_signal_err
 
                     # Capital gate (degraded): advance FSM synchronously
                     logger.critical("LIFECYCLE: Capital ready (degraded) - FSM state before transitions = %s", _bootstrap_state_value())

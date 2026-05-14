@@ -14,6 +14,7 @@ Covers:
 
 import threading
 import unittest
+from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
 from bot.bootstrap_state_machine import (
@@ -41,11 +42,32 @@ def _fresh() -> BootstrapStateMachine:
 def _fast_forward(fsm: BootstrapStateMachine, *states: BootstrapState) -> None:
     """Apply a sequence of transitions; raises on first failure."""
     for s in states:
-        ok = fsm.transition(s, "test fast-forward")
+        _ctx = _authority_ready_patch() if s == BootstrapState.RUNNING_SUPERVISED else nullcontext()
+        with _ctx:
+            ok = fsm.transition(s, "test fast-forward")
         if not ok:
             raise AssertionError(
                 f"fast_forward: transition to {s.value} failed from {fsm.state.value}"
             )
+
+
+def _authority_ready_patch():
+    """Patch startup authority checks to a verified-ready status."""
+    return patch(
+        "bot.execution_authority_context.require_startup_execution_authority",
+        return_value={
+            "ready": True,
+            "checks": {
+                "redis_reachable": True,
+                "lease_acquired": True,
+                "fencing_token_active": True,
+                "heartbeat_active": True,
+                "authority_verified": True,
+            },
+            "missing": [],
+            "authority_status": {"ok": True, "redis_reachable": True, "token_present": True},
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +99,9 @@ class TestLegalTransitions(unittest.TestCase):
         fsm = _fresh()
         self.assertEqual(fsm.state, BootstrapState.BOOT_INIT)
         for target in self.HAPPY_PATH:
-            result = fsm.transition(target, "test")
+            _ctx = _authority_ready_patch() if target == BootstrapState.RUNNING_SUPERVISED else nullcontext()
+            with _ctx:
+                result = fsm.transition(target, "test")
             self.assertTrue(result, f"Expected True transitioning to {target.value}")
             self.assertEqual(fsm.state, target)
 
@@ -812,7 +836,7 @@ class TestOwnershipEnforcement(unittest.TestCase):
 
 
 class TestFinalizeBootDegradedMode(unittest.TestCase):
-    """finalize_boot() must grant execution authority in degraded mode without Redis."""
+    """finalize_boot() must fail closed unless startup authority is fully verified."""
 
     def _fsm_at_threads_starting(self) -> BootstrapStateMachine:
         """Return a fresh FSM advanced to THREADS_STARTING."""
@@ -836,65 +860,54 @@ class TestFinalizeBootDegradedMode(unittest.TestCase):
         return fsm
 
     def test_finalize_boot_succeeds_without_redis_degraded(self):
-        """finalize_boot() succeeds normally when Redis degraded flags are not set."""
+        """finalize_boot() succeeds only when authority prerequisites are verified."""
         fsm = self._fsm_at_threads_starting()
-        with patch.dict("os.environ", {
-            "NIJA_ALLOW_REDIS_DEGRADED": "",
-            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "",
-        }, clear=False):
-            ok = fsm.finalize_boot("test: no degraded flags")
+        with _authority_ready_patch():
+            ok = fsm.finalize_boot("test: authority verified")
         self.assertTrue(ok)
         self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
         self.assertTrue(fsm.execution_authority)
 
-    def test_finalize_boot_bypasses_redis_ping_when_degraded_writer_authority_set(self):
-        """When NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 is set alongside
-        NIJA_ALLOW_REDIS_DEGRADED=1, finalize_boot() must skip the Redis PING
-        gate and grant execution authority even when Redis is unreachable."""
+    def test_finalize_boot_degraded_writer_authority_no_longer_bypasses_requirements(self):
+        """Degraded-writer env flags alone must not bypass startup authority checks."""
         fsm = self._fsm_at_threads_starting()
         with patch.dict("os.environ", {
             "NIJA_ALLOW_REDIS_DEGRADED": "1",
             "NIJA_REQUIRE_REDIS_FOR_LIVE": "true",
             "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "1",
         }, clear=False):
-            ok = fsm.finalize_boot("test: degraded writer authority bypass")
-        self.assertTrue(ok, "finalize_boot should succeed when degraded writer authority is set")
-        self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
-        self.assertTrue(fsm.execution_authority)
-        self.assertTrue(fsm.boot_complete)
+            ok = fsm.finalize_boot("test: degraded writer authority bypass blocked")
+        self.assertFalse(ok)
+        self.assertEqual(fsm.state, BootstrapState.THREADS_STARTING)
+        self.assertFalse(fsm.execution_authority)
 
-    def test_finalize_boot_blocked_when_degraded_but_no_writer_authority_and_redis_unreachable(self):
-        """When NIJA_ALLOW_REDIS_DEGRADED=1 but NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY is
-        NOT set and Redis is unreachable (no URL configured), finalize_boot() must
-        remain blocked (fail-closed)."""
+    def test_finalize_boot_blocked_when_authority_prerequisites_missing(self):
+        """Missing Redis/lease/fencing/heartbeat verification must block RUNNING state."""
         fsm = self._fsm_at_threads_starting()
-        # Simulate Redis being unreachable by clearing all Redis URL env vars.
-        # When no URL is configured _redis_ok stays False, triggering the gate.
-        with patch.dict("os.environ", {
-            "NIJA_ALLOW_REDIS_DEGRADED": "1",
-            "NIJA_REQUIRE_REDIS_FOR_LIVE": "true",
-            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "",
-            "NIJA_REDIS_URL": "",
-            "REDIS_TLS_URL": "",
-            "REDIS_URL": "",
-        }, clear=False):
-            ok = fsm.finalize_boot("test: redis unreachable, no degraded writer authority")
-        self.assertFalse(ok, "finalize_boot must be blocked when Redis is unreachable without degraded writer authority")
+        with patch(
+            "bot.execution_authority_context.require_startup_execution_authority",
+            side_effect=RuntimeError(
+                "STARTUP_EXECUTION_AUTHORITY_REQUIRED: missing=redis_reachable,lease_acquired,"
+                "fencing_token_active,heartbeat_active,authority_verified"
+            ),
+        ):
+            ok = fsm.finalize_boot("test: authority missing")
+        self.assertFalse(ok)
         self.assertNotEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
         self.assertFalse(fsm.execution_authority)
 
-    def test_finalize_boot_require_redis_false_bypasses_gate(self):
-        """Setting NIJA_REQUIRE_REDIS_FOR_LIVE=false bypasses the Redis PING gate."""
+    def test_finalize_boot_require_redis_false_still_needs_verified_authority(self):
+        """NIJA_REQUIRE_REDIS_FOR_LIVE=false must not bypass verified authority."""
         fsm = self._fsm_at_threads_starting()
         with patch.dict("os.environ", {
             "NIJA_ALLOW_REDIS_DEGRADED": "1",
             "NIJA_REQUIRE_REDIS_FOR_LIVE": "false",
             "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "",
         }, clear=False):
-            ok = fsm.finalize_boot("test: require redis false")
-        self.assertTrue(ok)
-        self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
-        self.assertTrue(fsm.execution_authority)
+            ok = fsm.finalize_boot("test: require redis false still blocked")
+        self.assertFalse(ok)
+        self.assertEqual(fsm.state, BootstrapState.THREADS_STARTING)
+        self.assertFalse(fsm.execution_authority)
 
 
 if __name__ == "__main__":

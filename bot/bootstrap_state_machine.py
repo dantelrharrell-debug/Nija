@@ -529,6 +529,27 @@ class BootstrapStateMachine:
                     raise BootstrapInvariantError("FSM_TRANSITION", msg)
                 return False
 
+            if new_state == BootstrapState.RUNNING_SUPERVISED:
+                try:
+                    try:
+                        from bot.execution_authority_context import require_startup_execution_authority
+                    except ImportError:
+                        from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
+
+                    require_startup_execution_authority(
+                        context=f"bootstrap_fsm.transition({current.value}->{new_state.value})",
+                        force_refresh=True,
+                    )
+                except Exception as exc:
+                    msg = (
+                        "Execution authority prerequisites missing for RUNNING_SUPERVISED "
+                        f"(reason={reason!r}): {exc}"
+                    )
+                    logger.error("❌ [BootstrapFSM] %s", msg)
+                    if raise_on_invalid:
+                        raise BootstrapInvariantError("FSM_EXECUTION_AUTHORITY", msg) from exc
+                    return False
+
             record: Dict[str, Any] = {
                 "from": current.value,
                 "to": new_state.value,
@@ -636,56 +657,21 @@ class BootstrapStateMachine:
                 )
                 return False
 
-            # Fix 4: Redis degraded-mode gate — block LIVE_ACTIVE when Redis is
-            # unreachable unless the operator explicitly opts in.
-            # NIJA_ALLOW_REDIS_DEGRADED=true means Redis is not guaranteed; we must
-            # verify the connection is actually available before granting execution
-            # authority.  Set NIJA_REQUIRE_REDIS_FOR_LIVE=false to bypass this gate
-            # only when you intentionally accept the risk of operating without Redis.
-            #
-            # Exception: when NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 is also set the
-            # operator has explicitly acknowledged that the fencing token is unavailable
-            # and that execution should proceed without it.  In that case the Redis PING
-            # gate is skipped — assert_distributed_writer_authority() already handles
-            # this case correctly (fail-open when strict_required=False).
-            _truthy = {"1", "true", "yes", "on", "enabled"}
-            _redis_degraded = os.getenv("NIJA_ALLOW_REDIS_DEGRADED", "").strip().lower() in _truthy
-            _require_redis = os.getenv("NIJA_REQUIRE_REDIS_FOR_LIVE", "true").strip().lower() not in {"0", "false", "no", "off", "disabled"}
-            _degraded_writer_authority = os.getenv("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY", "").strip().lower() in _truthy
-            if _redis_degraded and _require_redis:
-                if _degraded_writer_authority:
-                    # Operator has explicitly opted into degraded writer authority mode;
-                    # skip the Redis connectivity gate and grant execution authority.
-                    # Trades are NOT gated on the fencing token in this mode.
-                    logger.critical(
-                        "⚠️ [BootstrapFSM] finalize_boot: Redis connectivity check SKIPPED "
-                        "(NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1) — granting execution authority "
-                        "without fencing token. Ensure only ONE bot instance is running."
-                    )
-                else:
-                    # Attempt a live Redis PING to confirm the connection is recovered.
-                    _redis_ok = False
-                    try:
-                        from bot.redis_runtime import connect_redis_with_fallback  # noqa: PLC0415
-                        _redis_url = (
-                            os.getenv("NIJA_REDIS_URL")
-                            or os.getenv("REDIS_TLS_URL")
-                            or os.getenv("REDIS_URL")
-                            or ""
-                        )
-                        if _redis_url:
-                            _rc, _ = connect_redis_with_fallback(url=_redis_url)
-                            _redis_ok = bool(_rc and _rc.ping())
-                    except Exception as _ping_err:
-                        logger.warning("[BootstrapFSM] finalize_boot Redis PING failed: %s", _ping_err)
-                    if not _redis_ok:
-                        logger.error(
-                            "❌ [BootstrapFSM] finalize_boot BLOCKED: NIJA_ALLOW_REDIS_DEGRADED=true "
-                            "and Redis is unreachable — refusing to grant execution authority. "
-                            "Fix the Redis connection, set NIJA_REQUIRE_REDIS_FOR_LIVE=false to bypass, "
-                            "or set NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 to accept degraded mode."
-                        )
-                        return False
+            try:
+                try:
+                    from bot.execution_authority_context import require_startup_execution_authority  # noqa: PLC0415
+                except ImportError:
+                    from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
+                require_startup_execution_authority(
+                    context=f"bootstrap_fsm.finalize_boot({reason})",
+                    force_refresh=True,
+                )
+            except Exception as exc:
+                logger.error(
+                    "❌ [BootstrapFSM] finalize_boot blocked: startup execution authority prerequisites missing: %s",
+                    exc,
+                )
+                return False
 
             _from_state = self._state
             self._state = BootstrapState.RUNNING_SUPERVISED
