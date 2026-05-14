@@ -13106,12 +13106,26 @@ class TradingStrategy:
                             decision,
                         )
 
+                    # ── CORE STRATEGY MODE — resolve symbol allow-list once per scan cycle ──
+                    _csm_filter = None
+                    try:
+                        from bot.core_strategy_mode import is_symbol_allowed as _csm_fn, is_core_mode_active as _csm_active
+                        if _csm_active():
+                            _csm_filter = _csm_fn
+                            logger.info("   🎯 CORE STRATEGY MODE: scanning BTC-USD / ETH-USD only")
+                    except Exception:
+                        pass
+
                     for i, symbol in enumerate(markets_to_scan):
                         filter_stats['total'] += 1
                         try:
                             # FIX #1: BLACKLIST CHECK - Skip disabled pairs immediately
                             if symbol in DISABLED_PAIRS:
                                 logger.debug(f"   ⛔ SKIPPING {symbol}: Blacklisted pair (spread > profit edge)")
+                                continue
+
+                            # CORE STRATEGY MODE: skip symbols outside BTC-USD/ETH-USD universe
+                            if _csm_filter is not None and not _csm_filter(symbol):
                                 continue
 
                             # CYCLE TIME CAP: break the scan loop early when the scan

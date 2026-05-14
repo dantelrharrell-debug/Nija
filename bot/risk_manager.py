@@ -1038,6 +1038,14 @@ class AdaptiveRiskManager:
             breakdown['safety_clamped'] = True
             breakdown['safety_cap_usd'] = safety_cap
 
+        # NO-LEVERAGE CLAMP: position_size must not exceed account_balance (1× max)
+        # Activated by NIJA_CORE_STRATEGY_MODE=true or NIJA_NO_LEVERAGE=true.
+        try:
+            from bot.core_strategy_mode import clamp_no_leverage as _clamp_nl
+            position_size = _clamp_nl(float(scalar(position_size)), float(scalar(account_balance)))
+        except Exception:
+            pass
+
         # BROKER-AWARE MINIMUM POSITION ADJUSTMENT (Jan 25, 2026)
         # Fix for edge case: When calculated position is just below broker minimum due to
         # max position % cap, intelligently bump up to minimum if safe to do so.
