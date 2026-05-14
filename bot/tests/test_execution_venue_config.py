@@ -32,8 +32,8 @@ class ExecutionVenueConfigTests(unittest.TestCase):
         }
         self.assertTrue(should_initialize_coinbase_platform(env))
 
-    def test_coinbase_platform_defaults_to_disabled_without_trading_flag(self):
-        self.assertFalse(should_initialize_coinbase_platform({}))
+    def test_coinbase_platform_defaults_to_enabled_without_trading_flag(self):
+        self.assertTrue(should_initialize_coinbase_platform({}))
 
     def test_coinbase_platform_blocked_when_trading_disabled(self):
         env = {"ENABLE_COINBASE_TRADING": "false"}
@@ -60,7 +60,7 @@ class ExecutionVenueConfigTests(unittest.TestCase):
 
     def test_coinbase_platform_env_matrix(self):
         cases = (
-            ({}, False),
+            ({}, True),
             ({"ENABLE_COINBASE_TRADING": "true"}, True),
             ({"ENABLE_COINBASE": "true", "ENABLE_COINBASE_TRADING": "true"}, True),
             ({"ENABLE_COINBASE": "false", "ENABLE_COINBASE_TRADING": "true"}, False),
