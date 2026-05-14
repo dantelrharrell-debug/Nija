@@ -266,8 +266,10 @@ class AITradeConfidenceEngine:
                     "score %.1f → %.1f (0.30× penalty)",
                     symbol, side.upper(), regime_label, _pre, score,
                 )
-        except Exception:
-            pass
+        except ImportError:
+            pass  # optional feature; skip when module is unavailable
+        except Exception as _ctb_err:
+            logger.debug("[CoreMode] counter-trend check skipped for %s: %s", symbol, _ctb_err)
 
         action, reason = self._gate(score, symbol, side)
 

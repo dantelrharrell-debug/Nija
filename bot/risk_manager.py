@@ -1043,8 +1043,10 @@ class AdaptiveRiskManager:
         try:
             from bot.core_strategy_mode import clamp_no_leverage as _clamp_nl
             position_size = _clamp_nl(float(scalar(position_size)), float(scalar(account_balance)))
-        except Exception:
-            pass
+        except ImportError:
+            pass  # optional feature; skip when module is unavailable
+        except Exception as _nl_err:
+            logger.debug("No-leverage clamp skipped: %s", _nl_err)
 
         # BROKER-AWARE MINIMUM POSITION ADJUSTMENT (Jan 25, 2026)
         # Fix for edge case: When calculated position is just below broker minimum due to

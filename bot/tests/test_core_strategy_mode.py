@@ -258,7 +258,8 @@ class TestMarketFiltersIntegration(unittest.TestCase):
         os.environ.pop("NIJA_NO_LEVERAGE", None)
         # Clear cached import of core_strategy_mode so next test gets a fresh read
         for mod_name in list(sys.modules.keys()):
-            if "core_strategy_mode" in mod_name:
+            if mod_name in ("bot.core_strategy_mode", "core_strategy_mode",
+                            "bot.market_filters", "market_filters"):
                 del sys.modules[mod_name]
 
     def test_core_mode_symbol_btc_passes(self):
@@ -305,7 +306,8 @@ class TestConfidenceEngineCoreMode(unittest.TestCase):
         os.environ.pop("NIJA_CORE_STRATEGY_MODE", None)
         os.environ.pop("NIJA_NO_LEVERAGE", None)
         for mod_name in list(sys.modules.keys()):
-            if "core_strategy_mode" in mod_name or "ai_trade_confidence" in mod_name:
+            if mod_name in ("bot.core_strategy_mode", "core_strategy_mode",
+                            "bot.ai_trade_confidence_engine", "ai_trade_confidence_engine"):
                 del sys.modules[mod_name]
 
     def _make_df(self, n: int = 30):

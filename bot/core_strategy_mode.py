@@ -275,7 +275,7 @@ if _CORE_MODE:
         "🎯 CORE STRATEGY MODE ACTIVE | symbols=%s | risk=%.2f%% | "
         "daily_loss=%.1f%% | max_pos=%d | max_pos_pct=%.0f%% | "
         "atr_mult=%.1f× | no_leverage=%s",
-        sorted(CORE_SYMBOLS),
+        list(CORE_SYMBOLS),
         CORE_RISK_PCT * 100,
         CORE_DAILY_LOSS_PCT,
         CORE_MAX_POSITIONS,
