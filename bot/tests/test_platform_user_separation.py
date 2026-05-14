@@ -11,9 +11,22 @@ Tests that:
 import sys
 sys.path.insert(0, '.')
 
-from bot.multi_account_broker_manager import MultiAccountBrokerManager
+import pytest
+from bot.multi_account_broker_manager import (
+    MultiAccountBrokerManager,
+    get_broker_manager,
+    reset_broker_manager_singleton,
+)
 from bot.broker_manager import BrokerType, BaseBroker, AccountType
 from typing import List, Dict, Any
+
+
+@pytest.fixture(autouse=True)
+def _reset_mabm_singleton():
+    """Reset the MABM singleton before and after each test for full isolation."""
+    reset_broker_manager_singleton()
+    yield
+    reset_broker_manager_singleton()
 
 
 class MockBroker(BaseBroker):
