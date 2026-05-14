@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import socket
+import ssl
 import threading
 import time
 from types import FrameType
@@ -55,17 +56,17 @@ def get_redis_tls_kwargs(url: str) -> dict[str, Any]:
 
     if tls_ca_certs:
         return {
-            "ssl_cert_reqs": "required",
+            "ssl_cert_reqs": ssl.CERT_REQUIRED,
             "ssl_ca_certs": tls_ca_certs,
         }
 
     if tls_insecure or (tls_auto and is_railway_host):
         return {
-            "ssl_cert_reqs": "none",
+            "ssl_cert_reqs": ssl.CERT_NONE,
             "ssl_check_hostname": False,
         }
 
-    return {"ssl_cert_reqs": "required"}
+    return {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 
 
 def _prioritized_alt_urls(primary_url: str) -> list[str]:

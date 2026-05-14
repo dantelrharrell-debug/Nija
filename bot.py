@@ -16,6 +16,7 @@ import logging
 import socket
 import hashlib
 import importlib
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -2587,13 +2588,13 @@ def _acquire_distributed_process_lock() -> None:
             _is_railway_host = ".rlwy.net" in (_parsed_url.hostname or "").lower()
             if (_parsed_url.scheme or "").lower() == "rediss":
                 if _tls_ca_certs:
-                    _kwargs["ssl_cert_reqs"] = "required"
+                    _kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
                     _kwargs["ssl_ca_certs"] = _tls_ca_certs
                 elif _tls_insecure or (_tls_auto and _is_railway_host):
-                    _kwargs["ssl_cert_reqs"] = "none"
+                    _kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
                     _kwargs["ssl_check_hostname"] = False
                 else:
-                    _kwargs["ssl_cert_reqs"] = "required"
+                    _kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
             return redis.Redis.from_url(_url, **_kwargs)
 
         _ping_exc = None

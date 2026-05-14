@@ -1446,6 +1446,7 @@ if [ "${_REDIS_STARTUP_CHECK}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ]
 
     if [ -n "${_redis_url_for_ping}" ] && "$PY" - <<'PY' "${_redis_url_for_ping}"
 import os
+import ssl
 import sys
 from urllib.parse import urlparse
 
@@ -1471,13 +1472,13 @@ try:
         tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
         tls_auto = tls_insecure_raw in {"", "auto"}
         if tls_ca_certs:
-            kwargs["ssl_cert_reqs"] = "required"
+            kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
             kwargs["ssl_ca_certs"] = tls_ca_certs
         elif tls_insecure or (tls_auto and is_railway_host):
-            kwargs["ssl_cert_reqs"] = "none"
+            kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
             kwargs["ssl_check_hostname"] = False
         else:
-            kwargs["ssl_cert_reqs"] = "required"
+            kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
     r = redis.Redis.from_url(
         url,
         **kwargs,
