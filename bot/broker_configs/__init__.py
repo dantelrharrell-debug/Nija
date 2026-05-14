@@ -19,8 +19,7 @@ logger = logging.getLogger("nija.broker_configs")
 
 # Import broker-specific configs
 try:
-    # Coinbase is disabled
-    # from .coinbase_config import CoinbaseConfig
+    from .coinbase_config import CoinbaseConfig
     from .kraken_config import KrakenConfig
     from .binance_config import BinanceConfig
     from .okx_config import OKXConfig
@@ -38,7 +37,7 @@ except ImportError:
 
 class BrokerConfigType(Enum):
     """Supported broker configurations"""
-    # COINBASE = "coinbase"  # Disabled
+    COINBASE = "coinbase"
     KRAKEN = "kraken"
     ALPACA = "alpaca"
     BINANCE = "binance"
@@ -58,12 +57,9 @@ def get_broker_config(broker_type: str):
     """
     broker_type_lower = broker_type.lower()
 
-    # Coinbase is disabled - return None explicitly
-    if broker_type_lower == "coinbase":
-        logger.warning("Coinbase broker is disabled")
-        return None
-    
-    if broker_type_lower == "kraken" and KrakenConfig:
+    if broker_type_lower == "coinbase" and CoinbaseConfig:
+        return CoinbaseConfig()
+    elif broker_type_lower == "kraken" and KrakenConfig:
         return KrakenConfig()
     elif broker_type_lower == "binance" and BinanceConfig:
         return BinanceConfig()
@@ -82,7 +78,7 @@ def get_broker_config(broker_type: str):
 __all__ = [
     'BrokerConfigType',
     'get_broker_config',
-    # 'CoinbaseConfig',  # Disabled
+    'CoinbaseConfig',
     'KrakenConfig',
     'BinanceConfig',
     'OKXConfig',
