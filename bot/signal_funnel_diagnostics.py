@@ -218,10 +218,10 @@ class SignalFunnelDiagnostics:
             executed=executed,
         )
         with self._lock:
-            # Keep only the most recent 500 shadow trades to avoid unbounded growth
-            if len(self._shadow_trades) >= 500:
-                self._shadow_trades = self._shadow_trades[-400:]
             self._shadow_trades.append(trade)
+            # Trim to the most recent 500 entries to avoid unbounded growth
+            if len(self._shadow_trades) > 500:
+                self._shadow_trades = self._shadow_trades[-500:]
 
     def update_shadow_exit(
         self,
@@ -230,11 +230,13 @@ class SignalFunnelDiagnostics:
         side: str = "long",
     ) -> None:
         """
-        Update open shadow trades for the given pair with an exit price and
-        compute hypothetical PnL.
+        Update the most recently opened shadow trade for the given pair with an exit
+        price and compute hypothetical PnL.  Only the newest still-open trade is
+        closed so that multiple open shadow entries for the same pair are not all
+        closed at once.
         """
         with self._lock:
-            for trade in self._shadow_trades:
+            for trade in reversed(self._shadow_trades):
                 if trade.pair == pair and trade.exit_price == 0.0:
                     trade.exit_price = exit_price
                     trade.exit_time = time.time()
@@ -243,6 +245,18 @@ class SignalFunnelDiagnostics:
                         trade.hypothetical_pnl_pct = (
                             raw_pnl if trade.side == "long" else -raw_pnl
                         ) * 100.0
+                    break  # only close the most recent open trade
+
+    def mark_shadow_executed(self, pair: str) -> None:
+        """
+        Mark the most recently opened (and not yet executed) shadow trade for
+        *pair* as having been actually submitted to the broker.  Thread-safe.
+        """
+        with self._lock:
+            for trade in reversed(self._shadow_trades):
+                if trade.pair == pair and not trade.executed:
+                    trade.executed = True
+                    break
 
     def get_shadow_summary(self) -> Dict[str, Any]:
         """

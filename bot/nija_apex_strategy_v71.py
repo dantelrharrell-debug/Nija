@@ -3778,10 +3778,7 @@ class NIJAApexStrategyV71:
                         try:
                             _funnel_exec_l = get_signal_funnel()
                             _funnel_exec_l.record_execution_pass(symbol)
-                            for _st_l in reversed(getattr(_funnel_exec_l, '_shadow_trades', [])):
-                                if _st_l.pair == symbol and not _st_l.executed:
-                                    _st_l.executed = True
-                                    break
+                            _funnel_exec_l.mark_shadow_executed(symbol)
                         except Exception:
                             pass
                     return result
@@ -4486,10 +4483,7 @@ class NIJAApexStrategyV71:
                         try:
                             _funnel_exec_s = get_signal_funnel()
                             _funnel_exec_s.record_execution_pass(symbol)
-                            for _st_s in reversed(getattr(_funnel_exec_s, '_shadow_trades', [])):
-                                if _st_s.pair == symbol and not _st_s.executed:
-                                    _st_s.executed = True
-                                    break
+                            _funnel_exec_s.mark_shadow_executed(symbol)
                         except Exception:
                             pass
                     return result
