@@ -137,15 +137,6 @@ except ImportError:
         get_broker_failure_manager = None  # type: ignore
         _BROKER_FAILURE_MANAGER_AVAILABLE = False
 
-# Import global Kraken nonce jump helper for nonce-error recovery
-try:
-    from bot.global_kraken_nonce import jump_global_kraken_nonce_forward
-except ImportError:
-    try:
-        from global_kraken_nonce import jump_global_kraken_nonce_forward
-    except ImportError:
-        jump_global_kraken_nonce_forward = None  # type: ignore
-
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -164,6 +155,7 @@ ADOPTION_FAILURE_BACKOFF_S = 30.0
 
 # Error message truncation length for health status tracking
 MAX_ERROR_MESSAGE_LENGTH = 100  # Maximum length for error messages stored in health status
+KRAKEN_BROKER_TYPE_NAME = "kraken"
 
 
 class IndependentBrokerTrader:
@@ -171,6 +163,19 @@ class IndependentBrokerTrader:
     Manages independent trading operations across multiple brokers.
     Each broker operates in isolation to prevent cascade failures.
     """
+
+    @staticmethod
+    def _is_kraken_broker_type(broker_type) -> bool:
+        """Return True when broker_type resolves to Kraken."""
+        if broker_type is None:
+            return False
+        return getattr(broker_type, "value", "").lower() == KRAKEN_BROKER_TYPE_NAME
+
+    @staticmethod
+    def _is_nonce_error(exc: Exception) -> bool:
+        """Return True when an exception looks like a Kraken nonce rejection."""
+        _err = str(exc).lower()
+        return "invalid nonce" in _err or "nonce" in _err
 
     def __init__(self, broker_manager, trading_strategy, multi_account_manager=None,
                  platform_account: Optional[Dict] = None):
@@ -552,7 +557,40 @@ class IndependentBrokerTrader:
                         logger.info(f"      ⚠️  Underfunded (minimum: ${MINIMUM_FUNDED_BALANCE:.2f})")
 
                 except Exception as e:
-                    logger.warning(f"   ❌ User: {user_id} | {broker_type.value}: Error checking balance: {e}")
+                    logger.warning(
+                        "   ❌ User: %s | %s: Error checking balance: %s",
+                        user_id,
+                        broker_type.value,
+                        e,
+                    )
+                    recovered_after_nonce_resync = False
+                    if self._is_kraken_broker_type(broker_type) and self._is_nonce_error(e):
+                        if self._attempt_kraken_nonce_resync(broker_name, broker):
+                            try:
+                                balance = broker.get_account_balance()
+                                logger.info(
+                                    f"   🔁 User: {user_id} | {broker_type.value}: "
+                                    f"balance recovered after nonce resync: ${balance:,.2f}"
+                                )
+                                if balance >= MINIMUM_FUNDED_BALANCE:
+                                    if user_id not in funded_users:
+                                        funded_users[user_id] = {}
+                                    funded_users[user_id][broker_type.value] = balance
+                                    logger.info("      ✅ FUNDED - Ready to trade")
+                                else:
+                                    logger.info(
+                                        f"      ⚠️  Underfunded (minimum: ${MINIMUM_FUNDED_BALANCE:.2f})"
+                                    )
+                                recovered_after_nonce_resync = True
+                            except Exception as retry_err:
+                                logger.warning(
+                                    "   ❌ User: %s | %s: balance check still failing after nonce resync: %s",
+                                    user_id,
+                                    broker_type.value,
+                                    retry_err,
+                                )
+                    if recovered_after_nonce_resync:
+                        continue
 
         logger.info("=" * 70)
         if funded_users:
@@ -665,6 +703,53 @@ class IndependentBrokerTrader:
         logger.info("   🎯 Milestone tracking and progressive scaling")
         logger.info("   " + "=" * 70)
         logger.info("")
+
+    def _attempt_kraken_nonce_resync(self, broker_name: str, broker) -> bool:
+        """
+        Best-effort nonce resync for Kraken brokers by forcing reconnect.
+
+        KrakenBroker.connect() already includes probe-and-resync handshake logic
+        bound to the broker's per-key nonce manager.
+        """
+        logger.warning(
+            "⚠️  %s: Kraken nonce error detected — reconnecting to resync nonce",
+            broker_name,
+        )
+        try:
+            broker.connect()
+        except Exception as reconnect_err:
+            logger.warning(
+                "⚠️  %s: nonce resync reconnect failed: %s",
+                broker_name,
+                reconnect_err,
+            )
+            return False
+
+        if not hasattr(broker, "connected"):
+            logger.warning(
+                "⚠️  %s: nonce resync reconnect succeeded but broker has no 'connected' flag",
+                broker_name,
+            )
+            return False
+
+        _connected = getattr(broker, "connected")
+        if not isinstance(_connected, bool):
+            logger.warning(
+                "⚠️  %s: nonce resync reconnect returned non-boolean connected flag (%s)",
+                broker_name,
+                type(_connected).__name__,
+            )
+            _connected = bool(_connected)
+
+        if not _connected:
+            logger.warning(
+                "⚠️  %s: nonce resync reconnect completed but broker is still disconnected",
+                broker_name,
+            )
+            return False
+
+        logger.info("✅ %s: nonce resync reconnect succeeded", broker_name)
+        return True
 
     def _execute_trading_cycle(
         self,
@@ -884,22 +969,12 @@ class IndependentBrokerTrader:
                     except Exception as e:
                         # ─────────────────────────────────────────────────────
                         # 🔑 NONCE ERROR RECOVERY (Kraken "Invalid nonce")
-                        # Jump the global nonce forward so the next request is
-                        # accepted, then retry quickly without counting this as
-                        # a normal failure.
+                        # Force reconnect so broker.connect() can run its
+                        # per-key nonce probe-and-resync handshake.
                         # ─────────────────────────────────────────────────────
-                        _err_lower = str(e).lower()
-                        if "nonce" in _err_lower and broker_name == "kraken" and jump_global_kraken_nonce_forward is not None:
-                            logger.warning(
-                                "⚠️  %s: Kraken nonce error detected — jumping nonce forward 60 s "
-                                "and retrying in 5 s (not counted as failure)",
-                                broker_name,
-                            )
-                            try:
-                                jump_global_kraken_nonce_forward(60_000)  # 60 000 ms = 60 s
-                            except Exception as _nonce_jump_err:
-                                logger.debug("Nonce jump failed (non-critical): %s", _nonce_jump_err)
-                            stop_flag.wait(5)
+                        if self._is_kraken_broker_type(broker_type) and self._is_nonce_error(e):
+                            _resync_ok = self._attempt_kraken_nonce_resync(broker_name, broker)
+                            stop_flag.wait(5 if _resync_ok else 15)
                             continue
 
                         # ❌ FAILURE → track error count + intelligent backoff
@@ -1240,6 +1315,15 @@ class IndependentBrokerTrader:
                     logger.error(f"❌ {broker_name} (USER) trading cycle failed: {trading_err}")
                     logger.error(f"   Error type: {type(trading_err).__name__}")
                     logger.error(f"   ISOLATION: This failure is contained to {user_id} only")
+
+                    if self._is_kraken_broker_type(broker_type) and self._is_nonce_error(trading_err):
+                        _resync_ok = self._attempt_kraken_nonce_resync(broker_name, broker)
+                        logger.info(
+                            f"   {'✅' if _resync_ok else '⚠️'} {broker_name} (USER): "
+                            f"nonce resync {'completed' if _resync_ok else 'failed'} — retrying soon"
+                        )
+                        stop_flag.wait(5 if _resync_ok else 15)
+                        continue
 
                     # Record failure with isolation manager
                     if self.isolation_manager and FailureType:
