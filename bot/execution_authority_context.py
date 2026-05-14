@@ -351,9 +351,11 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
     current_holder_meta = parse_writer_lock_metadata("")
     current_instance = current_instance_identity()
     holder_inspection = inspect_lock_holder(current_instance, current_holder)
+    redis_reachable = False
     if redis_url:
         try:
             client = _connect_redis_for_authority(redis_url, timeout_s=2)
+            redis_reachable = bool(client.ping())
             current_holder_raw = str(client.get(lock_key) or "")
             current_holder_meta = parse_writer_lock_metadata(str(client.get(meta_key) or ""))
             current_holder = parse_distributed_lock_holder(current_holder_raw)
@@ -381,6 +383,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         "single_instance_lock_opt_out": bool(single_instance_opt_out),
         "live_mode": bool(live_mode),
         "redis_configured": bool(redis_url),
+        "redis_reachable": bool(redis_reachable),
         "token_present": bool(token),
         "token_prefix": token[:8] if token else "",
         "lock_key": lock_key,
@@ -395,6 +398,62 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
             "last_error": last_err,
         },
     }
+
+
+def get_startup_execution_authority_prerequisites(force_refresh: bool = False) -> dict:
+    """Return startup authority prerequisites required before live runtime handoff."""
+    authority = get_distributed_writer_authority_status(force_refresh=force_refresh)
+    lease_acquired = _env_truthy("NIJA_WRITER_LEASE_ACQUIRED")
+    heartbeat_flag = _env_truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
+    token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+
+    try:
+        heartbeat_last_ts = float(os.getenv("NIJA_WRITER_HEARTBEAT_LAST_TS", "0") or 0.0)
+    except (TypeError, ValueError):
+        heartbeat_last_ts = 0.0
+
+    try:
+        ttl_s = float(os.getenv("NIJA_WRITER_LOCK_TTL_S", "0") or 0.0)
+    except (TypeError, ValueError):
+        ttl_s = 0.0
+
+    heartbeat_max_age_s = max(ttl_s * 2.0, 30.0)
+    heartbeat_fresh = heartbeat_last_ts > 0 and (time.time() - heartbeat_last_ts) <= heartbeat_max_age_s
+    heartbeat_active = heartbeat_flag and heartbeat_fresh
+
+    checks = {
+        "redis_reachable": bool(authority.get("redis_reachable", False)),
+        "lease_acquired": bool(lease_acquired),
+        "fencing_token_active": bool(token) and bool(authority.get("token_present", False)),
+        "heartbeat_active": bool(heartbeat_active),
+        "authority_verified": bool(authority.get("ok", False)),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+
+    return {
+        "ready": not missing,
+        "checks": checks,
+        "missing": missing,
+        "heartbeat_last_ts": heartbeat_last_ts,
+        "heartbeat_max_age_s": heartbeat_max_age_s,
+        "authority_status": authority,
+    }
+
+
+def require_startup_execution_authority(*, context: str, force_refresh: bool = False) -> dict:
+    """Raise when startup execution authority prerequisites are not fully satisfied."""
+    status = get_startup_execution_authority_prerequisites(force_refresh=force_refresh)
+    if status["ready"]:
+        return status
+
+    checks = status["checks"]
+    missing = ", ".join(status["missing"]) or "unknown"
+    authority_error = str(status["authority_status"].get("error") or "")
+    raise RuntimeError(
+        "STARTUP_EXECUTION_AUTHORITY_REQUIRED: "
+        f"context={context} missing={missing} "
+        f"checks={checks} authority_error={authority_error or '<none>'}"
+    )
 
 
 @contextmanager

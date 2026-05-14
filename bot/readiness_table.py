@@ -25,6 +25,7 @@ Keys
 ----
 ``broker_connected``  — at least one platform broker is connected and eligible
 ``balance_hydrated``  — startup balance sync completed
+``authority_ready``   — Redis writer authority prerequisites verified
 ``capital_ready``     — capital authority gate is open (BootstrapFSM ≥ CAPITAL_READY)
 ``risk_ready``        — risk / strategy subsystem initialized
 ``strategy_ready``    — TradingStrategy singleton published
@@ -48,6 +49,7 @@ logger = logging.getLogger("nija.readiness_table")
 KEYS: tuple[str, ...] = (
     "broker_connected",
     "balance_hydrated",
+    "authority_ready",
     "capital_ready",
     "risk_ready",
     "strategy_ready",

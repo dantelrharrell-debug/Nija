@@ -147,6 +147,92 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "_ensure_running_supervised within the same control-flow block",
         )
 
+    def test_capital_ready_is_guarded_by_execution_authority(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        hydrate_fn = next(
+            (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_hydrate_startup_balances"),
+            None,
+        )
+        if hydrate_fn is None:
+            self.fail("Expected _hydrate_startup_balances() in bot.py")
+
+        authority_calls = []
+        capital_ready_calls = []
+        for node in ast.walk(hydrate_fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "_require_startup_execution_authority":
+                    authority_calls.append(node)
+                elif (
+                    node.func.id == "_rt_mark_ready"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "capital_ready"
+                ):
+                    capital_ready_calls.append(node)
+
+        self.assertGreaterEqual(
+            len(authority_calls),
+            1,
+            "Expected _hydrate_startup_balances() to require execution authority before CAPITAL_READY",
+        )
+        self.assertGreaterEqual(len(capital_ready_calls), 1, "Expected CAPITAL_READY marks in _hydrate_startup_balances()")
+        self.assertLess(
+            min(call.lineno for call in authority_calls),
+            min(call.lineno for call in capital_ready_calls),
+            "Execution authority must be checked before marking capital_ready",
+        )
+
+    def test_strategy_readiness_is_guarded_by_execution_authority(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        publish_fn = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "_publish_strategy_runtime_readiness"
+            ),
+            None,
+        )
+        if publish_fn is None:
+            self.fail("Expected _publish_strategy_runtime_readiness() in bot.py")
+
+        authority_calls = []
+        strategy_ready_calls = []
+        for node in ast.walk(publish_fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "_require_startup_execution_authority":
+                    authority_calls.append(node)
+                elif (
+                    node.func.id == "_rt_mark_ready"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "strategy_ready"
+                ):
+                    strategy_ready_calls.append(node)
+
+        self.assertEqual(
+            len(authority_calls),
+            1,
+            "Expected exactly one execution-authority guard in _publish_strategy_runtime_readiness()",
+        )
+        self.assertEqual(
+            len(strategy_ready_calls),
+            1,
+            "Expected exactly one strategy_ready mark in _publish_strategy_runtime_readiness()",
+        )
+        self.assertLess(
+            authority_calls[0].lineno,
+            strategy_ready_calls[0].lineno,
+            "Execution authority must be checked before marking strategy_ready",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
