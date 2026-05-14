@@ -4440,8 +4440,6 @@ class MultiAccountBrokerManager:
         raw_balance_response = self.get_aggregated_balance_breakdown(
             include_all_subaccounts=include_all_subaccounts
         )
-        logger.critical("DEBUG BALANCES: %s", raw_balance_response)
-        print("DEBUG BALANCES:", raw_balance_response)
         return float(raw_balance_response.get("total_balance", 0.0) or 0.0)
 
     def get_user_balance(self, user_id: str, broker_type: Optional[BrokerType] = None) -> float:
@@ -4612,7 +4610,38 @@ class MultiAccountBrokerManager:
 
     @staticmethod
     def _normalize_balance_value(balance: Any) -> float:
-        """Return the best available cash-like scalar from a broker balance payload."""
+        """Return the best available cash-like scalar from a broker balance payload.
+
+        Safety guarantees
+        -----------------
+        * NaN, +inf, -inf — clamped to 0.0; never propagated into capital sums.
+        * Negative values  — clamped to 0.0; a broker returning a negative balance
+          is treated as a data anomaly rather than reducing aggregated capital.
+        * Unknown/non-numeric values — silently skipped; 0.0 is returned when no
+          usable scalar can be extracted.
+        """
+        import math
+
+        def _safe_float(raw: Any) -> Optional[float]:
+            """Convert *raw* to a finite, non-negative float or return None."""
+            try:
+                v = float(raw)
+            except (TypeError, ValueError):
+                return None
+            if math.isnan(v) or math.isinf(v):
+                logger.debug(
+                    "_normalize_balance_value: discarding non-finite value %r from broker payload",
+                    raw,
+                )
+                return None
+            if v < 0.0:
+                logger.debug(
+                    "_normalize_balance_value: clamping negative balance %r to 0.0",
+                    raw,
+                )
+                return 0.0
+            return v
+
         if isinstance(balance, dict):
             for key in (
                 "trading_balance",
@@ -4624,33 +4653,29 @@ class MultiAccountBrokerManager:
                 "total_balance",
             ):
                 value = balance.get(key)
-                if value is not None:
-                    if isinstance(value, dict):
-                        # Preserves a deterministic priority for nested balance payloads.
-                        for nested_key in ("value", "amount", "total", "available"):
-                            nested_value = value.get(nested_key)
-                            if nested_value is not None:
-                                try:
-                                    return float(nested_value)
-                                except (TypeError, ValueError):
-                                    continue
-                        # Fallback: when no known nested keys are present, any numeric
-                        # nested scalar is accepted as usable balance.
-                        for nested_value in value.values():
-                            try:
-                                return float(nested_value)
-                            except (TypeError, ValueError):
-                                continue
-                        continue
-                    try:
-                        return float(value)
-                    except (TypeError, ValueError):
-                        continue
+                if value is None:
+                    continue
+                if isinstance(value, dict):
+                    # Preserves a deterministic priority for nested balance payloads.
+                    for nested_key in ("value", "amount", "total", "available"):
+                        nested_value = value.get(nested_key)
+                        if nested_value is not None:
+                            result = _safe_float(nested_value)
+                            if result is not None:
+                                return result
+                    # Fallback: when no known nested keys are present, any numeric
+                    # nested scalar is accepted as usable balance.
+                    for nested_value in value.values():
+                        result = _safe_float(nested_value)
+                        if result is not None:
+                            return result
+                    continue
+                result = _safe_float(value)
+                if result is not None:
+                    return result
             return 0.0
-        try:
-            return float(balance or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
+        result = _safe_float(balance or 0.0)
+        return result if result is not None else 0.0
 
     @staticmethod
     def _extract_position_count(positions: Any) -> int:
@@ -4682,8 +4707,6 @@ class MultiAccountBrokerManager:
     ) -> Tuple[bool, Dict[str, float], str]:
         """Return whether a connected user account has enough usable capital to trade."""
         raw_balance_response = broker.get_account_balance()
-        logger.critical("DEBUG BALANCES: %s", raw_balance_response)
-        print("DEBUG BALANCES:", raw_balance_response)
         raw_balance = raw_balance_response
         usable_balance = self._normalize_balance_value(raw_balance)
         total_equity = usable_balance
