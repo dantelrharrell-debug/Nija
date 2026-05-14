@@ -250,6 +250,27 @@ class AITradeConfidenceEngine:
         breakdown.volatility = self._score_volatility(df, indicators)
 
         score = min(breakdown.total, MAX_SCORE)
+
+        # CORE STRATEGY MODE: apply counter-trend penalty in trending regimes.
+        # When active, fading a strong trend (e.g. RSI > 65 long in a trending
+        # market) receives a severe score reduction so it virtually never clears
+        # the execution gate — without silently bypassing any risk filter.
+        try:
+            from bot.core_strategy_mode import is_counter_trend_blocked as _ctb
+            rsi_14_val = self._last(indicators, "rsi_14", "rsi", default=50.0)
+            if _ctb(regime_label, side, rsi_14_val):
+                _pre = score
+                score = score * 0.30
+                logger.debug(
+                    "[CoreMode] %s %s: counter-trend in '%s' regime — "
+                    "score %.1f → %.1f (0.30× penalty)",
+                    symbol, side.upper(), regime_label, _pre, score,
+                )
+        except ImportError:
+            pass  # optional feature; skip when module is unavailable
+        except Exception as _ctb_err:
+            logger.debug("[CoreMode] counter-trend check skipped for %s: %s", symbol, _ctb_err)
+
         action, reason = self._gate(score, symbol, side)
 
         result = ConfidenceResult(

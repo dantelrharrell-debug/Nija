@@ -97,6 +97,28 @@ def is_high_liquidity_symbol(symbol: str) -> bool:
         return True
     return symbol in TOP_10_HIGH_LIQUIDITY_SYMBOLS
 
+
+def is_core_mode_symbol(symbol: str) -> bool:
+    """
+    Return True when *symbol* is permitted in the current trading mode.
+
+    When ``NIJA_CORE_STRATEGY_MODE`` is active only ``BTC-USD`` and
+    ``ETH-USD`` pass.  When the flag is unset this is a no-op and every
+    symbol is allowed (identical to the previous behaviour).
+
+    Args:
+        symbol: Trading pair symbol, e.g. 'BTC-USD'.
+    """
+    try:
+        from bot.core_strategy_mode import is_symbol_allowed
+    except ImportError:
+        try:
+            from core_strategy_mode import is_symbol_allowed
+        except ImportError:
+            return True
+    return is_symbol_allowed(symbol)
+
+
 # Import scalar helper to prevent tuple comparison crashes
 try:
     from indicators import scalar
