@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import socket
+import ssl
 import threading
 import time
 from types import FrameType
@@ -37,6 +38,48 @@ def _redact_url_for_log(url: str) -> str:
     except ValueError:
         port = None
     return f"{parsed.scheme}://***@{host}:{port or '<unknown-port>'}"
+
+
+def get_redis_tls_kwargs(url: str) -> dict[str, Any]:
+    """Return TLS keyword args for ``redis.Redis.from_url``.
+
+    Parameters
+    ----------
+    url:
+        Redis connection URL. TLS kwargs are returned only for ``rediss://`` URLs.
+
+    Returns
+    -------
+    dict[str, Any]
+        SSL/TLS keyword arguments suitable for redis-py connection creation.
+        Policy is strict-by-default, with optional CA pinning and Railway
+        compatibility auto-mode.
+    """
+    raw_url = (url or "").strip()
+    parsed = urlparse(raw_url)
+    if (parsed.scheme or "").lower() != "rediss":
+        return {}
+
+    host = (parsed.hostname or "").lower()
+    is_railway_host = ".rlwy.net" in host
+    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
+    tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
+    tls_auto = tls_insecure_raw in {"", "auto"}
+    tls_ca_certs = os.getenv("NIJA_REDIS_TLS_CA_CERT", "").strip()
+
+    if tls_ca_certs:
+        return {
+            "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            "ssl_ca_certs": tls_ca_certs,
+        }
+
+    if tls_insecure or (tls_auto and is_railway_host):
+        return {
+            "ssl_cert_reqs": ssl.CERT_NONE,
+            "ssl_check_hostname": False,
+        }
+
+    return {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 
 
 def _prioritized_alt_urls(primary_url: str) -> list[str]:
@@ -119,19 +162,7 @@ def create_redis(
         "socket_timeout": socket_timeout,
         "socket_connect_timeout": socket_connect_timeout,
     }
-    parsed = urlparse(raw_url)
-    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
-    tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
-    tls_auto = tls_insecure_raw in {"", "auto"}
-    is_railway_host = ".rlwy.net" in (parsed.hostname or "").lower()
-    if (parsed.scheme or "").lower() == "rediss" and (
-        tls_insecure or (tls_auto and is_railway_host)
-    ):
-        # Railway viaduct proxy uses a self-signed / mismatched certificate.
-        # Disable both cert chain and hostname verification so TLS still
-        # encrypts the channel without failing the handshake.
-        kwargs["ssl_cert_reqs"] = "none"
-        kwargs["ssl_check_hostname"] = False
+    kwargs.update(get_redis_tls_kwargs(raw_url))
 
     return redis.Redis.from_url(raw_url, **kwargs)
 

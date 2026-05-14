@@ -15,8 +15,8 @@ The pipeline has five explicit, sequential stages that run inside
     STAGE 2 – NORMALIZE
         Each broker's own ``get_account_balance()`` already normalises asset
         codes (e.g. XXBT→BTC, ZUSD→USD) and converts crypto holdings to USD.
-        This stage aggregates the per-broker scalars and falls back to the
-        last-known balance when a fetch returns zero or raises an exception.
+        This stage aggregates per-broker scalars and treats failed / non-positive
+        fetches as ``0.0`` so stale balances cannot be coerced back into capital.
 
     STAGE 3 – VALUATE
         Derive real / usable / risk capital from the aggregated balances,
@@ -1014,6 +1014,7 @@ class CapitalRefreshCoordinator:
     ) -> Optional[CapitalSnapshot]:
 
         bootstrap_owner_thread = self._boot.is_owner_thread()
+        bootstrap_active = False
 
         self._bus.emit(CapitalEvent(
             event_type=CapitalEventType.REFRESH_STARTED,
@@ -1030,10 +1031,34 @@ class CapitalRefreshCoordinator:
         # Already-REFRESH_REQUESTED state: transition() is a no-op (invalid from
         # REFRESH_REQUESTED back to REFRESH_REQUESTED per the validation table).
         if bootstrap_owner_thread:
-            self._boot.transition(CapitalBootstrapState.WAIT_PLATFORM, trigger)
-            self._boot.transition(CapitalBootstrapState.INIT_COMPLETE, trigger)
-            self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
-            self._boot.transition(CapitalBootstrapState.REFRESH_IN_FLIGHT, trigger)
+            current_boot_state = self._boot.state
+            bootstrap_active = current_boot_state not in (
+                CapitalBootstrapState.READY,
+                CapitalBootstrapState.RUNNING,
+            )
+            if bootstrap_active:
+                if current_boot_state == CapitalBootstrapState.BOOT_IDLE:
+                    self._boot.transition(CapitalBootstrapState.WAIT_PLATFORM, trigger)
+                    self._boot.transition(CapitalBootstrapState.INIT_COMPLETE, trigger)
+                    self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
+                elif current_boot_state == CapitalBootstrapState.WAIT_PLATFORM:
+                    self._boot.transition(CapitalBootstrapState.INIT_COMPLETE, trigger)
+                    self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
+                elif current_boot_state == CapitalBootstrapState.INIT_COMPLETE:
+                    self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
+                elif current_boot_state in (
+                    CapitalBootstrapState.DEGRADED,
+                    CapitalBootstrapState.FAILED,
+                ):
+                    self._boot.transition(CapitalBootstrapState.REFRESH_REQUESTED, trigger)
+                self._boot.transition(CapitalBootstrapState.REFRESH_IN_FLIGHT, trigger)
+            else:
+                logger.debug(
+                    "[Coordinator] trigger=%s bootstrap FSM already terminal (%s); "
+                    "skipping bootstrap entry transitions",
+                    trigger,
+                    current_boot_state.value,
+                )
         else:
             logger.debug(
                 "[Coordinator] trigger=%s running off bootstrap owner thread — "
@@ -1132,7 +1157,8 @@ class CapitalRefreshCoordinator:
                 else:
                     scalar = 0.0
 
-                raw_balances[broker_key] = scalar if scalar > 0.0 else previous
+                scalar = scalar if scalar > 0.0 else 0.0
+                raw_balances[broker_key] = scalar
                 self._bus.emit(CapitalEvent(
                     event_type=CapitalEventType.BROKER_BALANCE_COLLECTED,
                     trigger=trigger,
@@ -1143,17 +1169,17 @@ class CapitalRefreshCoordinator:
                 ))
             except Exception as exc:
                 logger.warning(
-                    "[Coordinator] stage1_fetch broker=%s error=%s — fallback to previous=%.2f",
+                    "[Coordinator] stage1_fetch broker=%s error=%s — recording 0.00 "
+                    "(previous=%.2f not reused to avoid stale balance coercion)",
                     broker_key, exc, previous,
                 )
-                if previous > 0.0:
-                    raw_balances[broker_key] = previous
+                raw_balances[broker_key] = 0.0
                 self._bus.emit(CapitalEvent(
                     event_type=CapitalEventType.BROKER_BALANCE_COLLECTED,
                     trigger=trigger,
                     metadata={
                         "broker": broker_key,
-                        "balance": previous,
+                        "balance": 0.0,
                         "error": str(exc),
                     },
                 ))
@@ -1277,7 +1303,8 @@ class CapitalRefreshCoordinator:
             trigger=trigger,
             snapshot=snapshot,
         ))
-        self._boot.transition(CapitalBootstrapState.SNAPSHOT_EVALUATING, trigger)
+        if bootstrap_active:
+            self._boot.transition(CapitalBootstrapState.SNAPSHOT_EVALUATING, trigger)
 
         # =================================================================
         # STAGE 5: PUBLISH
@@ -1402,14 +1429,20 @@ class CapitalRefreshCoordinator:
         # _on_ready_callbacks are fired synchronously inside transition() when
         # _boot_target is READY.  They observe a fully-dispatched event queue
         # and a fully-hydrated CSM-v2 (ingested above).
-        if bootstrap_owner_thread:
+        if bootstrap_owner_thread and bootstrap_active:
             self._boot.transition(_boot_target, _boot_reason)
         else:
+            _skip_reason = (
+                "bootstrap_owner_thread=false"
+                if not bootstrap_owner_thread
+                else "bootstrap_terminal_state"
+            )
             logger.debug(
-                "[Coordinator] trigger=%s running off bootstrap owner thread — "
-                "skipping bootstrap FSM terminal transition to %s",
+                "[Coordinator] trigger=%s skipping bootstrap FSM terminal transition "
+                "to %s (%s)",
                 trigger,
                 _boot_target.value,
+                _skip_reason,
             )
 
         logger.info(

@@ -16,6 +16,7 @@ import logging
 import socket
 import hashlib
 import importlib
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -2580,13 +2581,20 @@ def _acquire_distributed_process_lock() -> None:
                 "socket_timeout": _redis_socket_timeout_s,
             }
             _parsed_url = urlparse(_url)
+            _tls_ca_certs = os.getenv("NIJA_REDIS_TLS_CA_CERT", "").strip()
             _tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
             _tls_insecure = _tls_insecure_raw in _truthy
             _tls_auto = _tls_insecure_raw in {"", "auto"}
-            if (_parsed_url.scheme or "").lower() == "rediss" and (
-                _tls_insecure or (_tls_auto and ".proxy.rlwy.net" in (_parsed_url.hostname or "").lower())
-            ):
-                _kwargs["ssl_cert_reqs"] = "none"
+            _is_railway_host = ".rlwy.net" in (_parsed_url.hostname or "").lower()
+            if (_parsed_url.scheme or "").lower() == "rediss":
+                if _tls_ca_certs:
+                    _kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+                    _kwargs["ssl_ca_certs"] = _tls_ca_certs
+                elif _tls_insecure or (_tls_auto and _is_railway_host):
+                    _kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+                    _kwargs["ssl_check_hostname"] = False
+                else:
+                    _kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
             return redis.Redis.from_url(_url, **_kwargs)
 
         _ping_exc = None
