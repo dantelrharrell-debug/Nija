@@ -2077,14 +2077,14 @@ class NIJAApexStrategyV71:
         """
         if metadata:
             # Prefer AI composite / enhanced score (0-100 scale)
-            for _key in ('enhanced_score', 'composite_score'):
-                _val = metadata.get(_key)
-                if _val is not None:
-                    return min(float(_val) / 100.0, 1.0)
+            for score_key in ('enhanced_score', 'composite_score'):
+                score_value = metadata.get(score_key)
+                if score_value is not None:
+                    return min(float(score_value) / 100.0, 1.0)
             # Fall back to legacy score (0-5 scale)
-            _legacy = metadata.get('legacy_score')
-            if _legacy is not None:
-                return min(float(_legacy) / MAX_ENTRY_SCORE, 1.0)
+            legacy_score = metadata.get('legacy_score')
+            if legacy_score is not None:
+                return min(float(legacy_score) / MAX_ENTRY_SCORE, 1.0)
         # score may be AI composite (>MAX_ENTRY_SCORE) or legacy (<=MAX_ENTRY_SCORE)
         return min(float(score) / (100.0 if score > MAX_ENTRY_SCORE else MAX_ENTRY_SCORE), 1.0)
 
