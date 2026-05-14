@@ -196,34 +196,16 @@ def init_redis(
 
     try:
         _connection_pool = None
-        _redis_client, redis_url = connect_redis_with_fallback(
-            url=redis_url,
-            decode_responses=decode_responses,
-            socket_timeout=socket_timeout,
-            socket_connect_timeout=socket_connect_timeout,
-            retries=5,
-            delay_s=2.0,
-            log=lambda msg: logger.warning(msg),
+        _redis_client = redis.Redis.from_url(
+            os.environ["NIJA_REDIS_URL"],
+            decode_responses=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            health_check_interval=30,
+            retry_on_timeout=True,
         )
-
-        parsed_target = _safe_parse_redis_target(redis_url)
-        redis_source = "argument" if redis_url_from_arg else (get_redis_url_source() or "auto")
-        logger.info(
-            "Redis target | source=%s scheme=%s host=%s port=%s db=%s tls=%s username=%s auth=%s",
-            redis_source,
-            parsed_target["scheme"],
-            parsed_target["host"],
-            parsed_target["port"],
-            parsed_target["db"],
-            parsed_target["tls"],
-            parsed_target["username"],
-            parsed_target["auth"],
-        )
-        logger.info(f"Redis URL source (redacted): {_redact_redis_url(redis_url)}")
 
         logger.info("✅ Redis client initialized successfully")
-        logger.info(f"   Max connections: {max_connections}")
-        logger.info(f"   Socket timeout: {socket_timeout}s")
 
     except Exception as e:
         logger.error(f"Failed to initialize Redis: {e}")
