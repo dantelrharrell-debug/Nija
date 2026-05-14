@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _ROOT)
+sys.modules.setdefault("redis", types.SimpleNamespace())
 
 from bot.redis_runtime import get_redis_tls_kwargs
 

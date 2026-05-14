@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from bot.capital_flow_state_machine import (
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from capital_flow_state_machine import (
     CapitalBootstrapState,
     CapitalEventBus,
     CapitalRefreshCoordinator,
@@ -66,7 +70,7 @@ def check_zero_or_failed_fetch_never_reuses_stale_positive_balance() -> None:
     coordinator, _runtime = _build_coordinator()
     authority = _StubAuthority(previous=250.0)
 
-    with patch("bot.capital_authority.get_capital_authority", return_value=authority):
+    with patch("capital_authority.get_capital_authority", return_value=authority):
         zero_snapshot = coordinator.execute_refresh(
             broker_map={"kraken": _ZeroBalanceBroker()},
             trigger="test_zero",
@@ -92,7 +96,7 @@ def check_runtime_refresh_does_not_mutate_terminal_bootstrap_state() -> None:
     bootstrap.force_transition(CapitalBootstrapState.RUNNING, "test terminal")
     authority = _StubAuthority(previous=0.0)
 
-    with patch("bot.capital_authority.get_capital_authority", return_value=authority):
+    with patch("capital_authority.get_capital_authority", return_value=authority):
         snapshot = coordinator.execute_refresh(
             broker_map={"kraken": _PositiveBroker(50.0)},
             trigger="test_terminal_skip",
