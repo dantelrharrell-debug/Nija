@@ -77,9 +77,9 @@ Environment variables (all optional)
     NIJA_FSM_SERVER_SYNC_OFFSET_MS  Lead (ms) above Kraken server time in recovery (default 3000)
     NIJA_FSM_RECOVERY_FREEZE_S      Pause before querying server time in recovery (default 3.0)
     NIJA_FSM_CEILING_JUMP_MS        Size of escalation ceiling jump (default 86400000 = 24 h)
-    NIJA_FSM_PROBE_STEP_MS          Per-step advance in probe loop (default 300000 = 5 min)
+    NIJA_FSM_PROBE_STEP_MS          Per-step advance in probe loop (default 10000ms = 10 s)
     NIJA_FSM_PROBE_MAX_ATTEMPTS     Maximum steps in one probe run (default 12)
-    NIJA_FSM_STARTUP_JUMP_MS        Lead added over persisted nonce at startup (default 10000)
+    NIJA_FSM_STARTUP_JUMP_MS        Lead added over persisted nonce at startup (default 5000)
 """
 
 from __future__ import annotations
@@ -101,9 +101,9 @@ _MAX_RESYNC_BEFORE_CIRCUIT_BREAK: int = int(os.environ.get("NIJA_FSM_MAX_RESYNC"
 _SERVER_SYNC_OFFSET_MS: int = int(os.environ.get("NIJA_FSM_SERVER_SYNC_OFFSET_MS", "3000"))
 _RECOVERY_FREEZE_S: float = float(os.environ.get("NIJA_FSM_RECOVERY_FREEZE_S", "3.0"))
 _CEILING_JUMP_MS: int = int(os.environ.get("NIJA_FSM_CEILING_JUMP_MS", "86400000"))
-_PROBE_STEP_MS: int = int(os.environ.get("NIJA_FSM_PROBE_STEP_MS", "300000"))
+_PROBE_STEP_MS: int = int(os.environ.get("NIJA_FSM_PROBE_STEP_MS", "10000"))
 _PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_FSM_PROBE_MAX_ATTEMPTS", "12"))
-_STARTUP_JUMP_MS: int = int(os.environ.get("NIJA_FSM_STARTUP_JUMP_MS", "10000"))
+_STARTUP_JUMP_MS: int = int(os.environ.get("NIJA_FSM_STARTUP_JUMP_MS", "5000"))
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
