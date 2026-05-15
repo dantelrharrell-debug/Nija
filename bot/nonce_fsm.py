@@ -77,7 +77,7 @@ Environment variables (all optional)
     NIJA_FSM_SERVER_SYNC_OFFSET_MS  Lead (ms) above Kraken server time in recovery (default 3000)
     NIJA_FSM_RECOVERY_FREEZE_S      Pause before querying server time in recovery (default 3.0)
     NIJA_FSM_CEILING_JUMP_MS        Size of escalation ceiling jump (default 86400000 = 24 h)
-    NIJA_FSM_PROBE_STEP_MS          Per-step advance in probe loop (default 10000 = 10 s)
+    NIJA_FSM_PROBE_STEP_MS          Per-step advance in probe loop (default 10000 ms = 10 s)
     NIJA_FSM_PROBE_MAX_ATTEMPTS     Maximum steps in one probe run (default 12)
     NIJA_FSM_STARTUP_JUMP_MS        Lead added over persisted nonce at startup (default 5000)
 """

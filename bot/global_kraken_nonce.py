@@ -242,7 +242,7 @@ _quarantine_callbacks: list = []    # List[Callable[[], None]]
 #
 # Conservative forward step to avoid overshooting Kraken nonce continuity.
 _PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "10000"))       # 10 s per step
-_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "12")) # up to 120 s
+_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "12")) # 12 attempts (=120 s at 10 s/step)
 
 # ── Deep-reset constants ──────────────────────────────────────────────────────
 # Activated by NIJA_DEEP_NONCE_RESET=1.  Provides 120-minute probe coverage

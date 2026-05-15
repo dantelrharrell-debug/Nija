@@ -1235,6 +1235,8 @@ class TradingStateMachine:
         _authority_ready = _is_authority_ready()
         if not _authority_ready:
             with self._lock:
+                # Only promote OFF -> LIVE_PENDING_CONFIRMATION here. If the
+                # machine is already armed/pending we preserve that state.
                 if self._current_state == TradingState.OFF:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
             logger.critical(
