@@ -1101,45 +1101,41 @@ class DistributedNonceManager:
         self._owner_id = str(uuid.uuid4())
         self._owner_fingerprint = _build_process_fingerprint()
         self._owner_instance_id = _resolve_instance_id()
-        self._strict_redis_lease = _runtime_strict_redis_lease()
+        self._strict_redis_lease = True  # Always strict — no degraded mode
 
-        if redis_client is not None:
-            try:
-                self._redis = _PerKeyRedisBackend(
-                    redis_client=redis_client,
-                    owner_id=self._owner_id,
-                    owner_fingerprint=self._owner_fingerprint,
-                    owner_instance_id=self._owner_instance_id,
-                    lease_ttl_ms=_REDIS_LEASE_TTL_MS,
-                    strict_lease=self._strict_redis_lease,
-                )
-                _logger.info(
-                    "DistributedNonceManager: using Redis backend "
-                    "(multi-instance safe, strict_lease=%s, lease_ttl_ms=%d, owner=%s)",
-                    self._strict_redis_lease,
-                    _REDIS_LEASE_TTL_MS,
-                    self._owner_fingerprint,
-                )
-            except Exception as exc:
-                if self._strict_redis_lease:
-                    _logger.critical(
-                        "DistributedNonceManager: strict Redis lease required but unavailable (%s). "
-                        "Failing closed to prevent split-brain.",
-                        exc,
-                    )
-                    raise
-                _logger.critical(
-                    "DistributedNonceManager: Redis backend unavailable (%s) — "
-                    "falling back to per-key file locks.  "
-                    "Multi-instance nonce coordination is DISABLED.  "
-                    "Ensure only ONE bot instance is running per API key.",
-                    exc,
-                )
-        else:
-            _logger.info(
-                "DistributedNonceManager: no Redis client — "
-                "using per-key file-lock backend (single-host safe)"
+        if redis_client is None:
+            raise RuntimeError(
+                "DistributedNonceManager: redis_client is required. "
+                "Redis is the mandatory nonce authority — no local file-lock fallback. "
+                "Ensure NIJA_REDIS_URL is configured and Redis is reachable."
             )
+
+        try:
+            self._redis = _PerKeyRedisBackend(
+                redis_client=redis_client,
+                owner_id=self._owner_id,
+                owner_fingerprint=self._owner_fingerprint,
+                owner_instance_id=self._owner_instance_id,
+                lease_ttl_ms=_REDIS_LEASE_TTL_MS,
+                strict_lease=self._strict_redis_lease,
+            )
+            _logger.info(
+                "DistributedNonceManager: using Redis backend "
+                "(multi-instance safe, strict_lease=%s, lease_ttl_ms=%d, owner=%s)",
+                self._strict_redis_lease,
+                _REDIS_LEASE_TTL_MS,
+                self._owner_fingerprint,
+            )
+        except Exception as exc:
+            _logger.critical(
+                "DistributedNonceManager: Redis backend unavailable (%s). "
+                "Failing closed — no file-lock fallback permitted.",
+                exc,
+            )
+            raise RuntimeError(
+                f"DistributedNonceManager: Redis backend unavailable: {exc}. "
+                "Redis is required for nonce authority. No local fallback."
+            ) from exc
 
     # ── Core API ──────────────────────────────────────────────────────────────
 
@@ -1166,23 +1162,21 @@ class DistributedNonceManager:
                 f"(key={api_key_id}) — startup FSM is in FAILED/IDLE state; "
                 "wait for NONCE_READY / CONNECTED before issuing nonces"
             )
-        if self._redis is not None:
-            try:
-                nonce = self._redis.next_nonce(api_key_id)
-                return nonce
-            except Exception as exc:
-                if self._strict_redis_lease:
-                    raise RuntimeError(
-                        "DistributedNonceManager: strict Redis lease enforcement blocked nonce issuance "
-                        f"for key={api_key_id}: {exc}"
-                    ) from exc
-                _logger.error(
-                    "DistributedNonceManager: Redis nonce call failed for "
-                    "key=%s (%s) — falling back to file mode for this call",
-                    api_key_id, exc,
-                )
-        # File / fcntl path — per-key KrakenNonceManager singleton
-        return self._file_nonce(api_key_id)
+        if self._redis is None:
+            raise RuntimeError(
+                f"DistributedNonceManager.get_nonce: Redis backend is not available "
+                f"(key={api_key_id}). Redis is required for nonce authority. "
+                "No local file-lock fallback is permitted."
+            )
+        try:
+            nonce = self._redis.next_nonce(api_key_id)
+            return nonce
+        except Exception as exc:
+            raise RuntimeError(
+                "DistributedNonceManager: Redis nonce issuance failed for "
+                f"key={api_key_id}: {exc}. "
+                "Redis is required — no local fallback."
+            ) from exc
 
     def record_error(self, api_key_id: str) -> None:
         """Record a nonce rejection from Kraken for *api_key_id*.
@@ -1345,30 +1339,37 @@ def get_distributed_nonce_manager(
     with _dnm_lock:
         if _dnm_instance is not None:
             return _dnm_instance
-        # Auto-construct Redis client from env if not supplied
+        # Auto-construct Redis client from env if not supplied.
+        # Redis is mandatory for nonce authority — no file-lock fallback.
         if redis_client is None:
             redis_url = get_redis_url()
-            if redis_url:
-                try:
-                    import redis as _redis
-                    redis_client = _redis.Redis.from_url(
-                        os.environ["NIJA_REDIS_URL"],
-                        decode_responses=True,
-                        socket_timeout=5,
-                        socket_connect_timeout=5,
-                        health_check_interval=30,
-                        retry_on_timeout=True,
-                    )
-                    _logger.info(
-                        "DistributedNonceManager: auto-connecting to Redis at %s",
-                        _redact_redis_url(redis_url),
-                    )
-                except Exception as exc:
-                    _logger.warning(
-                        "DistributedNonceManager: could not build Redis client "
-                        "from configured Redis URL (%s) — file-lock fallback active",
-                        exc,
-                    )
+            if not redis_url:
+                raise RuntimeError(
+                    "DistributedNonceManager: NIJA_REDIS_URL is not configured. "
+                    "Redis is required for distributed nonce authority. "
+                    "Set NIJA_REDIS_URL to a valid rediss:// endpoint."
+                )
+            try:
+                from bot.redis_runtime import create_redis as _create_redis
+            except ImportError:
+                from redis_runtime import create_redis as _create_redis  # type: ignore[import]
+            try:
+                redis_client = _create_redis(
+                    redis_url,
+                    decode_responses=True,
+                    socket_timeout=5,
+                    socket_connect_timeout=5,
+                )
+                _logger.info(
+                    "DistributedNonceManager: auto-connecting to Redis at %s",
+                    _redact_redis_url(redis_url),
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"DistributedNonceManager: could not connect to Redis at "
+                    f"{_redact_redis_url(redis_url)}: {exc}. "
+                    "Redis is required for nonce authority — no local fallback."
+                ) from exc
         _dnm_instance = DistributedNonceManager(redis_client=redis_client)
     return _dnm_instance
 

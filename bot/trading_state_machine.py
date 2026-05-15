@@ -101,10 +101,13 @@ def _heartbeat_verified() -> bool:
 
 
 def _emergency_local_fallback_active() -> bool:
-    """True when startup switched to emergency local writer-lock fallback mode."""
-    return _env_truthy("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE", "false") and _env_truthy(
-        "NIJA_RUNTIME_DEGRADED_MODE", "false"
-    )
+    """Always returns False — emergency local fallback is permanently disabled.
+
+    SAFETY: Local writer-lock fallback bypasses distributed authority and is
+    not permitted.  This function is retained only for call-site compatibility
+    and will always return False so all callers treat the fallback as inactive.
+    """
+    return False
 
 
 def _distributed_writer_authority_gate() -> tuple[bool, str]:
@@ -113,35 +116,27 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     Returns
     -------
     (ok, error)
-        ok=True when authority is valid or not required by current mode.
-        ok=False with an error string when strict/live mode requires authority
-        and verification fails.
+        ok=True when authority is confirmed via Redis fencing token.
+        ok=False with an error string when Redis is unreachable, fencing
+        token is missing, or authority verification fails.
+
+    SAFETY CONTRACT
+    ---------------
+    This gate MUST pass before any LIVE_ACTIVE transition.  There are NO
+    degraded-mode bypasses, NO fail-open paths, and NO local fallbacks.
+    If Redis is unavailable or the fencing token is missing, this gate
+    raises RuntimeError and blocks activation unconditionally.
     """
-    # Allow operators to disable strict Redis writer lock enforcement in
-    # controlled single-writer deployments.
-    if not _env_truthy("NIJA_ENFORCE_REDIS_WRITER_LOCK", "true"):
-        return True, ""
-
-    # Degraded runtime mode means startup explicitly accepted running without
-    # Redis-backed distributed lock authority (single-instance safety required).
-    # Keep activation gates aligned with that decision to avoid deadlocking
-    # LIVE_PENDING_CONFIRMATION on a missing fencing token.
-    if _env_truthy("NIJA_RUNTIME_DEGRADED_MODE", "false") and (
-        _env_truthy("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY", "false")
-        or _env_truthy("NIJA_ALLOW_REDIS_DEGRADED", "false")
-    ):
-        logger.critical(
-            "[WRITER AUTHORITY DEGRADED OVERRIDE] runtime degraded mode active; "
-            "distributed writer authority gate bypassed for activation."
+    # Verify fencing token is present before attempting Redis check.
+    fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    if not fencing_token:
+        err = (
+            "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
+            "Redis distributed writer authority is required for LIVE_ACTIVE. "
+            "Ensure the bot acquired a Redis writer lease at startup."
         )
-        return True, ""
-
-    if _emergency_local_fallback_active():
-        logger.critical(
-            "[WRITER AUTHORITY EMERGENCY OVERRIDE] local writer-lock fallback active; "
-            "distributed writer authority gate bypassed for this process startup."
-        )
-        return True, ""
+        logger.critical("[WRITER AUTHORITY HARD FAIL] %s", err)
+        return False, err
 
     retries = max(1, int(os.environ.get("NIJA_REDIS_LOCK_RETRIES", "3") or "3"))
     retry_delay_s = max(0.0, float(os.environ.get("NIJA_REDIS_LOCK_RETRY_DELAY_S", "0.20") or "0.20"))
@@ -161,17 +156,15 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
             if attempt < retries - 1 and retry_delay_s > 0:
                 time.sleep(retry_delay_s)
 
-    # Stability fallback: fail-open only for transient Redis/network outages.
-    # Split-brain protection remains enforced for definitive authority failures.
-    if _env_truthy("NIJA_REDIS_LOCK_FAIL_OPEN_TRANSIENT", "true") and _is_transient_redis_error(last_err):
-        logger.warning(
-            "[REDIS LOCK DEGRADED] distributed writer authority check failed transiently; "
-            "continuing with fail-open mode: %s",
-            last_err,
-        )
-        return True, ""
-
-    return False, last_err
+    # Hard fail — no degraded-mode bypass, no fail-open for transient errors.
+    # Redis unavailability is a hard block on LIVE_ACTIVE activation.
+    err = (
+        f"LIVE TRADING BLOCKED: distributed writer authority verification failed "
+        f"after {retries} attempt(s). Redis must be reachable and fencing token "
+        f"must be valid before LIVE_ACTIVE is permitted. last_error={last_err}"
+    )
+    logger.critical("[WRITER AUTHORITY HARD FAIL] %s", err)
+    return False, err
 
 
 def _nonce_writer_lease_gate() -> tuple[bool, str]:
@@ -238,15 +231,15 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
             if attempt < retries - 1 and retry_delay_s > 0:
                 time.sleep(retry_delay_s)
 
-    if _env_truthy("NIJA_NONCE_LEASE_FAIL_OPEN_TRANSIENT", "true") and _is_transient_redis_error(last_err):
-        logger.warning(
-            "[REDIS LOCK DEGRADED] nonce writer lease check failed transiently; "
-            "continuing with fail-open mode: %s",
-            last_err,
-        )
-        return True, ""
-
-    return False, last_err
+    # Hard fail — no fail-open for transient Redis errors.
+    # Nonce lease is a mandatory safety gate; Redis unavailability blocks activation.
+    err = (
+        f"LIVE TRADING BLOCKED: nonce writer lease verification failed "
+        f"after {retries} attempt(s). Redis nonce lease is required before "
+        f"LIVE_ACTIVE is permitted. last_error={last_err}"
+    )
+    logger.critical("[NONCE LEASE HARD FAIL] %s", err)
+    return False, err
 
 
 def _nonce_lease_stability_requirement_s() -> float:
@@ -922,6 +915,35 @@ class TradingStateMachine:
             current = self._current_state
 
             if new_state == TradingState.LIVE_ACTIVE:
+                # Enforce distributed writer authority before ANY LIVE_ACTIVE transition.
+                _writer_ok, _writer_err = _distributed_writer_authority_gate()
+                if not _writer_ok:
+                    error_msg = f"LIVE_ACTIVE blocked: distributed writer authority failed — {_writer_err}"
+                    logger.critical("[FSM HARD FAIL] %s", error_msg)
+                    raise StateTransitionError(error_msg)
+
+                # Enforce fencing token presence.
+                _fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+                if not _fencing_token:
+                    error_msg = (
+                        "LIVE_ACTIVE blocked: NIJA_WRITER_FENCING_TOKEN is not set. "
+                        "A valid Redis fencing token is required for LIVE_ACTIVE."
+                    )
+                    logger.critical("[FSM HARD FAIL] %s", error_msg)
+                    raise StateTransitionError(error_msg)
+
+                # Check runtime revocation before activating.
+                try:
+                    try:
+                        from bot.revocation_guard import check_revocation_or_raise
+                    except ImportError:
+                        from revocation_guard import check_revocation_or_raise  # type: ignore[import]
+                    check_revocation_or_raise()
+                except RuntimeError as _rev_exc:
+                    error_msg = f"LIVE_ACTIVE blocked: {_rev_exc}"
+                    logger.critical("[FSM HARD FAIL] %s", error_msg)
+                    raise StateTransitionError(error_msg) from _rev_exc
+
                 live_ok, live_err = _live_activation_gate()
                 if not live_ok:
                     error_msg = f"Activation blocked: {live_err}"
@@ -979,7 +1001,22 @@ class TradingStateMachine:
             # Trigger callbacks
             self._trigger_callbacks(new_state)
 
-            return True
+        # Start authority heartbeat monitor when entering LIVE_ACTIVE.
+        # Done outside the lock to avoid deadlock with the heartbeat thread.
+        if new_state == TradingState.LIVE_ACTIVE:
+            try:
+                try:
+                    from bot.authority_heartbeat import start_authority_heartbeat
+                except ImportError:
+                    from authority_heartbeat import start_authority_heartbeat  # type: ignore[import]
+                start_authority_heartbeat()
+                logger.info("AuthorityHeartbeatMonitor: started on LIVE_ACTIVE transition")
+            except Exception as _hb_exc:
+                logger.warning(
+                    "Could not start authority heartbeat monitor: %s", _hb_exc
+                )
+
+        return True
 
     def register_callback(self, state: TradingState, callback: Callable):
         """
@@ -1108,6 +1145,28 @@ class TradingStateMachine:
                 )
                 return False
 
+            # Enforce fencing token on force path — no bypass.
+            _force_fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+            if not _force_fencing_token:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_FENCING_TOKEN_MISSING "
+                    "NIJA_WRITER_FENCING_TOKEN is not set — LIVE_ACTIVE requires a valid fencing token"
+                )
+                return False
+
+            # Check revocation on force path.
+            try:
+                try:
+                    from bot.revocation_guard import check_revocation_or_raise
+                except ImportError:
+                    from revocation_guard import check_revocation_or_raise  # type: ignore[import]
+                check_revocation_or_raise()
+            except RuntimeError as _rev_exc:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_REVOCATION detail=%s", _rev_exc
+                )
+                return False
+
             with self._lock:
                 if not self._activation_committed:
                     self._current_state = TradingState.LIVE_ACTIVE
@@ -1117,7 +1176,7 @@ class TradingStateMachine:
                     self._can_dispatch_trades = True
                     logger.critical(
                         "[AUTO_ACTIVATE] FORCE LIVE PATH (FORCE/AUTO_ACTIVATE+HEARTBEAT)+LIVE_CAPITAL_VERIFIED — "
-                        "all gates bypassed, state forced to LIVE_ACTIVE"
+                        "writer authority and fencing token verified, state forced to LIVE_ACTIVE"
                     )
             return True
 
@@ -1509,8 +1568,32 @@ class TradingStateMachine:
                     _nonce_lease_err,
                 )
             
+            # Enforce fencing token on deterministic path.
+            _det_fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+            if not _det_fencing_token:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=DETERMINISTIC_FENCING_TOKEN_MISSING "
+                    "NIJA_WRITER_FENCING_TOKEN is not set — LIVE_ACTIVE requires a valid fencing token"
+                )
+                _writer_ok = False
+
+            # Check revocation on deterministic path.
+            _det_revoked = False
+            if _writer_ok:
+                try:
+                    try:
+                        from bot.revocation_guard import check_revocation_or_raise
+                    except ImportError:
+                        from revocation_guard import check_revocation_or_raise  # type: ignore[import]
+                    check_revocation_or_raise()
+                except RuntimeError as _rev_exc:
+                    logger.critical(
+                        "[AUTO_ACTIVATE BLOCKED] reason=DETERMINISTIC_REVOCATION detail=%s", _rev_exc
+                    )
+                    _det_revoked = True
+
             # Force transition if core conditions met
-            if live_verified and _capital_ready and not _kill_active and _writer_ok and _nonce_lease_ok:
+            if live_verified and _capital_ready and not _kill_active and _writer_ok and _nonce_lease_ok and not _det_revoked:
                 logger.critical(
                     "🟢 DETERMINISTIC ACTIVATION: state=%s live_verified=%s capital_ready=%s writer_ok=%s "
                     "nonce_lease_ok=%s "

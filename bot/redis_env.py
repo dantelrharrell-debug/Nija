@@ -80,12 +80,11 @@ def _build_component_redis_url() -> tuple[str, dict[str, object]]:
             component_port_valid = False
 
     if component_host_present and component_port_valid:
-        # Default to TLS only for Railway TCP proxy domain (public endpoint); private
-        # internal Railway hosts (REDISHOST/REDIS_HOST) do not support TLS and must use
-        # plain redis://.  NIJA_REDIS_FORCE_TLS can override in either direction.
+        # Always use rediss:// for Railway TCP proxy domain (public endpoint).
+        # Private internal Railway hosts (REDISHOST/REDIS_HOST) do not support TLS
+        # and must use plain redis://.  NIJA_REDIS_FORCE_TLS is ignored for security.
         _host_needs_tls = host_source == "RAILWAY_TCP_PROXY_DOMAIN" or ".proxy.rlwy.net" in host.lower()
-        _default_tls = "true" if _host_needs_tls else "false"
-        scheme = "rediss" if _is_truthy(os.getenv("NIJA_REDIS_FORCE_TLS", _default_tls)) else "redis"
+        scheme = "rediss" if _host_needs_tls else "redis"
         endpoint = f"{host}:{port}"
         username = user or "default"
         db_value = db_raw or "0"
