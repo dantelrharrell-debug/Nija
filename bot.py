@@ -2543,6 +2543,7 @@ def _acquire_distributed_process_lock() -> None:
             if (
                 _trimmed.startswith("redis://")
                 and _force_tls_check
+                and not _redis_url.startswith("rediss://")
                 and (
                     ".proxy.rlwy.net" in _trimmed.lower()
                     or _trimmed.lower().split("@", 1)[-1].split("/")[0].endswith(".up.railway.app")
@@ -2782,7 +2783,7 @@ def _acquire_distributed_process_lock() -> None:
                     if ".proxy.rlwy.net" in _u or (urlparse(_u).hostname or "").lower().endswith(".up.railway.app")
                 ]
                 _railway_hint = ""
-                if _internal_hosts:
+                if _all_urls and len(_internal_hosts) == len(_all_urls):
                     _railway_hint = (
                         f"\n  ⚠️  ALL configured Redis URLs use Railway internal networking "
                         f"({', '.join(_internal_hosts)}).\n"
@@ -2790,6 +2791,13 @@ def _acquire_distributed_process_lock() -> None:
                         f"     FIX: Go to Railway → Redis service → Connect tab → copy the PUBLIC proxy URL\n"
                         f"     (format: rediss://default:PASSWORD@maglev.proxy.rlwy.net:PORT)\n"
                         f"     Set it as NIJA_REDIS_URL in the bot service Variables and redeploy."
+                    )
+                elif _internal_hosts:
+                    _railway_hint = (
+                        f"\n  ⚠️  Some configured Redis URLs use Railway internal networking "
+                        f"({', '.join(_internal_hosts)}).\n"
+                        f"     Internal hostnames only work within compatible Railway private networking contexts.\n"
+                        f"     Prefer NIJA_REDIS_URL/REDIS_PUBLIC_URL set to a public proxy rediss:// endpoint."
                     )
                 elif _proxy_hosts and "connection reset" in str(_ping_exc).lower():
                     _railway_hint = (

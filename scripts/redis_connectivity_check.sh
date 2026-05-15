@@ -138,12 +138,12 @@ resolve_redis_url() {
     printf "%s" "${NIJA_REDIS_URL}"
     return 0
   fi
-  if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
-    printf "%s" "${REDIS_PRIVATE_URL}"
-    return 0
-  fi
   if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
     printf "%s" "${REDIS_PUBLIC_URL}"
+    return 0
+  fi
+  if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
+    printf "%s" "${REDIS_PRIVATE_URL}"
     return 0
   fi
   if [ -n "${REDIS_URL:-}" ]; then

@@ -334,12 +334,12 @@ _resolve_redis_url() {
         _strip_wrapping_quotes "${NIJA_REDIS_URL}"
         return 0
     fi
-    if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
-        _strip_wrapping_quotes "${REDIS_PRIVATE_URL}"
-        return 0
-    fi
     if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
         _strip_wrapping_quotes "${REDIS_PUBLIC_URL}"
+        return 0
+    fi
+    if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
+        _strip_wrapping_quotes "${REDIS_PRIVATE_URL}"
         return 0
     fi
     if [ -n "${REDIS_URL:-}" ]; then
@@ -388,12 +388,12 @@ _resolve_redis_url_source() {
         printf "%s" "NIJA_REDIS_URL"
         return 0
     fi
-    if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
-        printf "%s" "REDIS_PRIVATE_URL"
-        return 0
-    fi
     if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
         printf "%s" "REDIS_PUBLIC_URL"
+        return 0
+    fi
+    if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
+        printf "%s" "REDIS_PRIVATE_URL"
         return 0
     fi
     if [ -n "${REDIS_URL:-}" ]; then
