@@ -177,10 +177,10 @@ class ApexWithNAMIE(NIJAApexStrategyV71):
                 'adx': calculate_adx(df, 14),
             }
             
-            macd_data = calculate_macd(df)
-            indicators['macd_line'] = macd_data['macd_line']
-            indicators['macd_signal'] = macd_data['macd_signal']
-            indicators['macd_histogram'] = macd_data['macd_histogram']
+            macd_line, macd_signal, macd_histogram = calculate_macd(df)
+            indicators['macd_line'] = macd_line
+            indicators['macd_signal'] = macd_signal
+            indicators['macd_histogram'] = macd_histogram
             
             return indicators
         except Exception as e:

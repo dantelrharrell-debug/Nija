@@ -18,6 +18,7 @@ import argparse
 import sys
 import json
 from pathlib import Path
+from typing import Optional
 
 # Add bot directory to path
 sys.path.insert(0, str(Path(__file__).parent / 'bot'))
@@ -62,7 +63,7 @@ def get_risk_metrics(user_id: str) -> dict:
 def generate_report(
     user_id: str,
     current_tier: ScalingTier = ScalingTier.MICRO,
-    output_file: str = None,
+    output_file: Optional[str] = None,
     json_output: bool = False
 ) -> None:
     """

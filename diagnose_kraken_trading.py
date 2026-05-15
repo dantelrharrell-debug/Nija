@@ -188,7 +188,7 @@ def main():
 
     # Check INITIAL_CAPITAL setting
     is_valid, value, msg = check_env_var("INITIAL_CAPITAL", required=False)
-    if is_valid:
+    if is_valid and value is not None:
         logger.info(f"   ✅ INITIAL_CAPITAL={value}")
         if value not in ["auto", "LIVE"]:
             try:
@@ -202,7 +202,7 @@ def main():
 
     # Check LIVE_CAPITAL_VERIFIED (safety switch)
     is_valid, value, msg = check_env_var("LIVE_CAPITAL_VERIFIED", required=False)
-    if is_valid:
+    if is_valid and value is not None:
         if value.lower() in ['true', '1', 'yes']:
             logger.info(f"   ✅ LIVE_CAPITAL_VERIFIED={value} (live trading enabled)")
         else:

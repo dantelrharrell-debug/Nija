@@ -13,13 +13,28 @@ This can be added to:
 import logging
 from pathlib import Path
 import sys
+from flask import jsonify, request
 
 # Add bot directory to path
 sys.path.insert(0, str(Path(__file__).parent / 'bot'))
 
 from bot.position_tracker import PositionTracker
-from bot.broker_integration import get_broker_integration
 from bot.legacy_position_exit_protocol import LegacyPositionExitProtocol, AccountState
+
+try:
+    from bot.broker_integration import BrokerFactory
+except ImportError:
+    try:
+        from broker_integration import BrokerFactory
+    except ImportError:
+        BrokerFactory = None
+
+
+def get_broker_integration(broker_name: str):
+    """Compatibility wrapper for legacy examples expecting get_broker_integration."""
+    if BrokerFactory is None:
+        raise RuntimeError("BrokerFactory is not available")
+    return BrokerFactory.create_broker(broker_name)
 
 logger = logging.getLogger("nija.integration")
 

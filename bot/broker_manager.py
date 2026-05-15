@@ -6,7 +6,7 @@ Supports: Coinbase, Interactive Brokers, TD Ameritrade, Alpaca, etc.
 
 from enum import Enum
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, cast
 import datetime as _dt_module
 from datetime import datetime, timezone
 import functools
@@ -19,6 +19,7 @@ import sys
 import time
 import traceback
 import uuid
+import weakref
 import threading
 
 # Optional: 'requests' is used for Kraken gateway routing (NIJA_KRAKEN_GATEWAY_URL).
@@ -33,84 +34,9 @@ except ImportError:
 
 _GATEWAY_BLOCKED_ERROR_TAGS = ("blocked", "lease", "fencing")
 
-# Import circuit breaker for API reliability
-try:
-    from bot.broker_circuit_breaker import get_circuit_breaker, BrokerHealthState  # type: ignore[assignment]
-    CIRCUIT_BREAKER_AVAILABLE = True
-except ImportError:
-    try:
-        from broker_circuit_breaker import get_circuit_breaker, BrokerHealthState  # type: ignore[assignment]
-        CIRCUIT_BREAKER_AVAILABLE = True
-    except ImportError:
-        CIRCUIT_BREAKER_AVAILABLE = False
-        BrokerHealthState = None
-        def get_circuit_breaker(*args, **kwargs):  # type: ignore[misc]
-            return None
-
-try:
-    from bot.execution_authority_context import (
-        has_execution_authority,
-        assert_distributed_writer_authority,
-    )
-except ImportError:
-    try:
-        from execution_authority_context import (
-            has_execution_authority,
-            assert_distributed_writer_authority,
-        )
-    except ImportError:
-        def has_execution_authority() -> bool:
-            return False
-
-        def assert_distributed_writer_authority() -> None:
-            return
-
-try:
-    from bot.exchange_kill_switch import get_exchange_kill_switch_protector
-except ImportError:
-    try:
-        from exchange_kill_switch import get_exchange_kill_switch_protector  # type: ignore[import]
-    except ImportError:
-        get_exchange_kill_switch_protector = None  # type: ignore[assignment]
-
-# Import requests exceptions for proper timeout error handling
-# These are used in KrakenBroker.connect() to detect network timeouts
-# Note: The flag name is specific to clarify we're checking for timeout exception classes,
-# not just whether requests is available (it's used elsewhere for HTTP calls)
-try:
-    from requests.exceptions import (
-        Timeout,
-        ReadTimeout,
-        ConnectTimeout,
-        ConnectionError as RequestsConnectionError  # Avoid shadowing built-in ConnectionError
-    )
-    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    # If requests isn't available, we'll fallback to string matching
-    # ModuleNotFoundError is more specific but we catch both for compatibility
-    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = False
-
-# Try to load dotenv if available, but don't fail if not
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # dotenv not available, env vars should be set externally
-
-# Import rate limiter for API call throttling
-try:
-    from bot.rate_limiter import RateLimiter
-except ImportError:
-    try:
-        from rate_limiter import RateLimiter
-    except ImportError:
-        # Fallback if rate_limiter not available
-        RateLimiter = None
-
-# Import Global Kraken Nonce Manager (ONE source for all users - FINAL FIX)
 try:
     from bot.global_kraken_nonce import (
-        NonceManager,
+        KrakenNonceManager as NonceManager,
         get_global_kraken_nonce,
         get_kraken_nonce,
         get_kraken_api_lock,
@@ -131,8 +57,8 @@ try:
     )
 except ImportError:
     try:
-        from global_kraken_nonce import (
-            NonceManager,
+        from global_kraken_nonce import (  # type: ignore[import]
+            KrakenNonceManager as NonceManager,
             get_global_kraken_nonce,
             get_kraken_nonce,
             get_kraken_api_lock,
@@ -152,25 +78,76 @@ except ImportError:
             is_nonce_issuance_authorized,
         )
     except ImportError:
-        # Fallback: Global nonce manager not available
-        NonceManager = None
-        get_global_kraken_nonce = None
-        get_kraken_nonce = None
-        get_kraken_api_lock = None
-        jump_global_kraken_nonce_forward = None
-        get_global_nonce_manager = None
-        reset_global_kraken_nonce = None
-        is_nonce_trading_paused = None
-        get_nonce_pause_remaining = None
-        probe_and_resync_nonce = None
-        register_broker_quarantine_callback = None
-        is_broker_quarantined = None
-        is_kraken_key_invalidated = None
-        rebuild_nonce_manager = None
-        clear_broker_quarantine = None
-        authorize_nonce_issuance = None
-        revoke_nonce_issuance = None
-        is_nonce_issuance_authorized = None
+        NonceManager = None  # type: ignore[assignment]
+        get_global_kraken_nonce = None  # type: ignore[assignment]
+        get_kraken_nonce = None  # type: ignore[assignment]
+        get_kraken_api_lock = None  # type: ignore[assignment]
+        jump_global_kraken_nonce_forward = None  # type: ignore[assignment]
+        get_global_nonce_manager = None  # type: ignore[assignment]
+        reset_global_kraken_nonce = None  # type: ignore[assignment]
+        is_nonce_trading_paused = None  # type: ignore[assignment]
+        get_nonce_pause_remaining = None  # type: ignore[assignment]
+        probe_and_resync_nonce = None  # type: ignore[assignment]
+        register_broker_quarantine_callback = None  # type: ignore[assignment]
+        is_broker_quarantined = None  # type: ignore[assignment]
+        is_kraken_key_invalidated = None  # type: ignore[assignment]
+        rebuild_nonce_manager = None  # type: ignore[assignment]
+        clear_broker_quarantine = None  # type: ignore[assignment]
+        authorize_nonce_issuance = None  # type: ignore[assignment]
+        revoke_nonce_issuance = None  # type: ignore[assignment]
+        is_nonce_issuance_authorized = None  # type: ignore[assignment]
+
+try:
+    from bot.execution_authority_context import (
+        has_execution_authority,
+        assert_distributed_writer_authority,
+    )
+except ImportError:
+    try:
+        from execution_authority_context import (  # type: ignore[import]
+            has_execution_authority,
+            assert_distributed_writer_authority,
+        )
+    except ImportError:
+        def has_execution_authority() -> bool:
+            return False
+
+        def assert_distributed_writer_authority() -> None:
+            return
+
+try:
+    from bot.exchange_kill_switch import get_exchange_kill_switch_protector
+except ImportError:
+    try:
+        from exchange_kill_switch import get_exchange_kill_switch_protector  # type: ignore[import]
+    except ImportError:
+        get_exchange_kill_switch_protector = None  # type: ignore[assignment]
+
+try:
+    from bot.broker_circuit_breaker import get_circuit_breaker
+    CIRCUIT_BREAKER_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_circuit_breaker import get_circuit_breaker  # type: ignore[import]
+        CIRCUIT_BREAKER_AVAILABLE = True
+    except ImportError:
+        get_circuit_breaker = None  # type: ignore[assignment]
+        CIRCUIT_BREAKER_AVAILABLE = False
+
+try:
+    from bot.rate_limiter import RateLimiter
+except ImportError:
+    try:
+        from rate_limiter import RateLimiter  # type: ignore[import]
+    except ImportError:
+        RateLimiter = None  # type: ignore[assignment]
+
+try:
+    import requests
+    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = True
+except ImportError:
+    requests = None  # type: ignore[assignment]
+    REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE = False
 
 # ── Broker quarantine state ───────────────────────────────────────────────────
 # Set to True when the nonce manager confirms nonce poisoning (consecutive
@@ -273,7 +250,7 @@ def _on_kraken_nonce_quarantine() -> None:
         logging.warning("⚠️  Could not mark broker instances during quarantine: %s", _qe)
 
 
-def clear_kraken_broker_quarantine() -> None:
+def _clear_kraken_broker_quarantine_internal() -> None:
     """Clear the Kraken broker quarantine after a successful key rotation + resync.
 
     Performs a full reset:
@@ -4562,18 +4539,21 @@ class CoinbaseBroker(BaseBroker):
                     account_balance = self.get_account_balance()
                     
                     # Get hardening enforcer
-                    hardening = get_execution_layer_hardening(broker_type='coinbase')
+                    hardening: Any = get_execution_layer_hardening(broker_type='coinbase')
                     
                     # Validate order against ALL hardening requirements
-                    is_valid, error_reason, validation_details = hardening.validate_order_hardening(
-                        symbol=symbol,
-                        side=side,
-                        position_size_usd=quantity,
-                        balance=account_balance,
-                        current_positions=current_positions,
-                        user_id=getattr(self, 'user_id', None),
-                        force_liquidate=force_liquidate
-                    )
+                    if hardening and hasattr(hardening, 'validate_order_hardening'):
+                        is_valid, error_reason, validation_details = hardening.validate_order_hardening(
+                            symbol=symbol,
+                            side=side,
+                            position_size_usd=quantity,
+                            balance=account_balance,
+                            current_positions=current_positions,
+                            user_id=getattr(self, 'user_id', None),
+                            force_liquidate=force_liquidate
+                        )
+                    else:
+                        is_valid, error_reason, validation_details = True, None, {}
                     
                     if not is_valid:
                         # Hardening check FAILED - block this order
@@ -4629,7 +4609,10 @@ class CoinbaseBroker(BaseBroker):
             # ================================================================
             if EXCHANGE_ORDER_VALIDATOR_AVAILABLE:
                 try:
-                    _eov = get_exchange_order_validator()
+                    _eov_factory = get_exchange_order_validator
+                    if not callable(_eov_factory):
+                        raise RuntimeError("Exchange order validator unavailable")
+                    _eov = _eov_factory()
 
                     # Fast-path: block permanently flagged symbols immediately
                     if _eov.is_permanently_unsellable(symbol):
@@ -4771,6 +4754,25 @@ class CoinbaseBroker(BaseBroker):
                     )
             else:
                 # SELL order - use base_size (crypto amount) or quote_size (USD value)
+                def _with_backoff(fn, *args, **kwargs):
+                    import time
+                    delays = [1, 2, 4]
+                    for i, d in enumerate(delays):
+                        try:
+                            return fn(*args, **kwargs)
+                        except Exception as err:
+                            msg = str(err)
+                            if 'Too Many Requests' in msg or '429' in msg:
+                                logger.warning(f"⚠️ Rate limited, retrying in {d}s (attempt {i+1}/{len(delays)})")
+                                time.sleep(d)
+                                continue
+                            raise
+                    return fn(*args, **kwargs)
+
+                available_base = 0.0
+                base_increment = 0.0
+                precision = 0
+                base_size_rounded = 0.0
                 if size_type == 'base':
                     base_currency = symbol.split('-')[0].upper()
 
@@ -4940,11 +4942,11 @@ class CoinbaseBroker(BaseBroker):
                             logger.warning(f"⚠️ Could not parse base_increment for {symbol}: {inc_err}")
 
                     # If API metadata did not provide an increment, use a conservative fallback per asset
-                    if base_increment is None and base_currency in fallback_increment_map:
+                    if base_increment <= 0 and base_currency in fallback_increment_map:
                         base_increment = fallback_increment_map[base_currency]
 
                     # Final safety: ensure we have an increment
-                    if base_increment is None:
+                    if base_increment <= 0:
                         base_increment = 0.01  # Default to 2 decimal places
 
                     # Calculate precision from increment CORRECTLY
@@ -5026,7 +5028,7 @@ class CoinbaseBroker(BaseBroker):
                             logger.warning(f"   🧹 PHANTOM POSITION DETECTED: Zero balance but position tracked")
                             logger.warning(f"   Clearing {symbol} from position tracker (likely already sold/transferred)")
                             try:
-                                self.position_tracker.track_exit(symbol, exit_quantity=None)
+                                self.position_tracker.track_exit(symbol, exit_quantity=0.0)
                                 logger.info(f"   ✅ Phantom position cleared from tracker")
                             except Exception as clear_err:
                                 logger.error(f"   ❌ Failed to clear phantom position: {clear_err}")
@@ -5158,7 +5160,7 @@ class CoinbaseBroker(BaseBroker):
 
                             # Recompute safe trade qty based on same available snapshot
                             safety_epsilon2 = max(alt_inc, 1e-6)
-                            safe_available2 = max(0.0, (available_base if 'available_base' in locals() else 0.0) - safety_epsilon2)
+                            safe_available2 = max(0.0, available_base - safety_epsilon2)
                             trade_qty2 = min(float(quantity), safe_available2)
 
                             qty2 = (Decimal(str(trade_qty2)) / step2).to_integral_value(rounding=ROUND_DOWN) * step2
@@ -5197,14 +5199,14 @@ class CoinbaseBroker(BaseBroker):
                             logger.error(f"   Retry with stricter increment failed: {retry_err}")
 
                 # Generic fallback: decrement by one increment and retry a few times
-                if size_type == 'base' and base_increment and error_code in ('INVALID_SIZE_PRECISION', 'INSUFFICIENT_FUND', 'PREVIEW_INVALID_SIZE_PRECISION', 'PREVIEW_INSUFFICIENT_FUND'):
+                if size_type == 'base' and base_increment > 0 and error_code in ('INVALID_SIZE_PRECISION', 'INSUFFICIENT_FUND', 'PREVIEW_INVALID_SIZE_PRECISION', 'PREVIEW_INSUFFICIENT_FUND'):
                     try:
                         from decimal import Decimal, ROUND_DOWN, getcontext
                         getcontext().prec = 18
                         step = Decimal(str(base_increment))
 
                         max_attempts = 5
-                        current_qty = Decimal(str(base_size_rounded if 'base_size_rounded' in locals() else quantity))
+                        current_qty = Decimal(str(base_size_rounded if base_size_rounded else quantity))
                         for attempt in range(1, max_attempts + 1):
                             # Reduce by one increment per attempt and quantize down
                             reduced = current_qty - step * attempt
@@ -5273,7 +5275,7 @@ class CoinbaseBroker(BaseBroker):
                 }
 
             # Account label used in confirmation logs
-            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "PLATFORM"
+            account_label = getattr(self, 'account_identifier', None) or "PLATFORM"
 
             # FIRST LIVE TRADE BANNER (for legal/operational protection)
             global _FIRST_TRADE_EXECUTED
@@ -5397,7 +5399,7 @@ class CoinbaseBroker(BaseBroker):
                         # Track exit (partial or full sell)
                         self.position_tracker.track_exit(
                             symbol=symbol,
-                            exit_quantity=filled_size if filled_size else None
+                            exit_quantity=float(filled_size or 0.0)
                         )
                         logger.debug(f"   Position exit recorded")
 
@@ -5493,9 +5495,9 @@ class CoinbaseBroker(BaseBroker):
 
             # Log additional context if available
             if hasattr(e, 'response'):
-                logger.error(f"   Response: {e.response}")
+                logger.error(f"   Response: {getattr(cast(Any, e), 'response', None)}")
             if hasattr(e, 'status_code'):
-                logger.error(f"   Status code: {e.status_code}")
+                logger.error(f"   Status code: {getattr(cast(Any, e), 'status_code', None)}")
 
             return {"status": "error", "error": f"{error_type}: {error_msg}"}
 
@@ -5717,7 +5719,7 @@ class CoinbaseBroker(BaseBroker):
             # Handle both dict and object responses from Coinbase SDK
             accounts_list = accounts.get('accounts') if isinstance(accounts, dict) else getattr(accounts, 'accounts', [])
 
-            for account in accounts_list:
+            for account in accounts_list or []:
                 if isinstance(account, dict):
                     currency = account.get('currency')
                     balance = float(account.get('available_balance', {}).get('value', 0)) if account.get('available_balance') else 0
@@ -5944,11 +5946,11 @@ class CoinbaseBroker(BaseBroker):
         if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
             try:
                 local_price = _get_eps().get(symbol)
-                if local_price and local_price > 0:
+                if isinstance(local_price, (int, float)) and local_price > 0:
                     logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price:.6g}")
                     with self._entry_price_cache_lock:
                         self._entry_price_cache[symbol] = local_price
-                    return local_price
+                    return float(local_price)
             except Exception as _eps_err:
                 logger.debug(f"[EntryPrice] {symbol}: local store lookup failed: {_eps_err}")
 
@@ -6209,6 +6211,7 @@ class AlpacaBroker(BaseBroker):
         try:
             from alpaca.trading.client import TradingClient
             import time
+            user_id = self.user_id or ""
 
             # Get credentials based on account type
             if self.account_type == AccountType.PLATFORM:
@@ -6221,13 +6224,13 @@ class AlpacaBroker(BaseBroker):
                 # Convert user_id to uppercase for env var
                 # For user_id like 'tania_gilbert', extracts 'TANIA' for ALPACA_USER_TANIA_API_KEY
                 # For user_id like 'john', uses 'JOHN' for ALPACA_USER_JOHN_API_KEY
-                user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                user_env_name = user_id.split('_')[0].upper() if '_' in user_id else user_id.upper()
                 api_key = os.getenv(f"ALPACA_USER_{user_env_name}_API_KEY", "").strip()
                 api_secret = os.getenv(f"ALPACA_USER_{user_env_name}_API_SECRET", "").strip()
                 # Fallback: also try the full user_id in uppercase
                 # e.g. ALPACA_USER_TANIA_GILBERT_API_KEY for user_id='tania_gilbert'
                 if not api_key or not api_secret:
-                    full_env_name = self.user_id.upper()
+                    full_env_name = user_id.upper()
                     if full_env_name != user_env_name:
                         if not api_key:
                             api_key = os.getenv(f"ALPACA_USER_{full_env_name}_API_KEY", "").strip()
@@ -6235,7 +6238,7 @@ class AlpacaBroker(BaseBroker):
                             api_secret = os.getenv(f"ALPACA_USER_{full_env_name}_API_SECRET", "").strip()
                 paper_str = os.getenv(
                     f"ALPACA_USER_{user_env_name}_PAPER",
-                    os.getenv(f"ALPACA_USER_{self.user_id.upper()}_PAPER", "true"),
+                    os.getenv(f"ALPACA_USER_{user_id.upper()}_PAPER", "true"),
                 ).strip()
                 paper = paper_str.lower() == "true"
                 cred_label = f"USER:{self.user_id}"
@@ -6252,10 +6255,10 @@ class AlpacaBroker(BaseBroker):
                     logger.info("      ALPACA_PAPER=true  # or false for live trading")
                 else:
                     # USER account - provide specific instructions
-                    logger.info(f"   To enable Alpaca USER trading for {self.user_id}, set:")
-                    logger.info(f"      ALPACA_USER_{user_env_name}_API_KEY=<your-api-key>")
-                    logger.info(f"      ALPACA_USER_{user_env_name}_API_SECRET=<your-api-secret>")
-                    logger.info(f"      ALPACA_USER_{user_env_name}_PAPER=true  # or false for live trading")
+                    logger.info(f"   To enable Alpaca USER trading for {user_id}, set:")
+                    logger.info(f"      ALPACA_USER_{user_id.upper()}_API_KEY=<your-api-key>")
+                    logger.info(f"      ALPACA_USER_{user_id.upper()}_API_SECRET=<your-api-secret>")
+                    logger.info(f"      ALPACA_USER_{user_id.upper()}_PAPER=true  # or false for live trading")
                 return False
 
             # Log connection mode
@@ -6304,7 +6307,7 @@ class AlpacaBroker(BaseBroker):
                     # Special handling for paper trading being disabled
                     if "paper" in error_msg.lower() and "not" in error_msg.lower():
                         logging.warning(f"⚠️  Alpaca {cred_label} paper trading may be disabled or account not configured for paper trading")
-                        logging.warning(f"   Try setting ALPACA{'_USER_' + user_env_name if self.account_type == AccountType.USER else ''}_PAPER=false for live trading")
+                        logging.warning(f"   Try setting ALPACA{'_USER_' + user_id.upper() if self.account_type == AccountType.USER else ''}_PAPER=false for live trading")
                         return False
 
                     # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
@@ -6374,8 +6377,8 @@ class AlpacaBroker(BaseBroker):
 
             # Alpaca provides 'equity' which is cash + position values
             # This is exactly what we need per Rule #3
-            equity = float(account.equity)
-            cash = float(account.cash)
+            equity = float(getattr(account, 'equity', 0.0) or 0.0)
+            cash = float(getattr(account, 'cash', 0.0) or 0.0)
             position_value = equity - cash
 
             # Enhanced logging to show breakdown (only if verbose=True)
@@ -6411,7 +6414,16 @@ class AlpacaBroker(BaseBroker):
             logger.error(f"Error fetching Alpaca balance: {e}")
             return 0.0
 
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+    def place_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False,
+    ) -> Dict:
         """Place market order"""
         # 🍎 CRITICAL LAYER 0: APP STORE MODE CHECK (Absolute Block)
         try:
@@ -6435,9 +6447,8 @@ class AlpacaBroker(BaseBroker):
         )
         if _auth_block is not None:
             return _auth_block
-        
+
         try:
-            # 🔒 LAYER 1: BROKER ISOLATION CHECK
             _iso = _check_broker_isolation(self.broker_type, side)
             if _iso is not None:
                 return _iso
@@ -6446,20 +6457,19 @@ class AlpacaBroker(BaseBroker):
             from alpaca.trading.enums import OrderSide, TimeInForce
 
             order_side = OrderSide.BUY if side.lower() == 'buy' else OrderSide.SELL
-
             order_data = MarketOrderRequest(
                 symbol=symbol,
                 qty=quantity,
                 side=order_side,
-                time_in_force=TimeInForce.DAY
+                time_in_force=TimeInForce.DAY,
             )
 
+            if self.api is None:
+                return {"status": "error", "error": "API not connected"}
+
             order = self.api.submit_order(order_data)
+            account_label = getattr(self, 'account_identifier', None) or "PLATFORM"
 
-            # Enhanced trade confirmation logging with account identification
-            account_label = f"{self.account_identifier}" if hasattr(self, 'account_identifier') else "PLATFORM"
-
-            # FIRST LIVE TRADE BANNER (for legal/operational protection)
             global _FIRST_TRADE_EXECUTED
             with _FIRST_TRADE_LOCK:
                 if not _FIRST_TRADE_EXECUTED:
@@ -6487,12 +6497,12 @@ class AlpacaBroker(BaseBroker):
             logger.info(f"   Order Type: {side.upper()}")
             logger.info(f"   Symbol: {symbol}")
             logger.info(f"   Quantity: {quantity}")
-            logger.info(f"   Order ID: {order.id if hasattr(order, 'id') else 'N/A'}")
+            order_any = cast(Any, order)
+            logger.info(f"   Order ID: {getattr(order_any, 'id', 'N/A')}")
             logger.info(f"   Account: {account_label}")
             logger.info(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
             logger.info(LOG_SEPARATOR)
 
-            # Flush logs immediately to ensure confirmation is visible
             if _root_logger.handlers:
                 for handler in _root_logger.handlers:
                     handler.flush()
@@ -6519,10 +6529,10 @@ class AlpacaBroker(BaseBroker):
 
             return {
                 "status": normalized_status,
-                "order_id": str(order.id) if hasattr(order, 'id') else None,
+                "order_id": str(getattr(order_any, 'id', None)) if getattr(order_any, 'id', None) is not None else None,
                 "order": order,
-                "filled_price": float(order.filled_avg_price) if getattr(order, 'filled_avg_price', None) else None,
-                "account": account_label  # Add account identification to result
+                "filled_price": float(getattr(order_any, 'filled_avg_price', 0.0) or 0.0) if getattr(order_any, 'filled_avg_price', None) else None,
+                "account": account_label,
             }
 
         except Exception as e:
@@ -6536,31 +6546,32 @@ class AlpacaBroker(BaseBroker):
         market_value, so no additional price fetches are required.
         """
         try:
+            if self.api is None:
+                return []
             positions = self.api.get_all_positions()
             result = []
             for pos in positions:
-                entry_price = 0.0
-                current_price = 0.0
-                size_usd = 0.0
-                try:
-                    entry_price = float(pos.avg_entry_price)
-                except (TypeError, ValueError, AttributeError):
-                    pass
-                try:
-                    current_price = float(pos.current_price) if hasattr(pos, 'current_price') else 0.0
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    size_usd = float(pos.market_value)
-                except (TypeError, ValueError, AttributeError):
-                    pass
+                if isinstance(pos, dict):
+                    entry_price = float(pos.get('avg_entry_price', 0.0) or 0.0)
+                    current_price = float(pos.get('current_price', 0.0) or 0.0)
+                    size_usd = float(pos.get('market_value', 0.0) or 0.0)
+                    symbol_value = pos.get('symbol', '')
+                    qty_value = pos.get('qty', 0.0)
+                    unrealized_pl_value = pos.get('unrealized_pl', 0.0)
+                else:
+                    entry_price = float(getattr(pos, 'avg_entry_price', 0.0) or 0.0)
+                    current_price = float(getattr(pos, 'current_price', 0.0) or 0.0)
+                    size_usd = float(getattr(pos, 'market_value', 0.0) or 0.0)
+                    symbol_value = getattr(pos, 'symbol', '')
+                    qty_value = getattr(pos, 'qty', 0.0)
+                    unrealized_pl_value = getattr(pos, 'unrealized_pl', 0.0)
                 result.append({
-                    'symbol': pos.symbol,
-                    'quantity': float(pos.qty),
+                    'symbol': symbol_value,
+                    'quantity': float(qty_value or 0.0),
                     'entry_price': entry_price,
                     'current_price': current_price,
                     'size_usd': size_usd,
-                    'unrealized_pl': float(pos.unrealized_pl) if hasattr(pos, 'unrealized_pl') else 0.0,
+                    'unrealized_pl': float(unrealized_pl_value or 0.0),
                 })
             return result
         except Exception as e:
@@ -6703,8 +6714,11 @@ class AlpacaBroker(BaseBroker):
             # Extract tradeable symbols
             symbols = []
             for asset in assets:
-                if asset.tradable and asset.status == AssetStatus.ACTIVE:
-                    symbols.append(asset.symbol)
+                tradable = getattr(asset, 'tradable', False)
+                status = getattr(asset, 'status', None)
+                symbol_value = getattr(asset, 'symbol', None)
+                if tradable and status == AssetStatus.ACTIVE and symbol_value:
+                    symbols.append(symbol_value)
 
             logging.info(f"📊 Alpaca: Found {len(symbols)} tradeable stock symbols")
             return symbols
@@ -6925,7 +6939,7 @@ class BinanceBroker(BaseBroker):
                             "total_funds": available,
                         }
                         _log_balance_snapshot(
-                            account_label=f"binance:{self.account_identifier}",
+                            account_label=f"binance:{getattr(self, 'account_identifier', 'PLATFORM')}",
                             source="binance.get_account",
                             usd_available=0.0,
                             secondary_available=available,
@@ -6949,7 +6963,16 @@ class BinanceBroker(BaseBroker):
             logging.error(f"Error fetching Binance balance: {e}")
             return 0.0
 
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+    def place_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        size_type: str = 'quote',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False,
+    ) -> Dict:
         """
         Place market order on Binance.
 
@@ -7525,7 +7548,7 @@ class KrakenBroker(BaseBroker):
             logger.warning("   Will use static minimum volumes as fallback")
             return False
 
-    def _kraken_private_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
+    def _kraken_private_call(self, method: str, params: Optional[Dict] = None, category: Optional[Any] = None):
         """
         CRITICAL: Serialized wrapper for Kraken private API calls.
 
@@ -7682,7 +7705,7 @@ class KrakenBroker(BaseBroker):
 
             return result
 
-    def _kraken_api_call(self, method: str, params: Optional[Dict] = None, category: Optional['KrakenAPICategory'] = None):
+    def _kraken_api_call(self, method: str, params: Optional[Dict] = None, category: Optional[Any] = None):
         """
         Compatibility wrapper for _kraken_private_call().
 
@@ -7910,8 +7933,9 @@ class KrakenBroker(BaseBroker):
                     if os.getenv(env_name, "").strip():
                         detected_credential_vars.append(env_name)
             else:
-                user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
-                full_env_name = self.user_id.upper()
+                user_id = self.user_id or ""
+                user_env_name = user_id.split('_')[0].upper() if '_' in user_id else user_id.upper()
+                full_env_name = user_id.upper()
                 for env_name in (
                     f"KRAKEN_USER_{user_env_name}_API_KEY",
                     f"KRAKEN_USER_{user_env_name}_API_SECRET",
@@ -8039,7 +8063,8 @@ class KrakenBroker(BaseBroker):
                 # Convert user_id to uppercase for env var
                 # For user_id like 'daivon_frazier', extracts 'DAIVON' for KRAKEN_USER_DAIVON_API_KEY
                 # For user_id like 'john', uses 'JOHN' for KRAKEN_USER_JOHN_API_KEY
-                user_env_name = self.user_id.split('_')[0].upper() if '_' in self.user_id else self.user_id.upper()
+                user_id = self.user_id or ""
+                user_env_name = user_id.split('_')[0].upper() if '_' in user_id else user_id.upper()
                 key_name = f"KRAKEN_USER_{user_env_name}_API_KEY"
                 secret_name = f"KRAKEN_USER_{user_env_name}_API_SECRET"
                 api_key_raw = os.getenv(key_name, "")
@@ -8049,7 +8074,7 @@ class KrakenBroker(BaseBroker):
                 # This fixes the contradiction where PAL discovers credentials via the full
                 # env var name but KrakenBroker only looks at the first word of user_id.
                 if not api_key_raw or not api_secret_raw:
-                    full_env_name = self.user_id.upper()
+                    full_env_name = user_id.upper()
                     if full_env_name != user_env_name:
                         full_key_name = f"KRAKEN_USER_{full_env_name}_API_KEY"
                         full_secret_name = f"KRAKEN_USER_{full_env_name}_API_SECRET"
@@ -8139,10 +8164,11 @@ class KrakenBroker(BaseBroker):
                 else:
                     # USER account - provide specific instructions
                     # Note: user_env_name is guaranteed to be defined from the else block above
-                    logger.info(f"   🔧 FIX #1 — To enable Kraken USER trading for {self.user_id}, set:")
-                    logger.info(f"      KRAKEN_USER_{user_env_name}_API_KEY=<your-api-key>")
-                    logger.info(f"      KRAKEN_USER_{user_env_name}_API_SECRET=<your-api-secret>")
-                    logger.info(f"   ⚠️  NOTE: {self.user_id} needs THEIR OWN Kraken account (not a sub-account)")
+                    user_id = self.user_id or ""
+                    logger.info(f"   🔧 FIX #1 — To enable Kraken USER trading for {user_id}, set:")
+                    logger.info(f"      KRAKEN_USER_{(self.user_id or '').upper()}_API_KEY=<your-api-key>")
+                    logger.info(f"      KRAKEN_USER_{(self.user_id or '').upper()}_API_SECRET=<your-api-secret>")
+                    logger.info(f"   ⚠️  NOTE: {user_id} needs THEIR OWN Kraken account (not a sub-account)")
                     logger.info(f"   🔧 FIX #3 — Must be Classic API key (NOT OAuth)")
                     logger.info(f"   📖 Each user must create their own API key at: https://www.kraken.com/u/security/api")
                     logger.info("   📖 Setup guide: KRAKEN_QUICK_START.md")
@@ -8162,10 +8188,9 @@ class KrakenBroker(BaseBroker):
             # We use functools.partial to patch the session (standard pattern for krakenex).
             # Per-instance modification - no global state affected. Degrades gracefully if session changes.
             try:
-                self.api.session.request = functools.partial(
-                    self.api.session.request,
-                    timeout=self.API_TIMEOUT_SECONDS
-                )
+                _session_request = getattr(self.api.session, 'request', None)
+                if callable(_session_request):
+                    self._session_request = functools.partial(_session_request, timeout=self.API_TIMEOUT_SECONDS)
                 logger.debug(f"✅ HTTP timeout configured ({self.API_TIMEOUT_SECONDS}s) for {cred_label}")
             except AttributeError as e:
                 # If session attribute doesn't exist, log warning but continue
@@ -8242,7 +8267,7 @@ class KrakenBroker(BaseBroker):
                     _kid, _dnm.get_last_nonce(_kid)
                 )
 
-                self.api._nonce = _nonce_distributed
+                self.api._nonce = _nonce_distributed  # type: ignore[assignment]
                 _backend = "redis" if _dnm._redis is not None else "file/fcntl"
                 logger.info(
                     "   ✅ Nonce: DistributedNonceManager  backend=%-10s  "
@@ -8925,7 +8950,16 @@ class KrakenBroker(BaseBroker):
                     if REQUESTS_TIMEOUT_EXCEPTIONS_AVAILABLE:
                         # Include both timeout and connection errors (network issues)
                         # Note: Using RequestsConnectionError alias to avoid shadowing built-in ConnectionError
-                        is_timeout_error = isinstance(e, (Timeout, ReadTimeout, ConnectTimeout, RequestsConnectionError))
+                        timeout_exception_types = tuple(
+                            exc for exc in (
+                                globals().get('Timeout'),
+                                globals().get('ReadTimeout'),
+                                globals().get('ConnectTimeout'),
+                                globals().get('RequestsConnectionError'),
+                            )
+                            if exc is not None
+                        )
+                        is_timeout_error = bool(timeout_exception_types) and isinstance(e, timeout_exception_types)
                     else:
                         # Fallback to string matching if requests isn't available
                         is_timeout_error = (
@@ -9333,7 +9367,7 @@ class KrakenBroker(BaseBroker):
                 logger.info(
                     "[DEBUG] setting _last_known_balance=%s for broker=%s",
                     total_funds,
-                    self.name,
+                    getattr(self, 'name', 'unknown'),
                 )
                 self._balance_last_updated = time.time()  # Track when balance was last updated (Jan 24, 2026)
                 self._balance_fetch_errors = 0
@@ -9687,7 +9721,7 @@ class KrakenBroker(BaseBroker):
         )
         return total
 
-    def get_current_price(self, symbol: str) -> Optional[float]:
+    def get_current_price(self, symbol: str) -> float:
         """
         Get current market price for a symbol from Kraken.
 
@@ -9701,19 +9735,19 @@ class KrakenBroker(BaseBroker):
         Args:
             symbol: Trading pair in standard format (e.g., 'BTC-USD', 'ETH-USD', 'DOGE-USD')
 
-        Returns:
-            float: Current market price, or None if fetch fails
+            Returns:
+            float: Current market price, or 0.0 if fetch fails
 
         Safety:
             - Uses symbol mapper to convert to Kraken format
             - Falls back to EmergencySymbolResolver on failure
-            - Returns None on failure (not 0.0) for explicit error handling
+            - Returns 0.0 on failure for compatibility with the base broker interface
             - Logs errors with symbol mismatch hints
         """
         try:
             if not self.api:
                 logger.error(f"❌ Price fetch failed for {symbol} — Kraken API not connected")
-                return None
+                return 0.0
 
             # CRITICAL: Use symbol mapper to convert to Kraken format
             # This ensures we use the correct format (e.g., XETHZUSD, XXBTZUSD)
@@ -9725,7 +9759,7 @@ class KrakenBroker(BaseBroker):
                 kraken_symbol = convert_to_kraken(normalized_symbol)
                 if not kraken_symbol:
                     logger.warning(f"⚠️ Price fetch: Cannot convert {symbol} to Kraken format — activating Emergency Resolver")
-                    return self._resolve_price_emergency(symbol)
+                    return float(self._resolve_price_emergency(symbol) or 0.0)
             else:
                 # Fallback: Manual conversion if symbol mapper not available
                 kraken_symbol = normalized_symbol.replace('-', '').upper()
@@ -9739,12 +9773,12 @@ class KrakenBroker(BaseBroker):
             # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
             # Wrap in a 10-second thread timeout to prevent the position-analysis loop
             # from hanging for hours when the Kraken connection is broken.
-            _ticker_result_holder = [None]
-            _ticker_err_holder    = [None]
+            _ticker_result_holder: List[Any] = [None]
+            _ticker_err_holder: List[Any] = [None]
             def _fetch_ticker():
                 try:
                     with suppress_pykrakenapi_prints():
-                        _ticker_result_holder[0] = self.api.query_public(
+                        _ticker_result_holder[0] = cast(Any, self.api).query_public(
                             'Ticker', {'pair': kraken_symbol}
                         )
                 except Exception as _te:
@@ -9769,9 +9803,9 @@ class KrakenBroker(BaseBroker):
                 logger.debug(
                     f"⏱️  Ticker fetch for {symbol} timed out (10s) — returning None"
                 )
-                return None
+                return 0.0
             if _ticker_err_holder[0] is not None:
-                raise _ticker_err_holder[0]
+                raise cast(Exception, _ticker_err_holder[0])
             ticker_result = _ticker_result_holder[0]
 
             if ticker_result and 'result' in ticker_result:
@@ -9787,22 +9821,22 @@ class KrakenBroker(BaseBroker):
                         return price
                     else:
                         logger.warning(f"⚠️ No last trade price for {symbol} — activating Emergency Resolver")
-                        return self._resolve_price_emergency(symbol)
+                        return float(self._resolve_price_emergency(symbol) or 0.0)
                 else:
                     logger.warning(
                         f"⚠️ {symbol} not found in Kraken ticker ('{kraken_symbol}') "
                         f"— activating Emergency Resolver"
                     )
-                    return self._resolve_price_emergency(symbol)
+                    return float(self._resolve_price_emergency(symbol) or 0.0)
             else:
                 logger.warning(f"⚠️ Ticker API error for {symbol} — activating Emergency Resolver")
                 if ticker_result and 'error' in ticker_result and ticker_result['error']:
                     logger.warning(f"   API errors: {', '.join(ticker_result['error'])}")
-                return self._resolve_price_emergency(symbol)
+                return float(self._resolve_price_emergency(symbol) or 0.0)
 
         except Exception as e:
             logger.warning(f"⚠️ Price fetch exception for {symbol}: {e} — activating Emergency Resolver")
-            return self._resolve_price_emergency(symbol)
+            return float(self._resolve_price_emergency(symbol) or 0.0)
 
     def _resolve_price_emergency(self, symbol: str) -> Optional[float]:
         """
@@ -9836,7 +9870,7 @@ class KrakenBroker(BaseBroker):
             )
             return result.price
 
-        if result.status == SymbolStatus.DELISTED:
+        if getattr(result, 'status', None) == SymbolStatus.DELISTED:
             logger.warning(
                 f"🚫 {symbol} classified as Non-Tradeable Residual (delisted). "
                 f"Excluded from cap count and exposure modeling. "
@@ -11176,8 +11210,8 @@ class KrakenBroker(BaseBroker):
             # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
             # Wrap in a 15-second thread timeout so a broken connection never hangs the
             # position-analysis loop for hours (root cause of 13,000s+ pre-scan times).
-            _ohlc_result_holder = [None]
-            _ohlc_err_holder    = [None]
+            _ohlc_result_holder: List[Any] = [None]
+            _ohlc_err_holder: List[Any] = [None]
             _kraken_symbol_cap  = kraken_symbol
             _kraken_interval_cap = kraken_interval
             def _fetch_ohlc():
@@ -11707,7 +11741,7 @@ class OKXBroker(BaseBroker):
                             "total_funds": total_equity,
                         }
                         _log_balance_snapshot(
-                            account_label=f"okx:{self.account_identifier}",
+                            account_label=f"okx:{getattr(self, 'account_identifier', 'PLATFORM')}",
                             source="okx.get_balance+positions",
                             usd_available=0.0,
                             secondary_available=available,
@@ -11789,7 +11823,17 @@ class OKXBroker(BaseBroker):
         """
         return self._balance_fetch_errors
 
-    def place_market_order(self, symbol: str, side: str, quantity: float) -> Dict:
+    def place_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        *,
+        size_type: str = 'base',
+        ignore_balance: bool = False,
+        ignore_min_trade: bool = False,
+        force_liquidate: bool = False,
+    ) -> Dict:
         """
         Place market order on OKX.
 

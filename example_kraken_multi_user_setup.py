@@ -132,8 +132,14 @@ def verify_kraken_connection():
             try:
                 balance_info = kraken_broker.get_account_balance()
                 print(f"\n💰 Platform Account Balance:")
-                print(f"   Total Balance: ${balance_info.get('total_balance', 0):.2f}")
-                print(f"   Available Balance: ${balance_info.get('available_balance', 0):.2f}")
+                if isinstance(balance_info, dict):
+                    total_balance = float(balance_info.get('total_balance', 0.0) or 0.0)
+                    available_balance = float(balance_info.get('available_balance', 0.0) or 0.0)
+                else:
+                    total_balance = float(balance_info or 0.0)
+                    available_balance = total_balance
+                print(f"   Total Balance: ${total_balance:.2f}")
+                print(f"   Available Balance: ${available_balance:.2f}")
             except Exception as e:
                 print(f"⚠️  Could not fetch balance: {e}")
             

@@ -596,19 +596,19 @@ def get_kpi_tracker(initial_capital: float = 1000.0, reset: bool = False) -> KPI
         self.risk_free_rate = risk_free_rate
         
         # KPI history (in-memory circular buffer)
-        self.kpi_history: deque = deque(maxlen=history_size)
+        self.kpi_history = deque(maxlen=history_size)
         
         # Trade history for calculations
-        self.trade_history: List[Dict[str, Any]] = []
+        self.trade_history = []
         
         # Current state
         self.current_capital = initial_capital
         self.peak_capital = initial_capital
-        self.current_positions: List[Dict[str, Any]] = []
+        self.current_positions = []
         
         # Performance tracking
-        self.daily_returns: List[float] = []
-        self.equity_curve: List[Tuple[datetime, float]] = []
+        self.daily_returns = []
+        self.equity_curve = []
         
         # Thread safety
         self._lock = threading.Lock()

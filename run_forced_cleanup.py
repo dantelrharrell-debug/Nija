@@ -202,8 +202,8 @@ Safety:
                 broker_mgr = BrokerManager()
                 
                 # Try Coinbase first
-                from broker_integration import CoinbaseBroker
-                broker = CoinbaseBroker()
+                from broker_integration import BrokerFactory
+                broker = BrokerFactory.create_broker('coinbase')
                 if broker.connect():
                     result = cleanup.cleanup_single_account(broker, "platform_coinbase")
                     logger.info("")

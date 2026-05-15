@@ -1,4 +1,4 @@
-monified: 
+"""
 Alembic migration environment for NIJA database
 
 This module configures Alembic to work with NIJA's database models.
@@ -11,7 +11,7 @@ import sys
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
-from alembic import context
+import alembic.context as context
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))

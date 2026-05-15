@@ -14,6 +14,7 @@ import sys
 import os
 import pandas as pd
 import numpy as np
+from typing import Any
 from datetime import datetime, timedelta
 
 # Add bot directory to path  
@@ -27,6 +28,8 @@ import importlib.util
 def load_module(module_name, file_path):
     """Load module from file without triggering __init__.py"""
     spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load module spec for {module_name}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
@@ -125,10 +128,13 @@ def calculate_test_indicators(df):
         indicators['ema50'] = calculate_ema(df, 50)
         indicators['rsi'] = calculate_rsi(df, 14)
         indicators['rsi_9'] = calculate_rsi(df, 9)
-        macd_data = calculate_macd(df)
-        indicators['macd_line'] = macd_data['macd_line']
-        indicators['macd_signal'] = macd_data['macd_signal']
-        indicators['macd_histogram'] = macd_data['macd_histogram']
+        macd_data: Any = calculate_macd(df)
+        if isinstance(macd_data, tuple):
+            indicators['macd_line'], indicators['macd_signal'], indicators['macd_histogram'] = macd_data
+        else:
+            indicators['macd_line'] = macd_data['macd_line']
+            indicators['macd_signal'] = macd_data['macd_signal']
+            indicators['macd_histogram'] = macd_data['macd_histogram']
         indicators['atr'] = calculate_atr(df, 14)
         indicators['adx'] = calculate_adx(df, 14)
     except Exception as e:

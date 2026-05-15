@@ -61,7 +61,7 @@ class TestMarketCrashSimulator(unittest.TestCase):
         scenario = self.simulator.create_flash_crash_scenario()
         
         symbols = ['BTC-USD', 'ETH-USD']
-        initial_prices = {'BTC-USD': 40000, 'ETH-USD': 2000}
+        initial_prices = {'BTC-USD': 40000.0, 'ETH-USD': 2000.0}
         
         result = self.simulator.simulate_crash(
             scenario=scenario,
@@ -290,9 +290,9 @@ class TestStateMachineStressTester(unittest.TestCase):
         self.portfolio = PortfolioState(available_cash=10000.0)
         self.symbols = ['BTC-USD', 'ETH-USD', 'SOL-USD']
         self.initial_prices = {
-            'BTC-USD': 40000,
-            'ETH-USD': 2000,
-            'SOL-USD': 100
+            'BTC-USD': 40000.0,
+            'ETH-USD': 2000.0,
+            'SOL-USD': 100.0
         }
         self.sector_map = {
             'BTC-USD': 'bitcoin',

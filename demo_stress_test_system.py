@@ -49,7 +49,7 @@ def demo_crash_simulator():
     
     # Simulate crash
     symbols = ['BTC-USD', 'ETH-USD', 'SOL-USD']
-    initial_prices = {'BTC-USD': 40000, 'ETH-USD': 2000, 'SOL-USD': 100}
+    initial_prices = {'BTC-USD': 40000.0, 'ETH-USD': 2000.0, 'SOL-USD': 100.0}
     
     logger.info(f"\nSimulating crash for {len(symbols)} assets...")
     
@@ -197,7 +197,7 @@ def demo_integrated_stress_test():
     # Setup portfolio
     initial_portfolio = PortfolioState(available_cash=10000.0)
     symbols = ['BTC-USD', 'ETH-USD', 'SOL-USD']
-    initial_prices = {'BTC-USD': 40000, 'ETH-USD': 2000, 'SOL-USD': 100}
+    initial_prices = {'BTC-USD': 40000.0, 'ETH-USD': 2000.0, 'SOL-USD': 100.0}
     sector_map = {'BTC-USD': 'bitcoin', 'ETH-USD': 'ethereum', 'SOL-USD': 'layer_1_alt'}
     
     # Create flash crash scenario

@@ -70,8 +70,8 @@ except ImportError as e:
     # Fallback for position source utils
     def get_source_label(source: Any) -> str:  # type: ignore[misc]
         return "Unknown Source"
-    def is_nija_managed(pos: Any) -> bool:  # type: ignore[misc]
-        return pos.get('position_source') == 'nija_strategy'
+    def is_nija_managed(position: Any) -> bool:  # type: ignore[misc]
+        return position.get('position_source') == 'nija_strategy'
 
 # Import broker manager for balance queries
 try:

@@ -304,7 +304,10 @@ def demo_strategy_governance():
     logger.info(f"   Changes: {len(version.changes)}")
     logger.info(f"   Approvals: {len(version.approvals)}/3 required roles")
     logger.info(f"   Can Activate: {'YES ✓' if version.can_activate() else 'NO ✗'}")
-    logger.info(f"   Backtest Sharpe: {version.backtesting.sharpe_ratio:.2f}")
+    if version.backtesting:
+        logger.info(f"   Backtest Sharpe: {version.backtesting.sharpe_ratio:.2f}")
+    else:
+        logger.info("   Backtest Sharpe: N/A")
     
     return version
 

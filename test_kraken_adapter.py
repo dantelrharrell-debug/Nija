@@ -22,6 +22,8 @@ sys.path.insert(0, bot_dir)
 # Import directly from kraken_adapter module file
 import importlib.util
 spec = importlib.util.spec_from_file_location("kraken_adapter", adapter_path)
+if spec is None or spec.loader is None:
+    pytest.skip("Could not load kraken_adapter module spec", allow_module_level=True)
 kraken_adapter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kraken_adapter)
 

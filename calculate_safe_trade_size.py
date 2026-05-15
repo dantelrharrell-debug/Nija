@@ -18,7 +18,7 @@ Usage:
 
 import sys
 import argparse
-from typing import Dict, Tuple, Any
+from typing import Dict, Tuple, Any, Optional
 
 # Import NIJA modules
 sys.path.insert(0, './bot')
@@ -85,7 +85,7 @@ def calculate_fees(trade_size: float, use_limit_order: bool = True) -> Dict[str,
     }
 
 
-def calculate_safe_trade_size(balance: float, tier: TradingTier = None,
+def calculate_safe_trade_size(balance: float, tier: Optional[TradingTier] = None,
                               use_limit_order: bool = True, is_platform: bool = False,
                               exchange: str = 'coinbase') -> Dict:
     """

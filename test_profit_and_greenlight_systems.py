@@ -117,7 +117,8 @@ def test_audit_logging():
     )
     
     print(f"✅ Entry logged: {entry.event_id}")
-    print(f"   Checksum: {entry.checksum[:16]}...")
+    entry_checksum = entry.checksum or ""
+    print(f"   Checksum: {entry_checksum[:16]}...")
     print(f"   Valid: {entry.verify_checksum()}")
     
     # Log trade exit
@@ -137,7 +138,8 @@ def test_audit_logging():
     )
     
     print(f"✅ Exit logged: {exit_entry.event_id}")
-    print(f"   Checksum: {exit_entry.checksum[:16]}...")
+    exit_checksum = exit_entry.checksum or ""
+    print(f"   Checksum: {exit_checksum[:16]}...")
     print(f"   Valid: {exit_entry.verify_checksum()}")
     
     # Log position validation

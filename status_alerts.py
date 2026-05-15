@@ -46,7 +46,7 @@ class Alert:
     level: str  # critical, warning, info
     user_id: str
     message: str
-    details: Dict = None
+    details: Optional[Dict] = None
 
 
 class StatusAlerter:
@@ -261,6 +261,9 @@ class StatusAlerter:
     
     def _send_slack(self) -> bool:
         """Send alerts to Slack"""
+        if not self.slack_webhook:
+            return True
+
         try:
             import requests
             
@@ -314,8 +317,9 @@ class StatusAlerter:
                     })
             
             # Send to Slack
+            webhook_url = str(self.slack_webhook)
             response = requests.post(
-                self.slack_webhook,
+                webhook_url,
                 json={"blocks": blocks},
                 timeout=10
             )
@@ -333,6 +337,9 @@ class StatusAlerter:
     
     def _send_email(self) -> bool:
         """Send alerts via email"""
+        if not self.email_to:
+            return True
+
         try:
             # Build email body
             body = f"""NIJA Status Alerts
@@ -354,8 +361,9 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             
             # Send email using system mail command
             import subprocess
+            email_to = str(self.email_to)
             result = subprocess.run(
-                ['mail', '-s', 'NIJA Status Alerts', self.email_to],
+                ['mail', '-s', 'NIJA Status Alerts', email_to],
                 input=body.encode(),
                 timeout=10
             )

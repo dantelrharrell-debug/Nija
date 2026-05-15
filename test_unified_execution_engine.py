@@ -222,7 +222,8 @@ def test_execution():
         else:
             logger.info(f"   Error: {result.error_message}")
             # Count as passed if it's just the "not implemented" message
-            if "not implemented" in result.error_message.lower():
+            error_message = result.error_message or ""
+            if "not implemented" in error_message.lower():
                 logger.info(f"   ℹ️  Execution interface working (implementation pending)")
                 passed += 1
             else:
@@ -297,7 +298,8 @@ def test_error_handling():
 
         result = execute_trade(**kwargs)
 
-        if not result.success and test['expected_error'].lower() in result.error_message.lower():
+        error_message = result.error_message or ""
+        if not result.success and test['expected_error'].lower() in error_message.lower():
             logger.info(f"   ✅ PASS - Caught expected error: {result.error_message}")
             passed += 1
         else:
@@ -388,7 +390,8 @@ def test_multi_exchange():
             order_type='market'
         )
 
-        if result.success or "not implemented" in result.error_message.lower():
+        error_message = result.error_message or ""
+        if result.success or "not implemented" in error_message.lower():
             logger.info(f"      ✅ Interface working")
         else:
             logger.error(f"      ❌ {result.error_message}")

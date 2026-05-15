@@ -30,6 +30,8 @@ spec = importlib.util.spec_from_file_location(
     "risk_freeze_guard",
     _risk_guard_path
 )
+if spec is None or spec.loader is None:
+    raise ImportError("Could not load risk_freeze_guard module spec")
 risk_freeze_guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(risk_freeze_guard)
 
@@ -46,6 +48,8 @@ spec = importlib.util.spec_from_file_location(
     "risk_config_versions",
     _risk_config_path
 )
+if spec is None or spec.loader is None:
+    raise ImportError("Could not load risk_config_versions module spec")
 risk_config_versions = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(risk_config_versions)
 
@@ -116,7 +120,7 @@ class TestRiskFreezeGuard(unittest.TestCase):
     def test_allow_non_protected_parameter_change(self):
         """Test non-protected parameters can change"""
         config_with_extra = self.baseline_config.copy()
-        config_with_extra['some_other_param'] = 'value'
+        config_with_extra['some_other_param'] = 1.0
         
         self.guard.set_baseline(self.baseline_config)
         

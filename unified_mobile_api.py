@@ -34,7 +34,6 @@ import jwt
 from auth import get_user_manager
 from monetization_engine import MonetizationEngine, SubscriptionTier, BillingInterval
 from bot.kill_switch import get_kill_switch
-from bot.execution_engine import get_execution_engine
 from database.db_connection import get_db_session
 
 # Configure logging
@@ -120,6 +119,12 @@ def get_user_subscription_tier(user_id: str) -> SubscriptionTier:
         return SubscriptionTier.FREE
 
 
+def _get_request_user_id() -> Optional[str]:
+    """Get the mobile request user id when middleware has attached one."""
+    user_id = getattr(request, 'user_id', None)
+    return user_id if isinstance(user_id, str) else None
+
+
 def require_subscription_tier(required_tier: SubscriptionTier):
     """
     Decorator to enforce minimum subscription tier for endpoint access.
@@ -133,7 +138,11 @@ def require_subscription_tier(required_tier: SubscriptionTier):
             if not hasattr(request, 'user_id'):
                 return jsonify({'error': 'Authentication required'}), 401
             
-            user_tier = get_user_subscription_tier(request.user_id)
+            user_id = _get_request_user_id()
+            if not user_id:
+                return jsonify({'error': 'Authentication required'}), 401
+
+            user_tier = get_user_subscription_tier(user_id)
             
             # Define tier hierarchy
             tier_hierarchy = {
@@ -152,8 +161,8 @@ def require_subscription_tier(required_tier: SubscriptionTier):
                 }), 403
             
             # Add tier info to request context
-            request.subscription_tier = user_tier
-            request.tier_limits = TIER_LIMITS[user_tier]
+            setattr(request, 'subscription_tier', user_tier)
+            setattr(request, 'tier_limits', TIER_LIMITS[user_tier])
             
             return f(*args, **kwargs)
         
@@ -174,7 +183,11 @@ def require_feature(feature_name: str):
             if not hasattr(request, 'user_id'):
                 return jsonify({'error': 'Authentication required'}), 401
             
-            user_tier = get_user_subscription_tier(request.user_id)
+            user_id = _get_request_user_id()
+            if not user_id:
+                return jsonify({'error': 'Authentication required'}), 401
+
+            user_tier = get_user_subscription_tier(user_id)
             tier_features = TIER_LIMITS[user_tier]['features']
             
             if feature_name not in tier_features:
@@ -185,8 +198,8 @@ def require_feature(feature_name: str):
                     'message': f'This feature is not included in your {user_tier.value} subscription'
                 }), 403
             
-            request.subscription_tier = user_tier
-            request.tier_limits = TIER_LIMITS[user_tier]
+            setattr(request, 'subscription_tier', user_tier)
+            setattr(request, 'tier_limits', TIER_LIMITS[user_tier])
             
             return f(*args, **kwargs)
         
@@ -212,14 +225,17 @@ def start_trading():
             "risk_profile": "conservative"  // Optional: risk profile override
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     data = request.get_json() or {}
     
     try:
         kill_switch = get_kill_switch()
         
         # Check if trading is globally disabled
-        if not kill_switch.is_trading_enabled():
+        is_trading_enabled = getattr(kill_switch, 'is_active', None)
+        if callable(is_trading_enabled) and is_trading_enabled():
             return jsonify({
                 'error': 'Trading is currently disabled globally',
                 'message': 'Trading has been disabled by system administrator'
@@ -260,7 +276,9 @@ def stop_trading():
             "close_positions": false  // Optional: whether to close all positions
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     data = request.get_json() or {}
     
     try:
@@ -299,7 +317,9 @@ def get_trading_status():
             "brokers": ["coinbase", "kraken"]
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     
     try:
         # TODO: Fetch actual trading status from database
@@ -341,7 +361,9 @@ def get_positions():
             "total_value_usd": 1250.00
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     broker = request.args.get('broker')
     limit = int(request.args.get('limit', 50))
     
@@ -374,7 +396,9 @@ def get_position_detail(position_id: str):
     Returns:
         Detailed position information including P&L, entry/exit prices, etc.
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     
     try:
         # TODO: Fetch position details from database
@@ -409,7 +433,9 @@ def get_subscription_info():
             "limits": {...}
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     
     try:
         user_tier = get_user_subscription_tier(user_id)
@@ -510,7 +536,9 @@ def upgrade_subscription():
             "payment_method_id": "pm_xxx"  // Stripe payment method ID
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     data = request.get_json()
     
     if not data or 'tier' not in data:
@@ -524,12 +552,15 @@ def upgrade_subscription():
         monetization_engine = MonetizationEngine()
         
         # Create or update subscription
-        subscription = monetization_engine.create_subscription(
+        success, error_message, subscription = monetization_engine.create_subscription(
             user_id=user_id,
             tier=tier,
             interval=interval,
             payment_method_id=payment_method_id
         )
+
+        if not success or subscription is None:
+            return jsonify({'error': 'Failed to upgrade subscription', 'details': error_message or 'Unknown error'}), 500
         
         logger.info(f"Upgraded subscription for user {user_id} to {tier.value}")
         
@@ -576,7 +607,9 @@ def get_education_lessons():
             ]
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     category = request.args.get('category')
     completed = request.args.get('completed')
     
@@ -610,7 +643,9 @@ def get_lesson_content(lesson_id: str):
     Returns:
         Detailed lesson content including text, videos, quizzes, etc.
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     
     try:
         # TODO: Fetch lesson content from education system
@@ -642,7 +677,9 @@ def get_education_progress():
             "achievements": [...]
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     
     try:
         # TODO: Fetch user progress from education system
@@ -686,7 +723,9 @@ def get_performance_analytics():
             "max_drawdown": -5.2
         }
     """
-    user_id = request.user_id
+    user_id = _get_request_user_id()
+    if not user_id:
+        return jsonify({'error': 'Authentication required'}), 401
     period = request.args.get('period', 'month')
     broker = request.args.get('broker')
     
@@ -723,13 +762,13 @@ def setup_websocket_handlers(socketio: SocketIO):
     @socketio.on('connect')
     def handle_connect():
         """Handle client connection."""
-        logger.info(f"Client connected: {request.sid}")
+        logger.info(f"Client connected: {getattr(request, 'sid', 'unknown')}")
         emit('connected', {'message': 'Connected to NIJA trading server'})
     
     @socketio.on('disconnect')
     def handle_disconnect():
         """Handle client disconnection."""
-        logger.info(f"Client disconnected: {request.sid}")
+        logger.info(f"Client disconnected: {getattr(request, 'sid', 'unknown')}")
     
     @socketio.on('subscribe_positions')
     def handle_subscribe_positions(data):
@@ -808,7 +847,7 @@ def broadcast_position_update(user_id: str, position_data: Dict[str, Any], socke
         socketio: SocketIO instance
     """
     room = f'positions_{user_id}'
-    socketio.emit('position_update', position_data, room=room)
+    socketio.emit('position_update', position_data, to=room)
     logger.debug(f"Broadcasted position update to room {room}")
 
 
@@ -822,7 +861,7 @@ def broadcast_trade_execution(user_id: str, trade_data: Dict[str, Any], socketio
         socketio: SocketIO instance
     """
     room = f'trades_{user_id}'
-    socketio.emit('trade_execution', trade_data, room=room)
+    socketio.emit('trade_execution', trade_data, to=room)
     logger.debug(f"Broadcasted trade execution to room {room}")
 
 
@@ -830,7 +869,7 @@ def broadcast_trade_execution(user_id: str, trade_data: Dict[str, Any], socketio
 # Blueprint Registration
 # ========================================
 
-def register_unified_mobile_api(app: Flask, socketio: SocketIO = None):
+def register_unified_mobile_api(app: Flask, socketio: Optional[SocketIO] = None):
     """
     Register the unified mobile API blueprint and WebSocket handlers.
     
@@ -840,7 +879,7 @@ def register_unified_mobile_api(app: Flask, socketio: SocketIO = None):
     """
     app.register_blueprint(unified_mobile_api)
     
-    if socketio:
+    if socketio is not None:
         setup_websocket_handlers(socketio)
         logger.info("WebSocket handlers registered")
     

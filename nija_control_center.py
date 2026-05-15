@@ -41,6 +41,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+init_database: Any
+get_db_session: Any
+check_database_health: Any
+User: Any
+Position: Any
+BrokerCredential: Any
+get_hard_controls: Any
+get_user_pnl_tracker: Any
+get_user_risk_manager: Any
+
 # Add bot directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -52,24 +62,31 @@ try:
 except ImportError as e:
     logger.warning(f"Database not available: {e}")
     DATABASE_AVAILABLE = False
+    init_database = None
+    get_db_session = None
+    check_database_health = lambda: False
+    User = Position = BrokerCredential = None
 
 try:
     from controls import get_hard_controls
     CONTROLS_AVAILABLE = True
 except ImportError:
     CONTROLS_AVAILABLE = False
+    get_hard_controls = lambda: None
 
 try:
     from bot.user_pnl_tracker import get_user_pnl_tracker
     PNL_TRACKER_AVAILABLE = True
 except ImportError:
     PNL_TRACKER_AVAILABLE = False
+    get_user_pnl_tracker = lambda: None
 
 try:
     from bot.user_risk_manager import get_user_risk_manager
     RISK_MANAGER_AVAILABLE = True
 except ImportError:
     RISK_MANAGER_AVAILABLE = False
+    get_user_risk_manager = lambda: None
 
 try:
     from bot.broker_manager import BrokerManager
@@ -130,20 +147,18 @@ class NIJAControlCenter:
             return overview
             
         try:
-            session = get_db_session()
-            users = session.query(User).all()
-            overview['total_users'] = len(users)
-            overview['active_users'] = sum(1 for u in users if u.is_active)
-            
-            # Get positions
-            positions = session.query(Position).filter(Position.is_open == True).all()
-            overview['total_positions'] = len(positions)
-            overview['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
-            
-            # Check database health
-            overview['database_healthy'] = check_database_health()
-            
-            session.close()
+            with get_db_session() as session:
+                users = session.query(User).all()
+                overview['total_users'] = len(users)
+                overview['active_users'] = sum(1 for u in users if u.is_active)
+
+                # Get positions
+                positions = session.query(Position).filter(Position.is_open == True).all()
+                overview['total_positions'] = len(positions)
+                overview['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
+
+                # Check database health
+                overview['database_healthy'] = bool(check_database_health())
         except Exception as e:
             logger.error(f"Error getting platform overview: {e}")
             
@@ -151,7 +166,10 @@ class NIJAControlCenter:
         if CONTROLS_AVAILABLE:
             try:
                 controls = get_hard_controls()
-                overview['trading_enabled'] = controls.is_trading_enabled()
+                if controls and hasattr(controls, 'is_trading_enabled'):
+                    overview['trading_enabled'] = bool(controls.is_trading_enabled())
+                elif controls and hasattr(controls, 'is_live_capital_verified'):
+                    overview['trading_enabled'] = bool(controls.is_live_capital_verified())
             except Exception as e:
                 logger.error(f"Error checking trading status: {e}")
                 
@@ -165,52 +183,56 @@ class NIJAControlCenter:
             return summaries
             
         try:
-            session = get_db_session()
-            users = session.query(User).all()
-            
-            for user in users:
-                summary = {
-                    'user_id': user.user_id,
-                    'email': user.email or 'N/A',
-                    'tier': user.subscription_tier or 'basic',
-                    'is_active': user.is_active,
-                    'balance': 0.0,
-                    'positions': 0,
-                    'unrealized_pnl': 0.0,
-                    'daily_pnl': 0.0,
-                    'can_trade': False,
-                    'status': 'unknown'
-                }
-                
-                # Get positions for this user
-                positions = session.query(Position).filter(
-                    Position.user_id == user.user_id,
-                    Position.is_open == True
-                ).all()
-                summary['positions'] = len(positions)
-                summary['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
-                
-                # Get PnL data if available
-                if PNL_TRACKER_AVAILABLE:
-                    try:
-                        pnl_tracker = get_user_pnl_tracker(user.user_id)
-                        summary['daily_pnl'] = pnl_tracker.get_daily_pnl()
-                        summary['balance'] = pnl_tracker.get_total_balance()
-                    except Exception as e:
-                        logger.debug(f"Could not get PnL for {user.user_id}: {e}")
-                
-                # Get risk status
-                if RISK_MANAGER_AVAILABLE:
-                    try:
-                        risk_mgr = get_user_risk_manager(user.user_id)
-                        summary['can_trade'] = risk_mgr.can_trade()
-                        summary['status'] = risk_mgr.get_status()
-                    except Exception as e:
-                        logger.debug(f"Could not get risk status for {user.user_id}: {e}")
-                
-                summaries.append(summary)
-            
-            session.close()
+            with get_db_session() as session:
+                users = session.query(User).all()
+
+                for user in users:
+                    summary = {
+                        'user_id': user.user_id,
+                        'email': user.email or 'N/A',
+                        'tier': user.subscription_tier or 'basic',
+                        'is_active': user.is_active,
+                        'balance': 0.0,
+                        'positions': 0,
+                        'unrealized_pnl': 0.0,
+                        'daily_pnl': 0.0,
+                        'can_trade': False,
+                        'status': 'unknown'
+                    }
+
+                    # Get positions for this user
+                    positions = session.query(Position).filter(
+                        Position.user_id == user.user_id,
+                        Position.is_open == True
+                    ).all()
+                    summary['positions'] = len(positions)
+                    summary['unrealized_pnl'] = sum(p.unrealized_pnl or 0 for p in positions)
+
+                    # Get PnL data if available
+                    if PNL_TRACKER_AVAILABLE:
+                        try:
+                            pnl_tracker = get_user_pnl_tracker()
+                            if pnl_tracker and hasattr(pnl_tracker, 'get_stats'):
+                                stats = pnl_tracker.get_stats(str(user.user_id))
+                                summary['daily_pnl'] = stats.get('daily_pnl', 0.0)
+                                summary['balance'] = stats.get('total_pnl', 0.0)
+                        except Exception as e:
+                            logger.debug(f"Could not get PnL for {user.user_id}: {e}")
+
+                    # Get risk status
+                    if RISK_MANAGER_AVAILABLE:
+                        try:
+                            risk_mgr = get_user_risk_manager()
+                            if risk_mgr and hasattr(risk_mgr, 'can_trade'):
+                                can_trade_result, _ = risk_mgr.can_trade(str(user.user_id), 0.0)
+                                summary['can_trade'] = bool(can_trade_result)
+                            if risk_mgr and hasattr(risk_mgr, 'get_state'):
+                                state = risk_mgr.get_state(str(user.user_id))
+                                summary['status'] = 'circuit_breaker' if getattr(state, 'circuit_breaker_triggered', False) else 'active'
+                        except Exception as e:
+                            logger.debug(f"Could not get risk status for {user.user_id}: {e}")
+
+                    summaries.append(summary)
         except Exception as e:
             logger.error(f"Error getting user summaries: {e}")
             
@@ -339,7 +361,10 @@ class NIJAControlCenter:
         if CONTROLS_AVAILABLE:
             try:
                 controls = get_hard_controls()
-                controls.disable_trading()
+                if controls and hasattr(controls, 'disable_trading'):
+                    controls.disable_trading()
+                elif controls and hasattr(controls, 'trigger_global_kill_switch'):
+                    controls.trigger_global_kill_switch('Emergency stop from control center')
                 print(f"{Colors.OKGREEN}✓ Trading disabled globally{Colors.ENDC}")
             except Exception as e:
                 print(f"{Colors.FAIL}✗ Error disabling trading: {e}{Colors.ENDC}")
@@ -355,7 +380,10 @@ class NIJAControlCenter:
         if CONTROLS_AVAILABLE:
             try:
                 controls = get_hard_controls()
-                controls.disable_trading()
+                if controls and hasattr(controls, 'disable_trading'):
+                    controls.disable_trading()
+                elif controls and hasattr(controls, 'trigger_global_kill_switch'):
+                    controls.trigger_global_kill_switch('Pause trading from control center')
                 print(f"{Colors.OKGREEN}✓ Trading paused{Colors.ENDC}")
             except Exception as e:
                 print(f"{Colors.FAIL}✗ Error: {e}{Colors.ENDC}")
@@ -369,7 +397,10 @@ class NIJAControlCenter:
         if CONTROLS_AVAILABLE:
             try:
                 controls = get_hard_controls()
-                controls.enable_trading()
+                if controls and hasattr(controls, 'enable_trading'):
+                    controls.enable_trading()
+                elif controls and hasattr(controls, 'reset_global_kill_switch'):
+                    controls.reset_global_kill_switch()
                 print(f"{Colors.OKGREEN}✓ Trading enabled{Colors.ENDC}")
             except Exception as e:
                 print(f"{Colors.FAIL}✗ Error: {e}{Colors.ENDC}")

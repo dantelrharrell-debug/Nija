@@ -91,7 +91,7 @@ def get_pair_minimums(pair: str) -> Dict[str, float]:
 
     # Try to get dynamic minimum from market data cache
     try:
-        from bot.kraken_market_data import get_kraken_market_data
+        from bot.kraken_market_data import get_kraken_market_data  # type: ignore[import]
         market_data = get_kraken_market_data()
 
         # Get minimum volume from Kraken API data

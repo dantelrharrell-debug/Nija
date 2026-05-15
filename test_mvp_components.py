@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import shutil
+from typing import Dict, cast
 
 # Test results tracking
 tests_passed = 0
@@ -56,7 +57,8 @@ def test_secure_vault():
         assert creds is not None, "Failed to retrieve credentials"
         assert creds['api_key'] == "test_api_key_123", "API key mismatch"
         assert creds['api_secret'] == "test_secret_456", "API secret mismatch"
-        assert creds['additional_params']['passphrase'] == "test_pass", "Passphrase mismatch"
+        additional_params = cast(Dict[str, str], creds['additional_params'])
+        assert additional_params['passphrase'] == "test_pass", "Passphrase mismatch"
         print("✓ Credentials decrypted correctly")
 
         # Test listing brokers
@@ -85,7 +87,7 @@ def test_secure_vault():
     except Exception as e:
         print(f"\n❌ SECURE VAULT: FAILED - {e}")
         tests_failed += 1
-        if os.path.exists(temp_db):
+        if temp_db and os.path.exists(temp_db):
             os.unlink(temp_db)
         return False
 
@@ -147,6 +149,7 @@ def test_user_authentication():
         updated = user_db.update_user("test_user_1", {"subscription_tier": "enterprise"})
         assert updated, "Failed to update user"
         user = user_db.get_user("test_user_1")
+        assert user is not None, "Failed to get user after update"
         assert user['subscription_tier'] == "enterprise", "Tier not updated"
         print("✓ User update works")
 
@@ -160,7 +163,7 @@ def test_user_authentication():
     except Exception as e:
         print(f"\n❌ USER AUTHENTICATION: FAILED - {e}")
         tests_failed += 1
-        if os.path.exists(temp_db):
+        if temp_db and os.path.exists(temp_db):
             os.unlink(temp_db)
         return False
 
@@ -289,11 +292,13 @@ def test_integration():
 
         # 4. Retrieve credentials for execution
         creds = vault.get_credentials("user_123", best_broker)
+        assert creds is not None, "Credentials were not found"
         assert creds['api_key'] == "coinbase_key", "Credential retrieval failed"
         print("✓ Credentials retrieved for execution")
 
         # 5. Check user permissions
         user = user_db.get_user("user_123")
+        assert user is not None, "User was not found"
         assert user['subscription_tier'] == "pro", "User tier check failed"
         print("✓ User permissions checked")
 
@@ -308,9 +313,9 @@ def test_integration():
     except Exception as e:
         print(f"\n❌ INTEGRATION: FAILED - {e}")
         tests_failed += 1
-        if os.path.exists(vault_db):
+        if vault_db and os.path.exists(vault_db):
             os.unlink(vault_db)
-        if os.path.exists(user_db_path):
+        if user_db_path and os.path.exists(user_db_path):
             os.unlink(user_db_path)
         return False
 

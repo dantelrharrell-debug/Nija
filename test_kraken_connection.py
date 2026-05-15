@@ -27,6 +27,7 @@ import argparse
 import os
 import sys
 import time
+from typing import Any
 from datetime import datetime, timezone
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
@@ -159,6 +160,7 @@ def test_account(user_id: str, timeout: int = 15) -> bool:
     except Exception as exc:
         _warn(f"Could not load nonce manager: {exc}")
         _info("Will use krakenex default nonce (less reliable)")
+        gnm = None
         nonce_mgr = None
 
     # Build API client
@@ -167,7 +169,9 @@ def test_account(user_id: str, timeout: int = 15) -> bool:
     # Apply timeout to the underlying requests session
     try:
         import functools
-        k.session.request = functools.partial(k.session.request, timeout=timeout)
+        session: Any = getattr(k, "session", None)
+        if session is not None and hasattr(session, "request"):
+            session.request = functools.partial(session.request, timeout=timeout)
     except AttributeError:
         pass  # Older krakenex versions — no session attribute
 
@@ -182,13 +186,13 @@ def test_account(user_id: str, timeout: int = 15) -> bool:
     _info(f"Calling Kraken Balance API for {label}...")
     t0 = time.monotonic()
     try:
-        nonce = gnm.get_kraken_nonce() if nonce_mgr else None
+        nonce = gnm.get_kraken_nonce() if nonce_mgr and gnm is not None else None
         params = {"nonce": nonce} if nonce else {}
         result = k.query_private("Balance", params)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
     except Exception as exc:
         _fail(f"Request raised an exception: {exc}")
-        if nonce_mgr:
+        if nonce_mgr and gnm is not None:
             try:
                 gnm.record_kraken_nonce_error()
             except Exception:
@@ -202,7 +206,7 @@ def test_account(user_id: str, timeout: int = 15) -> bool:
             _warn("Nonce error detected — run: python3 reset_kraken_nonce.py")
         if any("permission" in str(e).lower() for e in errors):
             _warn("Permission error — ensure your API key has 'Query Funds' permission")
-        if nonce_mgr:
+        if nonce_mgr and gnm is not None:
             try:
                 gnm.record_kraken_nonce_error()
             except Exception:
@@ -210,7 +214,7 @@ def test_account(user_id: str, timeout: int = 15) -> bool:
         return False
 
     # Success
-    if nonce_mgr:
+    if nonce_mgr and gnm is not None:
         try:
             gnm.record_kraken_nonce_success()
         except Exception:

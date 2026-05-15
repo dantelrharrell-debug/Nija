@@ -51,6 +51,9 @@ output_queue = queue.Queue()
 def stream_output():
     """Stream bot output and filter for state transitions"""
     transition_count = 0
+    if proc.stdout is None:
+        print("[ERROR] Process stdout stream is unavailable")
+        return transition_count
     
     for line in proc.stdout:
         line = line.rstrip('\n')

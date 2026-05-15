@@ -304,6 +304,9 @@ def verify_ios_purchase():
                 'status': status.value,
                 'message': 'Invalid or expired receipt'
             }), 400
+
+        if receipt_info is None:
+            return jsonify({'success': False, 'status': status.value, 'message': 'Missing receipt details'}), 400
         
         # Map product ID to subscription tier
         product_id = receipt_info['product_id']
@@ -397,6 +400,9 @@ def verify_android_purchase():
                 'status': status.value,
                 'message': 'Invalid or expired purchase'
             }), 400
+
+        if purchase_info is None:
+            return jsonify({'success': False, 'status': status.value, 'message': 'Missing purchase details'}), 400
         
         # Map product ID to subscription tier
         if product_id not in PRODUCT_ID_TO_TIER:

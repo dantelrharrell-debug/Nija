@@ -35,7 +35,7 @@ def test_position_profit_status_logging():
         def get_account_balance(self):
             return 100.0
 
-    engine = ExecutionEngine(broker_client=MockBroker(), user_id=None)
+    engine = ExecutionEngine(broker_client=MockBroker(), user_id="test_user")
 
     # Add some mock positions
     engine.positions['BTC-USD'] = {
@@ -112,7 +112,7 @@ def test_stepped_profit_exit_logging():
         def get_account_balance(self):
             return 100.0
 
-    engine = ExecutionEngine(broker_client=MockBroker(), user_id=None)
+    engine = ExecutionEngine(broker_client=MockBroker(), user_id="test_user")
 
     # Add a position that should trigger profit exit
     engine.positions['CRO-USD'] = {
@@ -172,7 +172,7 @@ def test_profit_target_progress():
         def get_account_balance(self):
             return 100.0
 
-    engine = ExecutionEngine(broker_client=MockBroker(), user_id=None)
+    engine = ExecutionEngine(broker_client=MockBroker(), user_id="test_user")
 
     # Add a position making progress toward profit
     engine.positions['ADA-USD'] = {

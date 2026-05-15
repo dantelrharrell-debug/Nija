@@ -33,6 +33,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+try:
+    from bot.broker_integration import BrokerFactory
+except ImportError:
+    try:
+        from broker_integration import BrokerFactory
+    except ImportError:
+        BrokerFactory = None
+
+
+def get_broker_integration(broker_name: str):
+    """Compatibility wrapper for examples expecting get_broker_integration."""
+    if BrokerFactory is None:
+        raise RuntimeError("BrokerFactory is not available")
+    return BrokerFactory.create_broker(broker_name)
+
 
 def example_1_legacy_cleanup_with_monitoring():
     """
@@ -50,7 +65,6 @@ def example_1_legacy_cleanup_with_monitoring():
     
     try:
         from bot.position_tracker import PositionTracker
-        from bot.broker_integration import get_broker_integration
         from bot.legacy_position_exit_protocol import LegacyPositionExitProtocol
         
         # Initialize components
@@ -115,7 +129,6 @@ def example_2_pre_trade_risk_checks():
     
     try:
         from bot.risk_intelligence_gate import RiskIntelligenceGate, create_risk_intelligence_gate
-        from bot.broker_integration import get_broker_integration
         import pandas as pd
         
         # Initialize broker
@@ -153,6 +166,17 @@ def example_2_pre_trade_risk_checks():
                 'close': [50500] * 100,
                 'volume': [1000] * 100
             })
+        if not isinstance(df, pd.DataFrame):
+            try:
+                df = pd.DataFrame(df)
+            except Exception:
+                df = pd.DataFrame({
+                    'open': [50000] * 100,
+                    'high': [51000] * 100,
+                    'low': [49000] * 100,
+                    'close': [50500] * 100,
+                    'volume': [1000] * 100
+                })
         
         # Run pre-trade assessment
         logger.info(f"🎯 Assessing trade: {symbol} for ${proposed_size:.2f}")
@@ -197,7 +221,6 @@ def example_3_integrated_workflow():
     
     try:
         from bot.position_tracker import PositionTracker
-        from bot.broker_integration import get_broker_integration
         from bot.legacy_position_exit_protocol import LegacyPositionExitProtocol, AccountState
         from bot.risk_intelligence_gate import create_risk_intelligence_gate
         
@@ -244,10 +267,10 @@ def example_3_integrated_workflow():
         current_positions = broker.get_open_positions()
         
         # Get market data
+        import pandas as pd
         try:
             df = broker.get_market_data(symbol, timeframe='1h', limit=100)
         except:
-            import pandas as pd
             df = pd.DataFrame({
                 'open': [3000] * 100,
                 'high': [3100] * 100,
@@ -255,6 +278,17 @@ def example_3_integrated_workflow():
                 'close': [3050] * 100,
                 'volume': [1000] * 100
             })
+        if not isinstance(df, pd.DataFrame):
+            try:
+                df = pd.DataFrame(df)
+            except Exception:
+                df = pd.DataFrame({
+                    'open': [3000] * 100,
+                    'high': [3100] * 100,
+                    'low': [2900] * 100,
+                    'close': [3050] * 100,
+                    'volume': [1000] * 100
+                })
         
         # Pre-trade assessment
         approved, assessment = risk_gate.pre_trade_risk_assessment(
@@ -301,7 +335,6 @@ def example_4_startup_integration():
         """Example bot startup sequence with integrated checks"""
         try:
             from bot.position_tracker import PositionTracker
-            from bot.broker_integration import get_broker_integration
             from bot.legacy_position_exit_protocol import LegacyPositionExitProtocol, AccountState
             
             logger.info("🚀 Bot Starting Up...")

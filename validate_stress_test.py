@@ -51,7 +51,7 @@ print(f"✅ State after crisis conditions: {ssm.get_current_state().value}")
 # Test crash simulation (quick test)
 print("\nTesting crash simulation...")
 symbols = ['BTC-USD']
-initial_prices = {'BTC-USD': 40000}
+initial_prices = {'BTC-USD': 40000.0}
 
 result = simulator.simulate_crash(
     scenario=scenario,

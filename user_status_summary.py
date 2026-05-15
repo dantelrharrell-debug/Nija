@@ -21,7 +21,7 @@ import os
 import sys
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 import argparse
 
@@ -39,6 +39,13 @@ try:
     DATABASE_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Database imports not available: {e}")
+    init_database = None
+    get_db_session = None
+    check_database_health = None
+    User = Any
+    Position = Any
+    BrokerCredential = Any
+    TradingInstance = Any
     DATABASE_AVAILABLE = False
 
 # Import controls and risk management
@@ -47,6 +54,7 @@ try:
     CONTROLS_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Controls not available: {e}")
+    get_hard_controls = None
     CONTROLS_AVAILABLE = False
 
 # Import user risk manager
@@ -55,6 +63,7 @@ try:
     RISK_MANAGER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"User risk manager not available: {e}")
+    get_user_risk_manager = None
     RISK_MANAGER_AVAILABLE = False
 
 # Import user PnL tracker for balance and stats
@@ -63,6 +72,7 @@ try:
     PNL_TRACKER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"User PnL tracker not available: {e}")
+    get_user_pnl_tracker = None
     PNL_TRACKER_AVAILABLE = False
 
 
@@ -110,13 +120,13 @@ class UserStatusSummary:
         self.pnl_tracker = None
         
         # Initialize components if available
-        if CONTROLS_AVAILABLE:
+        if CONTROLS_AVAILABLE and callable(get_hard_controls):
             self.hard_controls = get_hard_controls()
         
-        if RISK_MANAGER_AVAILABLE:
+        if RISK_MANAGER_AVAILABLE and callable(get_user_risk_manager):
             self.risk_manager = get_user_risk_manager()
         
-        if PNL_TRACKER_AVAILABLE:
+        if PNL_TRACKER_AVAILABLE and callable(get_user_pnl_tracker):
             self.pnl_tracker = get_user_pnl_tracker()
     
     def get_all_users(self) -> List[UserStatus]:
@@ -155,12 +165,16 @@ class UserStatusSummary:
         
         # Initialize database if needed
         try:
-            init_database()
+            if callable(init_database):
+                init_database()
         except Exception as e:
             logger.debug(f"Database initialization error: {e}")
             return users
         
         # Query all users from database
+        if not callable(get_db_session):
+            return users
+
         with get_db_session() as session:
             db_users = session.query(User).all()
             
@@ -294,10 +308,14 @@ class UserStatusSummary:
                 logger.debug(f"Could not get stats from PnL tracker for {db_user.user_id}: {e}")
         
         # Get open positions
-        open_positions = session.query(Position).filter(
-            Position.user_id == db_user.user_id,
-            Position.status == 'open'
-        ).all()
+        position_model: Any = Position
+        if hasattr(position_model, 'user_id') and hasattr(position_model, 'status'):
+            open_positions = session.query(position_model).filter(
+                getattr(position_model, 'user_id') == db_user.user_id,
+                getattr(position_model, 'status') == 'open'
+            ).all()
+        else:
+            open_positions = []
         
         user_status.open_positions = len(open_positions)
         
@@ -546,7 +564,7 @@ def main():
         logging.getLogger().setLevel(logging.ERROR)
     
     # Check database health first
-    if DATABASE_AVAILABLE and not args.json:
+    if DATABASE_AVAILABLE and not args.json and callable(init_database) and callable(check_database_health):
         try:
             init_database()
             health = check_database_health()

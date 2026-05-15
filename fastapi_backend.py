@@ -32,12 +32,23 @@ import os
 import logging
 import time
 import stripe
+from importlib import import_module
 
 from auth import get_api_key_manager, get_user_manager
 from auth.user_database import get_user_database
 from auth.two_factor import get_two_factor_auth
 from auth.email_service import get_email_service
-from auth.audit_log import get_auth_audit_log
+
+
+def get_auth_audit_log() -> Any:
+    """Load auth audit log provider when available."""
+    try:
+        module = import_module("auth.audit_log")
+        return getattr(module, "get_auth_audit_log")()
+    except (ImportError, AttributeError):
+        return None
+
+
 from vault import get_vault
 from execution import get_permission_validator, UserPermissions
 from user_control import get_user_control_backend
@@ -83,10 +94,11 @@ app.add_middleware(
 )
 
 # Trusted host middleware (security)
-if os.getenv('TRUSTED_HOSTS'):
+trusted_hosts_env = os.getenv('TRUSTED_HOSTS')
+if trusted_hosts_env:
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=os.getenv('TRUSTED_HOSTS').split(',')
+        allowed_hosts=trusted_hosts_env.split(',')
     )
 
 # Configuration - Security: Require JWT secret
@@ -100,6 +112,7 @@ if len(JWT_SECRET_KEY) < 32:
     raise ValueError(
         "JWT_SECRET_KEY must be at least 32 characters for security."
     )
+JWT_SECRET_KEY_STR: str = JWT_SECRET_KEY
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = int(os.getenv('JWT_EXPIRATION_HOURS', '24'))
 
@@ -109,7 +122,7 @@ user_manager = get_user_manager()
 user_db = get_user_database()  # Database-backed user management
 vault = get_vault()  # Secure credential vault
 permission_validator = get_permission_validator()
-user_control = get_user_control_backend()
+user_control: Any = get_user_control_backend()
 two_fa = get_two_factor_auth()       # TOTP two-factor authentication
 email_svc = get_email_service()      # Transactional email service
 audit_log = get_auth_audit_log()     # Auth event audit log
@@ -208,13 +221,13 @@ def create_access_token(user_id: str) -> str:
         'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
         'iat': datetime.utcnow()
     }
-    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, JWT_SECRET_KEY_STR, algorithm=JWT_ALGORITHM)
 
 
 def decode_access_token(token: str) -> Optional[Dict]:
     """Decode and validate JWT token."""
     try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET_KEY_STR, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
         logger.warning("JWT token has expired")
@@ -224,7 +237,7 @@ def decode_access_token(token: str) -> Optional[Dict]:
         return None
 
 
-async def check_rate_limit(request: Request, user_id: str = None):
+async def check_rate_limit(request: Request, user_id: Optional[str] = None):
     """
     Rate limiting middleware - prevents API abuse.
 
@@ -905,10 +918,13 @@ async def create_checkout_session(
 
     app_url = os.getenv("APP_BASE_URL", "https://app.nija.trading")
     try:
+        customer_email = user_profile.get("email") if isinstance(user_profile, dict) else None
+        if not isinstance(customer_email, str):
+            customer_email = ""
         session = stripe.checkout.Session.create(
             mode="subscription",
             line_items=[{"price": price_id, "quantity": 1}],
-            customer_email=user_profile.get("email"),
+            customer_email=customer_email,
             metadata={"user_id": user_id, "tier": data.tier},
             success_url=f"{app_url}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{app_url}/subscription/cancel",
@@ -964,7 +980,7 @@ async def stripe_webhook(request: Request):
             event = stripe.Webhook.construct_event(
                 payload, sig_header, _stripe_webhook_secret
             )
-        except stripe.error.SignatureVerificationError:
+        except Exception:
             logger.warning("Stripe webhook signature verification failed")
             raise HTTPException(status_code=400, detail="Invalid signature")
     else:

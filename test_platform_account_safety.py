@@ -98,6 +98,8 @@ def test_position_cap_enforcement():
         "position_cap_enforcer", 
         os.path.join(bot_dir, "position_cap_enforcer.py")
     )
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load position_cap_enforcer module spec")
     enforcer_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(enforcer_module)
     PositionCapEnforcer = enforcer_module.PositionCapEnforcer
@@ -170,6 +172,8 @@ def test_dust_cleanup():
         "dust_blacklist",
         os.path.join(bot_dir, "dust_blacklist.py")
     )
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load dust_blacklist module spec")
     dust_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dust_module)
     DustBlacklist = dust_module.DustBlacklist
@@ -586,6 +590,8 @@ def test_verify_account_hierarchy():
     multi_account_dir = os.path.join(bot_dir, "multi_account_broker_manager.py")
     import importlib.util
     spec = importlib.util.spec_from_file_location("multi_account_broker_manager", multi_account_dir)
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load multi_account_broker_manager module spec")
     mabm_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mabm_module)
     MultiAccountBrokerManager = mabm_module.MultiAccountBrokerManager
@@ -672,6 +678,8 @@ def test_alpaca_hierarchy_validation():
     # Import startup_validation fresh so env-var changes take effect
     sv_path = os.path.join(bot_dir, "startup_validation.py")
     spec = importlib.util.spec_from_file_location("startup_validation", sv_path)
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load startup_validation module spec")
     sv_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sv_module)
     validate_account_hierarchy = sv_module.validate_account_hierarchy

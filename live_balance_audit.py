@@ -124,12 +124,7 @@ def connect_to_kraken() -> Optional[object]:
             return None
         
         # Initialize broker
-        broker = KrakenBroker(
-            api_key=api_key,
-            api_secret=api_secret,
-            account_name="platform",
-            verbose=True
-        )
+        broker = KrakenBroker()
         
         print(f"{Colors.YELLOW}⏳ Connecting to Kraken API...{Colors.RESET}")
         
@@ -138,12 +133,12 @@ def connect_to_kraken() -> Optional[object]:
         
         if connection_success:
             print(f"{Colors.GREEN}✅ Successfully connected to Kraken API{Colors.RESET}")
-            print(f"   Account: {broker.account_name}")
-            print(f"   Status: {broker.connection_status}")
+            print(f"   Account: platform")
+            print(f"   Status: connected")
             return broker
         else:
             print(f"{Colors.RED}❌ Failed to connect to Kraken API{Colors.RESET}")
-            print(f"   Reason: {broker.connection_status}")
+            print(f"   Reason: connect() returned False")
             return None
             
     except ImportError as e:

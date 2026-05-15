@@ -22,7 +22,7 @@ Architecture:
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import jwt
@@ -33,6 +33,8 @@ import secrets
 from auth import get_api_key_manager, get_user_manager
 from execution import get_permission_validator, UserPermissions
 from user_control import get_user_control_backend
+
+request: Any
 
 # Configure logging
 logging.basicConfig(
@@ -405,6 +407,8 @@ def user_settings():
 
         return jsonify({'message': 'Settings updated successfully'})
 
+    return jsonify({'error': 'Method not allowed'}), 405
+
 
 # ========================================
 # Broker API Key Management Endpoints
@@ -480,6 +484,8 @@ def manage_broker_keys(broker_name: str):
             return jsonify({
                 'error': f'No {broker_name} credentials found for this user'
             }), 404
+
+    return jsonify({'error': 'Method not allowed'}), 405
 
 
 # ========================================
@@ -702,13 +708,14 @@ def get_user_mode():
                 return jsonify({'error': 'User not found'}), 404
             
             # Determine mode
-            mode = UserMode.LIVE_TRADING.value if not user.education_mode else UserMode.EDUCATION.value
+            education_mode = bool(getattr(user, 'education_mode', False))
+            mode = UserMode.LIVE_TRADING.value if not education_mode else UserMode.EDUCATION.value
             
             # Get progress if in education mode
             progress = None
             ready_for_upgrade = False
             
-            if user.education_mode:
+            if education_mode:
                 education_manager.update_from_paper_account(user_id)
                 user_progress = education_manager.get_progress(user_id)
                 if user_progress:
@@ -718,7 +725,7 @@ def get_user_mode():
             return jsonify({
                 'success': True,
                 'mode': mode,
-                'education_mode': user.education_mode,
+                'education_mode': education_mode,
                 'consented_to_live_trading': user.consented_to_live_trading,
                 'progress': progress,
                 'ready_for_upgrade': ready_for_upgrade
@@ -789,8 +796,8 @@ def consent_to_live_trading():
                 return jsonify({'error': 'User not found'}), 404
             
             # Record consent
-            user.consented_to_live_trading = True
-            user.updated_at = datetime.utcnow()
+            setattr(user, 'consented_to_live_trading', True)
+            setattr(user, 'updated_at', datetime.utcnow())
             session.commit()
             
             logger.info(f"User {user_id} consented to live trading")
@@ -830,7 +837,7 @@ def activate_live_trading():
                 return jsonify({'error': 'User not found'}), 404
             
             # Check consent
-            if not user.consented_to_live_trading:
+            if not bool(getattr(user, 'consented_to_live_trading', False)):
                 return jsonify({
                     'error': 'Must consent to live trading first',
                     'action_required': 'consent'
@@ -845,8 +852,8 @@ def activate_live_trading():
                 }), 400
             
             # Activate live trading
-            user.education_mode = False
-            user.updated_at = datetime.utcnow()
+            setattr(user, 'education_mode', False)
+            setattr(user, 'updated_at', datetime.utcnow())
             session.commit()
             
             logger.info(f"User {user_id} activated live trading mode")
@@ -884,8 +891,8 @@ def revert_to_education():
                 return jsonify({'error': 'User not found'}), 404
             
             # Switch back to education mode
-            user.education_mode = True
-            user.updated_at = datetime.utcnow()
+            setattr(user, 'education_mode', True)
+            setattr(user, 'updated_at', datetime.utcnow())
             session.commit()
             
             logger.info(f"User {user_id} reverted to education mode")

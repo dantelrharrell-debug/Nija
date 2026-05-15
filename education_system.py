@@ -425,7 +425,9 @@ def update_lesson_progress():
             "quiz_score": 85.0
         }
     """
-    lesson_id = request.view_args['lesson_id']
+    lesson_id = (request.view_args or {}).get('lesson_id')
+    if not lesson_id:
+        return jsonify({'error': 'lesson_id is required'}), 400
     data = request.get_json()
     
     if not data or 'user_id' not in data:

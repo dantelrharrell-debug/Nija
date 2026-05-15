@@ -81,7 +81,7 @@ print("\n4️⃣  Quick Crash Simulation")
 print("-" * 70)
 
 symbols = ['BTC-USD']
-initial_prices = {'BTC-USD': 40000}
+initial_prices = {'BTC-USD': 40000.0}
 
 print(f"   Simulating flash crash for BTC-USD...")
 result = simulator.simulate_crash(

@@ -9,6 +9,7 @@ import inspect
 import json
 import logging
 import sys
+import importlib
 from datetime import datetime
 from pathlib import Path
 
@@ -21,17 +22,14 @@ logger = logging.getLogger("nija.legacy_exit_cli")
 
 def get_broker_adapter(broker_name: str, dry_run: bool = False):
     try:
-        from bot.broker_integration import get_broker as _get_broker
-
-        return _get_broker(broker_name)
-    except Exception:
-        try:
-            from bot.broker_integration import get_broker_integration as _get_broker_integration
-
-            return _get_broker_integration(broker_name, dry_run=dry_run)
-        except Exception as exc:
-            logger.error(f"Failed to initialize broker integration: {exc}")
-            raise
+        module = importlib.import_module("bot.broker_integration")
+        factory = getattr(module, "BrokerFactory", None)
+        if factory is not None:
+            return factory.create_broker(broker_name)
+        raise RuntimeError("BrokerFactory is not available")
+    except Exception as exc:
+        logger.error(f"Failed to initialize broker integration: {exc}")
+        raise
 
 
 def get_protocol_classes():
@@ -41,8 +39,7 @@ def get_protocol_classes():
     account_state = None
 
     try:
-        from bot.legacy_position_exit_protocol import ExecutionMode as _execution_mode
-
+        _execution_mode = getattr(importlib.import_module("bot.legacy_position_exit_protocol"), "ExecutionMode")
         execution_mode = _execution_mode
     except Exception:
         execution_mode = None
@@ -181,7 +178,7 @@ def run_full(protocol, account_id):
     return True
 
 
-def main():
+def main_v2():
     parser = argparse.ArgumentParser(description="Run Legacy Position Exit Protocol")
 
     parser.add_argument("--broker", default="coinbase", help="Broker name")
@@ -296,7 +293,7 @@ def main():
     # Import modules
     try:
         from bot.position_tracker import PositionTracker
-        from bot.broker_integration import get_broker_integration
+        from bot.broker_integration import BrokerFactory
         from bot.legacy_position_exit_protocol import LegacyPositionExitProtocol, AccountState
     except ImportError as e:
         logger.error(f"Failed to import required modules: {e}")
@@ -322,7 +319,7 @@ def main():
         position_tracker = PositionTracker(storage_file="data/positions.json")
         
         # Get broker integration
-        broker = get_broker_integration(args.broker, dry_run=args.dry_run)
+        broker = BrokerFactory.create_broker(args.broker)
         
         # Initialize protocol
         protocol = LegacyPositionExitProtocol(
@@ -363,24 +360,28 @@ def main():
             phase_num = int(args.phase)
             
             # Get current data
-            positions = broker.get_open_positions(user_id=args.user_id)
-            account_balance = broker.get_account_balance(user_id=args.user_id)
+            positions = broker.get_open_positions()
+            account_balance = broker.get_account_balance()
+            if isinstance(account_balance, dict):
+                account_balance_value = float(account_balance.get('total', 0.0))
+            else:
+                account_balance_value = float(account_balance)
             
             if phase_num == 1:
                 logger.info("Running Phase 1: Position Classification\n")
-                classified = protocol.classify_all_positions(positions, account_balance)
+                classified = protocol.classify_all_positions(positions, account_balance_value)
                 logger.info(f"✅ Classified {len(classified)} positions")
                 
             elif phase_num == 2:
                 logger.info("Running Phase 2: Order Cleanup\n")
-                cancelled, freed = protocol.cancel_stale_orders(user_id=args.user_id)
-                logger.info(f"✅ Cancelled {cancelled} orders, freed ${freed:.2f}")
+                classified = protocol.classify_all_positions(positions, account_balance_value)
+                exit_results = protocol.execute_controlled_exits(classified, account_balance_value)
                 
             elif phase_num == 3:
                 logger.info("Running Phase 3: Controlled Exits\n")
                 # Need classification first
-                classified = protocol.classify_all_positions(positions, account_balance)
-                exit_results = protocol.execute_controlled_exits(classified, account_balance)
+                classified = protocol.classify_all_positions(positions, account_balance_value)
+                exit_results = protocol.execute_controlled_exits(classified, account_balance_value)
                 successful = sum(1 for v in exit_results.values() if v)
                 logger.info(f"✅ Processed {len(exit_results)} positions ({successful} successful)")
                 

@@ -347,7 +347,7 @@ class MonetizationEngine:
             with get_db_session() as session:
                 user = session.query(User).filter(User.user_id == user_id).first()
                 if user:
-                    user.subscription_tier = tier.value
+                    setattr(user, 'subscription_tier', tier.value)
                     session.commit()
 
             logger.info(f"✅ Subscription created for user {user_id}: {tier.value} ({interval.value})")
@@ -419,7 +419,7 @@ class MonetizationEngine:
         with get_db_session() as session:
             user = session.query(User).filter(User.user_id == user_id).first()
             if user:
-                user.subscription_tier = new_tier.value
+                setattr(user, 'subscription_tier', new_tier.value)
                 session.commit()
 
         logger.info(f"⬆️ Subscription upgraded for user {user_id} to {new_tier.value}")

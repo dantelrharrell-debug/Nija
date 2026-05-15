@@ -357,7 +357,7 @@ class KrakenAdapter(BrokerAdapter):
 
         # Use kraken_adapter module for normalization
         try:
-            from bot.kraken_adapter import normalize_kraken_symbol
+            from bot.kraken_adapter import normalize_kraken_symbol  # type: ignore[import]
             return normalize_kraken_symbol(symbol)
         except ImportError:
             # Fallback: Remove separators and uppercase

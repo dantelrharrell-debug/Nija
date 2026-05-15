@@ -480,15 +480,17 @@ class FiveYearBacktester:
         # T-test: Are returns significantly different from zero?
         from scipy import stats
         t_stat, p_value = stats.ttest_1samp(trade_returns, 0)
+        t_stat_value = float(np.asarray(t_stat).item())
+        p_value_value = float(np.asarray(p_value).item())
 
         return {
             'sample_size_adequate': True,
             'total_trades': len(trades),
-            't_statistic': float(t_stat),
-            'p_value': float(p_value),
-            'significant_at_5pct': p_value < 0.05,
-            'significant_at_1pct': p_value < 0.01,
-            'conclusion': 'Strategy shows statistically significant edge' if p_value < 0.05 else 'No significant edge detected'
+            't_statistic': t_stat_value,
+            'p_value': p_value_value,
+            'significant_at_5pct': p_value_value < 0.05,
+            'significant_at_1pct': p_value_value < 0.01,
+            'conclusion': 'Strategy shows statistically significant edge' if p_value_value < 0.05 else 'No significant edge detected'
         }
 
     def save_report(self, report: Dict, output_file: str):

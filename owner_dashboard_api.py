@@ -40,6 +40,16 @@ from typing import Any, Dict, Tuple
 
 from flask import Flask, jsonify, request, send_from_directory, Response
 
+get_owner_control_layer: Any
+OwnerConfig: Any
+get_accounting_layer: Any
+get_text_alert_system: Any
+get_weekly_salary_mode: Any
+get_emergency_capital_protection: Any
+get_minimum_daily_target: Any
+get_user_registry: Any
+KillSwitch: Any
+
 # ---------------------------------------------------------------------------
 # NIJA subsystem imports (graceful degradation if running standalone)
 # ---------------------------------------------------------------------------
@@ -221,8 +231,10 @@ def _validate_owner_pin(pin: str) -> bool:
     if not expected:
         # No PIN configured — check owner control layer
         owner = _owner()
-        if owner and hasattr(owner, "_config") and hasattr(owner._config, "pin"):
-            expected = owner._config.pin
+        config = getattr(owner, "_config", None)
+        pin_value = getattr(config, "pin", "") if config is not None else ""
+        if isinstance(pin_value, str):
+            expected = pin_value
     if expected and pin != expected:
         return False
     return True

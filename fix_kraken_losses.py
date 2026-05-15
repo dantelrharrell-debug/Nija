@@ -44,7 +44,7 @@ def check_strategy_filters():
 
     if not os.path.exists(file_path):
         print(f"❌ ERROR: {file_path} not found!")
-        return False
+        return False, [f"{file_path} not found"]
 
     with open(file_path, 'r') as f:
         content = f.read()
@@ -150,7 +150,7 @@ def check_entry_scoring():
 
     if not os.path.exists(file_path):
         print(f"❌ ERROR: {file_path} not found!")
-        return False
+        return False, [f"{file_path} not found"]
 
     with open(file_path, 'r') as f:
         content = f.read()

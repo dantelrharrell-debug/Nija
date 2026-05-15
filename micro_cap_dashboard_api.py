@@ -26,11 +26,14 @@ logger = logging.getLogger(__name__)
 
 # Try to import bot components
 try:
-    from bot.broker_integration import get_broker_integration
+    from bot.broker_integration import BrokerFactory
+    def get_broker_integration() -> Any:
+        return BrokerFactory.create_broker('coinbase')
     BROKER_AVAILABLE = True
 except ImportError:
     logger.warning("broker_integration not available - using mock data")
     BROKER_AVAILABLE = False
+    get_broker_integration = lambda: None
 
 try:
     from bot.kpi_tracker import get_kpi_tracker
@@ -38,6 +41,7 @@ try:
 except ImportError:
     logger.warning("kpi_tracker not available - using mock data")
     KPI_AVAILABLE = False
+    get_kpi_tracker = lambda: None
 
 try:
     from bot.risk_manager import AdaptiveRiskManager
@@ -45,6 +49,7 @@ try:
 except ImportError:
     logger.warning("risk_manager not available - using mock data")
     RISK_MANAGER_AVAILABLE = False
+    AdaptiveRiskManager = lambda: None
 
 
 class MicroCapDashboardAPI:

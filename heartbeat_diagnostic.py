@@ -16,6 +16,7 @@ import os
 import sys
 import logging
 import time
+import importlib
 
 # Enable heartbeat trade
 os.environ['HEARTBEAT_TRADE'] = 'true'
@@ -78,7 +79,10 @@ logger.debug = _log_debug
 # Import and run bot
 try:
     logger.info("Importing NIJA bot module...")
-    from bot import main
+    bot_module = importlib.import_module("bot.live_bot_script")
+    main = getattr(bot_module, "main", None)
+    if not callable(main):
+        raise RuntimeError("No callable main() found in bot.live_bot_script")
     
     logger.info("Starting heartbeat trade diagnostic...")
     logger.info("")

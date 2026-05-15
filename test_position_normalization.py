@@ -34,6 +34,8 @@ def test_dust_blacklist():
     # Import directly from dust_blacklist.py to avoid bot.py import
     import importlib.util
     spec = importlib.util.spec_from_file_location("dust_blacklist", os.path.join(bot_dir, "dust_blacklist.py"))
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load dust_blacklist module spec")
     dust_blacklist_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dust_blacklist_module)
     DustBlacklist = dust_blacklist_module.DustBlacklist
@@ -127,6 +129,8 @@ def test_position_filtering():
     # Import directly from dust_blacklist.py to avoid bot.py import
     import importlib.util
     spec = importlib.util.spec_from_file_location("dust_blacklist", os.path.join(bot_dir, "dust_blacklist.py"))
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load dust_blacklist module spec")
     dust_blacklist_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dust_blacklist_module)
     DustBlacklist = dust_blacklist_module.DustBlacklist
@@ -176,6 +180,8 @@ def test_normalization_workflow():
     # Import directly from dust_blacklist.py to avoid bot.py import
     import importlib.util
     spec = importlib.util.spec_from_file_location("dust_blacklist", os.path.join(bot_dir, "dust_blacklist.py"))
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load dust_blacklist module spec")
     dust_blacklist_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dust_blacklist_module)
     DustBlacklist = dust_blacklist_module.DustBlacklist

@@ -147,7 +147,7 @@ def run_backtest_demo():
     # Export results
     results_dir = Path("./results")
     results_dir.mkdir(exist_ok=True)
-    engine.export_results(results, results_dir / "demo_backtest.json")
+    engine.export_results(results, str(results_dir / "demo_backtest.json"))
 
     print(f"\n📁 Results saved to: results/demo_backtest.json")
 

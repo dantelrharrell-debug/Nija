@@ -231,6 +231,8 @@ class TestIndividualUserConfigLoader(unittest.TestCase):
                 # Verify independent_trading was loaded
                 user = loader.get_user_by_id('daivon_frazier')
                 self.assertIsNotNone(user)
+                if user is None:
+                    return
                 self.assertTrue(user.independent_trading)
 
 

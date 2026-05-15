@@ -1809,7 +1809,7 @@ try:
     logger.debug("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
 except ImportError:
     try:
-        from tiered_risk_engine import TieredRiskEngine
+        from tiered_risk_engine import TieredRiskEngine  # type: ignore[import]
         TIERED_RISK_ENGINE_AVAILABLE = True
         logger.debug("✅ Tiered Risk Engine loaded - conservative/aggressive capital pool gating active")
     except ImportError:
@@ -4803,7 +4803,7 @@ class TradingStrategy:
 
                     # LEGACY COPY TRADING CHECK (DEPRECATED - Feb 3, 2026)
                     try:
-                        from bot.kraken_copy_trading import (
+                        from bot.kraken_copy_trading import (  # type: ignore[import]
                             initialize_copy_trading_system,
                             wrap_kraken_broker_for_copy_trading
                         )

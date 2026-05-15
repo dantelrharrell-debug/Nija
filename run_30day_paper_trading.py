@@ -228,7 +228,7 @@ class PaperTradingMonitor:
         if alerts:
             self._save_metrics()
 
-    def generate_weekly_report(self, week_number: int = None) -> WeeklyMetrics:
+    def generate_weekly_report(self, week_number: Optional[int] = None) -> Optional[WeeklyMetrics]:
         """Generate weekly performance summary"""
         if not self.daily_metrics:
             logger.warning("No daily metrics available")
@@ -286,7 +286,7 @@ class PaperTradingMonitor:
             profit_factor=profit_factor,
             sharpe_ratio=sharpe,
             max_drawdown_pct=max_dd,
-            avg_daily_return_pct=np.mean(daily_returns)
+            avg_daily_return_pct=float(np.mean(daily_returns))
         )
 
     def generate_30day_report(self) -> Dict:

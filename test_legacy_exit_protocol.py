@@ -21,6 +21,8 @@ spec = importlib.util.spec_from_file_location(
     "legacy_position_exit_protocol",
     Path(__file__).parent / 'bot' / 'legacy_position_exit_protocol.py'
 )
+if spec is None or spec.loader is None:
+    raise ImportError("Could not load legacy_position_exit_protocol module spec")
 legacy_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(legacy_module)
 

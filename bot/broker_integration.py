@@ -10,9 +10,10 @@ Each broker implements a common interface for unified trading logic.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from datetime import datetime
 import logging
+import os
 import threading
 import time
 import traceback
@@ -31,7 +32,13 @@ except ImportError:
         )
     except ImportError:
         # Fallback if validator not available
-        def validate_and_adjust_order(pair, volume, price, side, ordertype='market'):
+        def validate_and_adjust_order(
+            pair: str,
+            volume: float,
+            price: float,
+            side: str,
+            ordertype: str = 'market',
+        ) -> Tuple[bool, float, Optional[str]]:
             return True, volume, None
         def log_order_validation(pair, volume, price, side, is_valid, error=None):
             pass
@@ -82,14 +89,14 @@ except ImportError:
 
 # Import Kraken adapter for symbol normalization and position reconciliation
 try:
-    from bot.kraken_adapter import (
+    from bot.kraken_adapter import (  # type: ignore[import]
         normalize_kraken_symbol, is_dust_position, should_track_position,
         get_kraken_reconciler, reconcile_kraken_position_after_failed_exit,
         DUST_THRESHOLD_USD
     )
 except ImportError:
     try:
-        from kraken_adapter import (
+        from kraken_adapter import (  # type: ignore[import]
             normalize_kraken_symbol, is_dust_position, should_track_position,
             get_kraken_reconciler, reconcile_kraken_position_after_failed_exit,
             DUST_THRESHOLD_USD
@@ -153,30 +160,24 @@ except ImportError:
 
 # Import custom exceptions for safety checks
 try:
-    from bot.exceptions import (
-        ExecutionError, BrokerMismatchError, InvalidTxidError,
-        InvalidFillPriceError, OrderRejectedError, ExecutionFailed
-    )
+    import bot.exceptions as _exceptions_mod  # type: ignore[import]
 except ImportError:
     try:
-        from exceptions import (
-            ExecutionError, BrokerMismatchError, InvalidTxidError,
-            InvalidFillPriceError, OrderRejectedError, ExecutionFailed
-        )
+        import exceptions as _exceptions_mod  # type: ignore[import]
     except ImportError:
-        # Fallback: Define locally if import fails
-        class ExecutionError(Exception):
-            pass
-        class BrokerMismatchError(ExecutionError):
-            pass
-        class InvalidTxidError(ExecutionError):
-            pass
-        class InvalidFillPriceError(ExecutionError):
-            pass
-        class OrderRejectedError(ExecutionError):
-            pass
-        class ExecutionFailed(ExecutionError):
-            pass
+        _exceptions_mod = None  # type: ignore[assignment]
+
+
+class _ExecutionErrorFallback(Exception):
+    pass
+
+
+ExecutionError = cast(Any, getattr(_exceptions_mod, "ExecutionError", _ExecutionErrorFallback))
+BrokerMismatchError = cast(Any, getattr(_exceptions_mod, "BrokerMismatchError", _ExecutionErrorFallback))
+InvalidTxidError = cast(Any, getattr(_exceptions_mod, "InvalidTxidError", _ExecutionErrorFallback))
+InvalidFillPriceError = cast(Any, getattr(_exceptions_mod, "InvalidFillPriceError", _ExecutionErrorFallback))
+OrderRejectedError = cast(Any, getattr(_exceptions_mod, "OrderRejectedError", _ExecutionErrorFallback))
+ExecutionFailed = cast(Any, getattr(_exceptions_mod, "ExecutionFailed", _ExecutionErrorFallback))
 
 logger = logging.getLogger("nija.exchange")
 
@@ -314,7 +315,7 @@ class BrokerInterface(ABC):
         pass
 
     @abstractmethod
-    def get_account_balance(self) -> Dict[str, float]:
+    def get_account_balance(self) -> Dict[str, Any]:
         """
         Get account balance information.
 
@@ -453,7 +454,7 @@ class BrokerInterface(ABC):
         # Default implementation - brokers can override
         return None
 
-    def get_trading_fees(self, symbol: str) -> Dict[str, float]:
+    def get_trading_fees(self, symbol: str) -> Dict[str, Any]:
         """
         Get trading fee rates for a symbol from the exchange.
 
@@ -490,7 +491,7 @@ class CoinbaseBrokerAdapter(BrokerInterface):
     so there is a single, well-tested code path for every Coinbase call.
     """
 
-    def __init__(self, api_key: str = None, api_secret: str = None):
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None):
         """
         Initialize Coinbase broker adapter.
 
@@ -509,7 +510,7 @@ class CoinbaseBrokerAdapter(BrokerInterface):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_broker(self):
+    def _get_broker(self) -> Any:
         """Return the connected CoinbaseBroker, raising if not connected."""
         if self._broker is None:
             raise RuntimeError("CoinbaseBrokerAdapter is not connected. Call connect() first.")
@@ -590,7 +591,7 @@ class CoinbaseBrokerAdapter(BrokerInterface):
             logger.error(f"❌ Failed to connect to Coinbase: {e}")
             return False
 
-    def get_account_balance(self) -> Dict[str, float]:
+    def get_account_balance(self) -> Dict[str, Any]:
         """Get Coinbase account balance.
 
         Returns:
@@ -824,7 +825,7 @@ class CoinbaseBrokerAdapter(BrokerInterface):
             logger.error(f"Failed to fetch Coinbase order status for {order_id}: {e}")
             return None
 
-    def get_trading_fees(self, symbol: str) -> Dict[str, float]:
+    def get_trading_fees(self, symbol: str) -> Dict[str, Any]:
         """Get trading fee rates for a symbol from the Coinbase API.
 
         Attempts to pull live account-level fee tiers via the
@@ -879,7 +880,7 @@ class BinanceBrokerAdapter(BrokerInterface):
     Supports both spot and futures trading.
     """
 
-    def __init__(self, api_key: str = None, api_secret: str = None,
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
                  testnet: bool = False):
         """
         Initialize Binance broker adapter.
@@ -904,7 +905,7 @@ class BinanceBrokerAdapter(BrokerInterface):
         # self.client = Client(self.api_key, self.api_secret, testnet=self.testnet)
         return False
 
-    def get_account_balance(self) -> Dict[str, float]:
+    def get_account_balance(self) -> Dict[str, Any]:
         """Get Binance account balance."""
         logger.info("Fetching Binance account balance...")
         return {
@@ -951,7 +952,7 @@ class AlpacaBrokerAdapter(BrokerInterface):
     Alpaca API adapter for stock/crypto trading (skeleton for future implementation).
     """
 
-    def __init__(self, api_key: str = None, api_secret: str = None,
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
                  paper: bool = True):
         """
         Initialize Alpaca broker adapter.
@@ -976,7 +977,7 @@ class AlpacaBrokerAdapter(BrokerInterface):
         # self.client = TradingClient(self.api_key, self.api_secret, paper=self.paper)
         return False
 
-    def get_account_balance(self) -> Dict[str, float]:
+    def get_account_balance(self) -> Dict[str, Any]:
         """Get Alpaca account balance."""
         logger.info("Fetching Alpaca account balance...")
         return {
@@ -1033,7 +1034,7 @@ class KrakenBrokerAdapter(BrokerInterface):
     _permission_error_details_logged = False
     _permission_errors_lock = threading.Lock()
 
-    def __init__(self, api_key: str = None, api_secret: str = None):
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None):
         """
         Initialize Kraken broker adapter.
 
@@ -1104,7 +1105,7 @@ class KrakenBrokerAdapter(BrokerInterface):
         self._balance_cache_time: float = 0.0    # unix timestamp of last fetch
         self._balance_cache_ttl: float = 45.0    # seconds before re-fetching
 
-    def _kraken_api_call(self, method: str, params: dict = None):
+    def _kraken_api_call(self, method: str, params: Optional[Dict[str, Any]] = None):
         """
         Make a Kraken API call with:
 
@@ -1188,24 +1189,24 @@ class KrakenBrokerAdapter(BrokerInterface):
                 # Raise the *original* primary exception for consistent error messages
                 raise primary_exc from secondary_exc
 
-    def _kraken_api_call_primary(self, method: str, params: dict = None):
+    def _kraken_api_call_primary(self, method: str, params: Optional[Dict[str, Any]] = None):
         """Execute a Kraken API call via the primary krakenex instance."""
         with suppress_pykrakenapi_prints():
             if get_kraken_api_lock is not None:
                 api_lock = get_kraken_api_lock()
                 with api_lock:
                     if params:
-                        return self.api.query_private(method, params)
+                        return cast(Any, self.api).query_private(method, params)
                     else:
-                        return self.api.query_private(method)
+                        return cast(Any, self.api).query_private(method)
             else:
                 # Fallback: direct call without global lock
                 if params:
-                    return self.api.query_private(method, params)
+                    return cast(Any, self.api).query_private(method, params)
                 else:
-                    return self.api.query_private(method)
+                    return cast(Any, self.api).query_private(method)
 
-    def _kraken_api_call_secondary(self, method: str, params: dict = None):
+    def _kraken_api_call_secondary(self, method: str, params: Optional[Dict[str, Any]] = None):
         """
         Execute a Kraken API call via a *secondary* (fresh) krakenex instance.
 
@@ -1222,13 +1223,15 @@ class KrakenBrokerAdapter(BrokerInterface):
             )
             # Attach the same global nonce manager so nonces remain monotonic
             if get_global_kraken_nonce is not None:
-                def _global_nonce():
+                def _global_nonce() -> int:
                     _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                    if get_global_kraken_nonce is None:
+                        return int(time.time() * 1000)
                     if _lock is not None:
                         with _lock:
-                            return str(get_global_kraken_nonce())
-                    return str(get_global_kraken_nonce())
-                self._secondary_api._nonce = _global_nonce
+                            return int(get_global_kraken_nonce())
+                    return int(get_global_kraken_nonce())
+                cast(Any, self._secondary_api)._nonce = _global_nonce
             logger.info("🔌 Kraken secondary API instance created (fallback endpoint)")
 
         with suppress_pykrakenapi_prints():
@@ -1276,10 +1279,10 @@ class KrakenBrokerAdapter(BrokerInterface):
                     _nonce_key_id = _make_distributed_nonce_key_id(self.api_key)
                     _dnm.ensure_writer_lock(_nonce_key_id)
 
-                    def _distributed_nonce():
-                        return str(_dnm.get_nonce(_nonce_key_id))
+                    def _distributed_nonce() -> int:
+                        return int(_dnm.get_nonce(_nonce_key_id))
 
-                    self.api._nonce = _distributed_nonce
+                    cast(Any, self.api)._nonce = _distributed_nonce
                     _using_distributed_nonce = True
                     logger.debug(
                         "✅ Distributed Redis nonce manager installed for KrakenBrokerAdapter key_id=%s",
@@ -1292,15 +1295,17 @@ class KrakenBrokerAdapter(BrokerInterface):
                     )
 
             if (not _using_distributed_nonce) and get_global_kraken_nonce is not None:
-                def _global_nonce():
+                def _global_nonce() -> int:
                     """Generate nonce using global manager (fallback path)."""
                     _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
+                    if get_global_kraken_nonce is None:
+                        return int(time.time() * 1000)
                     if _lock is not None:
                         with _lock:
-                            return str(get_global_kraken_nonce())
-                    return str(get_global_kraken_nonce())
+                            return int(get_global_kraken_nonce())
+                    return int(get_global_kraken_nonce())
 
-                self.api._nonce = _global_nonce
+                cast(Any, self.api)._nonce = _global_nonce
                 logger.debug("✅ Global Kraken Nonce Manager installed for KrakenBrokerAdapter (fallback)")
             elif not _using_distributed_nonce:
                 logger.warning("⚠️ Nonce manager unavailable, using krakenex default")
@@ -1405,7 +1410,7 @@ class KrakenBrokerAdapter(BrokerInterface):
             logger.error(f"Failed to connect to Kraken: {e}")
             return False
 
-    def get_account_balance(self, verbose: bool = True) -> Dict[str, float]:
+    def get_account_balance(self, verbose: bool = True) -> Dict[str, Any]:
         """Get Kraken account balance with proper error handling.
 
         Results are cached for up to ``_balance_cache_ttl`` seconds (default 45 s)
@@ -1575,7 +1580,7 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def _validate_kraken_order(self, symbol: str, side: str, size: float,
                               size_type: str = 'quote',
-                              current_price: float = None) -> Tuple[bool, Optional[str], Optional[str]]:
+                              current_price: Optional[float] = None) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         Validate Kraken order before placing it.
 
@@ -1624,7 +1629,7 @@ class KrakenBrokerAdapter(BrokerInterface):
 
         # ✅ REQUIREMENT #4: Tier-based minimum enforcement
         # Check if user's balance tier allows this trade size
-        tier_validation_result = None  # Store result to log outside try-except
+        tier_validation_result: Optional[Tuple[str, float, bool]] = None  # Store result to log outside try-except
 
         if get_tier_from_balance and validate_trade_size:
             try:
@@ -1649,7 +1654,7 @@ class KrakenBrokerAdapter(BrokerInterface):
 
                     # Determine user's tier
                     user_tier = get_tier_from_balance(current_balance)
-                    tier_config = get_tier_config(user_tier)
+                    tier_config = get_tier_config(user_tier) if callable(get_tier_config) else None
 
                     # AUTO-RESIZE trade instead of rejecting (smarter approach)
                     if auto_resize_trade:
@@ -1853,7 +1858,7 @@ class KrakenBrokerAdapter(BrokerInterface):
 
                 # Validate using base currency volume
                 is_valid, adjusted_volume, error_msg = validate_and_adjust_order(
-                    pair=kraken_symbol,
+                    pair=kraken_symbol or symbol.replace('-', '').replace('/', '').upper(),
                     volume=volume_to_validate,
                     price=current_price,
                     side=side,
@@ -2036,7 +2041,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                                 # ✅ ORDER CONFIRMATION LOGGING (REQUIREMENT #2)
                                 logger.info(f"   ✅ ORDER CONFIRMED:")
                                 logger.info(f"      • Order ID: {order_id}")
-                                logger.info(f"      • Filled Volume: {filled_volume:.8f} {kraken_symbol[:3]}")
+                                symbol_code = (kraken_symbol or symbol).replace('-', '').replace('/', '').upper()
+                                logger.info(f"      • Filled Volume: {filled_volume:.8f} {symbol_code[:3]}")
                                 logger.info(f"      • Filled Price: ${filled_price:.2f}")
                                 logger.info(f"      • Status: {order_status}")
 
@@ -2552,11 +2558,15 @@ class KrakenBrokerAdapter(BrokerInterface):
         if _ENTRY_PRICE_STORE_AVAILABLE and _get_eps is not None:
             try:
                 local_price = _get_eps().get(symbol)
-                if local_price and local_price > 0:
-                    logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price:.6g}")
+                local_price_value = getattr(local_price, 'price', local_price)
+                if local_price_value is None:
+                    raise ValueError("missing local price")
+                local_price_float = float(cast(Any, local_price_value))
+                if local_price_float > 0:
+                    logger.debug(f"[EntryPrice] {symbol}: Using local store price ${local_price_float:.6g}")
                     with self._entry_price_cache_lock:
-                        self._entry_price_cache[symbol] = local_price
-                    return local_price
+                        self._entry_price_cache[symbol] = local_price_float
+                    return local_price_float
             except Exception as _eps_err:
                 logger.debug(f"[EntryPrice] {symbol}: local store lookup failed: {_eps_err}")
 
@@ -2729,8 +2739,8 @@ class OKXBrokerAdapter(BrokerInterface):
     Documentation: https://www.okx.com/docs-v5/en/
     """
 
-    def __init__(self, api_key: str = None, api_secret: str = None,
-                 passphrase: str = None, testnet: bool = False):
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
+                 passphrase: Optional[str] = None, testnet: bool = False):
         """
         Initialize OKX broker adapter.
 
@@ -2789,7 +2799,7 @@ class OKXBrokerAdapter(BrokerInterface):
             logger.error(f"Failed to connect to OKX: {e}")
             return False
 
-    def get_account_balance(self) -> Dict[str, float]:
+    def get_account_balance(self) -> Dict[str, Any]:
         """Get OKX account balance."""
         try:
             if not self.account_api:

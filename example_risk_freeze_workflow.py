@@ -16,7 +16,21 @@ from bot.risk_config_versions import (
     PaperTradingResults,
     Approval
 )
-from bot.risk_freeze_guard import get_risk_freeze_guard
+from importlib import import_module
+
+
+def get_risk_freeze_guard():
+    """Load risk freeze guard from active module or archived compatibility module."""
+    for module_name in (
+        'bot.risk_freeze_guard',
+        'archive.dead_code_apr2026.risk_freeze_guard',
+    ):
+        try:
+            module = import_module(module_name)
+            return module.get_risk_freeze_guard()
+        except (ImportError, AttributeError):
+            continue
+    raise RuntimeError('Risk freeze guard module is not available')
 
 
 def example_create_risk_version():
@@ -42,7 +56,8 @@ def example_create_risk_version():
         guard = get_risk_freeze_guard()
         guard.set_baseline(current_params)
     
-    print(f"✅ Current active version: {version_manager.get_active_version().version if version_manager.get_active_version() else 'None'}")
+    active_version = version_manager.get_active_version()
+    print(f"✅ Current active version: {active_version.version if active_version else 'None'}")
     print()
     
     # Step 2: Define proposed changes
@@ -174,17 +189,17 @@ def example_create_risk_version():
     # Check if can activate
     updated_version = version_manager.get_version('RISK_CONFIG_v1.1.0')
     
-    if updated_version.can_activate():
+    if updated_version and updated_version.can_activate():
         version_manager.activate_version('RISK_CONFIG_v1.1.0')
         print(f"✅ Version ACTIVATED: {updated_version.version}")
         print(f"   Status: {updated_version.status}")
     else:
         print(f"❌ Cannot activate - requirements not met")
-        if not updated_version.is_approved():
+        if not updated_version or not updated_version.is_approved():
             print("   Missing: Approvals")
-        if not updated_version.backtesting:
+        if not updated_version or not updated_version.backtesting:
             print("   Missing: Backtest results")
-        if not updated_version.paper_trading:
+        if not updated_version or not updated_version.paper_trading:
             print("   Missing: Paper trading results")
     
     print()

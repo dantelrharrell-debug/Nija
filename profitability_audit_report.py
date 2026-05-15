@@ -490,6 +490,7 @@ def check_stop_loss_thresholds():
     min_loss_floor = re.search(r'MIN_LOSS_FLOOR\s*=\s*(-?[\d.]+)', content)
     
     issues = []
+    threshold_pct = 0.0
     
     if stop_threshold:
         threshold_val = float(stop_threshold.group(1))

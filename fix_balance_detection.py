@@ -169,10 +169,12 @@ def test_coinbase_accounts(client) -> Dict:
             else:
                 currency = getattr(acct, 'currency', '?')
                 available_val = getattr(acct, 'available_balance', {})
-                if hasattr(available_val, 'value'):
+                if isinstance(available_val, dict):
+                    value = float(available_val.get('value', 0) or 0)
+                elif hasattr(available_val, 'value'):
                     value = float(available_val.value)
                 else:
-                    value = float(available_val or 0)
+                    value = float(available_val) if isinstance(available_val, (int, float, str)) else 0.0
             
             print_info(f"  Account {i}: {currency} = ${value:.2f}")
             if currency == 'USD':
@@ -228,7 +230,10 @@ def main():
     
     client = None
     if has_creds:
-        connected, client = test_coinbase_connection(cb_key, cb_secret)
+        if cb_key is None or cb_secret is None:
+            connected = False
+        else:
+            connected, client = test_coinbase_connection(cb_key, cb_secret)
         
         if connected and client:
             result = test_coinbase_accounts(client)

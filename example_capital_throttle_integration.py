@@ -11,11 +11,29 @@ Date: February 15, 2026
 import logging
 import sys
 import os
+import importlib
+from typing import Any
 
 # Add bot directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'bot'))
 
-from automated_capital_throttle import AutomatedCapitalThrottle
+
+
+def _load_automated_capital_throttle_class() -> Any:
+    """Load AutomatedCapitalThrottle from active or archived module locations."""
+    for module_name in (
+        "automated_capital_throttle",
+        "archive.dead_code_apr2026.automated_capital_throttle",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+            return getattr(module, "AutomatedCapitalThrottle")
+        except (ImportError, AttributeError):
+            continue
+    return None
+
+
+AutomatedCapitalThrottle = _load_automated_capital_throttle_class()
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -23,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 def demonstrate_capital_throttle():
     """Demonstrate capital throttle in action"""
+
+    if AutomatedCapitalThrottle is None:
+        print("\n❌ AutomatedCapitalThrottle module not available in this workspace")
+        return
     
     print("\n" + "=" * 70)
     print("AUTOMATED CAPITAL THROTTLE - INTEGRATION EXAMPLE")

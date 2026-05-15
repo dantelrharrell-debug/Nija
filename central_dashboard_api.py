@@ -26,12 +26,20 @@ from flask_cors import CORS
 import threading
 import time
 
+get_global_risk_engine: Any
+RiskLevel: Any
+RiskEventType: Any
+
 # Import global risk engine
 try:
     from core.global_risk_engine import get_global_risk_engine, RiskLevel, RiskEventType
     RISK_ENGINE_AVAILABLE = True
 except ImportError:
     RISK_ENGINE_AVAILABLE = False
+    get_global_risk_engine = lambda: None
+    RiskLevel = {}
+    RiskEventType = {}
+
     logging.warning("Global Risk Engine not available - limited functionality")
 
 # Import existing monitoring system

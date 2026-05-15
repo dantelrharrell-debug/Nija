@@ -18,7 +18,7 @@ Architecture:
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -38,6 +38,8 @@ from bot.user_rules_engine import (
     RULE_TYPE_TRAILING_STOP,
     RULE_TYPE_PORTFOLIO_REBALANCE,
 )
+
+request: Any
 from security.secrets_manager import get_jwt_secret
 import json
 from pathlib import Path
@@ -493,6 +495,8 @@ def user_settings():
 
         return jsonify({'message': 'Settings updated successfully'})
 
+    return jsonify({'error': 'Method not allowed'}), 405
+
 
 # ========================================
 # Broker API Key Management Endpoints
@@ -571,6 +575,8 @@ def manage_broker_keys(broker_name: str):
             return jsonify({
                 'error': f'No {broker_name} credentials found for this user'
             }), 404
+
+    return jsonify({'error': 'Method not allowed'}), 405
 
 
 # ========================================
@@ -1441,6 +1447,8 @@ def manage_rule(rule_id: str):
             return jsonify({'error': 'Rule not found or already deleted'}), 404
         logger.info("Rule %s deleted by user %s", rule_id, user_id)
         return jsonify({'message': 'Rule deleted successfully', 'rule_id': rule_id})
+
+    return jsonify({'error': 'Method not allowed'}), 405
 
 
 # ========================================

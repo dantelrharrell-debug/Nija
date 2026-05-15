@@ -36,6 +36,22 @@ from logging_system.centralized_logger import setup_centralized_logging, query_l
 logger = logging.getLogger(__name__)
 
 
+def _safe_iso(value: Any) -> Optional[str]:
+    """Safely convert datetime-like objects to ISO string."""
+    try:
+        return value.isoformat() if value is not None else None
+    except Exception:
+        return None
+
+
+def _safe_float(value: Any) -> float:
+    """Safely convert numeric-like objects to float."""
+    try:
+        return float(value) if value is not None else 0.0
+    except Exception:
+        return 0.0
+
+
 class FounderDashboard:
     """
     Founder Control Dashboard
@@ -179,8 +195,8 @@ class FounderDashboard:
                     'email': user.email,
                     'subscription_tier': user.subscription_tier,
                     'is_active': user.is_active,
-                    'created_at': user.created_at.isoformat() if user.created_at else None,
-                    'last_login': user.last_login.isoformat() if user.last_login else None
+                    'created_at': _safe_iso(user.created_at),
+                    'last_login': _safe_iso(user.last_login)
                 }
                 for user in users
             ]
@@ -220,15 +236,15 @@ class FounderDashboard:
                     'email': user.email,
                     'subscription_tier': user.subscription_tier,
                     'is_active': user.is_active,
-                    'created_at': user.created_at.isoformat() if user.created_at else None,
-                    'last_login': user.last_login.isoformat() if user.last_login else None
+                    'created_at': _safe_iso(user.created_at),
+                    'last_login': _safe_iso(user.last_login)
                 },
                 'trading_instances': [
                     {
                         'instance_id': inst.instance_id,
                         'broker': inst.broker,
                         'status': inst.status,
-                        'created_at': inst.created_at.isoformat() if inst.created_at else None
+                        'created_at': _safe_iso(inst.created_at)
                     }
                     for inst in instances
                 ],
@@ -236,10 +252,10 @@ class FounderDashboard:
                     {
                         'position_id': pos.position_id,
                         'symbol': pos.symbol,
-                        'size': float(pos.size) if pos.size else 0,
-                        'entry_price': float(pos.entry_price) if pos.entry_price else 0,
-                        'current_price': float(pos.current_price) if pos.current_price else 0,
-                        'unrealized_pnl': float(pos.unrealized_pnl) if pos.unrealized_pnl else 0
+                        'size': _safe_float(pos.size),
+                        'entry_price': _safe_float(pos.entry_price),
+                        'current_price': _safe_float(pos.current_price),
+                        'unrealized_pnl': _safe_float(pos.unrealized_pnl)
                     }
                     for pos in positions
                 ],
@@ -323,7 +339,7 @@ class FounderDashboard:
                 return {'status': 'error', 'message': 'User not found'}
 
             user.is_active = True
-            user.subscription_tier = 'alpha'
+            setattr(user, 'subscription_tier', 'alpha')
             session.commit()
 
             logger.info(f"✅ Alpha user approved: {user_id}")

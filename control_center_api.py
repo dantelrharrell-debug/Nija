@@ -29,6 +29,18 @@ import time
 
 logger = logging.getLogger(__name__)
 
+init_database: Any
+get_db_session: Any
+check_database_health: Any
+User: Any
+Position: Any
+BrokerCredential: Any
+Trade: Any
+get_hard_controls: Any
+get_user_pnl_tracker: Any
+get_user_risk_manager: Any
+get_command_center_metrics: Any
+
 # Import database models
 try:
     from database.db_connection import init_database, get_db_session, check_database_health
@@ -37,6 +49,10 @@ try:
 except ImportError as e:
     logger.warning(f"Database not available: {e}")
     DATABASE_AVAILABLE = False
+    init_database = None
+    get_db_session = None
+    check_database_health = lambda: False
+    User = Position = BrokerCredential = Trade = None
 
 # Import controls
 try:
@@ -44,6 +60,7 @@ try:
     CONTROLS_AVAILABLE = True
 except ImportError:
     CONTROLS_AVAILABLE = False
+    get_hard_controls = lambda: None
 
 # Import user management
 try:
@@ -51,12 +68,14 @@ try:
     PNL_TRACKER_AVAILABLE = True
 except ImportError:
     PNL_TRACKER_AVAILABLE = False
+    get_user_pnl_tracker = lambda: None
 
 try:
     from bot.user_risk_manager import get_user_risk_manager
     RISK_MANAGER_AVAILABLE = True
 except ImportError:
     RISK_MANAGER_AVAILABLE = False
+    get_user_risk_manager = lambda: None
 
 # Import command center metrics
 try:
@@ -64,6 +83,7 @@ try:
     COMMAND_CENTER_AVAILABLE = True
 except ImportError:
     COMMAND_CENTER_AVAILABLE = False
+    get_command_center_metrics = lambda: None
 
 
 class ControlCenterState:
@@ -149,6 +169,8 @@ def create_control_center_api(app: Optional[Flask] = None) -> Flask:
     if app is None:
         app = Flask(__name__)
         CORS(app)
+
+    assert app is not None
     
     @app.route('/api/control-center/overview', methods=['GET'])
     def get_overview():
