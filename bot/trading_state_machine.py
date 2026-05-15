@@ -123,10 +123,27 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     SAFETY CONTRACT
     ---------------
     This gate MUST pass before any LIVE_ACTIVE transition.  There are NO
-    degraded-mode bypasses, NO fail-open paths, and NO local fallbacks.
-    If Redis is unavailable or the fencing token is missing, this gate
-    raises RuntimeError and blocks activation unconditionally.
+    fail-open paths and NO local fallbacks under normal operation.
+
+    TEMPORARY DEGRADED MODE
+    -----------------------
+    If NIJA_RUNTIME_DEGRADED_MODE=1 is set, this gate is bypassed with a
+    CRITICAL log warning.  This allows the bot to run in single-instance
+    mode while the Redis TLS connection issue is being debugged.
+    Re-enable strict enforcement once Redis is reachable.
     """
+    # Degraded mode bypass: allow LIVE_ACTIVE without Redis fencing when
+    # NIJA_RUNTIME_DEGRADED_MODE=1 is explicitly set by the operator.
+    # TEMPORARY — remove once Redis TLS is fixed.
+    if _env_truthy("NIJA_RUNTIME_DEGRADED_MODE"):
+        logger.critical(
+            "⚠️  [WRITER AUTHORITY DEGRADED MODE] NIJA_RUNTIME_DEGRADED_MODE=1 — "
+            "distributed writer authority gate BYPASSED. "
+            "Redis fencing is NOT enforced. Multi-instance split-brain protection is DISABLED. "
+            "This is a TEMPORARY bypass while Redis TLS is being fixed."
+        )
+        return True, ""
+
     # Verify fencing token is present before attempting Redis check.
     fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
     if not fencing_token:
@@ -156,7 +173,7 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
             if attempt < retries - 1 and retry_delay_s > 0:
                 time.sleep(retry_delay_s)
 
-    # Hard fail — no degraded-mode bypass, no fail-open for transient errors.
+    # Hard fail — no fail-open for transient errors in strict mode.
     # Redis unavailability is a hard block on LIVE_ACTIVE activation.
     err = (
         f"LIVE TRADING BLOCKED: distributed writer authority verification failed "
