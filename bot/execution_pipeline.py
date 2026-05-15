@@ -105,6 +105,14 @@ except ImportError:
         def assert_distributed_writer_authority() -> None:
             return
 
+try:
+    from bot.exchange_kill_switch import get_exchange_kill_switch_protector
+except ImportError:
+    try:
+        from exchange_kill_switch import get_exchange_kill_switch_protector  # type: ignore[import]
+    except ImportError:
+        get_exchange_kill_switch_protector = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -624,6 +632,11 @@ class ExecutionPipeline:
         try:
             assert_distributed_writer_authority()
         except Exception as exc:
+            self._emit_execution_rejection_telemetry(
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                reason=f"distributed_writer_fence:{exc}",
+            )
             return PipelineResult(
                 success=False,
                 symbol=effective_request.symbol,
@@ -686,8 +699,23 @@ class ExecutionPipeline:
         return result
 
     def _on_order_rejected(self, error: str) -> None:
+        self._emit_execution_rejection_telemetry(
+            symbol="unknown",
+            side="unknown",
+            reason=error or "unknown exchange rejection",
+        )
         logger.critical("🚨 EXCHANGE REJECT: %s", error)
         raise SystemError("ECEL FAILURE — INVALID ORDER ESCAPED")
+
+    def _emit_execution_rejection_telemetry(self, *, symbol: str, side: str, reason: str) -> None:
+        if get_exchange_kill_switch_protector is None:
+            return
+        try:
+            _eks = get_exchange_kill_switch_protector()
+            _oid = f"exec-reject:pipeline:{symbol}:{side}:{int(time.time() * 1000)}"
+            _eks.record_order_result(order_id=_oid, accepted=False)
+        except Exception:
+            pass
 
     def _log_ecel_final_order(self, request: PipelineRequest, compiled: Any) -> None:
         if compiled is None or not getattr(compiled, "accepted", False):

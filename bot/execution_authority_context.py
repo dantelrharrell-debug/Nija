@@ -46,33 +46,19 @@ def _env_truthy(name: str) -> bool:
 
 
 def _allow_degraded_writer_authority() -> bool:
-    """Return True when degraded writer authority is explicitly enabled by the operator.
-
-    TEMPORARY: This bypass is active while the Redis TLS connection issue is
-    being debugged (viaduct.proxy.rlwy.net SSL record layer failures).
-    Both NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 AND NIJA_RUNTIME_DEGRADED_MODE=1
-    must be set to activate degraded mode — a single flag is not sufficient.
-
-    SAFETY WARNING: Enabling this bypasses distributed Redis fencing and permits
-    LIVE trading without a valid fencing token.  Multi-instance split-brain
-    protection is DISABLED in this mode.  Re-enable strict enforcement once
-    Redis TLS is fixed.
-    """
+    """Degraded writer-authority bypass is permanently disabled."""
     global _DEGRADED_WRITER_AUTH_WARNED
-    allow = (
+    requested = (
         _env_truthy("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY")
         and _env_truthy("NIJA_RUNTIME_DEGRADED_MODE")
     )
-    if allow and not _DEGRADED_WRITER_AUTH_WARNED:
+    if requested and not _DEGRADED_WRITER_AUTH_WARNED:
         _DEGRADED_WRITER_AUTH_WARNED = True
-        logger.critical(
-            "⚠️  DEGRADED WRITER AUTHORITY ACTIVE — distributed Redis fencing is DISABLED. "
-            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 and NIJA_RUNTIME_DEGRADED_MODE=1 are both set. "
-            "Multi-instance split-brain protection is NOT enforced. "
-            "This is a TEMPORARY bypass while Redis TLS is being fixed. "
-            "Re-enable strict enforcement once Redis is reachable."
+        logger.error(
+            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY + NIJA_RUNTIME_DEGRADED_MODE requested, "
+            "but degraded writer-authority bypass is disabled; strict fencing remains enforced."
         )
-    return allow
+    return False
 
 
 def _single_instance_lock_opt_out(live_mode: bool) -> bool:
@@ -221,16 +207,6 @@ def assert_distributed_writer_authority() -> None:
         scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
-
-    # Degraded mode bypass: if both NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 and
-    # NIJA_RUNTIME_DEGRADED_MODE=1 are set, allow authority without Redis fencing.
-    # TEMPORARY — remove once Redis TLS is fixed.
-    if _allow_degraded_writer_authority():
-        with _FENCE_VERIFY_LOCK:
-            _FENCE_LAST_CHECK_TS = time.monotonic()
-            _FENCE_LAST_OK = True
-            _FENCE_LAST_ERR = ""
-        return
 
     # Fencing token is mandatory — no recovery fallback permitted.
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()

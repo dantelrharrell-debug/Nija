@@ -21,12 +21,12 @@ def _set_env(name: str, value: str | None) -> None:
         os.environ[name] = value
 
 
-def check_railway_rediss_auto_uses_tls_without_cert_validation() -> None:
+def check_railway_rediss_uses_strict_tls_validation() -> None:
     _set_env("NIJA_REDIS_TLS_CA_CERT", None)
     _set_env("NIJA_REDIS_TLS_INSECURE", "auto")
     kwargs = get_redis_tls_kwargs("rediss://default:pw@maglev.proxy.rlwy.net:12345/0")
-    assert kwargs.get("ssl_cert_reqs") == ssl.CERT_NONE
-    assert kwargs.get("ssl_check_hostname") is False
+    assert kwargs.get("ssl_cert_reqs") == ssl.CERT_REQUIRED
+    assert kwargs.get("ssl_check_hostname") is True
 
 
 def check_ca_cert_enables_strict_verification() -> None:
@@ -35,14 +35,17 @@ def check_ca_cert_enables_strict_verification() -> None:
     kwargs = get_redis_tls_kwargs("rediss://default:pw@redis.example.com:6380/0")
     assert kwargs.get("ssl_cert_reqs") == ssl.CERT_REQUIRED
     assert kwargs.get("ssl_ca_certs") == "/etc/ssl/certs/ca-certificates.crt"
-    assert "ssl_check_hostname" not in kwargs
+    assert kwargs.get("ssl_check_hostname") is True
 
 
 def check_non_railway_rediss_defaults_to_strict_verification() -> None:
     _set_env("NIJA_REDIS_TLS_CA_CERT", None)
     _set_env("NIJA_REDIS_TLS_INSECURE", "false")
     kwargs = get_redis_tls_kwargs("rediss://default:pw@redis.example.com:6380/0")
-    assert kwargs == {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+    assert kwargs == {
+        "ssl_cert_reqs": ssl.CERT_REQUIRED,
+        "ssl_check_hostname": True,
+    }
 
 
 def check_non_tls_url_has_no_tls_kwargs() -> None:
@@ -53,7 +56,7 @@ def check_non_tls_url_has_no_tls_kwargs() -> None:
 
 
 if __name__ == "__main__":
-    check_railway_rediss_auto_uses_tls_without_cert_validation()
+    check_railway_rediss_uses_strict_tls_validation()
     check_ca_cert_enables_strict_verification()
     check_non_railway_rediss_defaults_to_strict_verification()
     check_non_tls_url_has_no_tls_kwargs()

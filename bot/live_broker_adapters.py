@@ -65,6 +65,14 @@ except ImportError:
         def assert_distributed_writer_authority() -> None:
             return
 
+try:
+    from bot.exchange_kill_switch import get_exchange_kill_switch_protector
+except ImportError:
+    try:
+        from exchange_kill_switch import get_exchange_kill_switch_protector  # type: ignore[import]
+    except ImportError:
+        get_exchange_kill_switch_protector = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -82,10 +90,23 @@ def _safe_float(value, default: float = 0.0) -> float:
 
 
 def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) -> Optional[Dict]:
+    def _emit_rejection_telemetry(reason: str) -> None:
+        if get_exchange_kill_switch_protector is None:
+            return
+        try:
+            _eks = get_exchange_kill_switch_protector()
+            _oid = (
+                f"exec-reject:{broker_name}:{symbol}:{side}:{int(time.time() * 1000)}:{reason[:24]}"
+            )
+            _eks.record_order_result(order_id=_oid, accepted=False)
+        except Exception:
+            pass
+
     enforced = True
     try:
         assert_distributed_writer_authority()
     except Exception as exc:
+        _emit_rejection_telemetry("distributed_writer_fence")
         msg = f"Distributed writer fence violation: {exc}"
         logger.error(
             "[Authority] distributed-fence blocked broker=%s symbol=%s side=%s size=%s err=%s",
@@ -104,6 +125,7 @@ def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) ->
     if not enforced or has_execution_authority():
         return None
     msg = "Execution authority violation: order must be submitted via ExecutionPipeline"
+    _emit_rejection_telemetry("execution_authority_violation")
     logger.error(
         "[Authority] blocked broker=%s symbol=%s side=%s size=%s",
         broker_name,

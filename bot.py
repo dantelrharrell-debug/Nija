@@ -984,7 +984,7 @@ def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tup
 
 def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
     """Single observer API for main-thread startup wait with bounded timeout."""
-    _allow_degraded = _env_truthy("NIJA_ALLOW_DEGRADED_STARTUP_HANDOFF", "true")
+    _allow_degraded = _env_truthy("NIJA_ALLOW_DEGRADED_STARTUP_HANDOFF", "false")
     _timeout_raw = os.getenv("NIJA_BOOTSTRAP_OBSERVER_TIMEOUT_S", f"{_BOOTSTRAP_OBSERVER_TIMEOUT_S:.1f}")
     try:
         _timeout_s = max(1.0, float(_timeout_raw))
@@ -1005,10 +1005,6 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
         _state = _bootstrap_state_value()
         if _state == "RUNNING_SUPERVISED":
             logger.critical("LIFECYCLE: FSM state=%s", _state)
-            return True, _state
-        if _allow_degraded and _state == "DEGRADED_READY":
-            logger.critical("LIFECYCLE: FSM state=%s (degraded handoff allowed)", _state)
-            logger.critical("LIFECYCLE: FSM state=RUNNING_SUPERVISED — bootstrap observer satisfied")
             return True, _state
         if _allow_degraded and _state == "DEGRADED_READY":
             logger.critical("LIFECYCLE: FSM state=DEGRADED_READY — bootstrap observer satisfied (degraded)")
@@ -2114,9 +2110,6 @@ def _acquire_distributed_process_lock() -> None:
                 flush=True,
             )
             print(f"   Lock error: {_reason}", flush=True)
-            os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-            os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-            os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
             return
         _reason_lc = str(_reason or "").lower()
         _retry_enabled = os.environ.get(
@@ -2331,6 +2324,12 @@ def _acquire_distributed_process_lock() -> None:
         (not _redis_primary_is_tls)
         and (_allow_plain_redis_fallback or (not _force_redis_tls))
     )
+    if _effective_allow_plain_redis_fallback:
+        print(
+            "⚠️ NIJA_REDIS_ALLOW_PLAIN_FALLBACK is ignored; plaintext Redis fallback is disabled.",
+            flush=True,
+        )
+    _effective_allow_plain_redis_fallback = False
     _fail_closed_retry_enabled = os.environ.get(
         "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE", "true"
     ).strip().lower() in _truthy
@@ -2476,13 +2475,9 @@ def _acquire_distributed_process_lock() -> None:
             _enter_fail_closed_standby(_shape_msg)
             return
         print(
-            "⚠️ Distributed lock is optional in this mode; continuing in degraded writer mode.",
+            "⚠️ Distributed lock is optional in this mode; skipping writer lock for this startup.",
             flush=True,
         )
-        _running_in_degraded_mode = True
-        os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-        os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-        os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
         return
 
     if not _redis_url:
@@ -2558,27 +2553,7 @@ def _acquire_distributed_process_lock() -> None:
                 )
 
         def _try_plain_railway_proxy_fallback(_url: str, _exc: Exception):
-            if not _effective_allow_plain_redis_fallback:
-                return None
-            if not _url.startswith("rediss://") or ".proxy.rlwy.net" not in _url.lower():
-                return None
-            _msg = str(_exc).lower()
-            if "timeout" not in _msg and "handshake" not in _msg and "ssl" not in _msg:
-                return None
-
-            _plain_url = _url.replace("rediss://", "redis://", 1)
-            print(
-                "⚠️ Redis TLS handshake timed out against Railway proxy and "
-                "NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true; trying plain redis:// fallback..."
-            )
-            try:
-                _plain_client = _build_strict_redis_client(_plain_url)
-                _plain_client.ping()
-                print("✅ Redis Railway proxy reachable via plain redis:// fallback")
-                return _plain_client, _plain_url
-            except Exception as _plain_exc:
-                print(f"⚠️ Plain redis:// fallback also failed: {_plain_exc}")
-                return None
+            return None
 
         def _detect_non_redis_http_endpoint(_url: str) -> str:
             """Return a direct operator-facing error when endpoint behaves like HTTP."""
@@ -2645,19 +2620,14 @@ def _acquire_distributed_process_lock() -> None:
             }
             _parsed_url = urlparse(_url)
             _tls_ca_certs = os.getenv("NIJA_REDIS_TLS_CA_CERT", "").strip()
-            _tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
-            _tls_insecure = _tls_insecure_raw in _truthy
-            _tls_auto = _tls_insecure_raw in {"", "auto"}
-            _is_railway_host = ".rlwy.net" in (_parsed_url.hostname or "").lower()
             if (_parsed_url.scheme or "").lower() == "rediss":
                 if _tls_ca_certs:
                     _kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+                    _kwargs["ssl_check_hostname"] = True
                     _kwargs["ssl_ca_certs"] = _tls_ca_certs
-                elif _tls_insecure or (_tls_auto and _is_railway_host):
-                    _kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
-                    _kwargs["ssl_check_hostname"] = False
                 else:
                     _kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+                    _kwargs["ssl_check_hostname"] = True
             return redis.Redis.from_url(_url, **_kwargs)
 
         _ping_exc = None
@@ -2699,13 +2669,6 @@ def _acquire_distributed_process_lock() -> None:
                     else:
                         print(f"❌ Redis connection failed after {_max_retries} attempts")
 
-        if _ping_exc:
-            _fallback_client = _try_plain_railway_proxy_fallback(_redis_url, _ping_exc)
-            if _fallback_client is not None:
-                _client, _redis_url = _fallback_client
-                _redis_url_source = f"{_redis_url_source} [plain Railway proxy fallback]"
-                _ping_exc = None
-        
         if _ping_exc:
             if _strict_single_redis:
                 raise RuntimeError(
@@ -2778,12 +2741,6 @@ def _acquire_distributed_process_lock() -> None:
                     _client_resolved = True
                     break
                 except Exception as _fb_exc:
-                    _plain_fb = _try_plain_railway_proxy_fallback(_fb_url, _fb_exc)
-                    if _plain_fb is not None:
-                        _client, _redis_url = _plain_fb
-                        _redis_url_source = f"{_fb_source} [plain Railway proxy fallback]"
-                        _client_resolved = True
-                        break
                     if _verbose_standby:
                         print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
@@ -2795,7 +2752,8 @@ def _acquire_distributed_process_lock() -> None:
                         ) from _ping_exc
                     print(
                         "🚨 LOCAL WRITER LOCK FALLBACK ACTIVE: Redis lock is unreachable; "
-                        "continuing without distributed lock because NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK=true.",
+                        "continuing without distributed lock because NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK=true. "
+                        "No degraded-mode override flags will be activated.",
                         flush=True,
                     )
                     print(
@@ -2803,13 +2761,6 @@ def _acquire_distributed_process_lock() -> None:
                         "Re-enable distributed lock after Redis recovery.",
                         flush=True,
                     )
-                    # Emergency outage mode: publish a scoped marker that
-                    # downstream activation gates can honor for this startup.
-                    # This flag will auto-clear when distributed writer authority recovers.
-                    os.environ["NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"] = "1"
-                    os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-                    os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-                    os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
                     if _force_local_lock_fallback:
                         os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
                         print(
@@ -2859,7 +2810,7 @@ def _acquire_distributed_process_lock() -> None:
                         f"       1. Go to Railway → Redis service → Connect tab\n"
                         f"       2. Copy the full PUBLIC proxy URL exactly as shown\n"
                         f"       3. Set NIJA_REDIS_URL to that value in bot service Variables\n"
-                        f"       4. Set NIJA_REDIS_FORCE_TLS=true and NIJA_REDIS_TLS_INSECURE=true\n"
+                        f"       4. Ensure TLS validation is strict (do not set NIJA_REDIS_TLS_INSECURE)\n"
                         f"       5. Remove conflicting vars: REDIS_URL / REDIS_PRIVATE_URL / REDIS_TLS_URL\n"
                         f"       6. Redeploy the bot service"
                     )
@@ -2887,44 +2838,9 @@ def _acquire_distributed_process_lock() -> None:
                         f"  Fallbacks tried: {_fallback_tried or 'none'}\n"
                         f"  Redis env presence: {_redis_env_presence}"
                     )
-                # Check if degraded mode is allowed (e.g., for temporary Redis outages)
-                _allow_degraded = os.environ.get("NIJA_ALLOW_REDIS_DEGRADED", "").strip().lower() in _truthy
-                
-                # Auto-enable degraded mode for transient connection errors (not config errors)
-                _is_transient_error = any(
-                    substr in str(_ping_exc).lower()
-                    for substr in ["connection refused", "connection reset", "timeout", "unreachable", 
-                                   "no route to host", "network unreachable", "host unreachable"]
-                )
-                # Never auto-degrade when distributed lock is required (LIVE/strict mode).
-                # In strict mode we must fail closed so activation cannot proceed without
-                # an acquired writer lock and fencing token.
-                _auto_degraded = _is_transient_error and not _allow_degraded and not _require_lock
-
-                if _multi_instance_possible:
-                    _allow_degraded = False
-                    _auto_degraded = False
-                
-                if _auto_degraded:
-                    _allow_degraded = True
-                    print("⚠️  TRANSIENT NETWORK ERROR DETECTED — AUTO-ENABLING DEGRADED MODE")
-                    print("     This appears to be a temporary connectivity issue, not a configuration error.")
-                
-                if _require_lock and not _allow_degraded:
+                if _require_lock:
                     raise RuntimeError(_ping_err_msg) from _ping_exc
                 print(f"⚠️ {_ping_err_msg}")
-                if _allow_degraded:
-                    _running_in_degraded_mode = True
-                    os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-                    os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-                    # Keep activation gates consistent with degraded lock mode:
-                    # when distributed lock is unavailable by policy, writer
-                    # authority checks must switch to degraded override.
-                    os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
-                    print("⚠️  DEGRADED MODE ACTIVE: Distributed writer lock DISABLED")
-                    print("   ⚠️  RUNNING WITHOUT SINGLE-WRITER SAFETY — DO NOT RUN MULTIPLE INSTANCES")
-                    print("   Once Redis is restored, restart the bot to re-enable distributed locking.")
-                    return
                 print("⚠️ Distributed writer lock SKIPPED (Redis unreachable and lock not required in this mode).")
                 print("   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 or LIVE_CAPITAL_VERIFIED=1 to enforce fail-closed behaviour.")
                 return
@@ -3206,28 +3122,15 @@ def _acquire_distributed_process_lock() -> None:
                     "Distributed writer lock timeout but UNSAFE bypass enabled; proceeding with local trading. "
                     "DO NOT RUN MULTIPLE INSTANCES."
                 )
-                # Mark degraded mode so downstream authority checks and finalize_boot()
-                # treat execution as degraded rather than blocking on missing fencing token.
-                _running_in_degraded_mode = True
-                os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-                os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-                os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
-                # Continue to live trading with local file-based locks
+                # Continue only with explicit unsafe bypass; degraded-mode overrides are disabled.
             else:
-                # NON-LIVE or NOT_REQUIRED: Enter degraded mode (safe fallback for non-live testing)
-                print("⚠️  Non-live/non-required mode: Entering degraded lock mode")
-                print("   Trading will use file-based per-key locks (not distributed)")
+                # NON-LIVE or NOT_REQUIRED: continue without distributed lock.
+                print("⚠️  Non-live/non-required mode: continuing without distributed lock")
+                print("   No degraded-mode override flags will be activated")
                 logger.info(
                     "Lock acquisition timeout in non-live or non-required mode; "
-                    "entering degraded trading mode with file-based locks"
+                    "continuing without distributed writer lock"
                 )
-                _running_in_degraded_mode = True
-                os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-                os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-                # Allow execution without fencing token — keep all three degraded
-                # flags consistent so finalize_boot() can bypass the Redis PING gate.
-                os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
-                # Continue to non-live trading with degraded lock mode
             return
         
         # ═══════════════════════════════════════════════════════════════════════════════════════
@@ -3285,10 +3188,6 @@ def _acquire_distributed_process_lock() -> None:
                 flush=True,
             )
             print(f"   Lock error: {_lock_exc}", flush=True)
-            _running_in_degraded_mode = True
-            os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-            os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-            os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
             return
         _enter_fail_closed_standby(str(_lock_exc))
 
@@ -8195,16 +8094,10 @@ def main():
                 if _degraded_allowed:
                     logger.warning(
                         "⚠️  Strategy publication timed out after %.1fs — "
-                        "proceeding in degraded/local-only mode (Redis unavailable). "
-                        "Distributed locking is disabled for this session.",
+                        "proceeding in local-only mode (Redis unavailable). "
+                        "Distributed locking remains strictly enforced where required.",
                         _STRATEGY_PUBLICATION_TIMEOUT_S,
                     )
-                    # Activate degraded-mode flags so downstream subsystems
-                    # (writer authority, execution engine) skip Redis checks.
-                    os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "1"
-                    os.environ["NIJA_ALLOW_REDIS_DEGRADED"] = "1"
-                    os.environ["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "1"
-                    os.environ["NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"] = "1"
                     # One final attempt to construct a fallback strategy before
                     # entering the trading loop without a published strategy.
                     if not _fallback_attempted:
