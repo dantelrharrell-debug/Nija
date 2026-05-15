@@ -2447,7 +2447,7 @@ def _acquire_distributed_process_lock() -> None:
             return "Primary Redis URL is missing host or port"
         if (
             _source == "NIJA_REDIS_URL"
-            and ".proxy.rlwy.net" in _host
+            and (".proxy.rlwy.net" in _host or _host.endswith(".up.railway.app"))
             and _scheme != "rediss"
             and _force_redis_tls
         ):
@@ -2543,7 +2543,10 @@ def _acquire_distributed_process_lock() -> None:
             if (
                 _trimmed.startswith("redis://")
                 and _force_tls_check
-                and ".proxy.rlwy.net" in _trimmed.lower()
+                and (
+                    ".proxy.rlwy.net" in _trimmed.lower()
+                    or _trimmed.lower().split("@", 1)[-1].split("/")[0].endswith(".up.railway.app")
+                )
             ):
                 print(
                     "⚠️  CONFIG WARNING: NIJA_REDIS_URL uses redis:// (plain) against a Railway "
@@ -2776,7 +2779,7 @@ def _acquire_distributed_process_lock() -> None:
                 ]
                 _proxy_hosts = [
                     _src for _src, _u in _all_urls
-                    if ".proxy.rlwy.net" in _u
+                    if ".proxy.rlwy.net" in _u or (urlparse(_u).hostname or "").lower().endswith(".up.railway.app")
                 ]
                 _railway_hint = ""
                 if _internal_hosts:
