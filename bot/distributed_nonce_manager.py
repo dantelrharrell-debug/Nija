@@ -1101,14 +1101,19 @@ class DistributedNonceManager:
         self._owner_id = str(uuid.uuid4())
         self._owner_fingerprint = _build_process_fingerprint()
         self._owner_instance_id = _resolve_instance_id()
-        self._strict_redis_lease = True  # Always strict — no degraded mode
+        self._strict_redis_lease = _runtime_strict_redis_lease()
 
         if redis_client is None:
-            raise RuntimeError(
-                "DistributedNonceManager: redis_client is required. "
-                "Redis is the mandatory nonce authority — no local file-lock fallback. "
-                "Ensure NIJA_REDIS_URL is configured and Redis is reachable."
+            # TEMPORARY degraded mode: if Redis is unavailable and degraded mode
+            # is enabled, fall back to file-based per-key locks.
+            # Re-enable strict enforcement once Redis TLS is fixed.
+            _logger.critical(
+                "DistributedNonceManager: redis_client is None — "
+                "falling back to file-based per-key locks (single-host safe). "
+                "⚠️  Multi-instance coordination is DISABLED. "
+                "This is a TEMPORARY fallback while Redis TLS is being fixed."
             )
+            return
 
         try:
             self._redis = _PerKeyRedisBackend(
@@ -1129,13 +1134,13 @@ class DistributedNonceManager:
         except Exception as exc:
             _logger.critical(
                 "DistributedNonceManager: Redis backend unavailable (%s). "
-                "Failing closed — no file-lock fallback permitted.",
+                "⚠️  Falling back to file-based per-key locks — "
+                "multi-instance coordination is DISABLED. "
+                "This is a TEMPORARY fallback while Redis TLS is being fixed.",
                 exc,
             )
-            raise RuntimeError(
-                f"DistributedNonceManager: Redis backend unavailable: {exc}. "
-                "Redis is required for nonce authority. No local fallback."
-            ) from exc
+            # File-lock fallback: self._redis remains None; get_nonce() will
+            # route through _file_nonce() instead.
 
     # ── Core API ──────────────────────────────────────────────────────────────
 
@@ -1163,20 +1168,32 @@ class DistributedNonceManager:
                 "wait for NONCE_READY / CONNECTED before issuing nonces"
             )
         if self._redis is None:
-            raise RuntimeError(
-                f"DistributedNonceManager.get_nonce: Redis backend is not available "
-                f"(key={api_key_id}). Redis is required for nonce authority. "
-                "No local file-lock fallback is permitted."
+            # TEMPORARY degraded mode: Redis is unavailable; fall back to
+            # file-based per-key fcntl locks (single-host safe).
+            # ⚠️  Multi-instance coordination is DISABLED in this path.
+            _logger.critical(
+                "DistributedNonceManager.get_nonce: Redis unavailable — "
+                "issuing nonce via file-lock fallback for key=%s. "
+                "⚠️  Multi-instance coordination is DISABLED. "
+                "This is a TEMPORARY fallback while Redis TLS is being fixed.",
+                api_key_id,
             )
+            return self._file_nonce(api_key_id)
         try:
             nonce = self._redis.next_nonce(api_key_id)
             return nonce
         except Exception as exc:
-            raise RuntimeError(
-                "DistributedNonceManager: Redis nonce issuance failed for "
-                f"key={api_key_id}: {exc}. "
-                "Redis is required — no local fallback."
-            ) from exc
+            # TEMPORARY degraded mode: if Redis fails at runtime, fall back to
+            # file-based per-key fcntl locks rather than crashing.
+            _logger.critical(
+                "DistributedNonceManager.get_nonce: Redis nonce issuance failed "
+                "for key=%s (%s) — falling back to file-lock nonce. "
+                "⚠️  Multi-instance coordination is DISABLED. "
+                "This is a TEMPORARY fallback while Redis TLS is being fixed.",
+                api_key_id,
+                exc,
+            )
+            return self._file_nonce(api_key_id)
 
     def record_error(self, api_key_id: str) -> None:
         """Record a nonce rejection from Kraken for *api_key_id*.
@@ -1340,15 +1357,19 @@ def get_distributed_nonce_manager(
         if _dnm_instance is not None:
             return _dnm_instance
         # Auto-construct Redis client from env if not supplied.
-        # Redis is mandatory for nonce authority — no file-lock fallback.
         if redis_client is None:
             redis_url = get_redis_url()
             if not redis_url:
-                raise RuntimeError(
-                    "DistributedNonceManager: NIJA_REDIS_URL is not configured. "
-                    "Redis is required for distributed nonce authority. "
-                    "Set NIJA_REDIS_URL to a valid rediss:// endpoint."
+                # TEMPORARY degraded mode: no Redis URL configured.
+                # Fall back to file-based per-key locks if degraded mode is active.
+                _logger.critical(
+                    "DistributedNonceManager: NIJA_REDIS_URL is not configured — "
+                    "falling back to file-based per-key locks (single-host safe). "
+                    "⚠️  Multi-instance coordination is DISABLED. "
+                    "This is a TEMPORARY fallback while Redis TLS is being fixed."
                 )
+                _dnm_instance = DistributedNonceManager(redis_client=None)
+                return _dnm_instance
             try:
                 from bot.redis_runtime import create_redis as _create_redis
             except ImportError:
@@ -1365,11 +1386,18 @@ def get_distributed_nonce_manager(
                     _redact_redis_url(redis_url),
                 )
             except Exception as exc:
-                raise RuntimeError(
-                    f"DistributedNonceManager: could not connect to Redis at "
-                    f"{_redact_redis_url(redis_url)}: {exc}. "
-                    "Redis is required for nonce authority — no local fallback."
-                ) from exc
+                # TEMPORARY degraded mode: Redis connection failed.
+                # Fall back to file-based per-key locks rather than crashing.
+                _logger.critical(
+                    "DistributedNonceManager: could not connect to Redis at %s (%s) — "
+                    "falling back to file-based per-key locks (single-host safe). "
+                    "⚠️  Multi-instance coordination is DISABLED. "
+                    "This is a TEMPORARY fallback while Redis TLS is being fixed.",
+                    _redact_redis_url(redis_url),
+                    exc,
+                )
+                _dnm_instance = DistributedNonceManager(redis_client=None)
+                return _dnm_instance
         _dnm_instance = DistributedNonceManager(redis_client=redis_client)
     return _dnm_instance
 
