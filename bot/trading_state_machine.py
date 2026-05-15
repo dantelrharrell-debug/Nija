@@ -125,25 +125,11 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     This gate MUST pass before any LIVE_ACTIVE transition.  There are NO
     fail-open paths and NO local fallbacks under normal operation.
 
-    TEMPORARY DEGRADED MODE
-    -----------------------
-    If NIJA_RUNTIME_DEGRADED_MODE=1 is set, this gate is bypassed with a
-    CRITICAL log warning.  This allows the bot to run in single-instance
-    mode while the Redis TLS connection issue is being debugged.
-    Re-enable strict enforcement once Redis is reachable.
+    Fail-closed behavior
+    --------------------
+    This gate never bypasses distributed authority checks. Redis fencing and
+    lease validation are mandatory for LIVE_ACTIVE transitions.
     """
-    # Degraded mode bypass: allow LIVE_ACTIVE without Redis fencing when
-    # NIJA_RUNTIME_DEGRADED_MODE=1 is explicitly set by the operator.
-    # TEMPORARY — remove once Redis TLS is fixed.
-    if _env_truthy("NIJA_RUNTIME_DEGRADED_MODE"):
-        logger.critical(
-            "⚠️  [WRITER AUTHORITY DEGRADED MODE] NIJA_RUNTIME_DEGRADED_MODE=1 — "
-            "distributed writer authority gate BYPASSED. "
-            "Redis fencing is NOT enforced. Multi-instance split-brain protection is DISABLED. "
-            "This is a TEMPORARY bypass while Redis TLS is being fixed."
-        )
-        return True, ""
-
     # Verify fencing token is present before attempting Redis check.
     fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
     if not fencing_token:
@@ -1243,6 +1229,23 @@ class TradingStateMachine:
             )
             return False
 
+        # ── Gate 1.5: distributed authority bootstrap readiness must be True ──
+        # Hard fail-closed: when authority is not ready, remain armed in
+        # LIVE_PENDING_CONFIRMATION instead of promoting to LIVE_ACTIVE.
+        authority_ready = _is_authority_ready()
+        if not authority_ready:
+            with self._lock:
+                # Only promote OFF -> LIVE_PENDING_CONFIRMATION here. If the
+                # machine is already armed/pending we preserve that state.
+                if self._current_state == TradingState.OFF:
+                    self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+            logger.critical(
+                "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_NOT_READY "
+                "authority_ready=False current_state=%s target_state=LIVE_PENDING_CONFIRMATION",
+                current.value,
+            )
+            return False
+
         # ── Gate 2: kill switch must be inactive ─────────────────────────
         kill_state = False
         try:
@@ -1817,6 +1820,22 @@ def _get_capital_authority_instance():
         return _f()
     except ImportError:
         return None
+
+
+def _is_authority_ready() -> bool:
+    """Return readiness-table authority gate state, fail-closed on errors."""
+    try:
+        try:
+            from bot.readiness_table import snapshot as _rt_snapshot
+        except ImportError:
+            from readiness_table import snapshot as _rt_snapshot  # type: ignore[import]
+        return bool((_rt_snapshot() or {}).get("authority_ready", False))
+    except Exception as _exc:
+        logger.critical(
+            "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_READY_CHECK_FAILED detail=%s",
+            _exc,
+        )
+        return False
 
 
 # ---------------------------------------------------------------------------
