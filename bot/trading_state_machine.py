@@ -1232,8 +1232,8 @@ class TradingStateMachine:
         # ── Gate 1.5: distributed authority bootstrap readiness must be True ──
         # Hard fail-closed: when authority is not ready, remain armed in
         # LIVE_PENDING_CONFIRMATION instead of promoting to LIVE_ACTIVE.
-        _authority_ready = _is_authority_ready()
-        if not _authority_ready:
+        authority_ready = _is_authority_ready()
+        if not authority_ready:
             with self._lock:
                 # Only promote OFF -> LIVE_PENDING_CONFIRMATION here. If the
                 # machine is already armed/pending we preserve that state.
@@ -1241,8 +1241,7 @@ class TradingStateMachine:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_NOT_READY "
-                "authority_ready=%s current_state=%s target_state=LIVE_PENDING_CONFIRMATION",
-                _authority_ready,
+                "authority_ready=False current_state=%s target_state=LIVE_PENDING_CONFIRMATION",
                 current.value,
             )
             return False
