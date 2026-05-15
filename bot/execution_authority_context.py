@@ -46,14 +46,13 @@ def _env_truthy(name: str) -> bool:
 
 
 def _allow_degraded_writer_authority() -> bool:
-    """Return True when operator explicitly allows degraded writer authority.
+    """Always returns False — degraded writer authority is permanently disabled.
 
-    This is intentionally opt-in and only active while runtime is already in
-    degraded startup mode.
+    SAFETY: Allowing degraded writer authority bypasses distributed fencing and
+    permits LIVE trading without Redis.  This is unconditionally prohibited.
+    The function is retained for call-site compatibility only.
     """
-    return _env_truthy("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY") and _env_truthy(
-        "NIJA_RUNTIME_DEGRADED_MODE"
-    )
+    return False
 
 
 def _single_instance_lock_opt_out(live_mode: bool) -> bool:
@@ -179,28 +178,17 @@ def assert_distributed_writer_authority() -> None:
 
     Runtime cost is bounded by a short verification cache to avoid a Redis
     round-trip on every order.
+
+    SAFETY CONTRACT
+    ---------------
+    This function ALWAYS enforces strict distributed fencing.  There are no
+    degraded-mode bypasses, no single-instance opt-outs, and no fail-open
+    paths.  If Redis is unreachable or the fencing token is missing or
+    mismatched, a RuntimeError is raised unconditionally.
     """
-    global _FENCE_LAST_CHECK_TS, _FENCE_LAST_OK, _FENCE_LAST_ERR, _DEGRADED_WRITER_AUTH_WARNED
+    global _FENCE_LAST_CHECK_TS, _FENCE_LAST_OK, _FENCE_LAST_ERR
 
-    live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
-    unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
-    single_instance_opt_out = _single_instance_lock_opt_out(live_mode)
-    strict_required = (
-        _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK")
-        or _env_truthy("STRICT_REDIS_WRITER_LOCK")
-        or (live_mode and not single_instance_opt_out)
-    ) and not unsafe_bypass
-    degraded_override = _allow_degraded_writer_authority()
-
-    if strict_required and degraded_override:
-        strict_required = False
-        if not _DEGRADED_WRITER_AUTH_WARNED:
-            logger.critical(
-                "[WRITER AUTHORITY DEGRADED OVERRIDE] strict distributed fencing disabled "
-                "(NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY=1 and NIJA_RUNTIME_DEGRADED_MODE=1). "
-                "Run only ONE bot instance per API key."
-            )
-            _DEGRADED_WRITER_AUTH_WARNED = True
+    import hashlib
 
     redis_url = get_redis_url()
     scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
@@ -210,20 +198,36 @@ def assert_distributed_writer_authority() -> None:
             or os.environ.get("KRAKEN_API_KEY", "").strip()
             or "default"
         )
-        # Keep parity with startup lock scope derivation shape when explicit key isn't set.
-        import hashlib
         scope = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
-    meta_key = os.getenv("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{scope}"
 
+    # Fencing token is mandatory — no recovery fallback permitted.
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
-    if not token and redis_url:
-        token = _recover_fencing_token_from_lock(redis_url, lock_key)
     if not token:
-        if strict_required:
-            raise RuntimeError("distributed writer fencing token missing in strict/live mode")
-        return
+        _err = (
+            "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
+            "Distributed writer authority requires a valid fencing token. "
+            "Ensure the bot acquired a Redis writer lease at startup."
+        )
+        with _FENCE_VERIFY_LOCK:
+            _FENCE_LAST_CHECK_TS = time.monotonic()
+            _FENCE_LAST_OK = False
+            _FENCE_LAST_ERR = _err
+        raise RuntimeError(_err)
+
+    # Redis URL is mandatory — no local fallback permitted.
+    if not redis_url:
+        _err = (
+            "LIVE TRADING BLOCKED: Redis URL is not configured. "
+            "Distributed writer authority requires Redis connectivity. "
+            "Set NIJA_REDIS_URL to a valid rediss:// endpoint."
+        )
+        with _FENCE_VERIFY_LOCK:
+            _FENCE_LAST_CHECK_TS = time.monotonic()
+            _FENCE_LAST_OK = False
+            _FENCE_LAST_ERR = _err
+        raise RuntimeError(_err)
 
     try:
         verify_ttl_s = max(0.0, float(os.getenv("NIJA_WRITER_RUNTIME_VERIFY_TTL_S", "1.5") or 1.5))
@@ -239,17 +243,6 @@ def assert_distributed_writer_authority() -> None:
             if _FENCE_LAST_OK:
                 return
             raise RuntimeError(_FENCE_LAST_ERR or "distributed writer fence verification cached failure")
-
-    fail_closed_verify = _env_truthy("NIJA_WRITER_RUNTIME_VERIFY_FAIL_CLOSED") or strict_required
-    if not redis_url:
-        if fail_closed_verify:
-            _err = "redis url missing for distributed writer runtime verification"
-            with _FENCE_VERIFY_LOCK:
-                _FENCE_LAST_CHECK_TS = time.monotonic()
-                _FENCE_LAST_OK = False
-                _FENCE_LAST_ERR = _err
-            raise RuntimeError(_err)
-        return
 
     try:
         client = _connect_redis_for_authority(redis_url, timeout_s=2)
@@ -274,25 +267,15 @@ def assert_distributed_writer_authority() -> None:
         if not ok:
             raise RuntimeError(err)
 
-        # Auto-recovery: clear emergency fallback flag if Redis lock is now verified
-        if _env_truthy("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"):
-            logger.critical(
-                "[EMERGENCY FALLBACK AUTO-RECOVERY] distributed writer lock recovered; "
-                "clearing NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE flag. Normal operation resumes."
-            )
-            os.environ["NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE"] = "0"
+    except RuntimeError:
+        raise
     except Exception as exc:
-        redis_failed = True
-        if redis_failed:
-            raise RuntimeError(
-                "LIVE TRADING BLOCKED: Redis execution authority unavailable"
-            )
-        if fail_closed_verify:
-            with _FENCE_VERIFY_LOCK:
-                _FENCE_LAST_CHECK_TS = time.monotonic()
-                _FENCE_LAST_OK = False
-                _FENCE_LAST_ERR = str(exc)
-            raise RuntimeError(str(exc)) from exc
+        _err = f"LIVE TRADING BLOCKED: Redis execution authority unavailable — {exc}"
+        with _FENCE_VERIFY_LOCK:
+            _FENCE_LAST_CHECK_TS = time.monotonic()
+            _FENCE_LAST_OK = False
+            _FENCE_LAST_ERR = _err
+        raise RuntimeError(_err) from exc
 
 
 def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict:

@@ -113,33 +113,13 @@ def _try_plain_railway_proxy_fallback(
     socket_timeout: int,
     socket_connect_timeout: int,
 ) -> tuple[redis.Redis, str] | None:
-    """Try plain redis:// against Railway proxy after TLS timeout/handshake failure."""
-    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower()
-    allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
+    """Plain redis:// fallback is permanently disabled.
 
-    if not redis_url.startswith("rediss://"):
-        return None
-
-    is_railway_host = ".rlwy.net" in redis_url.lower()
-    if not is_railway_host or not allow_plain_fallback:
-        return None
-
-    message = str(exc).lower()
-    if "timeout" not in message and "handshake" not in message and "ssl" not in message and "record layer" not in message:
-        return None
-
-    plain_url = redis_url.replace("rediss://", "redis://", 1)
-    logger.warning(
-        "Redis TLS failure against Railway proxy; plain fallback explicitly enabled, trying redis://"
-    )
-    plain_client = _build_strict_redis_client(
-        redis_url=plain_url,
-        decode_responses=decode_responses,
-        socket_timeout=socket_timeout,
-        socket_connect_timeout=socket_connect_timeout,
-    )
-    plain_client.ping()
-    return plain_client, plain_url
+    SECURITY: Downgrading from rediss:// to redis:// bypasses TLS and is
+    not permitted regardless of NIJA_REDIS_ALLOW_PLAIN_FALLBACK setting.
+    This function always returns None.
+    """
+    return None
 
 
 def safe_redis_call(fn, default: Any = None, context: str = "") -> Any:
@@ -196,13 +176,21 @@ def init_redis(
 
     try:
         _connection_pool = None
+        resolved_url = (redis_url or "").strip() or os.environ.get("NIJA_REDIS_URL", "").strip()
+        if not resolved_url:
+            raise RuntimeError(
+                "Redis URL is not configured. Set NIJA_REDIS_URL to a valid "
+                "rediss://default:<PASSWORD>@viaduct.proxy.rlwy.net:<PORT> endpoint."
+            )
+        tls_kwargs = get_redis_tls_kwargs(resolved_url)
         _redis_client = redis.Redis.from_url(
-            os.environ["NIJA_REDIS_URL"],
-            decode_responses=True,
-            socket_timeout=5,
-            socket_connect_timeout=5,
+            resolved_url,
+            decode_responses=decode_responses,
+            socket_timeout=socket_timeout,
+            socket_connect_timeout=socket_connect_timeout,
             health_check_interval=30,
             retry_on_timeout=True,
+            **tls_kwargs,
         )
 
         logger.info("✅ Redis client initialized successfully")

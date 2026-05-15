@@ -52,34 +52,35 @@ def get_redis_tls_kwargs(url: str) -> dict[str, Any]:
     -------
     dict[str, Any]
         SSL/TLS keyword arguments suitable for redis-py connection creation.
-        Policy is strict-by-default, with optional CA pinning and Railway
-        compatibility auto-mode.
+        Policy is strict: ssl=True, ssl_cert_reqs='required',
+        ssl_check_hostname=True for all rediss:// connections.
+        Optional CA pinning via NIJA_REDIS_TLS_CA_CERT.
+
+    SECURITY NOTE
+    -------------
+    NIJA_REDIS_TLS_INSECURE and NIJA_REDIS_FORCE_TLS are intentionally
+    ignored.  All rediss:// connections use strict TLS validation.
     """
     raw_url = (url or "").strip()
     parsed = urlparse(raw_url)
     if (parsed.scheme or "").lower() != "rediss":
         return {}
 
-    host = (parsed.hostname or "").lower()
-    is_railway_host = ".rlwy.net" in host
-    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
-    tls_insecure = tls_insecure_raw in {"1", "true", "yes", "on", "enabled"}
-    tls_auto = tls_insecure_raw in {"", "auto"}
     tls_ca_certs = os.getenv("NIJA_REDIS_TLS_CA_CERT", "").strip()
 
     if tls_ca_certs:
         return {
+            "ssl": True,
             "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            "ssl_check_hostname": True,
             "ssl_ca_certs": tls_ca_certs,
         }
 
-    if tls_insecure or (tls_auto and is_railway_host):
-        return {
-            "ssl_cert_reqs": ssl.CERT_NONE,
-            "ssl_check_hostname": False,
-        }
-
-    return {"ssl_cert_reqs": ssl.CERT_REQUIRED}
+    return {
+        "ssl": True,
+        "ssl_cert_reqs": ssl.CERT_REQUIRED,
+        "ssl_check_hostname": True,
+    }
 
 
 def _prioritized_alt_urls(primary_url: str) -> list[str]:
@@ -150,15 +151,28 @@ def create_redis(
     socket_timeout: int = 5,
     socket_connect_timeout: int = 5,
 ) -> redis.Redis:
-    """Create Redis client from URL without host/port reconstruction."""
+    """Create Redis client from URL with strict TLS enforcement.
+
+    Uses the provided URL (or NIJA_REDIS_URL from environment) and applies
+    strict TLS kwargs for rediss:// connections.  The Railway public proxy
+    endpoint requires rediss:// with ssl=True and ssl_cert_reqs='required'.
+    """
     import redis as _redis
+    resolved_url = (url or "").strip() or os.environ.get("NIJA_REDIS_URL", "").strip()
+    if not resolved_url:
+        raise RuntimeError(
+            "Redis URL is not configured. Set NIJA_REDIS_URL to a valid "
+            "rediss://default:<PASSWORD>@viaduct.proxy.rlwy.net:<PORT> endpoint."
+        )
+    tls_kwargs = get_redis_tls_kwargs(resolved_url)
     r = _redis.Redis.from_url(
-        os.environ["NIJA_REDIS_URL"],
-        decode_responses=True,
-        socket_timeout=5,
-        socket_connect_timeout=5,
+        resolved_url,
+        decode_responses=decode_responses,
+        socket_timeout=socket_timeout,
+        socket_connect_timeout=socket_connect_timeout,
         health_check_interval=30,
         retry_on_timeout=True,
+        **tls_kwargs,
     )
     return r
 
@@ -195,55 +209,46 @@ def connect_redis_with_fallback(
     delay_s: float = 2.0,
     log: Callable[[str], None] = print,
 ) -> tuple[redis.Redis, str]:
-    """Connect to Redis with bounded fallback across configured endpoints."""
+    """Connect to Redis with strict TLS enforcement.
+
+    Uses the provided URL (or NIJA_REDIS_URL) with strict TLS for rediss://
+    endpoints.  Plain redis:// downgrade and TLS-insecure fallbacks are
+    permanently disabled.  Railway proxy endpoints (.proxy.rlwy.net) are
+    automatically promoted to rediss:// if configured as redis://.
+
+    SECURITY NOTE
+    -------------
+    NIJA_REDIS_ALLOW_PLAIN_FALLBACK and NIJA_REDIS_FORCE_TLS are ignored.
+    TLS downgrade from rediss:// to redis:// is never permitted.
+    """
     primary_url = (url or get_redis_url()).strip()
     if not primary_url:
-        raise RuntimeError("Redis URL is missing")
+        raise RuntimeError(
+            "Redis URL is missing. Set NIJA_REDIS_URL to a valid "
+            "rediss://default:<PASSWORD>@viaduct.proxy.rlwy.net:<PORT> endpoint."
+        )
 
     non_redis_hint = _detect_non_redis_http_endpoint(primary_url)
     if non_redis_hint:
         raise RuntimeError(non_redis_hint)
 
-    # candidate tuple: (url, requires_tlsish_error)
-    candidates: list[tuple[str, bool]] = [(primary_url, False)]
-    allow_plain_fallback_raw = os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false").strip().lower()
-    allow_plain_fallback = allow_plain_fallback_raw in {"1", "true", "yes", "on", "enabled"}
-    primary_is_tls = primary_url.startswith("rediss://")
+    # Promote Railway proxy redis:// to rediss:// — TLS is required.
     primary_hostname = (urlparse(primary_url).hostname or "").lower()
-    is_railway_host = ".rlwy.net" in primary_hostname
     is_railway_proxy = ".proxy.rlwy.net" in primary_hostname
-    force_tls_env = os.getenv("NIJA_REDIS_FORCE_TLS", "true").strip().lower() in {
-        "1", "true", "yes", "on", "enabled"
-    }
-    # Downgrade: rediss:// -> redis:// for Railway proxy endpoints on SSL failure.
-    # This is unsafe as a default because it can mask a real TLS configuration mismatch,
-    # so it must be explicitly enabled by the operator.
-    allow_tls_downgrade = is_railway_host and allow_plain_fallback
-    if primary_is_tls and allow_tls_downgrade:
-        candidates.append((primary_url.replace("rediss://", "redis://", 1), True))
-    elif not primary_is_tls and is_railway_proxy and force_tls_env:
-        # Eagerly promote the TLS-upgraded URL to be the primary candidate.
-        # When a plain redis:// URL is used against a TLS-only Railway proxy the
-        # server responds with a protocol error (connection reset / EOF), NOT an
-        # SSL handshake error.  The old code appended the rediss:// upgrade with
-        # requires_tlsish_error=True, which caused it to be silently skipped
-        # because the initial failure did not look TLS-related.  We now make
-        # rediss:// the first thing tried; the original plain URL is kept as a
-        # last-resort fallback only when NIJA_REDIS_ALLOW_PLAIN_FALLBACK=true.
-        #
-        # candidates[0] is always the primary_url element added two lines above.
-        tls_url = primary_url.replace("redis://", "rediss://", 1)
-        candidates[0] = (tls_url, False)
-        if allow_plain_fallback:
-            candidates.append((primary_url, True))
+    if not primary_url.startswith("rediss://") and is_railway_proxy:
+        primary_url = primary_url.replace("redis://", "rediss://", 1)
+        log(f"Railway proxy endpoint promoted to rediss:// for TLS enforcement")
 
-    # If proxy/TLS path fails, try alternate configured URLs (internal/private first,
-    # then non-proxy native endpoints, and finally other Railway managed hostnames).
+    # Only try the primary URL and alternate configured URLs.
+    # No TLS downgrade candidates, no plain fallback.
+    candidates: list[tuple[str, bool]] = [(primary_url, False)]
+
+    # Add alternate configured URLs (internal/private first, then other endpoints).
     for alt_url in _prioritized_alt_urls(primary_url):
         candidates.append((alt_url, False))
 
     last_error: Optional[Exception] = None
-    for idx, (candidate_url, requires_tlsish_error) in enumerate(candidates):
+    for idx, (candidate_url, _) in enumerate(candidates):
         try:
             client = create_redis(
                 candidate_url,
@@ -260,24 +265,10 @@ def connect_redis_with_fallback(
             has_more_candidates = idx < len(candidates) - 1
             if not has_more_candidates:
                 break
-
-            if requires_tlsish_error and not _is_tlsish_connection_error(exc):
-                log(
-                    "Skipping scheme fallback candidate because failure did not look TLS-related; "
-                    "continuing to next configured Redis endpoint..."
-                )
-                continue
-
-            if requires_tlsish_error:
-                log(
-                    "Redis TLS/scheme mismatch suspected against Railway proxy; "
-                    "trying scheme fallback candidate..."
-                )
-            else:
-                log(
-                    "Redis candidate failed; trying next configured endpoint: "
-                    f"{_redact_url_for_log(candidate_url)}"
-                )
+            log(
+                "Redis candidate failed; trying next configured endpoint: "
+                f"{_redact_url_for_log(candidate_url)}"
+            )
             continue
 
     raise RuntimeError("Redis never became available") from last_error
