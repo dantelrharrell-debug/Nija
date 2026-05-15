@@ -1235,7 +1235,7 @@ class TradingStateMachine:
         _authority_ready = _is_authority_ready()
         if not _authority_ready:
             with self._lock:
-                if self._current_state in (TradingState.OFF, TradingState.LIVE_PENDING_CONFIRMATION):
+                if self._current_state == TradingState.OFF:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_NOT_READY "
