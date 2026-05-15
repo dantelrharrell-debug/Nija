@@ -450,7 +450,7 @@ if not host or not port:
     sys.stderr.write(f"redis-cli parse error: missing host/port ({safe})\n")
     raise SystemExit(1)
 
-is_proxy = host.lower().endswith(".proxy.rlwy.net")
+is_proxy = host.lower().endswith(".proxy.rlwy.net") or host.lower().endswith(".up.railway.app")
 use_tls = scheme == "rediss" or is_proxy
 
 cmd = ["redis-cli", "-h", host, "-p", str(port), "-n", str(db)]

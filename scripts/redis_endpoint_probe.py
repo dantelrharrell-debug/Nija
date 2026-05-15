@@ -195,7 +195,7 @@ def _prioritized_alt_urls(primary_url: str) -> list[str]:
         host = (urlparse(url).hostname or "").lower()
         if host.endswith(".railway.internal"):
             return (0, host)
-        if host.endswith(".proxy.rlwy.net"):
+        if host.endswith(".proxy.rlwy.net") or host.endswith(".up.railway.app"):
             return (3, host)
         if ".rlwy.net" in host:
             return (2, host)
@@ -209,8 +209,8 @@ def _build_candidates(primary_url: str) -> list[tuple[str, bool]]:
     allow_plain = _is_truthy(os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false"))
     force_tls = _is_truthy(os.getenv("NIJA_REDIS_FORCE_TLS", "true"))
     host = (urlparse(primary_url).hostname or "").lower()
-    is_proxy = host.endswith(".proxy.rlwy.net")
-    is_rlwy = ".rlwy.net" in host
+    is_proxy = host.endswith(".proxy.rlwy.net") or host.endswith(".up.railway.app")
+    is_rlwy = ".rlwy.net" in host or host.endswith(".up.railway.app")
 
     if primary_url.startswith("rediss://") and allow_plain and is_rlwy:
         candidates.append((primary_url.replace("rediss://", "redis://", 1), True))
@@ -276,7 +276,7 @@ def main() -> int:
 
         selected_host = (urlparse(selected_url).hostname or "").lower()
         selected_scheme = (urlparse(selected_url).scheme or "").lower()
-        is_proxy = selected_host.endswith(".proxy.rlwy.net")
+        is_proxy = selected_host.endswith(".proxy.rlwy.net") or selected_host.endswith(".up.railway.app")
 
         print("RESULT: Redis connectivity OK")
         print(f"Selected endpoint: {_redact(selected_url)}")

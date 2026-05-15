@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import redis  # type: ignore[import]
 
-from bot.redis_env import get_all_redis_urls, get_redis_url
+from bot.redis_env import get_all_redis_urls, get_redis_url, _is_railway_public_proxy_host
 
 
 def _is_tlsish_connection_error(exc: Exception) -> bool:
@@ -99,7 +99,7 @@ def _prioritized_alt_urls(primary_url: str) -> list[str]:
         host = (urlparse(url).hostname or "").lower()
         if host.endswith(".railway.internal"):
             return (0, host)
-        if host.endswith(".proxy.rlwy.net"):
+        if host.endswith(".proxy.rlwy.net") or host.endswith(".up.railway.app"):
             return (3, host)
         if ".rlwy.net" in host:
             return (2, host)
@@ -124,7 +124,7 @@ def _detect_non_redis_http_endpoint(url: str) -> str:
         # Railway public proxy endpoints can emit HTTP-like errors when a plain
         # redis:// probe is sent to a TLS-only listener; that is a scheme/TLS
         # mismatch, not proof that the endpoint is non-Redis.
-        if ".proxy.rlwy.net" in host.lower():
+        if _is_railway_public_proxy_host(host.lower()):
             return ""
         with socket.create_connection((host, int(port)), timeout=2.5) as sock:
             sock.sendall(b"*1\r\n$4\r\nPING\r\n")
@@ -246,7 +246,7 @@ def connect_redis_with_fallback(
 
     # Promote Railway proxy redis:// to rediss:// — TLS is required.
     primary_hostname = (urlparse(primary_url).hostname or "").lower()
-    is_railway_proxy = ".proxy.rlwy.net" in primary_hostname
+    is_railway_proxy = _is_railway_public_proxy_host(primary_hostname)
     if not primary_url.startswith("rediss://") and is_railway_proxy:
         primary_url = primary_url.replace("redis://", "rediss://", 1)
         log(f"Railway proxy endpoint promoted to rediss:// for TLS enforcement")

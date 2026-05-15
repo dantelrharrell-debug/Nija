@@ -57,6 +57,19 @@ def _is_truthy(value: str) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def _is_railway_public_proxy_host(host: str) -> bool:
+    """Return True when *host* is a known Railway public-proxy domain.
+
+    Railway exposes Redis (and other services) through two public URL formats:
+    - Legacy TCP proxy:  ``*.proxy.rlwy.net``  (e.g. maglev.proxy.rlwy.net)
+    - Newer service URL: ``*.up.railway.app``   (e.g. redis-production-e747.up.railway.app)
+
+    Both require TLS (``rediss://``) for external connections.
+    """
+    h = host.lower()
+    return ".proxy.rlwy.net" in h or h.endswith(".up.railway.app")
+
+
 def _build_component_redis_url() -> tuple[str, dict[str, object]]:
     """Build Redis URL from host/port/password style env vars when available."""
     host_source, host = _first_nonempty_env(_REDIS_COMPONENT_HOST_ENV_NAMES)
@@ -83,7 +96,7 @@ def _build_component_redis_url() -> tuple[str, dict[str, object]]:
         # Always use rediss:// for Railway TCP proxy domain (public endpoint).
         # Private internal Railway hosts (REDISHOST/REDIS_HOST) do not support TLS
         # and must use plain redis://.  NIJA_REDIS_FORCE_TLS is ignored for security.
-        _host_needs_tls = host_source == "RAILWAY_TCP_PROXY_DOMAIN" or ".proxy.rlwy.net" in host.lower()
+        _host_needs_tls = host_source == "RAILWAY_TCP_PROXY_DOMAIN" or _is_railway_public_proxy_host(host.lower())
         scheme = "rediss" if _host_needs_tls else "redis"
         endpoint = f"{host}:{port}"
         username = user or "default"
@@ -138,7 +151,7 @@ def _maybe_promote_proxy_tls(url: str) -> str:
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower()
-    if scheme == "redis" and ".proxy.rlwy.net" in host:
+    if scheme == "redis" and _is_railway_public_proxy_host(host):
         return "rediss://" + url[len("redis://"):]
     return url
 
@@ -210,7 +223,7 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
     parsed = urlparse(resolved_url) if resolved_url else None
     hostname = (parsed.hostname or "").lower() if parsed else ""
     scheme = (parsed.scheme or "").lower() if parsed else ""
-    is_railway_proxy = ".proxy.rlwy.net" in hostname
+    is_railway_proxy = _is_railway_public_proxy_host(hostname)
     is_railway_internal = ".railway.internal" in hostname
     tls_required_hint = bool(is_railway_proxy)
     tls_configured = scheme == "rediss"
