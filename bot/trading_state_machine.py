@@ -1239,8 +1239,9 @@ class TradingStateMachine:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_NOT_READY "
-                "authority_ready=%s state=LIVE_PENDING_CONFIRMATION",
+                "authority_ready=%s current_state=%s target_state=LIVE_PENDING_CONFIRMATION",
                 _authority_ready,
+                current.value,
             )
             return False
 
