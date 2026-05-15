@@ -52,7 +52,7 @@ def get_redis_tls_kwargs(url: str) -> dict[str, Any]:
     -------
     dict[str, Any]
         SSL/TLS keyword arguments suitable for redis-py connection creation.
-        Policy is strict: ssl=True, ssl_cert_reqs='required',
+        Policy is strict: ssl_cert_reqs='required',
         ssl_check_hostname=True for all rediss:// connections.
         Optional CA pinning via NIJA_REDIS_TLS_CA_CERT.
 
@@ -70,14 +70,12 @@ def get_redis_tls_kwargs(url: str) -> dict[str, Any]:
 
     if tls_ca_certs:
         return {
-            "ssl": True,
             "ssl_cert_reqs": ssl.CERT_REQUIRED,
             "ssl_check_hostname": True,
             "ssl_ca_certs": tls_ca_certs,
         }
 
     return {
-        "ssl": True,
         "ssl_cert_reqs": ssl.CERT_REQUIRED,
         "ssl_check_hostname": True,
     }
@@ -155,7 +153,7 @@ def create_redis(
 
     Uses the provided URL (or NIJA_REDIS_URL from environment) and applies
     strict TLS kwargs for rediss:// connections.  The Railway public proxy
-    endpoint requires rediss:// with ssl=True and ssl_cert_reqs='required'.
+    endpoint requires rediss:// with ssl_cert_reqs='required'.
     """
     import redis as _redis
     resolved_url = (url or "").strip() or os.environ.get("NIJA_REDIS_URL", "").strip()
