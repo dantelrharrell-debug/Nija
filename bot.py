@@ -7616,7 +7616,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _barrier_state = _rt_snapshot()
                 logger.info("Barrier state: %s", _barrier_state)
                 if not _rt_is_ready():
-                    _required_missing = sorted(k for k, v in _barrier_state.items() if not bool(v))
+                    _required_missing = sorted(k for k, v in _barrier_state.items() if not v)
                     logger.error("❌ Barrier still blocking execution loop")
                     raise RuntimeError(
                         "Startup readiness barrier blocked at bootstrap completion: "
