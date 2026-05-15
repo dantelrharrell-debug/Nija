@@ -1398,19 +1398,19 @@ def get_distributed_nonce_manager(
                 _dnm_instance = DistributedNonceManager(redis_client=None)
                 return _dnm_instance
             try:
-                from bot.redis_runtime import create_redis as _create_redis
-            except ImportError:
-                from redis_runtime import create_redis as _create_redis  # type: ignore[import]
-            try:
-                redis_client = _create_redis(
-                    redis_url,
+                redis_client, used_url = connect_redis_with_fallback(
+                    url=redis_url,
                     decode_responses=True,
-                    socket_timeout=5,
-                    socket_connect_timeout=5,
+                    socket_timeout=2,
+                    socket_connect_timeout=2,
+                    retries=1,
+                    delay_s=0.0,
+                    max_total_wait_s=3.0,
+                    log=lambda msg: _logger.debug("DistributedNonceManager redis connect: %s", msg),
                 )
                 _logger.info(
                     "DistributedNonceManager: auto-connecting to Redis at %s",
-                    _redact_redis_url(redis_url),
+                    _redact_redis_url(used_url),
                 )
             except Exception as exc:
                 if _live_mode_active():

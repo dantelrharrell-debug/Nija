@@ -156,7 +156,7 @@ def create_redis(
     endpoint requires rediss:// with ssl_cert_reqs='required'.
     """
     import redis as _redis
-    resolved_url = (url or "").strip() or os.environ.get("NIJA_REDIS_URL", "").strip()
+    resolved_url = (url or "").strip() or get_redis_url().strip()
     if not resolved_url:
         raise RuntimeError(
             "Redis URL is not configured. Set NIJA_REDIS_URL to a valid "
@@ -180,11 +180,17 @@ def wait_for_redis_ready(
     *,
     retries: int = 5,
     delay_s: float = 2.0,
+    max_total_wait_s: Optional[float] = None,
     log: Callable[[str], None] = print,
 ) -> None:
     """Block until Redis ping succeeds, else raise after bounded retries."""
     log("PINGING REDIS FIRST")
+    deadline: Optional[float] = None
+    if max_total_wait_s is not None and max_total_wait_s > 0:
+        deadline = time.monotonic() + max_total_wait_s
     for i in range(max(1, retries)):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RuntimeError("Redis readiness timeout budget exhausted")
         try:
             client.ping()
             log("REDIS OK - CONTINUING")
@@ -192,7 +198,14 @@ def wait_for_redis_ready(
         except Exception as exc:
             if i < retries - 1:
                 log(f"Redis not ready ({i + 1}/{retries}): {exc}")
-                time.sleep(delay_s)
+                sleep_for = max(0.0, float(delay_s))
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeError("Redis readiness timeout budget exhausted") from exc
+                    sleep_for = min(sleep_for, remaining)
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
             else:
                 raise RuntimeError("Redis never became available") from exc
 
@@ -205,6 +218,7 @@ def connect_redis_with_fallback(
     socket_connect_timeout: int = 5,
     retries: int = 5,
     delay_s: float = 2.0,
+    max_total_wait_s: Optional[float] = None,
     log: Callable[[str], None] = print,
 ) -> tuple[redis.Redis, str]:
     """Connect to Redis with strict TLS enforcement.
@@ -245,8 +259,25 @@ def connect_redis_with_fallback(
     for alt_url in _prioritized_alt_urls(primary_url):
         candidates.append((alt_url, False))
 
+    if max_total_wait_s is None:
+        try:
+            max_total_wait_s = float(os.getenv("NIJA_REDIS_CONNECT_MAX_TOTAL_WAIT_S", "12") or 12.0)
+        except (TypeError, ValueError):
+            max_total_wait_s = 12.0
+    if max_total_wait_s is not None and max_total_wait_s <= 0:
+        max_total_wait_s = None
+    started_at = time.monotonic()
+
+    def _remaining_budget() -> Optional[float]:
+        if max_total_wait_s is None:
+            return None
+        return max_total_wait_s - (time.monotonic() - started_at)
+
     last_error: Optional[Exception] = None
     for idx, (candidate_url, _) in enumerate(candidates):
+        remaining_budget = _remaining_budget()
+        if remaining_budget is not None and remaining_budget <= 0:
+            break
         try:
             client = create_redis(
                 candidate_url,
@@ -254,7 +285,13 @@ def connect_redis_with_fallback(
                 socket_timeout=socket_timeout,
                 socket_connect_timeout=socket_connect_timeout,
             )
-            wait_for_redis_ready(client, retries=retries, delay_s=delay_s, log=log)
+            wait_for_redis_ready(
+                client,
+                retries=retries,
+                delay_s=delay_s,
+                max_total_wait_s=remaining_budget,
+                log=log,
+            )
             if idx > 0:
                 log(f"Redis connected using fallback candidate: {_redact_url_for_log(candidate_url)}")
             return client, candidate_url
@@ -269,6 +306,10 @@ def connect_redis_with_fallback(
             )
             continue
 
+    if max_total_wait_s is not None and (time.monotonic() - started_at) >= max_total_wait_s:
+        raise RuntimeError(
+            f"Redis connection budget exhausted after {max_total_wait_s:.2f}s"
+        ) from last_error
     raise RuntimeError("Redis never became available") from last_error
 
 
