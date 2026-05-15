@@ -7280,11 +7280,14 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _tsm.get_current_state().value,
             )
 
-            # INIT_COMPLETE and RUNNING_SUPERVISED transitions are performed
-            # immediately after CAPITAL_READY in the capital gate (both success
-            # and timeout paths) to ensure they happen synchronously.
-            # Log current FSM state for diagnostics only — do not attempt any
-            # further transitions here as the capital gate already advanced the FSM.
+            # Maintain a single canonical INIT_COMPLETE transition marker in this
+            # startup orchestration path. The helper is best-effort/non-fatal and
+            # preserves ordering invariants even when earlier gate logic already
+            # advanced state in degraded or resumed paths.
+            _bfsm_transition(
+                _BootstrapState.INIT_COMPLETE,
+                "startup orchestration: initialization complete before bootstrap readiness signal",
+            )
             logger.critical("LIFECYCLE: FSM state at thread-launch boundary = %s", _bootstrap_state_value())
             _rt_mark_ready("bootstrap_ready")
 
@@ -7559,20 +7562,15 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             logger.critical(
                 "LIFECYCLE: entering strategy scheduler"
             )
+            logger.critical("LIFECYCLE: entering market scanner")
             _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
-            logger.critical(
-                "LIFECYCLE: FSM state=%s",
-                _bootstrap_state_value(),
-            )
-            logger.critical(
-                "LIFECYCLE: entering market scanner"
-            )
             if not _enable_execution_after_bootstrap_supervised(
                 context="threads live (pre-handoff)"
             ):
                 raise RuntimeError(
                     "Startup blocked: final bootstrap unlock did not complete before enabling execution"
                 )
+            logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
 
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
             # Delegates to _rerun_supervisor_loop so the supervisor logic lives
@@ -7618,7 +7616,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _barrier_state = _rt_snapshot()
                 logger.info("Barrier state: %s", _barrier_state)
                 if not _rt_is_ready():
+                    _required_missing = sorted(k for k, v in _barrier_state.items() if not v)
                     logger.error("❌ Barrier still blocking execution loop")
+                    raise RuntimeError(
+                        "Startup readiness barrier blocked at bootstrap completion: "
+                        f"required_missing={_required_missing} state={_barrier_state}"
+                    )
             except Exception as _gate_signal_err:
                 logger.warning("⚠️ readiness table signal failed at bootstrap completion: %s", _gate_signal_err)
             _emit_startup_orchestration_snapshot("bootstrap_complete")
