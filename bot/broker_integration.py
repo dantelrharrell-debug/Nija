@@ -114,9 +114,8 @@ except ImportError:
         jump_global_kraken_nonce_forward = None
 
 # Nonce jump amount used when recovering from "EAPI:Invalid nonce" errors.
-# Jumping 120 seconds (120 000 ms) ahead clears Kraken's ~60-second nonce window
-# and ensures the next request uses a fresh, accepted nonce.
-_KRAKEN_NONCE_RECOVERY_JUMP_MS = 120_000
+# Keep this jump intentionally small to avoid runaway nonce drift.
+_KRAKEN_NONCE_RECOVERY_JUMP_MS = 15_000
 
 # Import Broker Circuit Breaker for Kraken API reliability
 try:
@@ -199,6 +198,29 @@ except ImportError:
         def assert_distributed_writer_authority() -> None:
             return
 
+try:
+    from bot.exchange_kill_switch import get_exchange_kill_switch_protector
+except ImportError:
+    try:
+        from exchange_kill_switch import get_exchange_kill_switch_protector  # type: ignore[import]
+    except ImportError:
+        get_exchange_kill_switch_protector = None  # type: ignore[assignment]
+
+try:
+    from bot.distributed_nonce_manager import (
+        get_distributed_nonce_manager as _get_distributed_nonce_manager,
+        make_api_key_id as _make_distributed_nonce_key_id,
+    )
+except ImportError:
+    try:
+        from distributed_nonce_manager import (  # type: ignore[import]
+            get_distributed_nonce_manager as _get_distributed_nonce_manager,
+            make_api_key_id as _make_distributed_nonce_key_id,
+        )
+    except ImportError:
+        _get_distributed_nonce_manager = None  # type: ignore[assignment]
+        _make_distributed_nonce_key_id = None  # type: ignore[assignment]
+
 
 def _reject_if_unauthorized_order_submit(
     broker_name: str,
@@ -206,9 +228,22 @@ def _reject_if_unauthorized_order_submit(
     side: str,
     size: float,
 ) -> Optional[Dict[str, Any]]:
+    def _emit_rejection_telemetry(reason: str) -> None:
+        if get_exchange_kill_switch_protector is None:
+            return
+        try:
+            _eks = get_exchange_kill_switch_protector()
+            _oid = (
+                f"exec-reject:{broker_name}:{symbol}:{side}:{int(time.time() * 1000)}:{reason[:24]}"
+            )
+            _eks.record_order_result(order_id=_oid, accepted=False)
+        except Exception:
+            pass
+
     try:
         assert_distributed_writer_authority()
     except Exception as exc:
+        _emit_rejection_telemetry("distributed_writer_fence")
         logger.critical(
             "🔒 Distributed writer fence violation | broker=%s symbol=%s side=%s size=%s err=%s",
             broker_name,
@@ -222,6 +257,7 @@ def _reject_if_unauthorized_order_submit(
     if has_execution_authority():
         return None
     msg = "Execution authority violation: order submission must originate from ExecutionPipeline"
+    _emit_rejection_telemetry("execution_authority_violation")
     logger.critical(
         "🔒 %s | broker=%s symbol=%s side=%s size=%s",
         msg,
@@ -1229,11 +1265,35 @@ class KrakenBrokerAdapter(BrokerInterface):
 
             self.api = krakenex.API(key=self.api_key, secret=self.api_secret)
 
-            # FINAL FIX: Override nonce generator to use GLOBAL Kraken Nonce Manager
-            # ONE global source for all users (master + users)
-            if get_global_kraken_nonce is not None:
+            _using_distributed_nonce = False
+            if (
+                _get_distributed_nonce_manager is not None
+                and _make_distributed_nonce_key_id is not None
+                and self.api_key
+            ):
+                try:
+                    _dnm = _get_distributed_nonce_manager()
+                    _nonce_key_id = _make_distributed_nonce_key_id(self.api_key)
+                    _dnm.ensure_writer_lock(_nonce_key_id)
+
+                    def _distributed_nonce():
+                        return str(_dnm.get_nonce(_nonce_key_id))
+
+                    self.api._nonce = _distributed_nonce
+                    _using_distributed_nonce = True
+                    logger.debug(
+                        "✅ Distributed Redis nonce manager installed for KrakenBrokerAdapter key_id=%s",
+                        _nonce_key_id,
+                    )
+                except Exception as _dnm_err:
+                    logger.warning(
+                        "⚠️ Distributed nonce manager unavailable for KrakenBrokerAdapter: %s",
+                        _dnm_err,
+                    )
+
+            if (not _using_distributed_nonce) and get_global_kraken_nonce is not None:
                 def _global_nonce():
-                    """Generate nonce using global manager (nanosecond precision)."""
+                    """Generate nonce using global manager (fallback path)."""
                     _lock = get_kraken_api_lock() if get_kraken_api_lock is not None else None
                     if _lock is not None:
                         with _lock:
@@ -1241,16 +1301,16 @@ class KrakenBrokerAdapter(BrokerInterface):
                     return str(get_global_kraken_nonce())
 
                 self.api._nonce = _global_nonce
-                logger.debug("✅ Global Kraken Nonce Manager installed for KrakenBrokerAdapter")
-            else:
-                logger.warning("⚠️ Global nonce manager not available, using krakenex default")
+                logger.debug("✅ Global Kraken Nonce Manager installed for KrakenBrokerAdapter (fallback)")
+            elif not _using_distributed_nonce:
+                logger.warning("⚠️ Nonce manager unavailable, using krakenex default")
 
             self.kraken_api = KrakenAPI(self.api)
 
             # PRE-CONNECTION NONCE JUMP: Jump nonce forward before the first API call.
             # This clears any "burned" nonce window left by a previous session, which is
             # the primary cause of "EAPI:Invalid nonce" errors on restart.
-            if jump_global_kraken_nonce_forward is not None:
+            if (not _using_distributed_nonce) and jump_global_kraken_nonce_forward is not None:
                 try:
                     jump_global_kraken_nonce_forward(_KRAKEN_NONCE_RECOVERY_JUMP_MS)
                     logger.info("   ⚡ Pre-connection nonce jump applied (clears burned nonce window from previous sessions)")
@@ -1271,8 +1331,11 @@ class KrakenBrokerAdapter(BrokerInterface):
                     ])
                     if is_nonce_error and attempt < max_attempts:
                         logger.warning(f"   ⚠️ Kraken nonce error on attempt {attempt}/{max_attempts}: {error_msgs}")
-                        logger.info(f"   🔄 Jumping nonce forward 120 s and retrying...")
-                        if jump_global_kraken_nonce_forward is not None:
+                        logger.info(
+                            "   🔄 Jumping nonce forward %.1f s and retrying...",
+                            _KRAKEN_NONCE_RECOVERY_JUMP_MS / 1000.0,
+                        )
+                        if (not _using_distributed_nonce) and jump_global_kraken_nonce_forward is not None:
                             try:
                                 jump_global_kraken_nonce_forward(_KRAKEN_NONCE_RECOVERY_JUMP_MS)
                             except Exception as _je:

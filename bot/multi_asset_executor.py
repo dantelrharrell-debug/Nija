@@ -49,13 +49,22 @@ except ImportError:
         PipelineRequest = None         # type: ignore
 
 try:
-    from bot.execution_authority_context import has_execution_authority
+    from bot.execution_authority_context import (
+        has_execution_authority,
+        assert_distributed_writer_authority,
+    )
 except ImportError:
     try:
-        from execution_authority_context import has_execution_authority
+        from execution_authority_context import (  # type: ignore[import]
+            has_execution_authority,
+            assert_distributed_writer_authority,
+        )
     except ImportError:
         def has_execution_authority() -> bool:
             return False
+
+        def assert_distributed_writer_authority() -> None:
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +229,16 @@ class CoinbaseBrokerAdapter(BrokerAdapter):
         if self._client is None:
             logger.warning("[Coinbase] No client configured — simulating order")
             return {"order_id": "sim_" + symbol, "status": "SIMULATED", "filled_size": size}
+        try:
+            assert_distributed_writer_authority()
+        except Exception as exc:
+            logger.error("[Coinbase] blocked order submit due to distributed writer fence: %s", exc)
+            return {
+                "status": "ERROR",
+                "error": f"DISTRIBUTED_WRITER_FENCE_REJECT: {exc}",
+                "symbol": symbol,
+                "side": side,
+            }
         if not has_execution_authority():
             logger.error("[Coinbase] blocked direct order submit outside ExecutionPipeline")
             return {

@@ -65,6 +65,14 @@ except ImportError:
         def assert_distributed_writer_authority() -> None:
             return
 
+try:
+    from bot.exchange_kill_switch import get_exchange_kill_switch_protector
+except ImportError:
+    try:
+        from exchange_kill_switch import get_exchange_kill_switch_protector  # type: ignore[import]
+    except ImportError:
+        get_exchange_kill_switch_protector = None  # type: ignore[assignment]
+
 # Import requests exceptions for proper timeout error handling
 # These are used in KrakenBroker.connect() to detect network timeouts
 # Note: The flag name is specific to clarify we're checking for timeout exception classes,
@@ -638,9 +646,22 @@ def _reject_if_unauthorized_order_submit(
     quantity: float,
 ) -> Optional[Dict[str, Any]]:
     """Fail closed when direct broker order submit bypasses ExecutionPipeline."""
+    def _emit_rejection_telemetry(reason: str) -> None:
+        if get_exchange_kill_switch_protector is None:
+            return
+        try:
+            _eks = get_exchange_kill_switch_protector()
+            _oid = (
+                f"exec-reject:{broker_name}:{symbol}:{side}:{int(time.time() * 1000)}:{reason[:24]}"
+            )
+            _eks.record_order_result(order_id=_oid, accepted=False)
+        except Exception:
+            pass
+
     try:
         assert_distributed_writer_authority()
     except Exception as exc:
+        _emit_rejection_telemetry("distributed_writer_fence")
         logger.critical(
             "🔒 Distributed writer fence violation | broker=%s symbol=%s side=%s qty=%s err=%s",
             broker_name,
@@ -658,6 +679,7 @@ def _reject_if_unauthorized_order_submit(
         "Execution authority violation: broker order submission must originate "
         "from ExecutionPipeline"
     )
+    _emit_rejection_telemetry("execution_authority_violation")
     logger.critical(
         "🔒 %s | broker=%s symbol=%s side=%s qty=%s",
         msg,

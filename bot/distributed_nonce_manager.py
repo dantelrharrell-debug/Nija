@@ -172,6 +172,11 @@ def _env_true(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _live_mode_active() -> bool:
+    """Return True when runtime is in live-capital mode."""
+    return _env_true("LIVE_CAPITAL_VERIFIED", "0")
+
+
 # Writer leases must remain stable between renewals while avoiding rapid churn.
 # Clamp TTL to 10-30s to tolerate real-world latency spikes without flapping.
 # Renew at ~1/3 of TTL (default 0.333) to minimize expiry risk.
@@ -1104,9 +1109,11 @@ class DistributedNonceManager:
         self._strict_redis_lease = _runtime_strict_redis_lease()
 
         if redis_client is None:
-            # TEMPORARY degraded mode: if Redis is unavailable and degraded mode
-            # is enabled, fall back to file-based per-key locks.
-            # Re-enable strict enforcement once Redis TLS is fixed.
+            if _live_mode_active():
+                raise RuntimeError(
+                    "DistributedNonceManager: Redis nonce backend is required in LIVE mode; "
+                    "refusing file/fcntl fallback"
+                )
             _logger.critical(
                 "DistributedNonceManager: redis_client is None — "
                 "falling back to file-based per-key locks (single-host safe). "
@@ -1132,6 +1139,11 @@ class DistributedNonceManager:
                 self._owner_fingerprint,
             )
         except Exception as exc:
+            if _live_mode_active():
+                raise RuntimeError(
+                    "DistributedNonceManager: Redis backend unavailable in LIVE mode; "
+                    "refusing file/fcntl fallback"
+                ) from exc
             _logger.critical(
                 "DistributedNonceManager: Redis backend unavailable (%s). "
                 "⚠️  Falling back to file-based per-key locks — "
@@ -1168,6 +1180,11 @@ class DistributedNonceManager:
                 "wait for NONCE_READY / CONNECTED before issuing nonces"
             )
         if self._redis is None:
+            if _live_mode_active():
+                raise RuntimeError(
+                    "DistributedNonceManager.get_nonce: Redis nonce backend unavailable in LIVE mode; "
+                    "refusing file/fcntl fallback"
+                )
             # TEMPORARY degraded mode: Redis is unavailable; fall back to
             # file-based per-key fcntl locks (single-host safe).
             # ⚠️  Multi-instance coordination is DISABLED in this path.
@@ -1183,6 +1200,11 @@ class DistributedNonceManager:
             nonce = self._redis.next_nonce(api_key_id)
             return nonce
         except Exception as exc:
+            if _live_mode_active():
+                raise RuntimeError(
+                    "DistributedNonceManager.get_nonce: Redis nonce issuance failed in LIVE mode; "
+                    "refusing file/fcntl fallback"
+                ) from exc
             # TEMPORARY degraded mode: if Redis fails at runtime, fall back to
             # file-based per-key fcntl locks rather than crashing.
             _logger.critical(
@@ -1360,6 +1382,11 @@ def get_distributed_nonce_manager(
         if redis_client is None:
             redis_url = get_redis_url()
             if not redis_url:
+                if _live_mode_active():
+                    raise RuntimeError(
+                        "DistributedNonceManager: NIJA_REDIS_URL is required in LIVE mode; "
+                        "refusing file/fcntl fallback"
+                    )
                 # TEMPORARY degraded mode: no Redis URL configured.
                 # Fall back to file-based per-key locks if degraded mode is active.
                 _logger.critical(
@@ -1386,6 +1413,11 @@ def get_distributed_nonce_manager(
                     _redact_redis_url(redis_url),
                 )
             except Exception as exc:
+                if _live_mode_active():
+                    raise RuntimeError(
+                        "DistributedNonceManager: could not connect Redis nonce backend in LIVE mode; "
+                        "refusing file/fcntl fallback"
+                    ) from exc
                 # TEMPORARY degraded mode: Redis connection failed.
                 # Fall back to file-based per-key locks rather than crashing.
                 _logger.critical(
