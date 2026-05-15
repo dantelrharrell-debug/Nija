@@ -7286,7 +7286,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # advanced state in degraded or resumed paths.
             _bfsm_transition(
                 _BootstrapState.INIT_COMPLETE,
-                "startup orchestration: canonical INIT_COMPLETE marker before bootstrap_ready",
+                "startup orchestration: initialization complete before bootstrap readiness signal",
             )
             logger.critical("LIFECYCLE: FSM state at thread-launch boundary = %s", _bootstrap_state_value())
             _rt_mark_ready("bootstrap_ready")
@@ -7616,10 +7616,11 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _barrier_state = _rt_snapshot()
                 logger.info("Barrier state: %s", _barrier_state)
                 if not _rt_is_ready():
+                    _required_missing = sorted(k for k, v in _barrier_state.items() if not bool(v))
                     logger.error("❌ Barrier still blocking execution loop")
                     raise RuntimeError(
                         "Startup readiness barrier blocked at bootstrap completion: "
-                        f"state={_barrier_state}"
+                        f"required_missing={_required_missing} state={_barrier_state}"
                     )
             except Exception as _gate_signal_err:
                 logger.warning("⚠️ readiness table signal failed at bootstrap completion: %s", _gate_signal_err)
