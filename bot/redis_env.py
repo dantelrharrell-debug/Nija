@@ -6,6 +6,10 @@ import os
 from urllib.parse import quote
 from urllib.parse import urlparse
 
+try:
+    from bot.startup_env import first_normalized_env, normalize_optional_env_value
+except ImportError:
+    from startup_env import first_normalized_env, normalize_optional_env_value  # type: ignore[import]
 
 
 _REDIS_URL_ENV_NAMES = (
@@ -46,11 +50,7 @@ _REDIS_COMPONENT_DB_ENV_NAMES = (
 
 def _first_nonempty_env(names: tuple[str, ...]) -> tuple[str | None, str]:
     """Return first configured env value and the env name it came from."""
-    for name in names:
-        value = _strip_wrapping_quotes(os.getenv(name, ""))
-        if value:
-            return name, value
-    return None, ""
+    return first_normalized_env(names)
 
 
 def _is_truthy(value: str) -> bool:
@@ -108,11 +108,8 @@ def _build_component_redis_url() -> tuple[str, dict[str, object]]:
 
 
 def _strip_wrapping_quotes(value: str) -> str:
-    """Trim matching single or double quotes from environment values."""
-    value = (value or "").strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-        return value[1:-1].strip()
-    return value
+    """Normalize startup env values while preserving empty-string semantics."""
+    return normalize_optional_env_value(value) or ""
 
 
 def _maybe_strip_tls(url: str) -> str:
