@@ -63,17 +63,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _is_truthy(value: str) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
-
-
 def _tls_auto_insecure(url: str) -> bool:
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    tls_insecure_raw = os.getenv("NIJA_REDIS_TLS_INSECURE", "auto").strip().lower()
-    if _is_truthy(tls_insecure_raw):
-        return True
-    return tls_insecure_raw in {"", "auto"} and ".rlwy.net" in host
+    _ = url
+    return False
 
 
 def _resp(parts: list[str]) -> bytes:
@@ -205,19 +197,15 @@ def _prioritized_alt_urls(primary_url: str) -> list[str]:
 
 
 def _build_candidates(primary_url: str) -> list[tuple[str, bool]]:
-    candidates: list[tuple[str, bool]] = [(primary_url, False)]
-    allow_plain = _is_truthy(os.getenv("NIJA_REDIS_ALLOW_PLAIN_FALLBACK", "false"))
-    force_tls = _is_truthy(os.getenv("NIJA_REDIS_FORCE_TLS", "true"))
-    host = (urlparse(primary_url).hostname or "").lower()
+    primary = primary_url.strip()
+    host = (urlparse(primary).hostname or "").lower()
     is_proxy = host.endswith(".proxy.rlwy.net") or host.endswith(".up.railway.app")
-    is_rlwy = ".rlwy.net" in host or host.endswith(".up.railway.app")
+    if is_proxy and primary.startswith("redis://"):
+        primary = primary.replace("redis://", "rediss://", 1)
 
-    if primary_url.startswith("rediss://") and allow_plain and is_rlwy:
-        candidates.append((primary_url.replace("rediss://", "redis://", 1), True))
-    elif primary_url.startswith("redis://") and force_tls and is_proxy:
-        candidates.append((primary_url.replace("redis://", "rediss://", 1), True))
+    candidates: list[tuple[str, bool]] = [(primary, False)]
 
-    for alt in _prioritized_alt_urls(primary_url):
+    for alt in _prioritized_alt_urls(primary):
         candidates.append((alt, False))
     return candidates
 
@@ -287,7 +275,7 @@ def main() -> int:
         if is_proxy and selected_scheme == "rediss":
             print("CONCLUSION: Railway proxy TLS is working on the selected proxy port.")
         elif is_proxy and selected_scheme != "rediss":
-            print("CONCLUSION: Connected via Railway proxy without TLS (operator override/fallback).")
+            print("CONCLUSION: Proxy endpoint selected but TLS is not enabled; fix endpoint scheme to rediss://.")
         else:
             print("CONCLUSION: Proxy TLS path was not selected; using internal/native fallback endpoint.")
 
