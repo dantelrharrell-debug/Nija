@@ -167,8 +167,8 @@ def _wait_for_probe_window(context: str, timeout_s: float | None = None) -> bool
     return True
 
 # ── Nonce tuning constants (milliseconds) ─────────────────────────────────────
-_STARTUP_JUMP_MS: int = int(os.environ.get("NIJA_NONCE_STARTUP_JUMP_MS", "10000"))    # added to persisted nonce on hot restart
-_RESET_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_RESET_OFFSET_MS", "300000"))  # offset used by reset_to_safe_value()
+_STARTUP_JUMP_MS: int = int(os.environ.get("NIJA_NONCE_STARTUP_JUMP_MS", "5000"))    # added to persisted nonce on hot restart
+_RESET_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_RESET_OFFSET_MS", "10000"))  # offset used by reset_to_safe_value()
 
 # ── Nuclear reset / trading-pause constants ───────────────────────────────────
 # When consecutive nonce errors exceed this threshold the manager performs a
@@ -240,11 +240,9 @@ _quarantine_callbacks: list = []    # List[Callable[[], None]]
 # Each failed probe call jumps the nonce forward by _PROBE_STEP_MS.
 # Up to _PROBE_MAX_ATTEMPTS attempts are made before giving up.
 #
-# Default coverage raised from 6 × 5 min (30 min) → 12 × 5 min (60 min) so
-# a single nuclear reset (+30 min) plus accumulated backoff jumps is always
-# within range without requiring NIJA_DEEP_NONCE_RESET=1.
-_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "300000"))       # 5 min per step
-_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "12")) # up to 60 min
+# Conservative forward step to avoid overshooting Kraken nonce continuity.
+_PROBE_STEP_MS: int = int(os.environ.get("NIJA_NONCE_PROBE_STEP_MS", "10000"))       # 10 s per step
+_PROBE_MAX_ATTEMPTS: int = int(os.environ.get("NIJA_NONCE_PROBE_MAX_ATTEMPTS", "12")) # up to 120 s
 
 # ── Deep-reset constants ──────────────────────────────────────────────────────
 # Activated by NIJA_DEEP_NONCE_RESET=1.  Provides 120-minute probe coverage
