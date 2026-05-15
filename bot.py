@@ -7617,6 +7617,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 logger.info("Barrier state: %s", _barrier_state)
                 if not _rt_is_ready():
                     logger.error("❌ Barrier still blocking execution loop")
+                    raise RuntimeError(
+                        "Startup readiness barrier blocked at bootstrap completion: "
+                        f"state={_barrier_state}"
+                    )
             except Exception as _gate_signal_err:
                 logger.warning("⚠️ readiness table signal failed at bootstrap completion: %s", _gate_signal_err)
             _emit_startup_orchestration_snapshot("bootstrap_complete")
