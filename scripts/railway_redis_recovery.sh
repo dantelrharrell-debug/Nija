@@ -88,24 +88,21 @@ case $choice in
     echo ""
     echo "   B. UPDATE NIJA ENVIRONMENT:"
     echo "      1. Go to NIJA service → Variables"
-    echo "      2. Create or update NIJA_REDIS_URL:"
+    echo "      2. Set the Railway production Redis variables:"
     echo ""
-    echo -e "      ${CYAN}NIJA_REDIS_URL=rediss://default:YOUR_PASSWORD@YOUR_HOST:YOUR_PORT/0${NC}"
+    echo -e "      ${CYAN}REDIS_PASSWORD=YOUR_REDIS_PASSWORD${NC}"
+    echo -e "      ${CYAN}REDIS_PRIVATE_URL=redis://default:\${REDIS_PASSWORD}@redis.railway.internal:6379/0${NC}"
+    echo -e "      ${CYAN}REDIS_PUBLIC_URL=rediss://default:\${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0${NC}"
+    echo -e "      ${CYAN}NIJA_REDIS_URL=rediss://default:\${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0${NC}"
     echo ""
-    echo "      Example:"
-    echo -e "      ${CYAN}NIJA_REDIS_URL=rediss://default:2eF9xK_3mL#pQ@maglev.proxy.rlwy.net:31245/0${NC}"
+    echo "      3. Delete broken legacy vars if present: REDIS_URL, REDIS_TLS_URL"
     echo ""
-    echo "      Replace:"
-    echo "      - YOUR_PASSWORD: value from REDIS_PASSWORD"
-    echo "      - YOUR_HOST: domain from Networking tab"
-    echo "      - YOUR_PORT: port from Networking tab"
-    echo ""
-    echo "   3. Save and restart NIJA service"
+    echo "   4. Save and restart NIJA service"
     echo ""
     echo -e "${YELLOW}Important:${NC}"
     echo "   • Use rediss:// (with 'ss'), NOT redis://"
-    echo "   • Include the RedisPassword in the URL"
-    echo "   • Port should NOT be 6379 for TCP proxy"
+    echo "   • The public Railway endpoint MUST use rediss://"
+    echo "   • The internal Railway endpoint stays redis:// on port 6379"
     echo ""
     ;;
     
@@ -117,29 +114,23 @@ case $choice in
     echo -e "${YELLOW}Use this when the current proxy endpoint is down or unstable.${NC}"
     echo ""
     echo -e "${GREEN}✅ Instructions:${NC}"
-    echo "   1. In Railway, open Redis service → Connect / Variables"
-    echo "   2. Collect at least two candidate endpoints:"
-    echo "      • Internal/private host (preferred when NIJA runs inside Railway)"
-    echo "      • Public proxy host (fallback)"
-    echo "   3. In NIJA service → Variables, set the primary endpoint:"
-    echo ""
-    echo -e "      ${CYAN}NIJA_REDIS_URL=redis://default:YOUR_PASSWORD@YOUR_INTERNAL_HOST:6379/0${NC}"
-    echo ""
-    echo "      If using a public Railway proxy endpoint, use TLS:"
-    echo -e "      ${CYAN}NIJA_REDIS_URL=rediss://default:YOUR_PASSWORD@YOUR_PROXY_HOST:YOUR_PROXY_PORT/0${NC}"
-    echo ""
-    echo "   4. Add alternate URL variables for runtime fallback candidates:"
-    echo -e "      ${CYAN}REDIS_PRIVATE_URL=redis://default:YOUR_PASSWORD@YOUR_INTERNAL_HOST:6379/0${NC}"
-    echo -e "      ${CYAN}REDIS_PUBLIC_URL=rediss://default:YOUR_PASSWORD@YOUR_PROXY_HOST:YOUR_PROXY_PORT/0${NC}"
-    echo ""
-    echo "   5. Restart NIJA service"
-    echo "   6. Verify with preflight:"
-    echo -e "      ${CYAN}python -m bot.production_preflight${NC}"
-    echo ""
-    echo -e "${YELLOW}Important:${NC}"
-    echo "   • Do NOT bypass distributed lock enforcement in live mode."
-    echo "   • If all endpoints fail, treat as Redis provider outage and rotate endpoint/service."
-    echo ""
+     echo "   1. In Railway, open Redis service → Connect / Variables"
+     echo "   2. Set the production Redis variables in NIJA service → Variables:"
+     echo ""
+     echo -e "      ${CYAN}REDIS_PASSWORD=YOUR_REDIS_PASSWORD${NC}"
+     echo -e "      ${CYAN}REDIS_PRIVATE_URL=redis://default:\${REDIS_PASSWORD}@redis.railway.internal:6379/0${NC}"
+     echo -e "      ${CYAN}REDIS_PUBLIC_URL=rediss://default:\${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0${NC}"
+     echo -e "      ${CYAN}NIJA_REDIS_URL=rediss://default:\${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0${NC}"
+     echo ""
+     echo "   3. Delete broken legacy vars if present: REDIS_URL, REDIS_TLS_URL"
+     echo "   4. Restart NIJA service"
+     echo "   5. Verify with preflight:"
+     echo -e "      ${CYAN}python -m bot.production_preflight${NC}"
+     echo ""
+     echo -e "${YELLOW}Important:${NC}"
+     echo "   • Public Railway URLs must use rediss://, never redis://."
+     echo "   • Do NOT bypass distributed lock enforcement in live mode."
+     echo ""
     ;;
     
   5)
@@ -154,11 +145,14 @@ import os
 from urllib.parse import urlparse
 
 print('NIJA_REDIS_URL:', 'SET' if os.environ.get('NIJA_REDIS_URL') else 'NOT SET')
+print('REDIS_PRIVATE_URL:', 'SET' if os.environ.get('REDIS_PRIVATE_URL') else 'NOT SET')
+print('REDIS_PUBLIC_URL:', 'SET' if os.environ.get('REDIS_PUBLIC_URL') else 'NOT SET')
 print('REDIS_URL:', 'SET' if os.environ.get('REDIS_URL') else 'NOT SET')
+print('REDIS_TLS_URL:', 'SET' if os.environ.get('REDIS_TLS_URL') else 'NOT SET')
 print('REDIS_PASSWORD:', 'SET' if os.environ.get('REDIS_PASSWORD') else 'NOT SET')
 print('LIVE_CAPITAL_VERIFIED:', os.environ.get('LIVE_CAPITAL_VERIFIED', 'NOT SET'))
 
-url = os.environ.get('NIJA_REDIS_URL') or os.environ.get('REDIS_URL')
+url = os.environ.get('NIJA_REDIS_URL') or os.environ.get('REDIS_PRIVATE_URL') or os.environ.get('REDIS_PUBLIC_URL') or os.environ.get('REDIS_URL') or os.environ.get('REDIS_TLS_URL')
 if url:
   try:
     parsed = urlparse(url)

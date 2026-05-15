@@ -220,7 +220,10 @@ def main() -> int:
 
     if not primary_url:
         print("ERROR: No Redis URL configured.")
-        print("Checked URL sources: NIJA_REDIS_URL, REDIS_TLS_URL, REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL")
+        print(
+            "Checked URL sources: NIJA_REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL, "
+            "REDIS_URL (legacy), REDIS_TLS_URL (legacy)"
+        )
         return 2
 
     print(f"Primary Redis candidate: {_redact(primary_url)}")

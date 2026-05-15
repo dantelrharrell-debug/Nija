@@ -200,11 +200,12 @@ STEP 2: loading bot.py...
 
 ### "NIJA_REDIS_URL keeps reverting"
 1. Railway sometimes auto-detects URLs - check REDIS_TLS_URL or REDIS_URL
-2. Set all competing variables to empty string:
+2. Delete broken legacy variables and keep the production Railway set:
    - `REDIS_URL =`
-   - `REDIS_PRIVATE_URL =`
    - `REDIS_TLS_URL =`
-3. Only keep `NIJA_REDIS_URL` populated
+   - `REDIS_PRIVATE_URL=redis://default:${REDIS_PASSWORD}@redis.railway.internal:6379/0`
+   - `REDIS_PUBLIC_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
+3. Keep `NIJA_REDIS_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
 
 ### "Still crashing even after PR deployment"
 1. Force full redeploy: Delete old deployment → redeploy

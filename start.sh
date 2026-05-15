@@ -23,8 +23,8 @@ echo ""
 # start.sh is invoked a second time while a previous instance is still live.
 #
 # Cross-container / cross-deployment protection is handled separately by the
-# distributed Redis lock inside bot.py (set NIJA_REDIS_URL, REDIS_TLS_URL,
-# REDIS_URL, REDIS_PRIVATE_URL, or REDIS_PUBLIC_URL to enable it).
+# distributed Redis lock inside bot.py (prefer NIJA_REDIS_URL +
+# REDIS_PRIVATE_URL / REDIS_PUBLIC_URL; REDIS_URL and REDIS_TLS_URL are legacy).
 # ─────────────────────────────────────────────────────────────────────────────
 _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 _PID_FILE="${_SCRIPT_DIR}/data/nija.pid"
@@ -152,7 +152,7 @@ if [ "${DRY_RUN_MODE:-false}" = "false" ] && [ "${PAPER_MODE:-false}" = "false" 
 fi
 
 _REDIS_CONFIGURED=false
-if [ -n "${NIJA_REDIS_URL:-}" ] || [ -n "${REDIS_TLS_URL:-}" ] || [ -n "${REDIS_URL:-}" ] || [ -n "${REDIS_PRIVATE_URL:-}" ] || [ -n "${REDIS_PUBLIC_URL:-}" ]; then
+if [ -n "${NIJA_REDIS_URL:-}" ] || [ -n "${REDIS_PRIVATE_URL:-}" ] || [ -n "${REDIS_PUBLIC_URL:-}" ] || [ -n "${REDIS_URL:-}" ] || [ -n "${REDIS_TLS_URL:-}" ]; then
     _REDIS_CONFIGURED=true
 else
     _component_port_check="${RAILWAY_TCP_PROXY_PORT:-${REDIS_PORT:-${REDISPORT:-}}}"
@@ -334,20 +334,20 @@ _resolve_redis_url() {
         _strip_wrapping_quotes "${NIJA_REDIS_URL}"
         return 0
     fi
-    if [ -n "${REDIS_TLS_URL:-}" ]; then
-        _strip_wrapping_quotes "${REDIS_TLS_URL}"
-        return 0
-    fi
-    if [ -n "${REDIS_URL:-}" ]; then
-        _strip_wrapping_quotes "${REDIS_URL}"
-        return 0
-    fi
     if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
         _strip_wrapping_quotes "${REDIS_PRIVATE_URL}"
         return 0
     fi
     if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
         _strip_wrapping_quotes "${REDIS_PUBLIC_URL}"
+        return 0
+    fi
+    if [ -n "${REDIS_URL:-}" ]; then
+        _strip_wrapping_quotes "${REDIS_URL}"
+        return 0
+    fi
+    if [ -n "${REDIS_TLS_URL:-}" ]; then
+        _strip_wrapping_quotes "${REDIS_TLS_URL}"
         return 0
     fi
 
@@ -367,7 +367,7 @@ _resolve_redis_url() {
     if [ -n "${_host}" ] && [ -n "${_port}" ]; then
         if printf "%s" "${_port}" | grep -Eq '^[0-9]+$'; then
             _scheme="redis"
-            if printf "%s" "${_host}" | grep -Eiq '\.proxy\.rlwy\.net$' \
+            if printf "%s" "${_host}" | grep -Eiq '(\.proxy\.rlwy\.net|\.up\.railway\.app)$' \
                 && printf "%s" "${_force_tls}" | grep -Eiq '^(1|true|yes|on|enabled)$'; then
                 _scheme="rediss"
             fi
@@ -388,20 +388,20 @@ _resolve_redis_url_source() {
         printf "%s" "NIJA_REDIS_URL"
         return 0
     fi
-    if [ -n "${REDIS_TLS_URL:-}" ]; then
-        printf "%s" "REDIS_TLS_URL"
-        return 0
-    fi
-    if [ -n "${REDIS_URL:-}" ]; then
-        printf "%s" "REDIS_URL"
-        return 0
-    fi
     if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
         printf "%s" "REDIS_PRIVATE_URL"
         return 0
     fi
     if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
         printf "%s" "REDIS_PUBLIC_URL"
+        return 0
+    fi
+    if [ -n "${REDIS_URL:-}" ]; then
+        printf "%s" "REDIS_URL"
+        return 0
+    fi
+    if [ -n "${REDIS_TLS_URL:-}" ]; then
+        printf "%s" "REDIS_TLS_URL"
         return 0
     fi
     if [ -n "${RAILWAY_TCP_PROXY_DOMAIN:-}" ] && [ -n "${RAILWAY_TCP_PROXY_PORT:-}" ]; then
@@ -536,7 +536,8 @@ _validate_redis_url_or_exit() {
         echo "🔧 SOLUTION:"
         echo "   1. Open Railway Redis → Connect"
         echo "   2. Copy the public proxy port and password"
-        echo "   3. Set NIJA_REDIS_URL (or REDIS_TLS_URL) to the full rediss:// URL"
+        echo "   3. Set NIJA_REDIS_URL to the public rediss:// Railway URL"
+        echo "      and set REDIS_PRIVATE_URL / REDIS_PUBLIC_URL to the production fallback pair"
         echo "      OR fix ${_component_source} with numeric port + valid password"
         echo "   4. Redeploy"
         echo ""
@@ -789,8 +790,9 @@ _maybe_force_nonce_resync() {
     rm -f "${_SCRIPT_DIR}/data/kraken_nonce.state"*
 
     # Redis nonce key cleanup (best effort).
-    # Supports either NIJA_REDIS_URL or standard REDIS_URL variants.
-    local _redis_url="${NIJA_REDIS_URL:-${REDIS_TLS_URL:-${REDIS_URL:-${REDIS_PRIVATE_URL:-${REDIS_PUBLIC_URL:-}}}}}"
+    # Supports NIJA_REDIS_URL first, then explicit private/public fallbacks,
+    # then legacy REDIS_URL variants.
+    local _redis_url="${NIJA_REDIS_URL:-${REDIS_PRIVATE_URL:-${REDIS_PUBLIC_URL:-${REDIS_URL:-${REDIS_TLS_URL:-}}}}}"
     if [ -n "${_redis_url}" ] && command -v redis-cli >/dev/null 2>&1; then
         if _redis_cli_run "${_redis_url}" DEL kraken_nonce >/dev/null 2>&1; then
             echo "   ✅ Redis key reset: kraken_nonce"

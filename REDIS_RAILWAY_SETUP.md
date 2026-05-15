@@ -2,7 +2,7 @@
 
 ## 🔴 CRITICAL: Redis Lock Stability Issue
 
-The distributed writer lock uses Redis to prevent multiple bot instances from trading simultaneously. **If your Redis URL is incorrect or uses the internal Railway domain (`redis://nija.railway.internal:6379`), you WILL experience lock failures and trade execution failures.**
+The distributed writer lock uses Redis to prevent multiple bot instances from trading simultaneously. **Production Railway configs must use a TLS public runtime URL (`rediss://...up.railway.app:6379/0`) for `NIJA_REDIS_URL`, plus explicit private/public fallback variables. Do not use the public Railway endpoint as plain `redis://`.**
 
 ## ✅ Recommended: Start with Railway TCP Proxy (TLS)
 
@@ -46,22 +46,26 @@ If persistence cannot be verified, NIJA startup will fail closed in live mode.
 Set these Railway environment variables for the NIJA service:
 
 ```bash
-# Railway TCP Proxy connection (REQUIRED)
-RAILWAY_TCP_PROXY_DOMAIN=maglev.proxy.rlwy.net
-RAILWAY_TCP_PROXY_PORT=12345
-
-# Redis authentication
 REDIS_PASSWORD=your_redis_password_here
-REDIS_DB=0
+
+# PRIMARY (internal/private)
+REDIS_PRIVATE_URL=redis://default:${REDIS_PASSWORD}@redis.railway.internal:6379/0
+
+# FALLBACK (public TLS proxy)
+REDIS_PUBLIC_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0
+
+# PRIMARY runtime URL
+NIJA_REDIS_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0
 ```
 
-### Alternative: Use NIJA_REDIS_URL directly
-
-If you prefer to set a single variable, construct the URL and set:
+Remove these broken legacy variables if they are present:
 
 ```bash
-NIJA_REDIS_URL=rediss://default:your_redis_password_here@maglev.proxy.rlwy.net:12345/0
+REDIS_URL=
+REDIS_TLS_URL=
 ```
+
+The public Railway endpoint must use `rediss://`, never `redis://`.
 
 ### Step 4: Restart NIJA Service
 
@@ -193,10 +197,10 @@ Expected fail indicators:
 
 ### Proxy TLS Confirmation + Fallback Decision
 
-- If host is `*.proxy.rlwy.net` and `rediss://` ping succeeds, keep proxy TLS.
-- If host is `*.proxy.rlwy.net` and TLS ping fails, switch to private/internal or native non-proxy Redis.
-- Option A: `REDIS_PRIVATE_URL=redis://<service>.railway.internal:6379/0` (same Railway project/network)
-- Option B: `NIJA_REDIS_URL=redis://<native-host>:6379/0` (native non-proxy Redis)
+- Keep `NIJA_REDIS_URL` on the Railway public TLS endpoint (`rediss://...up.railway.app:6379/0`).
+- Keep `REDIS_PRIVATE_URL` on the Railway internal/private endpoint (`redis://...railway.internal:6379/0`) for fallback inside Railway.
+- Keep `REDIS_PUBLIC_URL` on the same public TLS endpoint for alternate-candidate retries.
+- Remove `REDIS_URL` and `REDIS_TLS_URL` unless you explicitly depend on them elsewhere.
 
 Connection runtime behavior:
 
@@ -234,9 +238,9 @@ Connection runtime behavior:
 
 ### Error: "Redis connection timeout"
 
-- Check that RAILWAY_TCP_PROXY_DOMAIN and RAILWAY_TCP_PROXY_PORT are correct
+- Check that `NIJA_REDIS_URL` uses the Railway public TLS endpoint with `rediss://`
+- Verify `REDIS_PRIVATE_URL` points at the internal Railway host on port `6379`
 - Verify the Redis service is running and has public networking enabled
-- Check Railway firewall rules allow outbound connections
 
 ### Error: "Redis WRONGPASS or invalid user"
 
@@ -266,30 +270,28 @@ For production resilience (failover + reset recovery + zero-downtime steps), see
 NIJA checks for Redis URLs in this order:
 
 1. `NIJA_REDIS_URL` (highest priority)
-2. `REDIS_URL`
-3. `REDIS_PRIVATE_URL`
-4. `REDIS_PUBLIC_URL`
-5. Individual components: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`
+2. `REDIS_PRIVATE_URL`
+3. `REDIS_PUBLIC_URL`
+4. `REDIS_URL` (legacy compatibility only)
+5. `REDIS_TLS_URL` (legacy compatibility only)
+6. Individual components: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`
 
-If **Railway proxy environment variables are set first**, they're used to construct the URL automatically:
+Recommended Railway production set:
 
-- `RAILWAY_TCP_PROXY_DOMAIN` + `RAILWAY_TCP_PROXY_PORT` + `REDIS_PASSWORD` → `rediss://default:PASSWORD@DOMAIN:PORT/DB`
+- `REDIS_PASSWORD`
+- `REDIS_PRIVATE_URL=redis://default:${REDIS_PASSWORD}@redis.railway.internal:6379/0`
+- `REDIS_PUBLIC_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
+- `NIJA_REDIS_URL=rediss://default:${REDIS_PASSWORD}@redis-production-e747.up.railway.app:6379/0`
 
 ## 🔧 Advanced: Manual URL Construction
 
-If Railway proxy variables aren't available, manually construct and set NIJA_REDIS_URL:
+If you must construct the URLs manually, use this Railway production layout:
 
 ```bash
-# Format: rediss://USERNAME:PASSWORD@HOST:PORT/DATABASE
-NIJA_REDIS_URL=rediss://default:YourPasswordHere@maglev.proxy.rlwy.net:12345/0
+REDIS_PRIVATE_URL=redis://default:YourPasswordHere@redis.railway.internal:6379/0
+REDIS_PUBLIC_URL=rediss://default:YourPasswordHere@redis-production-e747.up.railway.app:6379/0
+NIJA_REDIS_URL=rediss://default:YourPasswordHere@redis-production-e747.up.railway.app:6379/0
 ```
-
-Replace:
-
-- `YourPasswordHere` → actual Redis password
-- `maglev.proxy.rlwy.net` → your Railway TCP proxy domain
-- `12345` → your Railway TCP proxy port
-- `0` → Redis database number (usually 0)
 
 ## 📚 References
 

@@ -138,20 +138,20 @@ resolve_redis_url() {
     printf "%s" "${NIJA_REDIS_URL}"
     return 0
   fi
-  if [ -n "${REDIS_TLS_URL:-}" ]; then
-    printf "%s" "${REDIS_TLS_URL}"
-    return 0
-  fi
-  if [ -n "${REDIS_URL:-}" ]; then
-    printf "%s" "${REDIS_URL}"
-    return 0
-  fi
   if [ -n "${REDIS_PRIVATE_URL:-}" ]; then
     printf "%s" "${REDIS_PRIVATE_URL}"
     return 0
   fi
   if [ -n "${REDIS_PUBLIC_URL:-}" ]; then
     printf "%s" "${REDIS_PUBLIC_URL}"
+    return 0
+  fi
+  if [ -n "${REDIS_URL:-}" ]; then
+    printf "%s" "${REDIS_URL}"
+    return 0
+  fi
+  if [ -n "${REDIS_TLS_URL:-}" ]; then
+    printf "%s" "${REDIS_TLS_URL}"
     return 0
   fi
 
@@ -169,7 +169,7 @@ resolve_redis_url() {
   fi
 
   scheme="redis"
-  if printf "%s" "${host}" | grep -Eiq '\.proxy\.rlwy\.net$' \
+  if printf "%s" "${host}" | grep -Eiq '(\.proxy\.rlwy\.net|\.up\.railway\.app)$' \
     && printf "%s" "${force_tls}" | grep -Eiq '^(1|true|yes|on|enabled)$'; then
     scheme="rediss"
   fi
@@ -186,7 +186,7 @@ url="$(resolve_redis_url || true)"
 
 if [ -z "${url}" ]; then
   echo "ERROR: Redis URL is empty"
-  echo "Checked: NIJA_REDIS_URL, REDIS_TLS_URL, REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL"
+  echo "Checked: NIJA_REDIS_URL, REDIS_PRIVATE_URL, REDIS_PUBLIC_URL, REDIS_URL, REDIS_TLS_URL"
   echo "Also checked component vars: RAILWAY_TCP_PROXY_DOMAIN/PORT, REDIS_HOST/PORT, REDIS_PASSWORD"
   echo "Tip: pass an env file with --env-file <path> if variables are not exported in this shell"
   exit 4
@@ -264,7 +264,7 @@ raw = sys.argv[1]
 force_tls = sys.argv[2].strip().lower() in {"1", "true", "yes", "on", "enabled"}
 parsed = urlparse(raw)
 host = (parsed.hostname or "").lower()
-if force_tls and parsed.scheme == "redis" and host.endswith(".proxy.rlwy.net"):
+if force_tls and parsed.scheme == "redis" and (host.endswith(".proxy.rlwy.net") or host.endswith(".up.railway.app")):
     print("ERROR: NIJA_REDIS_URL uses redis:// on Railway proxy while NIJA_REDIS_FORCE_TLS=true")
     print("Set NIJA_REDIS_URL to rediss://...")
     raise SystemExit(3)
