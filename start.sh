@@ -191,9 +191,24 @@ if [ "${_UNSAFE_BYPASS}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
 fi
 
 if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_STRICT_LEASE}" = "true" ]; then
-    # Allow graceful standby retry instead of immediate exit when Redis is unreachable
-    # This lets the bot enter fail-closed standby and retry every 5s until Redis recovers
-    export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS="${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS:-false}"
+    # In live strict-lock mode, fail fast when Redis is unreachable so deployments
+    # do not hang indefinitely in standby when lock infrastructure is down.
+    _EXIT_ON_UNREACHABLE_RAW=$(printf "%s" "${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS:-true}" | tr '[:upper:]' '[:lower:]')
+    if [ "${_EXIT_ON_UNREACHABLE_RAW}" = "0" ] || [ "${_EXIT_ON_UNREACHABLE_RAW}" = "false" ] || [ "${_EXIT_ON_UNREACHABLE_RAW}" = "no" ] || [ "${_EXIT_ON_UNREACHABLE_RAW}" = "off" ]; then
+        echo "⚠️  Live strict-lock mode forbids NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=false; forcing true"
+        export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true
+    else
+        export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true
+    fi
+
+    # In live strict-lock mode, force a finite standby retry cap to avoid infinite loops.
+    _MAX_RETRIES_RAW="${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS:-12}"
+    if ! printf "%s" "${_MAX_RETRIES_RAW}" | grep -Eq '^[0-9]+$' || [ "${_MAX_RETRIES_RAW}" -le 0 ]; then
+        echo "⚠️  Live strict-lock mode requires NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS>0; forcing 12"
+        export NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS=12
+    else
+        export NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS="${_MAX_RETRIES_RAW}"
+    fi
     
     # Fail-fast defaults for trading safety (override via env if needed).
     # Always set defaults first to handle empty/unset values
@@ -238,7 +253,8 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     if [ "${NIJA_REDIS_LEASE_FORCE_TAKEOVER}" = "1" ] || [ "${NIJA_REDIS_LEASE_FORCE_TAKEOVER}" = "true" ]; then
         echo "   Force takeover enabled: timeout=${NIJA_REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S}s refresh_delta=${NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS}ms"
     fi
-    echo "   If lock is not acquired quickly, process retries indefinitely until available (may block deployment if lock never releases)"
+    echo "   If lock is not acquired quickly, process enters fail-closed standby with a finite retry cap"
+    echo "   Fail-closed retry cap: ${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS} attempts"
     echo ""
 fi
 
@@ -1498,8 +1514,10 @@ PY
     else
         _redis_health="degraded"
         export NIJA_REDIS_HEALTH=degraded
-        export NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS="${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS:-12}"
-        export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS="${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS:-true}"
+        if ! printf "%s" "${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS:-12}" | grep -Eq '^[0-9]+$' || [ "${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS:-12}" -le 0 ]; then
+            export NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS=12
+        fi
+        export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=true
         echo "⚠️  Redis preflight degraded (python ping failed); continuing startup with strict fail-closed lock mode"
         echo "   Standby retry cap set to ${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS} (12 default in live mode)"
         echo "   Exit-on-unreachable set to ${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS}"

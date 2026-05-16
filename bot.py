@@ -2139,6 +2139,14 @@ def _acquire_distributed_process_lock() -> None:
             _max_retry_attempts = max(0, int(_max_retry_attempts_raw or "0"))
         except (TypeError, ValueError):
             _max_retry_attempts = 0
+        if _live_mode and _require_lock and not _unsafe_bypass and _max_retry_attempts <= 0:
+            _max_retry_attempts = 12
+            os.environ["NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS"] = "12"
+            print(
+                "⚠️ Live lock-required mode forbids infinite standby retries in fail-closed mode; "
+                "forcing NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS=12.",
+                flush=True,
+            )
         print("❌ FAILED TO ACQUIRE WRITER LOCK", flush=True)
         print(f"❌ Failed to acquire distributed single-writer lock: {_reason}")
         print(
@@ -2349,6 +2357,23 @@ def _acquire_distributed_process_lock() -> None:
         "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS",
         "true" if _default_exit_unreachable else "false",
     ).strip().lower() in _truthy
+    if _live_mode and _require_lock and not _unsafe_bypass:
+        if _fail_closed_max_retries <= 0:
+            _fail_closed_max_retries = 12
+            os.environ["NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS"] = "12"
+            print(
+                "⚠️ Live lock-required mode forbids infinite fail-closed standby retries; "
+                "forcing NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS=12.",
+                flush=True,
+            )
+        if not _fail_closed_exit_unreachable:
+            _fail_closed_exit_unreachable = True
+            os.environ["NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS"] = "true"
+            print(
+                "⚠️ Live lock-required mode forbids NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS=false; "
+                "forcing true.",
+                flush=True,
+            )
     _allow_local_lock_fallback = os.environ.get(
         "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK", "false"
     ).strip().lower() in _truthy
@@ -2853,7 +2878,16 @@ def _acquire_distributed_process_lock() -> None:
                     raise RuntimeError(_ping_err_msg) from _ping_exc
                 print(f"⚠️ {_ping_err_msg}")
                 print("⚠️ Distributed writer lock SKIPPED (Redis unreachable and lock not required in this mode).")
-                print("   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 or LIVE_CAPITAL_VERIFIED=1 to enforce fail-closed behaviour.")
+                if _unsafe_bypass:
+                    print(
+                        "   Clear NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK to restore fail-closed distributed lock enforcement."
+                    )
+                elif _live_mode:
+                    print("   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 to enforce fail-closed behaviour.")
+                else:
+                    print(
+                        "   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 or LIVE_CAPITAL_VERIFIED=1 to enforce fail-closed behaviour."
+                    )
                 return
 
         def _try_acquire_once() -> tuple[int, str, int]:
@@ -4537,8 +4571,8 @@ def _run_preflight_check() -> bool:
         else:
             cb_rest_ok = False
         cb_sdk_ok = cb_root_ok or cb_rest_ok
-        cb_key = os.getenv("COINBASE_API_KEY") or os.getenv("CDP_API_KEY_NAME") or ""
-        cb_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("CDP_API_KEY_PRIVATE_KEY") or os.getenv("COINBASE_PEM_CONTENT") or ""
+        cb_key = os.getenv("COINBASE_API_KEY") or ""
+        cb_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT") or ""
         cb_creds_ok = bool(cb_key and cb_secret)
         if cb_sdk_ok and cb_creds_ok:
             checks.append(("Coinbase SDK + credentials", True, "SDK present, key and secret present"))
@@ -4548,7 +4582,7 @@ def _run_preflight_check() -> bool:
             if coinbase_required:
                 blockers.append(f"Coinbase SDK missing — {detail}")
         else:
-            detail = "SDK present but credentials missing (COINBASE_API_KEY / COINBASE_API_SECRET)"
+            detail = "SDK present but credentials missing (COINBASE_API_KEY + COINBASE_API_SECRET/COINBASE_PEM_CONTENT)"
             checks.append(("Coinbase SDK + credentials", not coinbase_required, detail))
             if coinbase_required:
                 blockers.append(f"Coinbase credentials missing — {detail}")
@@ -5889,7 +5923,8 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
 
                 # Check Coinbase
                 coinbase_configured = bool(
-                    os.getenv("COINBASE_API_KEY") and os.getenv("COINBASE_API_SECRET")
+                    os.getenv("COINBASE_API_KEY")
+                    and (os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT"))
                 )
                 if coinbase_configured:
                     exchanges_configured += 1

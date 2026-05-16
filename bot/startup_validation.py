@@ -255,7 +255,10 @@ def _coinbase_credentials_viable() -> Tuple[bool, str]:
     non-placeholder string (some integrations store only the raw EC key body).
     """
     key = os.getenv("COINBASE_API_KEY", "").strip()
-    secret = os.getenv("COINBASE_API_SECRET", "").strip()
+    secret = (
+        os.getenv("COINBASE_API_SECRET", "").strip()
+        or os.getenv("COINBASE_PEM_CONTENT", "").strip()
+    )
 
     if not _credential_looks_valid(key, _MIN_LENGTHS["coinbase_key"]):
         return False, ""
@@ -263,8 +266,8 @@ def _coinbase_credentials_viable() -> Tuple[bool, str]:
         return False, ""
     # If the secret looks like a PEM key (recommended) that's a strong signal
     if "-----BEGIN" in secret or "-----END" in secret:
-        return True, "COINBASE_API_KEY / COINBASE_API_SECRET (PEM format)"
-    return True, "COINBASE_API_KEY / COINBASE_API_SECRET"
+        return True, "COINBASE_API_KEY / COINBASE_API_SECRET|COINBASE_PEM_CONTENT (PEM format)"
+    return True, "COINBASE_API_KEY / COINBASE_API_SECRET|COINBASE_PEM_CONTENT"
 
 
 def _alpaca_credentials_viable() -> Tuple[bool, str]:
@@ -354,7 +357,9 @@ def validate_exchange_configuration() -> StartupValidationResult:
     # Coinbase (fully supported — not disabled in code)
     # ------------------------------------------------------------------
     coinbase_key_set = bool(os.getenv("COINBASE_API_KEY"))
-    coinbase_secret_set = bool(os.getenv("COINBASE_API_SECRET"))
+    coinbase_secret_set = bool(
+        os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
+    )
     coinbase_viable, coinbase_pair = _coinbase_credentials_viable()
 
     if coinbase_viable:
@@ -364,13 +369,14 @@ def validate_exchange_configuration() -> StartupValidationResult:
         result.add_risk(
             StartupRisk.NO_VIABLE_BROKER,
             "Coinbase credentials are set but appear to be placeholders or incomplete — "
-            "verify COINBASE_API_KEY and COINBASE_API_SECRET",
+            "verify COINBASE_API_KEY and COINBASE_API_SECRET/COINBASE_PEM_CONTENT",
         )
         result.add_warning(
             "⚠️  COINBASE CREDENTIALS INVALID: One or both values look like placeholders.\n"
             "    Required format (Cloud API Key):\n"
             "      COINBASE_API_KEY=organizations/{org_id}/apiKeys/{key_id}\n"
             "      COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----\\n<base64>\\n-----END EC PRIVATE KEY-----\n"
+            "      or COINBASE_PEM_CONTENT with the same PEM content\n"
             "    In Railway/Docker: use literal \\\\n (backslash-n) to represent newlines\n"
             "    in the PEM block — broker_manager.py converts them automatically.\n"
             "    Get credentials at: https://portal.cdp.coinbase.com/"

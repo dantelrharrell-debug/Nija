@@ -27,7 +27,7 @@ User accounts (individual subscribers):
     KRAKEN_USER_DAIVON_API_SECRET  — required
 
 Optional brokers (warnings only, bot still starts if absent):
-  Coinbase: COINBASE_API_KEY / COINBASE_API_SECRET
+    Coinbase: COINBASE_API_KEY / (COINBASE_API_SECRET or COINBASE_PEM_CONTENT)
   Alpaca:   ALPACA_API_KEY / ALPACA_API_SECRET
   Binance:  BINANCE_API_KEY / BINANCE_API_SECRET
   OKX:      OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE
@@ -329,7 +329,27 @@ def check_kraken_user_daivon() -> bool:
 def check_coinbase() -> bool:
     """Check Coinbase Advanced Trade credentials (optional broker)."""
     _section("Coinbase Advanced Trade  (optional)")
-    ok = _check_pair("COINBASE_API_KEY", "COINBASE_API_SECRET")
+
+    key_ok, key_disp = _check_var("COINBASE_API_KEY")
+    secret_ok, secret_disp = _check_var("COINBASE_API_SECRET")
+    pem_ok, pem_disp = _check_var("COINBASE_PEM_CONTENT")
+
+    if key_ok:
+        _ok(f"COINBASE_API_KEY = {key_disp}")
+    else:
+        _fail(f"COINBASE_API_KEY — {key_disp}")
+
+    if secret_ok:
+        _ok(f"COINBASE_API_SECRET = {secret_disp}")
+    elif pem_ok:
+        _ok(
+            "COINBASE_PEM_CONTENT = "
+            f"{pem_disp}  (accepted fallback; prefer COINBASE_API_SECRET when practical)"
+        )
+    else:
+        _fail("COINBASE_API_SECRET / COINBASE_PEM_CONTENT — neither is set")
+
+    ok = key_ok and (secret_ok or pem_ok)
 
     if not ok:
         _warn("Coinbase credentials not configured — Coinbase trading will be disabled.")
