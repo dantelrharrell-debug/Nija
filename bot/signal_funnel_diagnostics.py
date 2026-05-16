@@ -43,12 +43,20 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 logger = logging.getLogger("nija.signal_funnel")
 
 # How often to emit the per-pair funnel summary to the log (seconds)
 REPORT_INTERVAL_SECS: float = 300.0  # 5 minutes
+TRACE_STAGE_ORDER: Tuple[str, ...] = (
+    "signal",
+    "ai_gate",
+    "position_sizing",
+    "ecel",
+    "broker",
+    "fill",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +108,29 @@ class ShadowTrade:
     hypothetical_pnl_pct: float = 0.0  # filled on close
 
 
+@dataclass
+class ExecutionTraceStageEvent:
+    """A single stage update inside one execution trace attempt."""
+    stage: str
+    outcome: str
+    reason: str = ""
+    timestamp: float = field(default_factory=time.time)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ExecutionTraceAttempt:
+    """Per-attempt execution trace from signal through fill/rejection."""
+    trace_id: str
+    pair: str
+    side: str
+    status: str = "in_progress"
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    terminal_reason: str = ""
+    events: List[ExecutionTraceStageEvent] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Main diagnostics class
 # ---------------------------------------------------------------------------
@@ -115,6 +146,10 @@ class SignalFunnelDiagnostics:
         self._lock = threading.Lock()
         self._stats: Dict[str, FunnelStats] = {}
         self._shadow_trades: List[ShadowTrade] = []
+        self._trace_attempts: List[ExecutionTraceAttempt] = []
+        self._active_trace_by_key: Dict[str, str] = {}
+        self._trace_counter: int = 0
+        self._max_trace_attempts: int = 400
         self._last_report_time: float = time.monotonic()
 
     # ------------------------------------------------------------------
@@ -258,6 +293,133 @@ class SignalFunnelDiagnostics:
                     trade.executed = True
                     break
 
+    # ------------------------------------------------------------------
+    # Execution trace viewer (per-attempt stage flow)
+    # ------------------------------------------------------------------
+
+    def start_execution_trace(
+        self,
+        pair: str,
+        side: str,
+        *,
+        reason: str = "",
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Start a new execution attempt at SIGNAL stage and return trace_id."""
+        with self._lock:
+            self._trace_counter += 1
+            trace_id = f"trace-{int(time.time() * 1000)}-{self._trace_counter}"
+            attempt = ExecutionTraceAttempt(
+                trace_id=trace_id,
+                pair=pair,
+                side=side.lower(),
+            )
+            attempt.events.append(
+                ExecutionTraceStageEvent(
+                    stage="signal",
+                    outcome="pass",
+                    reason=reason,
+                    extra=dict(extra or {}),
+                )
+            )
+            self._trace_attempts.append(attempt)
+            self._active_trace_by_key[self._trace_key(pair, side)] = trace_id
+            self._trim_traces_locked()
+            return trace_id
+
+    def record_execution_stage(
+        self,
+        pair: str,
+        stage: str,
+        outcome: str,
+        *,
+        side: Optional[str] = None,
+        reason: str = "",
+        extra: Optional[Dict[str, Any]] = None,
+        terminal: bool = False,
+    ) -> Optional[str]:
+        """Record a stage update for the active trace attempt for pair/side."""
+        with self._lock:
+            attempt = self._resolve_attempt_locked(pair, side)
+            if attempt is None:
+                # Create a fallback attempt when downstream stages emit before signal stage.
+                fallback_side = (side or "unknown").lower()
+                self._trace_counter += 1
+                trace_id = f"trace-{int(time.time() * 1000)}-{self._trace_counter}"
+                attempt = ExecutionTraceAttempt(trace_id=trace_id, pair=pair, side=fallback_side)
+                self._trace_attempts.append(attempt)
+                self._active_trace_by_key[self._trace_key(pair, fallback_side)] = trace_id
+
+            event = ExecutionTraceStageEvent(
+                stage=stage,
+                outcome=outcome,
+                reason=reason,
+                extra=dict(extra or {}),
+            )
+            attempt.events.append(event)
+            attempt.updated_at = event.timestamp
+
+            if terminal:
+                attempt.status = "filled" if outcome in ("pass", "filled", "confirmed", "success") else "rejected"
+                attempt.terminal_reason = reason or outcome
+                self._active_trace_by_key.pop(self._trace_key(attempt.pair, attempt.side), None)
+            elif outcome in ("rejected", "error", "blocked", "failed"):
+                attempt.status = "rejected"
+                attempt.terminal_reason = reason or outcome
+                self._active_trace_by_key.pop(self._trace_key(attempt.pair, attempt.side), None)
+            elif stage == "fill" and outcome in ("pass", "filled", "confirmed", "success"):
+                attempt.status = "filled"
+                attempt.terminal_reason = reason or "filled"
+                self._active_trace_by_key.pop(self._trace_key(attempt.pair, attempt.side), None)
+
+            self._trim_traces_locked()
+            return attempt.trace_id
+
+    def get_execution_traces(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return latest per-attempt execution traces for viewer/API consumption."""
+        with self._lock:
+            attempts = list(self._trace_attempts[-max(1, limit):])
+
+        output: List[Dict[str, Any]] = []
+        for attempt in reversed(attempts):
+            stage_map: Dict[str, Dict[str, Any]] = {}
+            last_stage = ""
+            for event in attempt.events:
+                stage_map[event.stage] = {
+                    "outcome": event.outcome,
+                    "reason": event.reason,
+                    "timestamp": event.timestamp,
+                    "extra": dict(event.extra or {}),
+                }
+                last_stage = event.stage
+            output.append(
+                {
+                    "trace_id": attempt.trace_id,
+                    "pair": attempt.pair,
+                    "side": attempt.side,
+                    "status": attempt.status,
+                    "terminal_reason": attempt.terminal_reason,
+                    "created_at": attempt.created_at,
+                    "updated_at": attempt.updated_at,
+                    "last_stage": last_stage,
+                    "stages": {
+                        stage: stage_map.get(stage)
+                        for stage in TRACE_STAGE_ORDER
+                    },
+                    "events": [
+                        {
+                            "stage": event.stage,
+                            "outcome": event.outcome,
+                            "reason": event.reason,
+                            "timestamp": event.timestamp,
+                            "extra": dict(event.extra or {}),
+                        }
+                        for event in attempt.events
+                    ],
+                }
+            )
+        return output
+
     def get_shadow_summary(self) -> Dict[str, Any]:
         """
         Return a snapshot of shadow-paper statistics for logging or API consumption.
@@ -377,6 +539,32 @@ class SignalFunnelDiagnostics:
         if pair not in self._stats:
             self._stats[pair] = FunnelStats(pair=pair)
         return self._stats[pair]
+
+    def _trace_key(self, pair: str, side: str) -> str:
+        return f"{pair}|{(side or 'unknown').lower()}"
+
+    def _resolve_attempt_locked(self, pair: str, side: Optional[str]) -> Optional[ExecutionTraceAttempt]:
+        if side:
+            trace_id = self._active_trace_by_key.get(self._trace_key(pair, side))
+            if trace_id:
+                for attempt in reversed(self._trace_attempts):
+                    if attempt.trace_id == trace_id:
+                        return attempt
+        for attempt in reversed(self._trace_attempts):
+            if attempt.pair == pair and attempt.status == "in_progress":
+                return attempt
+        return None
+
+    def _trim_traces_locked(self) -> None:
+        if len(self._trace_attempts) <= self._max_trace_attempts:
+            return
+        self._trace_attempts = self._trace_attempts[-self._max_trace_attempts:]
+        live_ids = {attempt.trace_id for attempt in self._trace_attempts}
+        self._active_trace_by_key = {
+            key: trace_id
+            for key, trace_id in self._active_trace_by_key.items()
+            if trace_id in live_ids
+        }
 
 
 # ---------------------------------------------------------------------------
