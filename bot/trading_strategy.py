@@ -1267,6 +1267,21 @@ except ImportError:
         get_pnl_analytics_layer = None  # type: ignore
         logger.warning("⚠️ PnL Analytics Layer not available")
 
+# ── Exploration Governor — unified damping + guarded exploration control ─────
+try:
+    from exploration_governor import get_exploration_governor
+    EXPLORATION_GOVERNOR_AVAILABLE = True
+    logger.debug("✅ Exploration Governor loaded — asymmetric damping active")
+except ImportError:
+    try:
+        from bot.exploration_governor import get_exploration_governor
+        EXPLORATION_GOVERNOR_AVAILABLE = True
+        logger.debug("✅ Exploration Governor loaded — asymmetric damping active")
+    except ImportError:
+        EXPLORATION_GOVERNOR_AVAILABLE = False
+        get_exploration_governor = None  # type: ignore
+        logger.warning("⚠️ Exploration Governor not available")
+
 # ── Pair Performance Optimizer — kills underperformers, boosts top pairs ──────
 try:
     from pair_performance_optimizer import get_pair_performance_optimizer
@@ -4147,6 +4162,16 @@ class TradingStrategy:
                 self.pnl_analytics_layer = None
         else:
             self.pnl_analytics_layer = None
+
+        if EXPLORATION_GOVERNOR_AVAILABLE and get_exploration_governor is not None:
+            try:
+                self.exploration_governor = get_exploration_governor()
+                logger.info("✅ Exploration Governor initialized — unified asymmetric damping active")
+            except Exception as _e:
+                logger.warning("⚠️ Exploration Governor init failed: %s", _e)
+                self.exploration_governor = None
+        else:
+            self.exploration_governor = None
 
         # ── Pair Performance Optimizer — underperformer kill + top-pair boost
         if PAIR_PERF_OPTIMIZER_AVAILABLE and get_pair_performance_optimizer is not None:
@@ -14039,6 +14064,9 @@ class TradingStrategy:
                                                 _cem_config.confidence_delta,
                                             )
 
+                                        _wrft_delta = 0.0
+                                        _tfc_delta = 0.0
+
                                         # ── WIN-RATE / FREQUENCY TUNER — confidence nudge ──
                                         # Adjusts the confidence gate to maximise EV-per-hour:
                                         # loosens when win-rate is good but frequency is low,
@@ -14050,14 +14078,19 @@ class TradingStrategy:
                                         ):
                                             try:
                                                 _wrft_params = self.win_rate_frequency_tuner.get_params()
-                                                if _wrft_params.confidence_delta != 0.0:
+                                                _wrft_delta = float(_wrft_params.confidence_delta)
+                                                if _wrft_delta != 0.0 and (
+                                                    not EXPLORATION_GOVERNOR_AVAILABLE
+                                                    or not hasattr(self, 'exploration_governor')
+                                                    or self.exploration_governor is None
+                                                ):
                                                     _sf_confidence_raw = _sf_confidence
                                                     # Subtract delta: negative delta (LOOSEN) raises
                                                     # effective confidence → easier to pass the gate.
                                                     # Positive delta (TIGHTEN) lowers it → harder.
                                                     _sf_confidence = max(
                                                         0.0,
-                                                        min(1.0, _sf_confidence - _wrft_params.confidence_delta),
+                                                        min(1.0, _sf_confidence - _wrft_delta),
                                                     )
                                                     logger.debug(
                                                         "   📊 WinRateFreqTuner [%s]: conf "
@@ -14065,7 +14098,7 @@ class TradingStrategy:
                                                         symbol,
                                                         _sf_confidence_raw,
                                                         _sf_confidence,
-                                                        _wrft_params.confidence_delta,
+                                                        _wrft_delta,
                                                         _wrft_params.mode.value,
                                                     )
                                             except Exception as _wrft_err:
@@ -14121,8 +14154,12 @@ class TradingStrategy:
                                             and not DEBUG_BYPASS_MODE  # bypass freq controller in debug mode
                                         ):
                                             try:
-                                                _tfc_delta = self.trade_frequency_controller.get_confidence_delta()
-                                                if _tfc_delta != 0.0:
+                                                _tfc_delta = float(self.trade_frequency_controller.get_confidence_delta())
+                                                if _tfc_delta != 0.0 and (
+                                                    not EXPLORATION_GOVERNOR_AVAILABLE
+                                                    or not hasattr(self, 'exploration_governor')
+                                                    or self.exploration_governor is None
+                                                ):
                                                     _sf_confidence_pre_tfc = _sf_confidence
                                                     _sf_confidence = max(
                                                         0.0,
@@ -14140,6 +14177,46 @@ class TradingStrategy:
                                                 logger.debug(
                                                     "TradeFrequencyController confidence nudge "
                                                     "skipped for %s: %s", symbol, _tfc_err
+                                                )
+
+                                        if (
+                                            EXPLORATION_GOVERNOR_AVAILABLE
+                                            and hasattr(self, 'exploration_governor')
+                                            and self.exploration_governor is not None
+                                            and (_wrft_delta != 0.0 or _tfc_delta != 0.0)
+                                        ):
+                                            try:
+                                                _exp_delta = self.exploration_governor.get_confidence_adjustment(
+                                                    win_rate_delta=_wrft_delta,
+                                                    trade_frequency_delta=_tfc_delta,
+                                                    regime=str(getattr(_regime_result, 'regime', analysis.get('regime', 'unknown'))),
+                                                    ev_per_hour=float(getattr(_wrft_params, 'ev_per_hour', 0.0)) if '_wrft_params' in locals() else 0.0,
+                                                    drawdown_pressure=0.0,
+                                                    regime_confidence=float(
+                                                        getattr(_regime_result, 'confidence', 0.0) or 0.0
+                                                    ) if '_regime_result' in locals() else 0.0,
+                                                    cluster_key=f"{symbol}:{str(getattr(_regime_result, 'regime', analysis.get('regime', 'unknown')))}",
+                                                )
+                                                if _exp_delta != 0.0:
+                                                    _sf_conf_pre_exp = _sf_confidence
+                                                    _sf_confidence = max(
+                                                        0.0,
+                                                        min(1.0, _sf_confidence - _exp_delta),
+                                                    )
+                                                    logger.debug(
+                                                        "   🧭 ExplorationGovernor [%s]: conf %.3f→%.3f "
+                                                        "(combined_delta=%+.3f wr=%+.3f tf=%+.3f)",
+                                                        symbol,
+                                                        _sf_conf_pre_exp,
+                                                        _sf_confidence,
+                                                        _exp_delta,
+                                                        _wrft_delta,
+                                                        _tfc_delta,
+                                                    )
+                                            except Exception as _exp_err:
+                                                logger.debug(
+                                                    "ExplorationGovernor confidence adjustment skipped for %s: %s",
+                                                    symbol, _exp_err,
                                                 )
 
                                         # ── LOSS CONTROL TUNER — drawdown confidence tighten ──
@@ -18760,6 +18837,22 @@ class TradingStrategy:
                 self.trade_frequency_controller.record_trade()
             except Exception as _tfc_rec_err:
                 logger.debug("Trade Frequency Controller record_trade skipped for %s: %s", symbol, _tfc_rec_err)
+
+        if (EXPLORATION_GOVERNOR_AVAILABLE
+                and hasattr(self, 'exploration_governor')
+                and self.exploration_governor is not None):
+            try:
+                _exp_regime = "unknown"
+                if hasattr(self, 'regime_engine') and self.regime_engine is not None:
+                    _exp_regime = str(getattr(self.regime_engine, 'current_regime', 'unknown'))
+                self.exploration_governor.record_outcome(
+                    symbol=symbol,
+                    regime=_exp_regime,
+                    pnl_usd=profit_usd,
+                    is_win=is_win,
+                )
+            except Exception as _exp_outcome_err:
+                logger.debug("ExplorationGovernor record_outcome skipped for %s: %s", symbol, _exp_outcome_err)
 
         # 🎯 DYNAMIC SNIPER THRESHOLDS — feed outcome to adapt entry gates
         if (DYNAMIC_SNIPER_THRESHOLDS_AVAILABLE
