@@ -8410,8 +8410,8 @@ class KrakenBroker(BaseBroker):
                 _KRAKEN_STARTUP_FSM.mark_nonce_ready()
 
             # Test connection by fetching account balance.
-            # Probe already calibrated the nonce — a single attempt is sufficient.
-            # No retry loop: if it fails here the outer reconnect logic will retry.
+            # Deterministic kernel uses distributed monotonic nonce issuance only.
+            # Single attempt here; outer reconnect logic handles retries.
             max_attempts = 1
             base_delay = 5.0        # exponential backoff for normal errors
             lockout_base_delay = 120.0  # 2 min per step for "Temporary lockout"
