@@ -43,6 +43,11 @@ logger = logging.getLogger(__name__)
 test_results = []
 
 
+def _make_stub_broker():
+    """Create a minimal broker stub for constructor-only smoke tests."""
+    return object()
+
+
 def record_test(test_name: str, passed: bool, message: str = ""):
     """Record a test result."""
     test_results.append({
@@ -209,7 +214,7 @@ def test_position_cap_enforcer_creation():
     try:
         from position_cap_enforcer import PositionCapEnforcer
         
-        enforcer = PositionCapEnforcer(max_positions=8)
+        enforcer = PositionCapEnforcer(max_positions=8, broker=_make_stub_broker())
         
         assert enforcer is not None, "Enforcer should be created"
         assert enforcer.max_positions == 8, "Max positions should be 8"
@@ -492,7 +497,7 @@ def test_all_three_systems_together():
             max_positions=8
         )
         
-        position_enforcer = PositionCapEnforcer(max_positions=8)
+        position_enforcer = PositionCapEnforcer(max_positions=8, broker=_make_stub_broker())
         
         risk_manager = get_user_risk_manager()
         
