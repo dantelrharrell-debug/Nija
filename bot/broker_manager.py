@@ -8462,6 +8462,27 @@ class KrakenBroker(BaseBroker):
                     return self._kraken_private_call("Balance", {}, category=_probe_cat)
 
                 if _probe_mgr is not None:
+                    # ── Pre-probe DistributedNonceManager sync ────────────────
+                    # probe_and_resync() calls server_sync_resync() on the
+                    # file-backed KrakenNonceManager (_probe_mgr), but the
+                    # probe API call goes through DistributedNonceManager
+                    # which in Redis mode reads from a SEPARATE Redis counter.
+                    # That counter is never updated by server_sync_resync, so
+                    # if it was advanced by prior nuclear resets or repeated
+                    # failed retries it will remain stale-high and Kraken will
+                    # keep rejecting the probe nonces indefinitely — even after
+                    # a NIJA_FORCE_NONCE_RESYNC=1 restart.
+                    # Calling probe_server_sync() here deletes the Redis key so
+                    # the probe uses a fresh server-time floor.
+                    _probe_dnm = getattr(self, "nonce_manager", None)
+                    if _probe_dnm is not None and _probe_key_id:
+                        try:
+                            _probe_dnm.probe_server_sync(_probe_key_id)
+                        except Exception as _pss_err:
+                            logger.debug(
+                                "   ⚠️  probe_server_sync skipped for key=%s (%s)",
+                                _probe_key_id, _pss_err,
+                            )
                     _probe_ok = _probe_mgr.probe_and_resync(
                         _probe_call,
                         step_ms=_NONCE_PROBE_STEP_MS,   # 0 = let AdaptiveOffsetEngine choose
@@ -8481,8 +8502,9 @@ class KrakenBroker(BaseBroker):
                     # problem.  The bot will retry on the next connection attempt.
                     logger.error(
                         f"   ❌ Nonce resync handshake failed for {cred_label} — "
-                        f"nonce desync unresolved.  Wait and retry, or restart with "
-                        f"NIJA_FORCE_NONCE_RESYNC=1 if this persists."
+                        f"nonce desync unresolved.  Restart with "
+                        f"NIJA_FORCE_NONCE_RESYNC=1.  If that also fails, try "
+                        f"NIJA_DEEP_NONCE_RESET=1 (extends probe coverage to 120 min)."
                     )
                     return False
 
