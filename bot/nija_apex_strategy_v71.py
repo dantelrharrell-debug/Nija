@@ -3536,10 +3536,10 @@ class NIJAApexStrategyV71:
                     if _env_mult < 1.0 and _env_mult > 0.0:
                         _pre_env = position_size
                         position_size = scalar(position_size * _env_mult)
-                            logger.debug(
-                                "   🛡️  Risk envelope LONG: $%.2f × %.2f = $%.2f",
-                                _pre_env, _env_mult, position_size,
-                            )
+                        logger.debug(
+                            "   🛡️  Risk envelope LONG: $%.2f × %.2f = $%.2f",
+                            _pre_env, _env_mult, position_size,
+                        )
                     if _exploration_size_mult_l < 1.0:
                         _pre_exp_long = position_size
                         position_size = scalar(position_size * _exploration_size_mult_l)
@@ -4365,10 +4365,10 @@ class NIJAApexStrategyV71:
                     if _env_mult_s < 1.0 and _env_mult_s > 0.0:
                         _pre_env_s = position_size
                         position_size = scalar(position_size * _env_mult_s)
-                            logger.debug(
-                                "   🛡️  Risk envelope SHORT: $%.2f × %.2f = $%.2f",
-                                _pre_env_s, _env_mult_s, position_size,
-                            )
+                        logger.debug(
+                            "   🛡️  Risk envelope SHORT: $%.2f × %.2f = $%.2f",
+                            _pre_env_s, _env_mult_s, position_size,
+                        )
                     if _exploration_size_mult_s < 1.0:
                         _pre_exp_short = position_size
                         position_size = scalar(position_size * _exploration_size_mult_s)

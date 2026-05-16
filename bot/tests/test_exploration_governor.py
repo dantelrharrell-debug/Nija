@@ -19,6 +19,11 @@ class ExplorationGovernorTests(unittest.TestCase):
         self.gov = get_exploration_governor(reset=True)
 
     def test_asymmetric_damping_tightens_faster_than_it_recovers(self) -> None:
+        self.gov.get_confidence_adjustment(
+            win_rate_delta=0.12,
+            trade_frequency_delta=0.0,
+            regime="trending",
+        )
         tighten = self.gov.get_confidence_adjustment(
             win_rate_delta=0.12,
             trade_frequency_delta=0.0,
@@ -40,6 +45,11 @@ class ExplorationGovernorTests(unittest.TestCase):
             trade_frequency_delta=0.0,
             regime="trending",
         )
+        first_confirmed = self.gov.get_confidence_adjustment(
+            win_rate_delta=0.08,
+            trade_frequency_delta=0.0,
+            regime="trending",
+        )
         second = self.gov.get_confidence_adjustment(
             win_rate_delta=-0.08,
             trade_frequency_delta=0.0,
@@ -53,7 +63,8 @@ class ExplorationGovernorTests(unittest.TestCase):
             regime="trending",
         )
         self.assertLessEqual(third, second)
-        self.assertGreater(first, 0.0)
+        self.assertEqual(first, 0.0)
+        self.assertGreater(first_confirmed, 0.0)
 
     def test_regime_aware_cluster_decay_is_faster_in_high_volatility(self) -> None:
         self.gov.record_outcome(symbol="BTC-USD", regime="volatile", pnl_usd=-100.0, is_win=False)
