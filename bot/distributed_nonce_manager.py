@@ -150,6 +150,7 @@ Usage
 from __future__ import annotations
 
 import hashlib
+import importlib
 import logging
 import os
 import random
@@ -744,6 +745,50 @@ class _PerKeyRedisBackend:
             stable_for_txt,
         )
 
+    def _publish_lock_acquired_state(self, lease_version: int) -> None:
+        """Publish lock/fencing runtime state and advance bootstrap FSM when needed."""
+        os.environ["NIJA_LOCK_ACQUIRED"] = "true"
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(lease_version)
+        try:
+            bootstrap_state = None
+            bootstrap_enum = None
+            for module_name in ("bot.bootstrap_state_machine", "bootstrap_state_machine"):
+                try:
+                    module = importlib.import_module(module_name)
+                    bootstrap_state = getattr(module, "get_bootstrap_fsm", lambda: None)()
+                    bootstrap_enum = getattr(module, "BootstrapState", None)
+                    if bootstrap_state is not None:
+                        break
+                except Exception:
+                    continue
+            if bootstrap_state is None:
+                return
+            current_state = getattr(getattr(bootstrap_state, "state", None), "value", None)
+            if current_state is None:
+                current_state = getattr(bootstrap_state, "current_state", None)
+                current_state = getattr(current_state, "value", current_state)
+            if str(current_state) == "BOOT_INIT":
+                lock_acquired_state = (
+                    getattr(bootstrap_enum, "LOCK_ACQUIRED", None)
+                    if bootstrap_enum is not None
+                    else "LOCK_ACQUIRED"
+                )
+                transition = getattr(bootstrap_state, "transition", None)
+                if callable(transition):
+                    try:
+                        transition(lock_acquired_state, reason="redis_writer_lease_acquired")
+                    except TypeError:
+                        transition(lock_acquired_state, "redis_writer_lease_acquired")
+                    _logger.critical(
+                        "[BOOTSTRAP FSM] BOOT_INIT -> LOCK_ACQUIRED "
+                        "reason=redis_writer_lease_acquired"
+                    )
+        except Exception as exc:
+            _logger.exception(
+                "Failed to transition bootstrap FSM after lease acquisition: %s",
+                exc,
+            )
+
     def get_writer_lease_status(self, key_id: str) -> dict[str, object]:
         """Return current writer lease status for diagnostics."""
         status: dict[str, object] = {
@@ -966,6 +1011,7 @@ class _PerKeyRedisBackend:
                 lease_version,
                 self._owner_fingerprint,
             )
+            self._publish_lock_acquired_state(lease_version)
             return lease_version
 
         # Fencing rule: once a process has a lease version, any version rotation
@@ -1303,7 +1349,8 @@ class DistributedNonceManager:
         """
         if self._redis is None:
             return
-        self._redis.ensure_writer_lease(api_key_id)
+        lease_version = self._redis.ensure_writer_lease(api_key_id)
+        setattr(self, "lease_version", lease_version)
 
     def release_writer_lease(self, api_key_id: str) -> bool:
         """Release the Redis writer lease for *api_key_id* if held by this process."""
