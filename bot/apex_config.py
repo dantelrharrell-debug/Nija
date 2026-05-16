@@ -808,7 +808,6 @@ def get_active_risk_config():
         """
         return (
             os.getenv('NIJA_RUNTIME_DEGRADED_MODE', '').strip().lower() in _truthy
-            or os.getenv('NIJA_ALLOW_REDIS_DEGRADED', '').strip().lower() in _truthy
         )
 
     risk_profile = os.getenv('RISK_PROFILE', 'AUTO').upper()

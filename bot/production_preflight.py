@@ -52,7 +52,7 @@ log = logging.getLogger("nija.preflight")
 
 SEPARATOR = "=" * 72
 _TRUTHY = {"1", "true", "yes", "on", "enabled"}
-_RECOMMENDED_LEASE_TTL_MS = 20_000  # 20s balances WAN jitter vs. failover; tune for latency.
+_RECOMMENDED_LEASE_TTL_MS = 60_000  # 60s baseline for lock stability across startup and live failover.
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:

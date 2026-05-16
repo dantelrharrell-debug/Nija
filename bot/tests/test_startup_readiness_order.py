@@ -147,6 +147,44 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "_ensure_running_supervised within the same control-flow block",
         )
 
+    def test_transition_verification_occurs_after_execution_enablement(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        startup_fn = next(
+            (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_bot_startup_and_trading"),
+            None,
+        )
+        if startup_fn is None:
+            self.fail("Expected _run_bot_startup_and_trading() in bot.py")
+
+        execution_unlock_calls = []
+        transition_verify_calls = []
+        for node in ast.walk(startup_fn):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id == "_enable_execution_after_bootstrap_supervised":
+                    execution_unlock_calls.append(node)
+                elif node.func.id == "_verify_runtime_transition_states":
+                    transition_verify_calls.append(node)
+
+        self.assertEqual(
+            len(execution_unlock_calls),
+            1,
+            "Expected exactly one _enable_execution_after_bootstrap_supervised() call in _run_bot_startup_and_trading",
+        )
+        self.assertEqual(
+            len(transition_verify_calls),
+            1,
+            "Expected exactly one _verify_runtime_transition_states() call in _run_bot_startup_and_trading",
+        )
+        self.assertGreater(
+            transition_verify_calls[0].lineno,
+            execution_unlock_calls[0].lineno,
+            "_verify_runtime_transition_states must run after execution enablement",
+        )
+
     def test_capital_ready_is_guarded_by_execution_authority(self):
         repo_root = self._find_repo_root(Path(__file__).resolve())
         bot_path = repo_root / "bot.py"

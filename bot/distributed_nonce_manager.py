@@ -179,11 +179,11 @@ def _live_mode_active() -> bool:
 
 
 # Writer leases must remain stable between renewals while avoiding rapid churn.
-# Clamp TTL to 10-30s to tolerate real-world latency spikes without flapping.
+# Clamp TTL to 10-60s to tolerate real-world latency spikes without flapping.
 # Renew at ~1/3 of TTL (default 0.333) to minimize expiry risk.
 _REDIS_LEASE_TTL_MIN_MS = 10_000
-_REDIS_LEASE_TTL_MAX_MS = 30_000
-_REDIS_LEASE_TTL_DEFAULT_MS = 20_000
+_REDIS_LEASE_TTL_MAX_MS = 60_000
+_REDIS_LEASE_TTL_DEFAULT_MS = 60_000
 try:
     _lease_ttl_raw = int(
         os.environ.get("NIJA_REDIS_LEASE_TTL_MS", str(_REDIS_LEASE_TTL_DEFAULT_MS)) or _REDIS_LEASE_TTL_DEFAULT_MS
@@ -267,16 +267,6 @@ def _runtime_strict_redis_lease() -> bool:
         _env_true("NIJA_STRICT_REDIS_LEASE", "1")
         and not _env_true("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "0")
     )
-    _allow_degraded = (
-        _env_true("NIJA_ALLOW_REDIS_DEGRADED", "0")
-        or _env_true("NIJA_RUNTIME_DEGRADED_MODE", "0")
-    )
-    if _strict_requested and _allow_degraded:
-        _logger.warning(
-            "DistributedNonceManager: degraded mode requested; disabling strict Redis lease enforcement "
-            "for this process startup"
-        )
-        return False
     return _strict_requested
 
 

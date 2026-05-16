@@ -4,8 +4,8 @@ Tests for the broker_connected readiness gate in the bootstrap sequence.
 Verifies that:
 - When MABM is None, broker_connected is marked not-applicable (True in table).
 - When MABM has fully ready brokers, broker_connected is marked ready (True).
-- When MABM has no ready brokers, broker_connected is eventually marked
-  not-applicable so startup is never permanently blocked.
+- When MABM has no ready brokers, broker_connected remains False so policy
+  evaluation can decide whether startup should block or degrade.
 - After all flags are set the readiness table reports is_ready() == True.
 """
 
@@ -107,16 +107,10 @@ class TestReadinessBrokerGate(unittest.TestCase):
                 time.sleep(0.05)
             if bool(broker_manager.all_brokers_fully_ready()):
                 readiness_table.mark_ready("broker_connected")
-            else:
-                readiness_table.mark_not_applicable(
-                    "broker_connected",
-                    reason="broker readiness timeout — proceeding in degraded mode",
-                )
+            # Timeout path intentionally leaves broker_connected=False.
         else:
-            readiness_table.mark_not_applicable(
-                "broker_connected",
-                reason="all_brokers_fully_ready not available on MABM",
-            )
+            # Unknown manager contract intentionally leaves broker_connected=False.
+            return
 
     def test_gate_none_mabm_marks_not_applicable(self):
         self._simulate_broker_gate(None)
@@ -130,14 +124,14 @@ class TestReadinessBrokerGate(unittest.TestCase):
         self._simulate_broker_gate(_ReadyMABM())
         self.assertTrue(readiness_table.snapshot()["broker_connected"])
 
-    def test_gate_not_ready_broker_eventually_marks_not_applicable(self):
-        """When no broker becomes ready within the timeout, gate uses not_applicable."""
+    def test_gate_not_ready_broker_remains_false(self):
+        """When no broker becomes ready within timeout, broker_connected remains False."""
         class _NeverReadyMABM:
             def all_brokers_fully_ready(self):
                 return False
 
         self._simulate_broker_gate(_NeverReadyMABM(), timeout_s=0.1)
-        self.assertTrue(readiness_table.snapshot()["broker_connected"])
+        self.assertFalse(readiness_table.snapshot()["broker_connected"])
 
     def test_gate_broker_becomes_ready_within_timeout(self):
         """Broker that transitions to ready mid-wait is detected correctly."""
@@ -158,13 +152,13 @@ class TestReadinessBrokerGate(unittest.TestCase):
         t.join(timeout=1.0)
         self.assertTrue(readiness_table.snapshot()["broker_connected"])
 
-    def test_gate_mabm_without_method_marks_not_applicable(self):
-        """MABM that lacks all_brokers_fully_ready doesn't block startup."""
+    def test_gate_mabm_without_method_remains_false(self):
+        """MABM without readiness method leaves broker_connected unset."""
         class _LegacyMABM:
             pass  # no all_brokers_fully_ready attribute
 
         self._simulate_broker_gate(_LegacyMABM())
-        self.assertTrue(readiness_table.snapshot()["broker_connected"])
+        self.assertFalse(readiness_table.snapshot()["broker_connected"])
 
     def test_full_readiness_table_passes_after_gate(self):
         """All eight canonical keys must be True for is_ready() to return True."""
