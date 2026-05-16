@@ -86,17 +86,17 @@ class PortfolioCorrelationFilter:
 
     def __init__(
         self,
-        max_positions_per_group: int = 2,
-        max_avg_correlation: float = 0.75,
+        max_positions_per_group: int = 3,
+        max_avg_correlation: float = 0.82,
         correlation_window: int = 20,
         correlation_groups: Optional[Dict[str, List[str]]] = None,
     ):
         """
         Args:
             max_positions_per_group: Maximum positions allowed from the same
-                static correlation group (default 2).
+                static correlation group (default 3).
             max_avg_correlation: Maximum average pairwise correlation (Pearson)
-                allowed before blocking entry (default 0.75).
+                allowed before blocking entry (default 0.82).
             correlation_window: Number of recent price bars to use when
                 computing rolling correlations (default 20).
             correlation_groups: Optional custom group map.  Defaults to
@@ -303,25 +303,25 @@ class LiquidityFilter:
 
     def __init__(
         self,
-        min_volume_24h_usd: float = 1_000_000.0,
-        max_spread_bps: float = 50.0,
-        max_position_volume_fraction: float = 0.05,
+        min_volume_24h_usd: float = 250_000.0,
+        max_spread_bps: float = 80.0,
+        max_position_volume_fraction: float = 0.08,
     ):
         """
         Args:
-            min_volume_24h_usd: Minimum acceptable 24 h USD volume (default $1M).
+            min_volume_24h_usd: Minimum acceptable 24 h USD volume (default $250k).
                 This default is calibrated for accounts trading position sizes in
                 the $10–$500 range (STARTER/SAVER tiers).  Larger accounts
                 (INCOME/BALLER tiers) should raise this to $5M–$25M to avoid
                 moving the market with their positions.
-            max_spread_bps: Maximum bid-ask spread in basis points (default 50 bps
-                = 0.5 %).  This is a *conservative* ceiling; actual top-10
+            max_spread_bps: Maximum bid-ask spread in basis points (default 80 bps
+                = 0.8 %).  This is a throughput-oriented ceiling; actual top-10
                 liquidity pairs (BTC, ETH, SOL) typically have spreads of 1–5 bps.
                 For pairs not directly observable via the broker API the caller
                 should supply a measured bid/ask rather than rely on the internal
                 0.1 % estimate.
             max_position_volume_fraction: Maximum allowed ratio of proposed position
-                size to 24 h volume (default 5 %).
+                size to 24 h volume (default 8 %).
         """
         self.min_volume_24h_usd = min_volume_24h_usd
         self.max_spread_bps = max_spread_bps
@@ -566,16 +566,16 @@ class SignalConfidenceFilter:
 
     def __init__(
         self,
-        min_confidence: float = 0.45,
-        min_quality: float = 35.0,
+        min_confidence: float = 0.30,
+        min_quality: float = 22.0,
     ):
         """
         Args:
             min_confidence: Minimum signal confidence on a 0–1 scale
-                (default 0.45 = 45 %).  Signals below this are considered
+                (default 0.30 = 30 %).  Signals below this are considered
                 too uncertain to trade.
             min_quality: Minimum signal quality score on a 0–100 scale
-                (default 35.0).  Scores below this indicate weak setups.
+                (default 22.0).  Scores below this indicate weak setups.
         """
         self.min_confidence = min_confidence
         self.min_quality = min_quality
