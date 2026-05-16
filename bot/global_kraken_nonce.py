@@ -1236,14 +1236,36 @@ class KrakenNonceManager:
         # Hard invariant: every rebuilt manager must continue from the global
         # high-water mark (persisted file / Redis), never from server-time only.
 
-        # NIJA_FORCE_NONCE_RESYNC=1 / deep-reset: also wipe the adaptive-offset
-        # EMA so the next probe_and_resync() starts from the conservative timing
-        # floor rather than a potentially-stale small EMA value.
+        # NIJA_FORCE_NONCE_RESYNC=1 / deep-reset: wipe the adaptive-offset EMA
+        # AND the per-key state file so the next startup reads a server-time
+        # floor instead of a stale nuclear-reset high-water mark.
+        #
+        # Previously only the EMA files were wiped here.  That left the per-key
+        # state file intact, so _load_last_nonce() still returned the old large
+        # nonce value and server_sync_resync() continued to compute a floor
+        # anchored to that stale value — making NIJA_FORCE_NONCE_RESYNC=1
+        # ineffective for user Kraken accounts with accumulated nuclear resets.
         if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip() == "1" or _deep_reset:
             _logger.warning(
-                "KrakenNonceManager: %s — also wiping adaptive-offset EMA",
+                "KrakenNonceManager: %s — wiping adaptive-offset EMA and per-key state file",
                 "NIJA_DEEP_NONCE_RESET=1" if _deep_reset else "NIJA_FORCE_NONCE_RESYNC=1",
             )
+            # Wipe the per-key state file (and lock/tmp) so _load_last_nonce()
+            # starts from now_ms + STARTUP_JUMP_MS rather than a stale persisted
+            # nonce left over from nuclear resets or a prior failed probe loop.
+            # This mirrors what force_resync() does when called manually.
+            for _path in (
+                self._state_file,
+                self._state_file + ".lock",
+                self._state_file + ".tmp",
+            ):
+                try:
+                    os.remove(_path)
+                    _logger.debug("KrakenNonceManager: removed state file %s", _path)
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:
+                    _logger.debug("KrakenNonceManager: could not remove %s (%s)", _path, exc)
             for _path in (_AO_STATE_FILE, _AO_STATE_FILE + ".tmp"):
                 try:
                     os.remove(_path)

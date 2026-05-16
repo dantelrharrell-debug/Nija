@@ -1328,6 +1328,48 @@ class DistributedNonceManager:
                     api_key_id, exc2,
                 )
 
+    def probe_server_sync(self, api_key_id: str) -> None:
+        """Reset the nonce for *api_key_id* to a server-time floor before a probe.
+
+        The startup probe handshake calls ``_probe_mgr.probe_and_resync()`` which
+        invokes ``server_sync_resync()`` on the file-backed ``KrakenNonceManager``.
+        However the actual probe API call uses ``get_nonce(api_key_id)`` which in
+        Redis mode reads from a *separate* Redis counter — one that
+        ``server_sync_resync`` never touches.  If the Redis counter was advanced
+        by prior nuclear resets or repeated failed probe attempts it will remain
+        stale-high and Kraken will keep rejecting the probe nonces even after a
+        ``NIJA_FORCE_NONCE_RESYNC=1`` restart.
+
+        Calling this method immediately before ``probe_and_resync()`` closes the
+        gap:
+
+        * **Redis mode** — deletes the per-key Redis nonce entry so the very next
+          ``get_nonce()`` call returns ``max(1, now_ms) ≈ server_time_ms``,
+          matching the floor that ``server_sync_resync`` computes internally.
+
+        * **File mode** — the per-key ``KrakenNonceManager`` and the
+          ``DistributedNonceManager`` file path are the same object, so
+          ``server_sync_resync`` inside ``probe_and_resync`` already advances the
+          right counter.  This method is a deliberate no-op in that path.
+        """
+        if self._redis is not None:
+            try:
+                self._redis.reset(api_key_id)
+                _logger.info(
+                    "DistributedNonceManager.probe_server_sync: Redis nonce reset "
+                    "for key=%s — probe will use a fresh server-time floor",
+                    api_key_id,
+                )
+            except Exception as exc:
+                _logger.warning(
+                    "DistributedNonceManager.probe_server_sync: Redis reset failed "
+                    "for key=%s (%s) — probe may use a stale Redis nonce",
+                    api_key_id,
+                    exc,
+                )
+        # File mode: probe_and_resync's internal server_sync_resync already
+        # targets the correct counter; nothing extra needed here.
+
     def get_last_nonce(self, api_key_id: str) -> int:
         """Return the last issued nonce without advancing it (diagnostic use)."""
         if self._redis is not None:
