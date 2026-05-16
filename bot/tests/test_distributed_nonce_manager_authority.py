@@ -12,6 +12,7 @@ from bot.distributed_nonce_manager import (
     DistributedNonceManager,
     _PerKeyRedisBackend,
     _REDIS_NONCE_RESET_BUFFER_MS,
+    _emit_nonce_debug_hook,
 )
 
 
@@ -33,6 +34,11 @@ class _FakeRedisBackend:
 
 
 class TestDistributedNonceManagerAuthority(unittest.TestCase):
+    def test_get_nonce_rejects_empty_key_id(self) -> None:
+        mgr = DistributedNonceManager(redis_client=None)
+        with self.assertRaises(ValueError):
+            mgr.get_nonce("")
+
     def test_can_issue_nonce_uses_redis_lease_without_file_manager(self) -> None:
         mgr = DistributedNonceManager(redis_client=None)
         mgr._redis = _FakeRedisBackend(lease_ok=True)
@@ -74,6 +80,21 @@ class TestPerKeyRedisBackendReset(unittest.TestCase):
         expected_floor = int(1000.0 * 1000) + _REDIS_NONCE_RESET_BUFFER_MS
         fake_client.set.assert_called_once_with("nija:kraken:nonce:kid", str(expected_floor))
         fake_client.delete.assert_not_called()
+
+
+class TestDistributedNonceDebugHooks(unittest.TestCase):
+    def test_nonce_debug_hook_emits_only_when_enabled(self) -> None:
+        with patch("bot.distributed_nonce_manager._nonce_debug_hooks_enabled", return_value=False), patch(
+            "bot.distributed_nonce_manager._logger.warning"
+        ) as warn_disabled:
+            _emit_nonce_debug_hook("test", key_id="abc")
+            warn_disabled.assert_not_called()
+
+        with patch("bot.distributed_nonce_manager._nonce_debug_hooks_enabled", return_value=True), patch(
+            "bot.distributed_nonce_manager._logger.warning"
+        ) as warn_enabled:
+            _emit_nonce_debug_hook("test", key_id="abc")
+            warn_enabled.assert_called_once()
 
 
 if __name__ == "__main__":
