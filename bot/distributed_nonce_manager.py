@@ -160,7 +160,7 @@ import time
 import uuid
 from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from bot.redis_env import get_redis_url
 from bot.redis_runtime import connect_redis_with_fallback
@@ -370,6 +370,22 @@ def _resolve_instance_id() -> str:
         return ""
 
 
+def _nonce_debug_hooks_enabled() -> bool:
+    """Return True when nonce trace hooks are enabled."""
+    return _env_true("NIJA_NONCE_DEBUG_HOOKS", "0")
+
+
+def _emit_nonce_debug_hook(event: str, **fields: object) -> None:
+    """Emit an opt-in structured nonce debug log event."""
+    if not _nonce_debug_hooks_enabled():
+        return
+    _parts = []
+    for _key, _value in fields.items():
+        _safe = str(_value).replace("\n", "\\n").replace("\r", "\\r")
+        _parts.append(f"{_key}={_safe}")
+    _logger.warning("NONCE_DEBUG event=%s %s", event, " ".join(_parts))
+
+
 def _redact_redis_url(redis_url: str) -> str:
     """Return a logging-safe Redis URL with credentials removed."""
     try:
@@ -382,6 +398,14 @@ def _redact_redis_url(redis_url: str) -> str:
         return urlunsplit((parts.scheme, safe_netloc, parts.path, parts.query, parts.fragment))
     except Exception:
         return "<configured>"
+
+
+def _require_api_key_id(api_key_id: str) -> str:
+    """Validate and normalize API key identifiers used by nonce authority."""
+    normalized = str(api_key_id or "").strip()
+    if not normalized:
+        raise ValueError("api_key_id is required and cannot be empty")
+    return normalized
 
 # ── Key derivation ─────────────────────────────────────────────────────────────
 
@@ -837,6 +861,15 @@ class _PerKeyRedisBackend:
             args=[floor, self._owner_id, lease_version],
         )
         if int(result[0]) != 1:
+            _emit_nonce_debug_hook(
+                "redis_fence_reject",
+                key_id=key_id,
+                reason=result[1],
+                expected_owner=self._owner_id,
+                expected_version=lease_version,
+                observed_owner=result[3],
+                observed_version=result[2],
+            )
             raise RuntimeError(
                 "Redis fencing check rejected nonce issuance "
                 f"(key_id={key_id}, reason={result[1]}, lease_version={result[2]}, owner={result[3]})"
@@ -1222,8 +1255,22 @@ class DistributedNonceManager:
             The opaque key identifier returned by ``make_api_key_id(raw_key)``.
             Must be the SAME id used by every instance that shares this key.
         """
+        api_key_id = _require_api_key_id(api_key_id)
+        trace_id = f"{int(time.time() * 1000)}-{threading.get_ident()}"
+        _emit_nonce_debug_hook(
+            "nonce_request_start",
+            trace_id=trace_id,
+            key_id=api_key_id,
+            backend=("redis" if self._redis is not None else "file"),
+        )
         # Hard gate: fail immediately if the FSM has revoked nonce issuance.
         if not _get_nonce_auth():
+            _emit_nonce_debug_hook(
+                "nonce_request_blocked",
+                trace_id=trace_id,
+                key_id=api_key_id,
+                reason="fsm_unauthorized",
+            )
             raise RuntimeError(
                 f"DistributedNonceManager.get_nonce: nonce issuance not authorized "
                 f"(key={api_key_id}) — startup FSM is in FAILED/IDLE state; "
@@ -1245,11 +1292,32 @@ class DistributedNonceManager:
                 "This is a TEMPORARY fallback while Redis TLS is being fixed.",
                 api_key_id,
             )
-            return self._file_nonce(api_key_id)
+            nonce = self._file_nonce(api_key_id)
+            _emit_nonce_debug_hook(
+                "nonce_request_success",
+                trace_id=trace_id,
+                key_id=api_key_id,
+                nonce=nonce,
+                backend="file",
+            )
+            return nonce
         try:
             nonce = self._redis.next_nonce(api_key_id)
+            _emit_nonce_debug_hook(
+                "nonce_request_success",
+                trace_id=trace_id,
+                key_id=api_key_id,
+                nonce=nonce,
+                backend="redis",
+            )
             return nonce
         except Exception as exc:
+            _emit_nonce_debug_hook(
+                "nonce_request_redis_failure",
+                trace_id=trace_id,
+                key_id=api_key_id,
+                error=exc,
+            )
             if _live_mode_active():
                 raise RuntimeError(
                     "DistributedNonceManager.get_nonce: Redis nonce issuance failed in LIVE mode; "
@@ -1265,7 +1333,15 @@ class DistributedNonceManager:
                 api_key_id,
                 exc,
             )
-            return self._file_nonce(api_key_id)
+            nonce = self._file_nonce(api_key_id)
+            _emit_nonce_debug_hook(
+                "nonce_request_success",
+                trace_id=trace_id,
+                key_id=api_key_id,
+                nonce=nonce,
+                backend="file",
+            )
+            return nonce
 
     def record_error(self, api_key_id: str) -> None:
         """Record a nonce rejection from Kraken for *api_key_id*.
@@ -1276,9 +1352,11 @@ class DistributedNonceManager:
         manager's recovery probes drive the jump strategy).
         In file mode this directly calls ``record_error()`` on the manager.
         """
+        api_key_id = _require_api_key_id(api_key_id)
         try:
             mgr = self._get_file_manager(api_key_id)
             mgr.record_error()
+            _emit_nonce_debug_hook("nonce_record_error", key_id=api_key_id)
         except Exception as exc:
             _logger.debug(
                 "DistributedNonceManager.record_error: key=%s error=%s",
@@ -1287,9 +1365,11 @@ class DistributedNonceManager:
 
     def record_success(self, api_key_id: str, nonce: int) -> None:
         """Record that Kraken accepted *nonce* for *api_key_id*."""
+        api_key_id = _require_api_key_id(api_key_id)
         try:
             mgr = self._get_file_manager(api_key_id)
             mgr.record_success()
+            _emit_nonce_debug_hook("nonce_record_success", key_id=api_key_id, nonce=nonce)
         except Exception as exc:
             _logger.debug(
                 "DistributedNonceManager.record_success: key=%s error=%s",
@@ -1303,6 +1383,7 @@ class DistributedNonceManager:
         key has nonce floor 0 at Kraken, so the old persisted high-water mark
         must be discarded.
         """
+        api_key_id = _require_api_key_id(api_key_id)
         _logger.warning(
             "DistributedNonceManager.reset_key: resetting nonce for key=%s "
             "(key rotation — sequence restarting)",
@@ -1357,6 +1438,7 @@ class DistributedNonceManager:
           ``server_sync_resync`` inside ``probe_and_resync`` already advances the
           right counter.  This method is a deliberate no-op in that path.
         """
+        api_key_id = _require_api_key_id(api_key_id)
         if self._redis is not None:
             try:
                 self._redis.reset(api_key_id)
@@ -1377,6 +1459,7 @@ class DistributedNonceManager:
 
     def get_last_nonce(self, api_key_id: str) -> int:
         """Return the last issued nonce without advancing it (diagnostic use)."""
+        api_key_id = _require_api_key_id(api_key_id)
         if self._redis is not None:
             try:
                 return self._redis.get_last(api_key_id)
@@ -1394,6 +1477,7 @@ class DistributedNonceManager:
         In strict Redis mode this fails closed if lease acquisition/renewal
         fails, guaranteeing single-writer lock ownership is validated at runtime.
         """
+        api_key_id = _require_api_key_id(api_key_id)
         if self._redis is None:
             return
         lease_version = self._redis.ensure_writer_lease(api_key_id)
@@ -1401,12 +1485,14 @@ class DistributedNonceManager:
 
     def release_writer_lease(self, api_key_id: str) -> bool:
         """Release the Redis writer lease for *api_key_id* if held by this process."""
+        api_key_id = _require_api_key_id(api_key_id)
         if self._redis is None:
             return False
         return self._redis.release_writer_lease(api_key_id)
 
     def get_writer_lease_status(self, api_key_id: str) -> dict[str, object]:
         """Return writer lease diagnostics for *api_key_id* (never raises)."""
+        api_key_id = _require_api_key_id(api_key_id)
         if self._redis is None:
             return {"enabled": False, "key_id": api_key_id, "error": "redis_unavailable"}
         try:
@@ -1440,10 +1526,12 @@ class DistributedNonceManager:
 
     def _file_nonce(self, api_key_id: str) -> int:
         """Issue next nonce via the per-key KrakenNonceManager (file/fcntl)."""
+        api_key_id = _require_api_key_id(api_key_id)
         return self._get_file_manager(api_key_id).next_nonce()
 
     def _get_file_manager(self, api_key_id: str):
         """Return the per-key KrakenNonceManager, creating it if needed."""
+        api_key_id = _require_api_key_id(api_key_id)
         try:
             from bot.global_kraken_nonce import get_nonce_manager_for_key
         except ImportError:
