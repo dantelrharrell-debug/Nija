@@ -100,6 +100,15 @@ def _heartbeat_verified() -> bool:
         return False
 
 
+def _resolve_writer_fencing_token(writer_lease_manager: object | None = None) -> str:
+    """Resolve writer fencing token from env, with lease-manager fallback."""
+    token = (
+        os.getenv("NIJA_WRITER_FENCING_TOKEN")
+        or getattr(writer_lease_manager, "fencing_token", None)
+    )
+    return str(token or "").strip()
+
+
 def _emergency_local_fallback_active() -> bool:
     """Always returns False — emergency local fallback is permanently disabled.
 
@@ -130,8 +139,18 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     This gate never bypasses distributed authority checks. Redis fencing and
     lease validation are mandatory for LIVE_ACTIVE transitions.
     """
+    writer_lease_manager = None
+    try:
+        try:
+            from bot.distributed_nonce_manager import get_distributed_nonce_manager
+        except ImportError:
+            from distributed_nonce_manager import get_distributed_nonce_manager  # type: ignore[import]
+        writer_lease_manager = get_distributed_nonce_manager()
+    except Exception:
+        writer_lease_manager = None
+
     # Verify fencing token is present before attempting Redis check.
-    fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    fencing_token = _resolve_writer_fencing_token(writer_lease_manager)
     if not fencing_token:
         err = (
             "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
@@ -207,6 +226,13 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
             key_id = make_api_key_id(platform_key)
             manager = get_distributed_nonce_manager()
             manager.ensure_writer_lock(key_id)
+            status_fn = getattr(manager, "get_writer_lease_status", None)
+            if callable(status_fn):
+                status = status_fn(key_id)
+                if isinstance(status, dict):
+                    token = status.get("token")
+                    if token is not None and str(token).strip():
+                        setattr(manager, "fencing_token", str(token).strip())
             stability_required_s = _nonce_lease_stability_requirement_s()
             if stability_required_s > 0:
                 status = None
@@ -926,7 +952,7 @@ class TradingStateMachine:
                     raise StateTransitionError(error_msg)
 
                 # Enforce fencing token presence.
-                _fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+                _fencing_token = _resolve_writer_fencing_token()
                 if not _fencing_token:
                     error_msg = (
                         "LIVE_ACTIVE blocked: NIJA_WRITER_FENCING_TOKEN is not set. "
@@ -1149,7 +1175,7 @@ class TradingStateMachine:
                 return False
 
             # Enforce fencing token on force path — no bypass.
-            _force_fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+            _force_fencing_token = _resolve_writer_fencing_token()
             if not _force_fencing_token:
                 logger.critical(
                     "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_FENCING_TOKEN_MISSING "
@@ -1589,7 +1615,7 @@ class TradingStateMachine:
                 )
             
             # Enforce fencing token on deterministic path.
-            _det_fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+            _det_fencing_token = _resolve_writer_fencing_token()
             if not _det_fencing_token:
                 logger.critical(
                     "[AUTO_ACTIVATE BLOCKED] reason=DETERMINISTIC_FENCING_TOKEN_MISSING "

@@ -3182,6 +3182,21 @@ def _acquire_distributed_process_lock() -> None:
         # FSM SUCCESS STATE: Lock acquired — proceed to trading
         # ═══════════════════════════════════════════════════════════════════════════════════════
         if _fencing_token > 0:
+            token = _fencing_token
+            owner_id = _owner
+            instance_id = _instance_identity.get("instance_id", "")
+
+            os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(token)
+            os.environ["NIJA_WRITER_OWNER_ID"] = str(owner_id)
+            os.environ["NIJA_WRITER_INSTANCE_ID"] = str(instance_id)
+
+            logger.critical(
+                "WRITER AUTHORITY ESTABLISHED token=%s owner=%s instance=%s",
+                token,
+                owner_id,
+                instance_id,
+            )
+
             _token = f"{_fencing_token}:{_owner}"
             _distributed_writer_lock_client = _client
             _distributed_writer_lock_key = _lock_key
@@ -3210,7 +3225,6 @@ def _acquire_distributed_process_lock() -> None:
                 name="DistributedWriterLockHeartbeat",
             )
             _distributed_writer_lock_thread.start()
-            os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_fencing_token)
             os.environ["NIJA_WRITER_LOCK_KEY"] = _lock_key
             os.environ["NIJA_WRITER_LOCK_META_KEY"] = _meta_key
             os.environ["NIJA_WRITER_LOCK_SCOPE"] = _scope
