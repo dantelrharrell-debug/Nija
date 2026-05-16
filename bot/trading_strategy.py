@@ -66,6 +66,7 @@ try:
         PortfolioCorrelationFilter,
         LiquidityFilter,
         ExchangeLatencyGuard,
+        SignalConfidenceFilter,
         run_all_guardrails,
     )
     _ENTRY_GUARDRAILS_AVAILABLE = True
@@ -75,6 +76,7 @@ except ImportError:
             PortfolioCorrelationFilter,
             LiquidityFilter,
             ExchangeLatencyGuard,
+            SignalConfidenceFilter,
             run_all_guardrails,
         )
         _ENTRY_GUARDRAILS_AVAILABLE = True
@@ -82,6 +84,7 @@ except ImportError:
         PortfolioCorrelationFilter = None  # type: ignore
         LiquidityFilter = None  # type: ignore
         ExchangeLatencyGuard = None  # type: ignore
+        SignalConfidenceFilter = None  # type: ignore
         run_all_guardrails = None  # type: ignore
         _ENTRY_GUARDRAILS_AVAILABLE = False
         logger.warning("⚠️ Entry guardrails not available – correlation/liquidity/latency checks disabled")
@@ -4466,22 +4469,52 @@ class TradingStrategy:
         # Initialize entry guardrails (correlation, liquidity, latency)
         if _ENTRY_GUARDRAILS_AVAILABLE:
             try:
-                self.correlation_filter = PortfolioCorrelationFilter()
-                self.liquidity_filter = LiquidityFilter()
-                self.latency_guard = ExchangeLatencyGuard()
+                _corr_max_positions = int(os.getenv("NIJA_GUARDRAIL_MAX_POSITIONS_PER_GROUP", "3"))
+                _corr_max_avg = float(os.getenv("NIJA_GUARDRAIL_MAX_AVG_CORRELATION", "0.82"))
+                _corr_window = int(os.getenv("NIJA_GUARDRAIL_CORRELATION_WINDOW", "20"))
+                _liq_min_volume = float(os.getenv("NIJA_GUARDRAIL_MIN_VOLUME_24H_USD", "250000"))
+                _liq_max_spread = float(os.getenv("NIJA_GUARDRAIL_MAX_SPREAD_BPS", "80"))
+                _liq_max_pos_frac = float(os.getenv("NIJA_GUARDRAIL_MAX_POSITION_VOLUME_FRACTION", "0.08"))
+                _lat_max_avg = float(os.getenv("NIJA_GUARDRAIL_MAX_AVG_LATENCY_MS", "2000"))
+                _lat_max_single = float(os.getenv("NIJA_GUARDRAIL_MAX_SINGLE_LATENCY_MS", "5000"))
+                _lat_window = int(os.getenv("NIJA_GUARDRAIL_LATENCY_WINDOW", "10"))
+                _sig_min_conf = float(os.getenv("NIJA_GUARDRAIL_MIN_SIGNAL_CONFIDENCE", "0.30"))
+                _sig_min_quality = float(os.getenv("NIJA_GUARDRAIL_MIN_SIGNAL_QUALITY", "22"))
+
+                self.correlation_filter = PortfolioCorrelationFilter(
+                    max_positions_per_group=max(1, _corr_max_positions),
+                    max_avg_correlation=min(0.99, max(0.0, _corr_max_avg)),
+                    correlation_window=max(5, _corr_window),
+                )
+                self.liquidity_filter = LiquidityFilter(
+                    min_volume_24h_usd=max(0.0, _liq_min_volume),
+                    max_spread_bps=max(1.0, _liq_max_spread),
+                    max_position_volume_fraction=min(1.0, max(0.001, _liq_max_pos_frac)),
+                )
+                self.latency_guard = ExchangeLatencyGuard(
+                    max_avg_latency_ms=max(50.0, _lat_max_avg),
+                    max_single_latency_ms=max(100.0, _lat_max_single),
+                    window_size=max(3, _lat_window),
+                )
+                self.signal_confidence_filter = SignalConfidenceFilter(
+                    min_confidence=min(0.99, max(0.0, _sig_min_conf)),
+                    min_quality=max(0.0, _sig_min_quality),
+                )
                 logger.info(
                     "✅ Entry guardrails initialized – "
-                    "correlation/liquidity/latency checks active"
+                    "correlation/liquidity/latency/confidence checks active"
                 )
             except Exception as _eg_err:
                 logger.warning(f"⚠️ Failed to initialize entry guardrails: {_eg_err}")
                 self.correlation_filter = None
                 self.liquidity_filter = None
                 self.latency_guard = None
+                self.signal_confidence_filter = None
         else:
             self.correlation_filter = None
             self.liquidity_filter = None
             self.latency_guard = None
+            self.signal_confidence_filter = None
 
         # Track positions that can't be sold (too small/dust) to avoid infinite retry loops
         # NEW (Jan 16, 2026): Track with timestamps to allow retry after timeout
@@ -17115,17 +17148,46 @@ class TradingStrategy:
                                             p.get('symbol', '') for p in current_positions
                                             if p.get('symbol')
                                         ]
+                                        _signal_confidence = 1.0
+                                        _signal_quality = 0.0
+                                        try:
+                                            _signal_confidence = float(
+                                                analysis.get('confidence', analysis.get('signal_confidence', 1.0))
+                                            )
+                                        except Exception:
+                                            _signal_confidence = 1.0
+                                        try:
+                                            _raw_quality = float(
+                                                analysis.get(
+                                                    'quality_score',
+                                                    analysis.get('entry_score', analysis.get('score', 0.0)),
+                                                )
+                                            )
+                                            # SignalConfidenceFilter quality threshold uses a 0–100
+                                            # scale.  Many internal scores are 0–5 or 0–1; treat
+                                            # those as "quality unavailable" so we do not hard-block
+                                            # valid entries on mixed scales.
+                                            _signal_quality = _raw_quality if _raw_quality > 10.0 else 0.0
+                                        except Exception:
+                                            _signal_quality = 0.0
+                                        _signal_confidence = min(1.0, max(0.0, _signal_confidence))
+                                        _signal_quality = max(0.0, _signal_quality)
 
                                         _guard_passed, _guard_reason = run_all_guardrails(
                                             correlation_filter=self.correlation_filter,
                                             liquidity_filter=self.liquidity_filter,
                                             latency_guard=self.latency_guard,
+                                            signal_confidence_filter=getattr(
+                                                self, 'signal_confidence_filter', None
+                                            ),
                                             candidate_symbol=symbol,
                                             open_position_symbols=_open_syms,
                                             volume_24h_usd=_vol_24h,
                                             bid=_bid,
                                             ask=_ask,
                                             position_size_usd=position_size,
+                                            signal_confidence=_signal_confidence,
+                                            signal_quality=_signal_quality,
                                         )
 
                                         if not _guard_passed:
