@@ -8472,8 +8472,8 @@ class KrakenBroker(BaseBroker):
                     # failed retries it will remain stale-high and Kraken will
                     # keep rejecting the probe nonces indefinitely — even after
                     # a NIJA_FORCE_NONCE_RESYNC=1 restart.
-                    # Calling probe_server_sync() here deletes the Redis key so
-                    # the probe uses a fresh server-time floor.
+                    # Calling probe_server_sync() here re-anchors the Redis key
+                    # to a fresh near-now monotonic floor.
                     _probe_dnm = getattr(self, "nonce_manager", None)
                     if _probe_dnm is not None and _probe_key_id:
                         try:

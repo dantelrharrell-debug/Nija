@@ -126,9 +126,9 @@ Phase 5 — Key rotation (if ever needed after migration)
   After generating a new Kraken API key:
     1. Stop the bot (or enter maintenance mode).
     2. Call:  get_distributed_nonce_manager().reset_key(new_key_id)
-             (this deletes the Redis key and destroys the local file manager)
+             (this re-anchors Redis to a fresh monotonic floor and destroys the local file manager)
     3. Update KRAKEN_PLATFORM_API_KEY / KRAKEN_USER_<id>_API_KEY.
-    4. Restart.  The new key starts at nonce 0 — correct by design.
+    4. Restart.  The new key starts from a fresh near-now floor.
 
 Rollback
   Unset NIJA_REDIS_URL and restart.  The bot falls back to file/fcntl mode
@@ -210,6 +210,9 @@ _REDIS_LEASE_FORCE_TAKEOVER_TIMEOUT_S = max(
 )
 _REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS = max(
     0, int(os.environ.get("NIJA_REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS", "250"))
+)
+_REDIS_NONCE_RESET_BUFFER_MS = max(
+    0, int(os.environ.get("NIJA_REDIS_NONCE_RESET_BUFFER_MS", "5000"))
 )
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 try:
@@ -845,15 +848,16 @@ class _PerKeyRedisBackend:
         val = self._client.get(self._KEY_PREFIX + key_id)  # type: ignore[attr-defined]
         return int(val) if val else 0
 
-    def reset(self, key_id: str) -> None:
-        """Delete the nonce key for *key_id* (fresh start — use only after key rotation)."""
-        self._client.delete(self._KEY_PREFIX + key_id)  # type: ignore[attr-defined]
-        self._lease_by_key.pop(key_id, None)
-        self._stop_lease_heartbeat(key_id)
+    def reset(self, key_id: str, *, floor_ms: Optional[int] = None) -> None:
+        """Re-anchor nonce key to a monotonic floor for *key_id* without deleting it."""
+        floor = int(floor_ms) if floor_ms is not None else int(time.time() * 1000) + _REDIS_NONCE_RESET_BUFFER_MS
+        self._client.set(self._KEY_PREFIX + key_id, str(floor))  # type: ignore[attr-defined]
         _logger.warning(
             "DistributedNonceManager: Redis nonce key reset for key_id=%s "
-            "(new key rotation — nonce sequence restarting from 0)",
+            "(floor=%d, buffer_ms=%d)",
             key_id,
+            floor,
+            _REDIS_NONCE_RESET_BUFFER_MS,
         )
 
     def _ensure_writer_lease(self, key_id: str) -> int:
@@ -1285,7 +1289,7 @@ class DistributedNonceManager:
         """Record that Kraken accepted *nonce* for *api_key_id*."""
         try:
             mgr = self._get_file_manager(api_key_id)
-            mgr.record_success(nonce)
+            mgr.record_success()
         except Exception as exc:
             _logger.debug(
                 "DistributedNonceManager.record_success: key=%s error=%s",
@@ -1343,9 +1347,10 @@ class DistributedNonceManager:
         Calling this method immediately before ``probe_and_resync()`` closes the
         gap:
 
-        * **Redis mode** — deletes the per-key Redis nonce entry so the very next
-          ``get_nonce()`` call returns ``max(1, now_ms) ≈ server_time_ms``,
-          matching the floor that ``server_sync_resync`` computes internally.
+        * **Redis mode** — re-anchors the per-key Redis nonce entry to
+          ``now_ms + NIJA_REDIS_NONCE_RESET_BUFFER_MS`` so the next
+          ``get_nonce()`` call preserves monotonicity while escaping poisoned
+          high-water marks.
 
         * **File mode** — the per-key ``KrakenNonceManager`` and the
           ``DistributedNonceManager`` file path are the same object, so
@@ -1357,7 +1362,7 @@ class DistributedNonceManager:
                 self._redis.reset(api_key_id)
                 _logger.info(
                     "DistributedNonceManager.probe_server_sync: Redis nonce reset "
-                    "for key=%s — probe will use a fresh server-time floor",
+                    "for key=%s — probe will use a fresh monotonic floor",
                     api_key_id,
                 )
             except Exception as exc:
@@ -1376,7 +1381,7 @@ class DistributedNonceManager:
             try:
                 return self._redis.get_last(api_key_id)
             except Exception:
-                pass
+                return 0
         try:
             return self._get_file_manager(api_key_id).get_last_nonce()
         except Exception:
@@ -1420,6 +1425,12 @@ class DistributedNonceManager:
             return False
         if not api_key_id:
             return False
+        if self._redis is not None:
+            try:
+                self._redis.ensure_writer_lease(api_key_id)
+                return True
+            except Exception:
+                return False
         try:
             return bool(self._get_file_manager(api_key_id).can_issue_nonce())
         except Exception:
