@@ -1,5 +1,12 @@
 import unittest
+import types
+import sys
 from unittest.mock import Mock, patch
+
+if "redis" not in sys.modules:
+    _redis_stub = types.ModuleType("redis")
+    _redis_stub.from_url = lambda *args, **kwargs: None
+    sys.modules["redis"] = _redis_stub
 
 from bot.distributed_nonce_manager import (
     DistributedNonceManager,
