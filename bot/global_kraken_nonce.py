@@ -468,6 +468,9 @@ _PID_LOCK_FILE = _STATE_FILE + ".pid"
 _NONCE_BACKEND   = os.environ.get("NIJA_NONCE_BACKEND",   "file").strip().lower()
 _REDIS_URL       = get_redis_url() or "redis://localhost:6379/0"
 _REDIS_NONCE_KEY = os.environ.get("NIJA_REDIS_NONCE_KEY",  "nija:kraken:nonce")
+_REDIS_NONCE_RESET_BUFFER_MS = max(
+    0, int(os.environ.get("NIJA_REDIS_NONCE_RESET_BUFFER_MS", "5000") or "5000")
+)
 _NONCE_MODE      = os.environ.get("NIJA_NONCE_MODE",       "file").strip().lower()
 # If enabled, missing process-lifetime PID lock is treated as fatal (raise).
 # Default is disabled to avoid import-time crash loops in environments where
@@ -779,9 +782,15 @@ class _RedisNonceBackend:
         self._script(keys=[self._key], args=[floor_ms])
 
     def reset(self) -> None:
-        """Delete the Redis nonce key (fresh start — use with caution)."""
-        self._client.delete(self._key)
-        _logger.warning("RedisNonceBackend: nonce key '%s' deleted for reset", self._key)
+        """Re-anchor the Redis nonce key to a fresh monotonic near-now floor."""
+        floor = int(time.time() * 1000) + _REDIS_NONCE_RESET_BUFFER_MS
+        self._client.set(self._key, str(floor))
+        _logger.warning(
+            "RedisNonceBackend: nonce key '%s' reset to floor=%d (buffer_ms=%d)",
+            self._key,
+            floor,
+            _REDIS_NONCE_RESET_BUFFER_MS,
+        )
 
 
 def _build_redis_backend() -> "_RedisNonceBackend | None":
@@ -1628,7 +1637,8 @@ class KrakenNonceManager:
         ``probe_and_resync()`` starts from the conservative timing floor rather
         than a potentially-stale small EMA.
 
-        When Redis mode is active the Redis nonce key is also deleted.
+        When Redis mode is active the Redis nonce key is re-anchored to a fresh
+        monotonic near-now floor.
 
         Call this from a maintenance script or a one-off Railway shell command
         when NIJA is stopped and you need to guarantee a clean sync on the
@@ -1640,7 +1650,7 @@ class KrakenNonceManager:
 
         Note: ``self._pid_lock_file`` is intentionally excluded from the wipe
         list — the file descriptor is held open for the process lifetime and
-        must not be deleted while the process is running.
+        must not be removed while the process is running.
         """
         with _LOCK:
             # Per-key state files; _AO_STATE_FILE (adaptive engine) is shared
