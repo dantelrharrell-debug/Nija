@@ -104,7 +104,7 @@ def _resolve_writer_fencing_token(writer_lease_manager: object | None = None) ->
     """Resolve writer fencing token from env, with lease-manager fallback."""
     token = (
         os.getenv("NIJA_WRITER_FENCING_TOKEN")
-        or getattr(writer_lease_manager, "fencing_token", None)
+        or getattr(writer_lease_manager, "lease_version", None)
     )
     return str(token or "").strip()
 

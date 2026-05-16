@@ -1474,6 +1474,8 @@ class MultiAccountBrokerManager:
 
     def _is_system_bootstrap_at_least(self, min_state: str) -> bool:
         """Return True when system BootstrapFSM is at least *min_state*."""
+        if min_state == "LOCK_ACQUIRED" and os.getenv("NIJA_LOCK_ACQUIRED", "").strip().lower() == "true":
+            return True
         _current = self._get_system_bootstrap_state_name()
         if _current == "UNAVAILABLE":
             return True

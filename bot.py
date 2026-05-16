@@ -624,6 +624,8 @@ def _sum_nested_balances(balance_payload) -> float:
 
 def _is_bootstrap_lock_acquired() -> bool:
     """Return True only after BootstrapFSM reaches LOCK_ACQUIRED or later."""
+    if os.getenv("NIJA_LOCK_ACQUIRED", "").strip().lower() == "true":
+        return True
     if not (_BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None):
         return True
     try:
