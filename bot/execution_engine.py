@@ -159,6 +159,17 @@ except ImportError:
         SIGNAL_FUNNEL_AVAILABLE = False
         get_signal_funnel = None  # type: ignore
 
+try:
+    from bot.pipeline_funnel import get_pipeline_funnel as _get_pipeline_funnel
+    _PIPELINE_FUNNEL_AVAILABLE = True
+except ImportError:
+    try:
+        from pipeline_funnel import get_pipeline_funnel as _get_pipeline_funnel  # type: ignore[import]
+        _PIPELINE_FUNNEL_AVAILABLE = True
+    except ImportError:
+        _PIPELINE_FUNNEL_AVAILABLE = False
+        _get_pipeline_funnel = None  # type: ignore
+
 # Import Exchange Constraints Enforcer (reject-proof order validation)
 try:
     from bot.exchange_constraints_enforcer import (
@@ -1767,6 +1778,14 @@ class ExecutionEngine:
                 except Exception:
                     pass
 
+            def _pfunnel(method: str) -> None:
+                if not _PIPELINE_FUNNEL_AVAILABLE or _get_pipeline_funnel is None:
+                    return
+                try:
+                    getattr(_get_pipeline_funnel(), f"record_{method}")(symbol)
+                except Exception:
+                    pass
+
             # Bootstrap authority gate: execution is blocked until bootstrap
             # finalization grants runtime execution_authority.
             try:
@@ -2365,6 +2384,7 @@ class ExecutionEngine:
                     _trace("ecel", "rejected", "coinbase_execution_disabled", terminal=True)
                     return None
                 # ─── FIX 6: MANDATORY PRE-EXECUTION LOG ──────────────────────────
+                _pfunnel("risk_passed")
                 logger.critical(
                     "🚀 EXECUTING TRADE: %s | side=%s | size=$%.2f | entry=$%.4f | broker=%s",
                     symbol, side, position_size, entry_price, broker_name_str.upper(),
@@ -2410,6 +2430,7 @@ class ExecutionEngine:
                         )
                         _entry_t0 = _time.monotonic()
                         _entry_exc: Optional[Exception] = None
+                        _pfunnel("execution_attempted")
                         try:
                             result = self._submit_limit_order_via_ecel(
                                 broker_client=self.broker_client,
@@ -2563,6 +2584,7 @@ class ExecutionEngine:
 
                     _entry_t0 = _time.monotonic()
                     _market_exc: Optional[Exception] = None
+                    _pfunnel("execution_attempted")
                     try:
                         logger.critical(
                             "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
@@ -2688,6 +2710,7 @@ class ExecutionEngine:
                     return None
 
                 _trace("broker", "pass", "order_accepted", extra={"order_id": str(order_id), "status": order_status})
+                _pfunnel("orders_routed")
 
                 if FORCE_FIRST_TRADE and FORCE_TRADE_ON_FIRST_VALID_SIGNAL and not self._force_first_trade_done:
                     self._force_first_trade_done = True

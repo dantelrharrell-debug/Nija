@@ -438,7 +438,19 @@ except ImportError:
         SIGNAL_FUNNEL_AVAILABLE = False
         logger.warning("⚠️ Signal Funnel Diagnostics not available — no funnel tracking")
 
-# ── Trade Frequency Controller — minimum trade safeguard ─────────────────────
+# ── Pipeline Funnel Counter — global 5-stage choke-point finder ──────────────
+try:
+    from bot.pipeline_funnel import get_pipeline_funnel as _get_pipeline_funnel
+    _PIPELINE_FUNNEL_AVAILABLE = True
+except ImportError:
+    try:
+        from pipeline_funnel import get_pipeline_funnel as _get_pipeline_funnel  # type: ignore[import]
+        _PIPELINE_FUNNEL_AVAILABLE = True
+    except ImportError:
+        _get_pipeline_funnel = None  # type: ignore
+        _PIPELINE_FUNNEL_AVAILABLE = False
+
+
 # Tracks trade cadence and relaxes filters when no trade in drought_window hours.
 try:
     from bot.trade_frequency_controller import (
@@ -2678,6 +2690,11 @@ class NIJAApexStrategyV71:
                     _funnel.maybe_report_and_reset()
                 except Exception:
                     pass
+            if _PIPELINE_FUNNEL_AVAILABLE and _get_pipeline_funnel is not None:
+                try:
+                    _get_pipeline_funnel().record_signal_generated(symbol)
+                except Exception:
+                    pass
             # Require minimum data
             if len(df) < 100:
                 logger.debug(f"   {symbol}: Insufficient data ({len(df)} candles)")
@@ -3175,6 +3192,11 @@ class NIJAApexStrategyV71:
                                 reason=reason,
                                 extra={"trend": trend},
                             )
+                        except Exception:
+                            pass
+                    if _PIPELINE_FUNNEL_AVAILABLE and _get_pipeline_funnel is not None:
+                        try:
+                            _get_pipeline_funnel().record_signal_approved(symbol)
                         except Exception:
                             pass
                     _drought_l = (
@@ -4012,6 +4034,11 @@ class NIJAApexStrategyV71:
                                 reason=reason,
                                 extra={"trend": trend},
                             )
+                        except Exception:
+                            pass
+                    if _PIPELINE_FUNNEL_AVAILABLE and _get_pipeline_funnel is not None:
+                        try:
+                            _get_pipeline_funnel().record_signal_approved(symbol)
                         except Exception:
                             pass
                     _drought_s = (

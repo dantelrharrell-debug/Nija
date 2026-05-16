@@ -176,6 +176,9 @@ class MetricCollector:
         # 15. Control Compiler Layer
         snap["modules"]["control_compiler"] = self._collect_control_compiler()
 
+        # 16. Pipeline Funnel Counter (5-stage choke-point finder)
+        snap["modules"]["pipeline_funnel"] = self._collect_pipeline_funnel()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -311,6 +314,20 @@ class MetricCollector:
                 return {"available": False, "error": "control_compiler unavailable"}
         try:
             return get_control_compiler().get_health()
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def _collect_pipeline_funnel(self) -> Dict:
+        try:
+            from bot.pipeline_funnel import get_pipeline_funnel
+        except ImportError:
+            try:
+                from pipeline_funnel import get_pipeline_funnel  # type: ignore[import]
+            except ImportError:
+                return {"available": False, "error": "pipeline_funnel unavailable"}
+        try:
+            summary = get_pipeline_funnel().get_summary()
+            return {"available": True, **summary}
         except Exception as exc:
             return {"available": False, "error": str(exc)}
 
@@ -683,6 +700,33 @@ async function refresh() {
       metricRow('Terminal Reason', latest.terminal_reason || '—'),
     ]));
 
+    // Pipeline Funnel (5-stage choke-point finder)
+    const pf = mods.pipeline_funnel || {};
+    if (pf.available) {
+      const pfRows = [];
+      const stages = pf.stages || [];
+      for (const s of stages) {
+        const dropStr = s.drop_off_pct != null ? ` <span style="color:#d29922;font-size:0.78rem">▼ ${s.drop_off_pct}%</span>` : '';
+        pfRows.push(`<div class="metric">
+          <span class="label">${s.stage.replace(/_/g,' ')}</span>
+          <span class="value">${s.count.toLocaleString()}${dropStr}</span>
+        </div>`);
+      }
+      if (pf.choke_point) {
+        pfRows.push(`<div class="metric">
+          <span class="label" style="color:#f85149;font-weight:600">⚡ Choke Point</span>
+          <span class="value" style="color:#f85149">${pf.choke_point.replace(/_/g,' ')} (▼ ${pf.choke_drop_pct}%)</span>
+        </div>`);
+      }
+      if (pf.conversion_rate_pct != null) {
+        pfRows.push(metricRow('Conversion Rate', pf.conversion_rate_pct + ' %'));
+      }
+      pfRows.push(metricRow('Window', pf.window_seconds != null ? Math.floor(pf.window_seconds / 60) + ' min' : '—'));
+      cards.push(buildCard('Pipeline Funnel', pfRows));
+    } else {
+      cards.push(buildCard('Pipeline Funnel', [metricRow('Available', badge(null))]));
+    }
+
     document.getElementById('cards-container').innerHTML = cards.join('');
 
     // Alerts
@@ -774,6 +818,12 @@ class ObservabilityDashboard:
         def control_compiler():
             snap = self._collector.get_snapshot()
             mod = (snap.get("modules", {}) or {}).get("control_compiler", {})
+            return jsonify(mod)
+
+        @bp.route("/api/v1/pipeline-funnel")
+        def pipeline_funnel():
+            snap = self._collector.get_snapshot()
+            mod = (snap.get("modules", {}) or {}).get("pipeline_funnel", {})
             return jsonify(mod)
 
         @bp.route("/api/v1/health")
