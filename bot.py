@@ -1610,60 +1610,12 @@ def _capital_bootstrap_state_value() -> str:
 
 def _bootstrap_nonce_reset_once() -> None:
     """Bootstrap-owned nonce reset gate (single execution, post-READY only).
-    
-    FIX 1: NONCE_LOCK Acquisition Boundary
-    ──────────────────────────────────────
-    The nonce jump must only occur after capital bootstrap reaches READY/RUNNING.
-    Earlier bootstrap phases (PRE-FLIGHT,
-    STARTUP_VALIDATED, etc.) must not trigger nonce operations.
+
+    Deterministic nonce kernel: bootstrap nonce mutations are disabled.
+    Runtime nonce issuance is exclusively delegated to DistributedNonceManager.
     """
     if not _is_bootstrap_owner_thread():
         logger.debug("NONCE_BOOTSTRAP_SKIP non-owner thread attempted bootstrap nonce reset")
-        return
-
-    if os.getenv("NIJA_ENABLE_BOOTSTRAP_NONCE_RESET", "true").lower() not in {
-        "true",
-        "1",
-        "yes",
-        "on",
-    }:
-        logger.info(
-            "NONCE_BOOTSTRAP_SKIP bootstrap nonce reset disabled "
-            "(set NIJA_ENABLE_BOOTSTRAP_NONCE_RESET=false to disable)"
-        )
-        return
-
-    _kraken_creds_present = bool(
-        (os.getenv("KRAKEN_PLATFORM_API_KEY") or os.getenv("KRAKEN_API_KEY"))
-        and (os.getenv("KRAKEN_PLATFORM_API_SECRET") or os.getenv("KRAKEN_API_SECRET"))
-    )
-    if not _kraken_creds_present:
-        return
-
-    try:
-        from bot.multi_account_broker_manager import get_broker_manager as _get_broker_manager
-        from bot.broker_manager import BrokerType as _BrokerType
-
-        _kraken_broker = _get_broker_manager().platform_brokers.get(_BrokerType.KRAKEN)
-        if _kraken_broker is None or not getattr(_kraken_broker, "connected", False):
-            logger.info(
-                "NONCE_BOOTSTRAP_SKIP no connected PLATFORM Kraken broker present; "
-                "leaving nonce ownership to the Kraken connect path"
-            )
-            return
-    except Exception as _kraken_scope_err:
-        logger.warning(
-            "NONCE_BOOTSTRAP_SKIP could not confirm connected PLATFORM Kraken broker: %s",
-            _kraken_scope_err,
-        )
-        return
-
-    _capital_state = _capital_bootstrap_state_value()
-    if _capital_state not in {"READY", "RUNNING"}:
-        logger.warning(
-            "NONCE_LOCK_STATE_GATE_BLOCKED capital_bootstrap_state=%s — nonce reset blocked until READY/RUNNING",
-            _capital_state,
-        )
         return
 
     global _nonce_bootstrap_jump_done
@@ -1673,28 +1625,12 @@ def _bootstrap_nonce_reset_once() -> None:
                 "NONCE BOOTSTRAP guard: nonce jump already completed in this process"
             )
             return
+        _nonce_bootstrap_jump_done = True
 
-    logger.info("=" * 70)
-    logger.info("⚡ KRAKEN NONCE RESET (BOOTSTRAP OWNER)")
-    logger.info("=" * 70)
-    try:
-        from bot.global_kraken_nonce import jump_global_kraken_nonce_forward
-
-        # Jump 60 seconds forward (in milliseconds) to skip any stale nonce window.
-        _jump_ms = 60 * 1000
-        _new_nonce = jump_global_kraken_nonce_forward(_jump_ms)
-
-        with _nonce_bootstrap_jump_lock:
-            _nonce_bootstrap_jump_done = True
-
-        logger.info(
-            "✅ Global Kraken nonce jumped +60 s → %s (bootstrap-owned post-INIT step)",
-            _new_nonce,
-        )
-    except ImportError:
-        logger.warning("⚠️ global_kraken_nonce module not available — skipping nonce pre-reset")
-    except Exception as _nonce_err:
-        logger.warning("⚠️ Nonce pre-reset failed (non-fatal): %s", _nonce_err)
+    logger.info(
+        "NONCE_BOOTSTRAP_SKIP deterministic nonce kernel active — "
+        "bootstrap nonce jump disabled; nonce issuance delegated to DistributedNonceManager"
+    )
 
 # B1 bootstrap phase execution guard — prevents B1 pre-flight from running twice.
 # The single-owner bootstrap kernel (BotStartup thread) sets this the first time
