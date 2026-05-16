@@ -3136,6 +3136,16 @@ class NIJAApexStrategyV71:
                     logger.info("   ✅ %s: %s", symbol, anchor_reason)
 
                 if long_signal:
+                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                        try:
+                            get_signal_funnel().start_execution_trace(
+                                pair=symbol,
+                                side='long',
+                                reason=reason,
+                                extra={"trend": trend},
+                            )
+                        except Exception:
+                            pass
                     _drought_l = (
                         self._freq_ctrl.get_drought_relaxation()
                         if self._freq_ctrl is not None else None
@@ -3207,6 +3217,15 @@ class NIJAApexStrategyV71:
                                     adx=adx,
                                     volume=_volume_ratio,
                                     reason=f"entry_gate_score_{_gate_score}_of_5",
+                                )
+                                get_signal_funnel().record_execution_stage(
+                                    pair=symbol,
+                                    side='long',
+                                    stage='ai_gate',
+                                    outcome='rejected',
+                                    reason=reject_reason,
+                                    terminal=True,
+                                    extra={"gate_score": _gate_score, "gate_min": _min_gate_score_l},
                                 )
                             except Exception:
                                 pass
@@ -3298,6 +3317,15 @@ class NIJAApexStrategyV71:
                                                 volume=_volume_ratio,
                                                 reason="volatility_explosion_long",
                                             )
+                                            get_signal_funnel().record_execution_stage(
+                                                pair=symbol,
+                                                side='long',
+                                                stage='ai_gate',
+                                                outcome='rejected',
+                                                reason=reject_reason,
+                                                terminal=True,
+                                                extra={"regime": "volatility_explosion"},
+                                            )
                                         except Exception:
                                             pass
                                     self._log_final_decision(
@@ -3343,6 +3371,14 @@ class NIJAApexStrategyV71:
                                 if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                                     try:
                                         get_signal_funnel().record_ai_gate_pass(symbol)
+                                        get_signal_funnel().record_execution_stage(
+                                            pair=symbol,
+                                            side='long',
+                                            stage='ai_gate',
+                                            outcome='pass',
+                                            reason='ai_gate_passed',
+                                            extra={"gate_score": _gate_result_l.gate_score},
+                                        )
                                         get_signal_funnel().record_shadow_entry(
                                             pair=symbol,
                                             side='long',
@@ -3543,6 +3579,19 @@ class NIJAApexStrategyV71:
                             decision='SKIP',
                             reason=reason,
                         )
+                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                            try:
+                                get_signal_funnel().record_execution_stage(
+                                    pair=symbol,
+                                    side='long',
+                                    stage='position_sizing',
+                                    outcome='rejected',
+                                    reason=reason,
+                                    terminal=True,
+                                    extra={"position_size": float(position_size), "min_notional": float(min_required_balance)},
+                                )
+                            except Exception:
+                                pass
                         return {
                             'action': 'hold',
                             'reason': reason,
@@ -3563,6 +3612,19 @@ class NIJAApexStrategyV71:
                             decision='SKIP',
                             reason=reason,
                         )
+                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                            try:
+                                get_signal_funnel().record_execution_stage(
+                                    pair=symbol,
+                                    side='long',
+                                    stage='position_sizing',
+                                    outcome='rejected',
+                                    reason=reason,
+                                    terminal=True,
+                                    extra={"position_size": float(position_size)},
+                                )
+                            except Exception:
+                                pass
                         return {
                             'action': 'hold',
                             'reason': reason
@@ -3777,6 +3839,14 @@ class NIJAApexStrategyV71:
                     if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                         try:
                             _funnel_exec_l = get_signal_funnel()
+                            _funnel_exec_l.record_execution_stage(
+                                pair=symbol,
+                                side='long',
+                                stage='position_sizing',
+                                outcome='pass',
+                                reason='position_size_approved',
+                                extra={"position_size": float(position_size)},
+                            )
                             _funnel_exec_l.record_execution_pass(symbol)
                             _funnel_exec_l.mark_shadow_executed(symbol)
                         except Exception:
@@ -3849,6 +3919,16 @@ class NIJAApexStrategyV71:
                     logger.info("   ✅ %s: %s", symbol, anchor_reason)
 
                 if short_signal:
+                    if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                        try:
+                            get_signal_funnel().start_execution_trace(
+                                pair=symbol,
+                                side='short',
+                                reason=reason,
+                                extra={"trend": trend},
+                            )
+                        except Exception:
+                            pass
                     _drought_s = (
                         self._freq_ctrl.get_drought_relaxation()
                         if self._freq_ctrl is not None else None
@@ -3920,6 +4000,15 @@ class NIJAApexStrategyV71:
                                     adx=adx,
                                     volume=_volume_ratio,
                                     reason=f"entry_gate_score_{_gate_score}_of_5_short",
+                                )
+                                get_signal_funnel().record_execution_stage(
+                                    pair=symbol,
+                                    side='short',
+                                    stage='ai_gate',
+                                    outcome='rejected',
+                                    reason=reject_reason,
+                                    terminal=True,
+                                    extra={"gate_score": _gate_score, "gate_min": _min_gate_score_s},
                                 )
                             except Exception:
                                 pass
@@ -4005,6 +4094,15 @@ class NIJAApexStrategyV71:
                                                 volume=_volume_ratio,
                                                 reason="volatility_explosion_short",
                                             )
+                                            get_signal_funnel().record_execution_stage(
+                                                pair=symbol,
+                                                side='short',
+                                                stage='ai_gate',
+                                                outcome='rejected',
+                                                reason=reject_reason,
+                                                terminal=True,
+                                                extra={"regime": "volatility_explosion"},
+                                            )
                                         except Exception:
                                             pass
                                     self._log_final_decision(
@@ -4050,6 +4148,14 @@ class NIJAApexStrategyV71:
                                 if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                                     try:
                                         get_signal_funnel().record_ai_gate_pass(symbol)
+                                        get_signal_funnel().record_execution_stage(
+                                            pair=symbol,
+                                            side='short',
+                                            stage='ai_gate',
+                                            outcome='pass',
+                                            reason='ai_gate_passed',
+                                            extra={"gate_score": _gate_result_s.gate_score},
+                                        )
                                         get_signal_funnel().record_shadow_entry(
                                             pair=symbol,
                                             side='short',
@@ -4246,6 +4352,19 @@ class NIJAApexStrategyV71:
                             decision='SKIP',
                             reason=reason,
                         )
+                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                            try:
+                                get_signal_funnel().record_execution_stage(
+                                    pair=symbol,
+                                    side='short',
+                                    stage='position_sizing',
+                                    outcome='rejected',
+                                    reason=reason,
+                                    terminal=True,
+                                    extra={"position_size": float(position_size), "min_notional": float(min_required_balance)},
+                                )
+                            except Exception:
+                                pass
                         return {
                             'action': 'hold',
                             'reason': reason,
@@ -4266,6 +4385,19 @@ class NIJAApexStrategyV71:
                             decision='SKIP',
                             reason=reason,
                         )
+                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                            try:
+                                get_signal_funnel().record_execution_stage(
+                                    pair=symbol,
+                                    side='short',
+                                    stage='position_sizing',
+                                    outcome='rejected',
+                                    reason=reason,
+                                    terminal=True,
+                                    extra={"position_size": float(position_size)},
+                                )
+                            except Exception:
+                                pass
                         return {
                             'action': 'hold',
                             'reason': reason
@@ -4482,6 +4614,14 @@ class NIJAApexStrategyV71:
                     if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                         try:
                             _funnel_exec_s = get_signal_funnel()
+                            _funnel_exec_s.record_execution_stage(
+                                pair=symbol,
+                                side='short',
+                                stage='position_sizing',
+                                outcome='pass',
+                                reason='position_size_approved',
+                                extra={"position_size": float(position_size)},
+                            )
                             _funnel_exec_s.record_execution_pass(symbol)
                             _funnel_exec_s.mark_shadow_executed(symbol)
                         except Exception:

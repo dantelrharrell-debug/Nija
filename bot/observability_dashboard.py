@@ -167,6 +167,9 @@ class MetricCollector:
         # 12. Capital Growth Throttle (drawdown/size-multiplier)
         snap["modules"]["capital_throttle"] = self._collect_capital_throttle()
 
+        # 13. Execution Trace Viewer (signal -> fill stage traces)
+        snap["modules"]["execution_trace"] = self._collect_execution_trace()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -254,6 +257,27 @@ class MetricCollector:
                 "long_growth_pct": 0.0,
                 "throttle_reason": getattr(state, "label", ""),
                 "last_updated": state.last_updated.isoformat() if state.last_updated else None,
+            }
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def _collect_execution_trace(self) -> Dict:
+        try:
+            from bot.signal_funnel_diagnostics import get_signal_funnel
+        except ImportError:
+            try:
+                from signal_funnel_diagnostics import get_signal_funnel  # type: ignore[import]
+            except ImportError:
+                return {"available": False, "error": "signal_funnel_diagnostics unavailable"}
+
+        try:
+            funnel = get_signal_funnel()
+            traces = funnel.get_execution_traces(limit=25) if hasattr(funnel, "get_execution_traces") else []
+            return {
+                "available": True,
+                "count": len(traces),
+                "latest": traces[0] if traces else None,
+                "traces": traces,
             }
         except Exception as exc:
             return {"available": False, "error": str(exc)}
@@ -612,6 +636,21 @@ async function refresh() {
       metricRow('Daily Loss', rg.daily_loss != null ? '$' + rg.daily_loss.toLocaleString() : '—'),
     ]));
 
+    // Execution Trace Viewer
+    const et = mods.execution_trace || {};
+    const latest = et.latest || {};
+    cards.push(buildCard('Execution Trace Viewer', [
+      metricRow('Available', badge(et.available ? 'OK' : null)),
+      metricRow('Tracked Attempts', et.count ?? 0),
+      metricRow('Latest Pair', latest.pair || '—'),
+      metricRow('Latest Side', latest.side || '—'),
+      metricRow('Latest Status', latest.status
+        ? badge(latest.status, 'FILLED', 'IN_PROGRESS', 'N/A')
+        : '—'),
+      metricRow('Last Stage', latest.last_stage || '—'),
+      metricRow('Terminal Reason', latest.terminal_reason || '—'),
+    ]));
+
     document.getElementById('cards-container').innerHTML = cards.join('');
 
     // Alerts
@@ -679,6 +718,12 @@ class ObservabilityDashboard:
         @bp.route("/api/v1/alerts")
         def alerts():
             return jsonify({"alerts": self._collector.get_alerts(limit=100)})
+
+        @bp.route("/api/v1/execution-trace")
+        def execution_trace():
+            snap = self._collector.get_snapshot()
+            mod = (snap.get("modules", {}) or {}).get("execution_trace", {})
+            return jsonify(mod)
 
         @bp.route("/api/v1/health")
         def health():

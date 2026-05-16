@@ -148,6 +148,17 @@ except ImportError:
         get_execution_confirmation_layer = None  # type: ignore
         FillStatus = None  # type: ignore
 
+try:
+    from bot.signal_funnel_diagnostics import get_signal_funnel
+    SIGNAL_FUNNEL_AVAILABLE = True
+except ImportError:
+    try:
+        from signal_funnel_diagnostics import get_signal_funnel
+        SIGNAL_FUNNEL_AVAILABLE = True
+    except ImportError:
+        SIGNAL_FUNNEL_AVAILABLE = False
+        get_signal_funnel = None  # type: ignore
+
 # Import Exchange Constraints Enforcer (reject-proof order validation)
 try:
     from bot.exchange_constraints_enforcer import (
@@ -1733,6 +1744,29 @@ class ExecutionEngine:
             Position dictionary or None if failed
         """
         try:
+            def _trace(
+                stage: str,
+                outcome: str,
+                reason: str,
+                *,
+                terminal: bool = False,
+                extra: Optional[Dict[str, Any]] = None,
+            ) -> None:
+                if not SIGNAL_FUNNEL_AVAILABLE or get_signal_funnel is None:
+                    return
+                try:
+                    get_signal_funnel().record_execution_stage(
+                        pair=symbol,
+                        side=side,
+                        stage=stage,
+                        outcome=outcome,
+                        reason=reason,
+                        terminal=terminal,
+                        extra=extra or {},
+                    )
+                except Exception:
+                    pass
+
             # Bootstrap authority gate: execution is blocked until bootstrap
             # finalization grants runtime execution_authority.
             try:
@@ -1751,6 +1785,7 @@ class ExecutionEngine:
                         "⛔ EXECUTION AUTHORITY BLOCK: %s skipped — bootstrap execution_authority=false",
                         symbol,
                     )
+                    _trace("ecel", "rejected", "bootstrap_execution_authority_false", terminal=True)
                     return None
             except Exception as _auth_exc:
                 logger.debug("Bootstrap execution authority check skipped: %s", _auth_exc)
@@ -1770,6 +1805,7 @@ class ExecutionEngine:
                         symbol,
                         _scalar_balance,
                     )
+                    _trace("ecel", "rejected", f"balance_gate_zero_or_negative:{_scalar_balance:.2f}", terminal=True)
                     return None
 
             # ─── FIX 2: MINIMUM ORDER SIZE GATE ─────────────────────────────────────
@@ -1808,6 +1844,7 @@ class ExecutionEngine:
                                 _min_notional_floor,
                                 _spendable_usd,
                             )
+                            _trace("ecel", "rejected", f"below_min_notional_spendable:{_min_notional_floor:.2f}", terminal=True)
                             return None
                         logger.info(
                             "📈 Auto-adjusting size from $%.2f to $%.2f (minimum notional)",
@@ -1824,6 +1861,7 @@ class ExecutionEngine:
                     position_size,
                     MIN_NOTIONAL_USD,
                 )
+                _trace("ecel", "rejected", f"order_below_min_notional:{position_size:.2f}", terminal=True)
                 return None
 
             # ─── FIX 4: LIVE MODE ASSERTION ──────────────────────────────────────────
@@ -1832,6 +1870,7 @@ class ExecutionEngine:
             _dry_run_now = os.getenv("DRY_RUN_MODE", "false").lower() in ("true", "1", "yes")
             if _dry_run_now:
                 logger.warning("⛔ FIX4 DRY_RUN_MODE=true — trade execution blocked for %s", symbol)
+                _trace("ecel", "rejected", "dry_run_mode_enabled", terminal=True)
                 return None
 
             # ✅ LAYER -1: CAPITAL INTEGRITY GATE (FIX 4)
@@ -1845,6 +1884,7 @@ class ExecutionEngine:
                     side,
                     position_size,
                 )
+                _trace("ecel", "rejected", "capital_gate_blocked_entry", terminal=True)
                 return None
 
             _regime = self._normalize_regime(take_profit_levels)
@@ -1877,6 +1917,7 @@ class ExecutionEngine:
                     _expectancy_bucket,
                     f"{_remaining}s" if _remaining is not None else "manual/legacy",
                 )
+                _trace("ecel", "rejected", f"expectancy_kill_switch:{_expectancy_bucket}", terminal=True)
                 return None
 
             # ── PROOF-OF-TRADE: forced order sizing + critical attempt log ────────
@@ -1921,6 +1962,7 @@ class ExecutionEngine:
                     logger.error(f"   Controller State: {recovery_controller.current_state.value}")
                     logger.error(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
                     logger.error("=" * 80)
+                    _trace("ecel", "rejected", f"recovery_controller:{reason}", terminal=True)
                     return None
             
             # ✅ CRITICAL SAFETY CHECK #1: LIVE CAPITAL VERIFIED
@@ -1940,6 +1982,7 @@ class ExecutionEngine:
                     logger.error(f"   User ID: {self.user_id}")
                     logger.error(f"   Reason: {error_msg}")
                     logger.error("=" * 80)
+                    _trace("ecel", "rejected", f"hard_controls:{error_msg}", terminal=True)
                     return None
 
             # FIX #3 (Jan 19, 2026): Check if broker supports this symbol before attempting trade
@@ -1950,6 +1993,7 @@ class ExecutionEngine:
                     logger.info(f"   ❌ Entry rejected for {symbol}")
                     logger.info(f"      Reason: {broker_name_str.title()} does not support this symbol")
                     logger.info(f"      💡 This symbol may be specific to another exchange (e.g., BUSD is Binance-only)")
+                    _trace("ecel", "rejected", "symbol_not_supported_by_broker", terminal=True)
                     return None
 
             # Log entry attempt
@@ -2021,6 +2065,7 @@ class ExecutionEngine:
                         f"Trade skipped: size ${position_size:.2f} < min ${_hard_min:.2f} "
                         f"for {symbol} ({_hard_broker_key or 'broker'})"
                     )
+                    _trace("ecel", "rejected", f"hard_min_notional:{position_size:.2f}<{_hard_min:.2f}", terminal=True)
                     return None
 
             # ✅ Exchange constraints enforcer — adjust or reject before broker submission
@@ -2048,6 +2093,7 @@ class ExecutionEngine:
                                 _constraint.reason,
                                 position_size,
                             )
+                            _trace("ecel", "rejected", f"exchange_constraints:{_constraint.reason}", terminal=True)
                             return None
                 except Exception as _constraint_exc:
                     logger.debug("Exchange constraint validation skipped: %s", _constraint_exc)
@@ -2085,6 +2131,7 @@ class ExecutionEngine:
                 
                 if not is_valid:
                     logger.warning(f"❌ Entry rejected: {rejection_reason}")
+                    _trace("ecel", "rejected", f"minimum_notional_gate:{rejection_reason}", terminal=True)
                     return None
 
             # ✅ NET EDGE GATE: Reject trades that cannot clear the minimum
@@ -2102,11 +2149,13 @@ class ExecutionEngine:
                         _market_quality,
                         MARKET_QUALITY_THRESHOLD,
                     )
+                    _trace("ecel", "rejected", f"market_quality_gate:{_market_quality:.3f}", terminal=True)
                     return None
 
                 # Regime-specific suppression and threshold tuning.
                 if not FORCE_TRADE_MODE and _regime in {"low_vol", "low_volatility", "dead", "chop"}:
                     logger.info("⏭️ REGIME GATE: skipping %s due to low-opportunity regime (%s)", symbol, _regime)
+                    _trace("ecel", "rejected", f"regime_gate:{_regime}", terminal=True)
                     return None
 
                 _regime_expectancy_floor = MIN_EXPECTANCY_THRESHOLD_PCT
@@ -2152,6 +2201,7 @@ class ExecutionEngine:
                         _fee_rate * 100.0,
                         MIN_EDGE_MULTIPLIER,
                     )
+                    _trace("ecel", "rejected", "fee_dominated_trade", terminal=True)
                     return None
 
                 _total_cost_rate = (_fee_rate * 2) + _slippage_rate + _spread_rate
@@ -2172,6 +2222,7 @@ class ExecutionEngine:
                     logger.warning(f"   Net Edge:        {_net_edge_pct*100:.4f}% "
                                    f"(min required: {MIN_EDGE_THRESHOLD*100:.2f}%)")
                     logger.warning("=" * 70)
+                    _trace("ecel", "rejected", f"net_edge_gate:{_net_edge_pct:.6f}", terminal=True)
                     return None
 
                 logger.info(f"✅ Net Edge Gate passed: {_net_edge_pct*100:.4f}% "
@@ -2188,6 +2239,7 @@ class ExecutionEngine:
                         _reward_move * 100.0,
                         MIN_TP_PCT * 100.0,
                     )
+                    _trace("ecel", "rejected", "target_geometry_tp_too_small", terminal=True)
                     return None
                 if _risk_move > MAX_SL_PCT:
                     logger.warning(
@@ -2196,6 +2248,7 @@ class ExecutionEngine:
                         _risk_move * 100.0,
                         MAX_SL_PCT * 100.0,
                     )
+                    _trace("ecel", "rejected", "target_geometry_sl_too_wide", terminal=True)
                     return None
 
                 # ✅ POSITIVE EXPECTANCY GATE (E > 0)
@@ -2230,6 +2283,7 @@ class ExecutionEngine:
                     logger.warning(f"   Cost Penalty:          {_cost_penalty*100:.4f}%")
                     logger.warning(f"   Edge Score:            {_edge_score:.6f} (min {MIN_EDGE_SCORE_THRESHOLD:.6f})")
                     logger.warning("=" * 70)
+                    _trace("ecel", "rejected", f"edge_score_gate:{_edge_score:.6f}", terminal=True)
                     return None
 
                 if not FORCE_TRADE_MODE and _expectancy_pct <= _regime_expectancy_floor:
@@ -2245,6 +2299,7 @@ class ExecutionEngine:
                     logger.warning(f"   Expectancy:            ${_expectancy_usd:.2f} ({_expectancy_pct*100:.4f}%)")
                     logger.warning(f"   Required Floor:        {_regime_expectancy_floor*100:.4f}%")
                     logger.warning("=" * 70)
+                    _trace("ecel", "rejected", f"expectancy_gate:{_expectancy_pct:.6f}", terminal=True)
                     return None
 
                 # Kelly-lite sizing clamp to avoid oversized allocations.
@@ -2256,6 +2311,7 @@ class ExecutionEngine:
                         _p_win * 100.0,
                         _reward_risk,
                     )
+                    _trace("ecel", "rejected", "kelly_gate_non_positive", terminal=True)
                     return None
                 # In FORCE_TRADE_MODE, clamp kelly to 1.0 so sizing is unchanged
                 if _kelly_fraction <= 0:
@@ -2265,6 +2321,7 @@ class ExecutionEngine:
                 position_size = max(position_size * _kelly_fraction, 0.0)
                 if position_size <= 0:
                     logger.warning("🚫 KELLY GATE: %s rejected (post-kelly size is zero)", symbol)
+                    _trace("ecel", "rejected", "kelly_gate_zero_size", terminal=True)
                     return None
 
                 logger.info(
@@ -2305,6 +2362,7 @@ class ExecutionEngine:
                         order_side,
                         symbol,
                     )
+                    _trace("ecel", "rejected", "coinbase_execution_disabled", terminal=True)
                     return None
                 # ─── FIX 6: MANDATORY PRE-EXECUTION LOG ──────────────────────────
                 logger.critical(
@@ -2372,6 +2430,11 @@ class ExecutionEngine:
                             result = None
                         # Emit result for the limit attempt (before fallback)
                         self._emit_execution_result(symbol, order_side, result, _entry_t0, _entry_exc)
+                        _ecel_limit_status = self._normalized_order_status(result)
+                        if result is None or _ecel_limit_status in {'error', 'unfilled', 'skipped', 'rejected'}:
+                            _trace("ecel", "rejected", f"limit_order_rejected:{_ecel_limit_status}", extra={"order_type": "limit"})
+                        else:
+                            _trace("ecel", "pass", "limit_order_compiled", extra={"order_type": "limit"})
                         # If the limit order fails or errors, fall back to a market order
                         if result is None or self._normalized_order_status(result) in {'error', 'unfilled', 'skipped', 'rejected'}:
                             logger.warning(
@@ -2401,6 +2464,11 @@ class ExecutionEngine:
                                 _fallback_exc = _fb_exc
                                 result = None
                             self._emit_execution_result(symbol, order_side, result, _entry_t0, _fallback_exc)
+                            _ecel_fb_status = self._normalized_order_status(result)
+                            if result is None or _ecel_fb_status in {'error', 'unfilled', 'skipped', 'rejected'}:
+                                _trace("ecel", "rejected", f"fallback_market_rejected:{_ecel_fb_status}", terminal=True, extra={"order_type": "market"})
+                            else:
+                                _trace("ecel", "pass", "fallback_market_compiled", extra={"order_type": "market"})
                             if _fallback_exc is not None:
                                 raise _fallback_exc
                 else:
@@ -2455,6 +2523,7 @@ class ExecutionEngine:
                                     "[EOC] ❌ ORDER COMPILATION FAILED: %s — trade REJECTED",
                                     _eoc_exc,
                                 )
+                                _trace("ecel", "rejected", f"exchange_order_compiler:{_eoc_exc}", terminal=True)
                                 return None
                             logger.warning(
                                 "[EOC] Warning: order compilation exception: %s — using fallback",
@@ -2489,6 +2558,7 @@ class ExecutionEngine:
                                 _order_size_usd,
                                 MIN_TRADE_USD,
                             )
+                            _trace("ecel", "rejected", f"order_notional_below_min:{_order_size_usd:.2f}", terminal=True)
                             return None
 
                     _entry_t0 = _time.monotonic()
@@ -2513,6 +2583,11 @@ class ExecutionEngine:
                         _market_exc = _mk_exc
                         result = None
                     self._emit_execution_result(symbol, order_side, result, _entry_t0, _market_exc)
+                    _ecel_market_status = self._normalized_order_status(result)
+                    if result is None or _ecel_market_status in {'error', 'unfilled', 'skipped', 'rejected'}:
+                        _trace("ecel", "rejected", f"market_order_rejected:{_ecel_market_status}", terminal=True, extra={"order_type": "market"})
+                    else:
+                        _trace("ecel", "pass", "market_order_compiled", extra={"order_type": "market"})
                     if _market_exc is not None:
                         raise _market_exc
 
@@ -2559,6 +2634,7 @@ class ExecutionEngine:
                 if result_status == 'nonce_skip':
                     logger.warning("⚠️  Nonce pause active — skipping cycle, will retry next scan")
                     logger.warning(f"   Symbol: {symbol}, Size: ${position_size:.2f}")
+                    _trace("broker", "rejected", "nonce_skip", terminal=True)
                     return None
 
                 if result_status == 'error':
@@ -2567,16 +2643,19 @@ class ExecutionEngine:
 
                     # Check if this is a geographic restriction and add to blacklist
                     self._handle_geographic_restriction_error(symbol, details['detail'])
+                    _trace("broker", "rejected", details.get('detail', 'broker_error'), terminal=True)
 
                     return None
 
                 # Check for 'unfilled' status which indicates order wasn't placed
                 if result_status == 'unfilled':
                     self._log_order_failure(symbol, position_size, broker_response=result)
+                    _trace("broker", "rejected", "unfilled", terminal=True)
                     return None
 
                 if result_status == 'skipped':
                     self._log_order_failure(symbol, position_size, broker_response=result)
+                    _trace("broker", "rejected", "skipped", terminal=True)
                     return None
 
                 # ✅ SAFETY CHECK #3: Require txid before recording position
@@ -2590,6 +2669,7 @@ class ExecutionEngine:
                     logger.error(f"   Position Size: ${position_size:.2f}")
                     logger.error("   ⚠️  Order must have valid txid before recording position")
                     logger.error("=" * 70)
+                    _trace("broker", "rejected", "missing_order_id", terminal=True)
                     return None
 
                 # ✅ REQUIREMENT: Confirm status=open or closed
@@ -2604,7 +2684,10 @@ class ExecutionEngine:
                     logger.error(f"   Status: {order_status} (expected: {'/'.join(VALID_ORDER_STATUSES)})")
                     logger.error("   ⚠️  Order status must be confirmed before recording position")
                     logger.error(LOG_SEPARATOR)
+                    _trace("broker", "rejected", f"invalid_order_status:{order_status}", terminal=True)
                     return None
+
+                _trace("broker", "pass", "order_accepted", extra={"order_id": str(order_id), "status": order_status})
 
                 if FORCE_FIRST_TRADE and FORCE_TRADE_ON_FIRST_VALID_SIGNAL and not self._force_first_trade_done:
                     self._force_first_trade_done = True
@@ -2624,6 +2707,7 @@ class ExecutionEngine:
                     logger.error(f"   Fill Price: {actual_fill_price} (INVALID)")
                     logger.error("   ⚠️  Price must be greater than zero")
                     logger.error("=" * 70)
+                    _trace("fill", "rejected", "invalid_fill_price", terminal=True)
                     return None
 
                 # Validate immediate P&L to reject bad fills
@@ -2636,6 +2720,7 @@ class ExecutionEngine:
                 ):
                     # Position rejected - it was immediately closed by validation
                     self.rejected_trades_count += 1
+                    _trace("fill", "rejected", "entry_price_validation_failed", terminal=True)
                     return None
 
                 # Use actual fill price if available, otherwise use expected
@@ -2757,10 +2842,18 @@ class ExecutionEngine:
                 self.positions[symbol] = position
                 logger.info(f"Position opened: {symbol} {side} @ {final_entry_price:.2f}")
                 logger.info(f"   Order ID: {order_id}, Status: {order_status}")
+                _trace(
+                    "fill",
+                    "filled",
+                    "position_opened",
+                    terminal=True,
+                    extra={"fill_price": float(final_entry_price), "order_id": str(order_id)},
+                )
 
                 return position
             else:
                 logger.warning("No broker client configured - simulation mode")
+                _trace("broker", "rejected", "no_broker_client_configured", terminal=True)
                 return None
 
         except OrderRejectedError as e:
@@ -2770,11 +2863,35 @@ class ExecutionEngine:
 
             # Check if this is a geographic restriction and add to blacklist
             self._handle_geographic_restriction_error(symbol, error_msg)
+            if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                try:
+                    get_signal_funnel().record_execution_stage(
+                        pair=symbol,
+                        side=side,
+                        stage="broker",
+                        outcome="rejected",
+                        reason=error_msg or "order_rejected_error",
+                        terminal=True,
+                    )
+                except Exception:
+                    pass
 
             return None
 
         except Exception as e:
             logger.error(f"Execution error: {e}")
+            if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                try:
+                    get_signal_funnel().record_execution_stage(
+                        pair=symbol,
+                        side=side,
+                        stage="broker",
+                        outcome="error",
+                        reason=str(e),
+                        terminal=True,
+                    )
+                except Exception:
+                    pass
             return None
 
     def execute_exit(self, symbol: str, exit_price: float,
