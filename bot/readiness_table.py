@@ -70,17 +70,26 @@ _LOCK = threading.Lock()
 # Write API
 # ---------------------------------------------------------------------------
 
+def set_ready(component: str, value: bool) -> None:
+    """Set *component* readiness while preventing normal true-to-false regressions."""
+    with _LOCK:
+        if component not in _TABLE:
+            logger.debug("readiness_table: auto-registering unknown key '%s'", component)
+            _TABLE[component] = False
+        current = _TABLE.get(component)
+        if current is True and value is False:
+            logger.warning("Prevented readiness regression | %s", component)
+            return
+        _TABLE[component] = value
+
+
 def mark_ready(component: str) -> None:
     """Mark *component* as ready.
 
     If *component* is not one of the canonical keys it is accepted anyway so
     that callers do not need to track the exact key list.
     """
-    with _LOCK:
-        if component not in _TABLE:
-            logger.debug("readiness_table: auto-registering unknown key '%s'", component)
-            _TABLE[component] = False
-        _TABLE[component] = True
+    set_ready(component, True)
     logger.critical(
         "✅ READINESS_TABLE mark_ready=%s table=%s",
         component,
@@ -94,10 +103,7 @@ def mark_not_applicable(component: str, *, reason: str = "not configured") -> No
     Use this for optional subsystems that are skipped in the current
     deployment (e.g. ``nonce_ready`` on a Coinbase-only bot).
     """
-    with _LOCK:
-        if component not in _TABLE:
-            _TABLE[component] = False
-        _TABLE[component] = True
+    set_ready(component, True)
     logger.info(
         "⏩ READINESS_TABLE mark_not_applicable=%s reason=%s",
         component,

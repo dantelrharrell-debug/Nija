@@ -49,6 +49,11 @@ class TestReadinessBrokerGate(unittest.TestCase):
         readiness_table.mark_not_applicable("broker_connected", reason="test")
         self.assertTrue(readiness_table.snapshot()["broker_connected"])
 
+    def test_set_ready_prevents_true_to_false_regression(self):
+        readiness_table.mark_ready("broker_connected")
+        readiness_table.set_ready("broker_connected", False)
+        self.assertTrue(readiness_table.snapshot()["broker_connected"])
+
     def test_is_ready_requires_all_keys(self):
         self._mark_all_except_broker()
         self.assertFalse(readiness_table.is_ready())
