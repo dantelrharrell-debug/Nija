@@ -2443,6 +2443,8 @@ class CoinbaseBroker(BaseBroker):
         self._balance_last_updated = None  # Timestamp of last successful balance fetch (Jan 24, 2026)
         self._balance_fetch_errors = 0   # Count of consecutive errors
         self._is_available = True        # Broker availability flag
+        self._auth_failed = False        # Set permanently on 401 — stops all retries until restart
+        self._auth_failed_last_logged: float = 0.0  # Throttle: last time auth failure was logged
 
         # Throttle repeated low-cash critical alerts so frequent balance polls do not spam logs.
         try:
@@ -2901,6 +2903,9 @@ class CoinbaseBroker(BaseBroker):
                         logging.error("   3. API key created for wrong account or environment")
                         logging.error("   Fix: Verify credentials at https://www.coinbase.com/settings/api")
                         logging.error("   Then run: python3 validate_all_env_vars.py")
+                        # Permanently flag auth failure so balance fetches are skipped
+                        self._auth_failed = True
+                        self._is_available = False
                         return False
 
                     is_retryable = is_403_forbidden or is_429_rate_limit or is_network_error
@@ -3630,26 +3635,34 @@ class CoinbaseBroker(BaseBroker):
             # Explicitly detect authentication failures (401 Unauthorized)
             error_msg = str(e).lower()
             is_auth_error = (
-                '401' in str(e) or 
+                '401' in str(e) or
                 'unauthorized' in error_msg or
                 'invalid api key' in error_msg or
                 'authentication' in error_msg
             )
 
             if is_auth_error:
-                logging.critical("❌ AUTHENTICATION FAILURE: Invalid or expired Coinbase API credentials")
-                logging.critical("")
-                logging.critical("This is a BLOCKING error. The bot cannot proceed without valid credentials.")
-                logging.critical("")
-                logging.critical("✅ TO FIX:")
-                logging.critical("  1. Verify COINBASE_API_KEY environment variable is set correctly")
-                logging.critical("  2. Verify COINBASE_API_SECRET environment variable is set correctly")
-                logging.critical("  3. Check that API key has 'View' permissions at:")
-                logging.critical("     https://portal.cloud.coinbase.com/access/api")
-                logging.critical("  4. Ensure API key IP restrictions (if any) include your current IP")
-                logging.critical("")
-                import traceback
-                logging.critical(traceback.format_exc())
+                # Mark permanently so subsequent calls skip the API entirely.
+                self._auth_failed = True
+                self._is_available = False
+                self.exit_only_mode = True
+                # Rate-limit the CRITICAL log to once every 300 s to prevent log spam.
+                _now = time.time()
+                if _now - self._auth_failed_last_logged >= 300.0:
+                    self._auth_failed_last_logged = _now
+                    logging.critical("❌ AUTHENTICATION FAILURE: Invalid or expired Coinbase API credentials")
+                    logging.critical("")
+                    logging.critical("This is a BLOCKING error. The bot cannot proceed without valid credentials.")
+                    logging.critical("")
+                    logging.critical("✅ TO FIX:")
+                    logging.critical("  1. Verify COINBASE_API_KEY environment variable is set correctly")
+                    logging.critical("  2. Verify COINBASE_API_SECRET environment variable is set correctly")
+                    logging.critical("  3. Check that API key has 'View' permissions at:")
+                    logging.critical("     https://portal.cloud.coinbase.com/access/api")
+                    logging.critical("  4. Ensure API key IP restrictions (if any) include your current IP")
+                    logging.critical("")
+                    import traceback
+                    logging.critical(traceback.format_exc())
                 # CRITICAL: Raise immediately instead of returning $0.0
                 # This signals startup/hydration to FAIL FAST instead of retrying
                 raise RuntimeError("CRITICAL: Coinbase API authentication failed (401). Check credentials and permissions.") from e
@@ -3697,6 +3710,19 @@ class CoinbaseBroker(BaseBroker):
             float: TOTAL EQUITY (cash + positions) not just available cash
                    Returns last known balance on error (not 0)
         """
+        # Short-circuit permanently on auth failure — no API call, no log spam.
+        if self._auth_failed:
+            _now = time.time()
+            if _now - self._auth_failed_last_logged >= 300.0:
+                self._auth_failed_last_logged = _now
+                logger.error(
+                    "❌ Coinbase auth permanently failed (401) — balance fetch skipped. "
+                    "Update COINBASE_API_KEY/COINBASE_API_SECRET in Railway and redeploy."
+                )
+            if self._last_known_balance is not None:
+                return self._last_known_balance
+            return 0.0
+
         try:
             balance_data = self._get_account_balance_detailed(verbose=verbose)
             if balance_data is None:
@@ -3750,13 +3776,36 @@ class CoinbaseBroker(BaseBroker):
             return result
 
         except Exception as e:
-            logger.error(f"❌ Exception fetching Coinbase balance: {e}")
-            self._balance_fetch_errors += 1
-            if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
+            error_str = str(e)
+            is_auth_error = (
+                '401' in error_str or
+                'unauthorized' in error_str.lower() or
+                'authentication failed' in error_str.lower() or
+                'invalid api key' in error_str.lower()
+            )
+            if is_auth_error:
+                # Permanently disable Coinbase balance fetches — retrying a bad key wastes
+                # API quota and floods the logs.  Only a redeploy with fresh credentials
+                # can clear this flag.
+                self._auth_failed = True
                 self._is_available = False
-                self.exit_only_mode = True  # Pause new entries after consecutive errors
-                logger.error(f"❌ CAPITAL PROTECTION: Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
-                logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
+                self.exit_only_mode = True
+                _now = time.time()
+                if _now - self._auth_failed_last_logged >= 300.0:
+                    self._auth_failed_last_logged = _now
+                    logger.error(f"❌ Exception fetching Coinbase balance: {e}")
+                    logger.error(
+                        "❌ Coinbase auth permanently failed (401) — balance fetch disabled. "
+                        "Update COINBASE_API_KEY/COINBASE_API_SECRET in Railway and redeploy."
+                    )
+            else:
+                logger.error(f"❌ Exception fetching Coinbase balance: {e}")
+                self._balance_fetch_errors += 1
+                if self._balance_fetch_errors >= BROKER_MAX_CONSECUTIVE_ERRORS:
+                    self._is_available = False
+                    self.exit_only_mode = True  # Pause new entries after consecutive errors
+                    logger.error(f"❌ CAPITAL PROTECTION: Coinbase marked unavailable after {self._balance_fetch_errors} consecutive errors")
+                    logger.error(f"❌ Trading cycle PAUSED - entering EXIT-ONLY mode")
 
             # Return last known balance instead of 0
             if self._last_known_balance is not None:
