@@ -173,6 +173,9 @@ class MetricCollector:
         # 14. Execution Intelligence Layer v2
         snap["modules"]["eil_v2"] = self._collect_eil_v2()
 
+        # 15. Control Compiler Layer
+        snap["modules"]["control_compiler"] = self._collect_control_compiler()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -295,6 +298,19 @@ class MetricCollector:
                 return {"available": False, "error": "eil_v2_dashboard_routes unavailable"}
         try:
             return collect_eil_v2_snapshot()
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def _collect_control_compiler(self) -> Dict:
+        try:
+            from bot.control_compiler import get_control_compiler
+        except ImportError:
+            try:
+                from control_compiler import get_control_compiler  # type: ignore[import]
+            except ImportError:
+                return {"available": False, "error": "control_compiler unavailable"}
+        try:
+            return get_control_compiler().get_health()
         except Exception as exc:
             return {"available": False, "error": str(exc)}
 
@@ -752,6 +768,12 @@ class ObservabilityDashboard:
         def eil_v2():
             snap = self._collector.get_snapshot()
             mod = (snap.get("modules", {}) or {}).get("eil_v2", {})
+            return jsonify(mod)
+
+        @bp.route("/api/v1/control-compiler")
+        def control_compiler():
+            snap = self._collector.get_snapshot()
+            mod = (snap.get("modules", {}) or {}).get("control_compiler", {})
             return jsonify(mod)
 
         @bp.route("/api/v1/health")
