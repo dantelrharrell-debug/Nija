@@ -326,6 +326,39 @@ def check_kraken_user_daivon() -> bool:
     return ok
 
 
+def _coinbase_live_test(api_key: str, api_secret: str) -> tuple:
+    """
+    Attempt a live Coinbase Advanced Trade API call to verify credentials.
+
+    Returns:
+        (success: bool, detail: str)
+    """
+    try:
+        from coinbase.rest import RESTClient
+    except ImportError:
+        return None, "coinbase-advanced-py not installed — skipping live test"
+
+    # Normalize literal backslash-n sequences (Railway env var storage convention)
+    if '\\n' in api_secret:
+        api_secret = api_secret.replace('\\n', '\n')
+
+    try:
+        client = RESTClient(api_key=api_key, api_secret=api_secret)
+        resp = client.get_accounts()
+        accounts = getattr(resp, 'accounts', None)
+        count = len(accounts) if accounts else 0
+        return True, f"authenticated OK — {count} account(s) returned"
+    except Exception as exc:
+        msg = str(exc)
+        if "401" in msg or "Unauthorized" in msg:
+            return False, "401 Unauthorized — key is revoked, expired, or the secret is wrong"
+        if "403" in msg or "Forbidden" in msg:
+            return False, "403 Forbidden — key exists but lacks 'View' permission"
+        if "timeout" in msg.lower():
+            return False, f"Network timeout — {msg}"
+        return False, msg
+
+
 def check_coinbase() -> bool:
     """Check Coinbase Advanced Trade credentials (optional broker)."""
     _section("Coinbase Advanced Trade  (optional)")
@@ -334,6 +367,7 @@ def check_coinbase() -> bool:
     secret_ok, secret_disp = _check_var("COINBASE_API_SECRET")
     pem_ok, pem_disp = _check_var("COINBASE_PEM_CONTENT")
 
+    # ── Presence checks ────────────────────────────────────────────────────────
     if key_ok:
         _ok(f"COINBASE_API_KEY = {key_disp}")
     else:
@@ -361,6 +395,58 @@ def check_coinbase() -> bool:
             _info(f"{var} = {disp}  (optional — present)")
         else:
             _info(f"{var} — not set (optional)")
+
+    if not ok:
+        return ok  # optional: not counted toward required pass/fail
+
+    # ── Format validation ──────────────────────────────────────────────────────
+    raw_key = _get("COINBASE_API_KEY")
+    raw_secret = _get("COINBASE_API_SECRET") or _get("COINBASE_PEM_CONTENT")
+
+    # Key should follow: organizations/{org_id}/apiKeys/{key_id}
+    if raw_key and not raw_key.startswith("organizations/"):
+        _warn(
+            "COINBASE_API_KEY format looks wrong — expected "
+            "'organizations/{org_id}/apiKeys/{key_id}', "
+            f"got: '{raw_key[:60]}...'"
+        )
+        _info("Get the correct key from: https://portal.cdp.coinbase.com/access/api")
+    elif raw_key:
+        _ok("COINBASE_API_KEY format looks correct (organizations/…/apiKeys/…)")
+
+    # Secret must be a PEM EC private key (with possible literal \\n from Railway)
+    if raw_secret:
+        normalized_secret = raw_secret.replace('\\n', '\n')
+        if "-----BEGIN EC PRIVATE KEY-----" in normalized_secret:
+            _ok("COINBASE_API_SECRET PEM format: EC private key detected")
+        elif "-----BEGIN PRIVATE KEY-----" in normalized_secret:
+            _ok("COINBASE_API_SECRET PEM format: PKCS#8 private key detected")
+        else:
+            _warn(
+                "COINBASE_API_SECRET does not look like a PEM private key — "
+                "missing '-----BEGIN EC PRIVATE KEY-----' header"
+            )
+            _info(
+                "Expected format (use literal \\\\n for Railway env vars):\n"
+                "  -----BEGIN EC PRIVATE KEY-----\\\\n<base64>\\\\n-----END EC PRIVATE KEY-----"
+            )
+
+    # ── Live connectivity test ─────────────────────────────────────────────────
+    _info("Running live Coinbase API connectivity test…")
+    success, detail = _coinbase_live_test(raw_key, raw_secret)
+    if success is None:
+        _warn(f"Live test skipped: {detail}")
+    elif success:
+        _ok(f"Live test PASSED: {detail}")
+    else:
+        _fail(f"Live test FAILED: {detail}")
+        _info("To fix:")
+        _info("  1. Go to https://portal.cdp.coinbase.com/access/api")
+        _info("  2. Delete the old key and create a new one")
+        _info("  3. Grant 'View' and 'Trade' permissions")
+        _info("  4. Set COINBASE_API_KEY=organizations/{org_id}/apiKeys/{key_id}")
+        _info("  5. Set COINBASE_API_SECRET=-----BEGIN EC PRIVATE KEY-----\\\\n…")
+        _info("  6. Redeploy on Railway")
 
     return ok  # optional: not counted toward required pass/fail
 
