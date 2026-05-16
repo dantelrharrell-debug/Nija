@@ -53,6 +53,10 @@ class _StubMABM:
         return self._snapshot
 
 
+class _StubBroker:
+    pass
+
+
 def _run_bootstrap_guard(snapshot: dict, ca_hydrated_after: bool):
     """
     Execute the bootstrap snapshot-validation guard block that lives inside
@@ -120,7 +124,7 @@ def _run_bootstrap_guard(snapshot: dict, ca_hydrated_after: bool):
 # ---------------------------------------------------------------------------
 
 def check_snapshot_source_live_exchange_when_broker_map_non_empty():
-    broker_map = {"kraken": object()}
+    broker_map = {"kraken": _StubBroker()}
     snap_source = "live_exchange" if broker_map else "placeholder"
     assert snap_source == "live_exchange", f"Expected 'live_exchange', got {snap_source!r}"
 
