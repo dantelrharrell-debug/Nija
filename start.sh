@@ -1498,11 +1498,11 @@ PY
     else
         _redis_health="degraded"
         export NIJA_REDIS_HEALTH=degraded
-        export NIJA_RUNTIME_DEGRADED_MODE=1
-        export NIJA_ALLOW_REDIS_DEGRADED=1
-        export NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS="${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS:-0}"
-        echo "⚠️  Redis preflight degraded (python ping failed); continuing startup in degraded lock mode"
-        echo "   Fail-closed standby retry cap set to ${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS} (0 = infinite)"
+        export NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS="${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS:-12}"
+        export NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS="${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS:-true}"
+        echo "⚠️  Redis preflight degraded (python ping failed); continuing startup with strict fail-closed lock mode"
+        echo "   Standby retry cap set to ${NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS} (12 default in live mode)"
+        echo "   Exit-on-unreachable set to ${NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS}"
         echo "   Distributed lock may be unavailable until Redis recovers."
     fi
 
