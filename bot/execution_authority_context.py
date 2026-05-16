@@ -36,29 +36,12 @@ _FENCE_LAST_CHECK_TS: float = 0.0
 _FENCE_LAST_OK: bool = False
 _FENCE_LAST_ERR: str = ""
 _FENCE_RECOVER_NEXT_ATTEMPT_TS: float = 0.0
-_DEGRADED_WRITER_AUTH_WARNED: bool = False
 
 logger = logging.getLogger("nija.execution_authority")
 
 
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
-
-
-def _allow_degraded_writer_authority() -> bool:
-    """Degraded writer-authority bypass is permanently disabled."""
-    global _DEGRADED_WRITER_AUTH_WARNED
-    requested = (
-        _env_truthy("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY")
-        and _env_truthy("NIJA_RUNTIME_DEGRADED_MODE")
-    )
-    if requested and not _DEGRADED_WRITER_AUTH_WARNED:
-        _DEGRADED_WRITER_AUTH_WARNED = True
-        logger.error(
-            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY + NIJA_RUNTIME_DEGRADED_MODE requested, "
-            "but degraded writer-authority bypass is disabled; strict fencing remains enforced."
-        )
-    return False
 
 
 def _single_instance_lock_opt_out(live_mode: bool) -> bool:
@@ -166,8 +149,7 @@ def _recover_fencing_token_from_lock(redis_url: str, lock_key: str) -> str:
         with _FENCE_VERIFY_LOCK:
             _FENCE_RECOVER_NEXT_ATTEMPT_TS = time.monotonic() + recover_cooldown_s
         live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
-        degraded_or_opt_out = _allow_degraded_writer_authority() or _single_instance_lock_opt_out(live_mode)
-        if degraded_or_opt_out:
+        if _single_instance_lock_opt_out(live_mode):
             logger.info("Unable to recover fencing token from Redis lock (degraded/opt-out): %s", exc)
         else:
             logger.warning("Unable to recover fencing token from Redis lock: %s", exc)
@@ -299,8 +281,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         or _env_truthy("STRICT_REDIS_WRITER_LOCK")
         or (live_mode and not single_instance_opt_out)
     ) and not unsafe_bypass
-    degraded_override = _allow_degraded_writer_authority()
-    effective_strict_required = strict_required and not degraded_override
+    effective_strict_required = strict_required
     redis_url = get_redis_url()
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
     scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
@@ -367,7 +348,7 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
         "error": err,
         "strict_required": bool(strict_required),
         "effective_strict_required": bool(effective_strict_required),
-        "degraded_override_enabled": bool(degraded_override),
+        "degraded_override_enabled": False,
         "unsafe_bypass_enabled": bool(unsafe_bypass),
         "single_instance_lock_opt_out": bool(single_instance_opt_out),
         "live_mode": bool(live_mode),

@@ -868,13 +868,12 @@ class TestFinalizeBootDegradedMode(unittest.TestCase):
         self.assertEqual(fsm.state, BootstrapState.RUNNING_SUPERVISED)
         self.assertTrue(fsm.execution_authority)
 
-    def test_finalize_boot_degraded_writer_authority_no_longer_bypasses_requirements(self):
-        """Degraded-writer env flags alone must not bypass startup authority checks."""
+    def test_finalize_boot_env_overrides_do_not_bypass_requirements(self):
+        """Legacy env overrides must not bypass startup authority checks."""
         fsm = self._fsm_at_threads_starting()
         with patch.dict("os.environ", {
-            "NIJA_ALLOW_REDIS_DEGRADED": "1",
             "NIJA_REQUIRE_REDIS_FOR_LIVE": "true",
-            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "1",
+            "NIJA_RUNTIME_DEGRADED_MODE": "1",
         }, clear=False):
             ok = fsm.finalize_boot("test: degraded writer authority bypass blocked")
         self.assertFalse(ok)
@@ -900,9 +899,8 @@ class TestFinalizeBootDegradedMode(unittest.TestCase):
         """NIJA_REQUIRE_REDIS_FOR_LIVE=false must not bypass verified authority."""
         fsm = self._fsm_at_threads_starting()
         with patch.dict("os.environ", {
-            "NIJA_ALLOW_REDIS_DEGRADED": "1",
             "NIJA_REQUIRE_REDIS_FOR_LIVE": "false",
-            "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY": "",
+            "NIJA_RUNTIME_DEGRADED_MODE": "1",
         }, clear=False):
             ok = fsm.finalize_boot("test: require redis false still blocked")
         self.assertFalse(ok)

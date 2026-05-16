@@ -533,21 +533,9 @@ def _nonce_readiness_required_for_startup() -> bool:
     """Return True when startup must require Kraken nonce readiness.
 
     Cases:
-    1) Degraded Redis writer-authority mode is active and allowed -> nonce gate is bypassed.
-    2) Kraken platform credentials are present -> nonce gate is required.
-    3) No Kraken platform credentials (Coinbase-only) -> nonce gate is not required.
+    1) Kraken platform credentials are present -> nonce gate is required.
+    2) No Kraken platform credentials (Coinbase-only) -> nonce gate is not required.
     """
-    _truthy = {"1", "true", "yes", "on", "enabled"}
-    _runtime_degraded = os.environ.get("NIJA_RUNTIME_DEGRADED_MODE", "0").strip().lower() in _truthy
-    _degraded_allowed = (
-        os.environ.get("NIJA_ALLOW_REDIS_DEGRADED", "0").strip().lower() in _truthy
-        or os.environ.get("NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY", "0").strip().lower() in _truthy
-        or os.environ.get("NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE", "0").strip().lower() in _truthy
-    )
-    # Explicit degraded startup mode: distributed Redis authority is intentionally
-    # bypassed for this process, so nonce-readiness must not deadlock startup.
-    if _runtime_degraded and _degraded_allowed:
-        return False
     _kraken_platform_key = (
         os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
         or os.environ.get("KRAKEN_API_KEY", "").strip()
@@ -986,7 +974,6 @@ def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tup
 
 def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
     """Single observer API for main-thread startup wait with bounded timeout."""
-    _allow_degraded = _env_truthy("NIJA_ALLOW_DEGRADED_STARTUP_HANDOFF", "false")
     _timeout_raw = os.getenv("NIJA_BOOTSTRAP_OBSERVER_TIMEOUT_S", f"{_BOOTSTRAP_OBSERVER_TIMEOUT_S:.1f}")
     try:
         _timeout_s = max(1.0, float(_timeout_raw))
@@ -1007,9 +994,6 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
         _state = _bootstrap_state_value()
         if _state == "RUNNING_SUPERVISED":
             logger.critical("LIFECYCLE: FSM state=%s", _state)
-            return True, _state
-        if _allow_degraded and _state == "DEGRADED_READY":
-            logger.critical("LIFECYCLE: FSM state=DEGRADED_READY — bootstrap observer satisfied (degraded)")
             return True, _state
         if _state in {"BOOT_FAILED_RETRY", "EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
             logger.error(
@@ -1092,7 +1076,8 @@ _INIT_LOCK_PUBLISH_TIMEOUT_S = 5.0
 _STRATEGY_FALLBACK_GRACE_PERIOD_S = 30.0
 # Maximum seconds to wait for platform brokers to report fully ready at the
 # INIT_COMPLETE → THREADS_STARTING readiness gate.  After this timeout the
-# gate uses mark_not_applicable so startup is never permanently blocked.
+# broker_connected flag remains False and startup policy decides whether to
+# block or degrade.
 _BROKER_CONNECTED_READY_TIMEOUT_S = 30.0
 # Seconds the B1 preflight guard polls all_brokers_fully_ready() before
 # giving up.  Allows async balance-payload fetch to complete before B1 runs.
@@ -1385,6 +1370,56 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
         )
 
     return True
+
+
+def _verify_runtime_transition_states(*, context: str) -> None:
+    """Fail closed unless runtime transitions reached RUNNING/RUNNING_SUPERVISED/LIVE_ACTIVE."""
+    _bootstrap_state = _bootstrap_state_value()
+    if _bootstrap_state != "RUNNING_SUPERVISED":
+        raise RuntimeError(
+            f"Transition verification failed ({context}): bootstrap_state={_bootstrap_state} "
+            "expected=RUNNING_SUPERVISED"
+        )
+
+    _capital_state = "UNAVAILABLE"
+    try:
+        from bot.capital_flow_state_machine import get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm_verify
+    except ImportError:
+        from capital_flow_state_machine import get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm_verify  # type: ignore[import]
+
+    try:
+        _capital_state_obj = _get_capital_bootstrap_fsm_verify().state
+        _capital_state = getattr(_capital_state_obj, "value", str(_capital_state_obj))
+    except Exception as exc:
+        raise RuntimeError(
+            f"Transition verification failed ({context}): capital FSM state probe error: {exc}"
+        ) from exc
+    if _capital_state != "RUNNING":
+        raise RuntimeError(
+            f"Transition verification failed ({context}): capital_state={_capital_state} expected=RUNNING"
+        )
+
+    try:
+        from bot.trading_state_machine import TradingState as _TSVerify, get_state_machine as _get_tsm_verify
+    except ImportError:
+        from trading_state_machine import TradingState as _TSVerify, get_state_machine as _get_tsm_verify  # type: ignore[import]
+
+    _tsm_state = _get_tsm_verify().get_current_state()
+    _tsm_state_name = getattr(_tsm_state, "value", str(_tsm_state))
+    if _tsm_state != _TSVerify.LIVE_ACTIVE:
+        raise RuntimeError(
+            f"Transition verification failed ({context}): trading_state={_tsm_state_name} "
+            "expected=LIVE_ACTIVE"
+        )
+
+    os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+    logger.critical(
+        "LIFECYCLE: EXECUTION_ACTIVE verified context=%s bootstrap=%s capital=%s trading=%s",
+        context,
+        _bootstrap_state,
+        _capital_state,
+        _tsm_state_name,
+    )
 
 
 def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> tuple[dict, bool]:
@@ -7219,36 +7254,18 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     else:
                         logger.warning(
                             "Startup broker readiness timed out after %.0f s — "
-                            "marking not_applicable to unblock startup; "
+                            "leaving broker_connected=False for policy evaluation; "
                             "broker may still connect asynchronously table=%s",
                             _BROKER_CONNECTED_READY_TIMEOUT_S,
                             _rt_snapshot(),
                         )
-                        _rt_mark_not_applicable(
-                            "broker_connected",
-                            reason=(
-                                f"broker readiness {_BROKER_CONNECTED_READY_TIMEOUT_S:.0f} s timeout"
-                                " — proceeding in degraded mode"
-                            ),
-                        )
                 else:
                     logger.warning(
                         "Startup readiness probe missing all_brokers_fully_ready; "
-                        "marking not_applicable to allow startup to proceed"
-                    )
-                    _rt_mark_not_applicable(
-                        "broker_connected",
-                        reason="all_brokers_fully_ready not available on MABM",
+                        "leaving broker_connected=False for policy evaluation"
                     )
             except Exception as _gate_broker_err:
                 logger.warning("Startup readiness signal failed (broker_connected): %s", _gate_broker_err)
-                try:
-                    _rt_mark_not_applicable(
-                        "broker_connected",
-                        reason=f"broker_connected probe exception — unblocking startup: {_gate_broker_err}",
-                    )
-                except Exception:
-                    pass
 
             try:
                 if not _nonce_readiness_required_for_startup():
@@ -7262,30 +7279,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     except ImportError:
                         _gate_kraken_fsm = None
                     if _gate_kraken_fsm is None:
-                        _rt_mark_not_applicable(
-                            "nonce_ready",
-                            reason="Kraken startup FSM unavailable (Coinbase-only deployment)",
+                        logger.warning(
+                            "Startup nonce readiness required but Kraken startup FSM is unavailable; "
+                            "leaving nonce_ready=False for policy evaluation"
                         )
                     elif bool(_gate_kraken_fsm.is_nonce_ready()):
                         _rt_mark_ready("nonce_ready")
                     else:
                         logger.warning(
                             "Startup readiness nonce gate pending at INIT_COMPLETE boundary; "
-                            "marking not_applicable to unblock startup — Kraken nonce may still sync"
-                        )
-                        _rt_mark_not_applicable(
-                            "nonce_ready",
-                            reason="nonce not ready at INIT_COMPLETE boundary — unblocking startup",
+                            "leaving nonce_ready=False for policy evaluation"
                         )
             except Exception as _gate_nonce_err:
                 logger.warning("Startup readiness signal failed (nonce_ready): %s", _gate_nonce_err)
-                try:
-                    _rt_mark_not_applicable(
-                        "nonce_ready",
-                        reason=f"nonce_ready probe exception — unblocking startup: {_gate_nonce_err}",
-                    )
-                except Exception:
-                    pass
 
             logger.info("READINESS TABLE before THREADS_STARTING gate (diagnostic): %s", _rt_snapshot())
             _criteria, _required_missing, _optional_missing, _policy_deadline = _evaluate_startup_readiness_policy(
@@ -7467,6 +7473,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 raise RuntimeError(
                     "Startup blocked: final bootstrap unlock did not complete before enabling execution"
                 )
+            _verify_runtime_transition_states(context="threads live (pre-handoff)")
             logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
 
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
@@ -8079,13 +8086,12 @@ def main():
                 # ── DEGRADED-MODE FALLBACK ────────────────────────────────────
                 # Strategy publication timed out — most commonly caused by Redis
                 # SSL connection failures blocking the distributed writer lock.
-                # When degraded mode is permitted (NIJA_ALLOW_REDIS_DEGRADED or
-                # NIJA_ASSUME_SINGLE_INSTANCE), attempt one final fallback
+                # When degraded mode is permitted (NIJA_ASSUME_SINGLE_INSTANCE
+                # or explicit unsafe/local fallback flags), attempt one final fallback
                 # strategy construction and proceed in local-only mode rather
                 # than crashing the process.
                 _degraded_allowed = (
-                    os.environ.get("NIJA_ALLOW_REDIS_DEGRADED", "").strip().lower() in _TRUTHY_ENV_VALUES
-                    or os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _TRUTHY_ENV_VALUES
+                    os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _TRUTHY_ENV_VALUES
                     or os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _TRUTHY_ENV_VALUES
                     or os.environ.get("NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in _TRUTHY_ENV_VALUES
                 )

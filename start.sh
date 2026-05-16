@@ -213,7 +213,7 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
     # Fail-fast defaults for trading safety (override via env if needed).
     # Always set defaults first to handle empty/unset values
     if [ -z "${NIJA_REDIS_LEASE_TTL_MS}" ] || [ "${NIJA_REDIS_LEASE_TTL_MS}" = "0" ]; then
-        export NIJA_REDIS_LEASE_TTL_MS="600000"
+        export NIJA_REDIS_LEASE_TTL_MS="60000"
     fi
     if [ -z "${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}" ] || [ "${NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S}" = "0" ]; then
         export NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S="5"
@@ -227,8 +227,8 @@ if [ "${_LIVE_MODE}" = "true" ] && [ "${_REDIS_CONFIGURED}" = "true" ] && [ "${_
 
     # Normalize obviously invalid lease settings that can cause confusing runtime behavior/logs.
     if ! printf "%s" "${NIJA_REDIS_LEASE_TTL_MS}" | grep -Eq '^[0-9]+$' || [ "${NIJA_REDIS_LEASE_TTL_MS}" -lt 10000 ]; then
-        echo "⚠️  Invalid NIJA_REDIS_LEASE_TTL_MS=${NIJA_REDIS_LEASE_TTL_MS}; forcing 600000"
-        export NIJA_REDIS_LEASE_TTL_MS=600000
+        echo "⚠️  Invalid NIJA_REDIS_LEASE_TTL_MS=${NIJA_REDIS_LEASE_TTL_MS}; forcing 60000"
+        export NIJA_REDIS_LEASE_TTL_MS=60000
     fi
     if ! printf "%s" "${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S}" | grep -Eq '^[0-9]+([.][0-9]+)?$' || \
        awk "BEGIN {exit !(${NIJA_REDIS_LEASE_WAIT_LOG_INTERVAL_S} <= 0)}"; then
