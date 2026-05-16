@@ -122,6 +122,7 @@ class GateResult:
     regime_name: str = "unknown"
     gate_score: float = 0.0     # points earned across all gates (float: partial/penalty supported)
     gate_max: int = 9         # maximum possible points
+    effective_threshold: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +335,7 @@ class AIEntryGate:
                 regime_name=self._regime_key(regime),
                 gate_score=100,
                 gate_max=_GATE_MAX_SCORE,
+                effective_threshold=0.0,
             )
 
         with self._lock:
@@ -353,6 +355,7 @@ class AIEntryGate:
                 regime_name=regime_key,
                 gate_score=0,
                 gate_max=_GATE_MAX_SCORE,
+                effective_threshold=_GATE_MAX_SCORE,
             )
 
         # ── Evaluate all 5 gates, collect scores ─────────────────────
@@ -531,6 +534,7 @@ class AIEntryGate:
             regime_name=regime_key,
             gate_score=total_score,
             gate_max=_GATE_MAX_SCORE,
+            effective_threshold=float(effective_threshold),
         )
 
     def get_stats(self) -> Dict[str, Any]:
