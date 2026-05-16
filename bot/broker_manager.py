@@ -8398,119 +8398,20 @@ class KrakenBroker(BaseBroker):
             time.sleep(_startup_total)
             logger.info(f"   ✅ Startup delay complete, testing Kraken connection...")
 
-            # ── Nonce resync handshake ────────────────────────────────────────
-            # Probe Kraken's server-side nonce floor BEFORE the main retry loop.
-            # This resolves all three root-cause nonce failure scenarios:
-            #
-            #   1. Another process still running — cross-process lock detected;
-            #      adaptive step is automatically larger to clear any gap.
-            #   2. Kraken expecting a much higher nonce — ephemeral-filesystem
-            #      restart (Railway/Heroku) loses state file; Kraken's floor is
-            #      far ahead.  Probe jumps +adaptive_step until accepted.
-            #   3. Clock slightly off — probe converges to the correct range even
-            #      if NTP drift has pushed our nonces outside the ±1 s window.
-            #
-            # AdaptiveNonceOffsetEngine records each outcome (how many jump steps
-            # were needed) and feeds an EMA so subsequent restarts land in range
-            # on the very first probe attempt instead of iterating several times.
-            _skip_probe_handshake = (
-                self.account_type == AccountType.PLATFORM
-                and _KRAKEN_STARTUP_FSM.is_nonce_ready
+            # ── Deterministic nonce kernel ─────────────────────────────────────
+            # No probe/resync/jump calibration during runtime startup.
+            # Nonce mutation is limited to DistributedNonceManager.get_nonce().
+            logger.info(
+                "   ✅ Deterministic nonce kernel active for %s — "
+                "probe/resync handshake disabled",
+                cred_label,
             )
-            if _skip_probe_handshake:
-                logger.info(
-                    "   ✅ Nonce resync handshake already completed in this boot attempt "
-                    "(PLATFORM FSM NONCE_READY) — skipping duplicate calibration."
-                )
-            elif probe_and_resync_nonce is not None:
-                _probe_cat = KrakenAPICategory.MONITORING if KrakenAPICategory is not None else None
-                logger.info(f"   🔍 Nonce resync handshake: calibrating nonce to Kraken's server window ({cred_label})...")
-
-                # ── Route probe to the CORRECT nonce manager ─────────────────
-                # When DistributedNonceManager is active, all private API calls
-                # use the PER-KEY manager (self.api_key_id → _KEY_REGISTRY entry),
-                # NOT the module-level platform singleton.  probe_and_resync_nonce()
-                # calls _ensure_live_manager() which returns the PLATFORM singleton
-                # and advances its nonce — but the actual API call inside the probe
-                # uses the per-key manager, so the jump is lost and every probe
-                # attempt uses the same near-now_ms nonce.  Fix: call probe_and_resync()
-                # directly on the per-key manager so advances target the right counter.
-                _probe_key_id = getattr(self, "api_key_id", "")
-                _probe_mgr = None
-                if _probe_key_id:
-                    try:
-                        try:
-                            from bot.global_kraken_nonce import get_nonce_manager_for_key as _gnmfk
-                        except ImportError:
-                            from global_kraken_nonce import get_nonce_manager_for_key as _gnmfk  # type: ignore[import]
-                        _probe_mgr = _gnmfk(_probe_key_id)
-                    except Exception as _probe_mgr_err:
-                        logger.debug(
-                            "   ⚠️  Could not obtain per-key nonce manager for probe "
-                            "(key_id=%s, err=%s) — refusing platform fallback to "
-                            "prevent mixed nonce ownership",
-                            _probe_key_id, _probe_mgr_err,
-                        )
-                        self.last_connection_error = (
-                            "Per-key nonce manager unavailable during probe; "
-                            "platform fallback blocked to prevent nonce desync: "
-                            f"{_probe_mgr_err}"
-                        )
-                        return False
-
-                def _probe_call():
-                    return self._kraken_private_call("Balance", {}, category=_probe_cat)
-
-                if _probe_mgr is not None:
-                    # ── Pre-probe DistributedNonceManager sync ────────────────
-                    # probe_and_resync() calls server_sync_resync() on the
-                    # file-backed KrakenNonceManager (_probe_mgr), but the
-                    # probe API call goes through DistributedNonceManager
-                    # which in Redis mode reads from a SEPARATE Redis counter.
-                    # That counter is never updated by server_sync_resync, so
-                    # if it was advanced by prior nuclear resets or repeated
-                    # failed retries it will remain stale-high and Kraken will
-                    # keep rejecting the probe nonces indefinitely — even after
-                    # a NIJA_FORCE_NONCE_RESYNC=1 restart.
-                    # Calling probe_server_sync() here re-anchors the Redis key
-                    # to a fresh near-now monotonic floor.
-                    _probe_dnm = getattr(self, "nonce_manager", None)
-                    if _probe_dnm is not None and _probe_key_id:
-                        try:
-                            _probe_dnm.probe_server_sync(_probe_key_id)
-                        except Exception as _pss_err:
-                            logger.debug(
-                                "   ⚠️  probe_server_sync skipped for key=%s (%s)",
-                                _probe_key_id, _pss_err,
-                            )
-                    _probe_ok = _probe_mgr.probe_and_resync(
-                        _probe_call,
-                        step_ms=_NONCE_PROBE_STEP_MS,   # 0 = let AdaptiveOffsetEngine choose
-                    )
-                else:
-                    _probe_ok = probe_and_resync_nonce(
-                        _probe_call,
-                        step_ms=_NONCE_PROBE_STEP_MS,   # 0 = let AdaptiveOffsetEngine choose
-                    )
-                if _probe_ok:
-                    logger.info(f"   ✅ Nonce resync handshake complete for {cred_label}")
-                    if self.account_type == AccountType.PLATFORM:
-                        _KRAKEN_STARTUP_FSM.mark_nonce_ready()
-                else:
-                    # Nonce desync could not be resolved in one server-sync recovery
-                    # cycle.  This is a temporary resync issue, not a key-validity
-                    # problem.  The bot will retry on the next connection attempt.
-                    logger.error(
-                        f"   ❌ Nonce resync handshake failed for {cred_label} — "
-                        f"nonce desync unresolved.  Restart with "
-                        f"NIJA_FORCE_NONCE_RESYNC=1.  If that also fails, try "
-                        f"NIJA_DEEP_NONCE_RESET=1 (extends probe coverage to 120 min)."
-                    )
-                    return False
+            if self.account_type == AccountType.PLATFORM:
+                _KRAKEN_STARTUP_FSM.mark_nonce_ready()
 
             # Test connection by fetching account balance.
-            # Probe already calibrated the nonce — a single attempt is sufficient.
-            # No retry loop: if it fails here the outer reconnect logic will retry.
+            # Deterministic kernel uses distributed monotonic nonce issuance only.
+            # Single attempt here; outer reconnect logic handles retries.
             max_attempts = 1
             base_delay = 5.0        # exponential backoff for normal errors
             lockout_base_delay = 120.0  # 2 min per step for "Temporary lockout"

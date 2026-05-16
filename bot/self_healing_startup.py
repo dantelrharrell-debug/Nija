@@ -465,83 +465,44 @@ class CeilingJumpEscalator:
             if tier == EscalationTier.STANDARD_PROBE:
                 if not cfg.escalation_standard_probe:
                     continue
-                if self._api_call_fn is None:
-                    logger.info("CeilingJumpEscalator: STANDARD_PROBE skipped — no api_call_fn yet")
-                    continue
-                self._fire_alert(
-                    f"Nonce recovery: attempting standard probe_and_resync (adaptive step)",
-                    severity="WARNING",
+                msg = (
+                    "Deterministic nonce kernel active: STANDARD_PROBE disabled. "
+                    "Nonce mutation is restricted to distributed ISSUE_NONCE only."
                 )
-                kwargs: dict[str, Any] = {}
-                if cfg.standard_probe_max_attempts:
-                    kwargs["max_attempts"] = cfg.standard_probe_max_attempts
-                ok = mgr.probe_and_resync(self._api_call_fn, **kwargs)
-                if ok:
-                    logger.info("✅ CeilingJumpEscalator: STANDARD_PROBE succeeded")
-                    return EscalationResult(
-                        success=True,
-                        tier_used=tier,
-                        message="Standard probe_and_resync calibrated the nonce",
-                    )
-                logger.warning("CeilingJumpEscalator: STANDARD_PROBE exhausted — escalating")
+                logger.info("CeilingJumpEscalator: %s", msg)
+                return EscalationResult(
+                    success=True,
+                    tier_used=tier,
+                    message=msg,
+                )
 
             elif tier == EscalationTier.DEEP_PROBE:
                 if not cfg.escalation_deep_probe:
                     continue
-                if self._api_call_fn is None:
-                    logger.info("CeilingJumpEscalator: DEEP_PROBE skipped — no api_call_fn yet")
-                    continue
-                self._fire_alert(
-                    "Nonce recovery escalated to deep-probe mode (12×10 min = 120 min coverage)",
-                    severity="WARNING",
+                msg = (
+                    "Deterministic nonce kernel active: DEEP_PROBE disabled. "
+                    "Nonce mutation is restricted to distributed ISSUE_NONCE only."
                 )
-                # Activate deep-reset mode on the running manager instance via public API
-                if _NONCE_MGR_AVAILABLE:
-                    get_global_nonce_manager().activate_deep_reset()
-                kwargs = {}
-                if cfg.deep_probe_max_attempts:
-                    kwargs["max_attempts"] = cfg.deep_probe_max_attempts
-                ok = mgr.probe_and_resync(self._api_call_fn, **kwargs)
-                if ok:
-                    logger.info("✅ CeilingJumpEscalator: DEEP_PROBE succeeded")
-                    return EscalationResult(
-                        success=True,
-                        tier_used=tier,
-                        message="Deep probe_and_resync calibrated the nonce",
-                    )
-                logger.warning("CeilingJumpEscalator: DEEP_PROBE exhausted — escalating")
+                logger.info("CeilingJumpEscalator: %s", msg)
+                return EscalationResult(
+                    success=True,
+                    tier_used=tier,
+                    message=msg,
+                )
 
             elif tier == EscalationTier.CEILING_JUMP:
                 if not cfg.escalation_ceiling_jump:
                     continue
-                self._fire_alert(
-                    f"Nonce escalated to CEILING JUMP (now+{cfg.ceiling_jump_ms / 3_600_000:.0f}h). "
-                    "Nonce poisoning is severe. Broker will reconnect after this jump.",
-                    severity="CRITICAL",
+                msg = (
+                    "Deterministic nonce kernel active: CEILING_JUMP disabled. "
+                    "Only key rotation may reset nonce state."
                 )
-                new_nonce = mgr.force_ceiling_jump(ms=cfg.ceiling_jump_ms)
-                logger.warning(
-                    "CeilingJumpEscalator: ceiling jump applied — nonce=%d "
-                    "(now+%.1f h). Reconnect required.",
-                    new_nonce, cfg.ceiling_jump_ms / 3_600_000,
+                logger.info("CeilingJumpEscalator: %s", msg)
+                return EscalationResult(
+                    success=True,
+                    tier_used=tier,
+                    message=msg,
                 )
-                if self._api_call_fn is not None:
-                    ok = mgr.probe_and_resync(self._api_call_fn)
-                    if ok:
-                        logger.info("✅ CeilingJumpEscalator: CEILING_JUMP + probe succeeded")
-                        return EscalationResult(
-                            success=True,
-                            tier_used=tier,
-                            message=f"Ceiling jump (now+{cfg.ceiling_jump_ms / 3_600_000:.0f}h) + probe succeeded",
-                        )
-                    logger.warning("CeilingJumpEscalator: post-ceiling probe still failing — escalating to EMERGENCY")
-                else:
-                    # No API call fn: ceiling jump applied, reconnect should work
-                    return EscalationResult(
-                        success=True,
-                        tier_used=tier,
-                        message=f"Ceiling jump applied (now+{cfg.ceiling_jump_ms / 3_600_000:.0f}h). Reconnect the broker.",
-                    )
 
             elif tier == EscalationTier.EMERGENCY:
                 msg = (
