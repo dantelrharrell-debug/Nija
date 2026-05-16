@@ -459,6 +459,27 @@ except ImportError:
         TRADE_FREQ_CTRL_AVAILABLE = False
         logger.warning("⚠️ Trade Frequency Controller not available — no drought safeguard")
 
+try:
+    from bot.exploration_governor import (
+        ExplorationCandidate,
+        get_exploration_governor,
+    )
+    EXPLORATION_GOVERNOR_AVAILABLE = True
+    logger.info("✅ Exploration Governor loaded — shadow exploration active")
+except ImportError:
+    try:
+        from exploration_governor import (
+            ExplorationCandidate,
+            get_exploration_governor,
+        )
+        EXPLORATION_GOVERNOR_AVAILABLE = True
+        logger.info("✅ Exploration Governor loaded — shadow exploration active")
+    except ImportError:
+        ExplorationCandidate = None  # type: ignore
+        get_exploration_governor = None  # type: ignore
+        EXPLORATION_GOVERNOR_AVAILABLE = False
+        logger.warning("⚠️ Exploration Governor not available — no shadow exploration")
+
 # ── Momentum Entry Filter — simple 2-3 condition OR-logic entries ─────────────
 # Fires when institutional check misses: RSI momentum + volume/breakout confirm.
 try:
@@ -626,6 +647,16 @@ class NIJAApexStrategyV71:
                 self._freq_ctrl = None
         else:
             self._freq_ctrl = None
+
+        if EXPLORATION_GOVERNOR_AVAILABLE and get_exploration_governor is not None:
+            try:
+                self.exploration_governor = get_exploration_governor()
+                logger.info("✅ Exploration Governor enabled — near-miss shadow layer active")
+            except Exception as _exp_err:
+                logger.warning("Exploration Governor init error: %s", _exp_err)
+                self.exploration_governor = None
+        else:
+            self.exploration_governor = None
 
         # Strategy parameters - OPTIMIZED FOR HIGH WIN RATE
         # OPTIMIZATION (Jan 29, 2026): Rebalance filters for quality trades
@@ -3254,6 +3285,7 @@ class NIJAApexStrategyV71:
                     # strength 0.6 → 4%, strength 0.2 → 12%, strength 0.0 → 16% bonus.
                     _market_gate_bonus = max(0.0, (0.8 - _market_strength) * 0.20)
                     _gate_reduction_l = min(0.35, _gate_reduction_l + _market_gate_bonus)
+                    _exploration_size_mult_l = 1.0
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_vol_mult_l: Optional[float] = None
@@ -3366,6 +3398,52 @@ class NIJAApexStrategyV71:
                                         )
                                     except Exception:
                                         pass
+                                if (
+                                    EXPLORATION_GOVERNOR_AVAILABLE
+                                    and hasattr(self, 'exploration_governor')
+                                    and self.exploration_governor is not None
+                                    and ExplorationCandidate is not None
+                                ):
+                                    try:
+                                        _exploration_decision_l = self.exploration_governor.evaluate_candidate(
+                                            ExplorationCandidate(
+                                                symbol=symbol,
+                                                regime=str(
+                                                    getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN"
+                                                ),
+                                                side="long",
+                                                gate_score=float(_gate_result_l.gate_score),
+                                                effective_threshold=float(_gate_result_l.effective_threshold),
+                                                confidence=float(_confidence),
+                                                volume_ratio=float(_volume_ratio),
+                                                entry_type=str(_entry_type_l),
+                                                liquidity_bucket=(
+                                                    "high_liquidity"
+                                                    if _volume_ratio >= 1.5
+                                                    else "mid_liquidity" if _volume_ratio >= 0.8
+                                                    else "thin_liquidity"
+                                                ),
+                                                regime_confidence=float(
+                                                    metadata.get("regime_confidence", 0.0)
+                                                ) if metadata else 0.0,
+                                            )
+                                        )
+                                        _exploration_size_mult_l = self.exploration_governor.get_live_size_multiplier(symbol)
+                                        logger.info(
+                                            "🧭 Exploration LONG %s: %s prob=%.3f live=%s size_mult=%.2f gap=%.2f "
+                                            "cluster=%.2f regret=%.2f novelty=%.2f",
+                                            symbol,
+                                            _exploration_decision_l.reason,
+                                            _exploration_decision_l.probability,
+                                            _exploration_decision_l.allow_live,
+                                            _exploration_size_mult_l,
+                                            _exploration_decision_l.near_miss_gap,
+                                            _exploration_decision_l.cluster_pressure,
+                                            _exploration_decision_l.regret_score,
+                                            _exploration_decision_l.novelty_score,
+                                        )
+                                    except Exception as _exp_eval_l_err:
+                                        logger.debug("ExplorationGovernor long candidate skipped: %s", _exp_eval_l_err)
                             else:
                                 # AI gate passed — record funnel stage
                                 if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
@@ -3458,9 +3536,16 @@ class NIJAApexStrategyV71:
                     if _env_mult < 1.0 and _env_mult > 0.0:
                         _pre_env = position_size
                         position_size = scalar(position_size * _env_mult)
+                            logger.debug(
+                                "   🛡️  Risk envelope LONG: $%.2f × %.2f = $%.2f",
+                                _pre_env, _env_mult, position_size,
+                            )
+                    if _exploration_size_mult_l < 1.0:
+                        _pre_exp_long = position_size
+                        position_size = scalar(position_size * _exploration_size_mult_l)
                         logger.debug(
-                            "   🛡️  Risk envelope LONG: $%.2f × %.2f = $%.2f",
-                            _pre_env, _env_mult, position_size,
+                            "   🧭 Exploration LONG size: $%.2f × %.2f = $%.2f",
+                            _pre_exp_long, _exploration_size_mult_l, position_size,
                         )
 
                     # ── ATR-Based Dynamic Position Sizing (LONG) ──────────────
@@ -4031,6 +4116,7 @@ class NIJAApexStrategyV71:
                     # Market-strength gate bonus (mirrors long-side logic).
                     _market_gate_bonus_s = max(0.0, (0.8 - _market_strength) * 0.20)
                     _gate_reduction_s = min(0.35, _gate_reduction_s + _market_gate_bonus_s)
+                    _exploration_size_mult_s = 1.0
                     if self.ai_entry_gate is not None:
                         try:
                             _gate_vol_mult_s: Optional[float] = None
@@ -4143,6 +4229,52 @@ class NIJAApexStrategyV71:
                                         )
                                     except Exception:
                                         pass
+                                if (
+                                    EXPLORATION_GOVERNOR_AVAILABLE
+                                    and hasattr(self, 'exploration_governor')
+                                    and self.exploration_governor is not None
+                                    and ExplorationCandidate is not None
+                                ):
+                                    try:
+                                        _exploration_decision_s = self.exploration_governor.evaluate_candidate(
+                                            ExplorationCandidate(
+                                                symbol=symbol,
+                                                regime=str(
+                                                    getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN"
+                                                ),
+                                                side="short",
+                                                gate_score=float(_gate_result_s.gate_score),
+                                                effective_threshold=float(_gate_result_s.effective_threshold),
+                                                confidence=float(_confidence),
+                                                volume_ratio=float(_volume_ratio),
+                                                entry_type=str(_entry_type_s),
+                                                liquidity_bucket=(
+                                                    "high_liquidity"
+                                                    if _volume_ratio >= 1.5
+                                                    else "mid_liquidity" if _volume_ratio >= 0.8
+                                                    else "thin_liquidity"
+                                                ),
+                                                regime_confidence=float(
+                                                    metadata.get("regime_confidence", 0.0)
+                                                ) if metadata else 0.0,
+                                            )
+                                        )
+                                        _exploration_size_mult_s = self.exploration_governor.get_live_size_multiplier(symbol)
+                                        logger.info(
+                                            "🧭 Exploration SHORT %s: %s prob=%.3f live=%s size_mult=%.2f gap=%.2f "
+                                            "cluster=%.2f regret=%.2f novelty=%.2f",
+                                            symbol,
+                                            _exploration_decision_s.reason,
+                                            _exploration_decision_s.probability,
+                                            _exploration_decision_s.allow_live,
+                                            _exploration_size_mult_s,
+                                            _exploration_decision_s.near_miss_gap,
+                                            _exploration_decision_s.cluster_pressure,
+                                            _exploration_decision_s.regret_score,
+                                            _exploration_decision_s.novelty_score,
+                                        )
+                                    except Exception as _exp_eval_s_err:
+                                        logger.debug("ExplorationGovernor short candidate skipped: %s", _exp_eval_s_err)
                             else:
                                 # AI gate passed — record funnel stage (SHORT)
                                 if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
@@ -4233,9 +4365,16 @@ class NIJAApexStrategyV71:
                     if _env_mult_s < 1.0 and _env_mult_s > 0.0:
                         _pre_env_s = position_size
                         position_size = scalar(position_size * _env_mult_s)
+                            logger.debug(
+                                "   🛡️  Risk envelope SHORT: $%.2f × %.2f = $%.2f",
+                                _pre_env_s, _env_mult_s, position_size,
+                            )
+                    if _exploration_size_mult_s < 1.0:
+                        _pre_exp_short = position_size
+                        position_size = scalar(position_size * _exploration_size_mult_s)
                         logger.debug(
-                            "   🛡️  Risk envelope SHORT: $%.2f × %.2f = $%.2f",
-                            _pre_env_s, _env_mult_s, position_size,
+                            "   🧭 Exploration SHORT size: $%.2f × %.2f = $%.2f",
+                            _pre_exp_short, _exploration_size_mult_s, position_size,
                         )
 
                     # ── ATR-Based Dynamic Position Sizing (SHORT) ─────────────
