@@ -6,9 +6,18 @@ import types
 import unittest
 from unittest.mock import patch
 
+
+class _StubRedisClient:
+    def close(self) -> None:
+        return None
+
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
-sys.modules.setdefault("redis", types.SimpleNamespace(Redis=types.SimpleNamespace(from_url=lambda *args, **kwargs: object())))
+sys.modules.setdefault(
+    "redis",
+    types.SimpleNamespace(Redis=types.SimpleNamespace(from_url=lambda *args, **kwargs: _StubRedisClient())),
+)
 
 from bot.redis_runtime import connect_redis_with_fallback
 
@@ -17,7 +26,7 @@ class TestRedisRuntimeFallbackBudget(unittest.TestCase):
     @patch("bot.redis_runtime._detect_non_redis_http_endpoint", return_value="")
     @patch("bot.redis_runtime._prioritized_alt_urls", return_value=["redis://alt.internal:6379/0"])
     @patch("bot.redis_runtime.wait_for_redis_ready", side_effect=RuntimeError("redis unavailable"))
-    @patch("bot.redis_runtime.create_redis", return_value=object())
+    @patch("bot.redis_runtime.create_redis", return_value=_StubRedisClient())
     @patch("bot.redis_runtime.time.monotonic", side_effect=[0.0, 0.60, 1.20, 1.20, 1.20])
     def test_connect_redis_with_fallback_honors_total_budget(
         self,
