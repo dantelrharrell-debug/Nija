@@ -2627,6 +2627,15 @@ class CoinbaseBroker(BaseBroker):
                     'broken pipe' in error_msg
                 )
 
+                # Check for authentication/authorization errors (401, 403)
+                # 401 = Unauthorized (invalid credentials)
+                # 403 = Forbidden (valid credentials but no permission)
+                is_401_error = (
+                    '401 ' in error_msg or ' 401' in error_msg or
+                    'unauthorized' in error_msg.lower() or
+                    'invalid api key' in error_msg.lower()
+                )
+
                 # Check if this is a rate limiting error (403, 429, or "too many" errors)
                 # Use precise pattern matching to avoid false positives
                 is_403_error = (
@@ -2641,6 +2650,13 @@ class CoinbaseBroker(BaseBroker):
                     'too many requests' in error_msg
                 )
                 is_rate_limit = is_403_error or is_429_error
+
+                # 401 MUST NOT RETRY - fail fast on auth errors
+                if is_401_error:
+                    logging.error(f"🔴 AUTHENTICATION FAILURE (401): {e}")
+                    logging.error("   This indicates invalid or expired API credentials.")
+                    logging.error("   Verify your COINBASE_API_KEY and COINBASE_API_SECRET environment variables.")
+                    raise  # Fail immediately, do not retry
 
                 # Determine if error is retryable
                 is_retryable = is_rate_limit or is_connection_error
@@ -3611,28 +3627,56 @@ class CoinbaseBroker(BaseBroker):
 
             return result
         except Exception as e:
-            logging.error(f"🔥 ERROR get_account_balance: {e}")
-            logging.error("This usually indicates:")
-            logging.error("  1. Invalid API credentials")
-            logging.error("  2. Network connectivity issue")
-            logging.error("  3. Coinbase API temporarily unavailable")
-            logging.error("")
-            logging.error("Verify your credentials at:")
-            logging.error("  https://portal.cloud.coinbase.com/access/api")
-            import traceback
-            logging.error(traceback.format_exc())
-            return {
-                "usdc": usdc_balance,
-                "usd": usd_balance,
-                "trading_balance": usd_balance + usdc_balance,
-                "usd_held": 0.0,
-                "usdc_held": 0.0,
-                "total_held": 0.0,
-                "total_funds": usd_balance + usdc_balance,
-                "crypto": crypto_holdings,
-                "consumer_usd": consumer_usd,
-                "consumer_usdc": consumer_usdc,
-            }
+            # Explicitly detect authentication failures (401 Unauthorized)
+            error_msg = str(e).lower()
+            is_auth_error = (
+                '401' in str(e) or 
+                'unauthorized' in error_msg or
+                'invalid api key' in error_msg or
+                'authentication' in error_msg
+            )
+
+            if is_auth_error:
+                logging.critical("❌ AUTHENTICATION FAILURE: Invalid or expired Coinbase API credentials")
+                logging.critical("")
+                logging.critical("This is a BLOCKING error. The bot cannot proceed without valid credentials.")
+                logging.critical("")
+                logging.critical("✅ TO FIX:")
+                logging.critical("  1. Verify COINBASE_API_KEY environment variable is set correctly")
+                logging.critical("  2. Verify COINBASE_API_SECRET environment variable is set correctly")
+                logging.critical("  3. Check that API key has 'View' permissions at:")
+                logging.critical("     https://portal.cloud.coinbase.com/access/api")
+                logging.critical("  4. Ensure API key IP restrictions (if any) include your current IP")
+                logging.critical("")
+                import traceback
+                logging.critical(traceback.format_exc())
+                # CRITICAL: Raise immediately instead of returning $0.0
+                # This signals startup/hydration to FAIL FAST instead of retrying
+                raise RuntimeError("CRITICAL: Coinbase API authentication failed (401). Check credentials and permissions.") from e
+            else:
+                # For non-auth errors, log and return $0.0 as fallback
+                logging.error(f"🔥 ERROR get_account_balance: {e}")
+                logging.error("This usually indicates:")
+                logging.error("  1. Network connectivity issue")
+                logging.error("  2. Coinbase API temporarily unavailable")
+                logging.error("  3. API permissions issue")
+                logging.error("")
+                logging.error("Verify your credentials at:")
+                logging.error("  https://portal.cloud.coinbase.com/access/api")
+                import traceback
+                logging.error(traceback.format_exc())
+                return {
+                    "usdc": usdc_balance,
+                    "usd": usd_balance,
+                    "trading_balance": usd_balance + usdc_balance,
+                    "usd_held": 0.0,
+                    "usdc_held": 0.0,
+                    "total_held": 0.0,
+                    "total_funds": usd_balance + usdc_balance,
+                    "crypto": crypto_holdings,
+                    "consumer_usd": consumer_usd,
+                    "consumer_usdc": consumer_usdc,
+                }
 
     def get_account_balance(self, verbose: bool = False) -> float:
         """Get USD trading balance with fail-closed behavior (conforms to BaseBroker interface).
