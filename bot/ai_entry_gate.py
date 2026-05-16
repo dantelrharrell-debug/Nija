@@ -457,6 +457,33 @@ class AIEntryGate:
             2,
             int(_adaptive_base * (1.0 - total_reduction)),
         )
+        _gate_feedback_enabled = str(os.getenv("NIJA_EIL_GATE_FEEDBACK_ENABLED", "false")).lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        _path_prefix = "|".join(
+            [
+                f"gate1_score:{'pass' if gates['gate1_score'].passed else 'fail'}",
+                f"gate2_volume:{'pass' if gates['gate2_volume'].passed else 'fail'}",
+            ]
+        )
+        if _gate_feedback_enabled:
+            try:
+                from bot.regime_gate_calibrator import get_regime_gate_calibrator
+            except Exception:
+                try:
+                    from regime_gate_calibrator import get_regime_gate_calibrator  # type: ignore[import]
+                except Exception:
+                    get_regime_gate_calibrator = None  # type: ignore[assignment]
+            if get_regime_gate_calibrator is not None:
+                try:
+                    _calibrator = get_regime_gate_calibrator()
+                    _regime_pass_prob = _calibrator.get_gate_pass_probability(regime_key, _path_prefix)
+                    if _regime_pass_prob < 0.35:
+                        effective_threshold = min(_GATE_MAX_SCORE, effective_threshold + 1)
+                except Exception:
+                    pass
         passed = total_score >= effective_threshold
 
         if passed:
@@ -485,6 +512,19 @@ class AIEntryGate:
                 f"TRADE REJECTED → reason={reason} score={total_score} conf={enhanced_score}"
             )
         logger.debug("AIEntryGate: %s", reason)
+        if _gate_feedback_enabled:
+            try:
+                from bot.regime_gate_calibrator import get_regime_gate_calibrator
+            except Exception:
+                try:
+                    from regime_gate_calibrator import get_regime_gate_calibrator  # type: ignore[import]
+                except Exception:
+                    get_regime_gate_calibrator = None  # type: ignore[assignment]
+            if get_regime_gate_calibrator is not None:
+                try:
+                    get_regime_gate_calibrator().update(regime_key, _path_prefix, passed)
+                except Exception:
+                    pass
         return GateResult(
             passed=passed,
             reason=reason,

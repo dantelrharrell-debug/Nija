@@ -40,6 +40,7 @@ Author: NIJA Trading Systems
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -147,10 +148,22 @@ class SignalFunnelDiagnostics:
         self._stats: Dict[str, FunnelStats] = {}
         self._shadow_trades: List[ShadowTrade] = []
         self._trace_attempts: List[ExecutionTraceAttempt] = []
+        self._trace_quality_by_id: Dict[str, Dict[str, Any]] = {}
         self._active_trace_by_key: Dict[str, str] = {}
         self._trace_counter: int = 0
         self._max_trace_attempts: int = 400
         self._last_report_time: float = time.monotonic()
+        self._trace_gate_enabled: bool = (
+            str(os.getenv("NIJA_EIL_TRACE_GATE_ENABLED", "false")).lower() in ("1", "true", "yes")
+        )
+        self._trace_gate_min_pass_probability: float = float(
+            os.getenv("NIJA_EIL_TRACE_GATE_MIN_PASS_PROBABILITY", "0.35") or "0.35"
+        )
+        try:
+            from bot.trace_persistence import get_eil_trace_persistence_writer
+            get_eil_trace_persistence_writer()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Funnel stage recorders
@@ -306,6 +319,7 @@ class SignalFunnelDiagnostics:
         extra: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Start a new execution attempt at SIGNAL stage and return trace_id."""
+        event_payload: Optional[Dict[str, Any]] = None
         with self._lock:
             self._trace_counter += 1
             trace_id = f"trace-{int(time.time() * 1000)}-{self._trace_counter}"
@@ -324,8 +338,11 @@ class SignalFunnelDiagnostics:
             )
             self._trace_attempts.append(attempt)
             self._active_trace_by_key[self._trace_key(pair, side)] = trace_id
+            event_payload = self._build_stream_event_payload(attempt, attempt.events[-1])
             self._trim_traces_locked()
-            return trace_id
+        if event_payload is not None:
+            self._publish_trace_event(event_payload)
+        return trace_id
 
     def record_execution_stage(
         self,
@@ -339,6 +356,10 @@ class SignalFunnelDiagnostics:
         terminal: bool = False,
     ) -> Optional[str]:
         """Record a stage update for the active trace attempt for pair/side."""
+        event_payload: Optional[Dict[str, Any]] = None
+        terminal_payload: Optional[Dict[str, Any]] = None
+        score_for_output: Optional[Dict[str, Any]] = None
+        forced_rejection_terminal: bool = False
         with self._lock:
             attempt = self._resolve_attempt_locked(pair, side)
             if attempt is None:
@@ -358,10 +379,36 @@ class SignalFunnelDiagnostics:
             )
             attempt.events.append(event)
             attempt.updated_at = event.timestamp
+            event_payload = self._build_stream_event_payload(attempt, event)
+
+            if stage == "ecel" and outcome in ("pass", "compiled", "confirmed", "success"):
+                score_for_output = self._score_attempt_quality_locked(attempt)
+                if score_for_output is not None:
+                    self._trace_quality_by_id[attempt.trace_id] = score_for_output
+                    if self._trace_gate_enabled:
+                        _pp = score_for_output.get("pass_probability")
+                        if isinstance(_pp, (float, int)) and float(_pp) < self._trace_gate_min_pass_probability:
+                            attempt.status = "rejected"
+                            attempt.terminal_reason = "trace_gate_low_pass_probability"
+                            attempt.events.append(
+                                ExecutionTraceStageEvent(
+                                    stage="trace_gate",
+                                    outcome="rejected",
+                                    reason="trace_gate_low_pass_probability",
+                                    extra={
+                                        "pass_probability": float(_pp),
+                                        "threshold": self._trace_gate_min_pass_probability,
+                                    },
+                                )
+                            )
+                            self._active_trace_by_key.pop(self._trace_key(attempt.pair, attempt.side), None)
+                            forced_rejection_terminal = True
+                            terminal = True
 
             if terminal:
-                attempt.status = "filled" if outcome in ("pass", "filled", "confirmed", "success") else "rejected"
-                attempt.terminal_reason = reason or outcome
+                if not forced_rejection_terminal:
+                    attempt.status = "filled" if outcome in ("pass", "filled", "confirmed", "success") else "rejected"
+                    attempt.terminal_reason = reason or outcome
                 self._active_trace_by_key.pop(self._trace_key(attempt.pair, attempt.side), None)
             elif outcome in ("rejected", "error", "blocked", "failed"):
                 attempt.status = "rejected"
@@ -372,8 +419,15 @@ class SignalFunnelDiagnostics:
                 attempt.terminal_reason = reason or "filled"
                 self._active_trace_by_key.pop(self._trace_key(attempt.pair, attempt.side), None)
 
+            if attempt.status in ("filled", "rejected"):
+                terminal_payload = self._build_terminal_stream_payload(attempt)
+                self._apply_terminal_learning_hooks_locked(attempt)
             self._trim_traces_locked()
-            return attempt.trace_id
+        if event_payload is not None:
+            self._publish_trace_event(event_payload)
+        if terminal_payload is not None:
+            self._publish_terminal_trace(terminal_payload)
+        return attempt.trace_id
 
     def get_execution_traces(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Return latest per-attempt execution traces for viewer/API consumption."""
@@ -416,6 +470,7 @@ class SignalFunnelDiagnostics:
                         }
                         for event in attempt.events
                     ],
+                    "quality_prediction": self._trace_quality_by_id.get(attempt.trace_id),
                 }
             )
         return output
@@ -565,6 +620,159 @@ class SignalFunnelDiagnostics:
             for key, trace_id in self._active_trace_by_key.items()
             if trace_id in live_ids
         }
+        self._trace_quality_by_id = {
+            trace_id: score
+            for trace_id, score in self._trace_quality_by_id.items()
+            if trace_id in live_ids
+        }
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _build_stream_event_payload(
+        self,
+        attempt: ExecutionTraceAttempt,
+        event: ExecutionTraceStageEvent,
+    ) -> Dict[str, Any]:
+        regime = "unknown"
+        confidence = 0.0
+        adx = 0.0
+        gate_score = 0.0
+        ecel_result = ""
+        broker = ""
+        for evt in reversed(attempt.events):
+            extra = evt.extra or {}
+            if regime == "unknown":
+                regime = str(extra.get("regime") or extra.get("trend") or regime)
+            confidence = confidence or self._safe_float(extra.get("confidence"), 0.0)
+            adx = adx or self._safe_float(extra.get("adx"), 0.0)
+            gate_score = gate_score or self._safe_float(extra.get("gate_score"), 0.0)
+            if not broker:
+                broker = str(extra.get("broker") or "")
+            if evt.stage == "ecel":
+                ecel_result = evt.outcome
+        return {
+            "trace_id": attempt.trace_id,
+            "pair": attempt.pair,
+            "side": attempt.side,
+            "stage": event.stage,
+            "outcome": event.outcome,
+            "reason": event.reason,
+            "regime": regime,
+            "confidence": confidence,
+            "adx": adx,
+            "gate_score": gate_score,
+            "ecel_result": ecel_result,
+            "broker": broker,
+            "ts_unix": event.timestamp,
+            "extra": dict(event.extra or {}),
+        }
+
+    def _build_terminal_stream_payload(self, attempt: ExecutionTraceAttempt) -> Dict[str, Any]:
+        trace_path = [f"{event.stage}:{event.outcome}" for event in attempt.events]
+        regime = "unknown"
+        confidence = 0.0
+        adx = 0.0
+        gate_score = 0.0
+        ecel_decision = ""
+        for event in attempt.events:
+            extra = event.extra or {}
+            regime = str(extra.get("regime") or extra.get("trend") or regime)
+            confidence = confidence or self._safe_float(extra.get("confidence"), 0.0)
+            adx = adx or self._safe_float(extra.get("adx"), 0.0)
+            gate_score = gate_score or self._safe_float(extra.get("gate_score"), 0.0)
+            if event.stage == "ecel":
+                ecel_decision = event.reason or event.outcome
+        return {
+            "trace_id": attempt.trace_id,
+            "pair": attempt.pair,
+            "side": attempt.side,
+            "status": attempt.status,
+            "terminal_reason": attempt.terminal_reason,
+            "regime": regime,
+            "confidence": confidence,
+            "adx": adx,
+            "gate_score": gate_score,
+            "ecel_decision": ecel_decision,
+            "trace_path": trace_path,
+            "created_at": attempt.created_at,
+            "updated_at": attempt.updated_at,
+            "filled_at": attempt.updated_at if attempt.status == "filled" else None,
+            "events": [
+                {
+                    "stage": event.stage,
+                    "outcome": event.outcome,
+                    "reason": event.reason,
+                    "timestamp": event.timestamp,
+                    "extra": dict(event.extra or {}),
+                }
+                for event in attempt.events
+            ],
+            "quality_prediction": self._trace_quality_by_id.get(attempt.trace_id),
+        }
+
+    def _score_attempt_quality_locked(self, attempt: ExecutionTraceAttempt) -> Optional[Dict[str, Any]]:
+        payload = self._build_terminal_stream_payload(attempt)
+        try:
+            from bot.trace_quality_scorer import get_trace_quality_scorer
+
+            scorer = get_trace_quality_scorer()
+            score_obj = scorer.score_trace(payload)
+            if hasattr(score_obj, "__dict__"):
+                return dict(score_obj.__dict__)
+            if isinstance(score_obj, dict):
+                return dict(score_obj)
+        except Exception:
+            return None
+        return None
+
+    def _apply_terminal_learning_hooks_locked(self, attempt: ExecutionTraceAttempt) -> None:
+        payload = self._build_terminal_stream_payload(attempt)
+        try:
+            from bot.failure_cluster_engine import get_failure_cluster_engine
+
+            get_failure_cluster_engine().ingest_terminal_trace(payload)
+        except Exception:
+            pass
+        try:
+            from bot.regime_gate_calibrator import get_regime_gate_calibrator
+
+            get_regime_gate_calibrator().update_from_trace(payload)
+        except Exception:
+            pass
+        try:
+            from bot.trace_quality_scorer import get_trace_quality_scorer
+
+            quality_grade = ""
+            qp = self._trace_quality_by_id.get(attempt.trace_id) or {}
+            expected_grade = str(qp.get("expected_grade") or "")
+            if expected_grade in ("A", "B", "C", "D"):
+                quality_grade = expected_grade
+            get_trace_quality_scorer().record_terminal_outcome(payload, quality_grade=quality_grade)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _publish_trace_event(payload: Dict[str, Any]) -> None:
+        try:
+            from bot.trace_persistence import get_eil_trace_publisher
+
+            get_eil_trace_publisher().publish_event(payload)
+        except Exception:
+            return
+
+    @staticmethod
+    def _publish_terminal_trace(payload: Dict[str, Any]) -> None:
+        try:
+            from bot.trace_persistence import get_eil_trace_publisher
+
+            get_eil_trace_publisher().publish_terminal(payload)
+        except Exception:
+            return
 
 
 # ---------------------------------------------------------------------------

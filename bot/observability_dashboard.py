@@ -170,6 +170,9 @@ class MetricCollector:
         # 13. Execution Trace Viewer (signal -> fill stage traces)
         snap["modules"]["execution_trace"] = self._collect_execution_trace()
 
+        # 14. Execution Intelligence Layer v2
+        snap["modules"]["eil_v2"] = self._collect_eil_v2()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -279,6 +282,19 @@ class MetricCollector:
                 "latest": traces[0] if traces else None,
                 "traces": traces,
             }
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def _collect_eil_v2(self) -> Dict:
+        try:
+            from bot.eil_v2_dashboard_routes import collect_eil_v2_snapshot
+        except ImportError:
+            try:
+                from eil_v2_dashboard_routes import collect_eil_v2_snapshot  # type: ignore[import]
+            except ImportError:
+                return {"available": False, "error": "eil_v2_dashboard_routes unavailable"}
+        try:
+            return collect_eil_v2_snapshot()
         except Exception as exc:
             return {"available": False, "error": str(exc)}
 
@@ -723,6 +739,19 @@ class ObservabilityDashboard:
         def execution_trace():
             snap = self._collector.get_snapshot()
             mod = (snap.get("modules", {}) or {}).get("execution_trace", {})
+            return jsonify(mod)
+
+        @bp.route("/api/v1/failure-clusters")
+        def failure_clusters():
+            snap = self._collector.get_snapshot()
+            mod = (snap.get("modules", {}) or {}).get("eil_v2", {})
+            clusters = (mod.get("failure_clusters", {}) or {}).get("patterns", [])
+            return jsonify({"available": True, "patterns": clusters})
+
+        @bp.route("/api/v1/eil-v2")
+        def eil_v2():
+            snap = self._collector.get_snapshot()
+            mod = (snap.get("modules", {}) or {}).get("eil_v2", {})
             return jsonify(mod)
 
         @bp.route("/api/v1/health")
