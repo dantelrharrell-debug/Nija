@@ -78,6 +78,13 @@ class TestReadinessBrokerGate(unittest.TestCase):
         self.assertFalse(snap1["broker_connected"])
         self.assertTrue(snap2["broker_connected"])
 
+    def test_version_advances_when_value_changes(self):
+        version1, _ = readiness_table.snapshot_with_version()
+        readiness_table.mark_ready("broker_connected")
+        version2, snapshot = readiness_table.snapshot_with_version()
+        self.assertGreater(version2, version1)
+        self.assertTrue(snapshot["broker_connected"])
+
     # ------------------------------------------------------------------
     # Simulate the bootstrap broker_connected gate logic
     # ------------------------------------------------------------------

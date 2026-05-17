@@ -1385,6 +1385,22 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
         context,
     )
 
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator as _get_startup_coordinator_unlock
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator as _get_startup_coordinator_unlock  # type: ignore[import]
+        _startup_coordinator_unlock = _get_startup_coordinator_unlock()
+        _startup_coordinator_unlock.record_threads_confirmed_running(
+            bootstrap_state=_bootstrap_state_name,
+        )
+        _startup_coordinator_unlock.record_activation_requested(
+            requested=True,
+            source=f"bootstrap_unlock:{context}",
+        )
+    except Exception as _startup_coord_err:
+        logger.debug("Startup coordinator unlock handoff skipped (%s): %s", context, _startup_coord_err)
+
     if _get_capital_bootstrap_fsm_unlock is not None and _CapitalBootstrapState is not None:
         try:
             _capital_bootstrap_fsm = _get_capital_bootstrap_fsm_unlock()
@@ -1691,6 +1707,14 @@ def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> 
     finally:
         _ensure_running_supervised(_active_threads, context="threads live (post-start)")
 
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator as _get_startup_coordinator_launch
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator as _get_startup_coordinator_launch  # type: ignore[import]
+        _get_startup_coordinator_launch().record_threads_launched(len(_active_threads))
+    except Exception as _coord_err:
+        logger.debug("Startup coordinator thread-launch update skipped: %s", _coord_err)
     return _active_threads, use_independent_trading
 
 
@@ -4955,8 +4979,18 @@ def _run_state_machine_loop() -> None:
 
             if not _sm.is_live_trading_active():
                 if os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() == "true":
-                    logger.info("Forcing core loop activation")
-                    _sm.commit_activation()
+                    logger.info("Recording activation intent for coordinator-owned commit path")
+                    try:
+                        try:
+                            from bot.startup_coordinator import get_startup_coordinator as _get_startup_coordinator_sm_loop
+                        except ImportError:
+                            from startup_coordinator import get_startup_coordinator as _get_startup_coordinator_sm_loop  # type: ignore[import]
+                        _get_startup_coordinator_sm_loop().record_activation_requested(
+                            requested=True,
+                            source="state_machine_loop",
+                        )
+                    except Exception as _coord_err:
+                        logger.debug("State machine loop coordinator update failed: %s", _coord_err)
 
         except Exception:
             logger.exception("STATE_MACHINE_LOOP_ERROR")
@@ -5436,6 +5470,14 @@ def _try_finalize_running_supervised_handoff(
 
         if _state == _BootstrapState.RUNNING_SUPERVISED:
             logger.info(completion_log)
+            try:
+                try:
+                    from bot.startup_coordinator import get_startup_coordinator as _get_startup_coordinator_handoff
+                except ImportError:
+                    from startup_coordinator import get_startup_coordinator as _get_startup_coordinator_handoff  # type: ignore[import]
+                _get_startup_coordinator_handoff().record_bootstrap_state("RUNNING_SUPERVISED")
+            except Exception as _coord_err:
+                logger.debug("Startup coordinator RUNNING_SUPERVISED update skipped: %s", _coord_err)
             if set_bootstrap_events:
                 _bootstrap_complete_flag.set()
                 _bootstrap_completed_event.set()
@@ -5507,6 +5549,16 @@ def _try_finalize_running_supervised_handoff(
             _ok = bool(_bfsm.finalize_boot(reason))
             if _ok:
                 logger.info(completion_log)
+                try:
+                    try:
+                        from bot.startup_coordinator import get_startup_coordinator as _get_startup_coordinator_handoff
+                    except ImportError:
+                        from startup_coordinator import get_startup_coordinator as _get_startup_coordinator_handoff  # type: ignore[import]
+                    _coord = _get_startup_coordinator_handoff()
+                    _coord.record_bootstrap_state("RUNNING_SUPERVISED")
+                    _coord.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+                except Exception as _coord_err:
+                    logger.debug("Startup coordinator finalize_boot update skipped: %s", _coord_err)
                 if set_bootstrap_events:
                     _bootstrap_complete_flag.set()
                     _bootstrap_completed_event.set()

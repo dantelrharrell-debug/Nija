@@ -1394,12 +1394,7 @@ class SelfHealingStartup:
             self._step_state_machine()
 
     def _step_state_machine(self) -> None:
-        """Attempt activation if pre-conditions are met.
-
-        Previously observer-only; now calls commit_activation() so the startup
-        path can complete the OFF / LIVE_PENDING_CONFIRMATION → LIVE_ACTIVE
-        transition without waiting for the core loop supervisor.
-        """
+        """Record startup activation intent without committing runtime authority early."""
         logger.critical("STEP_STATE_MACHINE_ENTERED")
 
         sm = get_state_machine()
@@ -1427,15 +1422,21 @@ class SelfHealingStartup:
             return
 
         try:
-            result = sm.commit_activation()
+            try:
+                from bot.startup_coordinator import get_startup_coordinator
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+            get_startup_coordinator().record_activation_requested(
+                requested=True,
+                source="self_healing_startup",
+            )
             logger.critical(
-                "STEP_STATE_MACHINE: commit_activation result=%s state=%s is_live=%s",
-                result,
+                "STEP_STATE_MACHINE: activation intent recorded state=%s is_live=%s",
                 sm.get_current_state().value,
                 sm.is_live_trading_active(),
             )
         except Exception as _exc:
-            logger.warning("STEP_STATE_MACHINE: commit_activation raised: %s", _exc)
+            logger.warning("STEP_STATE_MACHINE: coordinator update raised: %s", _exc)
 
     def _is_live_active(self) -> bool:
         """Return True if the trading state machine has reached LIVE_ACTIVE."""

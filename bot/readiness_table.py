@@ -64,6 +64,7 @@ KEYS: tuple[str, ...] = (
 
 _TABLE: Dict[str, bool] = {k: False for k in KEYS}
 _LOCK = threading.Lock()
+_VERSION = 0
 
 
 # ---------------------------------------------------------------------------
@@ -72,15 +73,38 @@ _LOCK = threading.Lock()
 
 def set_ready(component: str, value: bool) -> None:
     """Set *component* readiness while preventing normal true-to-false regressions."""
+    global _VERSION
+    _snapshot = None
+    _changed = False
     with _LOCK:
         if component not in _TABLE:
             logger.debug("readiness_table: auto-registering unknown key '%s'", component)
             _TABLE[component] = False
+            _changed = True
         current = _TABLE.get(component)
         if current is True and value is False:
             logger.warning("Prevented readiness regression | %s", component)
             return
-        _TABLE[component] = value
+        if current != bool(value):
+            _changed = True
+        _TABLE[component] = bool(value)
+        if _changed:
+            _VERSION += 1
+        _snapshot = dict(_TABLE)
+
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+        get_startup_coordinator().record_readiness(
+            key=component,
+            value=bool(value),
+            version=_VERSION,
+            table=_snapshot or {},
+        )
+    except Exception:
+        logger.debug("readiness_table: coordinator update skipped", exc_info=True)
 
 
 def mark_ready(component: str) -> None:
@@ -130,6 +154,18 @@ def snapshot() -> Dict[str, bool]:
         return dict(_TABLE)
 
 
+def get_version() -> int:
+    """Return the monotonic readiness-table version."""
+    with _LOCK:
+        return int(_VERSION)
+
+
+def snapshot_with_version() -> tuple[int, Dict[str, bool]]:
+    """Return ``(version, snapshot)`` for atomic diagnostics."""
+    with _LOCK:
+        return int(_VERSION), dict(_TABLE)
+
+
 def pending() -> list[str]:
     """Return the sorted list of keys that are still False."""
     with _LOCK:
@@ -142,7 +178,9 @@ def pending() -> list[str]:
 
 def reset() -> None:
     """Reset all keys to False (use before a fresh startup attempt)."""
+    global _VERSION
     with _LOCK:
         for k in list(_TABLE):
             _TABLE[k] = False
+        _VERSION += 1
     logger.info("🔄 READINESS_TABLE reset — all keys False")
