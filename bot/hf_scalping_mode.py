@@ -6,13 +6,13 @@ Enables a high-frequency micro scalping mode that dramatically increases trade
 throughput by:
 
   • Reducing the inter-cycle scan interval to 60 s
-  • Setting MIN_CONFIDENCE to 0.25 for faster entry triggers
-  • Setting volume filters (volume_threshold 0.01, volume_min_threshold 0.002)
-  • Relaxing ADX minimum to 7 and trend confirmation count to 2
-  • Setting tight profit targets 0.4 %–1 % for rapid realisation
-  • Setting tight stop-losses 0.25 %–0.6 %
+  • Setting MIN_CONFIDENCE to 0.18 for faster entry triggers (Phase 1)
+  • Setting volume filters (volume_threshold 0.006 = 0.6 %, volume_min_threshold 0.002)
+  • Relaxing ADX minimum to 5 and trend confirmation count to 2 (Phase 1)
+  • Setting tight profit targets 1.0 % for rapid realisation (Phase 1)
+  • Setting tight stop-losses 0.35 % (Phase 1)
   • Capping position hold time at 3 minutes so capital re-deploys quickly
-  • Enforcing a per-hour trade rate cap (default 30) to avoid overtrading
+  • Enforcing a per-hour trade rate cap (default 12) to avoid overtrading (Phase 1)
 
 Activation
 ----------
@@ -69,6 +69,44 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_float_alias(preferred: str, legacy: str, default: float) -> float:
+    """Read *preferred* env var first; fall back to *legacy*, then *default*."""
+    v = os.environ.get(preferred)
+    if v is not None:
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            pass
+    return _env_float(legacy, default)
+
+
+def _env_int_alias(preferred: str, legacy: str, default: int) -> int:
+    """Read *preferred* env var first; fall back to *legacy*, then *default*."""
+    v = os.environ.get(preferred)
+    if v is not None:
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            pass
+    return _env_int(legacy, default)
+
+
+def _env_volume_threshold() -> float:
+    """Read HF_MIN_VOLUME_PCT (percentage) or HF_SCALP_VOLUME_THRESHOLD (fraction).
+
+    ``HF_MIN_VOLUME_PCT=0.6`` means 0.6 %; the stored fraction is 0.006.
+    The legacy ``HF_SCALP_VOLUME_THRESHOLD`` is already in fractional form.
+    Phase 1 default: 0.006 (0.6 %).
+    """
+    pct = os.environ.get("HF_MIN_VOLUME_PCT")
+    if pct is not None:
+        try:
+            return float(pct) / 100.0
+        except (ValueError, TypeError):
+            pass
+    return _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.006)
+
+
 def _env_bool(key: str, default: bool = False) -> bool:
     raw = os.environ.get(key, "")
     if raw.lower() in ("1", "true", "yes", "on"):
@@ -88,20 +126,19 @@ class HFScalpConfig:
     All tunable parameters for the HF scalping mode.
 
     Every field can be overridden at startup via a matching environment variable
-    (shown in the comment next to each field).
+    (shown in the comment next to each field).  Phase 1 short-form names take
+    priority; legacy ``HF_SCALP_*`` names are honoured as fallback for
+    backward compatibility.
 
-    Default values are tuned for safer live operation when no explicit
-    environment overrides are provided:
+    Phase 1 live-tuning defaults (lower thresholds = more trade frequency):
 
-        MIN_CONFIDENCE    0.25
-        volume_threshold  0.01
-        volume_min_thr    0.002
-        min_adx           7
-        min_trend_conf    3/5
-        TAKE_PROFIT       0.6 %
-        STOP_LOSS         0.3 %
+        MIN_CONFIDENCE    0.18   (HF_MIN_CONFIDENCE or HF_SCALP_MIN_CONFIDENCE)
+        min_adx           5      (HF_MIN_ADX or HF_SCALP_MIN_ADX)
+        volume_threshold  0.006  (HF_MIN_VOLUME_PCT=0.6 or HF_SCALP_VOLUME_THRESHOLD)
+        TAKE_PROFIT       1.0 %  (HF_TAKE_PROFIT_PCT or HF_SCALP_PROFIT_TARGET_PCT)
+        STOP_LOSS         0.35 % (HF_STOP_LOSS_PCT or HF_SCALP_STOP_LOSS_PCT)
+        MAX_TRADES/HR     12     (HF_MAX_TRADES_PER_HOUR or HF_SCALP_MAX_TRADES_PER_HOUR)
         SCAN_INTERVAL     60 s
-        MAX_TRADES/HR     20
     """
 
     # ── Master switch ──────────────────────────────────────────────────────────
@@ -126,24 +163,29 @@ class HFScalpConfig:
 
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_MIN_CONFIDENCE", 0.25)
+        default_factory=lambda: _env_float_alias(
+            "HF_MIN_CONFIDENCE", "HF_SCALP_MIN_CONFIDENCE", 0.18
+        )
     )
-    # env: HF_SCALP_MIN_CONFIDENCE
+    # env: HF_MIN_CONFIDENCE (Phase 1 preferred) or HF_SCALP_MIN_CONFIDENCE (legacy)
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.25)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.18)
     )
     # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
 
     min_adx: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MIN_ADX", 7)
+        default_factory=lambda: _env_int_alias(
+            "HF_MIN_ADX", "HF_SCALP_MIN_ADX", 5
+        )
     )
-    # env: HF_SCALP_MIN_ADX
+    # env: HF_MIN_ADX (Phase 1 preferred) or HF_SCALP_MIN_ADX (legacy)
 
     volume_threshold: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.01)
+        default_factory=_env_volume_threshold
     )
-    # env: HF_SCALP_VOLUME_THRESHOLD
+    # env: HF_MIN_VOLUME_PCT in % (Phase 1 preferred, e.g. 0.6 = 0.6 %)
+    #      or HF_SCALP_VOLUME_THRESHOLD in fraction (legacy, e.g. 0.006)
 
     volume_min_threshold: float = field(
         default_factory=lambda: _env_float("HF_SCALP_VOLUME_MIN_THRESHOLD", 0.002)
@@ -162,20 +204,26 @@ class HFScalpConfig:
 
     # ── Profit / stop management ───────────────────────────────────────────────
     profit_target_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_PROFIT_TARGET_PCT", 2.0)
+        default_factory=lambda: _env_float_alias(
+            "HF_TAKE_PROFIT_PCT", "HF_SCALP_PROFIT_TARGET_PCT", 1.0
+        )
     )
-    # env: HF_SCALP_PROFIT_TARGET_PCT
+    # env: HF_TAKE_PROFIT_PCT (Phase 1 preferred) or HF_SCALP_PROFIT_TARGET_PCT (legacy)
 
     stop_loss_pct: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_STOP_LOSS_PCT", 0.4)
+        default_factory=lambda: _env_float_alias(
+            "HF_STOP_LOSS_PCT", "HF_SCALP_STOP_LOSS_PCT", 0.35
+        )
     )
-    # env: HF_SCALP_STOP_LOSS_PCT
+    # env: HF_STOP_LOSS_PCT (Phase 1 preferred) or HF_SCALP_STOP_LOSS_PCT (legacy)
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     max_trades_per_hour: int = field(
-        default_factory=lambda: _env_int("HF_SCALP_MAX_TRADES_PER_HOUR", 20)
+        default_factory=lambda: _env_int_alias(
+            "HF_MAX_TRADES_PER_HOUR", "HF_SCALP_MAX_TRADES_PER_HOUR", 12
+        )
     )
-    # env: HF_SCALP_MAX_TRADES_PER_HOUR
+    # env: HF_MAX_TRADES_PER_HOUR (Phase 1 preferred) or HF_SCALP_MAX_TRADES_PER_HOUR (legacy)
 
     trade_cooldown_seconds: float = field(
         default_factory=lambda: _env_float("HF_SCALP_COOLDOWN_SECONDS", 30.0)
@@ -244,19 +292,20 @@ class HFScalpingMode:
         if not (live_mode and enforce_floor):
             return
 
-        # Safer baseline for live production with small capital.
+        # Phase 1 live-tuning baselines — lower thresholds for more trade
+        # frequency while keeping capital-protection systems intact.
         floors = {
             "cycle_interval_seconds": 60,
-            "min_confidence": 0.25,
-            "kraken_min_confidence": 0.25,
-            "min_adx": 7,
-            "volume_threshold": 0.01,
+            "min_confidence": 0.18,
+            "kraken_min_confidence": 0.18,
+            "min_adx": 5,
+            "volume_threshold": 0.006,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
-            "profit_target_pct": 2.0,
-            "stop_loss_pct": 0.4,
-            "max_trades_per_hour": 25,
+            "profit_target_pct": 1.0,
+            "stop_loss_pct": 0.35,
+            "max_trades_per_hour": 20,
             "trade_cooldown_seconds": 30.0,
         }
 
@@ -264,19 +313,19 @@ class HFScalpingMode:
         # Enabled by default to prevent drift from ad-hoc env overrides.
         lock_profile = _env_bool("HF_SCALP_LOCK_PROFILE", True)
         if lock_profile:
-            self.config.min_confidence = 0.25
-            self.config.kraken_min_confidence = 0.25
-            self.config.min_adx = 7
-            self.config.volume_threshold = 0.01
-            self.config.profit_target_pct = 2.0
-            self.config.stop_loss_pct = 0.4
-            # Keep within requested 15–25 trades/hr band.
-            if self.config.max_trades_per_hour < 15:
-                self.config.max_trades_per_hour = 15
-            elif self.config.max_trades_per_hour > 25:
-                self.config.max_trades_per_hour = 25
+            self.config.min_confidence = 0.18
+            self.config.kraken_min_confidence = 0.18
+            self.config.min_adx = 5
+            self.config.volume_threshold = 0.006
+            self.config.profit_target_pct = 1.0
+            self.config.stop_loss_pct = 0.35
+            # Phase 1 band: 10–20 trades/hr
+            if self.config.max_trades_per_hour < 10:
+                self.config.max_trades_per_hour = 10
+            elif self.config.max_trades_per_hour > 20:
+                self.config.max_trades_per_hour = 20
             logger.info(
-                "HF profile lock active — conf=0.25 adx=7 vol=1.0%% tp=2.0%% sl=0.4%% trades/hr=%d",
+                "HF profile lock active — conf=0.18 adx=5 vol=0.6%% tp=1.0%% sl=0.35%% trades/hr=%d",
                 self.config.max_trades_per_hour,
             )
 
