@@ -365,6 +365,97 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "CapitalBootstrapFSM must reach RUNNING before execution convergence retries begin",
         )
 
+    def test_startup_pre_init_blocks_strict_observer_instances(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        startup_fn = next(
+            (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_bot_startup_and_trading"),
+            None,
+        )
+        if startup_fn is None:
+            self.fail("Expected _run_bot_startup_and_trading() in bot.py")
+
+        authority_status_calls = [
+            node for node in ast.walk(startup_fn)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_startup_execution_authority_status"
+        ]
+        self.assertGreaterEqual(
+            len(authority_status_calls),
+            1,
+            "_run_bot_startup_and_trading must evaluate startup execution authority before write-capable init",
+        )
+
+        standby_runtime_error = False
+        for node in ast.walk(startup_fn):
+            if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+                continue
+            if not (isinstance(node.exc.func, ast.Name) and node.exc.func.id == "RuntimeError"):
+                continue
+            if not node.exc.args:
+                continue
+            first_arg = node.exc.args[0]
+            if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                if "STARTUP_OBSERVER_STANDBY" in first_arg.value:
+                    standby_runtime_error = True
+                    break
+            if isinstance(first_arg, ast.JoinedStr):
+                text_parts = [
+                    value.value for value in first_arg.values
+                    if isinstance(value, ast.Constant) and isinstance(value.value, str)
+                ]
+                if any("STARTUP_OBSERVER_STANDBY" in part for part in text_parts):
+                    standby_runtime_error = True
+                    break
+
+        self.assertTrue(
+            standby_runtime_error,
+            "_run_bot_startup_and_trading must fail closed with STARTUP_OBSERVER_STANDBY when strict authority is missing",
+        )
+
+    def test_strategy_fallback_requires_startup_authority_precheck(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        fallback_fn = next(
+            (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_ensure_strategy_fallback_published"),
+            None,
+        )
+        if fallback_fn is None:
+            self.fail("Expected _ensure_strategy_fallback_published() in bot.py")
+
+        authority_call_lines = []
+        trading_strategy_call_lines = []
+        for node in ast.walk(fallback_fn):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == "_startup_execution_authority_status":
+                authority_call_lines.append(node.lineno)
+            if isinstance(node.func, ast.Name) and node.func.id == "TradingStrategy":
+                trading_strategy_call_lines.append(node.lineno)
+
+        self.assertGreaterEqual(
+            len(authority_call_lines),
+            1,
+            "_ensure_strategy_fallback_published must evaluate startup authority before fallback constructor",
+        )
+        self.assertEqual(
+            len(trading_strategy_call_lines),
+            1,
+            "Expected exactly one TradingStrategy fallback constructor in _ensure_strategy_fallback_published",
+        )
+        self.assertLess(
+            min(authority_call_lines),
+            trading_strategy_call_lines[0],
+            "Startup authority precheck must run before TradingStrategy fallback construction",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
