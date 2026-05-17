@@ -3391,7 +3391,7 @@ def _acquire_distributed_process_lock() -> None:
         _enter_fail_closed_standby(str(_lock_exc))
 
 
-def _acquire_process_lock() -> None:
+def _acquire_process_lock() -> bool:
     """
     Write PID file and abort if another bot instance is already running.
 
@@ -3494,7 +3494,18 @@ def _acquire_process_lock() -> None:
     import atexit
     atexit.register(_release_process_lock)
     _acquire_distributed_process_lock()
+    lock_acquired = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "0").strip() == "1"
+    if not lock_acquired:
+        logger.critical(
+            "STARTUP_OBSERVER_STANDBY: distributed writer authority denied"
+        )
+        if _is_live_trading_active_now():
+            raise RuntimeError(
+                "STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
+            )
+        return False
     print(f"🔒 Process lock acquired (PID {os.getpid()}) — {_PID_FILE}")
+    return True
 
 
 def _release_process_lock() -> None:
