@@ -1326,6 +1326,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 )
                 return False
             try:
+                assert_distributed_writer_authority()
                 _dnm = _get_distributed_nonce_manager()
                 _nonce_key_id = _make_distributed_nonce_key_id(self.api_key)
                 _dnm.ensure_writer_lock(_nonce_key_id)
