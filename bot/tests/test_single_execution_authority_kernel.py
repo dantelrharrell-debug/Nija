@@ -638,6 +638,41 @@ class TestExecutionUnlockBoundary(unittest.TestCase):
             self.assertTrue(has_execution_authority())
         self.assertFalse(has_execution_authority())
 
+    def test_startup_write_authority_allows_ready_prerequisites_without_scope(self):
+        """Startup authority must allow validated startup prerequisites pre-scope."""
+        from bot.execution_authority_context import assert_startup_write_authority
+
+        with patch(
+            "bot.execution_authority_context.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.execution_authority_context.get_startup_execution_authority_prerequisites",
+            return_value={"ready": True, "missing": []},
+        ), patch(
+            "bot.execution_authority_context.get_seak",
+            return_value=None,
+        ):
+            assert_startup_write_authority()
+
+    def test_startup_write_authority_blocks_when_prerequisites_not_ready(self):
+        """Startup authority must fail closed when prerequisites are incomplete."""
+        from bot.execution_authority_context import assert_startup_write_authority
+
+        with patch(
+            "bot.execution_authority_context.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.execution_authority_context.get_startup_execution_authority_prerequisites",
+            return_value={"ready": False, "missing": ["heartbeat_active"]},
+        ), patch(
+            "bot.execution_authority_context.get_seak",
+            return_value=None,
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                assert_startup_write_authority()
+            self.assertIn("Startup execution authority unavailable", str(ctx.exception))
+            self.assertIn("heartbeat_active", str(ctx.exception))
+
 
 # ---------------------------------------------------------------------------
 # Evidence: Continuous authority heartbeat enforcement
