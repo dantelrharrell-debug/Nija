@@ -30,6 +30,15 @@ import time
 from typing import Any
 from datetime import datetime, timezone
 
+try:
+    from bot.execution_authority_context import assert_startup_write_authority
+except ImportError:
+    try:
+        from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
+    except ImportError:
+        def assert_startup_write_authority() -> None:
+            return
+
 # ── Load .env ─────────────────────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
@@ -156,6 +165,7 @@ def test_account(user_id: str, timeout: int = 15) -> bool:
 
     try:
         import global_kraken_nonce as gnm
+        assert_startup_write_authority()
         nonce_mgr = gnm.KrakenNonceManager()
     except Exception as exc:
         _warn(f"Could not load nonce manager: {exc}")

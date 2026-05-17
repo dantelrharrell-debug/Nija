@@ -116,6 +116,14 @@ def _env_bool(key: str, default: bool = False) -> bool:
     return default
 
 
+def _env_stop_loss_pct() -> float:
+    """Read stop-loss as a fraction, accepting legacy percent-style values."""
+    value = _env_float_alias("HF_STOP_LOSS_PCT", "HF_SCALP_STOP_LOSS_PCT", 0.0035)
+    if value > 0.05:
+        return value / 100.0
+    return value
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────────────────────────────────────
@@ -211,9 +219,7 @@ class HFScalpConfig:
     # env: HF_TAKE_PROFIT_PCT (Phase 1 preferred) or HF_SCALP_PROFIT_TARGET_PCT (legacy)
 
     stop_loss_pct: float = field(
-        default_factory=lambda: _env_float_alias(
-            "HF_STOP_LOSS_PCT", "HF_SCALP_STOP_LOSS_PCT", 0.35
-        )
+        default_factory=_env_stop_loss_pct
     )
     # env: HF_STOP_LOSS_PCT (Phase 1 preferred) or HF_SCALP_STOP_LOSS_PCT (legacy)
 
@@ -252,27 +258,19 @@ class HFScalpingMode:
         if self.config.enabled:
             logger.info(
                 "🚀 HF Scalping Mode ACTIVE — "
-                "cycle=%ds  confidence≥%.2f  ADX≥%d  vol≥%.0f%%  "
-                "TP=%.1f%%  SL=%.1f%%  max=%d trades/hr",
-                self.config.cycle_interval_seconds,
-                self.config.min_confidence,
-                self.config.min_adx,
-                self.config.volume_threshold * 100,
-                self.config.profit_target_pct,
-                self.config.stop_loss_pct,
-                self.config.max_trades_per_hour,
+                f"cycle={self.config.cycle_interval_seconds}s  "
+                f"confidence≥{self.config.min_confidence:.2f}  "
+                f"ADX≥{self.config.min_adx}  "
+                f"vol≥{self.config.volume_threshold * 100:.1f}%  "
+                f"TP={self.config.profit_target_pct:.1f}%  "
+                f"SL={self.config.stop_loss_pct * 100:.2f}%  "
+                f"max={self.config.max_trades_per_hour} trades/hr"
             )
             _live_mode = _env_bool("LIVE_CAPITAL_VERIFIED", False) and not _env_bool("DRY_RUN_MODE", False)
-            _floor_enforced = _env_bool("HF_SCALP_ENFORCE_SAFETY_FLOOR", True) and _live_mode
-            _min_conf_source = "env" if os.environ.get("HF_SCALP_MIN_CONFIDENCE") is not None else "default"
-            _vol_source = "env" if os.environ.get("HF_SCALP_VOLUME_THRESHOLD") is not None else "default"
             logger.info(
-                "HF effective gates — min_conf=%.2f (%s)  vol=%.0f%% (%s)  safety_floor=%s",
-                self.config.min_confidence,
-                _min_conf_source,
-                self.config.volume_threshold * 100,
-                _vol_source,
-                "on" if _floor_enforced else "off",
+                "HF effective gates — "
+                f"min_conf={self.config.min_confidence:.2f} "
+                f"vol={self.config.volume_threshold * 100:.1f}%"
             )
         else:
             logger.info("ℹ️  HF Scalping Mode INACTIVE (set HF_SCALP_MODE=1 to enable)")
@@ -296,15 +294,11 @@ class HFScalpingMode:
         # frequency while keeping capital-protection systems intact.
         floors = {
             "cycle_interval_seconds": 60,
-            "min_confidence": 0.18,
             "kraken_min_confidence": 0.18,
-            "min_adx": 5,
-            "volume_threshold": 0.006,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
             "profit_target_pct": 1.0,
-            "stop_loss_pct": 0.35,
             "max_trades_per_hour": 20,
             "trade_cooldown_seconds": 30.0,
         }
@@ -318,16 +312,25 @@ class HFScalpingMode:
             self.config.min_adx = 5
             self.config.volume_threshold = 0.006
             self.config.profit_target_pct = 1.0
-            self.config.stop_loss_pct = 0.35
+            self.config.stop_loss_pct = 0.0035
             # Phase 1 band: 10–20 trades/hr
             if self.config.max_trades_per_hour < 10:
                 self.config.max_trades_per_hour = 10
             elif self.config.max_trades_per_hour > 20:
                 self.config.max_trades_per_hour = 20
             logger.info(
-                "HF profile lock active — conf=0.18 adx=5 vol=0.6%% tp=1.0%% sl=0.35%% trades/hr=%d",
-                self.config.max_trades_per_hour,
+                "HF profile lock active — "
+                f"conf={self.config.min_confidence:.2f} "
+                f"adx={self.config.min_adx} "
+                f"vol={self.config.volume_threshold * 100:.1f}% "
+                f"tp={self.config.profit_target_pct:.1f}% "
+                f"sl={self.config.stop_loss_pct * 100:.2f}%"
             )
+
+        self.config.min_adx = max(self.config.min_adx, 5)
+        self.config.min_confidence = max(self.config.min_confidence, 0.18)
+        self.config.volume_threshold = max(self.config.volume_threshold, 0.006)
+        self.config.stop_loss_pct = max(self.config.stop_loss_pct, 0.0035)
 
         # Lower cap for trade frequency, lower bound for all other fields.
         clamped = []
@@ -367,7 +370,7 @@ class HFScalpingMode:
         ----------------------------------------
         _hf_scalp_active        bool  — sentinel read by analyze_market()
         _hf_min_confidence      float — overrides module-level MIN_CONFIDENCE
-        _hf_stop_pct            float — stop-loss %  (e.g. 0.3)
+        _hf_stop_pct            float — stop-loss fraction  (e.g. 0.0035)
         _hf_tp_pct              float — take-profit % (e.g. 0.5)
         min_adx                 int   — overrides self.min_adx (was 15 → 8)
         volume_threshold        float — overrides self.volume_threshold
@@ -392,14 +395,12 @@ class HFScalpingMode:
 
         logger.info(
             "✅ HF Scalp applied to APEX — "
-            "confidence≥%.2f  ADX≥%d  vol_thr=%.0f%%  trend_conf=%d/5  "
-            "TP=%.1f%%  SL=%.1f%%",
-            self.config.min_confidence,
-            self.config.min_adx,
-            self.config.volume_threshold * 100,
-            self.config.min_trend_confirmation,
-            self.config.profit_target_pct,
-            self.config.stop_loss_pct,
+            f"confidence≥{self.config.min_confidence:.2f}  "
+            f"ADX≥{self.config.min_adx}  "
+            f"vol≥{self.config.volume_threshold * 100:.1f}%  "
+            f"trend_conf={self.config.min_trend_confirmation}/5  "
+            f"TP={self.config.profit_target_pct:.1f}%  "
+            f"SL={self.config.stop_loss_pct * 100:.2f}%"
         )
 
     # ── Cycle timing ───────────────────────────────────────────────────────────

@@ -38,6 +38,11 @@ class _FakeRedisBackend:
 
 
 class TestDistributedNonceManagerAuthority(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = patch("bot.distributed_nonce_manager.assert_startup_write_authority", return_value=None)
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
     def test_get_nonce_rejects_empty_key_id(self) -> None:
         mgr = DistributedNonceManager(redis_client=None)
         with self.assertRaises(ValueError):

@@ -13,6 +13,7 @@ import threading
 import time
 import logging
 import importlib
+from dataclasses import dataclass
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator
@@ -24,6 +25,14 @@ from bot.instance_identity import (
     parse_writer_lock_metadata,
 )
 from bot.redis_env import get_redis_url
+
+try:
+    from bot.single_execution_authority_kernel import get_seak
+except ImportError:
+    try:
+        from single_execution_authority_kernel import get_seak  # type: ignore[import]
+    except ImportError:
+        get_seak = None  # type: ignore[assignment]
 
 
 _EXECUTION_AUTHORITY_ACTIVE: ContextVar[bool] = ContextVar(
@@ -38,6 +47,17 @@ _FENCE_LAST_ERR: str = ""
 _FENCE_RECOVER_NEXT_ATTEMPT_TS: float = 0.0
 
 logger = logging.getLogger("nija.execution_authority")
+
+
+@dataclass(frozen=True)
+class RuntimeAuthoritySnapshot:
+    ready: bool
+    authority_ready: bool
+    nonce_ready: bool
+    dispatch_health_ready: bool
+    dispatch_enabled: bool
+    kill_switch_active: bool
+    coordinator_state: str
 
 
 def _env_truthy(name: str) -> bool:
@@ -441,10 +461,75 @@ def has_execution_authority() -> bool:
     return bool(_EXECUTION_AUTHORITY_ACTIVE.get())
 
 
+def is_seak_halted() -> bool:
+    """Return True when the global execution kernel is halted."""
+    if get_seak is None:
+        return False
+    try:
+        return bool(getattr(get_seak(), "is_halted", False))
+    except Exception as exc:
+        logger.warning("SEAK halt status unavailable; failing closed: %s", exc)
+        return True
+
+
+def assert_startup_write_authority() -> None:
+    """Fail closed unless startup write-capable authority is fully available."""
+    assert_distributed_writer_authority()
+
+    if not has_execution_authority():
+        raise RuntimeError("Startup execution authority unavailable")
+
+    if is_seak_halted():
+        raise RuntimeError("SEAK halt active")
+
+
 def assert_execution_dispatch_permitted() -> None:
     """Fail closed unless writer authority and execution scope are both valid."""
     assert_distributed_writer_authority()
     if not has_execution_authority():
         raise RuntimeError(
             "Execution authority violation: order submission must originate from ExecutionPipeline"
+        )
+
+
+def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
+    """Return runtime convergence status for dispatch-time authority checks."""
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+
+        coordinator = get_startup_coordinator()
+        snapshot = coordinator.build_snapshot(
+            trading_state=os.getenv("NIJA_RUNTIME_TRADING_STATE", ""),
+            activation_intent=_env_truthy("LIVE_CAPITAL_VERIFIED")
+            or _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY"),
+        )
+        ready = bool(
+            snapshot.authority_ready
+            and snapshot.nonce_ready
+            and snapshot.dispatch_health_ready
+            and snapshot.dispatch_enabled
+            and not snapshot.kill_switch_active
+        )
+        return RuntimeAuthoritySnapshot(
+            ready=ready,
+            authority_ready=bool(snapshot.authority_ready),
+            nonce_ready=bool(snapshot.nonce_ready),
+            dispatch_health_ready=bool(snapshot.dispatch_health_ready),
+            dispatch_enabled=bool(snapshot.dispatch_enabled),
+            kill_switch_active=bool(snapshot.kill_switch_active),
+            coordinator_state=str(snapshot.coordinator_state),
+        )
+    except Exception as exc:
+        logger.warning("Runtime authority snapshot unavailable; failing closed: %s", exc)
+        return RuntimeAuthoritySnapshot(
+            ready=False,
+            authority_ready=False,
+            nonce_ready=False,
+            dispatch_health_ready=False,
+            dispatch_enabled=False,
+            kill_switch_active=False,
+            coordinator_state="unavailable",
         )

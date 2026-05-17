@@ -41,6 +41,15 @@ from urllib.parse import urlsplit, urlunsplit
 
 from bot.redis_env import get_redis_url
 
+try:
+    from bot.execution_authority_context import assert_startup_write_authority
+except ImportError:
+    try:
+        from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
+    except ImportError:
+        def assert_startup_write_authority() -> None:
+            return
+
 # fcntl is available on Linux/macOS; skip on Windows
 try:
     import fcntl as _fcntl
@@ -1041,6 +1050,7 @@ class KrakenNonceManager:
                            state file, cross-process lock, and error counters
                            so nonce sequences are completely isolated.
         """
+        assert_startup_write_authority()
         _wait_for_probe_window("KrakenNonceManager.__new__")
         if not key_id:
             # ── Platform singleton (hard guard) ───────────────────────────
@@ -2710,7 +2720,11 @@ NonceManager = KrakenNonceManager
 GlobalKrakenNonceManager = KrakenNonceManager
 
 # ── Module-level singletons ───────────────────────────────────────────────────
-_nonce_manager = KrakenNonceManager()
+try:
+    assert_startup_write_authority()
+    _nonce_manager = KrakenNonceManager()
+except Exception:
+    _nonce_manager = None
 
 
 def get_adaptive_offset_engine() -> AdaptiveNonceOffsetEngine:
@@ -2863,6 +2877,7 @@ def get_nonce_manager_for_key(key_id: str) -> KrakenNonceManager:
         current = _KEY_REGISTRY.get(key_id)
 
     if current is None:
+        assert_startup_write_authority()
         return KrakenNonceManager(key_id=key_id)
 
     return current
@@ -2918,6 +2933,7 @@ def rebuild_nonce_manager() -> KrakenNonceManager:
         "from Kraken server time — all accumulated nonce drift discarded"
     )
     KrakenNonceManager.destroy_instance(key_id="")
+    assert_startup_write_authority()
     _nonce_manager = KrakenNonceManager(key_id="")
     _logger.warning(
         "rebuild_nonce_manager: rebuild complete — new nonce=%d",

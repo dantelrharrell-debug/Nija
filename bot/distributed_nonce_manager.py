@@ -165,6 +165,15 @@ from typing import Any, Callable, Dict, Optional
 from bot.redis_env import get_redis_url
 from bot.redis_runtime import connect_redis_with_fallback
 
+try:
+    from bot.execution_authority_context import assert_startup_write_authority
+except ImportError:
+    try:
+        from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
+    except ImportError:
+        def assert_startup_write_authority() -> None:
+            return
+
 _logger = logging.getLogger(__name__)
 
 
@@ -1172,6 +1181,7 @@ class DistributedNonceManager:
     """
 
     def __init__(self, redis_client: Optional[object] = None) -> None:
+        assert_startup_write_authority()
         self._lock = threading.Lock()
         self._redis: Optional[_PerKeyRedisBackend] = None
         self._owner_id = str(uuid.uuid4())
@@ -1588,6 +1598,7 @@ def get_distributed_nonce_manager(
                     "⚠️  Multi-instance coordination is DISABLED. "
                     "This is a TEMPORARY fallback while Redis TLS is being fixed."
                 )
+                assert_startup_write_authority()
                 _dnm_instance = DistributedNonceManager(redis_client=None)
                 return _dnm_instance
             try:
@@ -1621,8 +1632,10 @@ def get_distributed_nonce_manager(
                     _redact_redis_url(redis_url),
                     exc,
                 )
+                assert_startup_write_authority()
                 _dnm_instance = DistributedNonceManager(redis_client=None)
                 return _dnm_instance
+        assert_startup_write_authority()
         _dnm_instance = DistributedNonceManager(redis_client=redis_client)
     return _dnm_instance
 
