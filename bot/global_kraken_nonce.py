@@ -2780,13 +2780,14 @@ def _ensure_live_manager() -> KrakenNonceManager:
     Raises ``RuntimeError`` if:
 
     * Nonce issuance has been revoked by the startup FSM (FAILED / IDLE state).
-    * The singleton was destroyed and has not been explicitly rebuilt.
+    * A controlled singleton rebuild fails.
 
-    The lazy-rebuild and in-place floor-repair paths that previously existed
-    here have been removed.  Nonce state is now authoritative: if the manager
-    does not exist or is not authorized, the caller receives a hard error
-    instead of a silently-repaired stale counter.  This eliminates hidden
-    rebuild races and the "four sources of truth" clock-domain oscillation.
+    Recovery policy
+    ---------------
+    If nonce issuance is authorized but the singleton was destroyed, this
+    function performs a controlled rebuild via ``rebuild_nonce_manager()``.
+    This keeps runtime recovery deterministic while still fail-closing when
+    the startup FSM revokes nonce issuance.
     """
     global _nonce_manager
     _wait_for_probe_window("_ensure_live_manager", timeout_s=30.0)
@@ -2799,13 +2800,19 @@ def _ensure_live_manager() -> KrakenNonceManager:
             "Wait for NONCE_READY / CONNECTED before issuing nonces."
         )
 
-    # ── Hard gate: destroyed singleton — no lazy rebuild ─────────────────
+    # ── Controlled recovery: destroyed singleton ──────────────────────────
     current = KrakenNonceManager._instance
     if current is None:
-        raise RuntimeError(
-            "KrakenNonceManager singleton was destroyed and has not been rebuilt. "
-            "Call rebuild_nonce_manager() from a controlled recovery path."
+        _logger.warning(
+            "KrakenNonceManager singleton missing while issuance is authorized; "
+            "attempting controlled rebuild."
         )
+        try:
+            current = rebuild_nonce_manager()
+        except Exception as exc:
+            raise RuntimeError(
+                "KrakenNonceManager singleton was destroyed and rebuild failed."
+            ) from exc
 
     # Keep module-level alias in sync.
     if _nonce_manager is not current:
