@@ -1457,9 +1457,6 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
             )
             return False
 
-    # Runtime execution authority is sourced from BootstrapFSM handoff, not
-    # capability flags or mutable "live mode" environment overrides.
-    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
     # Keep the post-unlock balance floor at the runtime minimum ($1) so the
     # supervised handoff does not immediately re-block on the same guard.
     os.environ["MINIMUM_TRADING_BALANCE"] = _post_unlock_minimum_trading_balance

@@ -71,6 +71,7 @@ class StartupConvergenceSnapshot:
     capital_balance: Optional[float]
     capital_stale: bool
     authority_version: int
+    authority_epoch: int
     authority_ready: bool
     authority_status: Dict[str, Any]
     nonce_version: int
@@ -81,6 +82,7 @@ class StartupConvergenceSnapshot:
     threads_confirmed_running: bool
     trading_state: str
     activation_intent: bool
+    activation_epoch: int
     kill_switch_active: bool
     dispatch_enabled: bool
     last_committed_snapshot_version: int
@@ -111,6 +113,7 @@ class _RuntimeState:
     capital_balance: Optional[float] = None
     capital_stale: bool = True
     authority_version: int = 0
+    authority_epoch: int = 0
     authority_ready: bool = False
     authority_status: Dict[str, Any] = field(default_factory=dict)
     nonce_version: int = 0
@@ -120,6 +123,7 @@ class _RuntimeState:
     threads_launched: int = 0
     threads_confirmed_running: bool = False
     activation_requested: bool = False
+    activation_epoch: int = 0
     kill_switch_active: bool = False
     dispatch_enabled: bool = False
     last_committed_snapshot_version: int = 0
@@ -253,6 +257,9 @@ class StartupCoordinator:
             status = dict(status or {})
             if self._runtime.authority_ready != bool(ready) or self._runtime.authority_status != status:
                 self._runtime.authority_version += 1
+                self._runtime.authority_epoch += 1
+                self._runtime.dispatch_enabled = False
+                self._runtime.last_committed_snapshot_version = 0
             self._runtime.authority_ready = bool(ready)
             self._runtime.authority_status = status
             return self._publish_locked(
@@ -260,6 +267,7 @@ class StartupCoordinator:
                 {
                     "ready": self._runtime.authority_ready,
                     "authority_version": self._runtime.authority_version,
+                    "authority_epoch": self._runtime.authority_epoch,
                 },
             )
 
@@ -267,16 +275,27 @@ class StartupCoordinator:
         with self._lock:
             if self._runtime.nonce_ready != bool(ready):
                 self._runtime.nonce_version += 1
+                self._runtime.authority_epoch += 1
+                self._runtime.dispatch_enabled = False
+                self._runtime.last_committed_snapshot_version = 0
             self._runtime.nonce_ready = bool(ready)
             return self._publish_locked(
                 StartupEvent.NONCE_STATUS_CHANGED,
-                {"ready": self._runtime.nonce_ready, "detail": detail, "nonce_version": self._runtime.nonce_version},
+                {
+                    "ready": self._runtime.nonce_ready,
+                    "detail": detail,
+                    "nonce_version": self._runtime.nonce_version,
+                    "authority_epoch": self._runtime.authority_epoch,
+                },
             )
 
     def record_dispatch_health(self, *, ready: bool, detail: str = "") -> int:
         with self._lock:
             if self._runtime.dispatch_health_ready != bool(ready):
                 self._runtime.dispatch_health_version += 1
+                self._runtime.authority_epoch += 1
+                self._runtime.dispatch_enabled = False
+                self._runtime.last_committed_snapshot_version = 0
             self._runtime.dispatch_health_ready = bool(ready)
             return self._publish_locked(
                 StartupEvent.DISPATCH_HEALTH_CHANGED,
@@ -284,6 +303,7 @@ class StartupCoordinator:
                     "ready": self._runtime.dispatch_health_ready,
                     "detail": detail,
                     "dispatch_health_version": self._runtime.dispatch_health_version,
+                    "authority_epoch": self._runtime.authority_epoch,
                 },
             )
 
@@ -310,6 +330,8 @@ class StartupCoordinator:
     def record_activation_requested(self, *, requested: bool = True, source: str = "") -> int:
         with self._lock:
             self._runtime.activation_requested = bool(requested)
+            if self._runtime.activation_requested:
+                self._runtime.activation_epoch = self._runtime.authority_epoch
             if self._runtime.coordinator_state not in {
                 StartupCoordinatorState.DISPATCH_ENABLED,
                 StartupCoordinatorState.LIVE_COMMITTED,
@@ -317,7 +339,11 @@ class StartupCoordinator:
                 self._runtime.coordinator_state = StartupCoordinatorState.ACTIVATION_ARMED
             return self._publish_locked(
                 StartupEvent.ACTIVATION_REQUESTED,
-                {"requested": self._runtime.activation_requested, "source": source},
+                {
+                    "requested": self._runtime.activation_requested,
+                    "source": source,
+                    "activation_epoch": self._runtime.activation_epoch,
+                },
             )
 
     def record_kill_switch(self, *, active: bool) -> int:
@@ -344,6 +370,7 @@ class StartupCoordinator:
                 capital_balance=self._runtime.capital_balance,
                 capital_stale=self._runtime.capital_stale,
                 authority_version=self._runtime.authority_version,
+                authority_epoch=self._runtime.authority_epoch,
                 authority_ready=self._runtime.authority_ready,
                 authority_status=dict(self._runtime.authority_status),
                 nonce_version=self._runtime.nonce_version,
@@ -354,6 +381,7 @@ class StartupCoordinator:
                 threads_confirmed_running=self._runtime.threads_confirmed_running,
                 trading_state=str(trading_state),
                 activation_intent=bool(activation_intent or self._runtime.activation_requested),
+                activation_epoch=self._runtime.activation_epoch,
                 kill_switch_active=self._runtime.kill_switch_active,
                 dispatch_enabled=self._runtime.dispatch_enabled,
                 last_committed_snapshot_version=self._runtime.last_committed_snapshot_version,
@@ -368,6 +396,9 @@ class StartupCoordinator:
             if not snapshot.activation_intent:
                 target = StartupCoordinatorState.ACTIVATION_ARMED
                 reason = "activation_intent_missing"
+            elif snapshot.activation_epoch != snapshot.authority_epoch:
+                target = StartupCoordinatorState.DEGRADED_RETRY
+                reason = "authority_epoch_stale"
             elif snapshot.kill_switch_active:
                 target = StartupCoordinatorState.FAIL_SAFE
                 reason = "kill_switch_active"

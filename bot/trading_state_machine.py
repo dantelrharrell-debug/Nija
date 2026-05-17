@@ -386,25 +386,7 @@ def _startup_reconciliation_gate() -> tuple[bool, str]:
         )
         return True, ""
 
-    if _env_truthy("NIJA_BYPASS_STARTUP_RECONCILIATION", "false"):
-        if not _env_truthy("NIJA_CONFIRM_BYPASS_RISKS", "false"):
-            logger.warning(
-                "[RECONCILIATION BYPASS IGNORED] NIJA_BYPASS_STARTUP_RECONCILIATION=true but "
-                "NIJA_CONFIRM_BYPASS_RISKS!=true; reconciliation gate remains enforced."
-            )
-        else:
-            logger.critical(
-                "[RECONCILIATION BYPASS] NIJA_BYPASS_STARTUP_RECONCILIATION=true — "
-                "startup reconciliation gate bypassed (verify exchange state manually)."
-            )
-            return True, ""
     if not _env_truthy("NIJA_REQUIRE_STARTUP_RECONCILIATION", "true"):
-        return True, ""
-    if _env_truthy("NIJA_RECONCILIATION_OVERRIDE", "false"):
-        logger.critical(
-            "[RECONCILIATION OVERRIDE] NIJA_RECONCILIATION_OVERRIDE=true — "
-            "startup reconciliation gate bypassed (verify exchange state manually)."
-        )
         return True, ""
     status = os.environ.get("NIJA_RECONCILIATION_STATUS", "").strip().upper()
     complete = _env_truthy("NIJA_RECONCILIATION_COMPLETE", "false")
@@ -427,21 +409,6 @@ def _startup_reconciliation_gate() -> tuple[bool, str]:
             "[RECONCILIATION GATE] reconciliation has not run yet (status=missing) — "
             "passing gate for initial startup. Gate will re-enforce once "
             "NIJA_RECONCILIATION_COMPLETE=true is set by the first trading cycle."
-        )
-        return True, ""
-
-    # DISCREPANCIES_FOUND: allow an operator escape valve via
-    # NIJA_ALLOW_DISCREPANCY_TRADING=true so the bot can trade after a manual
-    # review when discrepancies are understood and accepted.
-    # WARNING: enabling this override bypasses position-integrity protection.
-    # Set it only after verifying the exchange state manually, and remove it
-    # as soon as the underlying discrepancy is resolved.
-    if status == "DISCREPANCIES_FOUND" and _env_truthy("NIJA_ALLOW_DISCREPANCY_TRADING", "false"):
-        logger.critical(
-            "[RECONCILIATION GATE] NIJA_ALLOW_DISCREPANCY_TRADING=true — "
-            "proceeding despite DISCREPANCIES_FOUND status. "
-            "WARNING: position-integrity protection is bypassed. "
-            "Verify exchange state manually and remove this override once resolved."
         )
         return True, ""
 
@@ -1352,7 +1319,6 @@ class TradingStateMachine:
                     self._execution_authority = True
                     self._core_loop_owns_execution = False
                     self._can_dispatch_trades = True
-                    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
                 else:
                     logger.warning(
                         "ACTIVATION_COMMITTED_STATE_MISMATCH state=%s — retaining committed flag",
@@ -1382,7 +1348,6 @@ class TradingStateMachine:
                 self._execution_authority = True
                 self._core_loop_owns_execution = False
                 self._can_dispatch_trades = True
-            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
             return True
 
         if current not in (TradingState.OFF, TradingState.LIVE_PENDING_CONFIRMATION):

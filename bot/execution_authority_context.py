@@ -274,13 +274,13 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
     global _FENCE_LAST_CHECK_TS
 
     live_mode = _env_truthy("LIVE_CAPITAL_VERIFIED")
-    unsafe_bypass = _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK")
+    unsafe_bypass = False
     single_instance_opt_out = _single_instance_lock_opt_out(live_mode)
     strict_required = (
         _env_truthy("NIJA_REQUIRE_DISTRIBUTED_LOCK")
         or _env_truthy("STRICT_REDIS_WRITER_LOCK")
         or (live_mode and not single_instance_opt_out)
-    ) and not unsafe_bypass
+    )
     effective_strict_required = strict_required
     redis_url = get_redis_url()
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()

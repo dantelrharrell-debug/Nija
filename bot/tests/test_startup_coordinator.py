@@ -33,10 +33,10 @@ class TestStartupCoordinator(unittest.TestCase):
         )
         self.coordinator.record_threads_launched(1)
         self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
-        self.coordinator.record_activation_requested(requested=True, source="test")
         self.coordinator.record_authority(ready=True, status={"ok": True})
         self.coordinator.record_nonce_status(ready=True)
         self.coordinator.record_dispatch_health(ready=False, detail="execution pipeline pending")
+        self.coordinator.record_activation_requested(requested=True, source="test")
 
         blocked = self.coordinator.build_snapshot(
             trading_state="LIVE_PENDING_CONFIRMATION",
@@ -47,6 +47,7 @@ class TestStartupCoordinator(unittest.TestCase):
         self.assertEqual(blocked_decision.target_state, StartupCoordinatorState.DEGRADED_RETRY)
 
         self.coordinator.record_dispatch_health(ready=True, detail="execution pipeline healthy")
+        self.coordinator.record_activation_requested(requested=True, source="test")
         converged = self.coordinator.build_snapshot(
             trading_state="LIVE_PENDING_CONFIRMATION",
             activation_intent=True,
@@ -66,10 +67,10 @@ class TestStartupCoordinator(unittest.TestCase):
         )
         self.coordinator.record_threads_launched(1)
         self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
-        self.coordinator.record_activation_requested(requested=True, source="test")
         self.coordinator.record_authority(ready=True)
         self.coordinator.record_nonce_status(ready=True)
         self.coordinator.record_dispatch_health(ready=True)
+        self.coordinator.record_activation_requested(requested=True, source="test")
 
         snapshot = self.coordinator.build_snapshot(
             trading_state="LIVE_PENDING_CONFIRMATION",
