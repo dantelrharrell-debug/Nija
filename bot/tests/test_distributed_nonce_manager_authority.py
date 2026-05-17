@@ -163,10 +163,36 @@ class TestGlobalKrakenNonceRecovery(unittest.TestCase):
             gkn.KrakenNonceManager, "_instance", None
         ), patch.object(gkn, "_wait_for_probe_window", return_value=True), patch.object(
             gkn, "rebuild_nonce_manager", side_effect=RuntimeError("boom")
+        ), patch.object(gkn, "_last_rebuild_failure_monotonic", 0.0), patch.object(
+            gkn, "_last_rebuild_failure_error", None
         ):
             with self.assertRaises(RuntimeError) as ctx:
                 gkn._ensure_live_manager()
         self.assertIn("rebuild failed", str(ctx.exception).lower())
+
+    def test_ensure_live_manager_applies_rebuild_cooldown_after_failure(self) -> None:
+        with patch.object(gkn, "_NONCE_ISSUANCE_AUTHORIZED", True), patch.object(
+            gkn.KrakenNonceManager, "_instance", None
+        ), patch.object(gkn, "_wait_for_probe_window", return_value=True), patch.object(
+            gkn, "_REBUILD_RETRY_COOLDOWN_S", 30.0
+        ), patch.object(
+            gkn, "_last_rebuild_failure_monotonic", 0.0
+        ), patch.object(
+            gkn, "_last_rebuild_failure_error", None
+        ), patch.object(
+            gkn, "time"
+        ) as mocked_time, patch.object(
+            gkn, "rebuild_nonce_manager", side_effect=RuntimeError("boom")
+        ) as rebuild:
+            mocked_time.monotonic.side_effect = [100.0, 101.0, 105.0]
+            with self.assertRaises(RuntimeError) as first:
+                gkn._ensure_live_manager()
+            self.assertIn("rebuild failed", str(first.exception).lower())
+
+            with self.assertRaises(RuntimeError) as second:
+                gkn._ensure_live_manager()
+            self.assertIn("retry suppressed", str(second.exception).lower())
+            self.assertEqual(rebuild.call_count, 1)
 
 
 if __name__ == "__main__":

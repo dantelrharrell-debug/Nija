@@ -220,6 +220,9 @@ _ERROR_RECOVERY_THRESHOLD: int = int(os.environ.get("NIJA_NONCE_ERROR_RECOVERY_T
 #                 Negative values allow slack for minor backward clock drift.
 _PRE_REQUEST_EPSILON_MS: int      = int(os.environ.get("NIJA_NONCE_EPSILON_MS",       "1"))
 _PRE_REQUEST_SAFETY_OFFSET_MS: int = int(os.environ.get("NIJA_NONCE_SAFETY_OFFSET_MS", "0"))
+_REBUILD_RETRY_COOLDOWN_S: float = float(
+    os.environ.get("NIJA_NONCE_REBUILD_RETRY_COOLDOWN_S", "30.0")
+)
 
 # After this many consecutive nuclear resets within one session the manager
 # automatically activates deep-probe mode (12 × 10 min = 120 min coverage),
@@ -2725,6 +2728,8 @@ try:
     _nonce_manager = KrakenNonceManager()
 except Exception:
     _nonce_manager = None
+_last_rebuild_failure_monotonic: float = 0.0
+_last_rebuild_failure_error: Exception | None = None
 
 
 def get_adaptive_offset_engine() -> AdaptiveNonceOffsetEngine:
@@ -2789,7 +2794,7 @@ def _ensure_live_manager() -> KrakenNonceManager:
     This keeps runtime recovery deterministic while still fail-closing when
     the startup FSM revokes nonce issuance.
     """
-    global _nonce_manager
+    global _nonce_manager, _last_rebuild_failure_monotonic, _last_rebuild_failure_error
     _wait_for_probe_window("_ensure_live_manager", timeout_s=30.0)
 
     # ── Hard gate: authorization check ───────────────────────────────────
@@ -2803,15 +2808,30 @@ def _ensure_live_manager() -> KrakenNonceManager:
     # ── Controlled recovery: destroyed singleton ──────────────────────────
     current = KrakenNonceManager._instance
     if current is None:
+        now_mono = time.monotonic()
+        if (
+            _last_rebuild_failure_monotonic > 0.0
+            and (now_mono - _last_rebuild_failure_monotonic) < _REBUILD_RETRY_COOLDOWN_S
+        ):
+            remaining_s = _REBUILD_RETRY_COOLDOWN_S - (now_mono - _last_rebuild_failure_monotonic)
+            raise RuntimeError(
+                "KrakenNonceManager singleton was destroyed and previous rebuild failed; "
+                f"retry suppressed for {remaining_s:.1f}s cooldown."
+            ) from _last_rebuild_failure_error
         _logger.warning(
             "KrakenNonceManager singleton missing while issuance is authorized; "
             "attempting controlled rebuild."
         )
         try:
             current = rebuild_nonce_manager()
+            _last_rebuild_failure_monotonic = 0.0
+            _last_rebuild_failure_error = None
         except Exception as exc:
+            _last_rebuild_failure_monotonic = time.monotonic()
+            _last_rebuild_failure_error = exc
             raise RuntimeError(
-                "KrakenNonceManager singleton was destroyed and rebuild failed."
+                "KrakenNonceManager singleton was destroyed and rebuild failed; "
+                f"retry cooldown {_REBUILD_RETRY_COOLDOWN_S:.1f}s activated."
             ) from exc
 
     # Keep module-level alias in sync.
