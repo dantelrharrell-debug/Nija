@@ -209,16 +209,28 @@ def _format_startup_phase_tag() -> str:
     return "phase=unknown"
 
 
-def _reset_startup_events_for_fresh_attempt() -> None:
+def _reset_startup_events_for_fresh_attempt(*, clear_initialized_state: bool = False) -> None:
     """Reset readiness table and completion events before a fresh bootstrap attempt.
 
     When a startup attempt fails before full handoff, the next retry must not
     inherit stale readiness signals from the previous attempt.
     """
     _rt_reset()
+    if clear_initialized_state:
+        _acquired = _initialized_state_lock.acquire(timeout=5.0)
+        if _acquired:
+            try:
+                _initialized_state.clear()
+            finally:
+                _initialized_state_lock.release()
+            logger.debug("🔄 Cleared cached initialized state for clean bootstrap cycle")
+        else:
+            logger.warning("Could not acquire init lock to clear cached initialized state")
     _bootstrap_complete_flag.clear()
     _bootstrap_completed_event.clear()
     _force_trade_handoff_complete_event.clear()
+    os.environ["NIJA_EXECUTION_ACTIVE"] = "0"
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
     try:
         from bot.nija_core_loop import TRADING_ENGINE_READY as _tl_ready
     except ImportError:
@@ -655,10 +667,16 @@ def _hydrate_startup_balances(strategy) -> float:
                 _hydrated_total_balance_usd = _override
                 os.environ["ACCOUNT_BALANCE"] = f"{_override:.8f}"
                 _rt_mark_ready("balance_hydrated")
-                _require_startup_execution_authority(
-                    context="hydrate_startup_balances: ACCOUNT_BALANCE_OVERRIDE",
-                    force_refresh=True,
-                )
+                try:
+                    _startup_execution_authority_status(
+                        context="hydrate_startup_balances: ACCOUNT_BALANCE_OVERRIDE",
+                        force_refresh=True,
+                    )
+                except Exception as _auth_status_err:
+                    logger.warning(
+                        "Authority status unavailable during balance override hydration: %s",
+                        _auth_status_err,
+                    )
                 _rt_mark_ready("capital_ready")
                 logger.warning(
                     "⚠️ ACCOUNT_BALANCE_OVERRIDE active: forcing startup balance to $%.2f",
@@ -724,10 +742,16 @@ def _hydrate_startup_balances(strategy) -> float:
         logger.warning("Startup hydration total is <= 0 in non-live mode; continuing")
 
     _rt_mark_ready("balance_hydrated")
-    _require_startup_execution_authority(
-        context="hydrate_startup_balances",
-        force_refresh=True,
-    )
+    try:
+        _startup_execution_authority_status(
+            context="hydrate_startup_balances",
+            force_refresh=True,
+        )
+    except Exception as _auth_status_err:
+        logger.warning(
+            "Authority status unavailable during startup hydration: %s",
+            _auth_status_err,
+        )
     _rt_mark_ready("capital_ready")
     logger.info("CAPITAL_READY_SET")
     return _hydrated_total_balance_usd
@@ -1108,14 +1132,20 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
         logger.warning("Strategy publish failed (%s): %s", context, exc)
         return False
 
+    # Capability is independent from execution authority.  Publish strategy/risk/
+    # execution capability deterministically even when authority is temporarily
+    # unavailable; authority remains a separate hard gate for live activation.
     try:
-        _require_startup_execution_authority(
+        _startup_execution_authority_status(
             context=f"publish_strategy_runtime_readiness:{context}",
             force_refresh=True,
         )
     except Exception as exc:
-        logger.error("Strategy readiness blocked (%s): %s", context, exc)
-        return False
+        logger.warning(
+            "Strategy readiness published without authority confirmation (%s): %s",
+            context,
+            exc,
+        )
 
     _rt_mark_ready("strategy_ready")
     _rt_mark_ready("risk_ready")
@@ -1313,7 +1343,22 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
     _bootstrap_state_name = "UNAVAILABLE"
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
         try:
-            _bootstrap_state_name = getattr(_get_bootstrap_fsm().state, "value", "unknown")
+            _bfsm_unlock = _get_bootstrap_fsm()
+            _bootstrap_state_name = getattr(_bfsm_unlock.state, "value", "unknown")
+            _fsm_exec_authority = bool(
+                _bfsm_unlock.has_execution_authority()
+                if hasattr(_bfsm_unlock, "has_execution_authority")
+                else getattr(_bfsm_unlock, "execution_authority", False)
+            )
+            if not (_bootstrap_state_name == "RUNNING_SUPERVISED" and _fsm_exec_authority):
+                logger.critical(
+                    "EXECUTION ENABLE BLOCKED: BootstrapFSM is not the active execution authority "
+                    "(state=%s authority=%s context=%s)",
+                    _bootstrap_state_name,
+                    _fsm_exec_authority,
+                    context,
+                )
+                return False
         except Exception:
             _bootstrap_state_name = "unknown"
 
@@ -1325,31 +1370,30 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
         context,
     )
 
-    os.environ["LIVE_CAPITAL_VERIFIED"] = "true"
-    os.environ["LIVE_TRADING"] = "1"
-    os.environ["ALLOW_EXECUTION"] = "true"
-    os.environ["BLOCK_EXECUTION"] = "false"
-    os.environ["DRY_RUN_MODE"] = "false"
-    os.environ["SUPERVISOR_MODE"] = "false"
+    # Runtime execution authority is sourced from BootstrapFSM handoff, not
+    # capability flags or mutable "live mode" environment overrides.
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
     # Keep the post-unlock balance floor at the runtime minimum ($1) so the
     # supervised handoff does not immediately re-block on the same guard.
     os.environ["MINIMUM_TRADING_BALANCE"] = _post_unlock_minimum_trading_balance
 
     try:
-        if os.getenv("LIVE_CAPITAL_VERIFIED", "").lower() == "true":
-            _activated_now = False
-            if hasattr(_tsm_unlock, "activate_live_trading"):
-                _activated_now = bool(
-                    _tsm_unlock.activate_live_trading(
-                        reason=f"bootstrap unlock confirmed ({context})"
-                    )
+        _activated_now = False
+        if hasattr(_tsm_unlock, "activate_live_trading"):
+            _activated_now = bool(
+                _tsm_unlock.activate_live_trading(
+                    reason=f"bootstrap unlock confirmed ({context})"
                 )
-            if (not _activated_now) and _tsm_unlock.get_current_state() == _TSMState.OFF:
-                _tsm_unlock.transition_to(
-                    _TSMState.LIVE_ACTIVE,
-                    f"bootstrap unlock confirmed ({context})",
-                )
-                logger.info("✅ Forced state transition: OFF -> LIVE_ACTIVE")
+            )
+        _tsm_live = _tsm_unlock.get_current_state() == _TSMState.LIVE_ACTIVE
+        if not (_activated_now or _tsm_live):
+            logger.critical(
+                "EXECUTION ENABLE BLOCKED: TradingStateMachine activation not committed "
+                "(state=%s context=%s)",
+                _tsm_unlock.get_current_state().value,
+                context,
+            )
+            return False
     except Exception as _force_transition_err:
         logger.warning(
             "Force LIVE_ACTIVE transition failed after bootstrap unlock (%s): %s",
@@ -5172,7 +5216,7 @@ def _run_bot_startup_and_trading_with_retry():
                     and "active_threads" in _state_snap
                 )
                 if not _init_done:
-                    _reset_startup_events_for_fresh_attempt()
+                    _reset_startup_events_for_fresh_attempt(clear_initialized_state=True)
 
                 # Attempt to start the bot
                 _run_bot_startup_and_trading()
@@ -6796,10 +6840,16 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     logger.info("🚀 SYSTEM READY — TRADING ENABLED")
                     logger.info("💰 Startup total capital: $%.2f", _total_capital)
                     try:
-                        _require_startup_execution_authority(
+                        _startup_execution_authority_status(
                             context="capital_gate: capital_ready",
                             force_refresh=True,
                         )
+                    except Exception as _gate_signal_err:
+                        logger.warning(
+                            "Authority status probe failed during capital_ready signal: %s",
+                            _gate_signal_err,
+                        )
+                    try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         raise RuntimeError(
@@ -6876,10 +6926,16 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     )
                     logger.warning("🚀 SYSTEM READY — proceeding with zero or partial balance")
                     try:
-                        _require_startup_execution_authority(
+                        _startup_execution_authority_status(
                             context="capital_gate: degraded capital_ready",
                             force_refresh=True,
                         )
+                    except Exception as _gate_signal_err:
+                        logger.warning(
+                            "Authority status probe failed during degraded capital_ready signal: %s",
+                            _gate_signal_err,
+                        )
+                    try:
                         _rt_mark_ready("capital_ready")
                     except Exception as _gate_signal_err:
                         raise RuntimeError(
@@ -7962,7 +8018,7 @@ def main():
     # - Balance fetching
     # - Trading loop
     
-    _reset_startup_events_for_fresh_attempt()
+    _reset_startup_events_for_fresh_attempt(clear_initialized_state=True)
 
     logger.info("=" * 70)
     logger.info("🚀 SPAWNING STARTUP THREAD")
