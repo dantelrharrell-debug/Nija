@@ -1442,6 +1442,31 @@ class KrakenBrokerAdapter(BrokerInterface):
                         if _taxonomy:
                             logger.critical("   Remediation: %s", _taxonomy.remediation)
                         return False
+                    # Check if it's a permission error
+                    is_auth_error = any(keyword in error_msgs.lower() for keyword in [
+                        'eapi:invalid key', 'invalid key',
+                        'eapi:invalid signature', 'invalid signature',
+                        'api key invalid'
+                    ])
+                    if is_auth_error:
+                        logger.error(f"❌ Kraken connection test failed: {error_msgs}")
+                        logger.error("   ⚠️  API KEY AUTHENTICATION ERROR")
+                        logger.error(
+                            "   Kraken rejected the key/secret pair. Verify the key is active and "
+                            "the secret matches exactly."
+                        )
+                        logger.error("   🔧 FIX:")
+                        logger.error("   1. Go to https://www.kraken.com/u/security/api")
+                        logger.error("   2. Confirm this is a Classic API key")
+                        logger.error("   3. Recreate key/secret pair and redeploy env vars")
+                        logger.error("   4. Restart NIJA and re-run test_kraken_connection.py")
+                        return False
+
+                    # Check if it's a permission error
+                    is_permission_error = any(keyword in error_msgs.lower() for keyword in [
+                        'permission denied', 'egeneral:permission',
+                        'eapi:invalid permission', 'insufficient permission'
+                    ])
 
                     # PERMISSION → CONFIG_FAIL: misconfigured key — do not retry
                     if _permission_hit:

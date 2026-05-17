@@ -214,6 +214,17 @@ def test_account(user_id: str, timeout: int = 15) -> bool:
         _fail(f"Kraken API returned errors ({elapsed_ms} ms): {errors}")
         if any("nonce" in str(e).lower() for e in errors):
             _warn("Nonce error detected — run: python3 reset_kraken_nonce.py")
+        if any(
+            token in str(e).lower()
+            for e in errors
+            for token in (
+                "invalid key",
+                "eapi:invalid key",
+                "invalid signature",
+                "eapi:invalid signature",
+            )
+        ):
+            _warn("Authentication error — verify Kraken API key/secret pair and key is active")
         if any("permission" in str(e).lower() for e in errors):
             _warn("Permission error — ensure your API key has 'Query Funds' permission")
         if nonce_mgr and gnm is not None:
