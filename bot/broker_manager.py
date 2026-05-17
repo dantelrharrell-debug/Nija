@@ -2551,13 +2551,43 @@ class CoinbaseBroker(BaseBroker):
                         max_retries,
                         e,
                     )
+                    # Reinitialise the REST client entirely — merely clearing cookies does not
+                    # fix the broken requests.Session state that triggers the recursion.
                     try:
-                        _session = getattr(getattr(self, "client", None), "session", None)
-                        if _session is not None and hasattr(_session, "cookies"):
-                            _session.cookies.clear()
-                            logging.warning("   Cleared Coinbase HTTP session cookies to recover from recursion state")
-                    except Exception as _session_reset_err:
-                        logging.debug("Session cookie reset failed (non-fatal): %s", _session_reset_err)
+                        _old_client = getattr(self, "client", None)
+                        if _old_client is not None:
+                            _stored_key = getattr(_old_client, "api_key", None)
+                            _stored_secret = getattr(_old_client, "api_secret", None)
+                            if _stored_key and _stored_secret:
+                                try:
+                                    from coinbase.rest import RESTClient as _CBRESTClient
+                                except ImportError:
+                                    _CBRESTClient = None  # type: ignore[assignment,misc]
+                                if _CBRESTClient is not None:
+                                    self.client = _CBRESTClient(
+                                        api_key=_stored_key, api_secret=_stored_secret
+                                    )
+                                    logging.warning(
+                                        "   Recreated Coinbase REST client to recover from recursion state"
+                                    )
+                                else:
+                                    # SDK unavailable — fall back to cookie-clear only
+                                    _session = getattr(_old_client, "session", None)
+                                    if _session is not None and hasattr(_session, "cookies"):
+                                        _session.cookies.clear()
+                                        logging.warning(
+                                            "   Cleared Coinbase HTTP session cookies (recursion recovery fallback)"
+                                        )
+                            else:
+                                # Credentials not cached on old client — fall back to cookie-clear
+                                _session = getattr(_old_client, "session", None)
+                                if _session is not None and hasattr(_session, "cookies"):
+                                    _session.cookies.clear()
+                                    logging.warning(
+                                        "   Cleared Coinbase HTTP session cookies (recursion recovery fallback)"
+                                    )
+                    except Exception as _reinit_err:
+                        logging.debug("Client reinit failed (non-fatal): %s", _reinit_err)
 
                     if attempt >= max_retries - 1:
                         raise
@@ -2844,6 +2874,12 @@ class CoinbaseBroker(BaseBroker):
                         'timeout', 'connection', 'network', 'service unavailable',
                         '503', '504', 'temporary', 'try again'
                     ])
+                    # Recursion errors arise from the requests/cookiejar internal state after
+                    # long-running sessions.  The REST client must be recreated to recover.
+                    is_recursion_error = (
+                        isinstance(e, RecursionError)
+                        or 'maximum recursion depth exceeded' in error_msg_lower
+                    )
 
                     # 401 Unauthorized means invalid credentials — retrying is pointless
                     if is_401_unauthorized:
@@ -2860,7 +2896,22 @@ class CoinbaseBroker(BaseBroker):
                         self._is_available = False
                         return False
 
-                    is_retryable = is_403_forbidden or is_429_rate_limit or is_network_error
+                    # Recursion error: reinitialise the REST client before the next attempt.
+                    # Simply clearing cookies is insufficient — the requests.Session object
+                    # itself may be in a broken recursive state and must be replaced.
+                    if is_recursion_error:
+                        logging.warning(
+                            "⚠️  Recursion error in connect() attempt %s/%s — "
+                            "reinitialising Coinbase REST client: %s",
+                            attempt, max_attempts, e,
+                        )
+                        try:
+                            self.client = RESTClient(api_key=api_key, api_secret=api_secret)
+                            logging.warning("   ✅ Coinbase REST client reinitialized for next retry")
+                        except Exception as _reinit_err:
+                            logging.warning("   Client reinit failed: %s", _reinit_err)
+
+                    is_retryable = is_403_forbidden or is_429_rate_limit or is_network_error or is_recursion_error
 
                     if is_retryable and attempt < max_attempts:
                         # Use different delays based on error type
@@ -2875,6 +2926,12 @@ class CoinbaseBroker(BaseBroker):
                             delay = min(RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)), 120.0)
                             logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
                             logging.warning(f"   Rate limit exceeded - waiting {delay:.1f}s before retry...")
+                        elif is_recursion_error:
+                            # Recursion errors: use a short fixed delay — the real fix is the
+                            # client reinitialisation above; we don't need an aggressive backoff.
+                            delay = min(15.0 * (2 ** (attempt - 1)), 60.0)
+                            logging.warning(f"⚠️  Connection attempt {attempt}/{max_attempts} failed (recursion): {error_msg}")
+                            logging.warning(f"   Waiting {delay:.1f}s before retry...")
                         else:
                             # Network errors: Moderate exponential backoff
                             delay = min(10.0 * (2 ** (attempt - 1)), 60.0)
