@@ -1308,45 +1308,45 @@ class DistributedNonceManager:
                 key_id=api_key_id,
                 error=exc,
             )
-            if _live_mode_active():
-                raise RuntimeError(
-                    "DistributedNonceManager.get_nonce: Redis nonce issuance failed in LIVE mode; "
-                    "refusing file/fcntl fallback"
-                ) from exc
-            # TEMPORARY degraded mode: if Redis fails at runtime, fall back to
-            # file-based per-key fcntl locks rather than crashing.
-            _logger.critical(
-                "DistributedNonceManager.get_nonce: Redis nonce issuance failed "
-                "for key=%s (%s) — falling back to file-lock nonce. "
-                "⚠️  Multi-instance coordination is DISABLED. "
-                "This is a TEMPORARY fallback while Redis TLS is being fixed.",
-                api_key_id,
-                exc,
-            )
-            nonce = self._file_nonce(api_key_id)
-            _emit_nonce_debug_hook(
-                "nonce_request_success",
-                trace_id=trace_id,
-                key_id=api_key_id,
-                nonce=nonce,
-                backend="file",
-            )
-            return nonce
+            # Redis is the single writer authority. When Redis was configured
+            # and connected, a runtime failure must never silently fall back to
+            # the file-lock path. The file-based KrakenNonceManager counter has
+            # NOT been advanced by Redis-issued nonces, so any value it produces
+            # is far below Kraken's recorded high-water mark and will be
+            # immediately rejected — a stale nonce is worse than no nonce.
+            # Raise unconditionally so the caller can reconnect and retry.
+            raise RuntimeError(
+                f"DistributedNonceManager.get_nonce: Redis nonce issuance failed "
+                f"for key={api_key_id} ({exc}) — refusing file/fcntl fallback to "
+                "preserve single-writer Redis authority; caller should reconnect Redis and retry"
+            ) from exc
 
     def record_error(self, api_key_id: str) -> None:
         """Record a nonce rejection from Kraken for *api_key_id*.
 
-        In Redis mode the error is forwarded to the per-key
-        ``KrakenNonceManager`` so the escalating jump backoff and nuclear-reset
-        machinery still fires (Redis nonce stays authoritative, but the local
-        manager's recovery probes drive the jump strategy).
-        In file mode this directly calls ``record_error()`` on the manager.
+        In Redis mode, nonce recovery is handled entirely by the Redis monotonic
+        counter (the next ``get_nonce()`` call will produce a higher value).
+        The file-based KrakenNonceManager is NOT consulted: its counter has not
+        been driven by Redis-issued nonces, so forwarding errors to it would
+        trigger stale-state escalation (nuclear resets, probe loops) against a
+        counter value that has nothing to do with the current session.
+
+        In file mode this directly calls ``record_error()`` on the per-key manager.
         """
         api_key_id = _require_api_key_id(api_key_id)
+        _emit_nonce_debug_hook("nonce_record_error", key_id=api_key_id)
+        if self._redis is not None:
+            # Redis is the authority; skip file-based state machine to prevent
+            # spurious escalation from a stale counter.
+            _logger.debug(
+                "DistributedNonceManager.record_error: key=%s "
+                "(Redis mode — file-manager state skipped)",
+                api_key_id,
+            )
+            return
         try:
             mgr = self._get_file_manager(api_key_id)
             mgr.record_error()
-            _emit_nonce_debug_hook("nonce_record_error", key_id=api_key_id)
         except Exception as exc:
             _logger.debug(
                 "DistributedNonceManager.record_error: key=%s error=%s",
@@ -1354,12 +1354,29 @@ class DistributedNonceManager:
             )
 
     def record_success(self, api_key_id: str, nonce: int) -> None:
-        """Record that Kraken accepted *nonce* for *api_key_id*."""
+        """Record that Kraken accepted *nonce* for *api_key_id*.
+
+        In Redis mode, success tracking is handled by the Redis counter.
+        The file-based KrakenNonceManager is NOT consulted: its
+        ``_last_successful_nonce`` would be set from a stale file counter, not
+        from the Redis-issued value, creating a divergent success-history record
+        that could mislead the pre-request monotonicity guard.
+
+        In file mode this directly calls ``record_success()`` on the per-key manager.
+        """
         api_key_id = _require_api_key_id(api_key_id)
+        _emit_nonce_debug_hook("nonce_record_success", key_id=api_key_id, nonce=nonce)
+        if self._redis is not None:
+            # Redis is the authority; skip file-based state to avoid divergence.
+            _logger.debug(
+                "DistributedNonceManager.record_success: key=%s nonce=%d "
+                "(Redis mode — file-manager state skipped)",
+                api_key_id, nonce,
+            )
+            return
         try:
             mgr = self._get_file_manager(api_key_id)
             mgr.record_success()
-            _emit_nonce_debug_hook("nonce_record_success", key_id=api_key_id, nonce=nonce)
         except Exception as exc:
             _logger.debug(
                 "DistributedNonceManager.record_success: key=%s error=%s",
