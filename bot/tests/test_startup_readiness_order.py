@@ -311,6 +311,60 @@ class TestStartupReadinessOrder(unittest.TestCase):
             f"_enable_execution_after_bootstrap_supervised must not mutate legacy live-mode flags: {sorted(mutated_flags)}",
         )
 
+    def test_execution_unlock_promotes_capital_bootstrap_to_running_before_commit_loop(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        unlock_fn = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "_enable_execution_after_bootstrap_supervised"
+            ),
+            None,
+        )
+        if unlock_fn is None:
+            self.fail("Expected _enable_execution_after_bootstrap_supervised() in bot.py")
+
+        running_transition_calls = []
+        commit_activation_calls = []
+        for node in ast.walk(unlock_fn):
+            if not isinstance(node, ast.Call):
+                continue
+            if (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "transition"
+                and node.args
+                and isinstance(node.args[0], ast.Attribute)
+                and isinstance(node.args[0].value, ast.Name)
+                and node.args[0].value.id == "_CapitalBootstrapState"
+                and node.args[0].attr == "RUNNING"
+            ):
+                running_transition_calls.append(node)
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "commit_activation"
+            ):
+                commit_activation_calls.append(node)
+
+        self.assertEqual(
+            len(running_transition_calls),
+            1,
+            "Expected exactly one CapitalBootstrapFSM RUNNING transition in _enable_execution_after_bootstrap_supervised()",
+        )
+        self.assertGreaterEqual(
+            len(commit_activation_calls),
+            1,
+            "Expected commit_activation retries inside _enable_execution_after_bootstrap_supervised()",
+        )
+        self.assertLess(
+            running_transition_calls[0].lineno,
+            commit_activation_calls[0].lineno,
+            "CapitalBootstrapFSM must reach RUNNING before execution convergence retries begin",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

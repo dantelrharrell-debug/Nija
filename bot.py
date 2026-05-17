@@ -1293,6 +1293,21 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
             get_state_machine as _get_tsm_unlock,
         )
 
+    try:
+        from bot.capital_flow_state_machine import (
+            CapitalBootstrapState as _CapitalBootstrapState,
+            get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm_unlock,
+        )
+    except ImportError:
+        try:
+            from capital_flow_state_machine import (  # type: ignore[import]
+                CapitalBootstrapState as _CapitalBootstrapState,
+                get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm_unlock,
+            )
+        except ImportError:
+            _CapitalBootstrapState = None  # type: ignore[assignment]
+            _get_capital_bootstrap_fsm_unlock = None  # type: ignore[assignment]
+
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
         # Give the thread-launch/supervisor handoff a short bounded window to
         # commit RUNNING_SUPERVISED before execution is enabled.
@@ -1386,6 +1401,45 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
     except Exception as _startup_coord_err:
         logger.debug("Startup coordinator unlock handoff skipped (%s): %s", context, _startup_coord_err)
 
+    if _get_capital_bootstrap_fsm_unlock is not None and _CapitalBootstrapState is not None:
+        try:
+            _capital_bootstrap_fsm = _get_capital_bootstrap_fsm_unlock()
+            _capital_state_obj = getattr(_capital_bootstrap_fsm, "state", None)
+            _capital_state_name = getattr(_capital_state_obj, "value", str(_capital_state_obj))
+            if _capital_state_name != _CapitalBootstrapState.RUNNING.value:
+                _capital_transition_ok = bool(
+                    _capital_bootstrap_fsm.transition(
+                        _CapitalBootstrapState.RUNNING,
+                        f"execution unlock precondition ({context})",
+                    )
+                )
+                _capital_state_obj = getattr(_capital_bootstrap_fsm, "state", None)
+                _capital_state_name = getattr(_capital_state_obj, "value", str(_capital_state_obj))
+                if not _capital_transition_ok and _capital_state_name != _CapitalBootstrapState.RUNNING.value:
+                    logger.critical(
+                        "EXECUTION ENABLE BLOCKED: CapitalBootstrapFSM failed to reach RUNNING "
+                        "(state=%s context=%s)",
+                        _capital_state_name,
+                        context,
+                    )
+                    return False
+            logger.critical(
+                "CAPITAL BOOTSTRAP RUNNING CONFIRMED: state=%s context=%s",
+                _capital_state_name,
+                context,
+            )
+        except Exception as _capital_unlock_err:
+            logger.critical(
+                "EXECUTION ENABLE BLOCKED: CapitalBootstrapFSM RUNNING handoff failed "
+                "(context=%s err=%s)",
+                context,
+                _capital_unlock_err,
+            )
+            return False
+
+    # Runtime execution authority is sourced from BootstrapFSM handoff, not
+    # capability flags or mutable "live mode" environment overrides.
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
     # Keep the post-unlock balance floor at the runtime minimum ($1) so the
     # supervised handoff does not immediately re-block on the same guard.
     os.environ["MINIMUM_TRADING_BALANCE"] = _post_unlock_minimum_trading_balance
@@ -7630,28 +7684,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 finally:
                     _initialized_state_lock.release()
 
-            # Explicit capital bootstrap final step: READY -> RUNNING.
-            try:
-                from bot.capital_flow_state_machine import (
-                    CapitalBootstrapState as _CapitalBootstrapState,
-                    get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
-                )
-            except ImportError:
-                try:
-                    from capital_flow_state_machine import (  # type: ignore[import]
-                        CapitalBootstrapState as _CapitalBootstrapState,
-                        get_capital_bootstrap_fsm as _get_capital_bootstrap_fsm,
-                    )
-                except ImportError:
-                    _get_capital_bootstrap_fsm = None  # type: ignore[assignment]
-            if _get_capital_bootstrap_fsm is not None:
-                try:
-                    _get_capital_bootstrap_fsm().transition(
-                        _CapitalBootstrapState.RUNNING,
-                        "runtime supervised threads active",
-                    )
-                except Exception as _capital_running_err:
-                    logger.warning("Capital bootstrap RUNNING transition failed: %s", _capital_running_err)
             try:
                 _barrier_state = _rt_snapshot()
                 logger.info("Barrier state: %s", _barrier_state)
