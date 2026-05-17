@@ -193,7 +193,6 @@ except (TypeError, ValueError):
 _REDIS_LEASE_TTL_MS = min(_REDIS_LEASE_TTL_MAX_MS, max(_REDIS_LEASE_TTL_MIN_MS, _lease_ttl_raw))
 _STRICT_REDIS_LEASE = (
     _env_true("NIJA_STRICT_REDIS_LEASE", "1")
-    and not _env_true("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "0")
 )
 _REDIS_LEASE_ACQUIRE_TIMEOUT_S = max(
     0.0, float(os.environ.get("NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S", "90"))
@@ -265,7 +264,6 @@ def _runtime_strict_redis_lease() -> bool:
     """
     _strict_requested = (
         _env_true("NIJA_STRICT_REDIS_LEASE", "1")
-        and not _env_true("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "0")
     )
     return _strict_requested
 
