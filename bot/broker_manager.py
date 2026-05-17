@@ -9431,22 +9431,27 @@ class KrakenBroker(BaseBroker):
             return 0.0
 
         except Exception as e:
-            _suppressed_cooldown_s = self._get_nonce_rebuild_retry_suppression_seconds(e)
-            if _suppressed_cooldown_s > 0.0:
+            _nonce_rebuild_cooldown_s = self._get_nonce_rebuild_retry_cooldown_seconds(e)
+            if _nonce_rebuild_cooldown_s > 0.0:
+                self.last_connection_error = (
+                    "Kraken nonce-manager rebuild recovery active; "
+                    "investigate Kraken API connectivity or credentials"
+                )
                 _dedupe_key = (
                     f"kraken_nonce_rebuild_cooldown_balance:"
                     f"{getattr(self, 'account_identifier', 'platform')}"
                 )
                 if _should_emit_critical_log(
                     _dedupe_key,
-                    min(max(1.0, _suppressed_cooldown_s), 300.0),
+                    min(max(1.0, _nonce_rebuild_cooldown_s), 300.0),
                 ):
                     logger.warning(
-                        "⚠️ Kraken nonce-manager rebuild cooldown active (%s): "
-                        "%.1fs remaining — reusing cached balance without counting "
-                        "a new API failure",
+                        "⚠️ Kraken nonce-manager rebuild recovery active (%s): "
+                        "%.1fs cooldown window — reusing cached balance without "
+                        "counting a new API failure; investigate API connectivity "
+                        "or credentials",
                         self.account_identifier,
-                        _suppressed_cooldown_s,
+                        _nonce_rebuild_cooldown_s,
                     )
                 if self._last_known_balance is not None:
                     logger.warning(
@@ -9481,19 +9486,29 @@ class KrakenBroker(BaseBroker):
             return 0.0
 
     @staticmethod
-    def _get_nonce_rebuild_retry_suppression_seconds(error: BaseException) -> float:
-        """Return cooldown seconds when a Kraken nonce rebuild retry is suppressed."""
+    def _get_nonce_rebuild_retry_cooldown_seconds(error: BaseException) -> float:
+        """Return cooldown seconds when Kraken nonce-manager rebuild recovery is active."""
         current: Optional[BaseException] = error
         seen: set[int] = set()
         while current is not None and id(current) not in seen:
             seen.add(id(current))
             message = str(current)
             message_lower = message.lower()
-            if (
-                "krakennoncemanager singleton was destroyed" in message_lower
-                and "retry suppressed" in message_lower
-            ):
-                match = re.search(r"retry suppressed for ([0-9]+(?:\.[0-9]+)?)s", message_lower)
+            if "krakennoncemanager singleton was destroyed" in message_lower:
+                match = re.search(
+                    r"retry suppressed for ([0-9]+(?:\.[0-9]+)?)s",
+                    message_lower,
+                )
+                if match:
+                    try:
+                        return max(0.0, float(match.group(1)))
+                    except Exception:
+                        return 0.0
+
+                match = re.search(
+                    r"retry cooldown ([0-9]+(?:\.[0-9]+)?)s activated",
+                    message_lower,
+                )
                 if match:
                     try:
                         return max(0.0, float(match.group(1)))
