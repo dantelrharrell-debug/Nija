@@ -456,6 +456,60 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "Startup authority precheck must run before TradingStrategy fallback construction",
         )
 
+    def test_kraken_connect_checks_writer_authority_before_nonce_manager_init(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        broker_path = repo_root / "bot" / "broker_integration.py"
+        source = broker_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(broker_path))
+
+        kraken_class = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name == "KrakenBrokerAdapter"
+            ),
+            None,
+        )
+        if kraken_class is None:
+            self.fail("Expected KrakenBrokerAdapter in bot/broker_integration.py")
+
+        connect_fn = next(
+            (
+                node
+                for node in kraken_class.body
+                if isinstance(node, ast.FunctionDef) and node.name == "connect"
+            ),
+            None,
+        )
+        if connect_fn is None:
+            self.fail("Expected KrakenBrokerAdapter.connect() in bot/broker_integration.py")
+
+        writer_guard_calls = []
+        nonce_manager_calls = []
+        for node in ast.walk(connect_fn):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == "assert_distributed_writer_authority":
+                writer_guard_calls.append(node.lineno)
+            if isinstance(node.func, ast.Name) and node.func.id == "_get_distributed_nonce_manager":
+                nonce_manager_calls.append(node.lineno)
+
+        self.assertGreaterEqual(
+            len(writer_guard_calls),
+            1,
+            "KrakenBrokerAdapter.connect() must verify distributed writer authority before nonce manager init",
+        )
+        self.assertEqual(
+            len(nonce_manager_calls),
+            1,
+            "Expected exactly one _get_distributed_nonce_manager() call in KrakenBrokerAdapter.connect()",
+        )
+        self.assertLess(
+            min(writer_guard_calls),
+            nonce_manager_calls[0],
+            "KrakenBrokerAdapter.connect() must check writer authority before nonce manager initialization",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
