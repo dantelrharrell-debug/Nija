@@ -288,6 +288,33 @@ def _is_live_trading_active_now() -> bool:
         return False
 
 
+def acquire_writer_lock() -> bool:
+    """Return True if this process currently holds the distributed writer lock.
+
+    Checks the NIJA_WRITER_LEASE_ACQUIRED environment variable (set by
+    ``_acquire_distributed_process_lock`` on successful Redis lock acquisition)
+    and verifies that a fencing token is present.  Returns False when the lock
+    was never acquired or has been released.
+
+    This is the canonical startup-time check for single-writer authority.
+    """
+    _truthy = {"1", "true", "yes", "on", "enabled"}
+    lease_acquired = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip().lower() in _truthy
+    fencing_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    return lease_acquired and bool(fencing_token)
+
+
+def is_live_trading() -> bool:
+    """Return True when live capital trading is enabled for this deployment.
+
+    Checks LIVE_CAPITAL_VERIFIED environment variable.  This is the canonical
+    startup-time predicate for determining whether strict single-writer
+    enforcement must be applied.
+    """
+    _truthy = {"1", "true", "yes", "on", "enabled"}
+    return os.environ.get("LIVE_CAPITAL_VERIFIED", "").strip().lower() in _truthy
+
+
 def _acquire_init_lock_bootstrap_only(*, context: str, timeout_s: float) -> bool:
     """Acquire INIT lock only from bootstrap owner thread.
 
@@ -5660,23 +5687,16 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
         _rerun_supervisor_loop(_state_copy)
         return
 
-    _startup_authority = _startup_execution_authority_status(
-        context="startup_pre_init_write_guard",
-        force_refresh=True,
-    )
-    _startup_authority_details = _startup_authority.get("authority_status", {})
-    _startup_strict_required = bool(
-        _startup_authority_details.get(
-            "effective_strict_required",
-            _startup_authority_details.get("strict_required", False),
+    lock_acquired = acquire_writer_lock()
+    if not lock_acquired:
+        logger.critical(
+            "STARTUP_OBSERVER_STANDBY: distributed writer authority denied"
         )
-    )
-    if _startup_strict_required and not bool(_startup_authority.get("ready", False)):
-        _missing = ",".join(str(_k) for _k in _startup_authority.get("missing", [])) or "unknown"
-        raise RuntimeError(
-            "STARTUP_OBSERVER_STANDBY: strict startup execution authority not ready "
-            f"(missing={_missing})"
-        )
+        if is_live_trading():
+            raise RuntimeError(
+                "STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
+            )
+        return False
 
     # Coinbase is enabled by default. Set NIJA_DISABLE_COINBASE=true to disable.
 
