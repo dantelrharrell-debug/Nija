@@ -439,3 +439,12 @@ def execution_authority_scope() -> Iterator[None]:
 def has_execution_authority() -> bool:
     """Return True when the current context is authorized for order submit."""
     return bool(_EXECUTION_AUTHORITY_ACTIVE.get())
+
+
+def assert_execution_dispatch_permitted() -> None:
+    """Fail closed unless writer authority and execution scope are both valid."""
+    assert_distributed_writer_authority()
+    if not has_execution_authority():
+        raise RuntimeError(
+            "Execution authority violation: order submission must originate from ExecutionPipeline"
+        )

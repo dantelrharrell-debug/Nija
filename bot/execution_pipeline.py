@@ -113,6 +113,14 @@ except ImportError:
     except ImportError:
         get_exchange_kill_switch_protector = None  # type: ignore[assignment]
 
+try:
+    from bot.single_execution_authority_kernel import get_seak
+except ImportError:
+    try:
+        from single_execution_authority_kernel import get_seak  # type: ignore[import]
+    except ImportError:
+        get_seak = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -645,6 +653,39 @@ class ExecutionPipeline:
                 error=f"DistributedWriterFence reject: {exc}",
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
+
+        if get_seak is not None:
+            try:
+                seak = get_seak()
+                if bool(getattr(seak, "is_halted", False)):
+                    halt_reason = str(getattr(seak, "_halt_reason", "") or "emergency halt")
+                    self._emit_execution_rejection_telemetry(
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        reason=f"execution_authority_halt:{halt_reason}",
+                    )
+                    return PipelineResult(
+                        success=False,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size_usd=effective_request.size_usd,
+                        error=f"ExecutionAuthority reject: SEAK halted ({halt_reason})",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                self._emit_execution_rejection_telemetry(
+                    symbol=effective_request.symbol,
+                    side=effective_request.side,
+                    reason=f"execution_authority_halt_check:{exc}",
+                )
+                return PipelineResult(
+                    success=False,
+                    symbol=effective_request.symbol,
+                    side=effective_request.side,
+                    size_usd=effective_request.size_usd,
+                    error=f"ExecutionAuthority reject: SEAK check failed ({exc})",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
 
         with execution_authority_scope():
             result = self._dispatch(effective_request, t_start)

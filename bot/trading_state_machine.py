@@ -1731,7 +1731,16 @@ class TradingStateMachine:
             execution_authority = self._execution_authority
             can_dispatch = self._can_dispatch_trades
         if gates_ok is None:
-            gates_ok = _is_authority_ready()
+            authority_ready = _is_authority_ready()
+            runtime_writer_nonce_ready, runtime_detail = _runtime_writer_nonce_ready()
+            gates_ok = bool(authority_ready and runtime_writer_nonce_ready)
+            if not gates_ok:
+                logger.critical(
+                    "EXECUTION AUTHORITY LOCKED: authority_ready=%s writer_nonce_ready=%s detail=%s",
+                    authority_ready,
+                    runtime_writer_nonce_ready,
+                    runtime_detail or "authority_ready=false",
+                )
         return self._execution_authority_fsm.evaluate(
             intent_present=intent_present,
             bootstrap_running_supervised=_bootstrap_running_supervised(),
@@ -1943,6 +1952,23 @@ def _is_authority_ready() -> bool:
             _exc,
         )
         return False
+
+
+def _runtime_writer_nonce_ready() -> tuple[bool, str]:
+    """Return runtime writer+nonce readiness for dispatch authorization."""
+    writer_ok, writer_err = _distributed_writer_authority_gate()
+    if not writer_ok:
+        return False, f"writer_authority:{writer_err}"
+
+    nonce_sync_ok, nonce_sync_err = _nonce_sync_gate()
+    if not nonce_sync_ok:
+        return False, f"nonce_sync:{nonce_sync_err}"
+
+    nonce_lease_ok, nonce_lease_err = _nonce_writer_lease_gate()
+    if not nonce_lease_ok:
+        return False, f"nonce_lease:{nonce_lease_err}"
+
+    return True, ""
 
 
 # ---------------------------------------------------------------------------

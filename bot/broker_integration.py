@@ -182,20 +182,20 @@ logger = logging.getLogger("nija.exchange")
 
 try:
     from bot.execution_authority_context import (
-        has_execution_authority,
+        assert_execution_dispatch_permitted,
         assert_distributed_writer_authority,
     )
 except ImportError:
     try:
         from execution_authority_context import (
-            has_execution_authority,
+            assert_execution_dispatch_permitted,
             assert_distributed_writer_authority,
         )
     except ImportError:
-        def has_execution_authority() -> bool:
-            return False
-
         def assert_distributed_writer_authority() -> None:
+            return
+
+        def assert_execution_dispatch_permitted() -> None:
             return
 
 try:
@@ -241,32 +241,33 @@ def _reject_if_unauthorized_order_submit(
             pass
 
     try:
-        assert_distributed_writer_authority()
+        assert_execution_dispatch_permitted()
+        return None
     except Exception as exc:
-        _emit_rejection_telemetry("distributed_writer_fence")
+        message = str(exc)
+        if "Distributed writer fence" in message or "fencing" in message.lower() or "writer authority" in message.lower():
+            _emit_rejection_telemetry("distributed_writer_fence")
+            logger.critical(
+                "🔒 Distributed writer fence violation | broker=%s symbol=%s side=%s size=%s err=%s",
+                broker_name,
+                symbol,
+                side,
+                size,
+                exc,
+            )
+            raise RuntimeError(f"FATAL: Distributed writer fence violation: {exc}") from exc
+
+        _emit_rejection_telemetry("execution_authority_violation")
         logger.critical(
-            "🔒 Distributed writer fence violation | broker=%s symbol=%s side=%s size=%s err=%s",
+            "🔒 Execution authority violation: order submission must originate from ExecutionPipeline "
+            "| broker=%s symbol=%s side=%s size=%s err=%s",
             broker_name,
             symbol,
             side,
             size,
             exc,
         )
-        raise RuntimeError(f"FATAL: Distributed writer fence violation: {exc}") from exc
-
-    if has_execution_authority():
-        return None
-    msg = "Execution authority violation: order submission must originate from ExecutionPipeline"
-    _emit_rejection_telemetry("execution_authority_violation")
-    logger.critical(
-        "🔒 %s | broker=%s symbol=%s side=%s size=%s",
-        msg,
-        broker_name,
-        symbol,
-        side,
-        size,
-    )
-    raise RuntimeError("FATAL: Order bypassed ECEL")
+        raise RuntimeError("FATAL: Order bypassed ECEL") from exc
 
 
 def requires_nonce_ready(func):
@@ -709,6 +710,10 @@ class CoinbaseBrokerAdapter(BrokerInterface):
         Returns:
             Order response dict, or None on failure.
         """
+        _auth_block = _reject_if_unauthorized_order_submit('coinbase', symbol, side, size)
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             broker = self._get_broker()
             if broker.client is None:
@@ -1204,6 +1209,14 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def _assert_nonce_ready_for_api_call(self, call_path: str) -> None:
         """Hard fail-closed gate: block Kraken API calls until nonce readiness converges."""
+        try:
+            assert_distributed_writer_authority()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Kraken nonce readiness gate blocked API call ({call_path}): "
+                f"writer authority is not valid: {exc}"
+            ) from exc
+
         if self._distributed_nonce_manager is None or not self._nonce_key_id:
             raise RuntimeError(
                 "Kraken nonce readiness gate blocked API call: distributed nonce manager "
@@ -2150,6 +2163,10 @@ class KrakenBrokerAdapter(BrokerInterface):
         - txid confirmation
         - Enhanced error logging
         """
+        _auth_block = _reject_if_unauthorized_order_submit('kraken', symbol, side, size)
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             if not self.api:
                 logger.error("❌ Kraken API not connected")
@@ -2966,6 +2983,10 @@ class OKXBrokerAdapter(BrokerInterface):
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote') -> Optional[Dict]:
         """Place limit order on OKX."""
+        _auth_block = _reject_if_unauthorized_order_submit('okx', symbol, side, size)
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             if not self.trade_api:
                 return None
