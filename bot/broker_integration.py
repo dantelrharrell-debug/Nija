@@ -1775,10 +1775,6 @@ class KrakenBrokerAdapter(BrokerInterface):
         if _auth_block is not None:
             return _auth_block
 
-        _auth_block = _reject_if_unauthorized_order_submit('kraken', symbol, side, size)
-        if _auth_block is not None:
-            return _auth_block
-
         try:
             if not self.api:
                 logger.error("❌ Kraken API not connected")
@@ -2167,6 +2163,10 @@ class KrakenBrokerAdapter(BrokerInterface):
         - txid confirmation
         - Enhanced error logging
         """
+        _auth_block = _reject_if_unauthorized_order_submit('kraken', symbol, side, size)
+        if _auth_block is not None:
+            return _auth_block
+
         try:
             if not self.api:
                 logger.error("❌ Kraken API not connected")

@@ -46,8 +46,12 @@ class TestKrakenNonceReadinessGate(unittest.TestCase):
         adapter._distributed_nonce_manager = _FakeNonceManager(can_issue=False)
         adapter._nonce_key_id = "kid"
 
-        with self.assertRaises(RuntimeError) as ctx:
-            adapter._kraken_api_call_primary("Balance")
+        with patch(
+            "bot.broker_integration.assert_distributed_writer_authority",
+            return_value=None,
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter._kraken_api_call_primary("Balance")
 
         self.assertIn("nonce readiness gate blocked API call", str(ctx.exception))
         self.assertEqual(adapter.api.calls, [])
@@ -58,7 +62,11 @@ class TestKrakenNonceReadinessGate(unittest.TestCase):
         adapter._distributed_nonce_manager = _FakeNonceManager(can_issue=True)
         adapter._nonce_key_id = "kid"
 
-        response = adapter._kraken_api_call_primary("Balance")
+        with patch(
+            "bot.broker_integration.assert_distributed_writer_authority",
+            return_value=None,
+        ):
+            response = adapter._kraken_api_call_primary("Balance")
 
         self.assertEqual(response.get("result"), "ok")
         self.assertEqual(adapter.api.calls, [("Balance", None)])
@@ -68,8 +76,12 @@ class TestKrakenNonceReadinessGate(unittest.TestCase):
         adapter._distributed_nonce_manager = _FakeNonceManager(can_issue=False)
         adapter._nonce_key_id = "kid"
 
-        with self.assertRaises(RuntimeError) as ctx:
-            adapter._kraken_api_call_secondary("Balance")
+        with patch(
+            "bot.broker_integration.assert_distributed_writer_authority",
+            return_value=None,
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                adapter._kraken_api_call_secondary("Balance")
 
         self.assertIn("nonce readiness gate blocked API call", str(ctx.exception))
 
