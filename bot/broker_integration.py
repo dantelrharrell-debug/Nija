@@ -12,6 +12,7 @@ Each broker implements a common interface for unified trading logic.
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, cast
 from datetime import datetime
+from functools import wraps
 import logging
 import os
 import threading
@@ -266,6 +267,17 @@ def _reject_if_unauthorized_order_submit(
         size,
     )
     raise RuntimeError("FATAL: Order bypassed ECEL")
+
+
+def requires_nonce_ready(func):
+    """Decorator for Kraken private API calls that require nonce readiness."""
+
+    @wraps(func)
+    def _wrapped(self, *args, **kwargs):
+        self._assert_nonce_ready_for_api_call(func.__name__)
+        return func(self, *args, **kwargs)
+
+    return _wrapped
 
 # ── Optional: entry price store (local truth for entry prices) ─────────────
 try:
@@ -1190,6 +1202,33 @@ class KrakenBrokerAdapter(BrokerInterface):
                 # Raise the *original* primary exception for consistent error messages
                 raise primary_exc from secondary_exc
 
+    def _assert_nonce_ready_for_api_call(self, call_path: str) -> None:
+        """Hard fail-closed gate: block Kraken API calls until nonce readiness converges."""
+        if self._distributed_nonce_manager is None or not self._nonce_key_id:
+            raise RuntimeError(
+                "Kraken nonce readiness gate blocked API call: distributed nonce manager "
+                "is not initialized; wait for NONCE_READY / CONNECTED before broker API calls"
+            )
+        can_issue_fn = getattr(self._distributed_nonce_manager, "can_issue_nonce", None)
+        if not callable(can_issue_fn):
+            raise RuntimeError(
+                "Kraken nonce readiness gate blocked API call: nonce manager does not "
+                "expose can_issue_nonce()"
+            )
+        try:
+            can_issue = bool(can_issue_fn(self._nonce_key_id))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Kraken nonce readiness gate blocked API call ({call_path}): "
+                f"nonce readiness check failed: {exc}"
+            ) from exc
+        if not can_issue:
+            raise RuntimeError(
+                f"Kraken nonce readiness gate blocked API call ({call_path}): "
+                "nonce issuance not ready; wait for NONCE_READY / CONNECTED"
+            )
+
+    @requires_nonce_ready
     def _kraken_api_call_primary(self, method: str, params: Optional[Dict[str, Any]] = None):
         """Execute a Kraken API call via the primary krakenex instance."""
         with suppress_pykrakenapi_prints():
@@ -1207,6 +1246,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 else:
                     return cast(Any, self.api).query_private(method)
 
+    @requires_nonce_ready
     def _kraken_api_call_secondary(self, method: str, params: Optional[Dict[str, Any]] = None):
         """
         Execute a Kraken API call via a *secondary* (fresh) krakenex instance.
