@@ -1385,15 +1385,42 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
                     reason=f"bootstrap unlock confirmed ({context})"
                 )
             )
-        _tsm_live = _tsm_unlock.get_current_state() == _TSMState.LIVE_ACTIVE
-        if not (_activated_now or _tsm_live):
-            logger.critical(
-                "EXECUTION ENABLE BLOCKED: TradingStateMachine activation not committed "
-                "(state=%s context=%s)",
-                _tsm_unlock.get_current_state().value,
-                context,
-            )
-            return False
+
+        _commit_attempted = False
+        _commit_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_COMMIT_TIMEOUT_S", "20.0")
+        try:
+            _commit_timeout_s = max(1.0, float(_commit_timeout_raw))
+        except ValueError:
+            _commit_timeout_s = 20.0
+        _deadline = time.monotonic() + _commit_timeout_s
+
+        while True:
+            _current_state = _tsm_unlock.get_current_state()
+            _tsm_live = _current_state == _TSMState.LIVE_ACTIVE
+            if _activated_now or _tsm_live:
+                break
+
+            if (not _commit_attempted) and hasattr(_tsm_unlock, "commit_activation"):
+                _commit_attempted = True
+                try:
+                    _activated_now = bool(_tsm_unlock.commit_activation())
+                except Exception as _commit_err:
+                    logger.warning(
+                        "Execution unlock commit_activation attempt failed (%s): %s",
+                        context,
+                        _commit_err,
+                    )
+
+            if time.monotonic() >= _deadline:
+                logger.critical(
+                    "EXECUTION ENABLE BLOCKED: TradingStateMachine activation not committed "
+                    "(state=%s context=%s timeout=%.2fs)",
+                    _current_state.value,
+                    context,
+                    _commit_timeout_s,
+                )
+                return False
+            time.sleep(0.25)
     except Exception as _force_transition_err:
         logger.warning(
             "Force LIVE_ACTIVE transition failed after bootstrap unlock (%s): %s",
