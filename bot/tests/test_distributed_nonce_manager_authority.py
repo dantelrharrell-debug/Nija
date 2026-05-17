@@ -27,6 +27,10 @@ class _FakeRedisBackend:
             raise RuntimeError("lease failed")
         return 1
 
+    def next_nonce(self, _key_id: str) -> int:
+        self.last_value += 1
+        return self.last_value
+
     def get_last(self, _key_id: str) -> int:
         if self.raise_on_get_last:
             raise RuntimeError("redis get_last failed")
@@ -65,6 +69,44 @@ class TestDistributedNonceManagerAuthority(unittest.TestCase):
         mgr.record_success("test-key", 123456)
 
         helper.record_success.assert_called_once_with()
+
+    def test_get_nonce_redis_failure_raises_when_redis_configured(self) -> None:
+        """No file fallback when Redis backend is configured: RuntimeError is raised."""
+        mgr = DistributedNonceManager(redis_client=None)
+
+        class _FailingRedisBackend(_FakeRedisBackend):
+            def next_nonce(self, _key_id: str) -> int:  # type: ignore[override]
+                raise ConnectionError("redis gone")
+
+        mgr._redis = _FailingRedisBackend(lease_ok=True)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            mgr.get_nonce("test-key")
+
+        self.assertIn("refusing file/fcntl fallback", str(ctx.exception))
+        self.assertIn("single-writer Redis authority", str(ctx.exception))
+
+    def test_record_error_skips_file_manager_in_redis_mode(self) -> None:
+        """record_error() must NOT consult KrakenNonceManager when Redis is active."""
+        mgr = DistributedNonceManager(redis_client=None)
+        mgr._redis = _FakeRedisBackend(lease_ok=True)
+        mgr._get_file_manager = Mock(side_effect=AssertionError("file manager must not be consulted in redis mode"))
+
+        # Should complete without error and without touching the file manager.
+        mgr.record_error("test-key")
+
+        mgr._get_file_manager.assert_not_called()
+
+    def test_record_success_skips_file_manager_in_redis_mode(self) -> None:
+        """record_success() must NOT consult KrakenNonceManager when Redis is active."""
+        mgr = DistributedNonceManager(redis_client=None)
+        mgr._redis = _FakeRedisBackend(lease_ok=True)
+        mgr._get_file_manager = Mock(side_effect=AssertionError("file manager must not be consulted in redis mode"))
+
+        # Should complete without error and without touching the file manager.
+        mgr.record_success("test-key", 123456)
+
+        mgr._get_file_manager.assert_not_called()
 
 
 class TestPerKeyRedisBackendReset(unittest.TestCase):
