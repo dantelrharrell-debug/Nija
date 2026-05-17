@@ -1,0 +1,40 @@
+import unittest
+
+from bot.broker_manager import KrakenBroker
+
+
+class TestKrakenBalanceCooldown(unittest.TestCase):
+    def _build_broker(self) -> KrakenBroker:
+        broker = KrakenBroker.__new__(KrakenBroker)
+        broker.api = object()
+        broker._gateway_url = ""
+        broker.account_identifier = "PLATFORM"
+        broker._last_known_balance = 321.0
+        broker._balance_last_updated = None
+        broker._kraken_balance_cache_ttl = 0
+        broker.balance_cache = {"kraken": 321.0}
+        broker._balance_fetch_errors = 0
+        broker._is_available = True
+        broker.exit_only_mode = False
+        broker.kraken_health = "UNKNOWN"
+        return broker
+
+    def test_balance_fetch_does_not_count_retry_suppressed_nonce_rebuilds(self) -> None:
+        broker = self._build_broker()
+        broker._kraken_private_call = lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "KrakenNonceManager singleton was destroyed and previous rebuild failed; "
+                "retry suppressed for 29.0s cooldown."
+            )
+        )
+
+        balance = broker.get_account_balance(verbose=False)
+
+        self.assertEqual(balance, 321.0)
+        self.assertEqual(broker.get_error_count(), 0)
+        self.assertTrue(broker.is_available())
+        self.assertFalse(broker.exit_only_mode)
+
+
+if __name__ == "__main__":
+    unittest.main()
