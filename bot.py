@@ -1203,6 +1203,26 @@ def _ensure_strategy_fallback_published(*, context: str) -> bool:
                 _initialized_state_lock.release()
         return True
 
+    _authority = _startup_execution_authority_status(
+        context=f"{context}: fallback authority precheck",
+        force_refresh=True,
+    )
+    _authority_details = _authority.get("authority_status", {})
+    _strict_required = bool(
+        _authority_details.get(
+            "effective_strict_required",
+            _authority_details.get("strict_required", False),
+        )
+    )
+    if _strict_required and not bool(_authority.get("ready", False)):
+        logger.warning(
+            "Default strategy fallback blocked: startup execution authority not ready "
+            "(context=%s missing=%s)",
+            context,
+            _authority.get("missing", []),
+        )
+        return False
+
     logger.warning("No strategy published yet — attempting default strategy fallback (%s)", context)
     logger.warning("Fallback uses TradingStrategy default constructor in degraded startup mode (%s)", context)
     try:
@@ -5642,6 +5662,24 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
         _ensure_state_machine_loop_started()
         _rerun_supervisor_loop(_state_copy)
         return
+
+    _startup_authority = _startup_execution_authority_status(
+        context="startup_pre_init_write_guard",
+        force_refresh=True,
+    )
+    _startup_authority_details = _startup_authority.get("authority_status", {})
+    _startup_strict_required = bool(
+        _startup_authority_details.get(
+            "effective_strict_required",
+            _startup_authority_details.get("strict_required", False),
+        )
+    )
+    if _startup_strict_required and not bool(_startup_authority.get("ready", False)):
+        _missing = ",".join(str(_k) for _k in _startup_authority.get("missing", [])) or "unknown"
+        raise RuntimeError(
+            "STARTUP_OBSERVER_STANDBY: strict startup execution authority not ready "
+            f"(missing={_missing})"
+        )
 
     # Coinbase is enabled by default. Set NIJA_DISABLE_COINBASE=true to disable.
 
