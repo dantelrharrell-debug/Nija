@@ -31,6 +31,7 @@ import logging
 import time
 import threading
 import sys
+from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, NamedTuple
@@ -552,6 +553,123 @@ class StateTransitionError(Exception):
     pass
 
 
+class ExecutionSafetyState(str, Enum):
+    """Safety layer for runtime execution authority."""
+
+    LOCKED = "LOCKED"
+    AUTHORIZED = "AUTHORIZED"
+
+
+class ExecutionProgressState(str, Enum):
+    """Progress layer for execution authority convergence/liveness."""
+
+    LOCKED = "LOCKED"
+    ARMED = "ARMED"
+    CONVERGING = "CONVERGING"
+    BLOCKED_RETRY = "BLOCKED_RETRY"
+    AUTHORIZED = "AUTHORIZED"
+    FAIL_SAFE = "FAIL_SAFE"
+
+
+@dataclass(frozen=True)
+class ExecutionAuthoritySnapshot:
+    """Combined safety/progress snapshot for execution authority."""
+
+    safety_state: ExecutionSafetyState
+    progress_state: ExecutionProgressState
+    reason: str
+    intent_present: bool
+    gates_ok: bool
+    converged: bool
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "safety_state": self.safety_state.value,
+            "progress_state": self.progress_state.value,
+            "reason": self.reason,
+            "intent_present": self.intent_present,
+            "gates_ok": self.gates_ok,
+            "converged": self.converged,
+        }
+
+
+class ExecutionAuthorityConvergenceFSM:
+    """Dual-layer FSM for execution authority safety + progress."""
+
+    def __init__(self, timeout_s: float = 20.0) -> None:
+        self._timeout_s = max(1.0, float(timeout_s))
+        self._progress_state = ExecutionProgressState.LOCKED
+        self._blocked_since_monotonic: Optional[float] = None
+        self._lock = threading.Lock()
+
+    def evaluate(
+        self,
+        *,
+        intent_present: bool,
+        bootstrap_running_supervised: bool,
+        capital_running: bool,
+        trading_live: bool,
+        activation_committed: bool,
+        execution_authority: bool,
+        can_dispatch_trades: bool,
+        gates_ok: bool,
+        now_monotonic: Optional[float] = None,
+    ) -> ExecutionAuthoritySnapshot:
+        now = now_monotonic if now_monotonic is not None else time.monotonic()
+        prereqs_ready = bootstrap_running_supervised and capital_running
+        converged = bool(
+            intent_present
+            and prereqs_ready
+            and trading_live
+            and activation_committed
+            and execution_authority
+            and can_dispatch_trades
+            and gates_ok
+        )
+
+        with self._lock:
+            if not intent_present:
+                self._progress_state = ExecutionProgressState.LOCKED
+                self._blocked_since_monotonic = None
+                reason = "intent_missing"
+            elif converged:
+                self._progress_state = ExecutionProgressState.AUTHORIZED
+                self._blocked_since_monotonic = None
+                reason = "converged_authority"
+            elif not prereqs_ready:
+                self._progress_state = ExecutionProgressState.ARMED
+                self._blocked_since_monotonic = None
+                reason = "awaiting_bootstrap_or_capital_running"
+            elif not gates_ok:
+                if self._blocked_since_monotonic is None:
+                    self._blocked_since_monotonic = now
+                elapsed = now - self._blocked_since_monotonic
+                if elapsed >= self._timeout_s:
+                    self._progress_state = ExecutionProgressState.FAIL_SAFE
+                    reason = f"blocked_timeout_{elapsed:.2f}s"
+                else:
+                    self._progress_state = ExecutionProgressState.BLOCKED_RETRY
+                    reason = "blocked_retrying_gates"
+            else:
+                self._progress_state = ExecutionProgressState.CONVERGING
+                self._blocked_since_monotonic = None
+                reason = "awaiting_trading_live_commit_dispatch"
+
+            safety_state = (
+                ExecutionSafetyState.AUTHORIZED
+                if converged and self._progress_state != ExecutionProgressState.FAIL_SAFE
+                else ExecutionSafetyState.LOCKED
+            )
+            return ExecutionAuthoritySnapshot(
+                safety_state=safety_state,
+                progress_state=self._progress_state,
+                reason=reason,
+                intent_present=bool(intent_present),
+                gates_ok=bool(gates_ok),
+                converged=bool(converged and safety_state == ExecutionSafetyState.AUTHORIZED),
+            )
+
+
 class TradingStateMachine:
     """
     NIJA Trading State Machine - Absolute control over trading state.
@@ -646,6 +764,9 @@ class TradingStateMachine:
         self._execution_authority: bool = False
         self._core_loop_owns_execution: bool = True
         self._can_dispatch_trades: bool = False
+        self._execution_authority_fsm = ExecutionAuthorityConvergenceFSM(
+            timeout_s=float(os.getenv("NIJA_EXECUTION_CONVERGENCE_TIMEOUT_S", "20.0") or 20.0)
+        )
 
         # Try to load persisted state, but NEVER start in LIVE_ACTIVE
         self._load_state()
@@ -1542,8 +1663,7 @@ class TradingStateMachine:
 
     def has_execution_authority(self) -> bool:
         """Return True when dispatch authority has been granted."""
-        with self._lock:
-            return self._execution_authority or self._activation_committed
+        return self._evaluate_execution_authority_state().safety_state == ExecutionSafetyState.AUTHORIZED
 
     def release_core_loop_ownership(self, reason: str = "runtime handoff") -> None:
         """Release bootstrap/core-loop ownership lock and allow dispatch.
@@ -1561,10 +1681,37 @@ class TradingStateMachine:
             reason,
         )
 
+    def _evaluate_execution_authority_state(self, gates_ok: Optional[bool] = None) -> ExecutionAuthoritySnapshot:
+        runtime_mode = resolve_runtime_mode_safe(logger)
+        intent_present = bool(
+            (runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED"))
+            or _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+        )
+        with self._lock:
+            current_state = self._current_state
+            activation_committed = self._activation_committed
+            execution_authority = self._execution_authority
+            can_dispatch = self._can_dispatch_trades
+        if gates_ok is None:
+            gates_ok = _is_authority_ready()
+        return self._execution_authority_fsm.evaluate(
+            intent_present=intent_present,
+            bootstrap_running_supervised=_bootstrap_running_supervised(),
+            capital_running=_capital_bootstrap_running(),
+            trading_live=current_state == TradingState.LIVE_ACTIVE,
+            activation_committed=activation_committed,
+            execution_authority=execution_authority,
+            can_dispatch_trades=can_dispatch,
+            gates_ok=bool(gates_ok),
+        )
+
+    def get_execution_authority_snapshot(self, gates_ok: Optional[bool] = None) -> Dict[str, Any]:
+        """Return execution authority state snapshot (dual-layer FSM)."""
+        return self._evaluate_execution_authority_state(gates_ok=gates_ok).as_dict()
+
     def can_dispatch_trades(self) -> bool:
         """Return True when runtime dispatch should be allowed."""
-        with self._lock:
-            return self._can_dispatch_trades and (self._execution_authority or self._activation_committed)
+        return self._evaluate_execution_authority_state().safety_state == ExecutionSafetyState.AUTHORIZED
 
     def maybe_auto_activate(
         self,
@@ -1577,205 +1724,7 @@ class TradingStateMachine:
         that have not yet been updated.
         """
         logger.critical("ENTER maybe_auto_activate")
-
-        # ── DETERMINISTIC ACTIVATION PATH ──────────────────────────────────────
-        # If state is not already LIVE_ACTIVE and all core conditions are met,
-        # force transition to LIVE_ACTIVE immediately. This prevents stuck
-        # LIVE_PENDING_CONFIRMATION states caused by complex invariant locks.
-        current_state = self.get_current_state()
-        runtime_mode = resolve_runtime_mode_safe(logger)
-        if current_state != TradingState.LIVE_ACTIVE:
-            live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
-
-            # Check if capital is hydrated and balance available
-            _ca_check = _get_capital_authority_instance()
-            _capital_ready = (
-                _ca_check is not None
-                and _ca_check.is_hydrated
-                and _ca_check.get_real_capital() is not None
-            )
-            
-            # Check kill switch
-            _kill_active = False
-            try:
-                from kill_switch import get_kill_switch
-                _kill_active = get_kill_switch().is_active()
-            except Exception:
-                pass
-
-            # Check distributed writer authority to avoid split-brain force activation.
-            _writer_ok, _writer_err = _distributed_writer_authority_gate()
-            if not _writer_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=DISTRIBUTED_WRITER_AUTHORITY detail=%s",
-                    _writer_err,
-                )
-
-            _nonce_lease_ok, _nonce_lease_err = _nonce_writer_lease_gate()
-            if not _nonce_lease_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=NONCE_WRITER_LEASE detail=%s",
-                    _nonce_lease_err,
-                )
-            
-            # Enforce fencing token on deterministic path.
-            _det_fencing_token = _resolve_writer_fencing_token()
-            if not _det_fencing_token:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=DETERMINISTIC_FENCING_TOKEN_MISSING "
-                    "NIJA_WRITER_FENCING_TOKEN is not set — LIVE_ACTIVE requires a valid fencing token"
-                )
-                _writer_ok = False
-
-            # Check revocation on deterministic path.
-            _det_revoked = False
-            if _writer_ok:
-                try:
-                    try:
-                        from bot.revocation_guard import check_revocation_or_raise
-                    except ImportError:
-                        from revocation_guard import check_revocation_or_raise  # type: ignore[import]
-                    check_revocation_or_raise()
-                except RuntimeError as _rev_exc:
-                    logger.critical(
-                        "[AUTO_ACTIVATE BLOCKED] reason=DETERMINISTIC_REVOCATION detail=%s", _rev_exc
-                    )
-                    _det_revoked = True
-
-            # Force transition if core conditions met
-            if live_verified and _capital_ready and not _kill_active and _writer_ok and _nonce_lease_ok and not _det_revoked:
-                logger.critical(
-                    "🟢 DETERMINISTIC ACTIVATION: state=%s live_verified=%s capital_ready=%s writer_ok=%s "
-                    "nonce_lease_ok=%s "
-                    "→ forcing LIVE_ACTIVE transition",
-                    current_state.value,
-                    live_verified,
-                    _capital_ready,
-                    _writer_ok,
-                    _nonce_lease_ok,
-                )
-                with self._lock:
-                    self._current_state = TradingState.LIVE_ACTIVE
-                    self._activation_committed = True
-                    self._execution_authority = True
-                    self._core_loop_owns_execution = False
-                    self._can_dispatch_trades = True
-                logger.critical("✅ DETERMINISTIC ACTIVATION COMPLETE: state=%s is_live=%s",
-                    self.get_current_state().value,
-                    self.is_live_trading_active(),
-                )
-                return True
-
-        # ── Entry diagnostic — snapshot every gate variable before delegating ──
-        kill_switch = False
-        try:
-            from kill_switch import get_kill_switch
-            kill_switch = get_kill_switch().is_active()
-        except Exception:
-            pass
-
-        live_verified = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
-
-        CA_READY = None
-        EXECUTION_PIPELINE_HEALTHY = None
-        try:
-            _ca_diag = _get_capital_authority_instance()
-            CA_READY = bool(_ca_diag.is_hydrated) if _ca_diag is not None else None
-        except Exception:
-            pass
-        try:
-            try:
-                from bot.execution_router import get_execution_router as _get_er
-            except ImportError:
-                from execution_router import get_execution_router as _get_er  # type: ignore[import]
-            _er = _get_er()
-            _get_status = getattr(_er, "get_status", None)
-            _st_raw = _get_status() if callable(_get_status) else {}
-            _st = _st_raw if isinstance(_st_raw, dict) else {}
-            _reg = _st.get("registered_venues", 1)
-            _failed = len(_st.get("session_failed_venues", []))
-            EXECUTION_PIPELINE_HEALTHY = not (_reg > 0 and _failed >= _reg)
-        except Exception:
-            pass
-
-        brokers_ready = None
-        try:
-            _mabm_diag = _get_mabm_instance()
-            if _mabm_diag is not None and hasattr(_mabm_diag, "all_brokers_fully_ready"):
-                brokers_ready = bool(_mabm_diag.all_brokers_fully_ready())
-        except Exception:
-            pass
-
-        _first_snap_accepted = self._first_snap_accepted
-
-        # FIX 3: Compute composite LIVE_CAPITAL_VERIFIED status for diagnostics.
-        # live_verified below reflects only the env var flag (for the log line).
-        # commit_activation() applies the full composite check (flag + hydration + balance).
-        _ca_hydrated_diag = bool(CA_READY) if CA_READY is not None else None
-        _aggregation_norm_diag = bool(
-            cycle_capital.get("aggregation_normalized", True)
-        ) if cycle_capital else True
-
-        # ── Gate visibility: log ALL gate status before commit ──────────────────
-        gate_checks = {
-            "kill_switch": not kill_switch,  # False means gate passed (switch OFF)
-            "LIVE_CAPITAL_VERIFIED": live_verified,
-            "ca_hydrated": CA_READY,
-            "execution_healthy": EXECUTION_PIPELINE_HEALTHY,
-            "first_snap_accepted": _first_snap_accepted,
-            "brokers_ready": brokers_ready,
-        }
-        for gate_name, gate_status in gate_checks.items():
-            if gate_status is False:
-                logger.critical(f"❌ GATE BLOCKED: {gate_name}=False")
-            elif gate_status is None:
-                logger.warning(f"⚠️  GATE UNKNOWN: {gate_name}=None")
-
-        logger.critical(
-            "[AUTO_ACTIVATE ENTRY] kill_switch=%s "
-            "LIVE_CAPITAL_VERIFIED=%s "
-            "ca_hydrated=%s "
-            "aggregation_normalized=%s "
-            "capital_ready=%s "
-            "execution_healthy=%s "
-            "first_snap=%s "
-            "brokers_ready=%s",
-            kill_switch,
-            live_verified,
-            _ca_hydrated_diag,
-            _aggregation_norm_diag,
-            CA_READY,
-            EXECUTION_PIPELINE_HEALTHY,
-            _first_snap_accepted,
-            brokers_ready,
-        )
-
-        # One-line truth-test gate names requested by operator.
-        capital_ready = bool(CA_READY) if CA_READY is not None else False
-        exchange_ready = bool(brokers_ready) and bool(EXECUTION_PIPELINE_HEALTHY)
-        risk_clear = not kill_switch
-        _min_trade_threshold = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
-        _capital_total = float(cycle_capital.get("ca_total_capital", 0.0) or 0.0) if cycle_capital else 0.0
-        min_trade_ok = _capital_total >= _min_trade_threshold
-        logger.critical(f"capital_ready={capital_ready}")
-        logger.critical(f"exchange_ready={exchange_ready}")
-        logger.critical(f"risk_clear={risk_clear}")
-        logger.critical(f"min_trade_ok={min_trade_ok}")
-
-        _activation_result = self.commit_activation(cycle_capital=cycle_capital)
-        if not _activation_result:
-            logger.critical("❌ ACTIVATION BLOCKED: conditions not met")
-        else:
-            logger.critical("✅ ACTIVATION CONDITIONS MET")
-            logger.critical("🔥 ACTIVATION EXECUTED")
-
-        # Hard confirmation log — always emitted so activation state is never silent.
-        logger.critical(
-            "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
-            self.get_current_state().value,
-            self.is_live_trading_active(),
-        )
-        return _activation_result
+        return self.commit_activation(cycle_capital=cycle_capital)
 
 
     def get_state_history(self, limit: int = 10) -> list:
@@ -1850,6 +1799,32 @@ def _get_capital_authority_instance():
         return _f()
     except ImportError:
         return None
+
+
+def _bootstrap_running_supervised() -> bool:
+    """Return True when BootstrapFSM reached RUNNING_SUPERVISED."""
+    try:
+        try:
+            from bot.bootstrap_state_machine import get_bootstrap_fsm
+        except ImportError:
+            from bootstrap_state_machine import get_bootstrap_fsm  # type: ignore[import]
+        _state = getattr(get_bootstrap_fsm().state, "value", "")
+        return _state == "RUNNING_SUPERVISED"
+    except Exception:
+        return False
+
+
+def _capital_bootstrap_running() -> bool:
+    """Return True when CapitalBootstrapFSM reached RUNNING."""
+    try:
+        try:
+            from bot.capital_flow_state_machine import get_capital_bootstrap_fsm
+        except ImportError:
+            from capital_flow_state_machine import get_capital_bootstrap_fsm  # type: ignore[import]
+        _state = getattr(get_capital_bootstrap_fsm().state, "value", "")
+        return _state == "RUNNING"
+    except Exception:
+        return False
 
 
 def _is_authority_ready() -> bool:

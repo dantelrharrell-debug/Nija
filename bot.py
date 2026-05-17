@@ -1378,15 +1378,6 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
     os.environ["MINIMUM_TRADING_BALANCE"] = _post_unlock_minimum_trading_balance
 
     try:
-        _activated_now = False
-        if hasattr(_tsm_unlock, "activate_live_trading"):
-            _activated_now = bool(
-                _tsm_unlock.activate_live_trading(
-                    reason=f"bootstrap unlock confirmed ({context})"
-                )
-            )
-
-        _commit_attempted = False
         _commit_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_COMMIT_TIMEOUT_S", "20.0")
         try:
             _commit_timeout_s = max(1.0, float(_commit_timeout_raw))
@@ -1397,13 +1388,25 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
         while True:
             _current_state = _tsm_unlock.get_current_state()
             _tsm_live = _current_state == _TSMState.LIVE_ACTIVE
-            if _activated_now or _tsm_live:
+            _auth_snapshot = {}
+            if hasattr(_tsm_unlock, "get_execution_authority_snapshot"):
+                try:
+                    _auth_snapshot = _tsm_unlock.get_execution_authority_snapshot() or {}
+                except Exception:
+                    _auth_snapshot = {}
+            _converged = bool(_auth_snapshot.get("converged", False))
+            _progress_state = str(_auth_snapshot.get("progress_state", "unknown"))
+
+            if _converged or (
+                _tsm_live
+                and bool(_tsm_unlock.has_execution_authority())
+                and bool(_tsm_unlock.can_dispatch_trades())
+            ):
                 break
 
-            if (not _commit_attempted) and hasattr(_tsm_unlock, "commit_activation"):
-                _commit_attempted = True
+            if hasattr(_tsm_unlock, "commit_activation"):
                 try:
-                    _activated_now = bool(_tsm_unlock.commit_activation())
+                    _tsm_unlock.commit_activation()
                 except Exception as _commit_err:
                     logger.warning(
                         "Execution unlock commit_activation attempt failed (%s): %s",
@@ -1411,11 +1414,12 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
                         _commit_err,
                     )
 
-            if time.monotonic() >= _deadline:
+            if _progress_state == "FAIL_SAFE" or time.monotonic() >= _deadline:
                 logger.critical(
                     "EXECUTION ENABLE BLOCKED: TradingStateMachine activation not committed "
-                    "(state=%s context=%s timeout=%.2fs)",
+                    "(state=%s progress=%s context=%s timeout=%.2fs)",
                     _current_state.value,
+                    _progress_state,
                     context,
                     _commit_timeout_s,
                 )
@@ -4901,7 +4905,7 @@ def _run_state_machine_loop() -> None:
             if not _sm.is_live_trading_active():
                 if os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() == "true":
                     logger.info("Forcing core loop activation")
-                    _sm.activate_live_trading(reason="core loop forced activation")
+                    _sm.commit_activation()
 
         except Exception:
             logger.exception("STATE_MACHINE_LOOP_ERROR")
