@@ -476,8 +476,16 @@ def assert_startup_write_authority() -> None:
     """Fail closed unless startup write-capable authority is fully available."""
     assert_distributed_writer_authority()
 
-    if not has_execution_authority():
-        raise RuntimeError("Startup execution authority unavailable")
+    if has_execution_authority():
+        return
+
+    status = get_startup_execution_authority_prerequisites(force_refresh=False)
+    if not status.get("ready"):
+        missing = ", ".join(status.get("missing") or []) or "unknown"
+        raise RuntimeError(
+            "Startup execution authority unavailable "
+            f"(missing={missing})"
+        )
 
     if is_seak_halted():
         raise RuntimeError("SEAK halt active")
