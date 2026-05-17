@@ -14,6 +14,7 @@ from bot.distributed_nonce_manager import (
     _REDIS_NONCE_RESET_BUFFER_MS,
     _emit_nonce_debug_hook,
 )
+from bot import global_kraken_nonce as gkn
 
 
 class _FakeRedisBackend:
@@ -142,6 +143,30 @@ class TestDistributedNonceDebugHooks(unittest.TestCase):
         ) as warn_enabled:
             _emit_nonce_debug_hook("test", key_id="abc")
             warn_enabled.assert_called_once()
+
+
+class TestGlobalKrakenNonceRecovery(unittest.TestCase):
+    def test_ensure_live_manager_rebuilds_destroyed_singleton_when_authorized(self) -> None:
+        replacement_mgr = object()
+        with patch.object(gkn, "_NONCE_ISSUANCE_AUTHORIZED", True), patch.object(
+            gkn.KrakenNonceManager, "_instance", None
+        ), patch.object(gkn, "_nonce_manager", None), patch.object(
+            gkn, "_wait_for_probe_window", return_value=True
+        ), patch.object(
+            gkn, "rebuild_nonce_manager", return_value=replacement_mgr
+        ) as rebuild:
+            self.assertIs(gkn._ensure_live_manager(), replacement_mgr)
+            rebuild.assert_called_once_with()
+
+    def test_ensure_live_manager_raises_when_rebuild_fails(self) -> None:
+        with patch.object(gkn, "_NONCE_ISSUANCE_AUTHORIZED", True), patch.object(
+            gkn.KrakenNonceManager, "_instance", None
+        ), patch.object(gkn, "_wait_for_probe_window", return_value=True), patch.object(
+            gkn, "rebuild_nonce_manager", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                gkn._ensure_live_manager()
+        self.assertIn("rebuild failed", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":
