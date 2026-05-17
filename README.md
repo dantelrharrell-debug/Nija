@@ -3968,7 +3968,7 @@ If you see `EGeneral:Permission denied` in logs:
    - ✅ Cancel/Close Orders
 3. Save and restart the bot
 
-See: `KRAKEN_PERMISSION_ERROR_FIX.md` for detailed instructions
+See: `API_CREDENTIALS_GUIDE.md` for detailed credential and permission setup instructions
 
 ### Problem: No trades executing
 

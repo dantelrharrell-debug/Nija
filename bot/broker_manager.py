@@ -8521,7 +8521,7 @@ class KrakenBroker(BaseBroker):
                                     logger.warning("      ✅ If nonce errors persist, check system clock (use NTP sync)")
                                     logger.warning("")
                                     logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                                    logger.warning("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                                    logger.warning("   📖 See API_CREDENTIALS_GUIDE.md for detailed instructions")
                                     # Flush handlers to ensure all permission error messages appear together
                                     # CRITICAL: Flush root 'nija' logger handlers, not child logger (which has no handlers)
                                     for handler in _root_logger.handlers:
@@ -8531,7 +8531,7 @@ class KrakenBroker(BaseBroker):
                                     logger.error("   Your Kraken API key does not have the required permissions.")
                                     logger.error("   🔧 FIX: Must use Classic API key with Query/Create/Cancel Orders permissions")
                                     logger.error("   https://www.kraken.com/u/security/api")
-                                    logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                                    logger.error("   📖 See API_CREDENTIALS_GUIDE.md for detailed instructions")
 
                                 return False
 
@@ -9061,7 +9061,7 @@ class KrakenBroker(BaseBroker):
                             logger.warning("      ✅ If nonce errors persist, check system clock (use NTP sync)")
                             logger.warning("")
                             logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
-                            logger.warning("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                            logger.warning("   📖 See API_CREDENTIALS_GUIDE.md for detailed instructions")
                             # Flush handlers to ensure all permission error messages appear together
                             # CRITICAL: Flush root 'nija' logger handlers, not child logger (which has no handlers)
                             for handler in _root_logger.handlers:
@@ -9071,7 +9071,7 @@ class KrakenBroker(BaseBroker):
                             logger.error("   Your Kraken API key does not have the required permissions.")
                             logger.error("   🔧 FIX: Must use Classic API key with Query/Create/Cancel Orders permissions")
                             logger.error("   https://www.kraken.com/u/security/api")
-                            logger.error("   📖 See KRAKEN_PERMISSION_ERROR_FIX.md for detailed instructions")
+                            logger.error("   📖 See API_CREDENTIALS_GUIDE.md for detailed instructions")
 
                         return False
 
