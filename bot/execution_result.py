@@ -71,6 +71,19 @@ from typing import Optional
 
 logger = logging.getLogger("nija.execution_result")
 
+# Optional import — execution_result must remain importable even if the taxonomy
+# module is absent (e.g. partial deployments).
+try:
+    from bot.kraken_error_taxonomy import KrakenRetryPolicy
+    _TAXONOMY_AVAILABLE = True
+except ImportError:
+    try:
+        from kraken_error_taxonomy import KrakenRetryPolicy  # type: ignore[no-redef]
+        _TAXONOMY_AVAILABLE = True
+    except ImportError:
+        _TAXONOMY_AVAILABLE = False
+        KrakenRetryPolicy = None  # type: ignore[assignment,misc]
+
 # ---------------------------------------------------------------------------
 # Status enum
 # ---------------------------------------------------------------------------
@@ -117,6 +130,7 @@ class ExecutionResult:
     exchange_order_id: Optional[str] = None
     error_code: Optional[str] = None
     latency_ms: int = 0
+    retry_policy: Optional["KrakenRetryPolicy"] = None  # set when error_code originates from Kraken
 
     # ----------------------------------------------------------------
     # Convenience properties
@@ -160,6 +174,9 @@ def log_execution_result(result: ExecutionResult) -> None:
 
     if result.error_code is not None:
         parts.append(f"error={result.error_code}")
+
+    if result.retry_policy is not None:
+        parts.append(f"retry_policy={result.retry_policy.value}")
 
     parts.append(f"latency={result.latency_ms}ms")
 
