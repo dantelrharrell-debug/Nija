@@ -78,6 +78,28 @@ except ImportError:
         _OrderStatus = None  # type: ignore
         _log_exec_result = None  # type: ignore
 
+# ── Kraken Error Taxonomy — authoritative error classification layer ───────
+try:
+    from bot.kraken_error_taxonomy import (
+        classify_kraken_error as _classify_kraken_error,
+        KrakenRetryPolicy as _KrakenRetryPolicy,
+        KrakenErrorCategory as _KrakenErrorCategory,
+    )
+    _KRAKEN_TAXONOMY_AVAILABLE = True
+except ImportError:
+    try:
+        from kraken_error_taxonomy import (  # type: ignore[import]
+            classify_kraken_error as _classify_kraken_error,
+            KrakenRetryPolicy as _KrakenRetryPolicy,
+            KrakenErrorCategory as _KrakenErrorCategory,
+        )
+        _KRAKEN_TAXONOMY_AVAILABLE = True
+    except ImportError:
+        _KRAKEN_TAXONOMY_AVAILABLE = False
+        _classify_kraken_error = None  # type: ignore[assignment]
+        _KrakenRetryPolicy = None  # type: ignore[assignment,misc]
+        _KrakenErrorCategory = None  # type: ignore[assignment,misc]
+
 # Import Execution Intelligence Layer
 try:
     from bot.execution_intelligence import (
@@ -1268,7 +1290,12 @@ class ExecutionEngine:
         broker_response: Optional[Dict] = None,
         exc: Optional[Exception] = None,
     ) -> Dict[str, str]:
-        """Extract a compact, human-readable failure payload for logs."""
+        """Extract a compact, human-readable failure payload for logs.
+
+        When the Kraken error taxonomy layer is available the hint, retry
+        policy, and canonical error code are taken directly from it so the
+        execution engine never has to guess the correct response.
+        """
         status = str((broker_response or {}).get("status") or ("exception" if exc else "unknown")).lower()
         error = ""
         message = ""
@@ -1288,27 +1315,40 @@ class ExecutionEngine:
         combined = " | ".join(part for part in (error, message) if part).strip() or "Unknown execution failure"
         normalized = combined.lower()
 
-        hint = "Inspect broker rejection payload"
-        if "too small" in normalized or "minimum" in normalized or "min notional" in normalized:
-            hint = "Check minimum order size / exchange notional floor"
-        elif "insufficient" in normalized or "fund" in normalized or "balance" in normalized:
-            hint = "Check per-broker available balance and fee-adjusted sizing"
-        elif "unsupported" in normalized or "invalid product" in normalized or "symbol" in normalized:
-            hint = "Check symbol support / exchange restrictions"
-        elif "nonce" in normalized or "signature" in normalized or "eapi:invalid nonce" in normalized:
-            hint = "Check Kraken nonce synchronization / API signature path"
-        elif "geographic" in normalized or "region" in normalized or "jurisdiction" in normalized:
-            hint = "Check exchange geographic restrictions for this symbol"
+        # ── Taxonomy-driven classification ───────────────────────────────
+        retry_policy_value: Optional[str] = None
+        canonical_code: Optional[str] = None
+        if _KRAKEN_TAXONOMY_AVAILABLE and _classify_kraken_error is not None and error:
+            _taxonomy = _classify_kraken_error(error)
+            hint = _taxonomy.remediation
+            retry_policy_value = _taxonomy.policy.value
+            canonical_code = _taxonomy.canonical_code
+        else:
+            # Fallback: manual keyword hints for non-Kraken or degraded paths
+            hint = "Inspect broker rejection payload"
+            if "too small" in normalized or "minimum" in normalized or "min notional" in normalized:
+                hint = "Check minimum order size / exchange notional floor"
+            elif "insufficient" in normalized or "fund" in normalized or "balance" in normalized:
+                hint = "Check per-broker available balance and fee-adjusted sizing"
+            elif "unsupported" in normalized or "invalid product" in normalized or "symbol" in normalized:
+                hint = "Check symbol support / exchange restrictions"
+            elif "nonce" in normalized or "signature" in normalized or "eapi:invalid nonce" in normalized:
+                hint = "Check Kraken nonce synchronization / API signature path"
+            elif "geographic" in normalized or "region" in normalized or "jurisdiction" in normalized:
+                hint = "Check exchange geographic restrictions for this symbol"
 
-        error_code = error or message or status or "UNKNOWN_REJECTION"
+        error_code = canonical_code or error or message or status or "UNKNOWN_REJECTION"
         error_code = error_code[:120].upper().replace(" ", "_")
 
-        return {
+        result: Dict[str, str] = {
             "status": status,
             "error_code": error_code,
             "detail": combined,
             "hint": hint,
         }
+        if retry_policy_value is not None:
+            result["retry_policy"] = retry_policy_value
+        return result
 
     def _normalized_order_status(self, broker_response: Optional[Dict]) -> str:
         """Return normalized lowercase broker status for branch checks."""
@@ -1635,19 +1675,32 @@ class ExecutionEngine:
         latency_ms = int((_time.monotonic() - t0) * 1000)
 
         if exc is not None:
-            # Broker call raised — classify as FAILED
+            # Broker call raised — classify via taxonomy then emit FAILED
+            _exc_str = str(exc)[:120]
+            _retry_policy = None
+            if _KRAKEN_TAXONOMY_AVAILABLE and _classify_kraken_error is not None:
+                _t = _classify_kraken_error(_exc_str)
+                _retry_policy = _t.policy
             result = _exec_result_cls(
                 status=_status_failed,
                 symbol=symbol,
                 side=side,
                 exchange_order_id=None,
-                error_code=str(exc)[:120],
+                error_code=_exc_str,
                 latency_ms=latency_ms,
+                retry_policy=_retry_policy,
             )
         elif broker_response is None or str(broker_response.get("status", "")).lower() in {
             "error", "unfilled", "skipped", "rejected"
         }:
             details = self._extract_order_failure_details(broker_response=broker_response, exc=None)
+            _retry_policy_val = details.get("retry_policy")
+            _retry_policy_obj = None
+            if _retry_policy_val and _KRAKEN_TAXONOMY_AVAILABLE and _KrakenRetryPolicy is not None:
+                try:
+                    _retry_policy_obj = _KrakenRetryPolicy(_retry_policy_val)
+                except (ValueError, KeyError):
+                    pass
             result = _exec_result_cls(
                 status=_status_rejected,
                 symbol=symbol,
@@ -1655,6 +1708,7 @@ class ExecutionEngine:
                 exchange_order_id=None,
                 error_code=details["error_code"],
                 latency_ms=latency_ms,
+                retry_policy=_retry_policy_obj,
             )
         else:
             order_id = (
