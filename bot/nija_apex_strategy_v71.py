@@ -86,16 +86,16 @@ _DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (
 # (score >= 3/5 → confidence = 0.60, below 0.70 threshold).
 # THRESHOLD REDUCTION (Apr 2026): Lowered from 0.50 → 0.30 to match user-account activity.
 # Platform was stuck waiting while users traded on lower-confidence signals.
-# THRESHOLD REDUCTION (May 2026): Lowered 0.25 → 0.22 per funnel diagnostics showing
-# confidence gate was the primary bottleneck filtering out valid signals.
-MIN_CONFIDENCE = 0.22  # Confidence floor aligned with ENTRY_GATE_CONFIDENCE_THRESHOLD
+# THRESHOLD REDUCTION (May 2026): Lowered confidence/ADX/volume gates to the
+# Phase 1 live profile so runtime normalization no longer clamps to stale values.
+MIN_CONFIDENCE = 0.18  # Confidence floor aligned with ENTRY_GATE_CONFIDENCE_THRESHOLD
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Short-term fallback thresholds (idle > 10 minutes)
 FALLBACK_IDLE_MINUTES_THRESHOLD = 10.0
-FALLBACK_CONFIDENCE_THRESHOLD = 0.22
-FALLBACK_MIN_ADX = 6.0
-FALLBACK_MIN_VOLUME_THRESHOLD = 0.005
+FALLBACK_CONFIDENCE_THRESHOLD = 0.18
+FALLBACK_MIN_ADX = 5.0
+FALLBACK_MIN_VOLUME_THRESHOLD = 0.006
 
 # Confidence anchor floor (legacy score scale)
 MIN_RISK_SCORE_FOR_ANCHOR = 3
@@ -103,16 +103,15 @@ MIN_RISK_SCORE_FOR_ANCHOR = 3
 # Diagnostics window
 VOLUME_RATIO_WINDOW = 5
 # Entry gate thresholds (weighted scoring)
-# Confidence threshold lowered from 0.25 → 0.22 (May 2026) per funnel diagnostics.
-ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.22
-ENTRY_GATE_ADX_THRESHOLD = 7.0
-ENTRY_GATE_VOLUME_THRESHOLD = 0.01
+ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.18
+ENTRY_GATE_ADX_THRESHOLD = 5.0
+ENTRY_GATE_VOLUME_THRESHOLD = 0.006
 # Gate score reduced from 3 → 2 (May 2026): require 2/5 conditions instead of 3/5
 # so borderline signals aren't blocked when most but not all conditions align.
 ENTRY_GATE_MIN_SCORE = 2
 ENTRY_GATE_SAFETY_FLOOR = 2
-ENTRY_GATE_FALLBACK_CONFIDENCE = 0.22
-ENTRY_GATE_FALLBACK_ADX = 6.0
+ENTRY_GATE_FALLBACK_CONFIDENCE = 0.18
+ENTRY_GATE_FALLBACK_ADX = 5.0
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
 
 # Volume gate for entry confirmation in check_long/short_entry.
@@ -675,8 +674,8 @@ class NIJAApexStrategyV71:
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = min(self.config.get('min_adx', 5), 5)  # DEBUG TEMP: cap ADX threshold at 5 to force trade flow
-        self.volume_threshold = min(self.config.get('volume_threshold', 0.005), 0.005)  # DEBUG TEMP: MIN_VOLATILITY 0.5% equivalent for easier entries
+        self.min_adx = max(self.config.get('min_adx', 5), 5)
+        self.volume_threshold = max(self.config.get('volume_threshold', 0.006), 0.006)
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 1)  # TUNED: Lowered from 2 → 1 (Apr 2026) so a single confirmed condition (e.g. VWAP or MACD) is enough to attempt an entry; the AI scoring layers downstream still gate quality
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
@@ -915,7 +914,7 @@ class NIJAApexStrategyV71:
         # all signals since legacy_score=3 → confidence=0.60 < 0.70.
         self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '28'))
         self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '72'))
-        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.30'))
+        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.18'))
         self.kraken_min_atr_pct = float(os.getenv('KRAKEN_MIN_ATR_PCT', '0.4'))
         
         # Track first trade for sanity check logging
@@ -3775,7 +3774,7 @@ class NIJAApexStrategyV71:
                     # When active, bypass ATR-based targets and the R:R ratio gate
                     # in favour of fixed-percentage scalp levels.
                     if getattr(self, '_hf_scalp_active', False):
-                        _sl_pct = getattr(self, '_hf_stop_pct', 0.3) / 100.0
+                        _sl_pct = getattr(self, '_hf_stop_pct', 0.0035)
                         _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
                         stop_loss  = current_price * (1.0 - _sl_pct)
                         tp_levels  = [current_price * (1.0 + _tp_pct)]
@@ -4614,7 +4613,7 @@ class NIJAApexStrategyV71:
                     # When active, bypass ATR-based targets and the R:R ratio gate
                     # in favour of fixed-percentage scalp levels.
                     if getattr(self, '_hf_scalp_active', False):
-                        _sl_pct = getattr(self, '_hf_stop_pct', 0.3) / 100.0
+                        _sl_pct = getattr(self, '_hf_stop_pct', 0.0035)
                         _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
                         stop_loss  = current_price * (1.0 + _sl_pct)
                         tp_levels  = [current_price * (1.0 - _tp_pct)]

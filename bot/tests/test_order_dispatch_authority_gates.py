@@ -1,5 +1,6 @@
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from bot.broker_integration import (
@@ -87,6 +88,45 @@ class TestExecutionPipelineAuthorityHalts(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("SEAK halted", result.error)
+
+    def test_execute_blocks_when_runtime_authority_snapshot_not_ready(self):
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._execution_observer = None
+        pipeline._allocation_clamp = None
+        pipeline._exchange_normalizer = None
+        pipeline._pre_trade_risk_engine = None
+        pipeline._ecel = None
+        pipeline._ecel_required = False
+        pipeline._ecel_fail_closed = False
+        pipeline._throttler = None
+        pipeline._router = None
+        pipeline._multi_router = None
+        pipeline._enforce_execution_gate = lambda request, t_start: None
+        pipeline._emit_execution_rejection_telemetry = lambda **kwargs: None
+        pipeline._dispatch = lambda request, t_start: (_ for _ in ()).throw(AssertionError("dispatch must not run"))
+
+        request = PipelineRequest(symbol="BTC-USD", side="buy", size_usd=25.0)
+        with patch.dict(
+            os.environ,
+            {"LIVE_CAPITAL_VERIFIED": "false", "NIJA_WRITER_FENCING_TOKEN": ""},
+            clear=False,
+        ), patch(
+            "bot.execution_pipeline.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.execution_pipeline.assert_execution_dispatch_permitted",
+            return_value=None,
+        ), patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=SimpleNamespace(ready=False),
+        ), patch(
+            "bot.execution_pipeline.get_seak",
+            return_value=_FakeSeak(halted=False),
+        ):
+            result = pipeline.execute(request)
+
+        self.assertFalse(result.success)
+        self.assertIn("Runtime authority convergence lost", result.error)
 
 
 if __name__ == "__main__":

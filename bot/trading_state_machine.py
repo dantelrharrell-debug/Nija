@@ -144,8 +144,11 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     try:
         try:
             from bot.distributed_nonce_manager import get_distributed_nonce_manager
+            from bot.execution_authority_context import assert_startup_write_authority
         except ImportError:
             from distributed_nonce_manager import get_distributed_nonce_manager  # type: ignore[import]
+            from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
+        assert_startup_write_authority()
         writer_lease_manager = get_distributed_nonce_manager()
     except Exception:
         writer_lease_manager = None
@@ -218,13 +221,16 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
                     get_distributed_nonce_manager,
                     make_api_key_id,
                 )
+                from bot.execution_authority_context import assert_startup_write_authority
             except ImportError:
                 from distributed_nonce_manager import (  # type: ignore[import]
                     get_distributed_nonce_manager,
                     make_api_key_id,
                 )
+                from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
 
             key_id = make_api_key_id(platform_key)
+            assert_startup_write_authority()
             manager = get_distributed_nonce_manager()
             manager.ensure_writer_lock(key_id)
             status_fn = getattr(manager, "get_writer_lease_status", None)

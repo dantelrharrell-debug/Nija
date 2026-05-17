@@ -90,12 +90,16 @@ try:
     from bot.execution_authority_context import (
         execution_authority_scope,
         assert_distributed_writer_authority,
+        assert_execution_dispatch_permitted,
+        runtime_authority_snapshot,
     )
 except ImportError:
     try:
         from execution_authority_context import (
             execution_authority_scope,
             assert_distributed_writer_authority,
+            assert_execution_dispatch_permitted,
+            runtime_authority_snapshot,
         )
     except ImportError:
         @contextmanager
@@ -104,6 +108,15 @@ except ImportError:
 
         def assert_distributed_writer_authority() -> None:
             return
+
+        def assert_execution_dispatch_permitted() -> None:
+            return
+
+        class _RuntimeAuthoritySnapshotFallback:
+            ready = True
+
+        def runtime_authority_snapshot():
+            return _RuntimeAuthoritySnapshotFallback()
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -687,8 +700,27 @@ class ExecutionPipeline:
                     latency_ms=(time.monotonic() - t_start) * 1000,
                 )
 
-        with execution_authority_scope():
-            result = self._dispatch(effective_request, t_start)
+        try:
+            with execution_authority_scope():
+                assert_distributed_writer_authority()
+                assert_execution_dispatch_permitted()
+                if not runtime_authority_snapshot().ready:
+                    raise RuntimeError("Runtime authority convergence lost")
+                result = self._dispatch(effective_request, t_start)
+        except Exception as exc:
+            self._emit_execution_rejection_telemetry(
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                reason=f"execution_authority_runtime:{exc}",
+            )
+            return PipelineResult(
+                success=False,
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                size_usd=effective_request.size_usd,
+                error=f"ExecutionAuthority reject: {exc}",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
 
         if not result.success and self._is_retryable_exchange_rejection(result.error):
             logger.warning(

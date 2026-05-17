@@ -38,6 +38,15 @@ import glob
 import shutil
 from datetime import datetime, timezone
 
+try:
+    from bot.execution_authority_context import assert_startup_write_authority
+except ImportError:
+    try:
+        from execution_authority_context import assert_startup_write_authority  # type: ignore[import]
+    except ImportError:
+        def assert_startup_write_authority() -> None:
+            return
+
 # ── Load .env ─────────────────────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
@@ -336,6 +345,7 @@ def reset_nonce() -> tuple:
         gnm.AdaptiveNonceOffsetEngine._instance = None
         importlib.reload(gnm)
 
+        assert_startup_write_authority()
         mgr = gnm.KrakenNonceManager()
         old_nonce = mgr.get_last_nonce()
 

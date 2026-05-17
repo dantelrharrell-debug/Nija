@@ -489,7 +489,7 @@ class TestStartupReadinessOrder(unittest.TestCase):
         for node in ast.walk(connect_fn):
             if not isinstance(node, ast.Call):
                 continue
-            if isinstance(node.func, ast.Name) and node.func.id == "assert_distributed_writer_authority":
+            if isinstance(node.func, ast.Name) and node.func.id == "assert_startup_write_authority":
                 writer_guard_calls.append(node.lineno)
             if isinstance(node.func, ast.Name) and node.func.id == "_get_distributed_nonce_manager":
                 nonce_manager_calls.append(node.lineno)
@@ -497,7 +497,7 @@ class TestStartupReadinessOrder(unittest.TestCase):
         self.assertGreaterEqual(
             len(writer_guard_calls),
             1,
-            "KrakenBrokerAdapter.connect() must verify distributed writer authority before nonce manager init",
+            "KrakenBrokerAdapter.connect() must verify startup write authority before nonce manager init",
         )
         self.assertEqual(
             len(nonce_manager_calls),
@@ -507,7 +507,7 @@ class TestStartupReadinessOrder(unittest.TestCase):
         self.assertLess(
             min(writer_guard_calls),
             nonce_manager_calls[0],
-            "KrakenBrokerAdapter.connect() must check writer authority before nonce manager initialization",
+            "KrakenBrokerAdapter.connect() must check startup write authority before nonce manager initialization",
         )
 
 

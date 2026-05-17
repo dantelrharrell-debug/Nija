@@ -6070,13 +6070,13 @@ class TradingStrategy:
                         self.hf_scalping_mode = _hf
                         if _hf.enabled:
                             logger.info(
-                                "🚀 HF Scalping Mode ACTIVE — cycle=%ds  "
-                                "confidence≥%.2f  ADX≥%d  TP=%.1f%%  SL=%.1f%%",
-                                _hf.get_cycle_interval(),
-                                _hf.config.min_confidence,
-                                _hf.config.min_adx,
-                                _hf.config.profit_target_pct,
-                                _hf.config.stop_loss_pct,
+                                "🚀 HF Scalping Mode ACTIVE — "
+                                f"cycle={_hf.get_cycle_interval()}s  "
+                                f"confidence≥{_hf.config.min_confidence:.2f}  "
+                                f"ADX≥{_hf.config.min_adx}  "
+                                f"vol≥{_hf.config.volume_threshold * 100:.1f}%  "
+                                f"TP={_hf.config.profit_target_pct:.1f}%  "
+                                f"SL={_hf.config.stop_loss_pct * 100:.2f}%"
                             )
                     except Exception as _hf_init_err:
                         logger.warning("⚠️ HF Scalping Mode init skipped: %s", _hf_init_err)

@@ -27,8 +27,11 @@ def _get_dnm():
     """Lazily return the DistributedNonceManager singleton."""
     try:
         from bot.distributed_nonce_manager import get_distributed_nonce_manager
+        from bot.execution_authority_context import assert_startup_write_authority
     except ImportError:
         from distributed_nonce_manager import get_distributed_nonce_manager  # type: ignore
+        from execution_authority_context import assert_startup_write_authority  # type: ignore
+    assert_startup_write_authority()
     return get_distributed_nonce_manager()
 
 
@@ -141,4 +144,3 @@ __all__ = [
     "get_user_nonce_manager",
     "force_resync_all_user_nonces",
 ]
-
