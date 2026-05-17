@@ -13,6 +13,7 @@ from bot.trading_state_machine import (
     ExecutionSafetyState,
     TradingStateMachine,
 )
+from bot.startup_coordinator import get_startup_coordinator
 
 
 class TestExecutionAuthorityConvergenceFSM(unittest.TestCase):
@@ -118,6 +119,9 @@ class TestExecutionAuthorityConvergenceFSM(unittest.TestCase):
 
 
 class TestMaybeAutoActivateDelegation(unittest.TestCase):
+    def setUp(self) -> None:
+        get_startup_coordinator().reset_for_testing()
+
     def test_maybe_auto_activate_delegates_to_commit_activation_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_path = os.path.join(tmp, "state.json")
@@ -136,6 +140,42 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 with patch.object(sm, "commit_activation", return_value=False) as mock_commit:
                     self.assertFalse(sm.maybe_auto_activate())
                     mock_commit.assert_called_once_with(cycle_capital=None)
+
+    def test_runtime_execution_authority_env_is_not_startup_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "false",
+                    "DRY_RUN_MODE": "false",
+                    "NIJA_RUNTIME_EXECUTION_AUTHORITY": "true",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                snap = sm.get_execution_authority_snapshot(gates_ok=True)
+                self.assertFalse(snap["intent_present"])
+
+    def test_startup_coordinator_request_counts_as_activation_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "false",
+                    "DRY_RUN_MODE": "false",
+                    "NIJA_RUNTIME_EXECUTION_AUTHORITY": "false",
+                },
+                clear=False,
+            ):
+                get_startup_coordinator().record_activation_requested(
+                    requested=True,
+                    source="unit-test",
+                )
+                sm = TradingStateMachine(state_file=state_path)
+                snap = sm.get_execution_authority_snapshot(gates_ok=True)
+                self.assertTrue(snap["intent_present"])
 
 
 if __name__ == "__main__":

@@ -1133,11 +1133,13 @@ class TradingStateMachine:
                 self._execution_authority = False
                 self._core_loop_owns_execution = True
                 self._can_dispatch_trades = False
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
             elif new_state == TradingState.LIVE_ACTIVE:
                 self._activation_committed = True
                 self._execution_authority = True
                 self._core_loop_owns_execution = False
                 self._can_dispatch_trades = True
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
 
             # Persist
             self._persist_state()
@@ -1208,7 +1210,7 @@ class TradingStateMachine:
           Gate 1. Current state is OFF (or already LIVE_ACTIVE — see above)
           Gate 2. Kill switch is inactive
           Gate 3. Activation intent is present via LIVE_CAPITAL_VERIFIED or
-                  NIJA_RUNTIME_EXECUTION_AUTHORITY (runtime unlock marker)
+                  a coordinator-issued activation request
           Gate 4. Single global activation barrier
               - capital snapshot ready
               - broker registration/snapshot invariant valid
@@ -1228,8 +1230,6 @@ class TradingStateMachine:
         True  — activation committed (transition performed or was already live)
         False — one or more gates blocked; will be retried on the next cycle
         """
-        # ── ABSOLUTE OVERRIDE: FORCE_TRADE_MODE + LIVE_CAPITAL_VERIFIED ──────
-        # When both are set, bypass all gates and force LIVE_ACTIVE immediately.
         _force = (
             _env_truthy("FORCE_TRADE")
             or _env_truthy("FORCE_TRADE_MODE")
@@ -1238,8 +1238,16 @@ class TradingStateMachine:
         )
         runtime_mode = resolve_runtime_mode_safe(logger)
         _lcv_quick = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
-        _runtime_unlock_authority = _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
-        _live_activation_intent = bool(_lcv_quick or _runtime_unlock_authority)
+        _coordinator = _get_startup_coordinator()
+        if _lcv_quick or _force:
+            try:
+                _coordinator.record_activation_requested(
+                    requested=True,
+                    source="commit_activation:operator_intent",
+                )
+            except Exception:
+                logger.debug("commit_activation: coordinator activation request update failed", exc_info=True)
+        _live_activation_intent = _activation_intent_present(runtime_mode)
         _dry_run_quick = runtime_mode.dry_run if runtime_mode is not None else _env_truthy("DRY_RUN_MODE")
         _lcv_raw = (
             runtime_mode.raw.get("LIVE_CAPITAL_VERIFIED", "false")
@@ -1271,68 +1279,6 @@ class TradingStateMachine:
             )
             return False
 
-        if _force and _live_activation_intent and not _dry_run_quick:
-            _force_writer_ok = bool(_live_gate_status.get("lease_ok"))
-            _force_writer_err = str(_live_gate_status.get("lease_err") or "")
-            if not _force_writer_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_DISTRIBUTED_WRITER_AUTHORITY detail=%s",
-                    _force_writer_err,
-                )
-                return False
-
-            _force_nonce_ok, _force_nonce_err = _nonce_writer_lease_gate()
-            if not _force_nonce_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_NONCE_WRITER_LEASE detail=%s",
-                    _force_nonce_err,
-                )
-                return False
-
-            _force_nonce_sync_ok = bool(_live_gate_status.get("nonce_ok"))
-            _force_nonce_sync_err = str(_live_gate_status.get("nonce_err") or "")
-            if not _force_nonce_sync_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_NONCE_SYNC detail=%s",
-                    _force_nonce_sync_err,
-                )
-                return False
-
-            # Enforce fencing token on force path — no bypass.
-            _force_fencing_token = _resolve_writer_fencing_token()
-            if not _force_fencing_token:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_FENCING_TOKEN_MISSING "
-                    "NIJA_WRITER_FENCING_TOKEN is not set — LIVE_ACTIVE requires a valid fencing token"
-                )
-                return False
-
-            # Check revocation on force path.
-            try:
-                try:
-                    from bot.revocation_guard import check_revocation_or_raise
-                except ImportError:
-                    from revocation_guard import check_revocation_or_raise  # type: ignore[import]
-                check_revocation_or_raise()
-            except RuntimeError as _rev_exc:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=FORCE_PATH_REVOCATION detail=%s", _rev_exc
-                )
-                return False
-
-            with self._lock:
-                if not self._activation_committed:
-                    self._current_state = TradingState.LIVE_ACTIVE
-                    self._activation_committed = True
-                    self._execution_authority = True
-                    self._core_loop_owns_execution = False
-                    self._can_dispatch_trades = True
-                    logger.critical(
-                        "[AUTO_ACTIVATE] FORCE LIVE PATH (FORCE/AUTO_ACTIVATE+HEARTBEAT)+LIVE_CAPITAL_VERIFIED — "
-                        "writer authority and fencing token verified, state forced to LIVE_ACTIVE"
-                    )
-            return True
-
         # ── Gate 0: idempotency — read under lock for thread-safety ──────
         with self._lock:
             if self._activation_committed:
@@ -1341,6 +1287,7 @@ class TradingStateMachine:
                     self._execution_authority = True
                     self._core_loop_owns_execution = False
                     self._can_dispatch_trades = True
+                    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
                 else:
                     logger.warning(
                         "ACTIVATION_COMMITTED_STATE_MISMATCH state=%s — retaining committed flag",
@@ -1370,6 +1317,7 @@ class TradingStateMachine:
                 self._execution_authority = True
                 self._core_loop_owns_execution = False
                 self._can_dispatch_trades = True
+            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
             return True
 
         if current not in (TradingState.OFF, TradingState.LIVE_PENDING_CONFIRMATION):
@@ -1379,65 +1327,51 @@ class TradingStateMachine:
             )
             return False
 
-        # ── Gate 1.5: distributed authority bootstrap readiness must be True ──
-        # Hard fail-closed: when authority is not ready, remain armed in
-        # LIVE_PENDING_CONFIRMATION instead of promoting to LIVE_ACTIVE.
+        # ── Gate 1.5: authority + runtime safety probes are sampled once ──────
         authority_ready = _is_authority_ready()
+        try:
+            _coordinator.record_authority(
+                ready=authority_ready,
+                status={"current_state": current.value},
+            )
+        except Exception:
+            logger.debug("commit_activation: coordinator authority update failed", exc_info=True)
+
         if not authority_ready:
             with self._lock:
-                # Only promote OFF -> LIVE_PENDING_CONFIRMATION here. If the
-                # machine is already armed/pending we preserve that state.
                 if self._current_state == TradingState.OFF:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
-            logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_NOT_READY "
-                "authority_ready=False current_state=%s target_state=LIVE_PENDING_CONFIRMATION",
-                current.value,
-            )
-            return False
 
         # ── Gate 2: kill switch must be inactive ─────────────────────────
         kill_state = False
         try:
             from kill_switch import get_kill_switch
             kill_state = get_kill_switch().is_active()
-            if kill_state:
-                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=KILL_SWITCH_ACTIVE")
-                return False
         except Exception as _ks_err:
             logger.debug("commit_activation: could not check kill switch: %s", _ks_err)
+        try:
+            _coordinator.record_kill_switch(active=kill_state)
+        except Exception:
+            logger.debug("commit_activation: coordinator kill-switch update failed", exc_info=True)
 
         # ── Gate 2b: distributed writer authority must be valid ──────────
         # Prevent split-brain activation when another container/process owns
         # the Redis writer fence token.
         _writer_ok = bool(_live_gate_status.get("lease_ok"))
         _writer_err = str(_live_gate_status.get("lease_err") or "")
-        if not _writer_ok:
-            logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=DISTRIBUTED_WRITER_AUTHORITY detail=%s",
-                _writer_err,
-            )
-            return False
-
         # ── Gate 2c: nonce writer lease must be valid ─────────────────────
         # The distributed process writer lock and nonce-writer lease are
         # independent Redis invariants. Require both before LIVE activation.
         _nonce_lease_ok, _nonce_lease_err = _nonce_writer_lease_gate()
-        if not _nonce_lease_ok:
-            logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=NONCE_WRITER_LEASE detail=%s",
-                _nonce_lease_err,
-            )
-            return False
-
         _nonce_sync_ok = bool(_live_gate_status.get("nonce_ok"))
         _nonce_sync_err = str(_live_gate_status.get("nonce_err") or "")
-        if not _nonce_sync_ok:
-            logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=NONCE_SYNC detail=%s",
-                _nonce_sync_err,
+        try:
+            _coordinator.record_nonce_status(
+                ready=bool(_nonce_lease_ok and _nonce_sync_ok),
+                detail="; ".join(_d for _d in (_nonce_lease_err, _nonce_sync_err) if _d),
             )
-            return False
+        except Exception:
+            logger.debug("commit_activation: coordinator nonce update failed", exc_info=True)
 
         # ── Gate 3: LIVE_CAPITAL_VERIFIED — composite semantic check ──────────
         # Semantics: flag==true AND capital_hydrated==true AND total_balance is not None.
@@ -1449,12 +1383,21 @@ class TradingStateMachine:
         #                            AND capital_hydrated == true
         #                            AND total_balance is not None)
         if not _live_activation_intent:
+            _coordinator.evaluate_activation(
+                _coordinator.build_snapshot(
+                    trading_state=current.value,
+                    activation_intent=False,
+                )
+            )
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_NOT_SET "
-                "LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r NIJA_RUNTIME_EXECUTION_AUTHORITY=%r",
+                "LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r coordinator_activation_intent=%r",
                 _lcv_raw,
                 _live_trading_raw,
-                os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", ""),
+                _coordinator.build_snapshot(
+                    trading_state=current.value,
+                    activation_intent=False,
+                ).activation_intent,
             )
             return False
 
@@ -1483,13 +1426,30 @@ class TradingStateMachine:
                 _ca_balance_lcv = _ca_lcv.get_real_capital()
         except Exception as _bal_err:
             logger.debug("commit_activation: Gate 3c balance read failed: %s", _bal_err)
-        if _ca_lcv is not None and _ca_balance_lcv is None:
-            logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_BALANCE_UNKNOWN "
-                "flag=%r total_balance=None — capital balance not resolvable from CA.",
-                _lcv_raw,
+
+        _capital_state_value = _capital_bootstrap_state_value()
+        _bootstrap_state_value_now = _bootstrap_state_value()
+        try:
+            _coordinator.record_bootstrap_state(_bootstrap_state_value_now)
+            _coordinator.record_capital_state(
+                state=_capital_state_value,
+                hydrated=_ca_hydrated_lcv,
+                balance=_ca_balance_lcv,
+                stale=bool(_ca_lcv.is_stale()) if _ca_lcv is not None and hasattr(_ca_lcv, "is_stale") else True,
             )
-            return False
+        except Exception:
+            logger.debug("commit_activation: coordinator bootstrap/capital update failed", exc_info=True)
+
+        _readiness_version, _readiness_snapshot = _readiness_snapshot_with_version()
+        try:
+            _coordinator.record_readiness(
+                key="__snapshot__",
+                value=bool(all(_readiness_snapshot.values())) if _readiness_snapshot else False,
+                version=_readiness_version,
+                table=_readiness_snapshot,
+            )
+        except Exception:
+            logger.debug("commit_activation: coordinator readiness update failed", exc_info=True)
 
         # ── Gate 4: single global activation barrier ──────────────────────
         _mabm_gate = _get_mabm_instance()
@@ -1506,7 +1466,13 @@ class TradingStateMachine:
                 "[AUTO_ACTIVATE BLOCKED] reason=GLOBAL_ACTIVATION_BARRIER detail=%s",
                 _barrier_reason,
             )
-            return False
+        try:
+            _coordinator.record_dispatch_health(
+                ready=bool(_barrier_ready and _exec_ready and _venue_ready and _writer_ok and _nonce_lease_ok and _nonce_sync_ok),
+                detail=_barrier_reason,
+            )
+        except Exception:
+            logger.debug("commit_activation: coordinator dispatch-health update failed", exc_info=True)
 
         # ── Gate 5: activation_invariant — all subsystems simultaneously valid
 
@@ -1538,6 +1504,9 @@ class TradingStateMachine:
 
         # Final consolidated gate diagnostic — single source of truth for activation state.
         _live_verified_bool = bool(_live_activation_intent)
+        _snapshot_ready = self._first_snap_accepted or (
+            _snap.get("ca_valid_brokers", 0) > 0 and _snap.get("snapshot_source", "") == "live_exchange"
+        )
         commit_activation(
             kill=kill_state,
             capital_ready=_cap_ready,
@@ -1545,69 +1514,77 @@ class TradingStateMachine:
             venue_ready=_venue_ready,
             live_verified=_live_verified_bool,
             invariant=_inv_ready,
-            snapshot_ready=self._first_snap_accepted,
+            snapshot_ready=_snapshot_ready,
+        )
+        _frozen_snapshot = _coordinator.build_snapshot(
+            trading_state=current.value,
+            activation_intent=_live_activation_intent,
+        )
+        _decision = _coordinator.evaluate_activation(_frozen_snapshot)
+        logger.critical(
+            "STARTUP_COORDINATOR_DECISION version=%s state=%s reason=%s bootstrap=%s capital=%s readiness_v=%s",
+            _decision.snapshot_version,
+            _decision.target_state.value,
+            _decision.reason,
+            _frozen_snapshot.bootstrap_state,
+            _frozen_snapshot.capital_state,
+            _frozen_snapshot.readiness_version,
         )
 
-        # EDGE: only trigger on transition False → True.
-        # This prevents spurious repeated activation attempts every loop cycle.
-        _prev_ready = self._activation_ready_last_cycle
-        self._activation_ready_last_cycle = _inv_ready
-
-        if _inv_ready and not _prev_ready:
-            # All subsystems simultaneously valid — confirm snap and activate.
-            self._first_snap_accepted = True
-            try:
-                logger.critical("🚀 ACTIVATING TRADING ENGINE")
-                self.transition_to(
-                    TradingState.LIVE_ACTIVE,
-                    "CONVERGENCE_EDGE: all subsystems simultaneously valid in same snapshot cycle",
-                )
-                assert self._current_state == TradingState.LIVE_ACTIVE, (
-                    f"FSM state must be LIVE_ACTIVE after activation, got {self._current_state}"
-                )
-                with self._lock:
-                    self._current_state = TradingState.LIVE_ACTIVE
-                    self._activation_committed = True
-                    self._execution_authority = True
-                    self._core_loop_owns_execution = False
-                    self._can_dispatch_trades = True
-                logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
-                logger.critical("LIVE_ACTIVE_CONFIRMED_CONVERGENCE_EDGE")
+        if not _decision.allowed or not _inv_ready or not _snapshot_ready:
+            if kill_state:
+                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=KILL_SWITCH_ACTIVE")
+            elif not authority_ready:
                 logger.critical(
-                    "ACTIVATION STATE CONFIRMED: current_state=%s is_live=%s",
-                    self._current_state.value,
-                    self.is_live_trading_active(),
+                    "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_NOT_READY "
+                    "authority_ready=False current_state=%s target_state=LIVE_PENDING_CONFIRMATION",
+                    current.value,
                 )
-                return True
-            except Exception as exc:
-                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=TRANSITION_EXCEPTION error=%s", exc)
-                return False
-
-        if not _inv_ready:
-            # Log which sub-condition is blocking activation.
-            if not self._first_snap_accepted:
+            elif not _writer_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=DISTRIBUTED_WRITER_AUTHORITY detail=%s",
+                    _writer_err,
+                )
+            elif not _nonce_lease_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=NONCE_WRITER_LEASE detail=%s",
+                    _nonce_lease_err,
+                )
+            elif not _nonce_sync_ok:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=NONCE_SYNC detail=%s",
+                    _nonce_sync_err,
+                )
+            elif not _ca_hydrated_lcv:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED "
+                    "flag=%r ca_available=%s ca_hydrated=%s",
+                    _lcv_raw,
+                    _ca_lcv is not None,
+                    bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False,
+                )
+            elif _ca_lcv is not None and _ca_balance_lcv is None:
+                logger.critical(
+                    "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_BALANCE_UNKNOWN "
+                    "flag=%r total_balance=None — capital balance not resolvable from CA.",
+                    _lcv_raw,
+                )
+            elif not _snapshot_ready:
                 logger.critical(
                     "[AUTO_ACTIVATE BLOCKED] reason=SNAPSHOT_MISSING"
                     " — no valid live-exchange capital snapshot accepted"
                 )
             elif _ca_gate is not None and not _ca_gate.is_hydrated:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=CA_NOT_HYDRATED"
-                )
+                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=CA_NOT_HYDRATED")
             elif _ca_gate is not None and _ca_gate.is_stale():
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=CA_STALE"
-                )
+                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=CA_STALE")
             elif (
                 _mabm_gate is not None
                 and hasattr(_mabm_gate, "all_brokers_fully_ready")
                 and not _mabm_gate.all_brokers_fully_ready()
             ):
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=BROKERS_NOT_READY"
-                )
+                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=BROKERS_NOT_READY")
             elif not _snap.get("aggregation_normalized", True):
-                # FIX 2: broker aggregation pipeline not yet sequential-complete.
                 logger.critical(
                     "[AUTO_ACTIVATE BLOCKED] reason=AGGREGATION_NOT_NORMALIZED"
                     " — MABM viable broker count not yet reflected in CA balance entries."
@@ -1616,19 +1593,19 @@ class TradingStateMachine:
                 )
             else:
                 logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=INVARIANT_FAILED"
-                    " snap_source=%s valid_brokers=%s",
+                    "[AUTO_ACTIVATE BLOCKED] reason=%s snap_source=%s valid_brokers=%s",
+                    _decision.reason.upper(),
                     _snap.get("snapshot_source", ""),
                     _snap.get("ca_valid_brokers", 0),
                 )
             return False
 
-        # ── All gates passed — commit the activation atomically ───────────
         try:
+            self._first_snap_accepted = True
             logger.critical("🚀 ACTIVATING TRADING ENGINE")
             self.transition_to(
                 TradingState.LIVE_ACTIVE,
-                "COMMIT_ACTIVATION: all gates passed — single-source activation commit",
+                f"STARTUP_COORDINATOR_COMMIT version={_frozen_snapshot.snapshot_version}",
             )
             assert self._current_state == TradingState.LIVE_ACTIVE, (
                 f"FSM state must be LIVE_ACTIVE after activation, got {self._current_state}"
@@ -1639,6 +1616,8 @@ class TradingStateMachine:
                 self._execution_authority = True
                 self._core_loop_owns_execution = False
                 self._can_dispatch_trades = True
+            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+            _coordinator.finalize_activation_commit(_frozen_snapshot)
             logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
             logger.critical("ACTIVATION_COMMITTED — LIVE_ACTIVE confirmed")
             logger.critical(
@@ -1683,10 +1662,7 @@ class TradingStateMachine:
 
     def _evaluate_execution_authority_state(self, gates_ok: Optional[bool] = None) -> ExecutionAuthoritySnapshot:
         runtime_mode = resolve_runtime_mode_safe(logger)
-        intent_present = bool(
-            (runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED"))
-            or _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
-        )
+        intent_present = _activation_intent_present(runtime_mode)
         with self._lock:
             current_state = self._current_state
             activation_committed = self._activation_committed
@@ -1801,6 +1777,16 @@ def _get_capital_authority_instance():
         return None
 
 
+def _get_startup_coordinator():
+    """Return the deterministic startup coordinator singleton."""
+    try:
+        from bot.startup_coordinator import get_startup_coordinator
+        return get_startup_coordinator()
+    except ImportError:
+        from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+        return get_startup_coordinator()
+
+
 def _bootstrap_running_supervised() -> bool:
     """Return True when BootstrapFSM reached RUNNING_SUPERVISED."""
     try:
@@ -1825,6 +1811,60 @@ def _capital_bootstrap_running() -> bool:
         return _state == "RUNNING"
     except Exception:
         return False
+
+
+def _capital_bootstrap_state_value() -> str:
+    """Return the CapitalBootstrapFSM state value or ``UNAVAILABLE``."""
+    try:
+        try:
+            from bot.capital_flow_state_machine import get_capital_bootstrap_fsm
+        except ImportError:
+            from capital_flow_state_machine import get_capital_bootstrap_fsm  # type: ignore[import]
+        _state = getattr(get_capital_bootstrap_fsm().state, "value", "")
+        return str(_state or "UNAVAILABLE")
+    except Exception:
+        return "UNAVAILABLE"
+
+
+def _bootstrap_state_value() -> str:
+    """Return the BootstrapFSM state value or ``UNAVAILABLE``."""
+    try:
+        try:
+            from bot.bootstrap_state_machine import get_bootstrap_fsm
+        except ImportError:
+            from bootstrap_state_machine import get_bootstrap_fsm  # type: ignore[import]
+        _state = getattr(get_bootstrap_fsm().state, "value", "")
+        return str(_state or "UNAVAILABLE")
+    except Exception:
+        return "UNAVAILABLE"
+
+
+def _readiness_snapshot_with_version() -> tuple[int, Dict[str, bool]]:
+    """Return readiness-table version + snapshot, fail-closed on import errors."""
+    try:
+        try:
+            from bot.readiness_table import snapshot_with_version as _snapshot_with_version
+        except ImportError:
+            from readiness_table import snapshot_with_version as _snapshot_with_version  # type: ignore[import]
+        return _snapshot_with_version()
+    except Exception:
+        return 0, {}
+
+
+def _activation_intent_present(runtime_mode: Optional[Any] = None) -> bool:
+    """Return True when operator intent or coordinator request is present."""
+    _live_intent = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
+    _coordinator_requested = False
+    try:
+        _coordinator_requested = bool(
+            _get_startup_coordinator().build_snapshot(
+                trading_state="UNKNOWN",
+                activation_intent=False,
+            ).activation_intent
+        )
+    except Exception:
+        _coordinator_requested = False
+    return bool(_live_intent or _coordinator_requested)
 
 
 def _is_authority_ready() -> bool:
