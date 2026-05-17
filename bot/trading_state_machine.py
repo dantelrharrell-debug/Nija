@@ -594,13 +594,47 @@ class ExecutionAuthoritySnapshot:
 
 
 class ExecutionAuthorityConvergenceFSM:
-    """Dual-layer FSM for execution authority safety + progress."""
+    """Dual-layer FSM for execution authority safety + progress.
+
+    Zero-limbo guarantee
+    --------------------
+    Every state transition is deterministic and reversible:
+
+    * **LOCKED**        — no activation intent; all other inputs ignored.
+    * **ARMED**         — intent present but prerequisites not met yet
+                          (bootstrap or capital FSM not yet RUNNING).
+    * **BLOCKED_RETRY** — prerequisites met but safety gates failing;
+                          timer starts.
+    * **FAIL_SAFE**     — gates have been failing for longer than
+                          ``timeout_s``; this state is **recoverable** —
+                          if gates become OK the FSM exits to CONVERGING.
+    * **CONVERGING**    — gates OK, waiting for trading state / commit /
+                          dispatch handshake to complete.
+    * **AUTHORIZED**    — all conditions simultaneously met; orders may flow.
+
+    The FSM never gets permanently stuck: FAIL_SAFE clears automatically
+    the moment gates return OK.  Calling :meth:`reset` explicitly returns
+    the FSM to LOCKED regardless of current conditions.
+    """
 
     def __init__(self, timeout_s: float = 20.0) -> None:
         self._timeout_s = max(1.0, float(timeout_s))
         self._progress_state = ExecutionProgressState.LOCKED
         self._blocked_since_monotonic: Optional[float] = None
         self._lock = threading.Lock()
+
+    def reset(self) -> None:
+        """Return the FSM to LOCKED and clear any pending timers.
+
+        Use this for explicit operator-initiated recovery after a FAIL_SAFE,
+        or during testing to restore a clean slate between scenarios.
+        """
+        with self._lock:
+            self._progress_state = ExecutionProgressState.LOCKED
+            self._blocked_since_monotonic = None
+        logger.critical(
+            "ExecutionAuthorityConvergenceFSM.reset(): state forced to LOCKED"
+        )
 
     def evaluate(
         self,
@@ -628,6 +662,8 @@ class ExecutionAuthorityConvergenceFSM:
         )
 
         with self._lock:
+            prev_state = self._progress_state
+
             if not intent_present:
                 self._progress_state = ExecutionProgressState.LOCKED
                 self._blocked_since_monotonic = None
@@ -645,12 +681,29 @@ class ExecutionAuthorityConvergenceFSM:
                     self._blocked_since_monotonic = now
                 elapsed = now - self._blocked_since_monotonic
                 if elapsed >= self._timeout_s:
+                    if prev_state != ExecutionProgressState.FAIL_SAFE:
+                        logger.critical(
+                            "ExecutionAuthorityConvergenceFSM: FAIL_SAFE entered after "
+                            "%.1fs of blocked gates — execution authority withheld until "
+                            "gates recover or reset() is called",
+                            elapsed,
+                        )
                     self._progress_state = ExecutionProgressState.FAIL_SAFE
                     reason = f"blocked_timeout_{elapsed:.2f}s"
                 else:
                     self._progress_state = ExecutionProgressState.BLOCKED_RETRY
                     reason = "blocked_retrying_gates"
             else:
+                # gates_ok=True: FAIL_SAFE and BLOCKED_RETRY are both recoverable.
+                if prev_state in (
+                    ExecutionProgressState.FAIL_SAFE,
+                    ExecutionProgressState.BLOCKED_RETRY,
+                ):
+                    logger.critical(
+                        "ExecutionAuthorityConvergenceFSM: gates recovered from %s "
+                        "→ CONVERGING (timer cleared)",
+                        prev_state.value,
+                    )
                 self._progress_state = ExecutionProgressState.CONVERGING
                 self._blocked_since_monotonic = None
                 reason = "awaiting_trading_live_commit_dispatch"
@@ -1060,45 +1113,58 @@ class TradingStateMachine:
 
         Raises:
             StateTransitionError: If transition is not allowed
+
+        Design: zero-deadlock guarantee
+        --------------------------------
+        All network / Redis / disk I/O is performed **before** acquiring
+        ``self._lock`` so that concurrent state readers
+        (``get_current_state``, ``is_live_trading_active``,
+        ``can_make_broker_calls``, etc.) are never blocked while the
+        thread is waiting for a remote response.  Only in-memory operations
+        execute while the lock is held.
         """
+        # ── Pre-flight safety checks (I/O outside the lock) ──────────────────
+        # These gates do not depend on the current FSM state; they are safety
+        # invariants that must pass before any LIVE_ACTIVE transition.
+        if new_state == TradingState.LIVE_ACTIVE:
+            # Enforce distributed writer authority before ANY LIVE_ACTIVE transition.
+            _writer_ok, _writer_err = _distributed_writer_authority_gate()
+            if not _writer_ok:
+                error_msg = f"LIVE_ACTIVE blocked: distributed writer authority failed — {_writer_err}"
+                logger.critical("[FSM HARD FAIL] %s", error_msg)
+                raise StateTransitionError(error_msg)
+
+            # Enforce fencing token presence.
+            _fencing_token = _resolve_writer_fencing_token()
+            if not _fencing_token:
+                error_msg = (
+                    "LIVE_ACTIVE blocked: NIJA_WRITER_FENCING_TOKEN is not set. "
+                    "A valid Redis fencing token is required for LIVE_ACTIVE."
+                )
+                logger.critical("[FSM HARD FAIL] %s", error_msg)
+                raise StateTransitionError(error_msg)
+
+            # Check runtime revocation before activating.
+            try:
+                try:
+                    from bot.revocation_guard import check_revocation_or_raise
+                except ImportError:
+                    from revocation_guard import check_revocation_or_raise  # type: ignore[import]
+                check_revocation_or_raise()
+            except RuntimeError as _rev_exc:
+                error_msg = f"LIVE_ACTIVE blocked: {_rev_exc}"
+                logger.critical("[FSM HARD FAIL] %s", error_msg)
+                raise StateTransitionError(error_msg) from _rev_exc
+
+            live_ok, live_err = _live_activation_gate()
+            if not live_ok:
+                error_msg = f"Activation blocked: {live_err}"
+                logger.critical("ACTIVATION BLOCKED: %s", error_msg)
+                raise StateTransitionError(error_msg)
+
+        # ── Atomic state update (lock held only for in-memory operations) ─────
         with self._lock:
             current = self._current_state
-
-            if new_state == TradingState.LIVE_ACTIVE:
-                # Enforce distributed writer authority before ANY LIVE_ACTIVE transition.
-                _writer_ok, _writer_err = _distributed_writer_authority_gate()
-                if not _writer_ok:
-                    error_msg = f"LIVE_ACTIVE blocked: distributed writer authority failed — {_writer_err}"
-                    logger.critical("[FSM HARD FAIL] %s", error_msg)
-                    raise StateTransitionError(error_msg)
-
-                # Enforce fencing token presence.
-                _fencing_token = _resolve_writer_fencing_token()
-                if not _fencing_token:
-                    error_msg = (
-                        "LIVE_ACTIVE blocked: NIJA_WRITER_FENCING_TOKEN is not set. "
-                        "A valid Redis fencing token is required for LIVE_ACTIVE."
-                    )
-                    logger.critical("[FSM HARD FAIL] %s", error_msg)
-                    raise StateTransitionError(error_msg)
-
-                # Check runtime revocation before activating.
-                try:
-                    try:
-                        from bot.revocation_guard import check_revocation_or_raise
-                    except ImportError:
-                        from revocation_guard import check_revocation_or_raise  # type: ignore[import]
-                    check_revocation_or_raise()
-                except RuntimeError as _rev_exc:
-                    error_msg = f"LIVE_ACTIVE blocked: {_rev_exc}"
-                    logger.critical("[FSM HARD FAIL] %s", error_msg)
-                    raise StateTransitionError(error_msg) from _rev_exc
-
-                live_ok, live_err = _live_activation_gate()
-                if not live_ok:
-                    error_msg = f"Activation blocked: {live_err}"
-                    logger.critical("ACTIVATION BLOCKED: %s", error_msg)
-                    raise StateTransitionError(error_msg)
 
             # Check if transition is valid
             if new_state not in self.VALID_TRANSITIONS.get(current, []):
@@ -1141,20 +1207,19 @@ class TradingStateMachine:
                 self._can_dispatch_trades = True
                 os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
 
-            # Persist
-            self._persist_state()
+        # ── Post-transition I/O (outside the lock) ────────────────────────────
+        # Persist and trigger callbacks after releasing the lock so that
+        # concurrent readers are not stalled by disk I/O or callback execution.
+        self._persist_state()
 
-            # Log transition
-            logger.info(
-                f"🔄 State transition: {old_state.value} -> {new_state.value} "
-                f"(Reason: {reason or 'No reason provided'})"
-            )
+        logger.info(
+            f"🔄 State transition: {old_state.value} -> {new_state.value} "
+            f"(Reason: {reason or 'No reason provided'})"
+        )
 
-            # Trigger callbacks
-            self._trigger_callbacks(new_state)
+        self._trigger_callbacks(new_state)
 
         # Start authority heartbeat monitor when entering LIVE_ACTIVE.
-        # Done outside the lock to avoid deadlock with the heartbeat thread.
         if new_state == TradingState.LIVE_ACTIVE:
             try:
                 try:
@@ -1607,16 +1672,13 @@ class TradingStateMachine:
                 TradingState.LIVE_ACTIVE,
                 f"STARTUP_COORDINATOR_COMMIT version={_frozen_snapshot.snapshot_version}",
             )
+            # transition_to() atomically sets _activation_committed, _execution_authority,
+            # _core_loop_owns_execution, _can_dispatch_trades, and
+            # NIJA_RUNTIME_EXECUTION_AUTHORITY inside its own lock — no redundant
+            # re-set needed here.
             assert self._current_state == TradingState.LIVE_ACTIVE, (
                 f"FSM state must be LIVE_ACTIVE after activation, got {self._current_state}"
             )
-            with self._lock:
-                self._current_state = TradingState.LIVE_ACTIVE
-                self._activation_committed = True
-                self._execution_authority = True
-                self._core_loop_owns_execution = False
-                self._can_dispatch_trades = True
-            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
             _coordinator.finalize_activation_commit(_frozen_snapshot)
             logger.critical("STATE AFTER ACTIVATION = %s", self._current_state)
             logger.critical("ACTIVATION_COMMITTED — LIVE_ACTIVE confirmed")

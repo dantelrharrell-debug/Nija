@@ -430,8 +430,10 @@ class SingleExecutionAuthorityKernel:
                 reason=reason,
                 latency_ms=latency_ms,
             )
-            with threading.Lock():
-                self._total_rejected += 1
+            # Simple increment; consistent with all other counter updates in this
+            # class.  Creating a new threading.Lock() per call (the previous code)
+            # provides no mutual exclusion since the lock is never shared.
+            self._total_rejected += 1
             return ExecutionToken(
                 granted=False,
                 request_id=request.request_id,
@@ -901,6 +903,17 @@ class SingleExecutionAuthorityKernel:
             slot = self._slots.get(slot_key)
         if slot is None:
             logger.warning("SEAK.release: no slot found for %s", slot_key)
+            return
+        # Guard: only the current holder may release the slot.  A stale or
+        # late release from a previous request must not evict a new holder.
+        if request_id and slot.holder_request_id and slot.holder_request_id != request_id:
+            logger.warning(
+                "SEAK.release: stale release ignored for %s "
+                "(current_holder=%s, caller=%s)",
+                slot_key,
+                slot.holder_request_id,
+                request_id,
+            )
             return
         slot.holder_request_id = None
         try:
