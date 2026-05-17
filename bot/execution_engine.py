@@ -100,6 +100,25 @@ except ImportError:
         _KrakenRetryPolicy = None  # type: ignore[assignment,misc]
         _KrakenErrorCategory = None  # type: ignore[assignment,misc]
 
+# ── Execution State Controller — state-machine driven order lifecycle ──────
+try:
+    from bot.execution_state_controller import (
+        ExecutionStateController as _ExecutionStateController,
+        ExecutionOrderState as _ExecutionOrderState,
+    )
+    _EXEC_STATE_CONTROLLER_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_state_controller import (  # type: ignore[import]
+            ExecutionStateController as _ExecutionStateController,
+            ExecutionOrderState as _ExecutionOrderState,
+        )
+        _EXEC_STATE_CONTROLLER_AVAILABLE = True
+    except ImportError:
+        _EXEC_STATE_CONTROLLER_AVAILABLE = False
+        _ExecutionStateController = None  # type: ignore[assignment,misc]
+        _ExecutionOrderState = None       # type: ignore[assignment,misc]
+
 # Import Execution Intelligence Layer
 try:
     from bot.execution_intelligence import (
@@ -638,6 +657,11 @@ class ExecutionEngine:
                 self.profit_logger = None
         else:
             self.profit_logger = None
+
+        # Execution State Controller — taxonomy-driven per-order lifecycle FSM.
+        # Lazily instantiated on first use so the controller is always fresh
+        # and its state does not leak across unrelated trade attempts.
+        self._execution_controller: Optional[Any] = None
 
     def _submit_market_order_via_pipeline(
         self,
@@ -2639,26 +2663,50 @@ class ExecutionEngine:
                     _entry_t0 = _time.monotonic()
                     _market_exc: Optional[Exception] = None
                     _pfunnel("execution_attempted")
-                    try:
-                        logger.critical(
-                            "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
-                            symbol,
-                            order_side,
-                            f"{_order_quantity:.8f}",
-                            _order_size_usd,
-                        )
-                        result = self._submit_market_order_via_pipeline(
-                            broker_client=self.broker_client,
+                    logger.critical(
+                        "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                        symbol,
+                        order_side,
+                        f"{_order_quantity:.8f}",
+                        _order_size_usd,
+                    )
+                    # Use the state-machine controller so taxonomy-driven retry /
+                    # halt logic is handled in one place instead of scattered
+                    # if/elif policy branches.
+                    if _EXEC_STATE_CONTROLLER_AVAILABLE and _ExecutionStateController is not None:
+                        _mkt_ctrl = _ExecutionStateController()
+                        _exec_result = _mkt_ctrl.submit(
                             symbol=symbol,
                             side=order_side,
-                            size_usd=_order_size_usd,
-                            available_balance_usd=_spendable_usd or _available_usd,
-                            price_hint_usd=entry_price,
+                            qty=_order_size_usd,
+                            broker_fn=lambda: self._submit_market_order_via_pipeline(
+                                broker_client=self.broker_client,
+                                symbol=symbol,
+                                side=order_side,
+                                size_usd=_order_size_usd,
+                                available_balance_usd=_spendable_usd or _available_usd,
+                                price_hint_usd=entry_price,
+                            ),
                         )
-                    except Exception as _mk_exc:
-                        _market_exc = _mk_exc
-                        result = None
-                    self._emit_execution_result(symbol, order_side, result, _entry_t0, _market_exc)
+                        result = _mkt_ctrl.last_broker_response
+                        _market_exc = _mkt_ctrl.last_exception
+                        if _exec_result is not None and callable(_log_exec_result):
+                            _log_exec_result(_exec_result)
+                        self._execution_controller = _mkt_ctrl
+                    else:
+                        try:
+                            result = self._submit_market_order_via_pipeline(
+                                broker_client=self.broker_client,
+                                symbol=symbol,
+                                side=order_side,
+                                size_usd=_order_size_usd,
+                                available_balance_usd=_spendable_usd or _available_usd,
+                                price_hint_usd=entry_price,
+                            )
+                        except Exception as _mk_exc:
+                            _market_exc = _mk_exc
+                            result = None
+                        self._emit_execution_result(symbol, order_side, result, _entry_t0, _market_exc)
                     _ecel_market_status = self._normalized_order_status(result)
                     if result is None or _ecel_market_status in {'error', 'unfilled', 'skipped', 'rejected'}:
                         _trace("ecel", "rejected", f"market_order_rejected:{_ecel_market_status}", terminal=True, extra={"order_type": "market"})
