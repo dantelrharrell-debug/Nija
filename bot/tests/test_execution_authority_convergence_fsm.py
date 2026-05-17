@@ -11,6 +11,7 @@ from bot.trading_state_machine import (
     ExecutionAuthorityConvergenceFSM,
     ExecutionProgressState,
     ExecutionSafetyState,
+    TradingState,
     TradingStateMachine,
 )
 from bot.startup_coordinator import get_startup_coordinator
@@ -176,6 +177,36 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 sm = TradingStateMachine(state_file=state_path)
                 snap = sm.get_execution_authority_snapshot(gates_ok=True)
                 self.assertTrue(snap["intent_present"])
+
+
+class TestRuntimeAuthorityRevocation(unittest.TestCase):
+    def test_can_dispatch_revoked_when_writer_nonce_gate_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                with sm._lock:
+                    sm._current_state = TradingState.LIVE_ACTIVE
+                    sm._activation_committed = True
+                    sm._execution_authority = True
+                    sm._can_dispatch_trades = True
+
+                with patch(
+                    "bot.trading_state_machine._is_authority_ready",
+                    return_value=True,
+                ), patch(
+                    "bot.trading_state_machine._runtime_writer_nonce_ready",
+                    return_value=(False, "writer_authority:test"),
+                ):
+                    self.assertFalse(sm.can_dispatch_trades())
+                    self.assertFalse(sm.has_execution_authority())
 
 
 if __name__ == "__main__":
