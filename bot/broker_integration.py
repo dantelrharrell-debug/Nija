@@ -153,6 +153,25 @@ except ImportError:
         _KrakenRetryPolicy = None  # type: ignore[assignment,misc]
         _KrakenErrorCategory = None  # type: ignore[assignment,misc]
 
+# ── Execution State Controller — taxonomy-driven per-order lifecycle FSM ──
+try:
+    from bot.execution_state_controller import (
+        ExecutionStateController as _ExecutionStateController,
+        ExecutionOrderState as _ExecutionOrderState,
+    )
+    _EXEC_STATE_CONTROLLER_AVAILABLE = True
+except ImportError:
+    try:
+        from execution_state_controller import (  # type: ignore[import]
+            ExecutionStateController as _ExecutionStateController,
+            ExecutionOrderState as _ExecutionOrderState,
+        )
+        _EXEC_STATE_CONTROLLER_AVAILABLE = True
+    except ImportError:
+        _EXEC_STATE_CONTROLLER_AVAILABLE = False
+        _ExecutionStateController = None  # type: ignore[assignment,misc]
+        _ExecutionOrderState = None       # type: ignore[assignment,misc]
+
 # Nonce jump amount used when recovering from "EAPI:Invalid nonce" errors.
 # Keep this jump intentionally small to avoid runaway nonce drift.
 _KRAKEN_NONCE_RECOVERY_JUMP_MS = 15_000
@@ -1390,7 +1409,121 @@ class KrakenBrokerAdapter(BrokerInterface):
 
             self.kraken_api = KrakenAPI(self.api)
 
-            # Test connection with retry logic for nonce errors
+            # ── Connection probe via ExecutionStateController ─────────────
+            # The controller drives retry/halt decisions from taxonomy so the
+            # scattered _nonce_hit / _auth_hit / _permission_hit if/elif
+            # branches are no longer needed here.
+            _conn_ctrl: Any = None
+            if _EXEC_STATE_CONTROLLER_AVAILABLE and _ExecutionStateController is not None:
+                _dnm_ref = self._distributed_nonce_manager
+                _nonce_key_ref = self._nonce_key_id
+
+                def _on_nonce_retry(_taxonomy: Any = None) -> None:
+                    """Record nonce error in distributed nonce manager on each RETRY."""
+                    if _dnm_ref is not None and _nonce_key_ref:
+                        try:
+                            _dnm_ref.record_error(_nonce_key_ref)
+                        except Exception as _je:
+                            logger.debug("Nonce error recording failed (non-critical): %s", _je)
+
+                def _on_gate_fail(_taxonomy: Any) -> None:
+                    """Invoked when controller enters HALTED_AUTH or HALTED_CONFIG."""
+                    if _taxonomy is None:
+                        return
+                    category = getattr(_taxonomy, "category", None)
+                    remediation = getattr(_taxonomy, "remediation", "")
+                    if _KRAKEN_TAXONOMY_AVAILABLE and category == _KrakenErrorCategory.AUTH:
+                        logger.critical("🛑 Kraken authentication failure [policy=STOP]")
+                        if remediation:
+                            logger.critical("   Remediation: %s", remediation)
+                    elif _KRAKEN_TAXONOMY_AVAILABLE and category == _KrakenErrorCategory.PERMISSION:
+                        logger.error("❌ Kraken connection test failed: permission error")
+                        with KrakenBrokerAdapter._permission_errors_lock:
+                            if not KrakenBrokerAdapter._permission_error_details_logged:
+                                KrakenBrokerAdapter._permission_error_details_logged = True
+                                _log_full = True
+                            else:
+                                _log_full = False
+                        if _log_full:
+                            logger.error("   ⚠️  API KEY PERMISSION ERROR [policy=CONFIG_FAIL]")
+                            logger.error("   Your Kraken API key does not have the required permissions.")
+                            logger.warning("   To fix this issue:")
+                            logger.warning("   1. Go to https://www.kraken.com/u/security/api")
+                            logger.warning("   2. Find your API key and edit its permissions")
+                            logger.warning("   3. Enable these permissions:")
+                            logger.warning("      ✅ Query Funds (required to check balance)")
+                            logger.warning("      ✅ Query Open Orders & Trades (required for position tracking)")
+                            logger.warning("      ✅ Query Closed Orders & Trades (required for trade history)")
+                            logger.warning("      ✅ Create & Modify Orders (required to place trades)")
+                            logger.warning("      ✅ Cancel/Close Orders (required for stop losses)")
+                            logger.warning("   4. Save changes and restart the bot")
+                            logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
+                            logger.warning("   See API_CREDENTIALS_GUIDE.md for detailed instructions")
+                        else:
+                            logger.error("   ⚠️  API KEY PERMISSION ERROR [policy=CONFIG_FAIL]")
+                            logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' at:")
+                            logger.error("   https://www.kraken.com/u/security/api")
+                            logger.error("   📖 See API_CREDENTIALS_GUIDE.md for detailed instructions")
+
+                _conn_ctrl = _ExecutionStateController(
+                    gate_fail_callback=_on_gate_fail,
+                )
+                # Wrap each NONCE retry so nonce manager records the error.
+                _orig_next_state = _conn_ctrl._next_state_for_taxonomy
+
+                def _next_state_with_nonce_recording(taxonomy: Any) -> tuple:
+                    result = _orig_next_state(taxonomy)
+                    if (
+                        _KRAKEN_TAXONOMY_AVAILABLE
+                        and taxonomy is not None
+                        and getattr(taxonomy, "category", None) == _KrakenErrorCategory.NONCE
+                        and result[0] is not None
+                        and hasattr(result[0], "value")
+                        and "RETRYING" in str(result[0])
+                    ):
+                        _on_nonce_retry(taxonomy)
+                    return result
+
+                _conn_ctrl._next_state_for_taxonomy = _next_state_with_nonce_recording
+
+                _conn_ctrl.submit(
+                    symbol="__kraken_connect__",
+                    side="query",
+                    qty=0.0,
+                    broker_fn=lambda: self._kraken_api_call('Balance'),
+                    success_fn=lambda r: bool(r and r.get('result') and not r.get('error')),
+                )
+
+                if (
+                    _EXEC_STATE_CONTROLLER_AVAILABLE
+                    and _ExecutionOrderState is not None
+                    and _conn_ctrl.state == _ExecutionOrderState.COMPLETED
+                ):
+                    logger.info("✅ Kraken connected")
+                    return True
+
+                # Non-COMPLETED terminal: log generic failure if not already logged
+                # by _on_gate_fail (AUTH/PERMISSION log their own messages there).
+                _term_state = _conn_ctrl.state
+                if _EXEC_STATE_CONTROLLER_AVAILABLE and _ExecutionOrderState is not None:
+                    _halt_states = {
+                        _ExecutionOrderState.HALTED_AUTH,
+                        _ExecutionOrderState.HALTED_CONFIG,
+                    }
+                    if _term_state not in _halt_states:
+                        _last_tx = _conn_ctrl.last_taxonomy
+                        if _last_tx is not None:
+                            logger.error(
+                                "Kraken connection test failed [policy=%s code=%s]",
+                                getattr(_last_tx.policy, "value", str(_last_tx.policy)),
+                                _last_tx.canonical_code,
+                            )
+                            logger.error("   Remediation: %s", _last_tx.remediation)
+                        else:
+                            logger.error("Kraken connection test failed (no taxonomy available)")
+                return False
+
+            # ── Legacy fallback: manual retry loop when controller unavailable ─
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
                 balance = self._kraken_api_call('Balance')
@@ -1398,28 +1531,18 @@ class KrakenBrokerAdapter(BrokerInterface):
                 if balance and 'error' in balance and balance['error']:
                     error_msgs = ', '.join(balance['error'])
 
-                    # ── Classify via taxonomy layer ───────────────────────
-                    if _KRAKEN_TAXONOMY_AVAILABLE and _classify_kraken_error is not None:
-                        _taxonomy = _classify_kraken_error(error_msgs)
-                        _category = _taxonomy.category
-                        _policy   = _taxonomy.policy
-                        _nonce_hit      = (_category == _KrakenErrorCategory.NONCE)
-                        _permission_hit = (_category == _KrakenErrorCategory.PERMISSION)
-                        _auth_hit       = (_category == _KrakenErrorCategory.AUTH)
-                    else:
-                        # Fallback: ad-hoc string checks when taxonomy unavailable
-                        _em_lower = error_msgs.lower()
-                        _nonce_hit      = any(kw in _em_lower for kw in [
-                            'invalid nonce', 'eapi:invalid nonce', 'nonce window'])
-                        _permission_hit = any(kw in _em_lower for kw in [
-                            'permission denied', 'egeneral:permission',
-                            'eapi:invalid permission', 'insufficient permission'])
-                        _auth_hit       = any(kw in _em_lower for kw in [
-                            'eauth:', 'invalid key', 'invalid signature', 'account locked'])
-                        _taxonomy = None
-                        _policy   = None
+                    _taxonomy = (
+                        _classify_kraken_error(error_msgs)
+                        if _KRAKEN_TAXONOMY_AVAILABLE and _classify_kraken_error is not None
+                        else None
+                    )
+                    _category = getattr(_taxonomy, "category", None)
+                    _policy   = getattr(_taxonomy, "policy", None)
 
-                    # NONCE → RETRY: record and retry with brief pause
+                    _nonce_hit      = (_category == _KrakenErrorCategory.NONCE) if _KRAKEN_TAXONOMY_AVAILABLE else False
+                    _permission_hit = (_category == _KrakenErrorCategory.PERMISSION) if _KRAKEN_TAXONOMY_AVAILABLE else False
+                    _auth_hit       = (_category == _KrakenErrorCategory.AUTH) if _KRAKEN_TAXONOMY_AVAILABLE else False
+
                     if _nonce_hit and attempt < max_attempts:
                         logger.warning(
                             "   ⚠️ Kraken nonce error on attempt %d/%d [policy=RETRY]: %s",
@@ -1434,78 +1557,32 @@ class KrakenBrokerAdapter(BrokerInterface):
                         time.sleep(_pause)
                         continue
 
-                    # AUTH → STOP: fatal — do not retry
                     if _auth_hit:
-                        logger.critical(
-                            "🛑 Kraken authentication failure [policy=STOP]: %s", error_msgs
-                        )
+                        logger.critical("🛑 Kraken authentication failure [policy=STOP]: %s", error_msgs)
                         if _taxonomy:
                             logger.critical("   Remediation: %s", _taxonomy.remediation)
                         return False
-                    # Check if it's a permission error
-                    is_auth_error = any(keyword in error_msgs.lower() for keyword in [
-                        'eapi:invalid key', 'invalid key',
-                        'eapi:invalid signature', 'invalid signature',
-                        'api key invalid'
-                    ])
-                    if is_auth_error:
-                        logger.error(f"❌ Kraken connection test failed: {error_msgs}")
-                        logger.error("   ⚠️  API KEY AUTHENTICATION ERROR")
-                        logger.error(
-                            "   Kraken rejected the key/secret pair. Verify the key is active and "
-                            "the secret matches exactly."
-                        )
-                        logger.error("   🔧 FIX:")
-                        logger.error("   1. Go to https://www.kraken.com/u/security/api")
-                        logger.error("   2. Confirm this is a Classic API key")
-                        logger.error("   3. Recreate key/secret pair and redeploy env vars")
-                        logger.error("   4. Restart NIJA and re-run test_kraken_connection.py")
-                        return False
 
-                    # Check if it's a permission error
-                    is_permission_error = any(keyword in error_msgs.lower() for keyword in [
-                        'permission denied', 'egeneral:permission',
-                        'eapi:invalid permission', 'insufficient permission'
-                    ])
-
-                    # PERMISSION → CONFIG_FAIL: misconfigured key — do not retry
                     if _permission_hit:
                         logger.error("❌ Kraken connection test failed: %s", error_msgs)
-
                         with KrakenBrokerAdapter._permission_errors_lock:
                             if not KrakenBrokerAdapter._permission_error_details_logged:
                                 KrakenBrokerAdapter._permission_error_details_logged = True
                                 should_log_details = True
                             else:
                                 should_log_details = False
-
                         if should_log_details:
                             logger.error("   ⚠️  API KEY PERMISSION ERROR [policy=CONFIG_FAIL]")
                             logger.error("   Your Kraken API key does not have the required permissions.")
-                            logger.warning("")
-                            logger.warning("   To fix this issue:")
-                            logger.warning("   1. Go to https://www.kraken.com/u/security/api")
-                            logger.warning("   2. Find your API key and edit its permissions")
-                            logger.warning("   3. Enable these permissions:")
-                            logger.warning("      ✅ Query Funds (required to check balance)")
-                            logger.warning("      ✅ Query Open Orders & Trades (required for position tracking)")
-                            logger.warning("      ✅ Query Closed Orders & Trades (required for trade history)")
-                            logger.warning("      ✅ Create & Modify Orders (required to place trades)")
-                            logger.warning("      ✅ Cancel/Close Orders (required for stop losses)")
-                            logger.warning("   4. Save changes and restart the bot")
-                            logger.warning("")
-                            logger.warning("   For security, do NOT enable 'Withdraw Funds' permission")
+                            logger.warning("   To fix: enable Query Funds, Query/Create/Cancel Orders at:")
+                            logger.warning("   https://www.kraken.com/u/security/api")
                             logger.warning("   See API_CREDENTIALS_GUIDE.md for detailed instructions")
                         else:
                             logger.error("   ⚠️  API KEY PERMISSION ERROR [policy=CONFIG_FAIL]")
-                            logger.error("   Your Kraken API key does not have the required permissions.")
-                            logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' permissions at:")
+                            logger.error("   Fix: Enable 'Query Funds', 'Query/Create/Cancel Orders' at:")
                             logger.error("   https://www.kraken.com/u/security/api")
-                            logger.error("   📖 See API_CREDENTIALS_GUIDE.md for detailed instructions")
-
                         return False
 
-                    # All other errors — log with taxonomy hint if available
                     if _taxonomy:
                         logger.error(
                             "Kraken connection test failed [policy=%s code=%s]: %s",
@@ -1516,7 +1593,6 @@ class KrakenBrokerAdapter(BrokerInterface):
                         logger.error("   Remediation: %s", _taxonomy.remediation)
                     else:
                         logger.error(f"Kraken connection test failed: {error_msgs}")
-
                     return False
 
                 if balance and 'result' in balance:
