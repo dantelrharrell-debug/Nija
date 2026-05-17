@@ -1086,7 +1086,8 @@ class TradingStateMachine:
           Gate 0. Not already committed (idempotency guard)
           Gate 1. Current state is OFF (or already LIVE_ACTIVE — see above)
           Gate 2. Kill switch is inactive
-          Gate 3. LIVE_CAPITAL_VERIFIED env var is truthy (operator master switch)
+          Gate 3. Activation intent is present via LIVE_CAPITAL_VERIFIED or
+                  NIJA_RUNTIME_EXECUTION_AUTHORITY (runtime unlock marker)
           Gate 4. Single global activation barrier
               - capital snapshot ready
               - broker registration/snapshot invariant valid
@@ -1116,6 +1117,8 @@ class TradingStateMachine:
         )
         runtime_mode = resolve_runtime_mode_safe(logger)
         _lcv_quick = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
+        _runtime_unlock_authority = _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+        _live_activation_intent = bool(_lcv_quick or _runtime_unlock_authority)
         _dry_run_quick = runtime_mode.dry_run if runtime_mode is not None else _env_truthy("DRY_RUN_MODE")
         _lcv_raw = (
             runtime_mode.raw.get("LIVE_CAPITAL_VERIFIED", "false")
@@ -1147,7 +1150,7 @@ class TradingStateMachine:
             )
             return False
 
-        if _force and _lcv_quick and not _dry_run_quick:
+        if _force and _live_activation_intent and not _dry_run_quick:
             _force_writer_ok = bool(_live_gate_status.get("lease_ok"))
             _force_writer_err = str(_live_gate_status.get("lease_err") or "")
             if not _force_writer_ok:
@@ -1324,12 +1327,13 @@ class TradingStateMachine:
         #   LIVE_CAPITAL_VERIFIED = (flag == true
         #                            AND capital_hydrated == true
         #                            AND total_balance is not None)
-        if not _lcv_quick:
+        if not _live_activation_intent:
             logger.critical(
                 "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_NOT_SET "
-                "LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r",
+                "LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r NIJA_RUNTIME_EXECUTION_AUTHORITY=%r",
                 _lcv_raw,
                 _live_trading_raw,
+                os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", ""),
             )
             return False
 
@@ -1412,7 +1416,7 @@ class TradingStateMachine:
         )
 
         # Final consolidated gate diagnostic — single source of truth for activation state.
-        _live_verified_bool = bool(_lcv_quick)
+        _live_verified_bool = bool(_live_activation_intent)
         commit_activation(
             kill=kill_state,
             capital_ready=_cap_ready,

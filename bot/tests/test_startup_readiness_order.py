@@ -185,7 +185,7 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "_verify_runtime_transition_states must run after execution enablement",
         )
 
-    def test_capital_ready_is_guarded_by_execution_authority(self):
+    def test_capital_ready_is_decoupled_from_execution_authority_guard(self):
         repo_root = self._find_repo_root(Path(__file__).resolve())
         bot_path = repo_root / "bot.py"
         source = bot_path.read_text(encoding="utf-8")
@@ -212,19 +212,14 @@ class TestStartupReadinessOrder(unittest.TestCase):
                 ):
                     capital_ready_calls.append(node)
 
-        self.assertGreaterEqual(
+        self.assertEqual(
             len(authority_calls),
-            1,
-            "Expected _hydrate_startup_balances() to require execution authority before CAPITAL_READY",
+            0,
+            "Capability flag capital_ready must not be gated by execution authority in _hydrate_startup_balances()",
         )
         self.assertGreaterEqual(len(capital_ready_calls), 1, "Expected CAPITAL_READY marks in _hydrate_startup_balances()")
-        self.assertLess(
-            min(call.lineno for call in authority_calls),
-            min(call.lineno for call in capital_ready_calls),
-            "Execution authority must be checked before marking capital_ready",
-        )
 
-    def test_strategy_readiness_is_guarded_by_execution_authority(self):
+    def test_strategy_readiness_is_decoupled_from_execution_authority_guard(self):
         repo_root = self._find_repo_root(Path(__file__).resolve())
         bot_path = repo_root / "bot.py"
         source = bot_path.read_text(encoding="utf-8")
@@ -257,18 +252,63 @@ class TestStartupReadinessOrder(unittest.TestCase):
 
         self.assertEqual(
             len(authority_calls),
-            1,
-            "Expected exactly one execution-authority guard in _publish_strategy_runtime_readiness()",
+            0,
+            "Capability flags in _publish_strategy_runtime_readiness() must not be blocked on authority guard",
         )
         self.assertEqual(
             len(strategy_ready_calls),
             1,
             "Expected exactly one strategy_ready mark in _publish_strategy_runtime_readiness()",
         )
-        self.assertLess(
-            authority_calls[0].lineno,
-            strategy_ready_calls[0].lineno,
-            "Execution authority must be checked before marking strategy_ready",
+
+    def test_execution_unlock_does_not_set_legacy_live_flags(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        unlock_fn = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "_enable_execution_after_bootstrap_supervised"
+            ),
+            None,
+        )
+        if unlock_fn is None:
+            self.fail("Expected _enable_execution_after_bootstrap_supervised() in bot.py")
+
+        forbidden_live_flags = {
+            "LIVE_CAPITAL_VERIFIED",
+            "LIVE_TRADING",
+            "ALLOW_EXECUTION",
+            "BLOCK_EXECUTION",
+            "DRY_RUN_MODE",
+            "SUPERVISOR_MODE",
+        }
+        mutated_flags = set()
+
+        for node in ast.walk(unlock_fn):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Subscript):
+                    continue
+                if not (
+                    isinstance(target.value, ast.Attribute)
+                    and isinstance(target.value.value, ast.Name)
+                    and target.value.value.id == "os"
+                    and target.value.attr == "environ"
+                ):
+                    continue
+                if isinstance(target.slice, ast.Constant) and isinstance(target.slice.value, str):
+                    if target.slice.value in forbidden_live_flags:
+                        mutated_flags.add(target.slice.value)
+
+        self.assertEqual(
+            mutated_flags,
+            set(),
+            f"_enable_execution_after_bootstrap_supervised must not mutate legacy live-mode flags: {sorted(mutated_flags)}",
         )
 
 
