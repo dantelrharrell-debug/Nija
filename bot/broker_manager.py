@@ -9431,6 +9431,34 @@ class KrakenBroker(BaseBroker):
             return 0.0
 
         except Exception as e:
+            _suppressed_cooldown_s = self._get_nonce_rebuild_retry_suppression_seconds(e)
+            if _suppressed_cooldown_s > 0.0:
+                _dedupe_key = (
+                    f"kraken_nonce_rebuild_cooldown_balance:"
+                    f"{getattr(self, 'account_identifier', 'platform')}"
+                )
+                if _should_emit_critical_log(
+                    _dedupe_key,
+                    min(max(1.0, _suppressed_cooldown_s), 300.0),
+                ):
+                    logger.warning(
+                        "⚠️ Kraken nonce-manager rebuild cooldown active (%s): "
+                        "%.1fs remaining — reusing cached balance without counting "
+                        "a new API failure",
+                        self.account_identifier,
+                        _suppressed_cooldown_s,
+                    )
+                if self._last_known_balance is not None:
+                    logger.warning(
+                        f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}"
+                    )
+                    if "kraken" in self.balance_cache:
+                        return self.balance_cache["kraken"]
+                    return self._last_known_balance
+                self._is_available = False
+                self.kraken_health = "ERROR"
+                return 0.0
+
             # FIX #2: Log warning and use last known balance on exception
             # 🔒 CAPITAL PROTECTION: After 3 failed retries, pause trading cycle
             logger.warning(f"⚠️ Exception fetching Kraken balance ({self.account_identifier}): {e}")
@@ -9451,6 +9479,28 @@ class KrakenBroker(BaseBroker):
                 return self._last_known_balance
 
             return 0.0
+
+    @staticmethod
+    def _get_nonce_rebuild_retry_suppression_seconds(error: BaseException) -> float:
+        """Return cooldown seconds when a Kraken nonce rebuild retry is suppressed."""
+        current: Optional[BaseException] = error
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            message = str(current)
+            message_lower = message.lower()
+            if (
+                "krakennoncemanager singleton was destroyed" in message_lower
+                and "retry suppressed" in message_lower
+            ):
+                match = re.search(r"retry suppressed for ([0-9]+(?:\.[0-9]+)?)s", message_lower)
+                if match:
+                    try:
+                        return max(0.0, float(match.group(1)))
+                    except Exception:
+                        return 0.0
+            current = cast(Optional[BaseException], current.__cause__ or current.__context__)
+        return 0.0
 
     def get_account_balance_detailed(self) -> dict:
         """
