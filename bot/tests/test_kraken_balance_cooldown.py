@@ -9,6 +9,7 @@ class TestKrakenBalanceCooldown(unittest.TestCase):
         broker.api = object()
         broker._gateway_url = ""
         broker.account_identifier = "PLATFORM"
+        broker.last_connection_error = None
         broker._last_known_balance = 321.0
         broker._balance_last_updated = None
         broker._kraken_balance_cache_ttl = 0
@@ -34,6 +35,23 @@ class TestKrakenBalanceCooldown(unittest.TestCase):
         self.assertEqual(broker.get_error_count(), 0)
         self.assertTrue(broker.is_available())
         self.assertFalse(broker.exit_only_mode)
+
+    def test_balance_fetch_does_not_count_initial_nonce_rebuild_failure_cooldown(self) -> None:
+        broker = self._build_broker()
+        broker._kraken_private_call = lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "KrakenNonceManager singleton was destroyed and rebuild failed; "
+                "retry cooldown 30.0s activated."
+            )
+        )
+
+        balance = broker.get_account_balance(verbose=False)
+
+        self.assertEqual(balance, 321.0)
+        self.assertEqual(broker.get_error_count(), 0)
+        self.assertTrue(broker.is_available())
+        self.assertFalse(broker.exit_only_mode)
+        self.assertIn("api connectivity or credentials", broker.last_connection_error.lower())
 
 
 if __name__ == "__main__":
