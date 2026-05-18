@@ -84,7 +84,7 @@ class MachineSpec:
     temporal_rules: tuple[TemporalRule, ...]
 
     def transition_map(self) -> Dict[str, tuple[str, ...]]:
-        graph: Dict[str, list[str]] = {}
+        graph: Dict[str, list[str]] = {state: [] for state in self.states}
         for edge in self.transitions:
             if edge.source == "*":
                 continue
@@ -597,4 +597,3 @@ def get_formal_state_machine_spec() -> FormalStateMachineSpec:
         ),
     )
     return spec
-
