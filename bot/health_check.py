@@ -457,6 +457,86 @@ class HealthCheckManager:
             "last_heartbeat": datetime.fromtimestamp(self.state.last_heartbeat).isoformat(),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
+
+    def _build_startup_state_signal(self) -> Dict[str, Any]:
+        """Build deterministic startup signal separating liveness/readiness/trading authority."""
+        signal: Dict[str, Any] = {
+            "liveness": {
+                "alive": bool(self.state.is_alive),
+                "state": "ALIVE" if self.state.is_alive else "NOT_ALIVE",
+            },
+            "readiness": {
+                "ready": bool(self.state.is_ready),
+                "state": str(self.state.readiness_status or ReadinessStatus.NOT_READY.value).upper(),
+            },
+            "trading_authority": {
+                "authorized": False,
+                "state": "BLOCKED",
+                "reason": "coordinator_unavailable",
+                "coordinator_state": "UNKNOWN",
+                "snapshot_version": 0,
+                "dispatch_enabled": False,
+            },
+        }
+
+        try:
+            try:
+                from bot.startup_coordinator import get_startup_coordinator
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+
+            try:
+                from bot.trading_state_machine import get_state_machine
+            except ImportError:
+                from trading_state_machine import get_state_machine  # type: ignore[import]
+
+            try:
+                runtime_mode = resolve_runtime_mode()
+                activation_intent = bool(runtime_mode.is_live)
+            except Exception:
+                activation_intent = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
+
+            trading_state = "UNKNOWN"
+            try:
+                sm = get_state_machine()
+                _state = sm.get_current_state()
+                if _state is not None:
+                    trading_state = str(getattr(_state, "value", _state))
+            except Exception:
+                trading_state = "UNKNOWN"
+
+            coordinator = get_startup_coordinator()
+            snapshot = coordinator.build_snapshot(
+                trading_state=trading_state,
+                activation_intent=activation_intent,
+            )
+            decision = coordinator.evaluate_activation(snapshot)
+            authorized = bool(decision.allowed and snapshot.dispatch_enabled)
+            authority_state = "AUTHORIZED" if authorized else "BLOCKED"
+
+            signal["trading_authority"] = {
+                "authorized": authorized,
+                "state": authority_state,
+                "reason": str(decision.reason),
+                "coordinator_state": str(decision.target_state.value),
+                "snapshot_version": int(decision.snapshot_version),
+                "dispatch_enabled": bool(snapshot.dispatch_enabled),
+                "activation_intent": bool(snapshot.activation_intent),
+                "trading_state": str(snapshot.trading_state),
+            }
+        except Exception as exc:
+            signal["trading_authority"]["reason"] = f"state_signal_error: {exc}"
+
+        authority = signal["trading_authority"]
+        readiness = signal["readiness"]
+        if authority.get("authorized"):
+            code = "TRADING_AUTHORIZED"
+        elif readiness.get("ready"):
+            code = f"ALIVE_READY_TRADING_BLOCKED:{authority.get('reason', 'unknown')}"
+        else:
+            code = f"ALIVE_NOT_READY:{readiness.get('state', 'UNKNOWN')}"
+        signal["state_code"] = code
+        return signal
     
     def get_readiness_status(self) -> tuple[Dict[str, Any], int]:
         """
@@ -492,6 +572,7 @@ class HealthCheckManager:
                 "active_positions": self.state.active_positions,
                 "last_trade": datetime.fromtimestamp(self.state.last_trade_time).isoformat() if self.state.last_trade_time else None
             },
+            "startup_state": self._build_startup_state_signal(),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
@@ -617,6 +698,7 @@ class HealthCheckManager:
                 "configuration_checked": self._configuration_checked,
                 "error_count": self.state.error_count,
                 "uptime_seconds": self.state.uptime_seconds,
+                "startup_state": self._build_startup_state_signal(),
                 "execution_gate": execution_gate,
                 "runtime_mode": runtime_mode_snapshot,
                 "runtime_env_flags": runtime_env_flags,
