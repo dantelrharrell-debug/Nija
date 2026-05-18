@@ -9433,33 +9433,14 @@ class KrakenBroker(BaseBroker):
         except Exception as e:
             _nonce_rebuild_cooldown_s = self._get_nonce_rebuild_retry_cooldown_seconds(e)
             if _nonce_rebuild_cooldown_s > 0.0:
-                self.last_connection_error = (
-                    "Kraken nonce-manager rebuild recovery active; "
-                    "investigate Kraken API connectivity or credentials"
+                _cached_balance = self._activate_nonce_rebuild_cooldown_recovery(
+                    _nonce_rebuild_cooldown_s
                 )
-                _dedupe_key = (
-                    f"kraken_nonce_rebuild_cooldown_balance:"
-                    f"{getattr(self, 'account_identifier', 'platform')}"
-                )
-                if _should_emit_critical_log(
-                    _dedupe_key,
-                    min(max(1.0, _nonce_rebuild_cooldown_s), 300.0),
-                ):
+                if _cached_balance is not None:
                     logger.warning(
-                        "⚠️ Kraken nonce-manager rebuild recovery active (%s): "
-                        "%.1fs cooldown window — reusing cached balance without "
-                        "counting a new API failure; investigate API connectivity "
-                        "or credentials",
-                        self.account_identifier,
-                        _nonce_rebuild_cooldown_s,
+                        f"   ⚠️ Using last known balance: ${_cached_balance:.2f}"
                     )
-                if self._last_known_balance is not None:
-                    logger.warning(
-                        f"   ⚠️ Using last known balance: ${self._last_known_balance:.2f}"
-                    )
-                    if "kraken" in self.balance_cache:
-                        return self.balance_cache["kraken"]
-                    return self._last_known_balance
+                    return _cached_balance
                 self._is_available = False
                 self.kraken_health = "ERROR"
                 return 0.0
@@ -9484,6 +9465,62 @@ class KrakenBroker(BaseBroker):
                 return self._last_known_balance
 
             return 0.0
+
+    def _activate_nonce_rebuild_cooldown_recovery(
+        self,
+        cooldown_s: float,
+    ) -> Optional[float]:
+        """Return cached balance and clear stale offline state during nonce rebuild cooldown."""
+        self.last_connection_error = (
+            "Kraken nonce-manager rebuild recovery active; "
+            "investigate Kraken API connectivity or credentials"
+        )
+        _dedupe_key = (
+            f"kraken_nonce_rebuild_cooldown_balance:"
+            f"{getattr(self, 'account_identifier', 'platform')}"
+        )
+        if _should_emit_critical_log(
+            _dedupe_key,
+            min(max(1.0, cooldown_s), 300.0),
+        ):
+            logger.warning(
+                "⚠️ Kraken nonce-manager rebuild recovery active (%s): "
+                "%.1fs cooldown window — reusing cached balance without "
+                "counting a new API failure; investigate API connectivity "
+                "or credentials",
+                self.account_identifier,
+                cooldown_s,
+            )
+
+        cached_balance: Optional[float] = None
+        if "kraken" in self.balance_cache:
+            try:
+                cached_balance = float(self.balance_cache["kraken"])
+            except (TypeError, ValueError):
+                cached_balance = None
+        if cached_balance is None and self._last_known_balance is not None:
+            cached_balance = float(self._last_known_balance)
+
+        if cached_balance is None:
+            return None
+
+        if (
+            self._balance_fetch_errors
+            or not self._is_available
+            or self.exit_only_mode
+            or self.kraken_health == "ERROR"
+        ):
+            logger.info(
+                "✅ Kraken cooldown recovery cleared stale offline state (%s) "
+                "while cached balance fallback is active",
+                self.account_identifier,
+            )
+        self._balance_fetch_errors = 0
+        self._is_available = True
+        self.exit_only_mode = False
+        self.kraken_health = "OK"
+        self.balance_cache["kraken"] = cached_balance
+        return cached_balance
 
     @staticmethod
     def _get_nonce_rebuild_retry_cooldown_seconds(error: BaseException) -> float:
@@ -9517,7 +9554,7 @@ class KrakenBroker(BaseBroker):
             current = cast(Optional[BaseException], current.__cause__ or current.__context__)
         return 0.0
 
-    def get_account_balance_detailed(self) -> dict:
+    def get_account_balance_detailed(self, verbose: bool = False) -> dict:
         """
         Get detailed account balance information with fail-closed behavior.
 
@@ -9644,6 +9681,27 @@ class KrakenBroker(BaseBroker):
             return {**default_balance, 'error_message': 'Unexpected API response format'}
 
         except Exception as e:
+            _nonce_rebuild_cooldown_s = self._get_nonce_rebuild_retry_cooldown_seconds(e)
+            if _nonce_rebuild_cooldown_s > 0.0:
+                _cached_balance = self._activate_nonce_rebuild_cooldown_recovery(
+                    _nonce_rebuild_cooldown_s
+                )
+                if _cached_balance is not None:
+                    if verbose:
+                        logger.warning(
+                            "⚠️ Kraken detailed balance recovery active (%s): using cached balance $%.2f",
+                            self.account_identifier,
+                            _cached_balance,
+                        )
+                    return {
+                        **default_balance,
+                        'usd': _cached_balance,
+                        'trading_balance': _cached_balance,
+                        'total_funds': _cached_balance,
+                        'error': False,
+                        'error_message': '',
+                    }
+
             error_msg = str(e)
             logger.error(f"❌ Exception fetching Kraken detailed balance ({self.account_identifier}): {error_msg}")
             return {**default_balance, 'error_message': error_msg}
