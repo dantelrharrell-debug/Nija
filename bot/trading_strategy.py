@@ -5874,7 +5874,10 @@ class TradingStrategy:
                 logger.info("   Purpose: Verify connectivity and trading functionality")
                 logger.info("   Action: Bot will auto-disable after heartbeat completes")
                 logger.info("=" * 70)
-                _hb_ok = self._execute_heartbeat_trade(broker=self.broker)
+                _hb_ok = self._execute_heartbeat_trade(
+                    broker=self.broker,
+                    force=_heartbeat_required_now,
+                )
 
                 if _hb_ok:
                     self._mark_heartbeat_verified()
@@ -8542,7 +8545,7 @@ class TradingStrategy:
         
         logger.info("=" * 70)
     
-    def _execute_heartbeat_trade(self, broker=None):
+    def _execute_heartbeat_trade(self, broker=None, force: bool = False):
         """
         Execute a tiny heartbeat trade to verify exchange connectivity.
         
@@ -8552,23 +8555,28 @@ class TradingStrategy:
         - Monitor exchange connectivity health
         
         Only executes if:
-        - HEARTBEAT_TRADE_ENABLED is true
-        - Sufficient time has passed since last heartbeat (HEARTBEAT_TRADE_INTERVAL_SECONDS)
+        - HEARTBEAT_TRADE_ENABLED is true (or force=True for required-first activation)
+        - Sufficient time has passed since last heartbeat (HEARTBEAT_TRADE_INTERVAL_SECONDS), unless force=True
         - Broker is connected and has sufficient balance
         
         Args:
             broker: Broker instance to execute heartbeat trade on
+            force: Bypass HEARTBEAT_TRADE/interval/one-shot guards for required-first verification
             
         Returns:
             bool: True if heartbeat trade was executed, False otherwise
         """
-        if not HEARTBEAT_TRADE_ENABLED:
+        if not HEARTBEAT_TRADE_ENABLED and not force:
             return False
+        if force and not HEARTBEAT_TRADE_ENABLED:
+            logger.critical(
+                "❤️  Forced heartbeat execution: HEARTBEAT_REQUIRED_FIRST_ACTIVATION=true (HEARTBEAT_TRADE flag bypassed)"
+            )
 
         if HEARTBEAT_ONESHOT_RESET:
             self._clear_heartbeat_one_shot_lock()
 
-        if self._is_heartbeat_one_shot_locked():
+        if self._is_heartbeat_one_shot_locked() and not force:
             logger.warning(
                 "   ❤️  Heartbeat trade skipped: one-shot lock already set (%s)",
                 HEARTBEAT_ONESHOT_LOCK_PATH,
@@ -8591,7 +8599,7 @@ class TradingStrategy:
             )
         
         # Check if enough time has passed since last heartbeat
-        if self.heartbeat_last_trade_time > 0:
+        if self.heartbeat_last_trade_time > 0 and not force:
             time_since_last = current_time - self.heartbeat_last_trade_time
             if time_since_last < HEARTBEAT_TRADE_INTERVAL_SECONDS:
                 return False
