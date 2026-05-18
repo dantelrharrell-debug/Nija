@@ -1675,7 +1675,15 @@ class TradingStateMachine:
 
     def has_execution_authority(self) -> bool:
         """Return True when dispatch authority has been granted."""
-        return self._evaluate_execution_authority_state().safety_state == ExecutionSafetyState.AUTHORIZED
+        authority_snapshot = self._evaluate_execution_authority_state()
+        if authority_snapshot.safety_state != ExecutionSafetyState.AUTHORIZED:
+            return False
+        runtime_mode = resolve_runtime_mode_safe(logger)
+        coordinator_snapshot = _get_startup_coordinator().build_snapshot(
+            trading_state=self.get_current_state().value,
+            activation_intent=_activation_intent_present(runtime_mode),
+        )
+        return bool(coordinator_snapshot.trading_authority)
 
     def release_core_loop_ownership(self, reason: str = "runtime handoff") -> None:
         """Release bootstrap/core-loop ownership lock and allow dispatch.
@@ -1725,11 +1733,36 @@ class TradingStateMachine:
 
     def get_execution_authority_snapshot(self, gates_ok: Optional[bool] = None) -> Dict[str, Any]:
         """Return execution authority state snapshot (dual-layer FSM)."""
-        return self._evaluate_execution_authority_state(gates_ok=gates_ok).as_dict()
+        authority_snapshot = self._evaluate_execution_authority_state(gates_ok=gates_ok).as_dict()
+        runtime_mode = resolve_runtime_mode_safe(logger)
+        intent_present = _activation_intent_present(runtime_mode)
+        with self._lock:
+            trading_state = self._current_state.value
+        coordinator_snapshot = _get_startup_coordinator().build_snapshot(
+            trading_state=trading_state,
+            activation_intent=intent_present,
+        )
+        authority_snapshot.update(
+            {
+                "runtime_authority_state": coordinator_snapshot.runtime_authority_state,
+                "runtime_authority_reason": coordinator_snapshot.runtime_authority_reason,
+                "trading_authority": coordinator_snapshot.trading_authority,
+                "execution_permitted": coordinator_snapshot.execution_permitted,
+            }
+        )
+        return authority_snapshot
 
     def can_dispatch_trades(self) -> bool:
         """Return True when runtime dispatch should be allowed."""
-        return self._evaluate_execution_authority_state().safety_state == ExecutionSafetyState.AUTHORIZED
+        authority_snapshot = self._evaluate_execution_authority_state()
+        if authority_snapshot.safety_state != ExecutionSafetyState.AUTHORIZED:
+            return False
+        runtime_mode = resolve_runtime_mode_safe(logger)
+        coordinator_snapshot = _get_startup_coordinator().build_snapshot(
+            trading_state=self.get_current_state().value,
+            activation_intent=_activation_intent_present(runtime_mode),
+        )
+        return bool(coordinator_snapshot.execution_permitted)
 
     def maybe_auto_activate(
         self,
