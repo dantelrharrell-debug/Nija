@@ -1,9 +1,38 @@
-"""Deterministic startup coordinator for cross-FSM convergence."""
+"""Deterministic startup coordinator for cross-FSM convergence.
+
+Model-checking invariants
+-------------------------
+GLOBAL_STATE
+    The :data:`GLOBAL_STATE` singleton provides an *atomic snapshot* of the
+    full runtime state across all FSMs via :meth:`GlobalState.capture`.  Any
+    reader that needs a consistent view must call :meth:`GlobalState.capture`
+    rather than inspecting individual sub-system objects.
+
+GLOBAL_EPOCH
+    A single monotonic counter — :attr:`_RuntimeState.global_epoch` — advances
+    whenever authority, nonce, or dispatch-health changes.  The
+    ``activation_epoch`` gating check uses this unified counter so that any
+    authority-invalidating event requires a fresh activation request.
+
+dispatch_enabled (derived)
+    ``dispatch_enabled`` is **derived** — it is never stored as primary mutable
+    state.  The :attr:`StartupConvergenceSnapshot.dispatch_enabled` property
+    returns ``True`` iff ``runtime_authority_state == EXECUTING``.  The
+    coordinator only tracks ``last_committed_snapshot_version`` as the durable
+    latch; the derived property is recomputed on every snapshot read.
+
+FAIL_SAFE (3-tier)
+    :class:`FailSafeTier` normalises failure severity into three tiers:
+    WARN (degraded-operational), HALT (trading stopped, recoverable), and
+    SHUTDOWN (restart required).  The coordinator exposes
+    :meth:`StartupCoordinator.record_fail_safe` to enter a specific tier.
+"""
 
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -34,6 +63,33 @@ class StartupEvent(str, Enum):
     DISPATCH_ENABLED = "DISPATCH_ENABLED"
 
 
+class FailSafeTier(int, Enum):
+    """3-tier severity model for FAIL_SAFE semantics.
+
+    Tier 1 – WARN
+        System is degraded but still operational.  Alerts are raised and
+        non-critical subsystems may be suspended, but trading continues.
+
+    Tier 2 – HALT
+        Trading is stopped.  The failure is recoverable via operator
+        intervention (e.g. restarting a subsystem, re-enabling a kill switch).
+        The process stays alive waiting for recovery.
+
+    Tier 3 – SHUTDOWN
+        Unrecoverable failure.  The process must be restarted from scratch.
+        All dispatch is permanently blocked until restart completes.
+    """
+
+    WARN = 1
+    """Degraded-operational — trading continues with alerts."""
+
+    HALT = 2
+    """Trading halted — recoverable with operator intervention."""
+
+    SHUTDOWN = 3
+    """Unrecoverable — requires full process restart."""
+
+
 class StartupCoordinatorState(str, Enum):
     BOOT_INIT = "BOOT_INIT"
     LOCKED = "LOCKED"
@@ -54,6 +110,14 @@ class StartupCoordinatorState(str, Enum):
     LIVE_COMMITTED = "LIVE_COMMITTED"
     DISPATCH_ENABLED = "DISPATCH_ENABLED"
     DEGRADED_RETRY = "DEGRADED_RETRY"
+    # 3-tier FAIL_SAFE model (item 4)
+    FAIL_SAFE_WARN = "FAIL_SAFE_WARN"
+    """Tier 1: degraded-operational — trading continues with alerts."""
+    FAIL_SAFE_HALT = "FAIL_SAFE_HALT"
+    """Tier 2: trading halted — recoverable with operator intervention."""
+    FAIL_SAFE_SHUTDOWN = "FAIL_SAFE_SHUTDOWN"
+    """Tier 3: unrecoverable — requires full process restart."""
+    # Legacy alias kept for backward compatibility with existing callers.
     FAIL_SAFE = "FAIL_SAFE"
     RESTART_REQUIRED = "RESTART_REQUIRED"
 
@@ -140,7 +204,8 @@ class StartupConvergenceSnapshot:
     capital_balance: Optional[float]
     capital_stale: bool
     authority_version: int
-    authority_epoch: int
+    global_epoch: int
+    """Unified monotonic epoch — advances on authority/nonce/dispatch-health changes."""
     authority_ready: bool
     authority_status: Dict[str, Any]
     nonce_version: int
@@ -153,10 +218,20 @@ class StartupConvergenceSnapshot:
     activation_intent: bool
     activation_epoch: int
     kill_switch_active: bool
-    dispatch_enabled: bool
     last_committed_snapshot_version: int
     runtime_authority_state: str
     runtime_authority_reason: str
+
+    @property
+    def dispatch_enabled(self) -> bool:
+        """Derived: True iff the runtime authority state is EXECUTING.
+
+        ``dispatch_enabled`` is **not** stored as primary mutable state.  It
+        is recomputed from ``runtime_authority_state`` on every snapshot read,
+        ensuring that any authority regression is immediately reflected without
+        requiring an explicit flag reset.
+        """
+        return self.runtime_authority_state == RuntimeAuthorityState.EXECUTING.value
 
     @property
     def pending_readiness(self) -> list[str]:
@@ -195,7 +270,8 @@ class _RuntimeState:
     capital_balance: Optional[float] = None
     capital_stale: bool = True
     authority_version: int = 0
-    authority_epoch: int = 0
+    global_epoch: int = 0
+    """Unified monotonic epoch — advances on any authority-invalidating change."""
     authority_ready: bool = False
     authority_status: Dict[str, Any] = field(default_factory=dict)
     nonce_version: int = 0
@@ -207,7 +283,6 @@ class _RuntimeState:
     activation_requested: bool = False
     activation_epoch: int = 0
     kill_switch_active: bool = False
-    dispatch_enabled: bool = False
     last_committed_snapshot_version: int = 0
     runtime_authority_state: RuntimeAuthorityState = RuntimeAuthorityState.BOOT
     runtime_authority_reason: str = "boot_init"
@@ -341,8 +416,7 @@ class StartupCoordinator:
             status = dict(status or {})
             if self._runtime.authority_ready != bool(ready) or self._runtime.authority_status != status:
                 self._runtime.authority_version += 1
-                self._runtime.authority_epoch += 1
-                self._runtime.dispatch_enabled = False
+                self._runtime.global_epoch += 1
                 self._runtime.last_committed_snapshot_version = 0
             self._runtime.authority_ready = bool(ready)
             self._runtime.authority_status = status
@@ -351,7 +425,7 @@ class StartupCoordinator:
                 {
                     "ready": self._runtime.authority_ready,
                     "authority_version": self._runtime.authority_version,
-                    "authority_epoch": self._runtime.authority_epoch,
+                    "global_epoch": self._runtime.global_epoch,
                 },
             )
 
@@ -359,8 +433,7 @@ class StartupCoordinator:
         with self._lock:
             if self._runtime.nonce_ready != bool(ready):
                 self._runtime.nonce_version += 1
-                self._runtime.authority_epoch += 1
-                self._runtime.dispatch_enabled = False
+                self._runtime.global_epoch += 1
                 self._runtime.last_committed_snapshot_version = 0
             self._runtime.nonce_ready = bool(ready)
             return self._publish_locked(
@@ -369,7 +442,7 @@ class StartupCoordinator:
                     "ready": self._runtime.nonce_ready,
                     "detail": detail,
                     "nonce_version": self._runtime.nonce_version,
-                    "authority_epoch": self._runtime.authority_epoch,
+                    "global_epoch": self._runtime.global_epoch,
                 },
             )
 
@@ -377,8 +450,7 @@ class StartupCoordinator:
         with self._lock:
             if self._runtime.dispatch_health_ready != bool(ready):
                 self._runtime.dispatch_health_version += 1
-                self._runtime.authority_epoch += 1
-                self._runtime.dispatch_enabled = False
+                self._runtime.global_epoch += 1
                 self._runtime.last_committed_snapshot_version = 0
             self._runtime.dispatch_health_ready = bool(ready)
             return self._publish_locked(
@@ -387,7 +459,7 @@ class StartupCoordinator:
                     "ready": self._runtime.dispatch_health_ready,
                     "detail": detail,
                     "dispatch_health_version": self._runtime.dispatch_health_version,
-                    "authority_epoch": self._runtime.authority_epoch,
+                    "global_epoch": self._runtime.global_epoch,
                 },
             )
 
@@ -415,7 +487,7 @@ class StartupCoordinator:
         with self._lock:
             self._runtime.activation_requested = bool(requested)
             if self._runtime.activation_requested:
-                self._runtime.activation_epoch = self._runtime.authority_epoch
+                self._runtime.activation_epoch = self._runtime.global_epoch
             if self._runtime.coordinator_state not in {
                 StartupCoordinatorState.DISPATCH_ENABLED,
                 StartupCoordinatorState.LIVE_COMMITTED,
@@ -434,7 +506,8 @@ class StartupCoordinator:
         with self._lock:
             self._runtime.kill_switch_active = bool(active)
             if self._runtime.kill_switch_active:
-                self._runtime.coordinator_state = StartupCoordinatorState.FAIL_SAFE
+                # Kill-switch activation is always a SHUTDOWN-tier event.
+                self._runtime.coordinator_state = StartupCoordinatorState.FAIL_SAFE_SHUTDOWN
             return self._publish_locked(
                 StartupEvent.KILL_SWITCH_CHANGED,
                 {"active": self._runtime.kill_switch_active},
@@ -470,11 +543,16 @@ class StartupCoordinator:
             and self._runtime.nonce_ready
             and self._runtime.dispatch_health_ready
             and not self._runtime.kill_switch_active
-            and self._runtime.activation_epoch == self._runtime.authority_epoch
+            and self._runtime.activation_epoch == self._runtime.global_epoch
         )
+        # dispatch_enabled is derived: True iff a valid activation commit exists.
+        # This replaces the former primary flag with a computed condition so that
+        # any authority-invalidating change (which resets last_committed_snapshot_version)
+        # automatically revokes execution authority.
+        dispatch_committed = self._runtime.last_committed_snapshot_version > 0
         executing = bool(
             authority_converged
-            and self._runtime.dispatch_enabled
+            and dispatch_committed
             and trading_state == "LIVE_ACTIVE"
         )
         severe_degradation = None
@@ -486,16 +564,19 @@ class StartupCoordinator:
             severe_degradation = f"bootstrap_state={bootstrap_state}"
         elif self._runtime.coordinator_state in {
             StartupCoordinatorState.FAIL_SAFE,
+            StartupCoordinatorState.FAIL_SAFE_WARN,
+            StartupCoordinatorState.FAIL_SAFE_HALT,
+            StartupCoordinatorState.FAIL_SAFE_SHUTDOWN,
             StartupCoordinatorState.RESTART_REQUIRED,
             StartupCoordinatorState.DEGRADED_RETRY,
         }:
             severe_degradation = f"coordinator_state={self._runtime.coordinator_state.value}"
         elif self._runtime.capital_stale:
             severe_degradation = "capital_stale"
-        elif activation_intent and self._runtime.activation_epoch != self._runtime.authority_epoch:
-            severe_degradation = "authority_epoch_stale"
-        elif self._runtime.dispatch_enabled and not authority_converged:
-            severe_degradation = "dispatch_enabled_without_authority"
+        elif activation_intent and self._runtime.activation_epoch != self._runtime.global_epoch:
+            severe_degradation = "global_epoch_stale"
+        elif dispatch_committed and not authority_converged:
+            severe_degradation = "dispatch_committed_without_authority"
         elif (
             self._runtime.runtime_authority_state in {
                 RuntimeAuthorityState.AUTHORIZED,
@@ -506,7 +587,7 @@ class StartupCoordinator:
         ):
             severe_degradation = "authority_regressed"
         elif self._runtime.runtime_authority_state == RuntimeAuthorityState.EXECUTING and not (
-            self._runtime.dispatch_enabled and trading_state == "LIVE_ACTIVE"
+            dispatch_committed and trading_state == "LIVE_ACTIVE"
         ):
             severe_degradation = "execution_revoked"
 
@@ -518,7 +599,7 @@ class StartupCoordinator:
             reason = f"bootstrap_state={bootstrap_state}"
         elif executing:
             target_state = RuntimeAuthorityState.EXECUTING
-            reason = "dispatch_enabled"
+            reason = "dispatch_committed"
         elif authority_converged:
             target_state = RuntimeAuthorityState.AUTHORIZED
             reason = "authority_converged"
@@ -578,7 +659,7 @@ class StartupCoordinator:
                 capital_balance=self._runtime.capital_balance,
                 capital_stale=self._runtime.capital_stale,
                 authority_version=self._runtime.authority_version,
-                authority_epoch=self._runtime.authority_epoch,
+                global_epoch=self._runtime.global_epoch,
                 authority_ready=self._runtime.authority_ready,
                 authority_status=dict(self._runtime.authority_status),
                 nonce_version=self._runtime.nonce_version,
@@ -591,7 +672,6 @@ class StartupCoordinator:
                 activation_intent=bool(activation_intent or self._runtime.activation_requested),
                 activation_epoch=self._runtime.activation_epoch,
                 kill_switch_active=self._runtime.kill_switch_active,
-                dispatch_enabled=self._runtime.dispatch_enabled,
                 last_committed_snapshot_version=self._runtime.last_committed_snapshot_version,
                 runtime_authority_state=runtime_authority_state.value,
                 runtime_authority_reason=runtime_authority_reason,
@@ -627,7 +707,10 @@ class StartupCoordinator:
     def finalize_activation_commit(self, snapshot: StartupConvergenceSnapshot) -> int:
         with self._lock:
             self._runtime.last_committed_snapshot_version = snapshot.snapshot_version
-            self._runtime.dispatch_enabled = True
+            # dispatch_enabled is derived — not stored as primary state.
+            # Setting last_committed_snapshot_version > 0 is the only durable
+            # latch.  The snapshot's dispatch_enabled property computes the
+            # final value from runtime_authority_state.
             self._runtime.coordinator_state = StartupCoordinatorState.LIVE_COMMITTED
             self._publish_locked(
                 StartupEvent.DISPATCH_ENABLED,
@@ -637,6 +720,34 @@ class StartupCoordinator:
             return self._publish_locked(
                 StartupEvent.DISPATCH_ENABLED,
                 {"snapshot_version": snapshot.snapshot_version, "phase": StartupCoordinatorState.DISPATCH_ENABLED.value},
+            )
+
+    def record_fail_safe(self, tier: "FailSafeTier", reason: str = "") -> int:
+        """Enter a FAIL_SAFE state at the specified *tier*.
+
+        Parameters
+        ----------
+        tier:
+            :class:`FailSafeTier` severity level.
+
+            * ``WARN`` → :attr:`StartupCoordinatorState.FAIL_SAFE_WARN`
+            * ``HALT`` → :attr:`StartupCoordinatorState.FAIL_SAFE_HALT`
+            * ``SHUTDOWN`` → :attr:`StartupCoordinatorState.FAIL_SAFE_SHUTDOWN`
+
+        reason:
+            Human-readable description of why FAIL_SAFE was triggered.
+        """
+        _tier_to_state = {
+            FailSafeTier.WARN: StartupCoordinatorState.FAIL_SAFE_WARN,
+            FailSafeTier.HALT: StartupCoordinatorState.FAIL_SAFE_HALT,
+            FailSafeTier.SHUTDOWN: StartupCoordinatorState.FAIL_SAFE_SHUTDOWN,
+        }
+        with self._lock:
+            target = _tier_to_state.get(tier, StartupCoordinatorState.FAIL_SAFE_SHUTDOWN)
+            self._runtime.coordinator_state = target
+            return self._publish_locked(
+                StartupEvent.KILL_SWITCH_CHANGED,
+                {"fail_safe_tier": tier.value, "reason": reason or target.value},
             )
 
     def get_state(self) -> str:
@@ -660,8 +771,128 @@ def get_startup_coordinator() -> StartupCoordinator:
         return _startup_coordinator
 
 
+# ---------------------------------------------------------------------------
+# GLOBAL_STATE — atomic snapshot model (item 1)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GlobalStateSnapshot:
+    """Immutable atomic snapshot of the full runtime state across all FSMs.
+
+    Produced by :meth:`GlobalState.capture`.  All fields are read under a
+    single coordinator lock to ensure a consistent view — callers must never
+    assemble global state by calling multiple methods independently.
+
+    Attributes
+    ----------
+    startup:
+        The :class:`StartupConvergenceSnapshot` captured at ``snapshot_ts``.
+    esc_state:
+        String value of the current :class:`ExecutionOrderState` (or
+        ``"IDLE"`` when the ESC is not active).
+    snapshot_ts:
+        Monotonic timestamp (``time.monotonic()``) at which the snapshot
+        was taken.  Useful for staleness checks.
+    global_epoch:
+        Mirrors ``startup.global_epoch`` for convenience.
+    """
+
+    startup: StartupConvergenceSnapshot
+    esc_state: str
+    snapshot_ts: float
+    global_epoch: int
+
+    @property
+    def dispatch_enabled(self) -> bool:
+        """Convenience alias: delegates to the startup snapshot."""
+        return self.startup.dispatch_enabled
+
+    @property
+    def runtime_authority_state(self) -> str:
+        """Convenience alias: delegates to the startup snapshot."""
+        return self.startup.runtime_authority_state
+
+
+class GlobalState:
+    """Singleton registry that provides atomic cross-FSM state snapshots.
+
+    Usage::
+
+        from bot.startup_coordinator import GLOBAL_STATE
+
+        snapshot = GLOBAL_STATE.capture(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        )
+        if snapshot.dispatch_enabled:
+            ...
+
+    The :meth:`capture` method calls :meth:`StartupCoordinator.build_snapshot`
+    under the coordinator's own lock, so the returned snapshot is always
+    internally consistent.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._latest: Optional[GlobalStateSnapshot] = None
+
+    def capture(
+        self,
+        *,
+        trading_state: str,
+        activation_intent: bool,
+        esc_state: str = "IDLE",
+    ) -> "GlobalStateSnapshot":
+        """Build and store a new :class:`GlobalStateSnapshot`.
+
+        Parameters
+        ----------
+        trading_state:
+            Current trading state string (e.g. ``"LIVE_ACTIVE"``).
+        activation_intent:
+            Whether the operator has requested activation.
+        esc_state:
+            Current :class:`~bot.execution_state_controller.ExecutionOrderState`
+            value string.  Defaults to ``"IDLE"``.
+
+        Returns
+        -------
+        GlobalStateSnapshot
+            A fully consistent, immutable snapshot of the global state.
+        """
+        coordinator = get_startup_coordinator()
+        startup = coordinator.build_snapshot(
+            trading_state=trading_state,
+            activation_intent=activation_intent,
+        )
+        snapshot = GlobalStateSnapshot(
+            startup=startup,
+            esc_state=esc_state,
+            snapshot_ts=time.monotonic(),
+            global_epoch=startup.global_epoch,
+        )
+        with self._lock:
+            self._latest = snapshot
+        return snapshot
+
+    def latest(self) -> Optional["GlobalStateSnapshot"]:
+        """Return the most recently captured snapshot, or ``None``."""
+        with self._lock:
+            return self._latest
+
+
+#: Module-level GLOBAL_STATE singleton.  Use :meth:`GlobalState.capture` to
+#: obtain an atomic snapshot of the full runtime state.
+GLOBAL_STATE = GlobalState()
+
+
 __all__ = [
     "ActivationDecision",
+    "FailSafeTier",
+    "GlobalState",
+    "GlobalStateSnapshot",
+    "GLOBAL_STATE",
     "StartupConvergenceSnapshot",
     "StartupCoordinator",
     "StartupCoordinatorState",

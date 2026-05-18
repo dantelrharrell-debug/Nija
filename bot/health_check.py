@@ -511,7 +511,10 @@ class HealthCheckManager:
                 activation_intent=activation_intent,
             )
             decision = coordinator.evaluate_activation(snapshot)
-            authorized = bool(decision.allowed and snapshot.dispatch_enabled)
+            # Use trading_authority (AUTHORIZED or EXECUTING) rather than
+            # dispatch_enabled (EXECUTING only) — dispatch_enabled is now
+            # a derived property that reflects the narrower EXECUTING state.
+            authorized = bool(decision.allowed or snapshot.trading_authority)
             authority_state = "AUTHORIZED" if authorized else "BLOCKED"
 
             signal["trading_authority"] = {

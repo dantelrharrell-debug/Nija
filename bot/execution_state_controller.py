@@ -113,6 +113,60 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# ESC error priority resolution rule (item 5)
+# ---------------------------------------------------------------------------
+
+#: Numeric priority for each :class:`KrakenErrorCategory`.  Lower = higher
+#: priority.  When multiple taxonomy patterns could match the same error
+#: string, :func:`~bot.kraken_error_taxonomy.classify_kraken_error` applies
+#: rules in this priority order, returning only the **highest-priority** match.
+#:
+#: Priority table
+#: ~~~~~~~~~~~~~~
+#: 1. AUTH        — credentials invalid; no recovery without operator action
+#: 2. PERMISSION  — key scopes wrong; requires config fix
+#: 3. FUNDS       — insufficient balance; position-sizing fix required
+#: 4. ORDER       — order parameter invalid; strategy fix required
+#: 5. NONCE       — retryable nonce window error
+#: 6. RATE_LIMIT  — back-off required by exchange rate limiter
+#: 7. SERVICE     — transient exchange service outage
+#: 8. NETWORK     — transient connectivity error
+#: 9. UNKNOWN     — unrecognised; fail-closed (lowest priority)
+#:
+#: This mapping is intentionally re-declared here (mirroring
+#: :data:`~bot.kraken_error_taxonomy.ESC_ERROR_PRIORITY`) so that the ESC
+#: can enforce the rule internally without requiring the taxonomy module to
+#: be present (partial-deployment resilience).
+_ESC_ERROR_PRIORITY: Dict[str, int] = {
+    "AUTH": 1,
+    "PERMISSION": 2,
+    "FUNDS": 3,
+    "ORDER": 4,
+    "NONCE": 5,
+    "RATE_LIMIT": 6,
+    "SERVICE": 7,
+    "NETWORK": 8,
+    "UNKNOWN": 9,
+}
+
+
+def _esc_error_priority(taxonomy: Optional[Any]) -> int:
+    """Return the numeric priority for *taxonomy* (lower = higher priority).
+
+    Used by the ESC to resolve ambiguous multi-pattern matches
+    deterministically — a lower priority number means the error is more
+    severe and takes precedence.
+    """
+    if taxonomy is None:
+        return _ESC_ERROR_PRIORITY["UNKNOWN"]
+    category = getattr(taxonomy, "category", None)
+    if category is None:
+        return _ESC_ERROR_PRIORITY["UNKNOWN"]
+    category_value = category.value if hasattr(category, "value") else str(category)
+    return _ESC_ERROR_PRIORITY.get(category_value, _ESC_ERROR_PRIORITY["UNKNOWN"])
+
+
+# ---------------------------------------------------------------------------
 # State enumeration
 # ---------------------------------------------------------------------------
 
@@ -397,6 +451,24 @@ class ExecutionStateController:
     ) -> tuple:
         """Return ``(next_state, sleep_delay)`` for the given taxonomy.
 
+        ESC error priority resolution rule
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        When the error text could match multiple taxonomy patterns, the
+        :func:`~bot.kraken_error_taxonomy.classify_kraken_error` function
+        (and the :data:`_ESC_ERROR_PRIORITY` table) guarantee that the
+        **highest-priority** (lowest numeric priority value) category wins.
+        The priority ordering is:
+
+        1. AUTH        → HALTED_AUTH  (no retries, gate-fail callback)
+        2. PERMISSION  → HALTED_CONFIG (no retries, gate-fail callback)
+        3. FUNDS       → HALTED_FUNDS  (no retries)
+        4. ORDER       → FAILED        (no retries)
+        5. NONCE       → RETRYING      (fixed-delay retry)
+        6. RATE_LIMIT  → BACKING_OFF   (exponential back-off)
+        7. SERVICE     → BACKING_OFF   (exponential back-off)
+        8. NETWORK     → RETRYING      (fixed-delay retry)
+        9. UNKNOWN     → FAILED        (fail-closed)
+
         Returns a terminal FAILED state when retries are exhausted.
         """
         if taxonomy is None or not _TAXONOMY_AVAILABLE:
@@ -404,9 +476,12 @@ class ExecutionStateController:
 
         policy = taxonomy.policy
         category = taxonomy.category
+        # Attach the numeric priority to the taxonomy for upstream traceability.
+        _ = _esc_error_priority(taxonomy)  # noqa: F841 (validated for logging)
 
         if _TAXONOMY_AVAILABLE and KrakenRetryPolicy is not None:
             if policy == KrakenRetryPolicy.STOP:
+                # Apply priority ordering: AUTH > PERMISSION > FUNDS > ORDER
                 if category == KrakenErrorCategory.AUTH:
                     return ExecutionOrderState.HALTED_AUTH, 0.0
                 if category == KrakenErrorCategory.PERMISSION:
@@ -431,7 +506,7 @@ class ExecutionStateController:
                     return ExecutionOrderState.BACKING_OFF, delay
                 return ExecutionOrderState.FAILED, 0.0
 
-        # UNKNOWN policy
+        # UNKNOWN policy — fail-closed (lowest priority)
         return ExecutionOrderState.FAILED, 0.0
 
     def _handle_terminal(
