@@ -393,7 +393,26 @@ def get_distributed_writer_authority_status(force_refresh: bool = False) -> dict
 
 
 def get_startup_execution_authority_prerequisites(force_refresh: bool = False) -> dict:
-    """Return startup authority prerequisites required before live runtime handoff."""
+    """Return startup authority prerequisites required before live runtime handoff.
+
+    Heartbeat liveness uses a two-tier freshness model:
+
+    1. ``heartbeat_fresh`` — last *successful* Redis refresh is within
+       ``heartbeat_max_age_s`` (``max(ttl_s * 2, 30)`` seconds).  This is the
+       strict check used when the distributed authority cannot be independently
+       verified via Redis.
+
+    2. ``heartbeat_alive_fresh`` — the heartbeat thread updated its
+       ``NIJA_WRITER_HEARTBEAT_ALIVE_TS`` (written on *every* loop iteration,
+       including failed Redis attempts) within ``heartbeat_alive_max_age_s``
+       (``max(ttl_s * 12, 120)`` seconds).  This looser check distinguishes a
+       *dead thread* from a *live thread temporarily unable to reach Redis*.
+
+    ``heartbeat_active`` passes when the flag is set AND either freshness tier
+    passes.  This prevents transient Redis outages (which set off the 30-second
+    success-freshness window but leave the thread alive) from permanently
+    blocking execution authority.
+    """
     authority = get_distributed_writer_authority_status(force_refresh=force_refresh)
     lease_acquired = _env_truthy("NIJA_WRITER_LEASE_ACQUIRED")
     heartbeat_flag = _env_truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
@@ -405,13 +424,32 @@ def get_startup_execution_authority_prerequisites(force_refresh: bool = False) -
         heartbeat_last_ts = 0.0
 
     try:
+        heartbeat_alive_ts = float(os.getenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0") or 0.0)
+    except (TypeError, ValueError):
+        heartbeat_alive_ts = 0.0
+
+    try:
         ttl_s = float(os.getenv("NIJA_WRITER_LOCK_TTL_S", "0") or 0.0)
     except (TypeError, ValueError):
         ttl_s = 0.0
 
+    now = time.time()
+    # Strict freshness: last successful heartbeat-to-Redis within 2× TTL (min 30 s).
     heartbeat_max_age_s = max(ttl_s * 2.0, 30.0)
-    heartbeat_fresh = heartbeat_last_ts > 0 and (time.time() - heartbeat_last_ts) <= heartbeat_max_age_s
-    heartbeat_active = heartbeat_flag and heartbeat_fresh
+    heartbeat_fresh = heartbeat_last_ts > 0 and (now - heartbeat_last_ts) <= heartbeat_max_age_s
+
+    # Loose liveness: thread iterated (even during Redis failures) within 12× TTL
+    # (min 120 s).  Covers the window where Redis is temporarily unreachable but
+    # the heartbeat thread is still running and will recover once Redis is back.
+    heartbeat_alive_max_age_s = max(ttl_s * 12.0, 120.0)
+    heartbeat_alive_fresh = (
+        heartbeat_alive_ts > 0 and (now - heartbeat_alive_ts) <= heartbeat_alive_max_age_s
+    )
+    # Fall back to last_ts if alive_ts was never set (pre-fix deployments).
+    if heartbeat_alive_ts <= 0 < heartbeat_last_ts:
+        heartbeat_alive_fresh = heartbeat_fresh
+
+    heartbeat_active = heartbeat_flag and (heartbeat_fresh or heartbeat_alive_fresh)
 
     checks = {
         "redis_reachable": bool(authority.get("redis_reachable", False)),
@@ -427,7 +465,9 @@ def get_startup_execution_authority_prerequisites(force_refresh: bool = False) -
         "checks": checks,
         "missing": missing,
         "heartbeat_last_ts": heartbeat_last_ts,
+        "heartbeat_alive_ts": heartbeat_alive_ts,
         "heartbeat_max_age_s": heartbeat_max_age_s,
+        "heartbeat_alive_max_age_s": heartbeat_alive_max_age_s,
         "authority_status": authority,
     }
 
