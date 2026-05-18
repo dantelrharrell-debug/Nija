@@ -3568,8 +3568,7 @@ def _emit_boot_trace(stage: str, detail: str) -> None:
     print(f"{stage}: {detail}", flush=True)
 
 
-_apply_startup_debug_env_aliases()
-_acquire_process_lock()
+_health_server_started: bool = False
 
 
 def _start_health_server():
@@ -3587,6 +3586,9 @@ def _start_health_server():
     - /ready or /readiness - Readiness probe (is service ready to handle traffic?)
     - /status - Detailed status information for operators
     """
+    global _health_server_started
+    if _health_server_started:
+        return
     try:
         # Resolve port with a safe default if env is missing
         port_env = os.getenv("PORT", "")
@@ -3740,6 +3742,7 @@ def _start_health_server():
         server = HTTPServer(("0.0.0.0", port), HealthHandler)
         t = threading.Thread(target=server.serve_forever, daemon=True, name="HealthServer")
         t.start()
+        _health_server_started = True
         print(f"🌐 Health server listening on port {port} (Railway-optimized)")
         print(f"   📍 Liveness:  http://0.0.0.0:{port}/health (ALWAYS returns 200 OK)")
         print(f"   📍 Readiness: http://0.0.0.0:{port}/ready")
@@ -3747,6 +3750,12 @@ def _start_health_server():
         print(f"   📍 Metrics:   http://0.0.0.0:{port}/metrics")
     except Exception as e:
         print(f"❌ Health server failed to start: {e}")
+
+
+_apply_startup_debug_env_aliases()
+_start_health_server()
+_acquire_process_lock()
+
 
 # Load .env and verify the result at runtime
 _dotenv_loaded = False
