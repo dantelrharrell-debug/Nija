@@ -4884,6 +4884,36 @@ class MultiAccountBrokerManager:
         """
         return getattr(broker, 'credentials_configured', False)
 
+    @staticmethod
+    def _format_platform_broker_status(
+        broker_type: BrokerType,
+        broker: BaseBroker,
+        *,
+        include_primary_suffix: bool = False,
+    ) -> str:
+        """Return a user-facing platform broker status label."""
+        if getattr(broker, "connected", False):
+            return "✅ CONNECTED (PRIMARY)" if include_primary_suffix else "✅ CONNECTED"
+
+        if broker_type == BrokerType.KRAKEN:
+            error_text = str(getattr(broker, "last_connection_error", "") or "").lower()
+            has_cached_balance = (
+                getattr(broker, "_last_known_balance", None) is not None
+                or "kraken" in getattr(broker, "balance_cache", {})
+            )
+            cooldown_markers = (
+                "nonce-manager rebuild recovery active",
+                "retry suppressed for",
+                "retry cooldown",
+                "previous rebuild failed",
+            )
+            if has_cached_balance and any(marker in error_text for marker in cooldown_markers):
+                if include_primary_suffix:
+                    return "⚠️ COOLDOWN RECOVERY (cached balance active — entries blocked)"
+                return "⚠️ COOLDOWN RECOVERY (cached balance active)"
+
+        return "❌ NOT CONNECTED"
+
     def get_all_balances_with_status(self) -> Dict:
         """
         Get balances for all accounts with connection and credential status.
@@ -5368,7 +5398,7 @@ class MultiAccountBrokerManager:
         logger.info("🔷 PLATFORM ACCOUNTS (Primary Trading Accounts):")
         if self._platform_brokers:
             for broker_type, broker in self._platform_brokers.items():
-                status = "✅ CONNECTED" if broker.connected else "❌ NOT CONNECTED"
+                status = self._format_platform_broker_status(broker_type, broker)
                 logger.info(f"   • {broker_type.value.upper()}: {status}")
         else:
             logger.info("   ⚠️  No platform brokers connected")
@@ -5569,6 +5599,17 @@ class MultiAccountBrokerManager:
         if platform_status:
             for name, connected in platform_status.items():
                 status = "✅ CONNECTED (PRIMARY)" if connected else "❌ NOT CONNECTED"
+                try:
+                    broker_type = BrokerType[name]
+                    broker = self._platform_brokers.get(broker_type)
+                    if broker is not None:
+                        status = self._format_platform_broker_status(
+                            broker_type,
+                            broker,
+                            include_primary_suffix=True,
+                        )
+                except Exception:
+                    pass
                 logger.info(f"   • {name}: {status}")
         else:
             logger.warning("   ⚠️  No platform brokers registered")
