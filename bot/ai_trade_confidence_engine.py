@@ -31,7 +31,7 @@ combining six independent signal dimensions:
 
 Execution Gate
 --------------
-Trades with ``confidence_score >= CONFIDENCE_THRESHOLD`` (default 65) are
+Trades with ``confidence_score >= CONFIDENCE_THRESHOLD`` (default 45) are
 recommended for execution.  Below-threshold signals are logged and returned
 with ``recommended_action = "WAIT"`` or ``"SKIP"``.
 
@@ -71,7 +71,7 @@ logger = logging.getLogger("nija.confidence_engine")
 # Constants
 # ---------------------------------------------------------------------------
 
-CONFIDENCE_THRESHOLD: float = 52.0   # minimum score to recommend execution (slightly lowered 54→52 for balanced frequency)
+CONFIDENCE_THRESHOLD: float = 45.0   # minimum score to recommend execution (lowered 52→45 to match the 50/100 target and account for typical market conditions)
 MAX_SCORE: float = 100.0
 
 _COMPONENT_MAX = {
@@ -160,7 +160,7 @@ class AITradeConfidenceEngine:
     Parameters
     ----------
     confidence_threshold:
-        Minimum aggregate score to recommend execution (default: 65).
+        Minimum aggregate score to recommend execution (default: 45).
     use_regime_detector:
         When True, attempt to import and use ``MarketRegimeDetectionEngine``
         for regime-aligned scoring.  Falls back gracefully if unavailable.
@@ -413,8 +413,10 @@ class AITradeConfidenceEngine:
             pts = max_pts * 0.65
         elif ratio >= 0.8:
             pts = max_pts * 0.40
+        elif ratio >= 0.5:
+            pts = max_pts * 0.20            # low but present volume — partial credit
         else:
-            pts = 0.0                       # thin volume — no confirmation
+            pts = 0.0                       # very thin volume — no confirmation
 
         return round(min(pts, max_pts), 2)
 
@@ -492,12 +494,12 @@ class AITradeConfidenceEngine:
         else:
             expansion = 1.0
 
-        # Optimal: moderate volatility (ATR_pct 0.5–3%), expansion 0.8–1.6
-        if 0.005 <= atr_pct <= 0.03 and 0.8 <= expansion <= 1.6:
+        # Optimal: moderate volatility (ATR_pct 0.3–4%), expansion 0.7–1.8
+        if 0.003 <= atr_pct <= 0.04 and 0.7 <= expansion <= 1.8:
             return max_pts
-        if atr_pct < 0.002 or expansion < 0.5:
+        if atr_pct < 0.001 or expansion < 0.4:
             return max_pts * 0.2            # too calm — no edge
-        if expansion > 2.5 or atr_pct > 0.06:
+        if expansion > 3.0 or atr_pct > 0.08:
             return max_pts * 0.1            # crisis — unpredictable
         return max_pts * 0.5
 
@@ -555,7 +557,7 @@ def get_ai_trade_confidence_engine(
     Parameters
     ----------
     confidence_threshold:
-        Passed only on the *first* call (default: 65).
+        Passed only on the *first* call (default: 45).
     """
     global _confidence_engine
     if _confidence_engine is None:
