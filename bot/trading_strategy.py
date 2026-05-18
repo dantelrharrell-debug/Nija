@@ -210,17 +210,24 @@ except ImportError:
 
 # Always Trade Mode — guaranteed minimum trade frequency, idle-capital prevention
 try:
-    from always_trade_mode import get_always_trade_mode
+    from always_trade_mode import (
+        get_always_trade_mode,
+        arm_trading_strategy_force_entry_path,
+    )
     ALWAYS_TRADE_MODE_AVAILABLE = True
     logger.debug("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
 except ImportError:
     try:
-        from bot.always_trade_mode import get_always_trade_mode
+        from bot.always_trade_mode import (
+            get_always_trade_mode,
+            arm_trading_strategy_force_entry_path,
+        )
         ALWAYS_TRADE_MODE_AVAILABLE = True
         logger.debug("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
     except ImportError:
         ALWAYS_TRADE_MODE_AVAILABLE = False
         get_always_trade_mode = None  # type: ignore
+        arm_trading_strategy_force_entry_path = None  # type: ignore
 
 # True Capital Scaling Engine — $94 → $1,000+ structured compounding
 try:
@@ -8679,6 +8686,18 @@ class TradingStrategy:
         except Exception:
             return False
 
+    def _activate_local_force_entry_path(self) -> None:
+        """
+        Arm the ``TradingStrategy`` drought / forced-entry path for this process.
+
+        Always Trade Mode already flips ``bot.nija_core_loop.FORCE_NEXT_CYCLE``, but the
+        live service primarily trades through ``TradingStrategy``'s own scan-and-rank loop.
+        Bridging the drought signal into the local flags ensures prolonged inactivity
+        immediately activates the existing forced-entry relaxations in the live path too.
+        """
+        if arm_trading_strategy_force_entry_path is not None:
+            arm_trading_strategy_force_entry_path(self, FORCED_ENTRY_FALLBACK_CYCLES)
+
     def _mark_heartbeat_verified(self) -> None:
         """Persist heartbeat verification marker after successful heartbeat trade."""
         try:
@@ -8977,6 +8996,7 @@ class TradingStrategy:
                     last_trade_ts=_atm_last_trade if _atm_last_trade > 0 else None,
                 )
                 if _atm_decision.force_entry and not user_mode:
+                    self._activate_local_force_entry_path()
                     try:
                         import bot.nija_core_loop as _ncl_atm
                         _ncl_atm.FORCE_NEXT_CYCLE = True
