@@ -3528,7 +3528,7 @@ def _acquire_process_lock() -> bool:
         )
         if _is_live_trading_active_now():
             raise RuntimeError(
-                "STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
+                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
             )
         return False
     print(f"🔒 Process lock acquired (PID {os.getpid()}) — {_PID_FILE}")
@@ -5740,7 +5740,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
         )
         if is_live_trading():
             raise RuntimeError(
-                "STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
+                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
             )
         return False
 
