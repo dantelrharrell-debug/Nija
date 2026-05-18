@@ -2730,6 +2730,10 @@ except Exception:
     _nonce_manager = None
 _last_rebuild_failure_monotonic: float = 0.0
 _last_rebuild_failure_error: Exception | None = None
+_consecutive_rebuild_failures: int = 0
+# Monotonic timestamp of the last time we emitted the cooldown-active diagnostic
+# log.  Used to throttle repeated emissions to at most once per cooldown window.
+_last_rebuild_cooldown_diag_monotonic: float = 0.0
 
 
 def get_adaptive_offset_engine() -> AdaptiveNonceOffsetEngine:
@@ -2795,6 +2799,7 @@ def _ensure_live_manager() -> KrakenNonceManager:
     the startup FSM revokes nonce issuance.
     """
     global _nonce_manager, _last_rebuild_failure_monotonic, _last_rebuild_failure_error
+    global _consecutive_rebuild_failures, _last_rebuild_cooldown_diag_monotonic
     _wait_for_probe_window("_ensure_live_manager", timeout_s=30.0)
 
     # ── Hard gate: authorization check ───────────────────────────────────
@@ -2814,6 +2819,16 @@ def _ensure_live_manager() -> KrakenNonceManager:
             and (now_mono - _last_rebuild_failure_monotonic) < _REBUILD_RETRY_COOLDOWN_S
         ):
             remaining_s = _REBUILD_RETRY_COOLDOWN_S - (now_mono - _last_rebuild_failure_monotonic)
+            # Throttle the stored-error reminder to at most once per cooldown window.
+            if now_mono - _last_rebuild_cooldown_diag_monotonic >= _REBUILD_RETRY_COOLDOWN_S:
+                _last_rebuild_cooldown_diag_monotonic = now_mono
+                _logger.error(
+                    "KrakenNonceManager rebuild cooldown active (%d consecutive failure(s)); "
+                    "%.1fs remaining.  Last rebuild error: %s",
+                    _consecutive_rebuild_failures,
+                    remaining_s,
+                    _last_rebuild_failure_error,
+                )
             raise RuntimeError(
                 "KrakenNonceManager singleton was destroyed and previous rebuild failed; "
                 f"retry suppressed for {remaining_s:.1f}s cooldown."
@@ -2826,9 +2841,41 @@ def _ensure_live_manager() -> KrakenNonceManager:
             current = rebuild_nonce_manager()
             _last_rebuild_failure_monotonic = 0.0
             _last_rebuild_failure_error = None
+            _consecutive_rebuild_failures = 0
         except Exception as exc:
+            _consecutive_rebuild_failures += 1
             _last_rebuild_failure_monotonic = time.monotonic()
             _last_rebuild_failure_error = exc
+            _logger.error(
+                "KrakenNonceManager rebuild FAILED (attempt #%d): %s",
+                _consecutive_rebuild_failures,
+                exc,
+                exc_info=True,
+            )
+            if _consecutive_rebuild_failures >= 3:
+                _exc_str = str(exc).lower()
+                if any(
+                    kw in _exc_str
+                    for kw in ("permission", "invalid key", "invalid signature",
+                               "expired", "revoked", "unauthorized", "auth", "eapi:invalid key",
+                               "startup execution authority", "missing=")
+                ):
+                    _logger.error(
+                        "KrakenNonceManager: %d consecutive rebuild failures with a "
+                        "possible credentials/authority error — check "
+                        "KRAKEN_PLATFORM_API_KEY, KRAKEN_PLATFORM_API_SECRET, "
+                        "startup execution authority, and API key permissions on "
+                        "the Kraken exchange dashboard.",
+                        _consecutive_rebuild_failures,
+                    )
+                else:
+                    _logger.error(
+                        "KrakenNonceManager: %d consecutive rebuild failures — "
+                        "investigate API connectivity, clock sync (NTP), "
+                        "KRAKEN_PLATFORM_API_KEY/KRAKEN_PLATFORM_API_SECRET validity, "
+                        "and startup execution authority.",
+                        _consecutive_rebuild_failures,
+                    )
             raise RuntimeError(
                 "KrakenNonceManager singleton was destroyed and rebuild failed; "
                 f"retry cooldown {_REBUILD_RETRY_COOLDOWN_S:.1f}s activated."
@@ -2980,6 +3027,8 @@ def get_global_nonce_stats() -> dict:
         "trading_paused": mgr.is_paused(),
         "pause_remaining_s": mgr.get_pause_remaining(),
         "broker_quarantined": _quarantine_triggered,
+        "consecutive_rebuild_failures": _consecutive_rebuild_failures,
+        "rebuild_cooldown_remaining_s": get_nonce_rebuild_cooldown_remaining_s(),
     }
 
 
@@ -3195,6 +3244,16 @@ def get_nonce_rebuild_cooldown_remaining_s() -> float:
     return max(0.0, remaining)
 
 
+def get_consecutive_rebuild_failures() -> int:
+    """Return the number of consecutive nonce-manager rebuild failures since last success.
+
+    Resets to ``0`` on any successful :func:`rebuild_nonce_manager` call.
+    Useful for dashboards and health-check endpoints to surface persistent
+    rebuild problems (e.g. credential or authority issues).
+    """
+    return _consecutive_rebuild_failures
+
+
 __all__ = [
     "KrakenNonceManager",
     "NonceManager",
@@ -3225,6 +3284,7 @@ __all__ = [
     "is_kraken_key_invalidated",
     "get_nonce_pause_remaining",
     "get_nonce_rebuild_cooldown_remaining_s",
+    "get_consecutive_rebuild_failures",
     "cleanup_legacy_nonce_files",
     "check_ntp_sync",
     "log_ntp_clock_status",
