@@ -3550,43 +3550,30 @@ def _release_process_lock() -> None:
         pass
 
 
-def _apply_startup_debug_env_aliases() -> None:
-    """Apply operator-friendly debug env aliases before lock acquisition."""
-    _fail_fast_singleton = os.environ.get("FAIL_FAST_SINGLETON", "").strip().lower()
-    if _fail_fast_singleton in ("0", "false", "no", "off"):
-        if "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE" not in os.environ:
-            os.environ["NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE"] = "true"
-        print(
-            "⚠️  Debug override: FAIL_FAST_SINGLETON=false -> "
-            "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=true",
-            flush=True,
-        )
-
-
-def _emit_boot_trace(stage: str, detail: str) -> None:
-    """Print an always-flushed boot marker for early startup debugging."""
-    print(f"{stage}: {detail}", flush=True)
-
-
-_apply_startup_debug_env_aliases()
-_acquire_process_lock()
+_health_server_started: bool = False
 
 
 def _start_health_server():
     """
     Start HTTP health server with Railway-optimized liveness endpoint.
-    
+
     CRITICAL for Railway deployment:
     - /health and /healthz ALWAYS return 200 OK (stateless, < 50ms)
     - No dependencies on bot state, locks, or initialization
     - Binds immediately before any Kraken connections or user loading
-    
+
     This prevents Railway from killing the container during startup.
-    
+    Called at module load time so the health server is live even while the
+    distributed writer lock acquisition is retrying (fail-closed standby).
+
     Other endpoints:
     - /ready or /readiness - Readiness probe (is service ready to handle traffic?)
     - /status - Detailed status information for operators
     """
+    global _health_server_started
+    if _health_server_started:
+        return
+    _health_server_started = True
     try:
         # Resolve port with a safe default if env is missing
         port_env = os.getenv("PORT", "")
@@ -3609,7 +3596,7 @@ def _start_health_server():
                         self.send_header("Content-Type", "text/plain")
                         self.end_headers()
                         self.wfile.write(b"ok")
-                    
+
                     # Readiness probe - returns 200 only if ready, 503 if not ready/config error
                     elif self.path in ("/ready", "/readiness"):
                         try:
@@ -3626,7 +3613,7 @@ def _start_health_server():
                             self.send_header("Content-Type", "application/json")
                             self.end_headers()
                             self.wfile.write(json.dumps({"status": "not_ready", "reason": "initializing"}).encode())
-                    
+
                     # Detailed status for operators and debugging
                     elif self.path in ("/status", "/"):
                         try:
@@ -3676,7 +3663,7 @@ def _start_health_server():
                                 _fallback["writer_lock_ok"] = False
 
                             self.wfile.write(json.dumps(_fallback, indent=2).encode())
-                    
+
                     # Prometheus metrics endpoint
                     elif self.path == "/metrics":
                         try:
@@ -3715,7 +3702,7 @@ def _start_health_server():
                             self.send_header("Content-Type", "application/json")
                             self.end_headers()
                             self.wfile.write(json.dumps({"ok": False, "error": str(lock_err)}).encode())
-                    
+
                     else:
                         self.send_response(404)
                         self.send_header("Content-Type", "application/json")
@@ -3732,7 +3719,7 @@ def _start_health_server():
                         self.wfile.write(json.dumps({"error": str(e)}).encode())
                     except Exception:
                         pass
-            
+
             def log_message(self, format, *args):
                 # Silence default HTTP server logging to reduce noise
                 return
@@ -3747,6 +3734,34 @@ def _start_health_server():
         print(f"   📍 Metrics:   http://0.0.0.0:{port}/metrics")
     except Exception as e:
         print(f"❌ Health server failed to start: {e}")
+
+
+def _apply_startup_debug_env_aliases() -> None:
+    """Apply operator-friendly debug env aliases before lock acquisition."""
+    _fail_fast_singleton = os.environ.get("FAIL_FAST_SINGLETON", "").strip().lower()
+    if _fail_fast_singleton in ("0", "false", "no", "off"):
+        if "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE" not in os.environ:
+            os.environ["NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE"] = "true"
+        print(
+            "⚠️  Debug override: FAIL_FAST_SINGLETON=false -> "
+            "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=true",
+            flush=True,
+        )
+
+
+def _emit_boot_trace(stage: str, detail: str) -> None:
+    """Print an always-flushed boot marker for early startup debugging."""
+    print(f"{stage}: {detail}", flush=True)
+
+
+_apply_startup_debug_env_aliases()
+# Start health server BEFORE the writer-lock acquisition loop so Railway
+# health checks pass even while the bot is retrying Redis lock acquisition
+# in fail-closed standby (the bot is blocked at the lock gate, not the
+# trading engine — health/liveness must remain reachable throughout).
+_start_health_server()
+_acquire_process_lock()
+
 
 # Load .env and verify the result at runtime
 _dotenv_loaded = False
