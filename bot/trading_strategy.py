@@ -210,17 +210,24 @@ except ImportError:
 
 # Always Trade Mode — guaranteed minimum trade frequency, idle-capital prevention
 try:
-    from always_trade_mode import get_always_trade_mode
+    from always_trade_mode import (
+        get_always_trade_mode,
+        arm_trading_strategy_force_entry_path,
+    )
     ALWAYS_TRADE_MODE_AVAILABLE = True
     logger.debug("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
 except ImportError:
     try:
-        from bot.always_trade_mode import get_always_trade_mode
+        from bot.always_trade_mode import (
+            get_always_trade_mode,
+            arm_trading_strategy_force_entry_path,
+        )
         ALWAYS_TRADE_MODE_AVAILABLE = True
         logger.debug("✅ Always Trade Mode loaded — minimum trade frequency guaranteed")
     except ImportError:
         ALWAYS_TRADE_MODE_AVAILABLE = False
         get_always_trade_mode = None  # type: ignore
+        arm_trading_strategy_force_entry_path = None  # type: ignore
 
 # True Capital Scaling Engine — $94 → $1,000+ structured compounding
 try:
@@ -8688,18 +8695,8 @@ class TradingStrategy:
         Bridging the drought signal into the local flags ensures prolonged inactivity
         immediately activates the existing forced-entry relaxations in the live path too.
         """
-        if not getattr(self, "_first_trade_executed", False):
-            self._first_trade_force_active = True
-
-        _current_streak = int(getattr(self, "_zero_signal_streak", 0) or 0)
-        self._zero_signal_streak = max(_current_streak, FORCED_ENTRY_FALLBACK_CYCLES)
-
-        logger.warning(
-            "⚡ ALWAYS TRADE MODE: local force-entry path armed "
-            "(first_trade_force=%s, zero_signal_streak=%d)",
-            bool(getattr(self, "_first_trade_force_active", False)),
-            self._zero_signal_streak,
-        )
+        if arm_trading_strategy_force_entry_path is not None:
+            arm_trading_strategy_force_entry_path(self, FORCED_ENTRY_FALLBACK_CYCLES)
 
     def _mark_heartbeat_verified(self) -> None:
         """Persist heartbeat verification marker after successful heartbeat trade."""

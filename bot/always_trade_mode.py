@@ -323,6 +323,40 @@ class AlwaysTradeMode:
 
 
 # ---------------------------------------------------------------------------
+# TradingStrategy bridge helper
+# ---------------------------------------------------------------------------
+
+def arm_trading_strategy_force_entry_path(
+    strategy: object,
+    forced_entry_fallback_cycles: int,
+) -> None:
+    """
+    Bridge Always Trade Mode into ``TradingStrategy``'s local forced-entry path.
+
+    ``TradingStrategy`` owns the live scan / rank / execute loop, so raising only
+    ``bot.nija_core_loop.FORCE_NEXT_CYCLE`` can leave the active process idle.
+    This helper arms the local first-trade / drought fallback flags that the
+    live strategy loop already knows how to consume.
+    """
+    if not getattr(strategy, "_first_trade_executed", False):
+        setattr(strategy, "_first_trade_force_active", True)
+
+    _current_streak = int(getattr(strategy, "_zero_signal_streak", 0) or 0)
+    setattr(
+        strategy,
+        "_zero_signal_streak",
+        max(_current_streak, int(forced_entry_fallback_cycles)),
+    )
+
+    logger.warning(
+        "⚡ ALWAYS TRADE MODE: local force-entry path armed "
+        "(first_trade_force=%s, zero_signal_streak=%d)",
+        bool(getattr(strategy, "_first_trade_force_active", False)),
+        int(getattr(strategy, "_zero_signal_streak", 0) or 0),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Singleton
 # ---------------------------------------------------------------------------
 
