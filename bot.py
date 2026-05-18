@@ -2023,6 +2023,7 @@ _distributed_writer_lock_thread = None
 _running_in_degraded_mode = False  # True if bot runs without Redis distributed lock safety
 os.environ.setdefault("NIJA_WRITER_LEASE_ACQUIRED", "0")
 os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
+os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0")
 
 
 def _writer_lock_scope() -> str:
@@ -2110,6 +2111,7 @@ def _release_distributed_process_lock() -> None:
         _distributed_writer_fencing_token = 0
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
 
 
 def _release_nonce_writer_lease() -> None:
@@ -2158,16 +2160,38 @@ def _build_writer_lock_meta_payload(
 
 
 def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
-    """Keep the distributed writer lock alive; fail closed if ownership is lost."""
+    """Keep the distributed writer lock alive; fail closed if ownership is lost.
+
+    The heartbeat Lua script now returns three distinct codes:
+      1  — lock still held by this process and TTL successfully refreshed.
+     -1  — lock key was missing (expired due to transient Redis outage); safe
+            to re-acquire with NX because no other writer holds it.
+      0  — lock key held by a different token; another writer has taken over —
+            hard exit to preserve the single-writer invariant.
+
+    When the key is missing (-1) the heartbeat attempts a single NX SET to
+    re-acquire the lock with the original fencing token.  If that succeeds the
+    heartbeat continues transparently.  If another process wins the NX race the
+    heartbeat exits immediately (same as the wrong-token path).
+
+    ``NIJA_WRITER_HEARTBEAT_ALIVE_TS`` is updated on every loop iteration
+    (including failure iterations) so callers can detect a dead thread versus a
+    thread that is alive but temporarily unable to reach Redis.
+    """
     _interval = max(3, ttl_s // 3)
+    _now_ts = str(time.time())
     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
-    os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = str(time.time())
+    os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = _now_ts
+    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _now_ts
     try:
         _max_failures = max(3, int(os.environ.get("NIJA_WRITER_LOCK_HEARTBEAT_MAX_FAILURES", "12")))
     except (TypeError, ValueError):
         _max_failures = 12
     _failure_streak = 0
     while not _distributed_writer_lock_stop.wait(_interval):
+        # Update alive TS on every iteration so authority checks can distinguish
+        # "thread dead" from "thread alive but Redis temporarily unreachable".
+        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
         try:
             if _distributed_writer_lock_client is None:
                 raise RuntimeError("distributed writer lock client became None")
@@ -2176,7 +2200,7 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                 """
                 local current = redis.call('GET', KEYS[1])
                 if not current then
-                    return 0
+                    return -1
                 end
                 local sep = string.find(current, ':', 1, true)
                 local token = current
@@ -2204,8 +2228,67 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                     heartbeat_at=time.time(),
                 ),
             )
-            if int(_result or 0) != 1:
+            _result_code = int(_result or 0)
+            if _result_code == 1:
+                # Lock refreshed successfully.
+                _failure_streak = 0
+                os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = str(time.time())
+            elif _result_code == -1:
+                # Lock key is missing — it expired due to a transient Redis
+                # outage while the heartbeat was failing.  Attempt re-acquisition
+                # using the same fencing token and NX so the operation is atomic.
+                _reacquired = _distributed_writer_lock_client.set(
+                    _distributed_writer_lock_key,
+                    _distributed_writer_lock_token,
+                    ex=ttl_s,
+                    nx=True,
+                )
+                if _reacquired:
+                    try:
+                        _distributed_writer_lock_client.set(
+                            _distributed_writer_lock_meta_key,
+                            _build_writer_lock_meta_payload(
+                                _distributed_writer_fencing_token,
+                                current_instance_identity(),
+                                acquired_at=float(os.environ.get("NIJA_WRITER_LOCK_ACQUIRED_AT", "0") or 0.0),
+                                heartbeat_at=time.time(),
+                            ),
+                            ex=ttl_s,
+                        )
+                    except Exception:
+                        pass
+                    _failure_streak = 0
+                    _reacq_ts = str(time.time())
+                    os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = _reacq_ts
+                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _reacq_ts
+                    print(
+                        "⚠️ Distributed writer lock had expired (transient Redis outage); "
+                        "successfully re-acquired with same fencing token.",
+                        flush=True,
+                    )
+                    logger.warning(
+                        "WRITER LOCK RE-ACQUIRED: lock had expired (transient outage) and was "
+                        "re-acquired atomically. fencing_token=%s lock_key=%s",
+                        _distributed_writer_fencing_token,
+                        _distributed_writer_lock_key,
+                    )
+                else:
+                    # Another process acquired the lock while ours was expired.
+                    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+                    print(
+                        "\n🚫 Distributed writer lock expired and another process re-acquired it; "
+                        "exiting for safety.",
+                        flush=True,
+                    )
+                    _distributed_writer_lock_stop.set()
+                    _release_distributed_process_lock()
+                    os._exit(1)
+            else:
+                # _result_code == 0: lock is held by a different token — another
+                # writer has taken over.  Hard exit to preserve single-writer safety.
                 os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+                os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
                 print(
                     "\n🚫 Distributed single-writer lock lost; "
                     "another NIJA writer may be active. Exiting for safety.",
@@ -2214,8 +2297,6 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                 _distributed_writer_lock_stop.set()
                 _release_distributed_process_lock()
                 os._exit(1)
-            _failure_streak = 0
-            os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = str(time.time())
         except Exception as _hb_exc:
             _failure_streak += 1
             if _failure_streak == 1 or _failure_streak % 3 == 0:
@@ -2226,6 +2307,7 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                 )
             if _failure_streak >= _max_failures:
                 os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+                os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
                 print(
                     f"\n🚫 Distributed lock heartbeat failed {_failure_streak}x ({_hb_exc}); "
                     "exiting to preserve single-writer invariant.",
@@ -2235,6 +2317,7 @@ def _distributed_writer_lock_heartbeat(ttl_s: int) -> None:
                 _release_distributed_process_lock()
                 os._exit(1)
     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
 
 
 def _acquire_distributed_process_lock() -> None:
@@ -2247,7 +2330,7 @@ def _acquire_distributed_process_lock() -> None:
 
     os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
     os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
-
+    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
     _truthy = ("1", "true", "yes", "enabled", "on")
     _standby_retry_active = os.environ.get("NIJA_STANDBY_RETRY_ACTIVE", "0").strip() == "1"
     try:
