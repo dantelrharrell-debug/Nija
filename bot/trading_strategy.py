@@ -8679,6 +8679,28 @@ class TradingStrategy:
         except Exception:
             return False
 
+    def _activate_local_force_entry_path(self) -> None:
+        """
+        Arm the ``TradingStrategy`` drought / forced-entry path for this process.
+
+        Always Trade Mode already flips ``bot.nija_core_loop.FORCE_NEXT_CYCLE``, but the
+        live service primarily trades through ``TradingStrategy``'s own scan-and-rank loop.
+        Bridging the drought signal into the local flags ensures prolonged inactivity
+        immediately activates the existing forced-entry relaxations in the live path too.
+        """
+        if not getattr(self, "_first_trade_executed", False):
+            self._first_trade_force_active = True
+
+        _current_streak = int(getattr(self, "_zero_signal_streak", 0) or 0)
+        self._zero_signal_streak = max(_current_streak, FORCED_ENTRY_FALLBACK_CYCLES)
+
+        logger.warning(
+            "⚡ ALWAYS TRADE MODE: local force-entry path armed "
+            "(first_trade_force=%s, zero_signal_streak=%d)",
+            bool(getattr(self, "_first_trade_force_active", False)),
+            self._zero_signal_streak,
+        )
+
     def _mark_heartbeat_verified(self) -> None:
         """Persist heartbeat verification marker after successful heartbeat trade."""
         try:
@@ -8977,6 +8999,7 @@ class TradingStrategy:
                     last_trade_ts=_atm_last_trade if _atm_last_trade > 0 else None,
                 )
                 if _atm_decision.force_entry and not user_mode:
+                    self._activate_local_force_entry_path()
                     try:
                         import bot.nija_core_loop as _ncl_atm
                         _ncl_atm.FORCE_NEXT_CYCLE = True
