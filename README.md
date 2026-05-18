@@ -21,6 +21,17 @@
 
 > **NIJA defaults to DISABLED mode (safe state) until credentials and the live-trading flag are set.**
 
+## Formal verification contract
+
+NIJA's safety-critical startup, trading, capital, authority, nonce, and order
+dispatch flows are now documented in a machine-readable formal spec:
+
+- `bot/formal_state_machine_spec.py`
+- `FORMAL_STATE_MACHINE_SPEC.md`
+
+When changing any FSM, update both the implementation and the formal spec so
+transition graphs, invariants, and temporal validity rules stay aligned.
+
 ### 4-Step Setup
 
 ```bash
