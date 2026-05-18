@@ -3550,6 +3550,24 @@ def _release_process_lock() -> None:
         pass
 
 
+def _apply_startup_debug_env_aliases() -> None:
+    """Apply operator-friendly debug env aliases before lock acquisition."""
+    _fail_fast_singleton = os.environ.get("FAIL_FAST_SINGLETON", "").strip().lower()
+    if _fail_fast_singleton in ("0", "false", "no", "off"):
+        if "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE" not in os.environ:
+            os.environ["NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE"] = "true"
+        print(
+            "⚠️  Debug override: FAIL_FAST_SINGLETON=false -> "
+            "NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE=true",
+            flush=True,
+        )
+
+
+def _emit_boot_trace(stage: str, detail: str) -> None:
+    """Print an always-flushed boot marker for early startup debugging."""
+    print(f"{stage}: {detail}", flush=True)
+
+
 _health_server_started: bool = False
 
 
@@ -3727,6 +3745,7 @@ def _start_health_server():
         server = HTTPServer(("0.0.0.0", port), HealthHandler)
         t = threading.Thread(target=server.serve_forever, daemon=True, name="HealthServer")
         t.start()
+        _health_server_started = True
         print(f"🌐 Health server listening on port {port} (Railway-optimized)")
         print(f"   📍 Liveness:  http://0.0.0.0:{port}/health (ALWAYS returns 200 OK)")
         print(f"   📍 Readiness: http://0.0.0.0:{port}/ready")
@@ -3736,6 +3755,7 @@ def _start_health_server():
         print(f"❌ Health server failed to start: {e}")
 
 
+_apply_startup_debug_env_aliases()
 def _apply_startup_debug_env_aliases() -> None:
     """Apply operator-friendly debug env aliases before lock acquisition."""
     _fail_fast_singleton = os.environ.get("FAIL_FAST_SINGLETON", "").strip().lower()
