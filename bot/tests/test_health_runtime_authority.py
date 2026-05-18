@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from bot import readiness_table
 from bot.health_check import HealthCheckManager
@@ -43,7 +44,21 @@ class TestHealthRuntimeAuthority(unittest.TestCase):
         manager.mark_configuration_valid()
         manager.update_exchange_status(connected=1, expected=1)
 
-        status = manager.get_detailed_status()
+        class _DummyStateMachine:
+            def get_current_state(self):
+                class _State:
+                    value = "OFF"
+
+                return _State()
+
+            def can_dispatch_trades(self) -> bool:
+                return False
+
+        with patch(
+            "bot.trading_state_machine.get_state_machine",
+            return_value=_DummyStateMachine(),
+        ):
+            status = manager.get_detailed_status()
         runtime_authority = status["operational_state"]["runtime_authority"]
 
         self.assertEqual(runtime_authority["state"], RuntimeAuthorityState.AUTHORIZED.value)

@@ -48,8 +48,11 @@ class TestStartupCoordinator(unittest.TestCase):
         )
         blocked_decision = self.coordinator.evaluate_activation(blocked)
         self.assertFalse(blocked_decision.allowed)
-        self.assertEqual(blocked_decision.target_state, StartupCoordinatorState.DEGRADED_RETRY)
-        self.assertEqual(blocked.runtime_authority_state, RuntimeAuthorityState.DEGRADED.value)
+        self.assertEqual(
+            blocked_decision.target_state,
+            StartupCoordinatorState.ACTIVATION_CONVERGING,
+        )
+        self.assertEqual(blocked.runtime_authority_state, RuntimeAuthorityState.READY.value)
 
         self.coordinator.record_dispatch_health(ready=True, detail="execution pipeline healthy")
         self.coordinator.record_activation_requested(requested=True, source="test")
