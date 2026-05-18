@@ -233,7 +233,7 @@ class SignalFunnelDiagnostics:
         if extra:
             for k, v in extra.items():
                 parts.append(f"{k}={v}")
-        logger.info("REJECTED_SIGNAL: %s", " ".join(parts))
+        logger.warning("REJECTED_SIGNAL: %s", " ".join(parts))
 
     # ------------------------------------------------------------------
     # Shadow-paper tracking
