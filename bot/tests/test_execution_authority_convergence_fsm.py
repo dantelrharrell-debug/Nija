@@ -178,6 +178,23 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 snap = sm.get_execution_authority_snapshot(gates_ok=True)
                 self.assertTrue(snap["intent_present"])
 
+    def test_execution_snapshot_includes_runtime_authority_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "false",
+                    "DRY_RUN_MODE": "false",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                snap = sm.get_execution_authority_snapshot(gates_ok=True)
+                self.assertIn("runtime_authority_state", snap)
+                self.assertIn("runtime_authority_reason", snap)
+                self.assertIn("execution_permitted", snap)
+
 
 class TestRuntimeAuthorityRevocation(unittest.TestCase):
     def test_can_dispatch_revoked_when_writer_nonce_gate_fails(self) -> None:

@@ -58,6 +58,75 @@ class StartupCoordinatorState(str, Enum):
     RESTART_REQUIRED = "RESTART_REQUIRED"
 
 
+class RuntimeAuthorityState(str, Enum):
+    BOOT = "BOOT"
+    STANDBY = "STANDBY"
+    READY = "READY"
+    AUTHORIZED = "AUTHORIZED"
+    EXECUTING = "EXECUTING"
+    DEGRADED = "DEGRADED"
+
+
+_EARLY_BOOTSTRAP_STATES = frozenset(
+    {
+        "BOOT_INIT",
+        "LOCK_ACQUIRED",
+        "HEALTH_BOUND",
+        "ENV_VERIFIED",
+        "MODE_GATED",
+        "unknown",
+    }
+)
+
+_DEGRADED_BOOTSTRAP_STATES = frozenset(
+    {
+        "BOOT_FAILED_RETRY",
+        "EXTERNAL_RESTART_REQUIRED",
+    }
+)
+
+_RUNTIME_ALLOWED_TRANSITIONS = {
+    RuntimeAuthorityState.BOOT: {
+        RuntimeAuthorityState.STANDBY,
+        RuntimeAuthorityState.READY,
+        RuntimeAuthorityState.AUTHORIZED,
+        RuntimeAuthorityState.EXECUTING,
+        RuntimeAuthorityState.DEGRADED,
+    },
+    RuntimeAuthorityState.STANDBY: {
+        RuntimeAuthorityState.BOOT,
+        RuntimeAuthorityState.READY,
+        RuntimeAuthorityState.AUTHORIZED,
+        RuntimeAuthorityState.EXECUTING,
+        RuntimeAuthorityState.DEGRADED,
+    },
+    RuntimeAuthorityState.READY: {
+        RuntimeAuthorityState.STANDBY,
+        RuntimeAuthorityState.AUTHORIZED,
+        RuntimeAuthorityState.EXECUTING,
+        RuntimeAuthorityState.DEGRADED,
+    },
+    RuntimeAuthorityState.AUTHORIZED: {
+        RuntimeAuthorityState.READY,
+        RuntimeAuthorityState.EXECUTING,
+        RuntimeAuthorityState.DEGRADED,
+    },
+    RuntimeAuthorityState.EXECUTING: {
+        RuntimeAuthorityState.AUTHORIZED,
+        RuntimeAuthorityState.READY,
+        RuntimeAuthorityState.STANDBY,
+        RuntimeAuthorityState.DEGRADED,
+    },
+    RuntimeAuthorityState.DEGRADED: {
+        RuntimeAuthorityState.BOOT,
+        RuntimeAuthorityState.STANDBY,
+        RuntimeAuthorityState.READY,
+        RuntimeAuthorityState.AUTHORIZED,
+        RuntimeAuthorityState.EXECUTING,
+    },
+}
+
+
 @dataclass(frozen=True)
 class StartupConvergenceSnapshot:
     snapshot_version: int
@@ -86,10 +155,23 @@ class StartupConvergenceSnapshot:
     kill_switch_active: bool
     dispatch_enabled: bool
     last_committed_snapshot_version: int
+    runtime_authority_state: str
+    runtime_authority_reason: str
 
     @property
     def pending_readiness(self) -> list[str]:
         return sorted(key for key, value in self.readiness_table.items() if not value)
+
+    @property
+    def trading_authority(self) -> bool:
+        return self.runtime_authority_state in {
+            RuntimeAuthorityState.AUTHORIZED.value,
+            RuntimeAuthorityState.EXECUTING.value,
+        }
+
+    @property
+    def execution_permitted(self) -> bool:
+        return self.runtime_authority_state == RuntimeAuthorityState.EXECUTING.value
 
 
 @dataclass(frozen=True)
@@ -127,6 +209,8 @@ class _RuntimeState:
     kill_switch_active: bool = False
     dispatch_enabled: bool = False
     last_committed_snapshot_version: int = 0
+    runtime_authority_state: RuntimeAuthorityState = RuntimeAuthorityState.BOOT
+    runtime_authority_reason: str = "boot_init"
 
 
 class StartupCoordinator:
@@ -356,8 +440,132 @@ class StartupCoordinator:
                 {"active": self._runtime.kill_switch_active},
             )
 
+    def _reconcile_runtime_authority_locked(
+        self,
+        *,
+        trading_state: str,
+        activation_intent: bool,
+    ) -> tuple[RuntimeAuthorityState, str]:
+        bootstrap_state = str(self._runtime.bootstrap_state or "unknown")
+        capital_state = str(self._runtime.capital_state or "unknown")
+        trading_state = str(trading_state or "").strip() or "OFF"
+        activation_intent = bool(activation_intent or self._runtime.activation_requested)
+        pending_readiness = sorted(
+            key for key, value in self._runtime.readiness_table.items() if not value
+        )
+        prereqs_ready = bool(
+            bootstrap_state == "RUNNING_SUPERVISED"
+            and capital_state == "RUNNING"
+            and self._runtime.threads_launched > 0
+            and self._runtime.threads_confirmed_running
+            and self._runtime.capital_hydrated
+            and self._runtime.capital_balance is not None
+            and not self._runtime.capital_stale
+            and not pending_readiness
+        )
+        authority_converged = bool(
+            prereqs_ready
+            and activation_intent
+            and self._runtime.authority_ready
+            and self._runtime.nonce_ready
+            and self._runtime.dispatch_health_ready
+            and not self._runtime.kill_switch_active
+            and self._runtime.activation_epoch == self._runtime.authority_epoch
+        )
+        executing = bool(
+            authority_converged
+            and self._runtime.dispatch_enabled
+            and trading_state == "LIVE_ACTIVE"
+        )
+        severe_degradation = None
+        if self._runtime.kill_switch_active:
+            severe_degradation = "kill_switch_active"
+        elif trading_state == "EMERGENCY_STOP":
+            severe_degradation = "trading_state_emergency_stop"
+        elif bootstrap_state in _DEGRADED_BOOTSTRAP_STATES:
+            severe_degradation = f"bootstrap_state={bootstrap_state}"
+        elif self._runtime.coordinator_state in {
+            StartupCoordinatorState.FAIL_SAFE,
+            StartupCoordinatorState.RESTART_REQUIRED,
+            StartupCoordinatorState.DEGRADED_RETRY,
+        }:
+            severe_degradation = f"coordinator_state={self._runtime.coordinator_state.value}"
+        elif self._runtime.capital_stale:
+            severe_degradation = "capital_stale"
+        elif activation_intent and self._runtime.activation_epoch != self._runtime.authority_epoch:
+            severe_degradation = "authority_epoch_stale"
+        elif self._runtime.dispatch_enabled and not authority_converged:
+            severe_degradation = "dispatch_enabled_without_authority"
+        elif (
+            self._runtime.runtime_authority_state in {
+                RuntimeAuthorityState.AUTHORIZED,
+                RuntimeAuthorityState.EXECUTING,
+            }
+            and activation_intent
+            and not authority_converged
+        ):
+            severe_degradation = "authority_regressed"
+        elif self._runtime.runtime_authority_state == RuntimeAuthorityState.EXECUTING and not (
+            self._runtime.dispatch_enabled and trading_state == "LIVE_ACTIVE"
+        ):
+            severe_degradation = "execution_revoked"
+
+        if severe_degradation:
+            target_state = RuntimeAuthorityState.DEGRADED
+            reason = severe_degradation
+        elif bootstrap_state in _EARLY_BOOTSTRAP_STATES:
+            target_state = RuntimeAuthorityState.BOOT
+            reason = f"bootstrap_state={bootstrap_state}"
+        elif executing:
+            target_state = RuntimeAuthorityState.EXECUTING
+            reason = "dispatch_enabled"
+        elif authority_converged:
+            target_state = RuntimeAuthorityState.AUTHORIZED
+            reason = "authority_converged"
+        elif prereqs_ready:
+            target_state = RuntimeAuthorityState.READY
+            if not activation_intent:
+                reason = "activation_intent_missing"
+            elif not self._runtime.authority_ready:
+                reason = "authority_not_ready"
+            elif not self._runtime.nonce_ready:
+                reason = "nonce_not_ready"
+            elif not self._runtime.dispatch_health_ready:
+                reason = "dispatch_health_not_ready"
+            else:
+                reason = "awaiting_authority_convergence"
+        else:
+            target_state = RuntimeAuthorityState.STANDBY
+            if bootstrap_state != "RUNNING_SUPERVISED":
+                reason = f"bootstrap_state={bootstrap_state}"
+            elif capital_state != "RUNNING":
+                reason = f"capital_state={capital_state}"
+            elif self._runtime.threads_launched <= 0 or not self._runtime.threads_confirmed_running:
+                reason = "threads_not_running"
+            elif pending_readiness:
+                reason = f"readiness_pending={','.join(pending_readiness)}"
+            elif not self._runtime.capital_hydrated:
+                reason = "capital_not_hydrated"
+            elif self._runtime.capital_balance is None:
+                reason = "capital_balance_unknown"
+            else:
+                reason = "standing_by"
+
+        current = self._runtime.runtime_authority_state
+        if target_state != current and target_state not in _RUNTIME_ALLOWED_TRANSITIONS.get(current, set()):
+            target_state = RuntimeAuthorityState.DEGRADED
+            reason = f"invalid_transition={current.value}->{target_state.value}"
+
+        self._runtime.runtime_authority_state = target_state
+        self._runtime.runtime_authority_reason = reason
+        return target_state, reason
+
     def build_snapshot(self, *, trading_state: str, activation_intent: bool) -> StartupConvergenceSnapshot:
         with self._lock:
+            runtime_authority_state, runtime_authority_reason = self._reconcile_runtime_authority_locked(
+                trading_state=str(trading_state),
+                activation_intent=bool(activation_intent),
+            )
             return StartupConvergenceSnapshot(
                 snapshot_version=self._runtime.event_version,
                 coordinator_state=self._runtime.coordinator_state.value,
@@ -385,56 +593,33 @@ class StartupCoordinator:
                 kill_switch_active=self._runtime.kill_switch_active,
                 dispatch_enabled=self._runtime.dispatch_enabled,
                 last_committed_snapshot_version=self._runtime.last_committed_snapshot_version,
+                runtime_authority_state=runtime_authority_state.value,
+                runtime_authority_reason=runtime_authority_reason,
             )
 
     def evaluate_activation(self, snapshot: StartupConvergenceSnapshot) -> ActivationDecision:
         with self._lock:
-            if snapshot.dispatch_enabled and snapshot.last_committed_snapshot_version == snapshot.snapshot_version:
+            if snapshot.runtime_authority_state == RuntimeAuthorityState.EXECUTING.value:
                 self._runtime.coordinator_state = StartupCoordinatorState.DISPATCH_ENABLED
-                return ActivationDecision(True, StartupCoordinatorState.DISPATCH_ENABLED, "already_enabled", snapshot.snapshot_version)
+                return ActivationDecision(
+                    True,
+                    StartupCoordinatorState.DISPATCH_ENABLED,
+                    snapshot.runtime_authority_reason or "already_enabled",
+                    snapshot.snapshot_version,
+                )
 
-            if not snapshot.activation_intent:
-                target = StartupCoordinatorState.ACTIVATION_ARMED
-                reason = "activation_intent_missing"
-            elif snapshot.activation_epoch != snapshot.authority_epoch:
-                target = StartupCoordinatorState.DEGRADED_RETRY
-                reason = "authority_epoch_stale"
-            elif snapshot.kill_switch_active:
-                target = StartupCoordinatorState.FAIL_SAFE
-                reason = "kill_switch_active"
-            elif snapshot.bootstrap_state != "RUNNING_SUPERVISED":
-                target = StartupCoordinatorState.ACTIVATION_CONVERGING
-                reason = f"bootstrap_state={snapshot.bootstrap_state}"
-            elif snapshot.capital_state != "RUNNING":
-                target = StartupCoordinatorState.ACTIVATION_CONVERGING
-                reason = f"capital_state={snapshot.capital_state}"
-            elif snapshot.threads_launched <= 0 or not snapshot.threads_confirmed_running:
-                target = StartupCoordinatorState.ACTIVATION_CONVERGING
-                reason = "threads_not_running"
-            elif snapshot.pending_readiness:
-                target = StartupCoordinatorState.ACTIVATION_CONVERGING
-                reason = f"readiness_pending={','.join(snapshot.pending_readiness)}"
-            elif not snapshot.capital_hydrated:
-                target = StartupCoordinatorState.ACTIVATION_CONVERGING
-                reason = "capital_not_hydrated"
-            elif snapshot.capital_balance is None:
-                target = StartupCoordinatorState.ACTIVATION_CONVERGING
-                reason = "capital_balance_unknown"
-            elif snapshot.capital_stale:
-                target = StartupCoordinatorState.DEGRADED_RETRY
-                reason = "capital_stale"
-            elif not snapshot.authority_ready:
-                target = StartupCoordinatorState.DEGRADED_RETRY
-                reason = "authority_not_ready"
-            elif not snapshot.nonce_ready:
-                target = StartupCoordinatorState.DEGRADED_RETRY
-                reason = "nonce_not_ready"
-            elif not snapshot.dispatch_health_ready:
-                target = StartupCoordinatorState.DEGRADED_RETRY
-                reason = "dispatch_health_not_ready"
-            else:
+            if snapshot.runtime_authority_state == RuntimeAuthorityState.AUTHORIZED.value:
                 target = StartupCoordinatorState.DISPATCH_ENABLED
-                reason = "snapshot_converged"
+                reason = snapshot.runtime_authority_reason or "runtime_authorized"
+            elif snapshot.runtime_authority_state == RuntimeAuthorityState.DEGRADED.value:
+                target = StartupCoordinatorState.DEGRADED_RETRY
+                reason = snapshot.runtime_authority_reason or "runtime_degraded"
+            elif not snapshot.activation_intent:
+                target = StartupCoordinatorState.ACTIVATION_ARMED
+                reason = snapshot.runtime_authority_reason or "activation_intent_missing"
+            else:
+                target = StartupCoordinatorState.ACTIVATION_CONVERGING
+                reason = snapshot.runtime_authority_reason or "awaiting_runtime_authority"
 
             self._runtime.coordinator_state = target
             return ActivationDecision(target == StartupCoordinatorState.DISPATCH_ENABLED, target, reason, snapshot.snapshot_version)
@@ -481,5 +666,6 @@ __all__ = [
     "StartupCoordinator",
     "StartupCoordinatorState",
     "StartupEvent",
+    "RuntimeAuthorityState",
     "get_startup_coordinator",
 ]

@@ -58,6 +58,8 @@ class RuntimeAuthoritySnapshot:
     dispatch_enabled: bool
     kill_switch_active: bool
     coordinator_state: str
+    runtime_state: str
+    reason: str
 
 
 def _env_truthy(name: str) -> bool:
@@ -514,13 +516,7 @@ def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
             activation_intent=_env_truthy("LIVE_CAPITAL_VERIFIED")
             or _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY"),
         )
-        ready = bool(
-            snapshot.authority_ready
-            and snapshot.nonce_ready
-            and snapshot.dispatch_health_ready
-            and snapshot.dispatch_enabled
-            and not snapshot.kill_switch_active
-        )
+        ready = bool(snapshot.execution_permitted)
         return RuntimeAuthoritySnapshot(
             ready=ready,
             authority_ready=bool(snapshot.authority_ready),
@@ -529,6 +525,8 @@ def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
             dispatch_enabled=bool(snapshot.dispatch_enabled),
             kill_switch_active=bool(snapshot.kill_switch_active),
             coordinator_state=str(snapshot.coordinator_state),
+            runtime_state=str(snapshot.runtime_authority_state),
+            reason=str(snapshot.runtime_authority_reason),
         )
     except Exception as exc:
         logger.warning("Runtime authority snapshot unavailable; failing closed: %s", exc)
@@ -540,4 +538,6 @@ def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
             dispatch_enabled=False,
             kill_switch_active=False,
             coordinator_state="unavailable",
+            runtime_state="DEGRADED",
+            reason="runtime_authority_snapshot_unavailable",
         )

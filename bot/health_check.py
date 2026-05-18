@@ -596,6 +596,34 @@ class HealthCheckManager:
         except Exception as exc:
             runtime_mode_snapshot = {"error": str(exc)}
 
+        runtime_authority = {
+            "state": "DEGRADED",
+            "reason": "unavailable",
+            "trading_authority": False,
+            "execution_permitted": False,
+            "coordinator_state": None,
+            "snapshot_version": 0,
+        }
+        try:
+            try:
+                from bot.startup_coordinator import get_startup_coordinator
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+            coordinator_snapshot = get_startup_coordinator().build_snapshot(
+                trading_state=execution_gate.get("state_machine") or "",
+                activation_intent=bool(runtime_mode_snapshot.get("is_live")),
+            )
+            runtime_authority = {
+                "state": coordinator_snapshot.runtime_authority_state,
+                "reason": coordinator_snapshot.runtime_authority_reason,
+                "trading_authority": coordinator_snapshot.trading_authority,
+                "execution_permitted": coordinator_snapshot.execution_permitted,
+                "coordinator_state": coordinator_snapshot.coordinator_state,
+                "snapshot_version": coordinator_snapshot.snapshot_version,
+            }
+        except Exception as exc:
+            runtime_authority["reason"] = f"unavailable ({exc})"
+
         runtime_env_flags = {
             "LIVE_CAPITAL_VERIFIED": os.getenv("LIVE_CAPITAL_VERIFIED", "false"),
             "LIVE_TRADING": os.getenv("LIVE_TRADING", "false"),
@@ -618,6 +646,7 @@ class HealthCheckManager:
                 "error_count": self.state.error_count,
                 "uptime_seconds": self.state.uptime_seconds,
                 "execution_gate": execution_gate,
+                "runtime_authority": runtime_authority,
                 "runtime_mode": runtime_mode_snapshot,
                 "runtime_env_flags": runtime_env_flags,
             },
