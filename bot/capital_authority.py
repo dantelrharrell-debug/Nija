@@ -383,6 +383,66 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
+def _get_kraken_nonce_rebuild_cooldown_remaining_s() -> float:
+    """Return seconds remaining in the Kraken nonce-manager rebuild cooldown.
+
+    Wraps :func:`~bot.global_kraken_nonce.get_nonce_rebuild_cooldown_remaining_s`
+    with a graceful import fallback so the capital authority never hard-fails
+    when the nonce module is unavailable (e.g. in unit-test environments that
+    stub the broker map).
+
+    Returns
+    -------
+    float
+        Seconds remaining in the cooldown window, or ``0.0`` when the cooldown
+        has elapsed, no rebuild has failed yet, or the module is unavailable.
+    """
+    try:
+        try:
+            from bot.global_kraken_nonce import get_nonce_rebuild_cooldown_remaining_s
+        except ImportError:
+            from global_kraken_nonce import get_nonce_rebuild_cooldown_remaining_s  # type: ignore[import]
+        return float(get_nonce_rebuild_cooldown_remaining_s())
+    except Exception:
+        return 0.0
+
+
+def _get_nonce_rebuild_cooldown_seconds_from_exception(error: BaseException) -> float:
+    """Return the cooldown duration from a nonce-manager rebuild cooldown exception.
+
+    Detects the two canonical message patterns emitted by
+    ``global_kraken_nonce._ensure_live_manager`` when a rebuild is suppressed:
+
+    * ``"retry suppressed for <N>s cooldown"`` (rebuild retry cooldown active)
+    * ``"retry cooldown <N>s activated"`` (rebuild just failed, cooldown starts)
+
+    Returns the cooldown seconds from the error message, or ``0.0`` when the
+    exception is not a nonce rebuild cooldown (i.e. a real connectivity failure).
+    """
+    import re as _re
+
+    current: Optional[BaseException] = error
+    seen: set = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).lower()
+        if "krakennoncemanager singleton was destroyed" in message:
+            m = _re.search(r"retry suppressed for ([0-9]+(?:\.[0-9]+)?)s", message)
+            if m:
+                try:
+                    return max(0.0, float(m.group(1)))
+                except Exception:
+                    return 0.0
+            m = _re.search(r"retry cooldown ([0-9]+(?:\.[0-9]+)?)s activated", message)
+            if m:
+                try:
+                    return max(0.0, float(m.group(1)))
+                except Exception:
+                    return 0.0
+        current = current.__cause__ or current.__context__  # type: ignore[assignment]
+    return 0.0
+
+
 # ---------------------------------------------------------------------------
 # Public classes
 # ---------------------------------------------------------------------------
@@ -1057,29 +1117,76 @@ class CapitalAuthority:
                         broker_id,
                         balance,
                     )
-                elif can_preserve_previous:
-                    # Hard capital-truth contract: never let a transient zero read
-                    # wipe an already-validated non-zero balance snapshot.
-                    new_balances[broker_key] = previous
-                    logger.warning(
-                        "[CapitalAuthority] broker=%s returned non-positive balance (%.2f) — "
-                        "preserving previous non-zero balance=$%.2f",
-                        broker_id,
-                        balance,
-                        previous,
-                    )
                 else:
-                    # FIX 3: store zero instead of skipping — zero is a valid
-                    # confirmed balance (empty account is not an error).  This
-                    # ensures the broker appears in the snapshot so that
-                    # is_hydrated / CAPITAL_HYDRATED_EVENT fire correctly.
-                    new_balances[broker_key] = 0.0
-                    logger.debug(
-                        "[CapitalAuthority] broker=%s confirmed at $0.00 — stored as zero balance",
-                        broker_id,
-                    )
+                    # Recovery-aware zero-balance path: check whether the zero
+                    # return is due to a bounded Kraken nonce rebuild cooldown
+                    # rather than a genuine empty-account or connectivity failure.
+                    _cooldown_s = _get_kraken_nonce_rebuild_cooldown_remaining_s()
+                    if _cooldown_s > 0.0 and previous > 0.0:
+                        # The nonce manager is in a controlled rebuild cooldown.
+                        # Preserve the CA's own cached balance unconditionally —
+                        # this is a known-temporary recovery window, not a
+                        # connectivity failure.
+                        new_balances[broker_key] = previous
+                        logger.warning(
+                            "[CapitalAuthority] broker=%s nonce-rebuild cooldown active "
+                            "(%.1fs remaining) — balance returned $%.2f; "
+                            "preserving CA-cached balance=$%.2f (recovery-aware, "
+                            "not a connectivity failure)",
+                            broker_id,
+                            _cooldown_s,
+                            balance,
+                            previous,
+                        )
+                    elif can_preserve_previous:
+                        # Hard capital-truth contract: never let a transient zero read
+                        # wipe an already-validated non-zero balance snapshot.
+                        new_balances[broker_key] = previous
+                        logger.warning(
+                            "[CapitalAuthority] broker=%s returned non-positive balance (%.2f) — "
+                            "preserving previous non-zero balance=$%.2f",
+                            broker_id,
+                            balance,
+                            previous,
+                        )
+                    else:
+                        # FIX 3: store zero instead of skipping — zero is a valid
+                        # confirmed balance (empty account is not an error).  This
+                        # ensures the broker appears in the snapshot so that
+                        # is_hydrated / CAPITAL_HYDRATED_EVENT fire correctly.
+                        new_balances[broker_key] = 0.0
+                        logger.debug(
+                            "[CapitalAuthority] broker=%s confirmed at $0.00 — stored as zero balance",
+                            broker_id,
+                        )
             except Exception as exc:
-                if can_preserve_previous:
+                # Recovery-aware exception path: distinguish nonce rebuild cooldown
+                # exceptions (bounded, temporary) from real connectivity failures.
+                _exc_cooldown_s = _get_nonce_rebuild_cooldown_seconds_from_exception(exc)
+                if _exc_cooldown_s > 0.0:
+                    if previous > 0.0:
+                        # Known recovery window — preserve CA-cached balance
+                        # unconditionally without counting as an API failure.
+                        new_balances[broker_key] = previous
+                        logger.warning(
+                            "[CapitalAuthority] broker=%s nonce-rebuild cooldown active "
+                            "(%.1fs remaining) — exception: %s; "
+                            "preserving CA-cached balance=$%.2f (recovery-aware)",
+                            broker_id,
+                            _exc_cooldown_s,
+                            exc,
+                            previous,
+                        )
+                    else:
+                        logger.warning(
+                            "[CapitalAuthority] broker=%s nonce-rebuild cooldown active "
+                            "(%.1fs remaining) — exception: %s; "
+                            "no CA-cached balance to preserve; broker excluded until cooldown clears",
+                            broker_id,
+                            _exc_cooldown_s,
+                            exc,
+                        )
+                elif can_preserve_previous:
                     # Contract fail-closed path: retain last known good capital on
                     # fetch errors to avoid phantom-zero state transitions.
                     new_balances[broker_key] = previous
