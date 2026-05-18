@@ -165,6 +165,8 @@ class TestGlobalKrakenNonceRecovery(unittest.TestCase):
             gkn, "rebuild_nonce_manager", side_effect=RuntimeError("boom")
         ), patch.object(gkn, "_last_rebuild_failure_monotonic", 0.0), patch.object(
             gkn, "_last_rebuild_failure_error", None
+        ), patch.object(gkn, "_consecutive_rebuild_failures", 0), patch.object(
+            gkn, "_last_rebuild_cooldown_diag_monotonic", 0.0
         ):
             with self.assertRaises(RuntimeError) as ctx:
                 gkn._ensure_live_manager()
@@ -180,6 +182,10 @@ class TestGlobalKrakenNonceRecovery(unittest.TestCase):
         ), patch.object(
             gkn, "_last_rebuild_failure_error", None
         ), patch.object(
+            gkn, "_consecutive_rebuild_failures", 0
+        ), patch.object(
+            gkn, "_last_rebuild_cooldown_diag_monotonic", 0.0
+        ), patch.object(
             gkn, "time"
         ) as mocked_time, patch.object(
             gkn, "rebuild_nonce_manager", side_effect=RuntimeError("boom")
@@ -193,6 +199,84 @@ class TestGlobalKrakenNonceRecovery(unittest.TestCase):
                 gkn._ensure_live_manager()
             self.assertIn("retry suppressed", str(second.exception).lower())
             self.assertEqual(rebuild.call_count, 1)
+
+    def test_ensure_live_manager_increments_consecutive_failure_counter(self) -> None:
+        """Each rebuild failure increments _consecutive_rebuild_failures."""
+        with patch.object(gkn, "_NONCE_ISSUANCE_AUTHORIZED", True), patch.object(
+            gkn.KrakenNonceManager, "_instance", None
+        ), patch.object(gkn, "_wait_for_probe_window", return_value=True), patch.object(
+            gkn, "_REBUILD_RETRY_COOLDOWN_S", 0.0
+        ), patch.object(gkn, "_last_rebuild_failure_monotonic", 0.0), patch.object(
+            gkn, "_last_rebuild_failure_error", None
+        ), patch.object(gkn, "_last_rebuild_cooldown_diag_monotonic", 0.0), patch.object(
+            gkn, "rebuild_nonce_manager", side_effect=RuntimeError("fail")
+        ):
+            for expected in range(1, 4):
+                with self.assertRaises(RuntimeError):
+                    gkn._ensure_live_manager()
+                self.assertEqual(gkn._consecutive_rebuild_failures, expected)
+
+    def test_ensure_live_manager_resets_counter_on_success(self) -> None:
+        """A successful rebuild resets _consecutive_rebuild_failures to 0."""
+        replacement_mgr = object()
+        with patch.object(gkn, "_NONCE_ISSUANCE_AUTHORIZED", True), patch.object(
+            gkn.KrakenNonceManager, "_instance", None
+        ), patch.object(gkn, "_nonce_manager", None), patch.object(
+            gkn, "_wait_for_probe_window", return_value=True
+        ), patch.object(gkn, "_REBUILD_RETRY_COOLDOWN_S", 0.0), patch.object(
+            gkn, "_last_rebuild_failure_monotonic", 0.0
+        ), patch.object(gkn, "_last_rebuild_failure_error", None), patch.object(
+            gkn, "_last_rebuild_cooldown_diag_monotonic", 0.0
+        ), patch.object(
+            gkn, "rebuild_nonce_manager", return_value=replacement_mgr
+        ):
+            # Seed a non-zero count to verify reset.
+            gkn._consecutive_rebuild_failures = 5
+            gkn._ensure_live_manager()
+            self.assertEqual(gkn._consecutive_rebuild_failures, 0)
+
+    def test_ensure_live_manager_logs_error_on_rebuild_failure(self) -> None:
+        """The actual exception must be logged (not silently swallowed) when rebuild fails."""
+        with patch.object(gkn, "_NONCE_ISSUANCE_AUTHORIZED", True), patch.object(
+            gkn.KrakenNonceManager, "_instance", None
+        ), patch.object(gkn, "_wait_for_probe_window", return_value=True), patch.object(
+            gkn, "_REBUILD_RETRY_COOLDOWN_S", 0.0
+        ), patch.object(gkn, "_last_rebuild_failure_monotonic", 0.0), patch.object(
+            gkn, "_last_rebuild_failure_error", None
+        ), patch.object(gkn, "_consecutive_rebuild_failures", 0), patch.object(
+            gkn, "_last_rebuild_cooldown_diag_monotonic", 0.0
+        ), patch.object(
+            gkn, "rebuild_nonce_manager", side_effect=RuntimeError("auth_failure_detail")
+        ), patch.object(gkn._logger, "error") as mock_error:
+            with self.assertRaises(RuntimeError):
+                gkn._ensure_live_manager()
+        # The actual exception message must appear in the error log.
+        logged_args = " ".join(str(a) for call in mock_error.call_args_list for a in call.args)
+        self.assertIn("auth_failure_detail", logged_args)
+
+    def test_ensure_live_manager_logs_credential_hint_after_repeated_failures(self) -> None:
+        """After 3+ failures with an auth-related message, a credential hint is logged."""
+        with patch.object(gkn, "_NONCE_ISSUANCE_AUTHORIZED", True), patch.object(
+            gkn.KrakenNonceManager, "_instance", None
+        ), patch.object(gkn, "_wait_for_probe_window", return_value=True), patch.object(
+            gkn, "_REBUILD_RETRY_COOLDOWN_S", 0.0
+        ), patch.object(gkn, "_last_rebuild_failure_monotonic", 0.0), patch.object(
+            gkn, "_last_rebuild_failure_error", None
+        ), patch.object(gkn, "_consecutive_rebuild_failures", 2), patch.object(
+            gkn, "_last_rebuild_cooldown_diag_monotonic", 0.0
+        ), patch.object(
+            gkn, "rebuild_nonce_manager",
+            side_effect=RuntimeError("EAPI:Invalid key — check credentials"),
+        ), patch.object(gkn._logger, "error") as mock_error:
+            with self.assertRaises(RuntimeError):
+                gkn._ensure_live_manager()
+        logged_args = " ".join(str(a) for call in mock_error.call_args_list for a in call.args)
+        self.assertIn("KRAKEN_PLATFORM_API_KEY", logged_args)
+
+    def test_get_consecutive_rebuild_failures_returns_counter(self) -> None:
+        gkn._consecutive_rebuild_failures = 7
+        self.assertEqual(gkn.get_consecutive_rebuild_failures(), 7)
+        gkn._consecutive_rebuild_failures = 0
 
 
 if __name__ == "__main__":
