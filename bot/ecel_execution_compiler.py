@@ -575,6 +575,21 @@ class ECELExecutionCompiler:
                                 desired_notional_usd=req.desired_notional_usd)
 
         # ---------------------------------------------------------------------------
+        # Diagnostic: emit a WARNING when the available balance is below the minimum
+        # notional required by the exchange — this would produce DUST_ORDER / BELOW_MIN_NOTIONAL
+        # rejections further down the compile path.
+        # ---------------------------------------------------------------------------
+        if req.available_balance_usd is not None:
+            if req.available_balance_usd < rule.min_notional_usd:
+                logger.warning(
+                    "ECEL_BALANCE_BELOW_MIN broker=%s symbol=%s "
+                    "available_balance=%.4f USD min_notional=%.2f USD "
+                    "— order will be rejected; top up account or increase size",
+                    broker, symbol,
+                    req.available_balance_usd, rule.min_notional_usd,
+                )
+
+        # ---------------------------------------------------------------------------
         # Step 1: Establish working notional (at least min notional)
         # ---------------------------------------------------------------------------
         compiled_notional = float(max(desired_notional, self._to_decimal(rule.min_notional_usd)))

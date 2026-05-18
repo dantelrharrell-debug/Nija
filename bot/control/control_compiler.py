@@ -55,11 +55,18 @@ logger = logging.getLogger("nija.control.compiler")
 
 _CONTROL_ENABLED: bool = os.getenv("NIJA_CONTROL_ENABLED", "true").lower() == "true"
 
+# Per-strategy minimum confidence floors.
+# NIJA_DIAG_CONFIDENCE_FLOOR overrides all per-strategy floors when set, allowing
+# a temporary diagnostic mode to confirm signals reach the execution layer.
+_DIAG_CONFIDENCE_FLOOR: float = float(os.getenv("NIJA_DIAG_CONFIDENCE_FLOOR", "0.0"))
 _MIN_CONFIDENCE: Dict[str, float] = {
     "scalp":   float(os.getenv("NIJA_MIN_CONFIDENCE_SCALP",   "0.30")),
-    "swing":   float(os.getenv("NIJA_MIN_CONFIDENCE_SWING",   "0.65")),
+    "swing":   float(os.getenv("NIJA_MIN_CONFIDENCE_SWING",   "0.50")),  # lowered from 0.65
     "default": float(os.getenv("NIJA_MIN_CONFIDENCE_DEFAULT", "0.25")),
 }
+# When a diagnostic override is active, apply it to every strategy bucket
+if _DIAG_CONFIDENCE_FLOOR > 0.0:
+    _MIN_CONFIDENCE = {k: min(v, _DIAG_CONFIDENCE_FLOOR) for k, v in _MIN_CONFIDENCE.items()}
 
 _SIGNAL_REDIS_TTL: int = int(os.getenv("NIJA_SIGNAL_REDIS_TTL_SECONDS", "3600"))
 
@@ -195,6 +202,10 @@ class ControlCompiler:
             notes.append(f"schema_invalid:{reason}")
             self._record(accepted=False)
             self._store_audit(raw, None, notes)
+            logger.warning(
+                "COMPILER_REJECT symbol=%s action=%s strategy=%s stage=schema reason=%s",
+                raw.symbol, raw.action, raw.strategy or "?", reason,
+            )
             return None, notes
 
         # 2. Confidence validation
@@ -203,6 +214,10 @@ class ControlCompiler:
             notes.append(f"confidence_invalid:{reason}")
             self._record(accepted=False)
             self._store_audit(raw, None, notes)
+            logger.warning(
+                "COMPILER_REJECT symbol=%s action=%s confidence=%.3f strategy=%s stage=confidence reason=%s",
+                raw.symbol, raw.action, raw.confidence, raw.strategy or "?", reason,
+            )
             return None, notes
 
         # 3. Regime compatibility
@@ -211,6 +226,10 @@ class ControlCompiler:
             notes.append(f"regime_incompatible:{reason}")
             self._record(accepted=False)
             self._store_audit(raw, None, notes)
+            logger.warning(
+                "COMPILER_REJECT symbol=%s action=%s regime=%s strategy=%s stage=regime reason=%s",
+                raw.symbol, raw.action, raw.regime or "?", raw.strategy or "?", reason,
+            )
             return None, notes
 
         # 4. Position sizing
@@ -223,12 +242,21 @@ class ControlCompiler:
             notes.append("not_approved:execution_blocked")
             self._record(accepted=False)
             self._store_audit(raw, None, notes)
+            logger.warning(
+                "COMPILER_REJECT symbol=%s action=%s stage=approval reason=approved_flag_false",
+                raw.symbol, raw.action,
+            )
             return None, notes
 
         # Build compiled signal
         compiled = self._build_compiled(raw, sized_usd, notes)
         self._record(accepted=True)
         self._store_audit(raw, compiled, notes)
+        logger.info(
+            "COMPILER_ACCEPT symbol=%s action=%s side=%s size_usd=%.2f confidence=%.3f regime=%s strategy=%s",
+            compiled.symbol, compiled.action, compiled.side, compiled.size_usd,
+            compiled.confidence, compiled.regime, compiled.strategy or "?",
+        )
         return compiled, notes
 
     def compile_dict(

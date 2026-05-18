@@ -391,6 +391,54 @@ class MarketDataEngine:
             "symbols": health,
         }
 
+    def verify_feed_heartbeat(self) -> Dict[str, Any]:
+        """
+        Check whether the live market feed is delivering data.
+
+        Logs a WARNING for each stale symbol and a summary WARNING when ALL
+        symbols are stale (which indicates a complete feed outage).
+
+        Returns a dict with keys:
+          ``all_stale`` — True when every registered symbol is stale.
+          ``stale``     — list of stale symbol names.
+          ``live``      — list of live (fresh) symbol names.
+        """
+        health = self.get_health()
+        symbols = health.get("symbols", {})
+        stale: List[str] = []
+        live: List[str] = []
+
+        for sym, info in symbols.items():
+            if info.get("is_stale"):
+                last_bar_utc = info.get("last_bar_utc") or "never"
+                logger.warning(
+                    "MARKET_FEED_STALE symbol=%s last_bar=%s",
+                    sym, last_bar_utc,
+                )
+                stale.append(sym)
+            else:
+                live.append(sym)
+
+        all_stale = bool(symbols) and not live
+        if all_stale:
+            logger.warning(
+                "MARKET_FEED_OUTAGE all %d registered symbols are stale — "
+                "check data source connectivity",
+                len(symbols),
+            )
+        elif not symbols:
+            logger.warning(
+                "MARKET_FEED_EMPTY no symbols registered in MarketDataEngine — "
+                "feed has not been seeded yet",
+            )
+        else:
+            logger.debug(
+                "MARKET_FEED_HEARTBEAT live=%d stale=%d",
+                len(live), len(stale),
+            )
+
+        return {"all_stale": all_stale, "stale": stale, "live": live}
+
     def get_summary(self) -> Dict[str, Any]:
         """Return a concise summary of engine state."""
         with self._lock:
