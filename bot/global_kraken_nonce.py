@@ -3173,6 +3173,28 @@ def is_kraken_key_invalidated() -> bool:
     return _ensure_live_manager().is_key_invalidated
 
 
+def get_nonce_rebuild_cooldown_remaining_s() -> float:
+    """Return seconds remaining in the nonce-manager rebuild retry cooldown.
+
+    After a :func:`rebuild_nonce_manager` failure, ``_ensure_live_manager``
+    suppresses further rebuild attempts for ``_REBUILD_RETRY_COOLDOWN_S``
+    seconds (default 30 s, env ``NIJA_NONCE_REBUILD_RETRY_COOLDOWN_S``).
+    This is a bounded, deterministic recovery window — not a connectivity
+    failure.
+
+    Returns
+    -------
+    float
+        Seconds remaining in the cooldown window, or ``0.0`` when no
+        cooldown is active (either no rebuild has failed yet, or the
+        cooldown has elapsed).
+    """
+    if _last_rebuild_failure_monotonic <= 0.0:
+        return 0.0
+    remaining = _REBUILD_RETRY_COOLDOWN_S - (time.monotonic() - _last_rebuild_failure_monotonic)
+    return max(0.0, remaining)
+
+
 __all__ = [
     "KrakenNonceManager",
     "NonceManager",
@@ -3202,6 +3224,7 @@ __all__ = [
     "is_nonce_trading_paused",
     "is_kraken_key_invalidated",
     "get_nonce_pause_remaining",
+    "get_nonce_rebuild_cooldown_remaining_s",
     "cleanup_legacy_nonce_files",
     "check_ntp_sync",
     "log_ntp_clock_status",
