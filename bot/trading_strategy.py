@@ -14,9 +14,9 @@ Version: 7.1
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
 import threading
 import time
 from pathlib import Path
@@ -498,6 +498,7 @@ class TradingStrategy:
                 metadata={"reason": "HEARTBEAT_TRADE"},
             )
             buy_status = (buy_result or {}).get("status", "error")
+            buy_order_id = (buy_result or {}).get("order_id")
             buy_submitted = bool(buy_result)
             buy_submitted = buy_submitted and str(buy_status).lower().strip() not in {
                 "error",
@@ -668,6 +669,27 @@ class TradingStrategy:
                 "verified_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "details": dict(details or {}),
             }
+            deployment_id = (
+                os.environ.get("NIJA_DEPLOYMENT_ID")
+                or os.environ.get("RAILWAY_DEPLOYMENT_ID")
+                or os.environ.get("RAILWAY_DEPLOYMENT_INSTANCE_ID")
+                or ""
+            )
+            lease_generation_raw = (
+                os.environ.get("NIJA_WRITER_LEASE_GENERATION")
+                or os.environ.get("NIJA_WRITER_FENCING_TOKEN")
+                or "0"
+            )
+            nonce_epoch_raw = os.environ.get("NIJA_NONCE_EPOCH", "0")
+            try:
+                payload["lease_generation"] = int(str(lease_generation_raw).strip())
+            except (TypeError, ValueError):
+                payload["lease_generation"] = 0
+            try:
+                payload["nonce_epoch"] = int(str(nonce_epoch_raw).strip() or "0")
+            except (TypeError, ValueError):
+                payload["nonce_epoch"] = 0
+            payload["deployment_id"] = deployment_id
             marker.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
             logger.info(
                 "[HeartbeatTrade] marker_written path=%s stage=%s",

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -409,6 +409,57 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
                     "HEARTBEAT_TRADE": "true",
                     "HEARTBEAT_MARKER_PATH": marker_path,
                     "HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
+
+    def test_commit_activation_blocks_when_required_stage_not_met(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "order-verify-heartbeat.flag")
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                marker_file.write(
+                    json.dumps(
+                        {
+                            "verified": True,
+                            "version": 2,
+                            "stage": "ORDER_VERIFY",
+                            "verified_at_epoch": time.time(),
+                        }
+                    )
+                )
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "HEARTBEAT_VERIFICATION_REQUIRED_STAGE": "FILL_VERIFY",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
+
+    def test_commit_activation_blocks_when_legacy_marker_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "legacy-heartbeat.flag")
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                marker_file.write("verified")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
                 },
                 clear=False,
             ):

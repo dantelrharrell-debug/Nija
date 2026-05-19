@@ -93,21 +93,24 @@ except ImportError:
 
 try:
     from bot.execution_authority_context import (
-        has_execution_authority,
-        assert_distributed_writer_authority,
+        can_execute,
+        ExecutionBlocked,
     )
 except ImportError:
     try:
         from execution_authority_context import (  # type: ignore[import]
-            has_execution_authority,
-            assert_distributed_writer_authority,
+            can_execute,
+            ExecutionBlocked,
         )
     except ImportError:
-        def has_execution_authority() -> bool:
-            return False
+        def can_execute():
+            class _Decision:
+                allowed = False
+                reason = "execution_authority_unavailable"
+            return _Decision()
 
-        def assert_distributed_writer_authority() -> None:
-            return
+        class ExecutionBlocked(RuntimeError):
+            pass
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -629,28 +632,15 @@ def _reject_if_unauthorized_order_submit(
         except Exception:
             pass
 
-    try:
-        assert_distributed_writer_authority()
-    except Exception as exc:
-        _emit_rejection_telemetry("distributed_writer_fence")
-        logger.critical(
-            "🔒 Distributed writer fence violation | broker=%s symbol=%s side=%s qty=%s err=%s",
-            broker_name,
-            symbol,
-            side,
-            quantity,
-            exc,
-        )
-        raise RuntimeError(f"FATAL: Distributed writer fence violation: {exc}") from exc
-
-    if has_execution_authority():
+    decision = can_execute()
+    if decision.allowed:
         return None
 
     msg = (
-        "Execution authority violation: broker order submission must originate "
-        "from ExecutionPipeline"
+        "Execution authority violation: broker order submission blocked "
+        f"(reason={decision.reason})"
     )
-    _emit_rejection_telemetry("execution_authority_violation")
+    _emit_rejection_telemetry("execution_authority_blocked")
     logger.critical(
         "🔒 %s | broker=%s symbol=%s side=%s qty=%s",
         msg,
@@ -659,7 +649,7 @@ def _reject_if_unauthorized_order_submit(
         side,
         quantity,
     )
-    raise RuntimeError("FATAL: Order bypassed ECEL")
+    raise ExecutionBlocked(f"FATAL: {msg}")
 
 # ── Optional: entry price store (local truth for entry prices) ─────────────
 try:

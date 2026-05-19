@@ -452,6 +452,7 @@ class _PerKeyRedisBackend:
     _LEASE_VERSION_PREFIX = "nija:kraken:writer:lease_version:"
     _LEASE_VERSION_COUNTER_PREFIX = "nija:kraken:writer:version_counter:"
     _LEASE_FINGERPRINT_PREFIX = "nija:kraken:writer:fingerprint:"
+    _LEASE_GENERATION_KEY = "nija:lease:generation"
 
     # Lua scripts execute atomically on Redis; internal read/write sequences do not interleave.
     # Renewal logic is duplicated across lease scripts to keep each Lua script self-contained.
@@ -460,13 +461,15 @@ class _PerKeyRedisBackend:
         local version_key = KEYS[2]
         local counter_key = KEYS[3]
         local fingerprint_key = KEYS[4]
+        local generation_key = KEYS[5]
         local owner = ARGV[1]
         local ttl = tonumber(ARGV[2])
         local fingerprint = ARGV[3]
 
         local current_owner = redis.call('GET', owner_key)
         if not current_owner then
-            local version = redis.call('INCR', counter_key)
+            local version = redis.call('INCR', generation_key)
+            redis.call('SET', counter_key, tostring(version))
             redis.call('SET', owner_key, owner, 'PX', ttl)
             redis.call('SET', version_key, tostring(version), 'PX', ttl)
             redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl)
@@ -481,6 +484,11 @@ class _PerKeyRedisBackend:
                     version = 0
                 else
                     version = tonumber(redis.call('GET', counter_key)) or 0
+                end
+                local generation_version = tonumber(redis.call('GET', generation_key))
+                if generation_version and generation_version > version then
+                    version = generation_version
+                    redis.call('SET', counter_key, tostring(version))
                 end
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
                 if not set_ok then
@@ -535,6 +543,7 @@ class _PerKeyRedisBackend:
         local version_key = KEYS[2]
         local counter_key = KEYS[3]
         local fingerprint_key = KEYS[4]
+        local generation_key = KEYS[5]
         local owner = ARGV[1]
         local ttl = tonumber(ARGV[2])
         local fingerprint = ARGV[3]
@@ -549,6 +558,11 @@ class _PerKeyRedisBackend:
                     version = 0
                 else
                     version = tonumber(redis.call('GET', counter_key)) or 0
+                end
+                local generation_version = tonumber(redis.call('GET', generation_key))
+                if generation_version and generation_version > version then
+                    version = generation_version
+                    redis.call('SET', counter_key, tostring(version))
                 end
                 local set_ok = redis.call('SET', version_key, tostring(version), 'PX', ttl, 'NX')
                 if not set_ok then
@@ -580,7 +594,8 @@ class _PerKeyRedisBackend:
             return {0, current_version, current_owner}
         end
 
-        local version = redis.call('INCR', counter_key)
+        local version = redis.call('INCR', generation_key)
+        redis.call('SET', counter_key, tostring(version))
         redis.call('SET', owner_key, owner, 'PX', ttl)
         redis.call('SET', version_key, tostring(version), 'PX', ttl)
         redis.call('SET', fingerprint_key, fingerprint, 'PX', ttl)
@@ -772,6 +787,7 @@ class _PerKeyRedisBackend:
     def _publish_lock_acquired_state(self, lease_version: int) -> None:
         """Publish lock/fencing runtime state and advance bootstrap FSM when needed."""
         os.environ["NIJA_LOCK_ACQUIRED"] = "true"
+        os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(lease_version)
         # Only set NIJA_WRITER_FENCING_TOKEN when the process writer lock has not
         # already established it.  The process lock (bot.py) sets NIJA_WRITER_LEASE_ACQUIRED
         # alongside NIJA_WRITER_FENCING_TOKEN; if it is present, the nonce-lease version
@@ -917,6 +933,7 @@ class _PerKeyRedisBackend:
         version_key = self._LEASE_VERSION_PREFIX + key_id
         counter_key = self._LEASE_VERSION_COUNTER_PREFIX + key_id
         fingerprint_key = self._LEASE_FINGERPRINT_PREFIX + key_id
+        generation_key = self._LEASE_GENERATION_KEY
         prev = self._lease_by_key.get(key_id)
         if prev is None:
             self._maybe_apply_startup_backoff(key_id)
@@ -924,7 +941,7 @@ class _PerKeyRedisBackend:
 
         def _run_lease_script() -> tuple[bool, int, str]:
             _result = self._lease_script(
-                keys=[owner_key, version_key, counter_key, fingerprint_key],
+                keys=[owner_key, version_key, counter_key, fingerprint_key, generation_key],
                 args=[self._owner_id, self._lease_ttl_ms, self._owner_fingerprint],
             )
             _granted = int(_result[0]) == 1
@@ -934,7 +951,7 @@ class _PerKeyRedisBackend:
 
         def _force_takeover() -> tuple[bool, int, str]:
             _result = self._lease_force_script(
-                keys=[owner_key, version_key, counter_key, fingerprint_key],
+                keys=[owner_key, version_key, counter_key, fingerprint_key, generation_key],
                 args=[self._owner_id, self._lease_ttl_ms, self._owner_fingerprint, 1],
             )
             _granted = int(_result[0]) == 1

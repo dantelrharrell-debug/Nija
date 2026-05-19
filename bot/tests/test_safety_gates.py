@@ -2,8 +2,8 @@
 Safety gate tests for live-mode validation and execution safeguards.
 """
 
-import sys
 import json
+import sys
 import time
 from unittest.mock import MagicMock
 

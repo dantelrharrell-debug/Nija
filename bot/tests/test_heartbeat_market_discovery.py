@@ -173,10 +173,10 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
 
             self.assertTrue(result, "Heartbeat should succeed and persist marker")
             with open(marker_path, "r", encoding="utf-8") as marker_file:
-                marker_payload = json.loads(marker_file.read())
-                self.assertTrue(marker_payload.get("verified"))
-                self.assertIn(marker_payload.get("stage"), ("ORDER_VERIFY", "FILL_VERIFY"))
-                self.assertIsNotNone(marker_payload.get("verified_at_epoch"))
+                marker_payload = json.load(marker_file)
+            self.assertTrue(marker_payload.get("verified"))
+            self.assertIn(marker_payload.get("stage"), ("ORDER_VERIFY", "FILL_VERIFY"))
+            self.assertIsNotNone(marker_payload.get("verified_at_epoch"))
 
         buy_call = broker.execute_order.call_args_list[0]
         self.assertGreaterEqual(

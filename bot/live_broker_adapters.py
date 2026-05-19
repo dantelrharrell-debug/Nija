@@ -49,21 +49,24 @@ logger = logging.getLogger("nija.live_broker_adapters")
 
 try:
     from bot.execution_authority_context import (
-        has_execution_authority,
-        assert_distributed_writer_authority,
+        can_execute,
+        ExecutionBlocked,
     )
 except ImportError:
     try:
         from execution_authority_context import (
-            has_execution_authority,
-            assert_distributed_writer_authority,
+            can_execute,
+            ExecutionBlocked,
         )
     except ImportError:
-        def has_execution_authority() -> bool:
-            return False
+        def can_execute():
+            class _Decision:
+                allowed = False
+                reason = "execution_authority_unavailable"
+            return _Decision()
 
-        def assert_distributed_writer_authority() -> None:
-            return
+        class ExecutionBlocked(RuntimeError):
+            pass
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -102,36 +105,18 @@ def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) ->
         except Exception:
             pass
 
-    enforced = True
-    try:
-        assert_distributed_writer_authority()
-    except Exception as exc:
-        _emit_rejection_telemetry("distributed_writer_fence")
-        msg = f"Distributed writer fence violation: {exc}"
-        logger.error(
-            "[Authority] distributed-fence blocked broker=%s symbol=%s side=%s size=%s err=%s",
-            broker_name,
-            symbol,
-            side,
-            size,
-            exc,
-        )
-        return {
-            "status": "ERROR",
-            "error": msg,
-            "broker": broker_name,
-        }
-
-    if not enforced or has_execution_authority():
+    decision = can_execute()
+    if decision.allowed:
         return None
-    msg = "Execution authority violation: order must be submitted via ExecutionPipeline"
-    _emit_rejection_telemetry("execution_authority_violation")
+    _emit_rejection_telemetry("execution_authority_blocked")
+    msg = f"Execution blocked: {decision.reason}"
     logger.error(
-        "[Authority] blocked broker=%s symbol=%s side=%s size=%s",
+        "[Authority] blocked broker=%s symbol=%s side=%s size=%s reason=%s",
         broker_name,
         symbol,
         side,
         size,
+        decision.reason,
     )
     return {
         "status": "ERROR",

@@ -106,7 +106,10 @@ def _heartbeat_marker_path() -> str:
 
 def _heartbeat_min_required_stage() -> str:
     """Return minimum heartbeat verification stage required for activation."""
-    stage = os.environ.get("HEARTBEAT_VERIFICATION_REQUIRED_STAGE", "ORDER_VERIFY").strip().upper()
+    stage = (
+        os.environ.get("HEARTBEAT_VERIFICATION_REQUIRED_STAGE", "")
+        or os.environ.get("REQUIRED_HEARTBEAT_STAGE", "ORDER_VERIFY")
+    ).strip().upper()
     if stage not in _HEARTBEAT_STAGE_ORDER:
         return "ORDER_VERIFY"
     return stage
@@ -114,7 +117,7 @@ def _heartbeat_min_required_stage() -> str:
 
 def _heartbeat_verification_max_age_seconds() -> float:
     """Return heartbeat verification freshness policy (seconds)."""
-    raw = os.environ.get("HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS", "3600").strip()
+    raw = os.environ.get("HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS", "1800").strip()
     try:
         value = float(raw or 0.0)
     except (TypeError, ValueError):
@@ -160,6 +163,7 @@ def _heartbeat_verification_status() -> tuple[bool, str, Dict[str, Any]]:
             try:
                 verified_at_epoch = float(
                     payload.get("verified_at_epoch")
+                    or payload.get("verified_at")
                     or payload.get("timestamp_epoch")
                     or 0.0
                 )
@@ -173,10 +177,12 @@ def _heartbeat_verification_status() -> tuple[bool, str, Dict[str, Any]]:
                     "max_age_s": max_age_s,
                 }
         else:
-            # Backward compatibility path for legacy "verified" marker content.
-            legacy_marker = True
-            parsed_stage = "FILL_VERIFY"
-            verified_at_epoch = float(marker.stat().st_mtime or 0.0)
+            return False, "legacy_marker_non_fresh", {
+                "path": marker_path,
+                "required_stage": min_required_stage,
+                "max_age_s": max_age_s,
+                "legacy_marker": True,
+            }
 
         required_rank = _HEARTBEAT_STAGE_ORDER[min_required_stage]
         stage_rank = _HEARTBEAT_STAGE_ORDER.get(parsed_stage, 0)
