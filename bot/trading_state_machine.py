@@ -50,6 +50,7 @@ class LiveGateSnapshot(NamedTuple):
     reconciliation_ok: bool
     nonce_ok: bool
     lease_ok: bool
+    heartbeat_ok: bool
     strategy_ok: bool
     execution_allowed: bool
 
@@ -99,6 +100,36 @@ def _heartbeat_verified() -> bool:
         return os.path.exists(_heartbeat_marker_path())
     except Exception:
         return False
+
+
+def _writer_heartbeat_gate() -> tuple[bool, str]:
+    """Require an active + fresh distributed-writer heartbeat in live activation."""
+    if not _env_truthy("NIJA_ENFORCE_WRITER_HEARTBEAT_GATE", "true"):
+        return True, ""
+
+    if os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "0").strip() != "1":
+        return False, "writer_heartbeat_inactive"
+
+    alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0").strip()
+    try:
+        alive_ts = float(alive_raw or "0")
+    except (TypeError, ValueError):
+        return False, "writer_heartbeat_invalid_timestamp"
+    if alive_ts <= 0:
+        return False, "writer_heartbeat_missing_timestamp"
+
+    try:
+        max_age_s = max(
+            1.0,
+            float(os.environ.get("NIJA_WRITER_HEARTBEAT_MAX_AGE_S", "45") or 45.0),
+        )
+    except (TypeError, ValueError):
+        max_age_s = 45.0
+
+    age_s = max(0.0, time.time() - alive_ts)
+    if age_s > max_age_s:
+        return False, f"writer_heartbeat_stale age_s={age_s:.1f} max_age_s={max_age_s:.1f}"
+    return True, ""
 
 
 def _resolve_writer_fencing_token(writer_lease_manager: object | None = None) -> str:
@@ -438,8 +469,9 @@ def _collect_live_gate_status() -> Dict[str, object]:
     recon_ok, recon_err = _startup_reconciliation_gate()
     nonce_ok, nonce_err = _nonce_sync_gate()
     lease_ok, lease_err = _distributed_writer_authority_gate()
+    heartbeat_ok, heartbeat_err = _writer_heartbeat_gate()
     strategy_ok, strategy_err = _strategy_ready_gate()
-    execution_allowed = safe_ok and recon_ok and nonce_ok and lease_ok and strategy_ok
+    execution_allowed = safe_ok and recon_ok and nonce_ok and lease_ok and heartbeat_ok and strategy_ok
     return {
         "safe_ok": safe_ok,
         "safe_err": safe_err,
@@ -449,6 +481,8 @@ def _collect_live_gate_status() -> Dict[str, object]:
         "nonce_err": nonce_err,
         "lease_ok": lease_ok,
         "lease_err": lease_err,
+        "heartbeat_ok": heartbeat_ok,
+        "heartbeat_err": heartbeat_err,
         "strategy_ok": strategy_ok,
         "strategy_err": strategy_err,
         "execution_allowed": execution_allowed,
@@ -468,12 +502,14 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
     recon_ok = bool(live_gate_status.get("recon_ok"))
     nonce_ok = bool(live_gate_status.get("nonce_ok"))
     lease_ok = bool(live_gate_status.get("lease_ok"))
+    heartbeat_ok = bool(live_gate_status.get("heartbeat_ok"))
     strategy_ok = bool(live_gate_status.get("strategy_ok"))
     execution_allowed = bool(live_gate_status.get("execution_allowed"))
     snapshot = LiveGateSnapshot(
         reconciliation_ok=recon_ok,
         nonce_ok=nonce_ok,
         lease_ok=lease_ok,
+        heartbeat_ok=heartbeat_ok,
         strategy_ok=strategy_ok,
         execution_allowed=execution_allowed,
     )
@@ -485,16 +521,19 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
     logger.info("   • Reconciliation: %s", "COMPLETE" if recon_ok else "INCOMPLETE")
     logger.info("   • Nonce Sync: %s", "VALID" if nonce_ok else "INVALID")
     logger.info("   • Lease Owner: %s", "CONFIRMED" if lease_ok else "CONFLICT")
+    logger.info("   • Writer Heartbeat: %s", "HEALTHY" if heartbeat_ok else "UNHEALTHY")
     logger.info("   • Strategy Ready: %s", "TRUE" if strategy_ok else "FALSE")
     logger.info("   • EXECUTION_ALLOWED: %s", "TRUE" if execution_allowed else "FALSE")
 
-    # Fail-fast gate only for reconciliation/nonce/lease conflicts per safety contract.
-    if not (recon_ok and nonce_ok and lease_ok):
+    # Fail-fast gate only for reconciliation/nonce/lease/heartbeat conflicts per safety contract.
+    if not (recon_ok and nonce_ok and lease_ok and heartbeat_ok):
         logger.critical(
-            "🚫 EXECUTION BLOCKED — SAFETY GATE FAILURE (reconciliation=%s nonce_sync=%s lease_owner=%s)",
+            "🚫 EXECUTION BLOCKED — SAFETY GATE FAILURE "
+            "(reconciliation=%s nonce_sync=%s lease_owner=%s writer_heartbeat=%s)",
             "OK" if recon_ok else "FAIL",
             "OK" if nonce_ok else "FAIL",
             "OK" if lease_ok else "FAIL",
+            "OK" if heartbeat_ok else "FAIL",
         )
 
 
@@ -509,6 +548,10 @@ def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) 
     recon_err = str(live_gate_status.get("recon_err") or "")
     if not recon_ok:
         return False, f"STARTUP_RECONCILIATION {recon_err}"
+    heartbeat_ok = bool(live_gate_status.get("heartbeat_ok"))
+    heartbeat_err = str(live_gate_status.get("heartbeat_err") or "")
+    if not heartbeat_ok:
+        return False, f"WRITER_HEARTBEAT {heartbeat_err or 'unhealthy'}"
     return True, ""
 
 
@@ -1963,6 +2006,10 @@ def _runtime_writer_nonce_ready() -> tuple[bool, str]:
     writer_ok, writer_err = _distributed_writer_authority_gate()
     if not writer_ok:
         return False, f"writer_authority:{writer_err}"
+
+    heartbeat_ok, heartbeat_err = _writer_heartbeat_gate()
+    if not heartbeat_ok:
+        return False, f"writer_heartbeat:{heartbeat_err}"
 
     nonce_sync_ok, nonce_sync_err = _nonce_sync_gate()
     if not nonce_sync_ok:
