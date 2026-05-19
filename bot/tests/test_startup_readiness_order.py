@@ -185,6 +185,43 @@ class TestStartupReadinessOrder(unittest.TestCase):
             "_verify_runtime_transition_states must run after execution enablement",
         )
 
+    def test_startup_uses_single_bootstrap_transition_authority_for_init_handoff(self):
+        repo_root = self._find_repo_root(Path(__file__).resolve())
+        bot_path = repo_root / "bot.py"
+        source = bot_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(bot_path))
+
+        startup_fn = next(
+            (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run_bot_startup_and_trading"),
+            None,
+        )
+        if startup_fn is None:
+            self.fail("Expected _run_bot_startup_and_trading() in bot.py")
+
+        forbidden_direct_transitions = []
+        for node in ast.walk(startup_fn):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "_bfsm"
+                and node.func.attr == "transition"
+                and node.args
+                and isinstance(node.args[0], ast.Attribute)
+                and isinstance(node.args[0].value, ast.Name)
+                and node.args[0].value.id == "_BootstrapState"
+            ):
+                continue
+            if node.args[0].attr in {"INIT_COMPLETE", "RUNNING_SUPERVISED"}:
+                forbidden_direct_transitions.append((node.lineno, node.args[0].attr))
+
+        self.assertEqual(
+            forbidden_direct_transitions,
+            [],
+            "Init handoff transitions must use the canonical helper path only; direct _bfsm.transition"
+            f" calls found: {forbidden_direct_transitions}",
+        )
+
     def test_capital_ready_is_decoupled_from_execution_authority_guard(self):
         repo_root = self._find_repo_root(Path(__file__).resolve())
         bot_path = repo_root / "bot.py"

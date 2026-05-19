@@ -13,6 +13,8 @@ from bot.trading_state_machine import (
     ExecutionSafetyState,
     TradingState,
     TradingStateMachine,
+    _collect_live_gate_status,
+    _live_activation_gate,
 )
 from bot.startup_coordinator import get_startup_coordinator
 
@@ -224,6 +226,53 @@ class TestRuntimeAuthorityRevocation(unittest.TestCase):
                 ):
                     self.assertFalse(sm.can_dispatch_trades())
                     self.assertFalse(sm.has_execution_authority())
+
+
+class TestHeartbeatSafetyGating(unittest.TestCase):
+    def test_live_gate_status_blocks_execution_when_writer_heartbeat_unhealthy(self) -> None:
+        with patch(
+            "bot.trading_state_machine._safe_start_gate",
+            return_value=(True, ""),
+        ), patch(
+            "bot.trading_state_machine._startup_reconciliation_gate",
+            return_value=(True, ""),
+        ), patch(
+            "bot.trading_state_machine._nonce_sync_gate",
+            return_value=(True, ""),
+        ), patch(
+            "bot.trading_state_machine._distributed_writer_authority_gate",
+            return_value=(True, ""),
+        ), patch(
+            "bot.trading_state_machine._writer_heartbeat_gate",
+            return_value=(False, "writer_heartbeat_stale"),
+        ), patch(
+            "bot.trading_state_machine._strategy_ready_gate",
+            return_value=(True, ""),
+        ):
+            status = _collect_live_gate_status()
+        self.assertFalse(status["heartbeat_ok"])
+        self.assertFalse(status["execution_allowed"])
+
+    def test_live_activation_gate_blocks_on_writer_heartbeat(self) -> None:
+        ok, reason = _live_activation_gate(
+            {
+                "safe_ok": True,
+                "safe_err": "",
+                "recon_ok": True,
+                "recon_err": "",
+                "nonce_ok": True,
+                "nonce_err": "",
+                "lease_ok": True,
+                "lease_err": "",
+                "heartbeat_ok": False,
+                "heartbeat_err": "writer_heartbeat_stale",
+                "strategy_ok": True,
+                "strategy_err": "",
+                "execution_allowed": False,
+            }
+        )
+        self.assertFalse(ok)
+        self.assertIn("WRITER_HEARTBEAT", reason)
 
 
 if __name__ == "__main__":
