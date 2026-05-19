@@ -8622,15 +8622,34 @@ class TradingStrategy:
                 )
                 return False
             
-            # Get available markets
-            markets = broker.get_available_markets()
+            # Get available markets — defensive: use fallback if broker lacks the method
+            _HEARTBEAT_MARKET_FALLBACK = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD']
+            markets: list = []
+            if callable(getattr(broker, 'get_available_markets', None)):
+                try:
+                    markets = broker.get_available_markets() or []
+                except Exception as _mkt_err:
+                    logger.warning(
+                        "[HeartbeatTrade] market discovery raised: %s — using fallback list",
+                        _mkt_err,
+                    )
+            else:
+                logger.debug(
+                    "[HeartbeatTrade] broker %s has no get_available_markets(); "
+                    "using built-in fallback",
+                    broker_name,
+                )
             if not markets:
-                logger.warning("   ❤️  Heartbeat trade skipped: no markets available")
-                return False
-            
+                markets = _HEARTBEAT_MARKET_FALLBACK
+                logger.debug(
+                    "[HeartbeatTrade] using fallback market list (%d symbols)",
+                    len(markets),
+                )
+            logger.info("[HeartbeatTrade] market_discovery_count=%s", len(markets))
+
             # Select a deterministic symbol without hidden BTC/ETH preference.
             heartbeat_symbol = sorted(markets)[0] if markets else None
-            
+
             if not heartbeat_symbol:
                 logger.warning("   ❤️  Heartbeat trade skipped: no suitable symbol found")
                 return False
