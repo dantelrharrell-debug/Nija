@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -299,6 +301,114 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
                     "HEARTBEAT_TRADE": "true",
                     "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
                     "HEARTBEAT_MARKER_PATH": marker_path,
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
+
+    def test_commit_activation_blocks_when_heartbeat_marker_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "heartbeat_verified.flag")
+            stale_payload = {
+                "verified": True,
+                "version": 2,
+                "stage": "FILL_VERIFY",
+                "verified_at_epoch": time.time() - 7200,
+            }
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                marker_file.write(json.dumps(stale_payload))
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS": "3600",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
+
+    def test_commit_activation_passes_when_heartbeat_marker_is_fresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "heartbeat_verified.flag")
+            payload = {
+                "verified": True,
+                "version": 2,
+                "stage": "ORDER_VERIFY",
+                "verified_at_epoch": time.time(),
+            }
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                marker_file.write(json.dumps(payload))
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS": "3600",
+                    "HEARTBEAT_VERIFICATION_REQUIRED_STAGE": "ORDER_VERIFY",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                with patch(
+                    "bot.trading_state_machine._collect_live_gate_status",
+                    return_value={
+                        "safe_ok": True,
+                        "safe_err": "",
+                        "recon_ok": True,
+                        "recon_err": "",
+                        "nonce_ok": True,
+                        "nonce_err": "",
+                        "lease_ok": True,
+                        "lease_err": "",
+                        "heartbeat_ok": True,
+                        "heartbeat_err": "",
+                        "strategy_ok": True,
+                        "strategy_err": "",
+                        "breaker_ok": True,
+                        "breaker_err": "",
+                        "execution_allowed": True,
+                    },
+                ), patch(
+                    "bot.trading_state_machine._live_activation_gate",
+                    return_value=(True, ""),
+                ), patch(
+                    "bot.trading_state_machine._capital_readiness_gate",
+                    return_value=(True, "ok"),
+                ), patch(
+                    "bot.trading_state_machine._nonce_writer_lease_gate",
+                    return_value=(True, ""),
+                ), patch(
+                    "bot.trading_state_machine._runtime_writer_nonce_ready",
+                    return_value=(True, ""),
+                ):
+                    self.assertIsInstance(sm.commit_activation(), bool)
+
+    def test_commit_activation_blocks_on_malformed_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "heartbeat_verified.flag")
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                marker_file.write("{not-json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS": "3600",
                 },
                 clear=False,
             ):

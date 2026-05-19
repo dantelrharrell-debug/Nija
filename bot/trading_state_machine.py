@@ -56,6 +56,16 @@ class LiveGateSnapshot(NamedTuple):
 
 
 _LIVE_GATE_LAST_STATUS: Optional[LiveGateSnapshot] = None
+_HEARTBEAT_STAGE_ORDER: Dict[str, int] = {
+    "AUTH_VERIFY": 1,
+    "ORDER_VERIFY": 2,
+    "FILL_VERIFY": 3,
+}
+_EXECUTION_CIRCUIT_BREAKER_LOCK = threading.Lock()
+_EXECUTION_CIRCUIT_BREAKER_COUNTS: Dict[str, int] = {}
+_EXECUTION_CIRCUIT_BREAKER_TRIPPED: bool = False
+_EXECUTION_CIRCUIT_BREAKER_REASON: str = ""
+_EXECUTION_CIRCUIT_BREAKER_LAST_RESET_TOKEN: str = ""
 
 # Keep both import paths bound to the same module object so the process only
 # ever has one TradingStateMachine singleton.
@@ -94,12 +104,137 @@ def _heartbeat_marker_path() -> str:
     return os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
 
 
-def _heartbeat_verified() -> bool:
-    """True when the first-run heartbeat verification marker exists."""
+def _heartbeat_min_required_stage() -> str:
+    """Return minimum heartbeat verification stage required for activation."""
+    stage = os.environ.get("HEARTBEAT_VERIFICATION_REQUIRED_STAGE", "ORDER_VERIFY").strip().upper()
+    if stage not in _HEARTBEAT_STAGE_ORDER:
+        return "ORDER_VERIFY"
+    return stage
+
+
+def _heartbeat_verification_max_age_seconds() -> float:
+    """Return heartbeat verification freshness policy (seconds)."""
+    raw = os.environ.get("HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS", "3600").strip()
     try:
-        return os.path.exists(_heartbeat_marker_path())
-    except Exception:
-        return False
+        value = float(raw or 0.0)
+    except (TypeError, ValueError):
+        value = 3600.0
+    return max(0.0, value)
+
+
+def _heartbeat_verification_status() -> tuple[bool, str, Dict[str, Any]]:
+    """Return heartbeat verification status with stage + freshness checks."""
+    marker_path = _heartbeat_marker_path()
+    min_required_stage = _heartbeat_min_required_stage()
+    max_age_s = _heartbeat_verification_max_age_seconds()
+    try:
+        marker = Path(marker_path)
+        if not marker.exists():
+            return False, "marker_missing", {
+                "path": marker_path,
+                "required_stage": min_required_stage,
+                "max_age_s": max_age_s,
+            }
+
+        raw = marker.read_text(encoding="utf-8").strip()
+        legacy_marker = False
+        parsed_stage = "FILL_VERIFY"
+        verified_at_epoch = 0.0
+
+        if raw.startswith("{"):
+            try:
+                payload = json.loads(raw)
+            except Exception as exc:
+                return False, f"marker_malformed:{exc}", {
+                    "path": marker_path,
+                    "required_stage": min_required_stage,
+                    "max_age_s": max_age_s,
+                }
+            parsed_stage = str(payload.get("stage", "AUTH_VERIFY") or "AUTH_VERIFY").strip().upper()
+            if parsed_stage not in _HEARTBEAT_STAGE_ORDER:
+                return False, f"marker_invalid_stage:{parsed_stage}", {
+                    "path": marker_path,
+                    "required_stage": min_required_stage,
+                    "max_age_s": max_age_s,
+                }
+            try:
+                verified_at_epoch = float(
+                    payload.get("verified_at_epoch")
+                    or payload.get("timestamp_epoch")
+                    or 0.0
+                )
+            except (TypeError, ValueError):
+                verified_at_epoch = 0.0
+            if verified_at_epoch <= 0:
+                return False, "marker_missing_timestamp", {
+                    "path": marker_path,
+                    "required_stage": min_required_stage,
+                    "stage": parsed_stage,
+                    "max_age_s": max_age_s,
+                }
+        else:
+            # Backward compatibility path for legacy "verified" marker content.
+            legacy_marker = True
+            parsed_stage = "FILL_VERIFY"
+            verified_at_epoch = float(marker.stat().st_mtime or 0.0)
+
+        required_rank = _HEARTBEAT_STAGE_ORDER[min_required_stage]
+        stage_rank = _HEARTBEAT_STAGE_ORDER.get(parsed_stage, 0)
+        if stage_rank < required_rank:
+            return False, f"stage_too_low:{parsed_stage}<{min_required_stage}", {
+                "path": marker_path,
+                "required_stage": min_required_stage,
+                "stage": parsed_stage,
+                "verified_at_epoch": verified_at_epoch,
+                "max_age_s": max_age_s,
+                "legacy_marker": legacy_marker,
+            }
+
+        age_s = max(0.0, time.time() - verified_at_epoch) if verified_at_epoch > 0 else float("inf")
+        if max_age_s > 0:
+            # Legacy marker files are treated as non-fresh under enforced expiry semantics.
+            if legacy_marker:
+                return False, "legacy_marker_non_fresh", {
+                    "path": marker_path,
+                    "required_stage": min_required_stage,
+                    "stage": parsed_stage,
+                    "verified_at_epoch": verified_at_epoch,
+                    "age_s": age_s,
+                    "max_age_s": max_age_s,
+                    "legacy_marker": True,
+                }
+            if age_s > max_age_s:
+                return False, f"verification_stale age_s={age_s:.1f} max_age_s={max_age_s:.1f}", {
+                    "path": marker_path,
+                    "required_stage": min_required_stage,
+                    "stage": parsed_stage,
+                    "verified_at_epoch": verified_at_epoch,
+                    "age_s": age_s,
+                    "max_age_s": max_age_s,
+                    "legacy_marker": False,
+                }
+
+        return True, "", {
+            "path": marker_path,
+            "required_stage": min_required_stage,
+            "stage": parsed_stage,
+            "verified_at_epoch": verified_at_epoch,
+            "age_s": age_s if verified_at_epoch > 0 else 0.0,
+            "max_age_s": max_age_s,
+            "legacy_marker": legacy_marker,
+        }
+    except Exception as exc:
+        return False, f"marker_read_failed:{exc}", {
+            "path": marker_path,
+            "required_stage": min_required_stage,
+            "max_age_s": max_age_s,
+        }
+
+
+def _heartbeat_verified() -> bool:
+    """True when heartbeat verification is present, stage-sufficient, and fresh."""
+    ok, _, _ = _heartbeat_verification_status()
+    return ok
 
 
 def _heartbeat_verification_required() -> bool:
@@ -476,7 +611,10 @@ def _collect_live_gate_status() -> Dict[str, object]:
     lease_ok, lease_err = _distributed_writer_authority_gate()
     heartbeat_ok, heartbeat_err = _writer_heartbeat_gate()
     strategy_ok, strategy_err = _strategy_ready_gate()
-    execution_allowed = safe_ok and recon_ok and nonce_ok and lease_ok and heartbeat_ok and strategy_ok
+    breaker_ok, breaker_err = _execution_circuit_breaker_status()
+    execution_allowed = (
+        safe_ok and recon_ok and nonce_ok and lease_ok and heartbeat_ok and strategy_ok and breaker_ok
+    )
     return {
         "safe_ok": safe_ok,
         "safe_err": safe_err,
@@ -490,6 +628,8 @@ def _collect_live_gate_status() -> Dict[str, object]:
         "heartbeat_err": heartbeat_err,
         "strategy_ok": strategy_ok,
         "strategy_err": strategy_err,
+        "breaker_ok": breaker_ok,
+        "breaker_err": breaker_err,
         "execution_allowed": execution_allowed,
     }
 
@@ -509,6 +649,7 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
     lease_ok = bool(live_gate_status.get("lease_ok"))
     heartbeat_ok = bool(live_gate_status.get("heartbeat_ok"))
     strategy_ok = bool(live_gate_status.get("strategy_ok"))
+    breaker_ok = bool(live_gate_status.get("breaker_ok", True))
     execution_allowed = bool(live_gate_status.get("execution_allowed"))
     snapshot = LiveGateSnapshot(
         reconciliation_ok=recon_ok,
@@ -528,17 +669,19 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
     logger.info("   • Lease Owner: %s", "CONFIRMED" if lease_ok else "CONFLICT")
     logger.info("   • Writer Heartbeat: %s", "HEALTHY" if heartbeat_ok else "UNHEALTHY")
     logger.info("   • Strategy Ready: %s", "TRUE" if strategy_ok else "FALSE")
+    logger.info("   • Circuit Breaker: %s", "CLOSED" if breaker_ok else "TRIPPED")
     logger.info("   • EXECUTION_ALLOWED: %s", "TRUE" if execution_allowed else "FALSE")
 
     # Fail-fast gate only for reconciliation/nonce/lease/heartbeat conflicts per safety contract.
-    if not (recon_ok and nonce_ok and lease_ok and heartbeat_ok):
+    if not (recon_ok and nonce_ok and lease_ok and heartbeat_ok and breaker_ok):
         logger.critical(
             "🚫 EXECUTION BLOCKED — SAFETY GATE FAILURE "
-            "(reconciliation=%s nonce_sync=%s lease_owner=%s writer_heartbeat=%s)",
+            "(reconciliation=%s nonce_sync=%s lease_owner=%s writer_heartbeat=%s circuit_breaker=%s)",
             "OK" if recon_ok else "FAIL",
             "OK" if nonce_ok else "FAIL",
             "OK" if lease_ok else "FAIL",
             "OK" if heartbeat_ok else "FAIL",
+            "OK" if breaker_ok else "FAIL",
         )
 
 
@@ -557,6 +700,14 @@ def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) 
     heartbeat_err = str(live_gate_status.get("heartbeat_err") or "")
     if not heartbeat_ok:
         return False, f"WRITER_HEARTBEAT {heartbeat_err or 'unhealthy'}"
+    breaker_ok = bool(live_gate_status.get("breaker_ok", True))
+    breaker_err = str(live_gate_status.get("breaker_err") or "")
+    if not breaker_ok:
+        return False, f"EXECUTION_CIRCUIT_BREAKER {breaker_err or 'tripped'}"
+    if _heartbeat_verification_required():
+        hb_verified_ok, hb_verified_err, _ = _heartbeat_verification_status()
+        if not hb_verified_ok:
+            return False, f"HEARTBEAT_VERIFICATION {hb_verified_err or 'missing_or_stale'}"
     return True, ""
 
 
@@ -869,7 +1020,7 @@ class TradingStateMachine:
         heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
         force_live = _env_truthy("FORCE_LIVE_TRANSITION")
         heartbeat_required_first = _heartbeat_verification_required()
-        heartbeat_ok = _heartbeat_verified()
+        heartbeat_ok, heartbeat_err, heartbeat_meta = _heartbeat_verification_status()
 
         with self._lock:
             if dry_run_mode:
@@ -889,9 +1040,12 @@ class TradingStateMachine:
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: heartbeat_verification_required=true marker_missing path=%s heartbeat_trade=%s",
-                        _heartbeat_marker_path(),
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: heartbeat_verification_required=true reason=%s path=%s heartbeat_trade=%s required_stage=%s max_age_s=%s",
+                        heartbeat_err or "verification_missing",
+                        heartbeat_meta.get("path", _heartbeat_marker_path()),
                         heartbeat_trade,
+                        heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
+                        heartbeat_meta.get("max_age_s", _heartbeat_verification_max_age_seconds()),
                     )
                     return
 
@@ -1348,14 +1502,17 @@ class TradingStateMachine:
             else os.environ.get("LIVE_TRADING", "false")
         )
         _heartbeat_required_first = _heartbeat_verification_required()
-        _heartbeat_ok = _heartbeat_verified()
+        _heartbeat_ok, _heartbeat_err, _heartbeat_meta = _heartbeat_verification_status()
         _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
 
         if _heartbeat_required_first and not _heartbeat_ok:
             logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_VERIFICATION_REQUIRED marker_missing path=%s heartbeat_trade=%s",
-                _heartbeat_marker_path(),
+                "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_VERIFICATION_REQUIRED detail=%s path=%s heartbeat_trade=%s required_stage=%s max_age_s=%s",
+                _heartbeat_err or "verification_missing",
+                _heartbeat_meta.get("path", _heartbeat_marker_path()),
                 _heartbeat_trade,
+                _heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
+                _heartbeat_meta.get("max_age_s", _heartbeat_verification_max_age_seconds()),
             )
             return False
 
@@ -1386,7 +1543,7 @@ class TradingStateMachine:
 
         logger.critical(
             "ACTIVATION_GATE_SNAPSHOT state=%s committed=%s live_verified=%s dry_run=%s force=%s "
-            "heartbeat_required_first=%s heartbeat_ok=%s heartbeat_trade=%s first_snap=%s",
+            "heartbeat_required_first=%s heartbeat_ok=%s heartbeat_err=%s heartbeat_trade=%s first_snap=%s",
             current.value,
             self._activation_committed,
             _lcv_quick,
@@ -1394,6 +1551,7 @@ class TradingStateMachine:
             _force,
             _heartbeat_required_first,
             _heartbeat_ok,
+            _heartbeat_err or "",
             _heartbeat_trade,
             self._first_snap_accepted,
         )
@@ -1726,14 +1884,40 @@ class TradingStateMachine:
 
     def has_execution_authority(self) -> bool:
         """Return True when dispatch authority has been granted."""
+        return self.can_execute(require_executing=False)
+
+    def can_execute(self, require_executing: bool = True) -> bool:
+        """Single source of truth for execution authority decisions."""
         authority_snapshot = self._evaluate_execution_authority_state()
         if authority_snapshot.safety_state != ExecutionSafetyState.AUTHORIZED:
             return False
+        if self.get_current_state() != TradingState.LIVE_ACTIVE:
+            return False
+
+        breaker_ok, _ = _execution_circuit_breaker_status()
+        if not breaker_ok:
+            return False
+
+        runtime_ready, _runtime_reason = _runtime_writer_nonce_ready()
+        if not runtime_ready:
+            return False
+
+        heartbeat_required = _heartbeat_verification_required()
+        heartbeat_ok, _, _ = _heartbeat_verification_status()
+        if heartbeat_required and not heartbeat_ok:
+            return False
+
+        live_gate_status = _collect_live_gate_status()
+        if not bool(live_gate_status.get("execution_allowed", False)):
+            return False
+
         runtime_mode = resolve_runtime_mode_safe(logger)
         coordinator_snapshot = _get_startup_coordinator().build_snapshot(
             trading_state=self.get_current_state().value,
             activation_intent=_activation_intent_present(runtime_mode),
         )
+        if require_executing:
+            return bool(coordinator_snapshot.execution_permitted)
         return bool(coordinator_snapshot.trading_authority)
 
     def release_core_loop_ownership(self, reason: str = "runtime handoff") -> None:
@@ -1805,15 +1989,7 @@ class TradingStateMachine:
 
     def can_dispatch_trades(self) -> bool:
         """Return True when runtime dispatch should be allowed."""
-        authority_snapshot = self._evaluate_execution_authority_state()
-        if authority_snapshot.safety_state != ExecutionSafetyState.AUTHORIZED:
-            return False
-        runtime_mode = resolve_runtime_mode_safe(logger)
-        coordinator_snapshot = _get_startup_coordinator().build_snapshot(
-            trading_state=self.get_current_state().value,
-            activation_intent=_activation_intent_present(runtime_mode),
-        )
-        return bool(coordinator_snapshot.execution_permitted)
+        return self.can_execute(require_executing=True)
 
     def maybe_auto_activate(
         self,
@@ -2011,23 +2187,183 @@ def _is_authority_ready() -> bool:
 
 def _runtime_writer_nonce_ready() -> tuple[bool, str]:
     """Return runtime writer+nonce readiness for dispatch authorization."""
+    heartbeat_required = _heartbeat_verification_required()
+    heartbeat_ok, heartbeat_err, _ = _heartbeat_verification_status()
+    if heartbeat_required and not heartbeat_ok:
+        _record_execution_anomaly(
+            "heartbeat_verification",
+            heartbeat_err or "missing_or_stale",
+        )
+        return False, f"heartbeat_verification:{heartbeat_err or 'missing_or_stale'}"
+
     writer_ok, writer_err = _distributed_writer_authority_gate()
     if not writer_ok:
+        _record_execution_anomaly("fencing_mismatch", writer_err or "writer_authority_failed")
         return False, f"writer_authority:{writer_err}"
 
     heartbeat_ok, heartbeat_err = _writer_heartbeat_gate()
     if not heartbeat_ok:
+        _record_execution_anomaly("broker_desync", heartbeat_err or "writer_heartbeat_unhealthy")
         return False, f"writer_heartbeat:{heartbeat_err}"
 
     nonce_sync_ok, nonce_sync_err = _nonce_sync_gate()
     if not nonce_sync_ok:
+        _record_execution_anomaly("nonce_drift", nonce_sync_err or "nonce_sync_failed")
         return False, f"nonce_sync:{nonce_sync_err}"
 
     nonce_lease_ok, nonce_lease_err = _nonce_writer_lease_gate()
     if not nonce_lease_ok:
+        _record_execution_anomaly("nonce_drift", nonce_lease_err or "nonce_lease_failed")
         return False, f"nonce_lease:{nonce_lease_err}"
 
+    generation_ok, generation_err = _writer_lease_generation_gate()
+    if not generation_ok:
+        _record_execution_anomaly("fencing_mismatch", generation_err or "lease_generation_failed")
+        return False, f"lease_generation:{generation_err}"
+
     return True, ""
+
+
+def _execution_circuit_breaker_enabled() -> bool:
+    return _env_truthy("NIJA_EXEC_CIRCUIT_BREAKER_ENABLED", "true")
+
+
+def _execution_circuit_breaker_thresholds() -> Dict[str, int]:
+    def _int_env(name: str, default: int) -> int:
+        try:
+            return max(1, int(os.environ.get(name, str(default)) or default))
+        except (TypeError, ValueError):
+            return default
+    return {
+        "nonce_drift": _int_env("NIJA_EXEC_CB_NONCE_DRIFT_THRESHOLD", 3),
+        "fencing_mismatch": _int_env("NIJA_EXEC_CB_FENCING_MISMATCH_THRESHOLD", 1),
+        "broker_desync": _int_env("NIJA_EXEC_CB_BROKER_DESYNC_THRESHOLD", 3),
+        "partial_fills": _int_env("NIJA_EXEC_CB_PARTIAL_FILL_THRESHOLD", 3),
+        "rejected_orders": _int_env("NIJA_EXEC_CB_REJECT_THRESHOLD", 5),
+        "heartbeat_verification": _int_env("NIJA_EXEC_CB_HEARTBEAT_THRESHOLD", 2),
+    }
+
+
+def _execution_circuit_breaker_maybe_reset() -> None:
+    global _EXECUTION_CIRCUIT_BREAKER_TRIPPED
+    global _EXECUTION_CIRCUIT_BREAKER_REASON
+    global _EXECUTION_CIRCUIT_BREAKER_LAST_RESET_TOKEN
+    token = os.environ.get("NIJA_EXEC_CB_RESET_TOKEN", "").strip()
+    if not token or token == _EXECUTION_CIRCUIT_BREAKER_LAST_RESET_TOKEN:
+        return
+    with _EXECUTION_CIRCUIT_BREAKER_LOCK:
+        _EXECUTION_CIRCUIT_BREAKER_COUNTS.clear()
+        _EXECUTION_CIRCUIT_BREAKER_TRIPPED = False
+        _EXECUTION_CIRCUIT_BREAKER_REASON = ""
+        _EXECUTION_CIRCUIT_BREAKER_LAST_RESET_TOKEN = token
+    logger.critical("[EXECUTION CIRCUIT BREAKER] reset token accepted; breaker cleared")
+
+
+def _record_execution_anomaly(kind: str, detail: str = "") -> None:
+    """Record execution anomaly and trip circuit breaker when threshold reached."""
+    global _EXECUTION_CIRCUIT_BREAKER_TRIPPED
+    global _EXECUTION_CIRCUIT_BREAKER_REASON
+    if not _execution_circuit_breaker_enabled():
+        return
+    _execution_circuit_breaker_maybe_reset()
+    thresholds = _execution_circuit_breaker_thresholds()
+    threshold = thresholds.get(kind)
+    if threshold is None:
+        return
+    with _EXECUTION_CIRCUIT_BREAKER_LOCK:
+        count = _EXECUTION_CIRCUIT_BREAKER_COUNTS.get(kind, 0) + 1
+        _EXECUTION_CIRCUIT_BREAKER_COUNTS[kind] = count
+        if _EXECUTION_CIRCUIT_BREAKER_TRIPPED:
+            return
+        if count < threshold:
+            return
+        _EXECUTION_CIRCUIT_BREAKER_TRIPPED = True
+        _EXECUTION_CIRCUIT_BREAKER_REASON = f"{kind} threshold={threshold} detail={detail or '<none>'}"
+    logger.critical("[EXECUTION CIRCUIT BREAKER] TRIPPED reason=%s", _EXECUTION_CIRCUIT_BREAKER_REASON)
+    try:
+        from bot.startup_coordinator import FailSafeTier
+        _get_startup_coordinator().record_fail_safe(
+            FailSafeTier.HALT,
+            reason=f"execution_circuit_breaker:{_EXECUTION_CIRCUIT_BREAKER_REASON}",
+        )
+    except Exception:
+        logger.debug("execution circuit breaker failed to propagate fail-safe", exc_info=True)
+
+
+def _execution_circuit_breaker_status() -> tuple[bool, str]:
+    """Return (healthy, reason) for execution circuit breaker."""
+    if not _execution_circuit_breaker_enabled():
+        return True, ""
+    _execution_circuit_breaker_maybe_reset()
+    with _EXECUTION_CIRCUIT_BREAKER_LOCK:
+        if not _EXECUTION_CIRCUIT_BREAKER_TRIPPED:
+            return True, ""
+        return False, _EXECUTION_CIRCUIT_BREAKER_REASON or "execution_circuit_breaker_tripped"
+
+
+def report_execution_anomaly(kind: str, detail: str = "") -> None:
+    """Public entrypoint for other modules to report execution anomalies."""
+    _record_execution_anomaly(str(kind or "").strip(), detail=detail)
+
+
+def _writer_lease_generation_gate() -> tuple[bool, str]:
+    """Validate monotonic writer lease generation/fencing continuity."""
+    if not _env_truthy("NIJA_ENFORCE_WRITER_LEASE_GENERATION", "true"):
+        return True, ""
+    platform_key = (
+        os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+        or os.environ.get("KRAKEN_API_KEY", "").strip()
+    )
+    if not platform_key:
+        return True, ""
+    try:
+        try:
+            from bot.distributed_nonce_manager import (
+                get_distributed_nonce_manager,
+                make_api_key_id,
+            )
+        except ImportError:
+            from distributed_nonce_manager import (  # type: ignore[import]
+                get_distributed_nonce_manager,
+                make_api_key_id,
+            )
+        key_id = make_api_key_id(platform_key)
+        manager = get_distributed_nonce_manager()
+        manager.ensure_writer_lock(key_id)
+        status_fn = getattr(manager, "get_writer_lease_status", None)
+        if not callable(status_fn):
+            return False, "lease_status_unavailable"
+        status = status_fn(key_id)
+        if not isinstance(status, dict):
+            return False, "lease_status_invalid"
+        token_raw = status.get("token")
+        try:
+            generation = int(token_raw or 0)
+        except (TypeError, ValueError):
+            generation = 0
+        if generation <= 0:
+            return False, "lease_generation_missing"
+        last_raw = os.environ.get("NIJA_WRITER_LEASE_GENERATION_LAST", "0").strip()
+        try:
+            last_generation = int(last_raw or 0)
+        except (TypeError, ValueError):
+            last_generation = 0
+        if last_generation > 0 and generation < last_generation:
+            return False, f"lease_generation_regression prev={last_generation} current={generation}"
+        os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(generation)
+        if generation > last_generation:
+            os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] = str(generation)
+        expected_raw = os.environ.get("NIJA_WRITER_LEASE_GENERATION_EXPECTED", "").strip()
+        if expected_raw:
+            try:
+                expected = int(expected_raw)
+            except (TypeError, ValueError):
+                expected = 0
+            if expected > 0 and generation != expected:
+                return False, f"lease_generation_mismatch expected={expected} current={generation}"
+        return True, ""
+    except Exception as exc:
+        return False, f"lease_generation_check_failed:{exc}"
 
 
 # ---------------------------------------------------------------------------

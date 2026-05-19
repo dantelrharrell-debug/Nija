@@ -3,6 +3,8 @@ Safety gate tests for live-mode validation and execution safeguards.
 """
 
 import sys
+import json
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -76,7 +78,16 @@ def test_heartbeat_executes_once(tmp_path, monkeypatch: pytest.MonkeyPatch) -> N
         for _ in range(2):
             if not tsm._heartbeat_verified():
                 marker_path.parent.mkdir(parents=True, exist_ok=True)
-                marker_path.write_text("verified")
+                marker_path.write_text(
+                    json.dumps(
+                        {
+                            "verified": True,
+                            "version": 2,
+                            "stage": "FILL_VERIFY",
+                            "verified_at_epoch": time.time(),
+                        }
+                    )
+                )
                 executions += 1
         return executions
 
