@@ -13,6 +13,7 @@ Safety contract (from problem statement):
 
 import unittest
 import tempfile
+import shutil
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -68,6 +69,19 @@ class TestKrakenBrokerImplementsInterface(unittest.TestCase):
 
 class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
     """Heartbeat executor gracefully handles empty market discovery."""
+
+    def setUp(self):
+        self._hb_tmpdir = tempfile.mkdtemp(prefix="hb-marker-")
+        self._marker_patch = patch.dict(
+            "os.environ",
+            {"HEARTBEAT_MARKER_PATH": f"{self._hb_tmpdir}/heartbeat_verified.flag"},
+            clear=False,
+        )
+        self._marker_patch.start()
+
+    def tearDown(self):
+        self._marker_patch.stop()
+        shutil.rmtree(self._hb_tmpdir, ignore_errors=True)
 
     def _make_strategy_with_broker(self, broker):
         """Build a minimal TradingStrategy-shaped object for heartbeat tests."""
@@ -168,6 +182,19 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
 
 class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
     """Heartbeat executor continues when market discovery raises an exception."""
+
+    def setUp(self):
+        self._hb_tmpdir = tempfile.mkdtemp(prefix="hb-marker-")
+        self._marker_patch = patch.dict(
+            "os.environ",
+            {"HEARTBEAT_MARKER_PATH": f"{self._hb_tmpdir}/heartbeat_verified.flag"},
+            clear=False,
+        )
+        self._marker_patch.start()
+
+    def tearDown(self):
+        self._marker_patch.stop()
+        shutil.rmtree(self._hb_tmpdir, ignore_errors=True)
 
     def _make_strategy_with_broker(self, broker):
         from bot.trading_strategy import TradingStrategy
