@@ -3266,14 +3266,6 @@ class CoinbaseBroker(BaseBroker):
             logging.error(f"🔥 Error fetching all products: {e}")
             return []
 
-    def get_available_markets(self) -> list:
-        """Return available Coinbase markets for heartbeat verification."""
-        try:
-            return list(self.get_all_products() or [])
-        except Exception as exc:
-            logging.warning(f"⚠️  Error fetching available Coinbase markets: {exc}")
-            return []
-
     def _get_account_balance_detailed(self, verbose: bool = False):
         """Return ONLY tradable Advanced Trade USD/USDC balances (detailed version).
 
@@ -6893,6 +6885,7 @@ class AlpacaBroker(BaseBroker):
         except Exception as exc:
             logging.warning("[HeartbeatTrade] Alpaca market discovery failed: %s", exc)
         return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']
+
 
 class BinanceBroker(BaseBroker):
     """
