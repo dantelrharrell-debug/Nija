@@ -66,6 +66,7 @@ class RuntimeAuthoritySnapshot:
 class ExecutionDecision:
     allowed: bool
     reason: str
+    circuit_state: str
     state_live_active: bool
     lease_valid: bool
     lease_generation_current: bool
@@ -637,8 +638,42 @@ def can_execute() -> ExecutionDecision:
         heartbeat_stage_sufficient = False
 
     broker_health_ok = bool(runtime_snapshot.dispatch_health_ready)
-    circuit_breaker_closed = not bool(runtime_snapshot.kill_switch_active)
     dispatch_enabled = bool(runtime_snapshot.dispatch_enabled and has_execution_authority())
+
+    configured_circuit_state = (
+        os.getenv("NIJA_EXECUTION_CIRCUIT_STATE", "CLOSED").strip().upper() or "CLOSED"
+    )
+    if configured_circuit_state not in {"CLOSED", "OPEN", "HALTED", "RECOVERING"}:
+        configured_circuit_state = "OPEN"
+    recovery_approved = _env_truthy("NIJA_EXECUTION_RECOVERY_APPROVED")
+
+    immediate_halt_triggered = bool(
+        (not lease_valid)
+        or (not lease_generation_current)
+        or (not bool(runtime_snapshot.nonce_ready))
+        or ("other-instance" in lease_error.lower())
+        or ("mismatch" in lease_error.lower())
+    )
+    if immediate_halt_triggered and configured_circuit_state == "CLOSED":
+        configured_circuit_state = "HALTED"
+        os.environ["NIJA_EXECUTION_CIRCUIT_STATE"] = "HALTED"
+
+    circuit_breaker_closed = False
+    if configured_circuit_state == "CLOSED":
+        circuit_breaker_closed = not bool(runtime_snapshot.kill_switch_active)
+    elif configured_circuit_state == "RECOVERING":
+        circuit_breaker_closed = bool(
+            recovery_approved
+            and not bool(runtime_snapshot.kill_switch_active)
+            and lease_valid
+            and lease_generation_current
+            and heartbeat_fresh
+            and heartbeat_stage_sufficient
+            and broker_health_ok
+            and bool(runtime_snapshot.nonce_ready)
+        )
+    else:
+        circuit_breaker_closed = False
 
     checks = (
         ("state.live_active", state_live_active),
@@ -666,6 +701,7 @@ def can_execute() -> ExecutionDecision:
             return ExecutionDecision(
                 allowed=False,
                 reason=reason,
+                circuit_state=configured_circuit_state,
                 state_live_active=state_live_active,
                 lease_valid=lease_valid,
                 lease_generation_current=lease_generation_current,
@@ -679,6 +715,7 @@ def can_execute() -> ExecutionDecision:
     return ExecutionDecision(
         allowed=True,
         reason="allowed",
+        circuit_state=configured_circuit_state,
         state_live_active=state_live_active,
         lease_valid=lease_valid,
         lease_generation_current=lease_generation_current,
