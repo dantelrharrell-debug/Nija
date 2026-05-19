@@ -14,6 +14,9 @@ Safety contract (from problem statement):
 import unittest
 import tempfile
 import shutil
+import json
+import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -170,7 +173,10 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
 
             self.assertTrue(result, "Heartbeat should succeed and persist marker")
             with open(marker_path, "r", encoding="utf-8") as marker_file:
-                self.assertIn("verified", marker_file.read())
+                marker_payload = json.loads(marker_file.read())
+                self.assertTrue(marker_payload.get("verified"))
+                self.assertIn(marker_payload.get("stage"), ("ORDER_VERIFY", "FILL_VERIFY"))
+                self.assertIsNotNone(marker_payload.get("verified_at_epoch"))
 
         buy_call = broker.execute_order.call_args_list[0]
         self.assertGreaterEqual(
@@ -178,6 +184,72 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
             10.0,
             "Heartbeat buy should be safely sized above micro-order thresholds",
         )
+
+    def test_heartbeat_order_verify_passes_without_immediate_fill_when_configured(self):
+        broker = MagicMock()
+        broker.connected = True
+        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
+        broker.execute_order = MagicMock(return_value={"status": "accepted", "order_id": "hb-order-only"})
+        strategy = self._make_strategy_with_broker(broker)
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = f"{tmp}/heartbeat_verified.flag"
+            with patch.dict(
+                "os.environ",
+                {
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "HEARTBEAT_VERIFICATION_REQUIRED_STAGE": "ORDER_VERIFY",
+                },
+                clear=False,
+            ):
+                result = strategy._execute_heartbeat_trade()
+            self.assertTrue(result, "ORDER_VERIFY should pass on accepted order without immediate fill")
+            with open(marker_path, "r", encoding="utf-8") as marker_file:
+                marker_payload = json.loads(marker_file.read())
+                self.assertEqual(marker_payload.get("stage"), "ORDER_VERIFY")
+
+    def test_heartbeat_fill_verify_blocks_without_fill(self):
+        broker = MagicMock()
+        broker.connected = True
+        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
+        broker.execute_order = MagicMock(return_value={"status": "accepted", "order_id": "hb-order-only"})
+        strategy = self._make_strategy_with_broker(broker)
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = f"{tmp}/heartbeat_verified.flag"
+            with patch.dict(
+                "os.environ",
+                {
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "HEARTBEAT_VERIFICATION_REQUIRED_STAGE": "FILL_VERIFY",
+                },
+                clear=False,
+            ):
+                result = strategy._execute_heartbeat_trade()
+            self.assertFalse(result, "FILL_VERIFY should fail when buy order is accepted but not filled")
+            self.assertFalse(Path(marker_path).exists())
+
+    def test_heartbeat_marker_refresh_updates_timestamp(self):
+        broker = MagicMock()
+        broker.connected = True
+        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
+        fake_buy = {"status": "filled", "order_id": "hb-011"}
+        fake_sell = {"status": "filled", "order_id": "hb-012"}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell, fake_buy, fake_sell])
+        strategy = self._make_strategy_with_broker(broker)
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = f"{tmp}/heartbeat_verified.flag"
+            with patch.dict("os.environ", {"HEARTBEAT_MARKER_PATH": marker_path}, clear=False):
+                self.assertTrue(strategy._execute_heartbeat_trade())
+                with open(marker_path, "r", encoding="utf-8") as marker_file:
+                    first_payload = json.loads(marker_file.read())
+                time.sleep(0.02)
+                self.assertTrue(strategy._execute_heartbeat_trade())
+                with open(marker_path, "r", encoding="utf-8") as marker_file:
+                    second_payload = json.loads(marker_file.read())
+            self.assertGreater(
+                float(second_payload.get("verified_at_epoch", 0)),
+                float(first_payload.get("verified_at_epoch", 0)),
+                "Successful re-verification should refresh marker timestamp",
+            )
 
 
 class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):

@@ -1601,10 +1601,20 @@ class NijaCoreLoop:
                         reason="execute_action_returned_false",
                     )
                     self._n_rejected += 1
+                    try:
+                        from bot.trading_state_machine import report_execution_anomaly
+                        report_execution_anomaly("rejected_orders", "execute_action_returned_false")
+                    except Exception:
+                        pass
 
             except Exception as exec_err:
                 logger.warning("Phase3 execute error for %s: %s", sig.symbol, exec_err)
                 blocked += 1
+                try:
+                    from bot.trading_state_machine import report_execution_anomaly
+                    report_execution_anomaly("rejected_orders", f"execute_exception:{exec_err}")
+                except Exception:
+                    pass
 
         # ── Emit score histogram for this cycle ──────────────────────────
         if _sdd is not None:
