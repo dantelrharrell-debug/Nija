@@ -1813,6 +1813,11 @@ class BaseBroker(ABC):
             force_liquidate: Bypass ALL validation (EMERGENCY ONLY)
         """
         pass
+
+    @abstractmethod
+    def get_available_markets(self) -> list:
+        """Return normalized tradable markets for heartbeat verification and routing."""
+        pass
     
     def _call_with_circuit_breaker(self, func, *args, **kwargs):
         """
@@ -3245,6 +3250,14 @@ class CoinbaseBroker(BaseBroker):
 
         except Exception as e:
             logging.error(f"🔥 Error fetching all products: {e}")
+            return []
+
+    def get_available_markets(self) -> list:
+        """Return available Coinbase markets for heartbeat verification."""
+        try:
+            return list(self.get_all_products() or [])
+        except Exception as exc:
+            logging.warning(f"⚠️  Error fetching available Coinbase markets: {exc}")
             return []
 
     def _get_account_balance_detailed(self, verbose: bool = False):
@@ -6839,6 +6852,14 @@ class AlpacaBroker(BaseBroker):
             logging.info(f"📊 Alpaca: Using fallback list of {len(fallback_stocks)} stock symbols")
             return fallback_stocks
 
+    def get_available_markets(self) -> list:
+        """Return available Alpaca markets for heartbeat verification."""
+        try:
+            return list(self.get_all_products() or [])
+        except Exception as exc:
+            logging.warning(f"⚠️  Error fetching available Alpaca markets: {exc}")
+            return []
+
 class BinanceBroker(BaseBroker):
     """
     Binance Exchange integration for cryptocurrency spot trading.
@@ -7361,6 +7382,14 @@ class BinanceBroker(BaseBroker):
             ]
             logging.info(f"📊 Binance: Using fallback list of {len(fallback_pairs)} crypto pairs")
             return fallback_pairs
+
+    def get_available_markets(self) -> list:
+        """Return available Binance markets for heartbeat verification."""
+        try:
+            return list(self.get_all_products() or [])
+        except Exception as exc:
+            logging.warning(f"⚠️  Error fetching available Binance markets: {exc}")
+            return []
 
 
 
@@ -11415,11 +11444,31 @@ class KrakenBroker(BaseBroker):
         return supported
 
     def get_available_markets(self) -> list:
-        """Backward-compatible alias for heartbeat and legacy market scanners."""
+        """
+        Return normalized tradable Kraken markets.
+        Used by heartbeat verification and signal routing.
+        """
         try:
-            return list(self.get_all_products() or [])
+            if not self.api:
+                return []
+
+            resp = self.api.query_public("AssetPairs")
+            if not resp:
+                return []
+
+            result = resp.get("result", {})
+            markets = []
+            for _, pair_data in result.items():
+                wsname = pair_data.get("wsname")
+                if wsname:
+                    markets.append(wsname)
+
+            return markets
         except Exception as exc:
-            logging.warning(f"⚠️  Error fetching available Kraken markets: {exc}")
+            logger.exception(
+                "[KrakenBroker] get_available_markets failed: %s",
+                exc,
+            )
             return []
 
     def get_all_products(self) -> list:
@@ -12320,6 +12369,14 @@ class OKXBroker(BaseBroker):
         except Exception as e:
             logging.warning(f"⚠️  Error fetching OKX products: {e}")
             return self._get_okx_fallback_pairs()
+
+    def get_available_markets(self) -> list:
+        """Return available OKX markets for heartbeat verification."""
+        try:
+            return list(self.get_all_products() or [])
+        except Exception as exc:
+            logging.warning(f"⚠️  Error fetching available OKX markets: {exc}")
+            return []
 
     def _get_okx_fallback_pairs(self) -> list:
         """Get fallback list of popular OKX trading pairs"""

@@ -353,10 +353,9 @@ class TradingStrategy:
             True if the heartbeat trade executed successfully, False otherwise.
 
         Note:
-            Uses ``get_all_products()`` to verify the symbol is available on
-            the broker before placing the order.  ``get_available_markets()``
-            does not exist on KrakenBroker — ``get_all_products()`` is the
-            correct method.
+            Uses ``get_available_markets()`` to verify tradable symbols before
+            placing the order, with safe fallback markets to avoid startup
+            deadlock when market discovery is temporarily unavailable.
         """
         logger.info(
             "💓 Executing heartbeat trade: $%.2f on %s",
@@ -374,49 +373,58 @@ class TradingStrategy:
         logger.info("💓 Heartbeat trade using broker: %s", broker_name)
 
         # ── Verify the symbol is available on this broker ──────────────────
-        # Use get_all_products() — the correct method on KrakenBroker and all
-        # other broker classes.  get_available_markets() does not exist.
         symbol = _HEARTBEAT_TRADE_SYMBOL
+        markets = []
         try:
-            if hasattr(broker, "get_all_products"):
-                available_markets = broker.get_all_products()
-                if isinstance(available_markets, list) and available_markets:
-                    # Check if our preferred symbol is available; fall back to
-                    # the first available candidate if not.
-                    if symbol not in available_markets:
-                        for candidate in _HEARTBEAT_SYMBOL_CANDIDATES:
-                            if candidate in available_markets:
-                                logger.info(
-                                    "💓 Heartbeat symbol %s not available — using %s instead",
-                                    symbol,
-                                    candidate,
-                                )
-                                symbol = candidate
-                                break
-                        else:
-                            # Use the first available market as a last resort
-                            symbol = available_markets[0]
-                            logger.info(
-                                "💓 Heartbeat using first available market: %s", symbol
-                            )
-                    else:
-                        logger.info("💓 Heartbeat symbol %s confirmed available", symbol)
-                else:
-                    logger.warning(
-                        "⚠️  get_all_products() returned empty list — proceeding with %s",
-                        symbol,
-                    )
-            else:
-                logger.warning(
-                    "⚠️  Broker %s has no get_all_products() method — "
-                    "proceeding with symbol %s without market verification",
-                    broker_name,
-                    symbol,
-                )
-        except Exception as _market_err:
+            if hasattr(broker, "get_available_markets"):
+                markets = broker.get_available_markets()
+        except Exception as exc:
+            logger.exception(
+                "[HeartbeatTrade] market discovery failed: %s",
+                exc,
+            )
+            markets = ["BTC/USD"]
+
+        # fallback prevents startup deadlock
+        if not markets:
             logger.warning(
-                "⚠️  Market availability check failed (%s) — proceeding with %s",
-                _market_err,
+                "[HeartbeatTrade] Market discovery unavailable; "
+                "using fallback heartbeat markets"
+            )
+            markets = ["BTC/USD", "ETH/USD"]
+
+        normalized_markets: List[str] = []
+        seen_markets = set()
+        for market in markets:
+            if not isinstance(market, str):
+                continue
+            normalized = market.strip().replace("/", "-")
+            if not normalized or normalized in seen_markets:
+                continue
+            normalized_markets.append(normalized)
+            seen_markets.add(normalized)
+
+        if normalized_markets:
+            available_set = set(normalized_markets)
+            if symbol not in available_set:
+                for candidate in _HEARTBEAT_SYMBOL_CANDIDATES:
+                    if candidate in available_set:
+                        logger.info(
+                            "💓 Heartbeat symbol %s not available — using %s instead",
+                            symbol,
+                            candidate,
+                        )
+                        symbol = candidate
+                        break
+                else:
+                    symbol = normalized_markets[0]
+                    logger.info("💓 Heartbeat using first available market: %s", symbol)
+            else:
+                logger.info("💓 Heartbeat symbol %s confirmed available", symbol)
+        else:
+            logger.warning(
+                "⚠️  Market discovery returned no usable symbols on %s — proceeding with %s",
+                broker_name,
                 symbol,
             )
 
