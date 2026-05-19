@@ -14,6 +14,7 @@ Version: 7.1
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -450,6 +451,7 @@ class TradingStrategy:
                 metadata={"reason": "HEARTBEAT_TRADE"},
             )
             buy_status = (buy_result or {}).get("status", "error")
+            buy_order_id = (buy_result or {}).get("order_id")
             buy_submitted = bool(buy_result)
             buy_filled = buy_status in ("filled", "ok", "success")
             logger.info(
@@ -461,6 +463,14 @@ class TradingStrategy:
                 trade_amount_usd,
             )
             logger.info("💓 Heartbeat BUY result: status=%s", buy_status)
+
+            if buy_submitted:
+                self._persist_heartbeat_marker(
+                    stage="ORDER_VERIFY",
+                    broker_name=broker_name,
+                    pair=symbol,
+                    order_id=buy_order_id,
+                )
 
             if not buy_filled:
                 logger.error(
@@ -503,12 +513,16 @@ class TradingStrategy:
                     sell_status,
                 )
 
-                # Still return True: the BUY succeeded which proves the stack works
-                self._persist_heartbeat_marker()
+                # Keep ORDER_VERIFY stage: order acceptance was proven, full fill verification was not.
                 return True
 
             logger.info("✅ Heartbeat trade round-trip complete")
-            self._persist_heartbeat_marker()
+            self._persist_heartbeat_marker(
+                stage="FILL_VERIFY",
+                broker_name=broker_name,
+                pair=symbol,
+                order_id=buy_order_id,
+            )
             return True
 
         except Exception as _trade_err:
@@ -557,14 +571,63 @@ class TradingStrategy:
         )
         return resolved
 
-    def _persist_heartbeat_marker(self) -> None:
+    def _persist_heartbeat_marker(
+        self,
+        stage: str,
+        broker_name: str,
+        pair: str,
+        order_id: Optional[str] = None,
+    ) -> None:
         """Persist first-run heartbeat verification marker for activation gates."""
         marker_path = os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
         try:
             marker = Path(marker_path)
             marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text("verified", encoding="utf-8")
-            logger.info("[HeartbeatTrade] marker_written path=%s", str(marker))
+            verified_at = int(time.time())
+
+            deployment_id = (
+                os.environ.get("NIJA_DEPLOYMENT_ID")
+                or os.environ.get("RAILWAY_DEPLOYMENT_ID")
+                or os.environ.get("RAILWAY_DEPLOYMENT_INSTANCE_ID")
+                or ""
+            )
+            lease_generation_raw = (
+                os.environ.get("NIJA_WRITER_LEASE_GENERATION")
+                or os.environ.get("NIJA_WRITER_FENCING_TOKEN")
+                or "0"
+            )
+            nonce_epoch_raw = os.environ.get("NIJA_NONCE_EPOCH", str(verified_at))
+
+            try:
+                lease_generation = int(str(lease_generation_raw).strip())
+            except (TypeError, ValueError):
+                lease_generation = 0
+
+            try:
+                nonce_epoch = int(str(nonce_epoch_raw).strip())
+            except (TypeError, ValueError):
+                nonce_epoch = verified_at
+
+            payload: Dict[str, Any] = {
+                "verified_at": verified_at,
+                "stage": str(stage or "").strip().upper(),
+                "broker": str(broker_name or "").strip().lower(),
+                "pair": str(pair or "").strip(),
+                "deployment_id": deployment_id,
+                "lease_generation": lease_generation,
+                "nonce_epoch": nonce_epoch,
+            }
+            if order_id:
+                payload["order_id"] = str(order_id)
+
+            marker.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            logger.info(
+                "[HeartbeatTrade] marker_written path=%s stage=%s broker=%s pair=%s",
+                str(marker),
+                payload["stage"],
+                payload["broker"],
+                payload["pair"],
+            )
         except Exception as _marker_err:
             logger.error("❌ Failed to persist heartbeat marker %s: %s", marker_path, _marker_err)
 

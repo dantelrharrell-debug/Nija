@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -290,6 +292,90 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = os.path.join(tmp, "state.json")
             marker_path = os.path.join(tmp, "missing-heartbeat.flag")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
+
+    def test_commit_activation_blocks_when_heartbeat_marker_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "stale-heartbeat.flag")
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                json.dump(
+                    {
+                        "verified_at": int(time.time()) - 7200,
+                        "stage": "FILL_VERIFY",
+                        "broker": "kraken",
+                        "pair": "BTC-USD",
+                    },
+                    marker_file,
+                )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS": "30",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
+
+    def test_commit_activation_blocks_when_required_stage_not_met(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "order-verify-heartbeat.flag")
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                json.dump(
+                    {
+                        "verified_at": int(time.time()),
+                        "stage": "ORDER_VERIFY",
+                        "broker": "kraken",
+                        "pair": "BTC-USD",
+                    },
+                    marker_file,
+                )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                    "REQUIRED_HEARTBEAT_STAGE": "FILL_VERIFY",
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
+
+    def test_commit_activation_blocks_when_legacy_marker_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "legacy-heartbeat.flag")
+            with open(marker_path, "w", encoding="utf-8") as marker_file:
+                marker_file.write("verified")
+
             with patch.dict(
                 os.environ,
                 {

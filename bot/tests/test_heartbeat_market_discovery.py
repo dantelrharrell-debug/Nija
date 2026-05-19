@@ -14,6 +14,7 @@ Safety contract (from problem statement):
 import unittest
 import tempfile
 import shutil
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -170,7 +171,10 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
 
             self.assertTrue(result, "Heartbeat should succeed and persist marker")
             with open(marker_path, "r", encoding="utf-8") as marker_file:
-                self.assertIn("verified", marker_file.read())
+                marker_payload = json.load(marker_file)
+            self.assertIn(marker_payload.get("stage"), {"ORDER_VERIFY", "FILL_VERIFY"})
+            self.assertIsInstance(marker_payload.get("verified_at"), int)
+            self.assertEqual(marker_payload.get("pair"), "BTC-USD")
 
         buy_call = broker.execute_order.call_args_list[0]
         self.assertGreaterEqual(

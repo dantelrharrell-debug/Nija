@@ -94,11 +94,97 @@ def _heartbeat_marker_path() -> str:
     return os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
 
 
-def _heartbeat_verified() -> bool:
-    """True when the first-run heartbeat verification marker exists."""
+def _required_heartbeat_stage() -> str:
+    """Resolve required heartbeat verification stage for activation gating."""
+    required_stage = (os.environ.get("REQUIRED_HEARTBEAT_STAGE", "ORDER_VERIFY") or "ORDER_VERIFY").strip().upper()
+    if required_stage not in {"AUTH_VERIFY", "ORDER_VERIFY", "FILL_VERIFY"}:
+        logger.warning(
+            "[HeartbeatVerify] invalid REQUIRED_HEARTBEAT_STAGE=%s; defaulting to ORDER_VERIFY",
+            required_stage,
+        )
+        return "ORDER_VERIFY"
+    return required_stage
+
+
+def _stage_rank(stage: str) -> int:
+    stage_rank = {
+        "AUTH_VERIFY": 1,
+        "ORDER_VERIFY": 2,
+        "FILL_VERIFY": 3,
+    }
+    return stage_rank.get(stage, 0)
+
+
+HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS = int(
+    os.getenv("HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS", "1800")
+)
+
+
+def heartbeat_marker_is_fresh(path: str) -> bool:
     try:
-        return os.path.exists(_heartbeat_marker_path())
-    except Exception:
+        if not os.path.exists(path):
+            return False
+
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+
+        if raw.strip() == "verified":
+            logger.warning(
+                "[HeartbeatVerify] legacy marker detected; treated stale"
+            )
+            return False
+
+        data = json.loads(raw)
+        verified_at = int(data["verified_at"])
+        age = time.time() - verified_at
+
+        if age > HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS:
+            logger.warning(
+                "[HeartbeatVerify] stale marker age=%ss max=%ss",
+                int(age),
+                HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS,
+            )
+            return False
+
+        return True
+
+    except Exception as exc:
+        logger.critical(
+            "[HeartbeatVerify] malformed marker: %s",
+            exc,
+        )
+        return False
+
+
+def heartbeat_marker_stage_is_sufficient(path: str, required_stage: Optional[str] = None) -> bool:
+    """Return True when marker stage satisfies required heartbeat verification stage."""
+    try:
+        with open(path, "r", encoding="utf-8") as marker_file:
+            payload = json.load(marker_file)
+        marker_stage = str(payload.get("stage", "")).strip().upper()
+        target_stage = (required_stage or _required_heartbeat_stage()).strip().upper()
+        if _stage_rank(marker_stage) < _stage_rank(target_stage):
+            logger.warning(
+                "[HeartbeatVerify] stage_insufficient marker_stage=%s required_stage=%s",
+                marker_stage or "UNKNOWN",
+                target_stage,
+            )
+            return False
+        return True
+    except Exception as exc:
+        logger.critical("[HeartbeatVerify] malformed marker: %s", exc)
+        return False
+
+
+def _heartbeat_verified() -> bool:
+    """True when persisted heartbeat verification marker is fresh and stage-sufficient."""
+    try:
+        marker_path = _heartbeat_marker_path()
+        if not heartbeat_marker_is_fresh(marker_path):
+            return False
+        return heartbeat_marker_stage_is_sufficient(marker_path, _required_heartbeat_stage())
+    except Exception as exc:
+        logger.critical("[HeartbeatVerify] malformed marker: %s", exc)
         return False
 
 
@@ -889,8 +975,9 @@ class TradingStateMachine:
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: heartbeat_verification_required=true marker_missing path=%s heartbeat_trade=%s",
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: stale_or_missing_heartbeat path=%s required_stage=%s heartbeat_trade=%s",
                         _heartbeat_marker_path(),
+                        _required_heartbeat_stage(),
                         heartbeat_trade,
                     )
                     return
@@ -1353,8 +1440,9 @@ class TradingStateMachine:
 
         if _heartbeat_required_first and not _heartbeat_ok:
             logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_VERIFICATION_REQUIRED marker_missing path=%s heartbeat_trade=%s",
+                "[AUTO_ACTIVATE BLOCKED] stale_or_missing_heartbeat path=%s required_stage=%s heartbeat_trade=%s",
                 _heartbeat_marker_path(),
+                _required_heartbeat_stage(),
                 _heartbeat_trade,
             )
             return False

@@ -62,8 +62,42 @@ class RuntimeAuthoritySnapshot:
     reason: str
 
 
+@dataclass(frozen=True)
+class ExecutionDecision:
+    allowed: bool
+    reason: str
+    state_live_active: bool
+    lease_valid: bool
+    lease_generation_current: bool
+    heartbeat_fresh: bool
+    heartbeat_stage_sufficient: bool
+    broker_health_ok: bool
+    circuit_breaker_closed: bool
+    dispatch_enabled: bool
+
+
+class ExecutionBlocked(RuntimeError):
+    """Raised when canonical execution gate denies order dispatch."""
+
+
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+
+
+def _read_current_lease_generation() -> tuple[int, str]:
+    """Read monotonic lease generation from Redis."""
+    redis_url = get_redis_url()
+    if not redis_url:
+        return 0, "redis_unavailable"
+    generation_key = os.getenv("NIJA_LEASE_GENERATION_KEY", "nija:lease:generation").strip() or "nija:lease:generation"
+    try:
+        client = _connect_redis_for_authority(redis_url, timeout_s=2)
+        raw_generation = client.get(generation_key)  # type: ignore[attr-defined]
+        if raw_generation is None:
+            return 0, "generation_missing"
+        return int(str(raw_generation).strip()), ""
+    except Exception as exc:
+        return 0, str(exc)
 
 
 def _single_instance_lock_opt_out(live_mode: bool) -> bool:
@@ -535,11 +569,125 @@ def assert_startup_write_authority() -> None:
 
 def assert_execution_dispatch_permitted() -> None:
     """Fail closed unless writer authority and execution scope are both valid."""
-    assert_distributed_writer_authority()
-    if not has_execution_authority():
-        raise RuntimeError(
-            "Execution authority violation: order submission must originate from ExecutionPipeline"
-        )
+    decision = can_execute()
+    if not decision.allowed:
+        raise ExecutionBlocked(decision.reason)
+
+
+def can_execute() -> ExecutionDecision:
+    """Canonical execution authority decision for all order-dispatch paths."""
+    runtime_snapshot = runtime_authority_snapshot()
+    state_live_active = str(os.getenv("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() == "LIVE_ACTIVE"
+
+    local_generation_raw = (
+        os.getenv("NIJA_WRITER_LEASE_GENERATION")
+        or os.getenv("NIJA_WRITER_FENCING_TOKEN")
+        or "0"
+    )
+    try:
+        local_generation = int(str(local_generation_raw).strip())
+    except (TypeError, ValueError):
+        local_generation = 0
+    current_generation, generation_error = _read_current_lease_generation()
+    lease_generation_current = (
+        local_generation > 0
+        and current_generation > 0
+        and local_generation == current_generation
+    )
+    lease_valid = False
+    lease_error = ""
+    try:
+        assert_distributed_writer_authority()
+        lease_valid = True
+    except Exception as exc:
+        lease_error = str(exc)
+        lease_valid = False
+
+    heartbeat_fresh = False
+    heartbeat_stage_sufficient = False
+    heartbeat_reason = ""
+    try:
+        try:
+            from bot.trading_state_machine import (
+                _heartbeat_marker_path,
+                _required_heartbeat_stage,
+                heartbeat_marker_is_fresh,
+                heartbeat_marker_stage_is_sufficient,
+            )
+        except ImportError:
+            from trading_state_machine import (  # type: ignore[import]
+                _heartbeat_marker_path,
+                _required_heartbeat_stage,
+                heartbeat_marker_is_fresh,
+                heartbeat_marker_stage_is_sufficient,
+            )
+
+        marker_path = _heartbeat_marker_path()
+        heartbeat_fresh = heartbeat_marker_is_fresh(marker_path)
+        if heartbeat_fresh:
+            heartbeat_stage_sufficient = heartbeat_marker_stage_is_sufficient(
+                marker_path,
+                _required_heartbeat_stage(),
+            )
+        else:
+            heartbeat_stage_sufficient = False
+    except Exception as exc:
+        heartbeat_reason = str(exc)
+        heartbeat_fresh = False
+        heartbeat_stage_sufficient = False
+
+    broker_health_ok = bool(runtime_snapshot.dispatch_health_ready)
+    circuit_breaker_closed = not bool(runtime_snapshot.kill_switch_active)
+    dispatch_enabled = bool(runtime_snapshot.dispatch_enabled and has_execution_authority())
+
+    checks = (
+        ("state.live_active", state_live_active),
+        ("lease.valid", lease_valid),
+        ("lease.generation_current", lease_generation_current),
+        ("heartbeat.fresh", heartbeat_fresh),
+        ("heartbeat.stage_sufficient", heartbeat_stage_sufficient),
+        ("broker.health_ok", broker_health_ok),
+        ("circuit_breaker.closed", circuit_breaker_closed),
+        ("dispatch.enabled", dispatch_enabled),
+    )
+
+    for check_name, check_ok in checks:
+        if not check_ok:
+            reason = check_name
+            if check_name == "lease.valid" and lease_error:
+                reason = f"{check_name}: {lease_error}"
+            elif check_name == "lease.generation_current":
+                reason = (
+                    f"{check_name}: local={local_generation} current={current_generation} "
+                    f"detail={generation_error or 'generation_mismatch'}"
+                )
+            elif check_name.startswith("heartbeat.") and heartbeat_reason:
+                reason = f"{check_name}: {heartbeat_reason}"
+            return ExecutionDecision(
+                allowed=False,
+                reason=reason,
+                state_live_active=state_live_active,
+                lease_valid=lease_valid,
+                lease_generation_current=lease_generation_current,
+                heartbeat_fresh=heartbeat_fresh,
+                heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+                broker_health_ok=broker_health_ok,
+                circuit_breaker_closed=circuit_breaker_closed,
+                dispatch_enabled=dispatch_enabled,
+            )
+
+    return ExecutionDecision(
+        allowed=True,
+        reason="allowed",
+        state_live_active=state_live_active,
+        lease_valid=lease_valid,
+        lease_generation_current=lease_generation_current,
+        heartbeat_fresh=heartbeat_fresh,
+        heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+        broker_health_ok=broker_health_ok,
+        circuit_breaker_closed=circuit_breaker_closed,
+        dispatch_enabled=dispatch_enabled,
+    )
 
 
 def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
