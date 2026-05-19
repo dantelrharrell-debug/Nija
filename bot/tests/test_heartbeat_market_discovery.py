@@ -3,17 +3,17 @@ Unit tests for heartbeat market discovery (PR scope: get_available_markets).
 
 Validates:
 1. KrakenBroker implements the BaseBroker.get_available_markets interface
-2. Heartbeat executor falls back to built-in market list when discovery returns empty
+2. Heartbeat executor falls back gracefully when market discovery returns empty
 3. Heartbeat executor still runs when market discovery raises an exception
 
 Safety contract (from problem statement):
 - Heartbeat verification MUST NOT become market-discovery dependent.
-- An empty or failing get_available_markets() must not block heartbeat execution.
+- An empty or failing market-discovery call must not block heartbeat execution.
 """
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, PropertyMock
 
 
 class TestKrakenBrokerImplementsInterface(unittest.TestCase):
@@ -66,62 +66,55 @@ class TestKrakenBrokerImplementsInterface(unittest.TestCase):
 
 
 class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
-    """Heartbeat executor uses built-in fallback when market discovery returns empty."""
+    """Heartbeat executor gracefully handles empty market discovery."""
 
-    def _make_minimal_strategy(self):
+    def _make_strategy_with_broker(self, broker):
         """Build a minimal TradingStrategy-shaped object for heartbeat tests."""
         from bot.trading_strategy import TradingStrategy
         strategy = TradingStrategy.__new__(TradingStrategy)
-        strategy.heartbeat_last_trade_time = 0
-        strategy.heartbeat_trade_count = 0
-        strategy.broker = None
+        strategy.broker = broker
+        strategy.broker_manager = None
+        strategy.multi_account_manager = None
+        import threading
+        strategy._heartbeat_trade_lock = threading.Lock()
+        strategy._heartbeat_trade_completed = False
+        strategy._heartbeat_trade_success = False
         return strategy
 
-    def _make_broker(self, markets):
-        """Create a mock broker whose get_available_markets returns *markets*."""
+    def test_heartbeat_proceeds_when_market_discovery_returns_empty(self):
+        """When get_available_markets() returns [], heartbeat falls back and executes."""
+        from bot.trading_strategy import TradingStrategy
+
         broker = MagicMock()
         broker.connected = True
-        broker.get_available_markets = MagicMock(return_value=markets)
-        return broker
+        broker.get_available_markets = MagicMock(return_value=[])
+        # Remove get_all_products so only get_available_markets path is exercised
+        del broker.get_all_products
 
-    def test_fallback_used_when_market_discovery_returns_empty(self):
-        """When get_available_markets() returns [], the fallback list is used and
-        execution is not aborted early."""
-        import bot.trading_strategy as ts_mod
+        fake_buy = {'status': 'filled', 'order_id': 'hb-001'}
+        fake_sell = {'status': 'filled', 'order_id': 'hb-002'}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
 
-        strategy = self._make_minimal_strategy()
-        broker = self._make_broker([])
+        strategy = self._make_strategy_with_broker(broker)
 
-        # We expect the heartbeat to proceed past market discovery into order submission.
-        # Patch the order submission helper and balance service so execution can succeed.
-        fake_order = {'status': 'filled', 'order_id': 'hb-001'}
-        with patch.object(ts_mod, 'HEARTBEAT_TRADE_ENABLED', True), \
-             patch.object(ts_mod, 'HEARTBEAT_ONESHOT_RESET', False), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_SIZE_USD', 5.0), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_MAX_USD', 5.0), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_INTERVAL_SECONDS', 0), \
-             patch.object(ts_mod, 'HEARTBEAT_REQUIRED_FIRST_ACTIVATION', False), \
-             patch('bot.trading_strategy.BalanceService') as mock_balance, \
-             patch('bot.trading_strategy._submit_market_order_via_pipeline',
-                   return_value=fake_order), \
-             patch.object(strategy, '_is_heartbeat_one_shot_locked', return_value=False), \
-             patch.object(strategy, '_mark_heartbeat_one_shot_lock'), \
-             patch.object(strategy, '_get_broker_name', return_value='kraken'):
-            mock_balance.get = MagicMock(return_value=100.0)
-            result = strategy._execute_heartbeat_trade(broker=broker, force=False)
-
-        # Heartbeat should have executed (fallback markets provided a symbol).
-        self.assertTrue(result, "Heartbeat must succeed when fallback market list is used")
+        result = strategy._execute_heartbeat_trade()
+        # Heartbeat must succeed — it falls back to _HEARTBEAT_TRADE_SYMBOL
+        self.assertTrue(result, "Heartbeat must succeed even when market discovery returns empty")
 
     def test_market_discovery_count_logged(self):
         """[HeartbeatTrade] market_discovery_count=%s is emitted during execution."""
         import logging
-        import bot.trading_strategy as ts_mod
 
-        strategy = self._make_minimal_strategy()
-        broker = self._make_broker(['BTC-USD', 'ETH-USD', 'SOL-USD'])
+        broker = MagicMock()
+        broker.connected = True
+        broker.get_available_markets = MagicMock(return_value=['BTC-USD', 'ETH-USD', 'SOL-USD'])
 
-        fake_order = {'status': 'filled', 'order_id': 'hb-002'}
+        fake_buy = {'status': 'filled', 'order_id': 'hb-003'}
+        fake_sell = {'status': 'filled', 'order_id': 'hb-004'}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
+
+        strategy = self._make_strategy_with_broker(broker)
+
         log_records = []
 
         class _Capture(logging.Handler):
@@ -129,23 +122,11 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
                 log_records.append(record.getMessage())
 
         handler = _Capture()
-        ts_logger = logging.getLogger('nija')
+        ts_logger = logging.getLogger('nija.trading_strategy')
         ts_logger.addHandler(handler)
+        ts_logger.setLevel(logging.DEBUG)
         try:
-            with patch.object(ts_mod, 'HEARTBEAT_TRADE_ENABLED', True), \
-                 patch.object(ts_mod, 'HEARTBEAT_ONESHOT_RESET', False), \
-                 patch.object(ts_mod, 'HEARTBEAT_TRADE_SIZE_USD', 5.0), \
-                 patch.object(ts_mod, 'HEARTBEAT_TRADE_MAX_USD', 5.0), \
-                 patch.object(ts_mod, 'HEARTBEAT_TRADE_INTERVAL_SECONDS', 0), \
-                 patch.object(ts_mod, 'HEARTBEAT_REQUIRED_FIRST_ACTIVATION', False), \
-                 patch('bot.trading_strategy.BalanceService') as mock_balance, \
-                 patch('bot.trading_strategy._submit_market_order_via_pipeline',
-                       return_value=fake_order), \
-                 patch.object(strategy, '_is_heartbeat_one_shot_locked', return_value=False), \
-                 patch.object(strategy, '_mark_heartbeat_one_shot_lock'), \
-                 patch.object(strategy, '_get_broker_name', return_value='kraken'):
-                mock_balance.get = MagicMock(return_value=100.0)
-                strategy._execute_heartbeat_trade(broker=broker, force=False)
+            strategy._execute_heartbeat_trade()
         finally:
             ts_logger.removeHandler(handler)
 
@@ -157,75 +138,57 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
 
 
 class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
-    """Heartbeat executor continues when get_available_markets raises an exception."""
+    """Heartbeat executor continues when market discovery raises an exception."""
 
-    def _make_minimal_strategy(self):
+    def _make_strategy_with_broker(self, broker):
         from bot.trading_strategy import TradingStrategy
         strategy = TradingStrategy.__new__(TradingStrategy)
-        strategy.heartbeat_last_trade_time = 0
-        strategy.heartbeat_trade_count = 0
-        strategy.broker = None
+        strategy.broker = broker
+        strategy.broker_manager = None
+        strategy.multi_account_manager = None
+        import threading
+        strategy._heartbeat_trade_lock = threading.Lock()
+        strategy._heartbeat_trade_completed = False
+        strategy._heartbeat_trade_success = False
         return strategy
 
     def test_heartbeat_executes_when_market_discovery_raises(self):
         """If get_available_markets() raises, heartbeat falls back and still executes."""
-        import bot.trading_strategy as ts_mod
-
-        strategy = self._make_minimal_strategy()
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(
             side_effect=ConnectionError("Exchange unreachable")
         )
 
-        fake_order = {'status': 'filled', 'order_id': 'hb-003'}
-        with patch.object(ts_mod, 'HEARTBEAT_TRADE_ENABLED', True), \
-             patch.object(ts_mod, 'HEARTBEAT_ONESHOT_RESET', False), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_SIZE_USD', 5.0), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_MAX_USD', 5.0), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_INTERVAL_SECONDS', 0), \
-             patch.object(ts_mod, 'HEARTBEAT_REQUIRED_FIRST_ACTIVATION', False), \
-             patch('bot.trading_strategy.BalanceService') as mock_balance, \
-             patch('bot.trading_strategy._submit_market_order_via_pipeline',
-                   return_value=fake_order), \
-             patch.object(strategy, '_is_heartbeat_one_shot_locked', return_value=False), \
-             patch.object(strategy, '_mark_heartbeat_one_shot_lock'), \
-             patch.object(strategy, '_get_broker_name', return_value='kraken'):
-            mock_balance.get = MagicMock(return_value=100.0)
-            result = strategy._execute_heartbeat_trade(broker=broker, force=False)
+        fake_buy = {'status': 'filled', 'order_id': 'hb-005'}
+        fake_sell = {'status': 'filled', 'order_id': 'hb-006'}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
 
+        strategy = self._make_strategy_with_broker(broker)
+
+        result = strategy._execute_heartbeat_trade()
         self.assertTrue(
             result,
             "Heartbeat must succeed even when get_available_markets() raises an exception",
         )
 
-    def test_heartbeat_executes_when_broker_lacks_get_available_markets(self):
-        """If broker has no get_available_markets(), heartbeat uses built-in fallback."""
-        import bot.trading_strategy as ts_mod
+    def test_heartbeat_executes_when_broker_lacks_market_discovery(self):
+        """If broker has no get_available_markets() or get_all_products(), heartbeat uses default symbol."""
+        broker = MagicMock(spec=[])  # spec=[] means no attributes
+        broker.connected = True
 
-        strategy = self._make_minimal_strategy()
-        # Use SimpleNamespace: no get_available_markets attribute at all
-        broker = SimpleNamespace(connected=True)
+        fake_buy = {'status': 'filled', 'order_id': 'hb-007'}
+        fake_sell = {'status': 'filled', 'order_id': 'hb-008'}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
+        # Replicate what _get_active_broker does when self.broker is connected
+        object.__setattr__(broker, 'connected', True)
 
-        fake_order = {'status': 'filled', 'order_id': 'hb-004'}
-        with patch.object(ts_mod, 'HEARTBEAT_TRADE_ENABLED', True), \
-             patch.object(ts_mod, 'HEARTBEAT_ONESHOT_RESET', False), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_SIZE_USD', 5.0), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_MAX_USD', 5.0), \
-             patch.object(ts_mod, 'HEARTBEAT_TRADE_INTERVAL_SECONDS', 0), \
-             patch.object(ts_mod, 'HEARTBEAT_REQUIRED_FIRST_ACTIVATION', False), \
-             patch('bot.trading_strategy.BalanceService') as mock_balance, \
-             patch('bot.trading_strategy._submit_market_order_via_pipeline',
-                   return_value=fake_order), \
-             patch.object(strategy, '_is_heartbeat_one_shot_locked', return_value=False), \
-             patch.object(strategy, '_mark_heartbeat_one_shot_lock'), \
-             patch.object(strategy, '_get_broker_name', return_value='mock'):
-            mock_balance.get = MagicMock(return_value=100.0)
-            result = strategy._execute_heartbeat_trade(broker=broker, force=False)
+        strategy = self._make_strategy_with_broker(broker)
 
+        result = strategy._execute_heartbeat_trade()
         self.assertTrue(
             result,
-            "Heartbeat must succeed when broker has no get_available_markets method",
+            "Heartbeat must succeed when broker has no market discovery method",
         )
 
 

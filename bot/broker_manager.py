@@ -11468,6 +11468,14 @@ class KrakenBroker(BaseBroker):
         supported = asset_class.lower() in ["crypto", "cryptocurrency", "futures"]
         return supported
 
+    def get_available_markets(self) -> list:
+        """Backward-compatible alias for heartbeat and legacy market scanners."""
+        try:
+            return list(self.get_all_products() or [])
+        except Exception as exc:
+            logging.warning(f"⚠️  Error fetching available Kraken markets: {exc}")
+            return []
+
     def get_all_products(self) -> list:
         """
         Get list of all tradeable cryptocurrency and futures pairs from Kraken.
