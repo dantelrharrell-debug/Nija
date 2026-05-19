@@ -1,3 +1,4 @@
+import os
 import unittest
 import types
 import sys
@@ -277,6 +278,74 @@ class TestGlobalKrakenNonceRecovery(unittest.TestCase):
         gkn._consecutive_rebuild_failures = 7
         self.assertEqual(gkn.get_consecutive_rebuild_failures(), 7)
         gkn._consecutive_rebuild_failures = 0
+
+
+class TestPublishLockAcquiredStateNonOverwrite(unittest.TestCase):
+    """Regression tests for fencing-token overwrite bug.
+
+    When the process writer lock (bot.py) has already established
+    NIJA_WRITER_FENCING_TOKEN, _publish_lock_acquired_state must NOT
+    overwrite it with the nonce lease version.  Doing so causes
+    assert_distributed_writer_authority() to compare the nonce-lease token
+    against the Redis process-lock key and always find a mismatch.
+    """
+
+    def _make_mgr(self) -> "_PerKeyRedisBackend":
+        """Create a minimal _PerKeyRedisBackend instance without a real Redis client."""
+        backend = _PerKeyRedisBackend.__new__(_PerKeyRedisBackend)
+        return backend
+
+    def setUp(self) -> None:
+        # Ensure a clean env state before each test.
+        for key in ("NIJA_LOCK_ACQUIRED", "NIJA_WRITER_FENCING_TOKEN", "NIJA_WRITER_LEASE_ACQUIRED"):
+            os.environ.pop(key, None)
+
+    def tearDown(self) -> None:
+        for key in ("NIJA_LOCK_ACQUIRED", "NIJA_WRITER_FENCING_TOKEN", "NIJA_WRITER_LEASE_ACQUIRED"):
+            os.environ.pop(key, None)
+
+    def test_sets_fencing_token_when_process_lock_not_yet_established(self) -> None:
+        """When NIJA_WRITER_LEASE_ACQUIRED is absent, the nonce lease token IS written."""
+        mgr = self._make_mgr()
+        mgr._publish_lock_acquired_state(42)
+        self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), "42")
+        self.assertEqual(os.environ.get("NIJA_LOCK_ACQUIRED"), "true")
+
+    def test_does_not_overwrite_fencing_token_when_process_lock_established(self) -> None:
+        """When NIJA_WRITER_LEASE_ACQUIRED=1 (process lock token=15), the nonce lease
+        version (28) must NOT overwrite NIJA_WRITER_FENCING_TOKEN."""
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = "15"
+        os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+
+        mgr = self._make_mgr()
+        mgr._publish_lock_acquired_state(28)
+
+        # Token must remain 15 (the process lock token), not 28 (nonce lease).
+        self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), "15")
+        # NIJA_LOCK_ACQUIRED is still set.
+        self.assertEqual(os.environ.get("NIJA_LOCK_ACQUIRED"), "true")
+
+    def test_does_not_overwrite_for_any_truthy_lease_acquired_value(self) -> None:
+        """All recognised truthy values of NIJA_WRITER_LEASE_ACQUIRED protect the token."""
+        for truthy in ("1", "true", "yes", "on", "enabled"):
+            with self.subTest(truthy=truthy):
+                os.environ["NIJA_WRITER_FENCING_TOKEN"] = "15"
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = truthy
+                mgr = self._make_mgr()
+                mgr._publish_lock_acquired_state(99)
+                self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), "15",
+                                 f"Token overwritten when NIJA_WRITER_LEASE_ACQUIRED={truthy!r}")
+
+    def test_overwrites_when_lease_acquired_is_falsy(self) -> None:
+        """A falsy NIJA_WRITER_LEASE_ACQUIRED still allows the nonce manager to set the token."""
+        for falsy in ("", "0", "false", "no"):
+            with self.subTest(falsy=falsy):
+                os.environ["NIJA_WRITER_FENCING_TOKEN"] = "15"
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = falsy
+                mgr = self._make_mgr()
+                mgr._publish_lock_acquired_state(99)
+                self.assertEqual(os.environ.get("NIJA_WRITER_FENCING_TOKEN"), "99",
+                                 f"Token not updated when NIJA_WRITER_LEASE_ACQUIRED={falsy!r}")
 
 
 if __name__ == "__main__":

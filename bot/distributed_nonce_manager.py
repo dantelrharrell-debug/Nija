@@ -772,7 +772,23 @@ class _PerKeyRedisBackend:
     def _publish_lock_acquired_state(self, lease_version: int) -> None:
         """Publish lock/fencing runtime state and advance bootstrap FSM when needed."""
         os.environ["NIJA_LOCK_ACQUIRED"] = "true"
-        os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(lease_version)
+        # Only set NIJA_WRITER_FENCING_TOKEN when the process writer lock has not
+        # already established it.  The process lock (bot.py) sets NIJA_WRITER_LEASE_ACQUIRED
+        # alongside NIJA_WRITER_FENCING_TOKEN; if it is present, the nonce-lease version
+        # must NOT overwrite the process-lock token because assert_distributed_writer_authority()
+        # validates NIJA_WRITER_FENCING_TOKEN against the Redis process lock key, and
+        # replacing it with a nonce-lease version causes a permanent mismatch.
+        _process_lock_established = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip().lower() in {
+            "1", "true", "yes", "on", "enabled"
+        }
+        if not _process_lock_established:
+            os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(lease_version)
+        else:
+            _logger.debug(
+                "DistributedNonceManager: skipping NIJA_WRITER_FENCING_TOKEN overwrite "
+                "(process writer lock already established, lease_version=%d)",
+                lease_version,
+            )
         try:
             bootstrap_state = None
             bootstrap_enum = None
