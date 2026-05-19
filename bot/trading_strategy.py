@@ -481,6 +481,189 @@ class TradingStrategy:
                     "⚠️  Heartbeat SELL returned status=%s — position may remain open",
                     sell_status,
                 )
+
+        # Fallback: use a curated default list
+        self.symbols = _HEARTBEAT_SYMBOL_CANDIDATES.copy()
+        logger.info(
+            "ℹ️  Using default symbol list (%d symbols)", len(self.symbols)
+        )
+
+    # -----------------------------------------------------------------------
+    # Heartbeat trade
+    # -----------------------------------------------------------------------
+
+    def _schedule_heartbeat_trade(self) -> None:
+        """Schedule the heartbeat trade in a background daemon thread."""
+        with self._heartbeat_trade_lock:
+            if self._heartbeat_trade_thread is not None and self._heartbeat_trade_thread.is_alive():
+                logger.debug("Heartbeat trade thread already running")
+                return
+            self._heartbeat_trade_thread = threading.Thread(
+                target=self._heartbeat_trade_runner,
+                name="HeartbeatTrade",
+                daemon=True,
+            )
+            self._heartbeat_trade_thread.start()
+        logger.info("💓 Heartbeat trade thread started")
+
+    def _heartbeat_trade_runner(self) -> None:
+        """Background thread: wait for the configured interval then execute the heartbeat trade."""
+        logger.info(
+            "💓 Heartbeat trade runner sleeping %.0fs before first attempt",
+            _HEARTBEAT_TRADE_INTERVAL_S,
+        )
+        time.sleep(_HEARTBEAT_TRADE_INTERVAL_S)
+        try:
+            success = self._execute_heartbeat_trade()
+            with self._heartbeat_trade_lock:
+                self._heartbeat_trade_completed = True
+                self._heartbeat_trade_success = success
+            if success:
+                logger.info("✅ Heartbeat trade PASSED — bot confirmed ready for live trading")
+            else:
+                logger.error(
+                    "❌ Heartbeat trade FAILED — trading remains blocked until heartbeat succeeds"
+                )
+        except Exception as _hb_err:
+            logger.error("❌ Heartbeat trade runner raised: %s", _hb_err, exc_info=True)
+            with self._heartbeat_trade_lock:
+                self._heartbeat_trade_completed = True
+                self._heartbeat_trade_success = False
+
+    def _execute_heartbeat_trade(self) -> bool:
+        """
+        Execute a small $5 test trade to verify the full execution stack.
+
+        This is a one-shot verification that runs once on startup.  It places
+        a market buy order for the configured heartbeat symbol (default BTC-USD)
+        and immediately sells it to close the position.
+
+        Returns:
+            True if the heartbeat trade executed successfully, False otherwise.
+
+        Note:
+            Uses ``get_available_markets()`` to verify tradable symbols before
+            placing the order, with safe fallback markets to avoid startup
+            deadlock when market discovery is temporarily unavailable.
+        """
+        logger.info(
+            "💓 Executing heartbeat trade: $%.2f on %s",
+            _HEARTBEAT_TRADE_AMOUNT_USD,
+            _HEARTBEAT_TRADE_SYMBOL,
+        )
+
+        # ── Resolve broker ─────────────────────────────────────────────────
+        broker = self._get_active_broker()
+        if broker is None:
+            logger.error("❌ Heartbeat trade: no active broker available")
+            return False
+
+        broker_name = type(broker).__name__
+        logger.info("💓 Heartbeat trade using broker: %s", broker_name)
+
+        # ── Verify the symbol is available on this broker ──────────────────
+        symbol = _HEARTBEAT_TRADE_SYMBOL
+        markets = []
+        try:
+            if hasattr(broker, "get_available_markets"):
+                markets = broker.get_available_markets()
+        except Exception as exc:
+            logger.exception(
+                "[HeartbeatTrade] market discovery failed: %s",
+                exc,
+            )
+            markets = ["BTC/USD"]
+
+        # fallback prevents startup deadlock
+        if not markets:
+            logger.warning(
+                "[HeartbeatTrade] Market discovery unavailable; "
+                "using fallback heartbeat markets"
+            )
+            markets = ["BTC/USD", "ETH/USD"]
+
+        normalized_markets: List[str] = []
+        seen_markets = set()
+        for market in markets:
+            if not isinstance(market, str):
+                continue
+            normalized = market.strip().replace("/", "-")
+            if not normalized or normalized in seen_markets:
+                continue
+            normalized_markets.append(normalized)
+            seen_markets.add(normalized)
+
+        if normalized_markets:
+            available_set = set(normalized_markets)
+            if symbol not in available_set:
+                for candidate in _HEARTBEAT_SYMBOL_CANDIDATES:
+                    if candidate in available_set:
+                        logger.info(
+                            "💓 Heartbeat symbol %s not available — using %s instead",
+                            symbol,
+                            candidate,
+                        )
+                        symbol = candidate
+                        break
+                else:
+                    symbol = normalized_markets[0]
+                    logger.info("💓 Heartbeat using first available market: %s", symbol)
+            else:
+                logger.info("💓 Heartbeat symbol %s confirmed available", symbol)
+        else:
+            logger.warning(
+                "⚠️  Market discovery returned no usable symbols on %s — proceeding with %s",
+                broker_name,
+                symbol,
+            )
+
+        # ── Place the heartbeat buy order ──────────────────────────────────
+        try:
+            logger.info(
+                "💓 Placing heartbeat BUY: %s $%.2f",
+                symbol,
+                _HEARTBEAT_TRADE_AMOUNT_USD,
+            )
+            buy_result = broker.execute_order(
+                symbol=symbol,
+                side="buy",
+                quantity=_HEARTBEAT_TRADE_AMOUNT_USD,
+                size_type="quote",
+                metadata={"reason": "HEARTBEAT_TRADE"},
+            )
+            buy_status = (buy_result or {}).get("status", "error")
+            logger.info("💓 Heartbeat BUY result: status=%s", buy_status)
+
+            if buy_status not in ("filled", "ok", "success"):
+                logger.error(
+                    "❌ Heartbeat BUY failed: status=%s error=%s",
+                    buy_status,
+                    (buy_result or {}).get("error", "unknown"),
+                )
+                return False
+
+            logger.info("✅ Heartbeat BUY confirmed — order filled")
+
+            # Brief pause before the sell to allow the position to settle
+            time.sleep(2.0)
+
+            # ── Place the heartbeat sell order to close the position ────────
+            logger.info("💓 Placing heartbeat SELL to close position: %s", symbol)
+            sell_result = broker.execute_order(
+                symbol=symbol,
+                side="sell",
+                quantity=_HEARTBEAT_TRADE_AMOUNT_USD,
+                size_type="quote",
+                metadata={"reason": "HEARTBEAT_TRADE_CLOSE"},
+            )
+            sell_status = (sell_result or {}).get("status", "error")
+            logger.info("💓 Heartbeat SELL result: status=%s", sell_status)
+
+            if sell_status not in ("filled", "ok", "success"):
+                logger.warning(
+                    "⚠️  Heartbeat SELL returned status=%s — position may remain open",
+                    sell_status,
+                )
                 # Still return True: the BUY succeeded which proves the stack works
                 return True
 
