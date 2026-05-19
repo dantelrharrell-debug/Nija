@@ -1815,6 +1815,24 @@ class BaseBroker(ABC):
         pass
 
     @abstractmethod
+    def get_available_markets(self) -> List[str]:
+        """
+        Return the list of tradeable market symbols for this broker.
+
+        Heartbeat verification uses this to select a candidate symbol without
+        becoming dependent on metadata, exchange catalog state, or any optional
+        capability beyond authenticated order submission.
+
+        Implementations MUST:
+        - Return a non-empty list when the broker is connected and markets are
+          discoverable.
+        - Return a non-empty fallback list when discovery fails (never raise).
+
+        Returns:
+            List of trading-pair strings in broker-native format (e.g. 'BTC-USD').
+        """
+        pass
+
     def get_available_markets(self) -> list:
         """Return normalized tradable markets for heartbeat verification and routing."""
         pass
@@ -6237,6 +6255,20 @@ class CoinbaseBroker(BaseBroker):
         """Coinbase supports crypto only"""
         return asset_class.lower() == "crypto"
 
+    def get_available_markets(self) -> List[str]:
+        """Return tradeable markets for this Coinbase broker instance.
+
+        Delegates to ``get_all_products()`` and provides a minimal fallback so
+        heartbeat execution is never blocked by market discovery failures.
+        """
+        try:
+            markets = self.get_all_products()
+            if markets:
+                return markets
+        except Exception as exc:
+            logging.warning("[HeartbeatTrade] Coinbase market discovery failed: %s", exc)
+        return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD']
+
 
 class AlpacaBroker(BaseBroker):
     """
@@ -6852,6 +6884,19 @@ class AlpacaBroker(BaseBroker):
             logging.info(f"📊 Alpaca: Using fallback list of {len(fallback_stocks)} stock symbols")
             return fallback_stocks
 
+    def get_available_markets(self) -> List[str]:
+        """Return tradeable markets for this Alpaca broker instance.
+
+        Delegates to ``get_all_products()`` and provides a minimal fallback so
+        heartbeat execution is never blocked by market discovery failures.
+        """
+        try:
+            markets = self.get_all_products()
+            if markets:
+                return markets
+        except Exception as exc:
+            logging.warning("[HeartbeatTrade] Alpaca market discovery failed: %s", exc)
+        return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']
     def get_available_markets(self) -> list:
         """Return available Alpaca markets for heartbeat verification."""
         try:
@@ -7383,6 +7428,8 @@ class BinanceBroker(BaseBroker):
             logging.info(f"📊 Binance: Using fallback list of {len(fallback_pairs)} crypto pairs")
             return fallback_pairs
 
+    def get_available_markets(self) -> List[str]:
+        """Return tradeable markets for this Binance broker instance.
     def get_available_markets(self) -> list:
         """Return available Binance markets for heartbeat verification."""
         try:
@@ -7392,11 +7439,16 @@ class BinanceBroker(BaseBroker):
             return []
 
 
-
-
-
-
-
+        Delegates to ``get_all_products()`` and provides a minimal fallback so
+        heartbeat execution is never blocked by market discovery failures.
+        """
+        try:
+            markets = self.get_all_products()
+            if markets:
+                return markets
+        except Exception as exc:
+            logging.warning("[HeartbeatTrade] Binance market discovery failed: %s", exc)
+        return ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT']
 
 
 class KrakenBroker(BaseBroker):
@@ -11444,6 +11496,11 @@ class KrakenBroker(BaseBroker):
         return supported
 
     def get_available_markets(self) -> list:
+        """Backward-compatible alias for heartbeat and legacy market scanners."""
+        try:
+            return list(self.get_all_products() or [])
+        except Exception as exc:
+            logging.warning(f"⚠️  Error fetching available Kraken markets: {exc}")
         """
         Return normalized tradable Kraken markets.
         Used by heartbeat verification and signal routing.
@@ -11615,6 +11672,28 @@ class KrakenBroker(BaseBroker):
             ]
             logging.info(f"📊 Kraken: Using fallback list of {len(fallback_pairs)} crypto pairs")
             return fallback_pairs
+
+    def get_available_markets(self) -> List[str]:
+        """
+        Return tradeable market symbols for this Kraken broker instance.
+
+        Delegates to ``get_all_products()`` which handles caching, retry, and
+        its own built-in fallback list, so this method always returns a
+        non-empty list and never raises.
+
+        Contract (satisfies BaseBroker abstract method):
+        - Market discovery failure must not block heartbeat execution.
+        - Returns the cached product list when available (zero API cost).
+        - Returns the built-in fallback list on any discovery error.
+        """
+        try:
+            markets = self.get_all_products()
+            if markets:
+                return markets
+        except Exception as exc:
+            logging.warning("[HeartbeatTrade] Kraken market discovery failed: %s", exc)
+        # Hard-coded minimal fallback so heartbeat is never market-discovery dependent.
+        return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD']
 
 
 class OKXBroker(BaseBroker):
@@ -12387,6 +12466,20 @@ class OKXBroker(BaseBroker):
         ]
         logging.info(f"📊 OKX: Using fallback list of {len(fallback_pairs)} crypto pairs")
         return fallback_pairs
+
+    def get_available_markets(self) -> List[str]:
+        """Return tradeable markets for this OKX broker instance.
+
+        Delegates to ``get_all_products()`` and provides a minimal fallback so
+        heartbeat execution is never blocked by market discovery failures.
+        """
+        try:
+            markets = self.get_all_products()
+            if markets:
+                return markets
+        except Exception as exc:
+            logging.warning("[HeartbeatTrade] OKX market discovery failed: %s", exc)
+        return ['BTC-USDT', 'ETH-USDT', 'SOL-USDT', 'XRP-USDT', 'ADA-USDT']
 
 
 # ---------------------------------------------------------------------------
