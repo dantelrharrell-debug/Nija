@@ -95,7 +95,7 @@ _HEARTBEAT_TRADE_AMOUNT_USD: float = float(
     os.environ.get("HEARTBEAT_TRADE_AMOUNT_USD", "5.0") or "5.0"
 )
 _HEARTBEAT_TRADE_INTERVAL_S: float = float(
-    os.environ.get("HEARTBEAT_TRADE_INTERVAL_S", "600") or "600"
+    os.environ.get("HEARTBEAT_TRADE_INTERVAL_S", "15") or "15"
 )
 _HEARTBEAT_TRADE_SYMBOL: str = os.environ.get(
     "HEARTBEAT_TRADE_SYMBOL", "BTC-USD"
