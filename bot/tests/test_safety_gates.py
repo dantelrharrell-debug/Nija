@@ -81,10 +81,10 @@ def test_heartbeat_executes_once(tmp_path, monkeypatch: pytest.MonkeyPatch) -> N
                 marker_path.write_text(
                     json.dumps(
                         {
-                            "verified_at": int(time.time()),
-                            "stage": "ORDER_VERIFY",
-                            "broker": "kraken",
-                            "pair": "BTC-USD",
+                            "verified": True,
+                            "version": 2,
+                            "stage": "FILL_VERIFY",
+                            "verified_at_epoch": time.time(),
                         }
                     )
                 )

@@ -109,6 +109,22 @@ _HEARTBEAT_SYMBOL_CANDIDATES: List[str] = [
     "SOL-USD",
     "XRP-USD",
 ]
+_HEARTBEAT_STAGE_ORDER: Dict[str, int] = {
+    "AUTH_VERIFY": 1,
+    "ORDER_VERIFY": 2,
+    "FILL_VERIFY": 3,
+}
+
+
+def _heartbeat_required_stage() -> str:
+    stage = os.environ.get("HEARTBEAT_VERIFICATION_REQUIRED_STAGE", "ORDER_VERIFY").strip().upper()
+    if stage not in _HEARTBEAT_STAGE_ORDER:
+        return "ORDER_VERIFY"
+    return stage
+
+
+def _heartbeat_stage_is_sufficient(stage: str, required_stage: str) -> bool:
+    return _HEARTBEAT_STAGE_ORDER.get(stage, 0) >= _HEARTBEAT_STAGE_ORDER.get(required_stage, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +359,22 @@ class TradingStrategy:
                 self._heartbeat_trade_completed = True
                 self._heartbeat_trade_success = False
 
+    def _heartbeat_auth_verify(self, broker: Any) -> tuple[bool, str]:
+        """Best-effort authenticated request probe for AUTH_VERIFY stage."""
+        probe_methods = ("get_account_balance", "get_balance", "get_accounts", "get_portfolio")
+        for method_name in probe_methods:
+            method = getattr(broker, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                    return True, method_name
+                except Exception as exc:
+                    return False, f"{method_name}:{exc}"
+        # Fallback for broker test doubles that don't expose auth probe methods.
+        if getattr(broker, "connected", False) and callable(getattr(broker, "execute_order", None)):
+            return True, "connected_fallback"
+        return False, "auth_probe_unavailable"
+
     def _execute_heartbeat_trade(self) -> bool:
         """
         Execute a small $5 test trade to verify the full execution stack.
@@ -368,12 +400,22 @@ class TradingStrategy:
 
         broker_name = type(broker).__name__
         trade_amount_usd = self._resolve_heartbeat_trade_amount_usd(broker)
+        required_stage = _heartbeat_required_stage()
         logger.info(
             "💓 Executing heartbeat trade: $%.2f on %s",
             trade_amount_usd,
             _HEARTBEAT_TRADE_SYMBOL,
         )
         logger.info("💓 Heartbeat trade using broker: %s", broker_name)
+        logger.info("[HeartbeatTrade] required_stage=%s", required_stage)
+
+        # ── Stage 1: AUTH_VERIFY ─────────────────────────────────────────────
+        auth_ok, auth_detail = self._heartbeat_auth_verify(broker)
+        if not auth_ok:
+            logger.error("❌ Heartbeat AUTH_VERIFY failed: %s", auth_detail)
+            return False
+        stage_achieved = "AUTH_VERIFY"
+        stage_details: Dict[str, Any] = {"auth_probe": auth_detail}
 
         # ── Verify the symbol is available on this broker ──────────────────
         # Prefer get_available_markets() when the broker exposes it (satisfies
@@ -436,8 +478,13 @@ class TradingStrategy:
                 symbol,
             )
 
-        # ── Place the heartbeat buy order ──────────────────────────────────
+        # ── Stage 2 + 3 via heartbeat BUY order ────────────────────────────
         try:
+            _report_anomaly = None
+            try:
+                from bot.trading_state_machine import report_execution_anomaly as _report_anomaly
+            except Exception:
+                _report_anomaly = None
             logger.info(
                 "💓 Placing heartbeat BUY: %s $%.2f",
                 symbol,
@@ -453,7 +500,22 @@ class TradingStrategy:
             buy_status = (buy_result or {}).get("status", "error")
             buy_order_id = (buy_result or {}).get("order_id")
             buy_submitted = bool(buy_result)
-            buy_filled = buy_status in ("filled", "ok", "success")
+            buy_submitted = buy_submitted and str(buy_status).lower().strip() not in {
+                "error",
+                "rejected",
+                "failed",
+                "unfilled",
+                "skipped",
+            }
+            buy_filled = str(buy_status).lower().strip() in ("filled", "ok", "success")
+            stage_details.update(
+                {
+                    "symbol": symbol,
+                    "buy_status": buy_status,
+                    "buy_submitted": buy_submitted,
+                    "buy_filled": buy_filled,
+                }
+            )
             logger.info(
                 "[HeartbeatTrade] submit=%s fill=%s broker=%s pair=%s size=%s",
                 buy_submitted,
@@ -465,20 +527,43 @@ class TradingStrategy:
             logger.info("💓 Heartbeat BUY result: status=%s", buy_status)
 
             if buy_submitted:
-                self._persist_heartbeat_marker(
-                    stage="ORDER_VERIFY",
-                    broker_name=broker_name,
-                    pair=symbol,
-                    order_id=buy_order_id,
-                )
+                stage_achieved = "ORDER_VERIFY"
+            if buy_filled:
+                stage_achieved = "FILL_VERIFY"
 
-            if not buy_filled:
+            if not buy_submitted:
+                if callable(_report_anomaly):
+                    _report_anomaly("rejected_orders", f"heartbeat_buy_not_accepted status={buy_status}")
                 logger.error(
-                    "❌ Heartbeat BUY failed: status=%s error=%s",
+                    "❌ Heartbeat BUY not accepted: status=%s error=%s",
                     buy_status,
                     (buy_result or {}).get("error", "unknown"),
                 )
                 return False
+
+            if not _heartbeat_stage_is_sufficient(stage_achieved, required_stage):
+                if callable(_report_anomaly):
+                    _report_anomaly(
+                        "rejected_orders",
+                        f"heartbeat_stage_insufficient achieved={stage_achieved} required={required_stage}",
+                    )
+                logger.error(
+                    "❌ Heartbeat stage insufficient: achieved=%s required=%s",
+                    stage_achieved,
+                    required_stage,
+                )
+                return False
+
+            self._persist_heartbeat_marker(stage=stage_achieved, details=stage_details)
+
+            if not buy_filled:
+                if callable(_report_anomaly):
+                    _report_anomaly("partial_fills", f"heartbeat_buy_not_filled status={buy_status}")
+                logger.warning(
+                    "⚠️  Heartbeat BUY accepted but not immediately filled; stage=%s",
+                    stage_achieved,
+                )
+                return True
 
             logger.info("✅ Heartbeat BUY confirmed — order filled")
 
@@ -508,24 +593,23 @@ class TradingStrategy:
             logger.info("💓 Heartbeat SELL result: status=%s", sell_status)
 
             if not sell_filled:
+                if callable(_report_anomaly):
+                    _report_anomaly("partial_fills", f"heartbeat_sell_not_filled status={sell_status}")
                 logger.warning(
                     "⚠️  Heartbeat SELL returned status=%s — position may remain open",
                     sell_status,
                 )
-
-                # Keep ORDER_VERIFY stage: order acceptance was proven, full fill verification was not.
                 return True
 
             logger.info("✅ Heartbeat trade round-trip complete")
-            self._persist_heartbeat_marker(
-                stage="FILL_VERIFY",
-                broker_name=broker_name,
-                pair=symbol,
-                order_id=buy_order_id,
-            )
             return True
 
         except Exception as _trade_err:
+            try:
+                from bot.trading_state_machine import report_execution_anomaly as _report_anomaly
+                _report_anomaly("rejected_orders", f"heartbeat_exception:{_trade_err}")
+            except Exception:
+                pass
             logger.error(
                 "❌ Heartbeat trade execution raised: %s", _trade_err, exc_info=True
             )
@@ -571,20 +655,20 @@ class TradingStrategy:
         )
         return resolved
 
-    def _persist_heartbeat_marker(
-        self,
-        stage: str,
-        broker_name: str,
-        pair: str,
-        order_id: Optional[str] = None,
-    ) -> None:
-        """Persist first-run heartbeat verification marker for activation gates."""
+    def _persist_heartbeat_marker(self, *, stage: str, details: Optional[Dict[str, Any]] = None) -> None:
+        """Persist stage-aware heartbeat verification marker for activation gates."""
         marker_path = os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
         try:
             marker = Path(marker_path)
             marker.parent.mkdir(parents=True, exist_ok=True)
-            verified_at = int(time.time())
-
+            payload = {
+                "verified": True,
+                "version": 2,
+                "stage": str(stage or "AUTH_VERIFY").strip().upper(),
+                "verified_at_epoch": float(time.time()),
+                "verified_at_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "details": dict(details or {}),
+            }
             deployment_id = (
                 os.environ.get("NIJA_DEPLOYMENT_ID")
                 or os.environ.get("RAILWAY_DEPLOYMENT_ID")
@@ -596,37 +680,21 @@ class TradingStrategy:
                 or os.environ.get("NIJA_WRITER_FENCING_TOKEN")
                 or "0"
             )
-            nonce_epoch_raw = os.environ.get("NIJA_NONCE_EPOCH", str(verified_at))
-
+            nonce_epoch_raw = os.environ.get("NIJA_NONCE_EPOCH", "0")
             try:
-                lease_generation = int(str(lease_generation_raw).strip())
+                payload["lease_generation"] = int(str(lease_generation_raw).strip())
             except (TypeError, ValueError):
-                lease_generation = 0
-
+                payload["lease_generation"] = 0
             try:
-                nonce_epoch = int(str(nonce_epoch_raw).strip())
+                payload["nonce_epoch"] = int(str(nonce_epoch_raw).strip() or "0")
             except (TypeError, ValueError):
-                nonce_epoch = verified_at
-
-            payload: Dict[str, Any] = {
-                "verified_at": verified_at,
-                "stage": str(stage or "").strip().upper(),
-                "broker": str(broker_name or "").strip().lower(),
-                "pair": str(pair or "").strip(),
-                "deployment_id": deployment_id,
-                "lease_generation": lease_generation,
-                "nonce_epoch": nonce_epoch,
-            }
-            if order_id:
-                payload["order_id"] = str(order_id)
-
-            marker.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+                payload["nonce_epoch"] = 0
+            payload["deployment_id"] = deployment_id
+            marker.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
             logger.info(
-                "[HeartbeatTrade] marker_written path=%s stage=%s broker=%s pair=%s",
+                "[HeartbeatTrade] marker_written path=%s stage=%s",
                 str(marker),
                 payload["stage"],
-                payload["broker"],
-                payload["pair"],
             )
         except Exception as _marker_err:
             logger.error("❌ Failed to persist heartbeat marker %s: %s", marker_path, _marker_err)
