@@ -12,6 +12,7 @@ Safety contract (from problem statement):
 """
 
 import unittest
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -134,6 +135,34 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         self.assertTrue(
             matching,
             "[HeartbeatTrade] market_discovery_count structured log line must be emitted",
+        )
+
+    def test_heartbeat_writes_marker_and_uses_safe_minimum_size(self):
+        """Successful heartbeat writes verification marker and uses >= $10 notional."""
+        broker = MagicMock()
+        broker.connected = True
+        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
+
+        fake_buy = {'status': 'filled', 'order_id': 'hb-009'}
+        fake_sell = {'status': 'filled', 'order_id': 'hb-010'}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
+
+        strategy = self._make_strategy_with_broker(broker)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = f"{tmp}/heartbeat_verified.flag"
+            with patch.dict("os.environ", {"HEARTBEAT_MARKER_PATH": marker_path}, clear=False):
+                result = strategy._execute_heartbeat_trade()
+
+            self.assertTrue(result, "Heartbeat should succeed and persist marker")
+            with open(marker_path, "r", encoding="utf-8") as marker_file:
+                self.assertIn("verified", marker_file.read())
+
+        buy_call = broker.execute_order.call_args_list[0]
+        self.assertGreaterEqual(
+            float(buy_call.kwargs.get("quantity", 0.0)),
+            10.0,
+            "Heartbeat buy should be safely sized above micro-order thresholds",
         )
 
 

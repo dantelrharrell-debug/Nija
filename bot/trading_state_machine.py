@@ -102,6 +102,11 @@ def _heartbeat_verified() -> bool:
         return False
 
 
+def _heartbeat_verification_required() -> bool:
+    """True when startup policy requires heartbeat trade verification before live execution."""
+    return _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION") or _env_truthy("HEARTBEAT_TRADE")
+
+
 def _writer_heartbeat_gate() -> tuple[bool, str]:
     """Require an active + fresh distributed-writer heartbeat in live activation."""
     if not _env_truthy("NIJA_ENFORCE_WRITER_HEARTBEAT_GATE", "true"):
@@ -863,7 +868,7 @@ class TradingStateMachine:
         auto_activate = _env_truthy("AUTO_ACTIVATE")
         heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
         force_live = _env_truthy("FORCE_LIVE_TRANSITION")
-        heartbeat_required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
+        heartbeat_required_first = _heartbeat_verification_required()
         heartbeat_ok = _heartbeat_verified()
 
         with self._lock:
@@ -877,14 +882,16 @@ class TradingStateMachine:
                 return
 
             if live_verified and (auto_activate or force_live):
-                if heartbeat_required_first and not heartbeat_ok and not heartbeat_trade:
+                if heartbeat_required_first and not heartbeat_ok:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
                     self._activation_committed = False
                     self._execution_authority = False
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: HEARTBEAT_REQUIRED_FIRST_ACTIVATION=true but marker missing and HEARTBEAT_TRADE=false"
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: heartbeat_verification_required=true marker_missing path=%s heartbeat_trade=%s",
+                        _heartbeat_marker_path(),
+                        heartbeat_trade,
                     )
                     return
 
@@ -1340,14 +1347,15 @@ class TradingStateMachine:
             if runtime_mode is not None
             else os.environ.get("LIVE_TRADING", "false")
         )
-        _heartbeat_required_first = _env_truthy("HEARTBEAT_REQUIRED_FIRST_ACTIVATION")
+        _heartbeat_required_first = _heartbeat_verification_required()
         _heartbeat_ok = _heartbeat_verified()
         _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
 
-        if _heartbeat_required_first and not _heartbeat_ok and not _heartbeat_trade:
+        if _heartbeat_required_first and not _heartbeat_ok:
             logger.critical(
-                "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_REQUIRED_FIRST_ACTIVATION marker_missing path=%s",
+                "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_VERIFICATION_REQUIRED marker_missing path=%s heartbeat_trade=%s",
                 _heartbeat_marker_path(),
+                _heartbeat_trade,
             )
             return False
 
