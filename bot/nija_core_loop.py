@@ -2402,6 +2402,30 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     if _current_cycle_capital
                     else 0.0
                 )
+
+                # Hard gate: never execute strategy cycles until runtime authority
+                # has fully converged to dispatch-enabled live execution.
+                if _sm_loop is not None:
+                    try:
+                        _state_gate = _sm_loop.get_current_state()
+                        _committed_gate = bool(_sm_loop.get_activation_committed())
+                        _dispatch_gate = bool(_sm_loop.can_dispatch_trades())
+                        _live_gate = _state_gate == _TradingState.LIVE_ACTIVE
+                    except Exception as _exec_gate_err:
+                        logger.warning("Execution gate probe failed; skipping strategy cycle: %s", _exec_gate_err)
+                        time.sleep(cycle_secs)
+                        continue
+
+                    if (not _committed_gate) or (not _dispatch_gate) or (not _live_gate):
+                        logger.critical(
+                            "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s",
+                            _committed_gate,
+                            _dispatch_gate,
+                            getattr(_state_gate, "value", str(_state_gate)),
+                        )
+                        time.sleep(cycle_secs)
+                        continue
+
                 logger.critical("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
                 logger.critical("🚀 RUNNING TRADE CYCLE")
                 _cycle_start_ts = time.time()

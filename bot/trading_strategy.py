@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija.trading_strategy")
@@ -94,7 +95,7 @@ _HEARTBEAT_TRADE_AMOUNT_USD: float = float(
     os.environ.get("HEARTBEAT_TRADE_AMOUNT_USD", "5.0") or "5.0"
 )
 _HEARTBEAT_TRADE_INTERVAL_S: float = float(
-    os.environ.get("HEARTBEAT_TRADE_INTERVAL_S", "600") or "600"
+    os.environ.get("HEARTBEAT_TRADE_INTERVAL_S", "15") or "15"
 )
 _HEARTBEAT_TRADE_SYMBOL: str = os.environ.get(
     "HEARTBEAT_TRADE_SYMBOL", "BTC-USD"
@@ -358,12 +359,6 @@ class TradingStrategy:
             ``get_all_products()`` for older broker implementations.  Either
             way, market discovery failure never blocks heartbeat execution.
         """
-        logger.info(
-            "💓 Executing heartbeat trade: $%.2f on %s",
-            _HEARTBEAT_TRADE_AMOUNT_USD,
-            _HEARTBEAT_TRADE_SYMBOL,
-        )
-
         # ── Resolve broker ─────────────────────────────────────────────────
         broker = self._get_active_broker()
         if broker is None:
@@ -371,6 +366,12 @@ class TradingStrategy:
             return False
 
         broker_name = type(broker).__name__
+        trade_amount_usd = self._resolve_heartbeat_trade_amount_usd(broker)
+        logger.info(
+            "💓 Executing heartbeat trade: $%.2f on %s",
+            trade_amount_usd,
+            _HEARTBEAT_TRADE_SYMBOL,
+        )
         logger.info("💓 Heartbeat trade using broker: %s", broker_name)
 
         # ── Verify the symbol is available on this broker ──────────────────
@@ -439,19 +440,29 @@ class TradingStrategy:
             logger.info(
                 "💓 Placing heartbeat BUY: %s $%.2f",
                 symbol,
-                _HEARTBEAT_TRADE_AMOUNT_USD,
+                trade_amount_usd,
             )
             buy_result = broker.execute_order(
                 symbol=symbol,
                 side="buy",
-                quantity=_HEARTBEAT_TRADE_AMOUNT_USD,
+                quantity=trade_amount_usd,
                 size_type="quote",
                 metadata={"reason": "HEARTBEAT_TRADE"},
             )
             buy_status = (buy_result or {}).get("status", "error")
+            buy_submitted = bool(buy_result)
+            buy_filled = buy_status in ("filled", "ok", "success")
+            logger.info(
+                "[HeartbeatTrade] submit=%s fill=%s broker=%s pair=%s size=%s",
+                buy_submitted,
+                buy_filled,
+                broker_name,
+                symbol,
+                trade_amount_usd,
+            )
             logger.info("💓 Heartbeat BUY result: status=%s", buy_status)
 
-            if buy_status not in ("filled", "ok", "success"):
+            if not buy_filled:
                 logger.error(
                     "❌ Heartbeat BUY failed: status=%s error=%s",
                     buy_status,
@@ -469,23 +480,35 @@ class TradingStrategy:
             sell_result = broker.execute_order(
                 symbol=symbol,
                 side="sell",
-                quantity=_HEARTBEAT_TRADE_AMOUNT_USD,
+                quantity=trade_amount_usd,
                 size_type="quote",
                 metadata={"reason": "HEARTBEAT_TRADE_CLOSE"},
             )
             sell_status = (sell_result or {}).get("status", "error")
+            sell_submitted = bool(sell_result)
+            sell_filled = sell_status in ("filled", "ok", "success")
+            logger.info(
+                "[HeartbeatTrade] submit=%s fill=%s broker=%s pair=%s size=%s",
+                sell_submitted,
+                sell_filled,
+                broker_name,
+                symbol,
+                trade_amount_usd,
+            )
             logger.info("💓 Heartbeat SELL result: status=%s", sell_status)
 
-            if sell_status not in ("filled", "ok", "success"):
+            if not sell_filled:
                 logger.warning(
                     "⚠️  Heartbeat SELL returned status=%s — position may remain open",
                     sell_status,
                 )
 
                 # Still return True: the BUY succeeded which proves the stack works
+                self._persist_heartbeat_marker()
                 return True
 
             logger.info("✅ Heartbeat trade round-trip complete")
+            self._persist_heartbeat_marker()
             return True
 
         except Exception as _trade_err:
@@ -493,6 +516,57 @@ class TradingStrategy:
                 "❌ Heartbeat trade execution raised: %s", _trade_err, exc_info=True
             )
             return False
+
+    def _resolve_heartbeat_trade_amount_usd(self, broker: Any) -> float:
+        """Resolve a safe heartbeat notional above exchange minimums."""
+        broker_name = type(broker).__name__.replace("Broker", "").lower().strip()
+        exchange_minimum = 0.0
+
+        try:
+            from bot.minimum_notional_gate import get_minimum_notional_gate
+        except ImportError:
+            try:
+                from minimum_notional_gate import get_minimum_notional_gate  # type: ignore[import]
+            except ImportError:
+                get_minimum_notional_gate = None  # type: ignore[assignment]
+
+        if get_minimum_notional_gate is not None:
+            try:
+                exchange_minimum = float(
+                    get_minimum_notional_gate().get_minimum_for_symbol(
+                        _HEARTBEAT_TRADE_SYMBOL,
+                        broker_name=broker_name,
+                    )
+                    or 0.0
+                )
+            except Exception as _min_gate_err:
+                logger.debug("Heartbeat notional gate minimum lookup failed: %s", _min_gate_err)
+
+        if exchange_minimum <= 0.0:
+            try:
+                exchange_minimum = float(getattr(broker, "min_trade_size", 0.0) or 0.0)
+            except Exception:
+                exchange_minimum = 0.0
+
+        resolved = max(_HEARTBEAT_TRADE_AMOUNT_USD, exchange_minimum * 1.25, 10.0)
+        logger.info(
+            "[HeartbeatTrade] amount_resolved configured=%.2f exchange_min=%.2f final=%.2f",
+            _HEARTBEAT_TRADE_AMOUNT_USD,
+            exchange_minimum,
+            resolved,
+        )
+        return resolved
+
+    def _persist_heartbeat_marker(self) -> None:
+        """Persist first-run heartbeat verification marker for activation gates."""
+        marker_path = os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
+        try:
+            marker = Path(marker_path)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("verified", encoding="utf-8")
+            logger.info("[HeartbeatTrade] marker_written path=%s", str(marker))
+        except Exception as _marker_err:
+            logger.error("❌ Failed to persist heartbeat marker %s: %s", marker_path, _marker_err)
 
     def _get_active_broker(self) -> Optional[Any]:
         """Return the best available connected broker for the heartbeat trade."""

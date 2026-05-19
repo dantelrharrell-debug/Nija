@@ -14,6 +14,7 @@ from bot.trading_state_machine import (
     TradingState,
     TradingStateMachine,
     _collect_live_gate_status,
+    _heartbeat_verification_required,
     _live_activation_gate,
 )
 from bot.startup_coordinator import get_startup_coordinator
@@ -229,6 +230,17 @@ class TestRuntimeAuthorityRevocation(unittest.TestCase):
 
 
 class TestHeartbeatSafetyGating(unittest.TestCase):
+    def test_heartbeat_verification_required_when_heartbeat_trade_enabled(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                "HEARTBEAT_TRADE": "true",
+            },
+            clear=False,
+        ):
+            self.assertTrue(_heartbeat_verification_required())
+
     def test_live_gate_status_blocks_execution_when_writer_heartbeat_unhealthy(self) -> None:
         with patch(
             "bot.trading_state_machine._safe_start_gate",
@@ -273,6 +285,25 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertIn("WRITER_HEARTBEAT", reason)
+
+    def test_commit_activation_blocks_when_heartbeat_trade_enabled_and_marker_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            marker_path = os.path.join(tmp, "missing-heartbeat.flag")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "true",
+                    "HEARTBEAT_TRADE": "true",
+                    "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                    "HEARTBEAT_MARKER_PATH": marker_path,
+                },
+                clear=False,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertFalse(sm.commit_activation())
 
 
 if __name__ == "__main__":

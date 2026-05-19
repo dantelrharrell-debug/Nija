@@ -12,6 +12,8 @@ Safety contract (from problem statement):
 """
 
 import unittest
+import tempfile
+import shutil
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -67,6 +69,19 @@ class TestKrakenBrokerImplementsInterface(unittest.TestCase):
 
 class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
     """Heartbeat executor gracefully handles empty market discovery."""
+
+    def setUp(self):
+        self._hb_tmpdir = tempfile.mkdtemp(prefix="hb-marker-")
+        self._marker_patch = patch.dict(
+            "os.environ",
+            {"HEARTBEAT_MARKER_PATH": f"{self._hb_tmpdir}/heartbeat_verified.flag"},
+            clear=False,
+        )
+        self._marker_patch.start()
+
+    def tearDown(self):
+        self._marker_patch.stop()
+        shutil.rmtree(self._hb_tmpdir, ignore_errors=True)
 
     def _make_strategy_with_broker(self, broker):
         """Build a minimal TradingStrategy-shaped object for heartbeat tests."""
@@ -136,9 +151,50 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
             "[HeartbeatTrade] market_discovery_count structured log line must be emitted",
         )
 
+    def test_heartbeat_writes_marker_and_uses_safe_minimum_size(self):
+        """Successful heartbeat writes verification marker and uses >= $10 notional."""
+        broker = MagicMock()
+        broker.connected = True
+        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
+
+        fake_buy = {'status': 'filled', 'order_id': 'hb-009'}
+        fake_sell = {'status': 'filled', 'order_id': 'hb-010'}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
+
+        strategy = self._make_strategy_with_broker(broker)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            marker_path = f"{tmp}/heartbeat_verified.flag"
+            with patch.dict("os.environ", {"HEARTBEAT_MARKER_PATH": marker_path}, clear=False):
+                result = strategy._execute_heartbeat_trade()
+
+            self.assertTrue(result, "Heartbeat should succeed and persist marker")
+            with open(marker_path, "r", encoding="utf-8") as marker_file:
+                self.assertIn("verified", marker_file.read())
+
+        buy_call = broker.execute_order.call_args_list[0]
+        self.assertGreaterEqual(
+            float(buy_call.kwargs.get("quantity", 0.0)),
+            10.0,
+            "Heartbeat buy should be safely sized above micro-order thresholds",
+        )
+
 
 class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
     """Heartbeat executor continues when market discovery raises an exception."""
+
+    def setUp(self):
+        self._hb_tmpdir = tempfile.mkdtemp(prefix="hb-marker-")
+        self._marker_patch = patch.dict(
+            "os.environ",
+            {"HEARTBEAT_MARKER_PATH": f"{self._hb_tmpdir}/heartbeat_verified.flag"},
+            clear=False,
+        )
+        self._marker_patch.start()
+
+    def tearDown(self):
+        self._marker_patch.stop()
+        shutil.rmtree(self._hb_tmpdir, ignore_errors=True)
 
     def _make_strategy_with_broker(self, broker):
         from bot.trading_strategy import TradingStrategy
