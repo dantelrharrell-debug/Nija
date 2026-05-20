@@ -58,12 +58,15 @@ class TestExecutionStabilityAuthorityGate(unittest.TestCase):
         ), patch(
             "bot.trading_state_machine.heartbeat_marker_is_fresh",
             return_value=True,
+            create=True,
         ), patch(
             "bot.trading_state_machine._required_heartbeat_stage",
             return_value="ORDER_VERIFY",
+            create=True,
         ), patch(
             "bot.trading_state_machine.heartbeat_marker_stage_is_sufficient",
             return_value=True,
+            create=True,
         ), patch(
             "bot.execution_authority_context._evaluate_stability_authority",
             return_value=self._stability(True),
@@ -93,12 +96,15 @@ class TestExecutionStabilityAuthorityGate(unittest.TestCase):
         ), patch(
             "bot.trading_state_machine.heartbeat_marker_is_fresh",
             return_value=True,
+            create=True,
         ), patch(
             "bot.trading_state_machine._required_heartbeat_stage",
             return_value="ORDER_VERIFY",
+            create=True,
         ), patch(
             "bot.trading_state_machine.heartbeat_marker_stage_is_sufficient",
             return_value=True,
+            create=True,
         ), patch(
             "bot.execution_authority_context._evaluate_stability_authority",
             return_value=self._stability(False, reason="hard_collapse_containment"),
@@ -111,4 +117,3 @@ class TestExecutionStabilityAuthorityGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

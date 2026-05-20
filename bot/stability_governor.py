@@ -250,6 +250,19 @@ class StabilityGovernor:
         return StabilityState.NORMAL
 
     def _apply_state_hysteresis(self, target_state: StabilityState) -> StabilityState:
+        if target_state == StabilityState.HALTED and self._state != StabilityState.HALTED:
+            self._state = StabilityState.HALTED
+            self._pending_state = target_state
+            self._pending_count = 0
+            self._cooldown_remaining = self._mode_cooldown
+            return self._state
+        if self._state == StabilityState.HALTED and target_state == StabilityState.RECOVERING:
+            self._state = StabilityState.RECOVERING
+            self._pending_state = target_state
+            self._pending_count = 0
+            self._cooldown_remaining = self._mode_cooldown
+            return self._state
+
         if target_state == self._state:
             self._pending_state = target_state
             self._pending_count = 0
@@ -486,4 +499,3 @@ def get_stability_governor() -> StabilityGovernor:
         if _STABILITY_GOVERNOR is None:
             _STABILITY_GOVERNOR = StabilityGovernor()
     return _STABILITY_GOVERNOR
-
