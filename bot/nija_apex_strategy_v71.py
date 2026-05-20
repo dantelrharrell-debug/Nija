@@ -491,6 +491,20 @@ except ImportError:
         EXPLORATION_GOVERNOR_AVAILABLE = False
         logger.warning("⚠️ Exploration Governor not available — no shadow exploration")
 
+try:
+    from bot.stability_governor import get_stability_governor as _get_stability_governor
+    STABILITY_GOVERNOR_AVAILABLE = True
+    logger.info("✅ Stability Governor loaded — Lyapunov-style runtime guard active")
+except ImportError:
+    try:
+        from stability_governor import get_stability_governor as _get_stability_governor  # type: ignore
+        STABILITY_GOVERNOR_AVAILABLE = True
+        logger.info("✅ Stability Governor loaded — Lyapunov-style runtime guard active")
+    except ImportError:
+        _get_stability_governor = None  # type: ignore
+        STABILITY_GOVERNOR_AVAILABLE = False
+        logger.warning("⚠️ Stability Governor not available — no runtime stability guard")
+
 # ── Momentum Entry Filter — simple 2-3 condition OR-logic entries ─────────────
 # Fires when institutional check misses: RSI momentum + volume/breakout confirm.
 try:
@@ -668,6 +682,16 @@ class NIJAApexStrategyV71:
                 self.exploration_governor = None
         else:
             self.exploration_governor = None
+
+        if STABILITY_GOVERNOR_AVAILABLE and _get_stability_governor is not None:
+            try:
+                self.stability_governor = _get_stability_governor()
+                logger.info("✅ Stability Governor enabled — Lyapunov guard active")
+            except Exception as _sg_err:
+                logger.warning("Stability Governor init error: %s", _sg_err)
+                self.stability_governor = None
+        else:
+            self.stability_governor = None
 
         # Strategy parameters - OPTIMIZED FOR HIGH WIN RATE
         # OPTIMIZATION (Jan 29, 2026): Rebalance filters for quality trades
@@ -3450,6 +3474,38 @@ class NIJAApexStrategyV71:
                                             )
                                         )
                                         _exploration_size_mult_l = self.exploration_governor.get_live_size_multiplier(symbol)
+                                        # Apply stability governor exploration damping when enabled.
+                                        if (
+                                            STABILITY_GOVERNOR_AVAILABLE
+                                            and hasattr(self, "stability_governor")
+                                            and self.stability_governor is not None
+                                            and _exploration_decision_l.allow_live
+                                        ):
+                                            try:
+                                                import random as _rand_l
+                                                _sg_damp_l = self.stability_governor.exploration_damping()
+                                                if _sg_damp_l < 1.0 and _rand_l.random() >= _sg_damp_l:
+                                                    logger.info(
+                                                        "🛡️  Stability governor suppressed LONG live exploration "
+                                                        "%s (damping=%.2f mode=%s)",
+                                                        symbol, _sg_damp_l,
+                                                        self.stability_governor._mode.value,
+                                                    )
+                                                    _exploration_decision_l = type(_exploration_decision_l)(
+                                                        shadow_sampled=_exploration_decision_l.shadow_sampled,
+                                                        allow_live=False,
+                                                        probability=_exploration_decision_l.probability * _sg_damp_l,
+                                                        size_multiplier=1.0,
+                                                        reason=f"stability_governor_damped({self.stability_governor._mode.value})",
+                                                        near_miss_gap=_exploration_decision_l.near_miss_gap,
+                                                        cluster_pressure=_exploration_decision_l.cluster_pressure,
+                                                        regret_score=_exploration_decision_l.regret_score,
+                                                        novelty_score=_exploration_decision_l.novelty_score,
+                                                        budget_remaining_hour=_exploration_decision_l.budget_remaining_hour,
+                                                        budget_remaining_day=_exploration_decision_l.budget_remaining_day,
+                                                    )
+                                            except Exception as _sg_l_err:
+                                                logger.debug("StabilityGovernor long damping error: %s", _sg_l_err)
                                         logger.info(
                                             "🧭 Exploration LONG %s: %s prob=%.3f live=%s size_mult=%.2f gap=%.2f "
                                             "cluster=%.2f regret=%.2f novelty=%.2f",
@@ -4286,6 +4342,38 @@ class NIJAApexStrategyV71:
                                             )
                                         )
                                         _exploration_size_mult_s = self.exploration_governor.get_live_size_multiplier(symbol)
+                                        # Apply stability governor exploration damping when enabled.
+                                        if (
+                                            STABILITY_GOVERNOR_AVAILABLE
+                                            and hasattr(self, "stability_governor")
+                                            and self.stability_governor is not None
+                                            and _exploration_decision_s.allow_live
+                                        ):
+                                            try:
+                                                import random as _rand_s
+                                                _sg_damp_s = self.stability_governor.exploration_damping()
+                                                if _sg_damp_s < 1.0 and _rand_s.random() >= _sg_damp_s:
+                                                    logger.info(
+                                                        "🛡️  Stability governor suppressed SHORT live exploration "
+                                                        "%s (damping=%.2f mode=%s)",
+                                                        symbol, _sg_damp_s,
+                                                        self.stability_governor._mode.value,
+                                                    )
+                                                    _exploration_decision_s = type(_exploration_decision_s)(
+                                                        shadow_sampled=_exploration_decision_s.shadow_sampled,
+                                                        allow_live=False,
+                                                        probability=_exploration_decision_s.probability * _sg_damp_s,
+                                                        size_multiplier=1.0,
+                                                        reason=f"stability_governor_damped({self.stability_governor._mode.value})",
+                                                        near_miss_gap=_exploration_decision_s.near_miss_gap,
+                                                        cluster_pressure=_exploration_decision_s.cluster_pressure,
+                                                        regret_score=_exploration_decision_s.regret_score,
+                                                        novelty_score=_exploration_decision_s.novelty_score,
+                                                        budget_remaining_hour=_exploration_decision_s.budget_remaining_hour,
+                                                        budget_remaining_day=_exploration_decision_s.budget_remaining_day,
+                                                    )
+                                            except Exception as _sg_s_err:
+                                                logger.debug("StabilityGovernor short damping error: %s", _sg_s_err)
                                         logger.info(
                                             "🧭 Exploration SHORT %s: %s prob=%.3f live=%s size_mult=%.2f gap=%.2f "
                                             "cluster=%.2f regret=%.2f novelty=%.2f",

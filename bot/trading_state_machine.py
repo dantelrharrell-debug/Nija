@@ -2310,6 +2310,15 @@ def _execution_circuit_breaker_status() -> tuple[bool, str]:
 def report_execution_anomaly(kind: str, detail: str = "") -> None:
     """Public entrypoint for other modules to report execution anomalies."""
     _record_execution_anomaly(str(kind or "").strip(), detail=detail)
+    # Forward to stability governor when enabled (fail-silent).
+    try:
+        try:
+            from bot.stability_governor import get_stability_governor
+        except ImportError:
+            from stability_governor import get_stability_governor  # type: ignore[import]
+        get_stability_governor().notify_anomaly(str(kind or "").strip(), detail=detail)
+    except Exception:
+        pass
 
 
 def _writer_lease_generation_gate() -> tuple[bool, str]:

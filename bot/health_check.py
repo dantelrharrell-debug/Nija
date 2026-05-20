@@ -718,7 +718,39 @@ class HealthCheckManager:
             "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": os.getenv("HEARTBEAT_REQUIRED_FIRST_ACTIVATION", "false"),
             "FORCE_LIVE_TRANSITION": os.getenv("FORCE_LIVE_TRANSITION", "false"),
         }
-        
+
+        stability_governor_status: Dict[str, Any] = {
+            "mode": "UNAVAILABLE",
+            "enabled": False,
+            "v_potential": None,
+            "v_delta": None,
+            "rising_count": None,
+            "transition_count": None,
+            "exploration_damping": None,
+            "reason": "unavailable",
+        }
+        try:
+            try:
+                from bot.stability_governor import get_stability_governor
+            except ImportError:
+                from stability_governor import get_stability_governor  # type: ignore[import]
+            _sg_snap = get_stability_governor().get_snapshot()
+            stability_governor_status = {
+                "mode": _sg_snap.mode.value,
+                "enabled": _sg_snap.enabled,
+                "v_potential": _sg_snap.v_potential,
+                "v_delta": _sg_snap.v_delta,
+                "rising_count": _sg_snap.rising_count,
+                "recovery_window": _sg_snap.recovery_window,
+                "stable_count": _sg_snap.stable_count,
+                "transition_count": _sg_snap.transition_count,
+                "exploration_damping": _sg_snap.exploration_damping,
+                "reason": _sg_snap.reason,
+                "anomaly_counts": _sg_snap.anomaly_counts,
+            }
+        except Exception as _sg_exc:
+            stability_governor_status["reason"] = f"error: {_sg_exc}"
+
         return {
             "service": "NIJA Trading Bot",
             "version": "7.2.0",
@@ -734,6 +766,7 @@ class HealthCheckManager:
                 "runtime_authority": runtime_authority,
                 "runtime_mode": runtime_mode_snapshot,
                 "runtime_env_flags": runtime_env_flags,
+                "stability_governor": stability_governor_status,
             },
         }
     
