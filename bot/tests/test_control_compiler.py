@@ -281,18 +281,33 @@ class TestBootstrapPass(unittest.TestCase):
         self._orig_bootstrap_enabled = cc_mod._BOOTSTRAP_PASS_ENABLED
         self._orig_bootstrap_limit = cc_mod._BOOTSTRAP_PASS_LIMIT
         self._orig_bootstrap_min_conf = cc_mod._BOOTSTRAP_MIN_CONFIDENCE
+        self._orig_decay_window = cc_mod._BOOTSTRAP_DECAY_WINDOW
+        self._orig_decay_min_samples = cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES
+        self._orig_decay_baseline = cc_mod._BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE
+        self._orig_decay_target = cc_mod._BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE
+        self._orig_decay_shape = cc_mod._BOOTSTRAP_DECAY_SHAPE
         cc_mod._MIN_CONFIDENCE_BASELINE = 0.10
         cc_mod._BOOTSTRAP_PASS_ENABLED = True
-        cc_mod._BOOTSTRAP_PASS_LIMIT = 1
+        cc_mod._BOOTSTRAP_PASS_LIMIT = 2
         cc_mod._BOOTSTRAP_MIN_CONFIDENCE = 0.05
+        cc_mod._BOOTSTRAP_DECAY_WINDOW = 16
+        cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = 4
+        cc_mod._BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE = 0.50
+        cc_mod._BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE = 0.75
+        cc_mod._BOOTSTRAP_DECAY_SHAPE = 1.0
 
     def tearDown(self):
         cc_mod._MIN_CONFIDENCE_BASELINE = self._orig_min_conf
         cc_mod._BOOTSTRAP_PASS_ENABLED = self._orig_bootstrap_enabled
         cc_mod._BOOTSTRAP_PASS_LIMIT = self._orig_bootstrap_limit
         cc_mod._BOOTSTRAP_MIN_CONFIDENCE = self._orig_bootstrap_min_conf
+        cc_mod._BOOTSTRAP_DECAY_WINDOW = self._orig_decay_window
+        cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = self._orig_decay_min_samples
+        cc_mod._BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE = self._orig_decay_baseline
+        cc_mod._BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE = self._orig_decay_target
+        cc_mod._BOOTSTRAP_DECAY_SHAPE = self._orig_decay_shape
 
-    def test_synthetic_low_threshold_signal_gets_one_bootstrap_pass(self):
+    def test_synthetic_low_threshold_signal_gets_bootstrap_pass_while_uncalibrated(self):
         raw = _valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True})
         result = self.compiler.compile(raw)
         self.assertTrue(result.accepted)
@@ -300,12 +315,22 @@ class TestBootstrapPass(unittest.TestCase):
         self.assertEqual(result.signal.metadata.get("bootstrap_pass_index"), 1)
         self.assertEqual(result.signal.metadata.get("bootstrap_reason"), "k_confidence_override")
 
-    def test_bootstrap_pass_is_bounded(self):
-        first = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True}))
-        second = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True}))
-        self.assertTrue(first.accepted)
-        self.assertFalse(second.accepted)
-        self.assertEqual(second.status, CompileStatus.K_GATE_FAILED)
+    def test_bootstrap_decay_self_disables_after_consistent_acceptance(self):
+        for i in range(6):
+            accepted = self.compiler.compile(
+                _valid_raw(symbol=f"CAL{i}-USD", confidence=0.90, regime=self._bootstrap_regime)
+            )
+            self.assertTrue(accepted.accepted)
+
+        health = self.compiler.get_health()
+        self.assertEqual(health["bootstrap_pass"]["effective_limit"], 0)
+        self.assertGreater(health["bootstrap_pass"]["effective_min_confidence"], cc_mod._BOOTSTRAP_MIN_CONFIDENCE)
+
+        result = self.compiler.compile(
+            _valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True})
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.status, CompileStatus.K_GATE_FAILED)
 
     def test_bootstrap_pass_requires_signal_intent_metadata(self):
         result = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={}))
