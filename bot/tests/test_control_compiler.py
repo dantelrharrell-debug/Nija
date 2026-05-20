@@ -276,6 +276,7 @@ class TestBootstrapPass(unittest.TestCase):
 
     def setUp(self):
         self.compiler = _fresh_compiler()
+        self._bootstrap_regime = "bootstrap_probe"
         self._orig_min_conf = cc_mod._MIN_CONFIDENCE_BASELINE
         self._orig_bootstrap_enabled = cc_mod._BOOTSTRAP_PASS_ENABLED
         self._orig_bootstrap_limit = cc_mod._BOOTSTRAP_PASS_LIMIT
@@ -292,18 +293,55 @@ class TestBootstrapPass(unittest.TestCase):
         cc_mod._BOOTSTRAP_MIN_CONFIDENCE = self._orig_bootstrap_min_conf
 
     def test_synthetic_low_threshold_signal_gets_one_bootstrap_pass(self):
-        raw = _valid_raw(confidence=0.08, metadata={"synthetic": True})
+        raw = _valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True})
         result = self.compiler.compile(raw)
         self.assertTrue(result.accepted)
         self.assertTrue(result.signal.metadata.get("bootstrap_pass"))
         self.assertEqual(result.signal.metadata.get("bootstrap_pass_index"), 1)
+        self.assertEqual(result.signal.metadata.get("bootstrap_reason"), "k_confidence_override")
 
     def test_bootstrap_pass_is_bounded(self):
-        first = self.compiler.compile(_valid_raw(confidence=0.08, metadata={"synthetic": True}))
-        second = self.compiler.compile(_valid_raw(confidence=0.08, metadata={"synthetic": True}))
+        first = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True}))
+        second = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True}))
         self.assertTrue(first.accepted)
         self.assertFalse(second.accepted)
         self.assertEqual(second.status, CompileStatus.K_GATE_FAILED)
+
+    def test_bootstrap_pass_requires_signal_intent_metadata(self):
+        result = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={}))
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.status, CompileStatus.K_GATE_FAILED)
+        self.assertEqual(result.reason_code, SignalValidator.RC_K_CONFIDENCE)
+
+    def test_bootstrap_pass_respects_min_confidence(self):
+        result = self.compiler.compile(
+            _valid_raw(confidence=0.04, regime=self._bootstrap_regime, metadata={"synthetic": True})
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.status, CompileStatus.K_GATE_FAILED)
+        self.assertEqual(result.reason_code, SignalValidator.RC_K_CONFIDENCE)
+
+    def test_bootstrap_pass_can_use_low_threshold_marker(self):
+        result = self.compiler.compile(
+            _valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"low_threshold": True})
+        )
+        self.assertTrue(result.accepted)
+        self.assertTrue(result.signal.metadata.get("bootstrap_pass"))
+
+    def test_bootstrap_pass_does_not_override_non_k_confidence_rejections(self):
+        result = self.compiler.compile(
+            _valid_raw(confidence=0.08, regime=self._bootstrap_regime, approved=False, metadata={"synthetic": True})
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.status, CompileStatus.INVARIANT_FAILED)
+        self.assertEqual(result.reason_code, SignalValidator.RC_NOT_APPROVED)
+
+    def test_bootstrap_pass_disabled_rejects_k_confidence_signal(self):
+        cc_mod._BOOTSTRAP_PASS_ENABLED = False
+        result = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True}))
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.status, CompileStatus.K_GATE_FAILED)
+        self.assertEqual(result.reason_code, SignalValidator.RC_K_CONFIDENCE)
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +582,31 @@ class TestCompilerHealth(unittest.TestCase):
         compiler.compile(_valid_raw(symbol=""))  # reject
         health = compiler.get_health()
         self.assertAlmostEqual(health["accept_rate"], 0.5)
+
+    def test_health_reports_bootstrap_pass_usage(self):
+        compiler = _fresh_compiler()
+        orig_enabled = cc_mod._BOOTSTRAP_PASS_ENABLED
+        orig_limit = cc_mod._BOOTSTRAP_PASS_LIMIT
+        orig_min_conf = cc_mod._BOOTSTRAP_MIN_CONFIDENCE
+        orig_min_conf_baseline = cc_mod._MIN_CONFIDENCE_BASELINE
+        try:
+            cc_mod._BOOTSTRAP_PASS_ENABLED = True
+            cc_mod._BOOTSTRAP_PASS_LIMIT = 2
+            cc_mod._BOOTSTRAP_MIN_CONFIDENCE = 0.05
+            cc_mod._MIN_CONFIDENCE_BASELINE = 0.10
+            compiler.compile(_valid_raw(confidence=0.08, regime="bootstrap_probe_health", metadata={"synthetic": True}))
+            health = compiler.get_health()
+            self.assertIn("bootstrap_pass", health)
+            self.assertEqual(health["bootstrap_pass"]["enabled"], True)
+            self.assertEqual(health["bootstrap_pass"]["limit"], 2)
+            self.assertEqual(health["bootstrap_pass"]["used"], 1)
+            self.assertEqual(health["bootstrap_pass"]["remaining"], 1)
+            self.assertEqual(health["bootstrap_pass"]["min_confidence"], 0.05)
+        finally:
+            cc_mod._BOOTSTRAP_PASS_ENABLED = orig_enabled
+            cc_mod._BOOTSTRAP_PASS_LIMIT = orig_limit
+            cc_mod._BOOTSTRAP_MIN_CONFIDENCE = orig_min_conf
+            cc_mod._MIN_CONFIDENCE_BASELINE = orig_min_conf_baseline
 
 
 # ---------------------------------------------------------------------------
