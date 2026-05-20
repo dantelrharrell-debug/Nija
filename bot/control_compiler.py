@@ -157,6 +157,11 @@ _BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE: float = max(
     min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE", "0.85"))),
 )
 _BOOTSTRAP_DECAY_SHAPE: float = max(0.5, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_SHAPE", "1.5")))
+_MIN_LIVE_EXECUTION_GAP_S: float = max(60.0, float(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_GAP_S", "1800")))
+_MIN_LIVE_EXECUTION_CONF_RELAX: float = max(
+    0.1, min(1.0, float(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_CONF_RELAX", "0.7")))
+)
+_MIN_LIVE_EXECUTION_LIMIT_FLOOR: int = max(1, int(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_LIMIT_FLOOR", "1")))
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +264,18 @@ class CompileResult:
     signal: Optional[ControlSignal] = None
     # Machine-readable rejection code for structured logging / tracing
     reason_code: str = ""
+
+
+@dataclass(frozen=True)
+class ExecutionDecision:
+    """Canonical trade-admission deny telemetry event."""
+
+    stage: str
+    allow: bool
+    reason: str
+    confidence: float
+    threshold: float
+    governor_mode: str
 
 
 @dataclass
@@ -857,6 +874,13 @@ class ControlCompiler:
         self._rejection_reasons: Dict[str, int] = {}
         self._bootstrap_passes_used: int = 0
         self._execution_outcomes: Deque[bool] = deque(maxlen=_BOOTSTRAP_DECAY_WINDOW)
+        self._last_live_execution_ts: Optional[float] = None
+        self._execution_drop_counts: Dict[str, int] = {
+            "compiler_confidence": 0,
+            "governor_guarded": 0,
+            "broker_health": 0,
+            "nonce_authority": 0,
+        }
 
         logger.info(
             "ControlCompiler initialized | K_AI_GATE=%.2f K_CONFIDENCE=%.2f "
@@ -921,6 +945,8 @@ class ControlCompiler:
             )
             self._record(raw, accepted=False, reason_code=reason_code)
             self._emit_trace_rejection(raw, stage="compiler_validate", reason=reason, reason_code=reason_code)
+            if is_execution:
+                self._record_compiler_reject_telemetry(raw, reason_code)
             return result
 
         assert signal is not None  # guaranteed by validator
@@ -939,6 +965,12 @@ class ControlCompiler:
                 self._record(raw, accepted=False, reason_code="instability:frozen")
                 self._emit_trace_rejection(
                     raw, stage="compiler_instability", reason=inst_reason, reason_code="instability:frozen"
+                )
+                self._emit_execution_decision(
+                    reason="governor_guarded",
+                    confidence=float(raw.confidence),
+                    threshold=0.0,
+                    governor_mode="GUARDED",
                 )
                 # K auto-response: tighten AI gate
                 self._matrix.apply_step(
@@ -1044,7 +1076,10 @@ class ControlCompiler:
                 "decay_progress": round(bootstrap_decay["decay_progress"], 6),
                 "acceptance_rate": round(bootstrap_decay["acceptance_rate"], 6),
                 "samples": bootstrap_decay["samples"],
+                "live_execution_gap_s": bootstrap_decay["live_execution_gap_s"],
+                "starvation_recovery_active": bootstrap_decay["starvation_recovery_active"],
             },
+            "execution_drop_counts": dict(self._execution_drop_counts),
             "k_values": self._matrix.get_all(),
             "k_history": self._matrix.get_history(limit=20),
             "active_freezes": self._instability.get_freezes(),
@@ -1075,10 +1110,86 @@ class ControlCompiler:
                     )
             if is_execution:
                 self._execution_outcomes.append(bool(accepted))
+                if accepted:
+                    self._last_live_execution_ts = time.time()
         if not accepted:
             # Also record in instability detector for non-schema rejections
             if is_execution and not reason_code.startswith("schema:"):
                 self._instability.record(raw.symbol, raw.regime, accepted=False)
+
+    def _emit_execution_decision(
+        self,
+        *,
+        reason: str,
+        confidence: float,
+        threshold: float,
+        governor_mode: str,
+        stage: str = "control_compiler",
+    ) -> None:
+        decision = ExecutionDecision(
+            stage=stage,
+            allow=False,
+            reason=reason,
+            confidence=float(confidence),
+            threshold=float(threshold),
+            governor_mode=governor_mode,
+        )
+        logger.info(
+            "ExecutionDecision(stage=%s, allow=%s, reason=%s, confidence=%.4f, threshold=%.4f, governor_mode=%s)",
+            decision.stage,
+            decision.allow,
+            decision.reason,
+            decision.confidence,
+            decision.threshold,
+            decision.governor_mode,
+        )
+
+    def _increment_drop_count(self, bucket: str) -> None:
+        with self._lock:
+            if bucket in self._execution_drop_counts:
+                self._execution_drop_counts[bucket] += 1
+
+    def record_external_execution_drop(
+        self,
+        *,
+        reason: str,
+        drop_bucket: str,
+        governor_mode: str = "UNKNOWN",
+        confidence: float = 0.0,
+        threshold: float = 0.0,
+        stage: str = "control_compiler",
+    ) -> None:
+        """Record a non-compiler trade-admission deny in canonical telemetry."""
+        self._increment_drop_count(drop_bucket)
+        self._emit_execution_decision(
+            stage=stage,
+            reason=reason,
+            confidence=confidence,
+            threshold=threshold,
+            governor_mode=governor_mode,
+        )
+
+    def _record_compiler_reject_telemetry(self, raw: RawSignal, reason_code: str) -> None:
+        try:
+            confidence = float(raw.confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        threshold = 0.0
+        reason = reason_code or "compiler_reject"
+        governor_mode = "NORMAL"
+        if reason_code == SignalValidator.RC_K_CONFIDENCE:
+            threshold = _MIN_CONFIDENCE_BASELINE * self._matrix.get("K_CONFIDENCE")
+            reason = "confidence_below_threshold"
+            governor_mode = "GUARDED"
+            self._increment_drop_count("compiler_confidence")
+
+        self._emit_execution_decision(
+            reason=reason,
+            confidence=confidence,
+            threshold=threshold,
+            governor_mode=governor_mode,
+        )
 
     def _compute_bootstrap_decay_state_unlocked(self) -> Dict[str, Any]:
         """
@@ -1108,6 +1219,12 @@ class ControlCompiler:
         effective_min_confidence = _BOOTSTRAP_MIN_CONFIDENCE + (
             (target_conf_floor - _BOOTSTRAP_MIN_CONFIDENCE) * decay_progress
         )
+        last_live_ts = self._last_live_execution_ts
+        live_execution_gap_s = (time.time() - last_live_ts) if last_live_ts else float("inf")
+        starvation_recovery_active = bool(live_execution_gap_s > _MIN_LIVE_EXECUTION_GAP_S)
+        if starvation_recovery_active:
+            effective_min_confidence *= _MIN_LIVE_EXECUTION_CONF_RELAX
+            effective_limit = max(_MIN_LIVE_EXECUTION_LIMIT_FLOOR, effective_limit)
 
         return {
             "samples": samples,
@@ -1116,6 +1233,10 @@ class ControlCompiler:
             "decay_progress": decay_progress,
             "effective_limit": effective_limit,
             "effective_min_confidence": max(0.0, min(1.0, effective_min_confidence)),
+            "live_execution_gap_s": (
+                round(live_execution_gap_s, 3) if math.isfinite(live_execution_gap_s) else None
+            ),
+            "starvation_recovery_active": starvation_recovery_active,
         }
 
     def _get_bootstrap_decay_state(self) -> Dict[str, Any]:
