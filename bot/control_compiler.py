@@ -144,16 +144,19 @@ _BOOTSTRAP_MIN_CONFIDENCE: float = max(
     0.0,
     min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_MIN_CONFIDENCE", "0.05"))),
 )
-_BOOTSTRAP_DECAY_WINDOW_S: float = max(60.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_WINDOW_S", "3600")))
+# Self-healing bootstrap decay: as execution acceptance stabilizes, bootstrap
+# affordances decay toward strict confidence gating automatically.
+_BOOTSTRAP_DECAY_WINDOW: int = max(10, int(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_WINDOW", "120")))
 _BOOTSTRAP_DECAY_MIN_SAMPLES: int = max(1, int(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_MIN_SAMPLES", "20")))
-_BOOTSTRAP_DECAY_ACCEPT_RATE_START: float = max(
+_BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE: float = max(
     0.0,
-    min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_ACCEPT_RATE_START", "0.55"))),
+    min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE", "0.50"))),
 )
-_BOOTSTRAP_DECAY_ACCEPT_RATE_FULL: float = max(
+_BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE: float = max(
     0.0,
-    min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_ACCEPT_RATE_FULL", "0.90"))),
+    min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE", "0.85"))),
 )
+_BOOTSTRAP_DECAY_SHAPE: float = max(0.5, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_SHAPE", "1.5")))
 
 
 # ---------------------------------------------------------------------------
@@ -853,8 +856,7 @@ class ControlCompiler:
         self._rejected: int = 0
         self._rejection_reasons: Dict[str, int] = {}
         self._bootstrap_passes_used: int = 0
-        self._execution_outcomes: Deque[Tuple[float, bool]] = deque()
-        self._bootstrap_pass_timestamps: Deque[float] = deque()
+        self._execution_outcomes: Deque[bool] = deque(maxlen=_BOOTSTRAP_DECAY_WINDOW)
 
         logger.info(
             "ControlCompiler initialized | K_AI_GATE=%.2f K_CONFIDENCE=%.2f "
@@ -917,7 +919,7 @@ class ControlCompiler:
                 reason=reason,
                 reason_code=reason_code,
             )
-            self._record(raw, accepted=False, reason_code=reason_code, bootstrap_used=False)
+            self._record(raw, accepted=False, reason_code=reason_code)
             self._emit_trace_rejection(raw, stage="compiler_validate", reason=reason, reason_code=reason_code)
             return result
 
@@ -934,7 +936,7 @@ class ControlCompiler:
                     reason=inst_reason,
                     reason_code="instability:frozen",
                 )
-                self._record(raw, accepted=False, reason_code="instability:frozen", bootstrap_used=False)
+                self._record(raw, accepted=False, reason_code="instability:frozen")
                 self._emit_trace_rejection(
                     raw, stage="compiler_instability", reason=inst_reason, reason_code="instability:frozen"
                 )
@@ -959,7 +961,7 @@ class ControlCompiler:
         # ── Accept ───────────────────────────────────────────────────────
         if is_execution:
             self._instability.record(raw.symbol, raw.regime, accepted=True)
-        self._record(raw, accepted=True, reason_code="", bootstrap_used=bool(signal.metadata.get("bootstrap_pass")))
+        self._record(raw, accepted=True, reason_code="")
         return CompileResult(
             accepted=True,
             status=CompileStatus.ACCEPTED,
@@ -1021,7 +1023,7 @@ class ControlCompiler:
             rejected = self._rejected
             reasons = dict(self._rejection_reasons)
             bootstrap_used = self._bootstrap_passes_used
-            calibration = self._get_bootstrap_calibration_locked(time.time())
+            bootstrap_decay = self._compute_bootstrap_decay_state_unlocked()
 
         accept_rate = (accepted / total) if total > 0 else 1.0
         return {
@@ -1034,15 +1036,14 @@ class ControlCompiler:
             "bootstrap_pass": {
                 "enabled": _BOOTSTRAP_PASS_ENABLED,
                 "limit": _BOOTSTRAP_PASS_LIMIT,
-                "effective_limit": calibration["effective_limit"],
                 "used": bootstrap_used,
-                "used_in_decay_window": calibration["window_bootstrap_used"],
-                "remaining": calibration["remaining"],
-                "min_confidence": calibration["effective_min_confidence"],
-                "base_min_confidence": _BOOTSTRAP_MIN_CONFIDENCE,
-                "decay_ratio": calibration["decay_ratio"],
-                "window_acceptance_rate": calibration["acceptance_rate"],
-                "window_samples": calibration["sample_count"],
+                "remaining": max(0, bootstrap_decay["effective_limit"] - bootstrap_used),
+                "min_confidence": _BOOTSTRAP_MIN_CONFIDENCE,
+                "effective_limit": bootstrap_decay["effective_limit"],
+                "effective_min_confidence": round(bootstrap_decay["effective_min_confidence"], 6),
+                "decay_progress": round(bootstrap_decay["decay_progress"], 6),
+                "acceptance_rate": round(bootstrap_decay["acceptance_rate"], 6),
+                "samples": bootstrap_decay["samples"],
             },
             "k_values": self._matrix.get_all(),
             "k_history": self._matrix.get_history(limit=20),
@@ -1059,8 +1060,7 @@ class ControlCompiler:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _record(self, raw: RawSignal, accepted: bool, reason_code: str, bootstrap_used: bool = False) -> None:
-        now = time.time()
+    def _record(self, raw: RawSignal, accepted: bool, reason_code: str) -> None:
         action = (raw.action or "hold").lower().strip()
         is_execution = action in _EXECUTION_ACTIONS
         with self._lock:
@@ -1074,51 +1074,53 @@ class ControlCompiler:
                         self._rejection_reasons.get(reason_code, 0) + 1
                     )
             if is_execution:
-                self._execution_outcomes.append((now, bool(accepted)))
-                self._prune_bootstrap_histories_locked(now)
+                self._execution_outcomes.append(bool(accepted))
         if not accepted:
             # Also record in instability detector for non-schema rejections
-            if action in _EXECUTION_ACTIONS and not reason_code.startswith("schema:"):
+            if is_execution and not reason_code.startswith("schema:"):
                 self._instability.record(raw.symbol, raw.regime, accepted=False)
 
-    def _prune_bootstrap_histories_locked(self, now_ts: float) -> None:
-        cutoff = now_ts - _BOOTSTRAP_DECAY_WINDOW_S
-        while self._execution_outcomes and self._execution_outcomes[0][0] < cutoff:
-            self._execution_outcomes.popleft()
-        while self._bootstrap_pass_timestamps and self._bootstrap_pass_timestamps[0] < cutoff:
-            self._bootstrap_pass_timestamps.popleft()
+    def _compute_bootstrap_decay_state_unlocked(self) -> Dict[str, Any]:
+        """
+        Compute bootstrap decay state from execution outcomes.
 
-    def _get_bootstrap_calibration_locked(self, now_ts: float) -> Dict[str, Any]:
-        self._prune_bootstrap_histories_locked(now_ts)
-        sample_count = len(self._execution_outcomes)
-        accepted_count = sum(1 for _, accepted in self._execution_outcomes if accepted)
-        acceptance_rate = (accepted_count / sample_count) if sample_count else 0.0
+        Caller must hold ``self._lock``.
+        """
+        samples = len(self._execution_outcomes)
+        accepted = sum(1 for value in self._execution_outcomes if value)
+        acceptance_rate = (accepted / samples) if samples > 0 else 0.0
+        smoothed_acceptance = ((accepted + 1.0) / (samples + 2.0)) if samples > 0 else 0.5
 
-        if sample_count >= _BOOTSTRAP_DECAY_MIN_SAMPLES:
-            span = max(1e-9, _BOOTSTRAP_DECAY_ACCEPT_RATE_FULL - _BOOTSTRAP_DECAY_ACCEPT_RATE_START)
-            decay_ratio = (acceptance_rate - _BOOTSTRAP_DECAY_ACCEPT_RATE_START) / span
-            decay_ratio = max(0.0, min(1.0, decay_ratio))
-        else:
-            decay_ratio = 0.0
+        decay_progress = 0.0
+        if samples >= _BOOTSTRAP_DECAY_MIN_SAMPLES:
+            target = _BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE
+            baseline = min(_BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE, target - 1e-6)
+            span = max(1e-6, target - baseline)
+            decay_progress = (smoothed_acceptance - baseline) / span
+            decay_progress = max(0.0, min(1.0, decay_progress))
 
-        effective_limit = max(0, int(math.ceil(_BOOTSTRAP_PASS_LIMIT * (1.0 - decay_ratio))))
-        bootstrap_used = len(self._bootstrap_pass_timestamps)
-        remaining = max(0, effective_limit - bootstrap_used)
-        effective_conf_floor = _MIN_CONFIDENCE_BASELINE * self._matrix.get("K_CONFIDENCE")
-        target_min_confidence = max(_BOOTSTRAP_MIN_CONFIDENCE, effective_conf_floor)
+        decay_multiplier = max(0.0, (1.0 - decay_progress) ** _BOOTSTRAP_DECAY_SHAPE)
+        effective_limit = int(round(_BOOTSTRAP_PASS_LIMIT * decay_multiplier))
+        effective_limit = max(0, min(_BOOTSTRAP_PASS_LIMIT, effective_limit))
+
+        k_conf = self._matrix.get("K_CONFIDENCE")
+        target_conf_floor = max(_BOOTSTRAP_MIN_CONFIDENCE, _MIN_CONFIDENCE_BASELINE * k_conf)
         effective_min_confidence = _BOOTSTRAP_MIN_CONFIDENCE + (
-            (target_min_confidence - _BOOTSTRAP_MIN_CONFIDENCE) * decay_ratio
+            (target_conf_floor - _BOOTSTRAP_MIN_CONFIDENCE) * decay_progress
         )
 
         return {
-            "sample_count": sample_count,
+            "samples": samples,
+            "accepted": accepted,
             "acceptance_rate": acceptance_rate,
-            "decay_ratio": decay_ratio,
+            "decay_progress": decay_progress,
             "effective_limit": effective_limit,
-            "window_bootstrap_used": bootstrap_used,
-            "remaining": remaining,
-            "effective_min_confidence": effective_min_confidence,
+            "effective_min_confidence": max(0.0, min(1.0, effective_min_confidence)),
         }
+
+    def _get_bootstrap_decay_state(self) -> Dict[str, Any]:
+        with self._lock:
+            return self._compute_bootstrap_decay_state_unlocked()
 
     def _emit_trace_rejection(
         self,
@@ -1176,6 +1178,10 @@ class ControlCompiler:
         if reason_code != SignalValidator.RC_K_CONFIDENCE:
             return None
         confidence = float(raw.confidence)
+        decay_state = self._get_bootstrap_decay_state()
+        effective_min_confidence = float(decay_state["effective_min_confidence"])
+        if confidence < effective_min_confidence:
+            return None
 
         metadata = raw.metadata or {}
         synthetic = bool(
@@ -1193,12 +1199,11 @@ class ControlCompiler:
             return None
 
         with self._lock:
-            calibration = self._get_bootstrap_calibration_locked(time.time())
-            if calibration["remaining"] <= 0:
+            effective_limit = self._compute_bootstrap_decay_state_unlocked()["effective_limit"]
+            if effective_limit <= 0:
                 return None
-            if confidence < calibration["effective_min_confidence"]:
+            if self._bootstrap_passes_used >= effective_limit:
                 return None
-            self._bootstrap_pass_timestamps.append(time.time())
             self._bootstrap_passes_used += 1
             used = self._bootstrap_passes_used
 
@@ -1221,15 +1226,17 @@ class ControlCompiler:
         signal.metadata["bootstrap_pass"] = True
         signal.metadata["bootstrap_pass_index"] = used
         signal.metadata["bootstrap_reason"] = "k_confidence_override"
+        signal.metadata["bootstrap_effective_limit"] = effective_limit
+        signal.metadata["bootstrap_decay_progress"] = round(float(decay_state["decay_progress"]), 6)
+        signal.metadata["bootstrap_effective_min_confidence"] = round(effective_min_confidence, 6)
         logger.warning(
-            "COMPILER_BOOTSTRAP_PASS symbol=%s action=%s confidence=%.3f used=%d/%d effective_limit=%d decay_ratio=%.3f",
+            "COMPILER_BOOTSTRAP_PASS symbol=%s action=%s confidence=%.3f used=%d/%d decay=%.3f",
             signal.symbol,
             signal.action,
             signal.confidence,
             used,
-            _BOOTSTRAP_PASS_LIMIT,
-            calibration["effective_limit"],
-            calibration["decay_ratio"],
+            effective_limit,
+            float(decay_state["decay_progress"]),
         )
         return signal
 
