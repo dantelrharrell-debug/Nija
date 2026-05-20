@@ -643,6 +643,43 @@ def _evaluate_stability_authority(
         )
 
 
+def _emit_trade_admission_telemetry(
+    *,
+    reason: str,
+    drop_bucket: str | None = None,
+    governor_mode: str = "UNKNOWN",
+    confidence: float = 0.0,
+    threshold: float = 0.0,
+    stage: str = "control_compiler",
+) -> None:
+    logger.info(
+        "ExecutionDecision(stage=%s, allow=%s, reason=%s, confidence=%.4f, threshold=%.4f, governor_mode=%s)",
+        stage,
+        False,
+        reason,
+        float(confidence),
+        float(threshold),
+        governor_mode,
+    )
+    if not drop_bucket:
+        return
+    try:
+        try:
+            from bot.control_compiler import get_control_compiler
+        except ImportError:
+            from control_compiler import get_control_compiler  # type: ignore[import]
+        get_control_compiler().record_external_execution_drop(
+            reason=reason,
+            drop_bucket=drop_bucket,
+            governor_mode=governor_mode,
+            confidence=float(confidence),
+            threshold=float(threshold),
+            stage=stage,
+        )
+    except Exception as exc:
+        logger.debug("Execution drop telemetry emit failed: %s", exc)
+
+
 def can_execute() -> ExecutionDecision:
     """Canonical execution authority decision for all order-dispatch paths."""
     runtime_snapshot = runtime_authority_snapshot()
@@ -759,6 +796,7 @@ def can_execute() -> ExecutionDecision:
         ("state.live_active", state_live_active),
         ("lease.valid", lease_valid),
         ("lease.generation_current", lease_generation_current),
+        ("nonce.authority", bool(runtime_snapshot.nonce_ready)),
         ("heartbeat.fresh", heartbeat_fresh),
         ("heartbeat.stage_sufficient", heartbeat_stage_sufficient),
         ("broker.health_ok", broker_health_ok),
@@ -785,6 +823,24 @@ def can_execute() -> ExecutionDecision:
                     f"(state={stability.halt_state} throttle={stability.throttle:.2f} "
                     f"size={stability.size_multiplier:.2f} stress={stability.stress_score:.2f})"
                 )
+            drop_bucket = None
+            governor_mode = "NORMAL"
+            telemetry_reason = reason
+            if check_name == "stability.allowed":
+                drop_bucket = "governor_guarded"
+                governor_mode = stability.halt_state or "GUARDED"
+                telemetry_reason = "governor_guarded"
+            elif check_name == "broker.health_ok":
+                drop_bucket = "broker_health"
+                telemetry_reason = "broker_health"
+            elif check_name == "nonce.authority":
+                drop_bucket = "nonce_authority"
+                telemetry_reason = "nonce_authority"
+            _emit_trade_admission_telemetry(
+                reason=telemetry_reason,
+                drop_bucket=drop_bucket,
+                governor_mode=governor_mode,
+            )
             return ExecutionDecision(
                 allowed=False,
                 reason=reason,
@@ -820,6 +876,11 @@ def can_execute() -> ExecutionDecision:
             _sg = get_stability_governor()
             if _sg.is_halted():
                 _sg_snap = _sg.get_snapshot()
+                _emit_trade_admission_telemetry(
+                    reason="governor_guarded",
+                    drop_bucket="governor_guarded",
+                    governor_mode="HALT",
+                )
                 return ExecutionDecision(
                     allowed=False,
                     reason=f"stability_governor:HALT:{_sg_snap.reason}",

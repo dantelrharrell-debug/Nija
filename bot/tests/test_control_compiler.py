@@ -286,6 +286,9 @@ class TestBootstrapPass(unittest.TestCase):
         self._orig_decay_baseline = cc_mod._BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE
         self._orig_decay_target = cc_mod._BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE
         self._orig_decay_shape = cc_mod._BOOTSTRAP_DECAY_SHAPE
+        self._orig_min_live_gap_s = cc_mod._MIN_LIVE_EXECUTION_GAP_S
+        self._orig_min_live_relax = cc_mod._MIN_LIVE_EXECUTION_CONF_RELAX
+        self._orig_min_live_limit_floor = cc_mod._MIN_LIVE_EXECUTION_LIMIT_FLOOR
         cc_mod._MIN_CONFIDENCE_BASELINE = 0.10
         cc_mod._BOOTSTRAP_PASS_ENABLED = True
         cc_mod._BOOTSTRAP_PASS_LIMIT = 2
@@ -295,6 +298,9 @@ class TestBootstrapPass(unittest.TestCase):
         cc_mod._BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE = 0.50
         cc_mod._BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE = 0.75
         cc_mod._BOOTSTRAP_DECAY_SHAPE = 1.0
+        cc_mod._MIN_LIVE_EXECUTION_GAP_S = 999999.0
+        cc_mod._MIN_LIVE_EXECUTION_CONF_RELAX = 0.7
+        cc_mod._MIN_LIVE_EXECUTION_LIMIT_FLOOR = 1
 
     def tearDown(self):
         cc_mod._MIN_CONFIDENCE_BASELINE = self._orig_min_conf
@@ -306,6 +312,9 @@ class TestBootstrapPass(unittest.TestCase):
         cc_mod._BOOTSTRAP_DECAY_BASELINE_ACCEPT_RATE = self._orig_decay_baseline
         cc_mod._BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE = self._orig_decay_target
         cc_mod._BOOTSTRAP_DECAY_SHAPE = self._orig_decay_shape
+        cc_mod._MIN_LIVE_EXECUTION_GAP_S = self._orig_min_live_gap_s
+        cc_mod._MIN_LIVE_EXECUTION_CONF_RELAX = self._orig_min_live_relax
+        cc_mod._MIN_LIVE_EXECUTION_LIMIT_FLOOR = self._orig_min_live_limit_floor
 
     def test_synthetic_low_threshold_signal_gets_bootstrap_pass_while_uncalibrated(self):
         raw = _valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True})
@@ -367,6 +376,19 @@ class TestBootstrapPass(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertEqual(result.status, CompileStatus.K_GATE_FAILED)
         self.assertEqual(result.reason_code, SignalValidator.RC_K_CONFIDENCE)
+
+    def test_starvation_recovery_relaxes_effective_confidence_and_floor_limit(self):
+        cc_mod._MIN_LIVE_EXECUTION_GAP_S = 1.0
+        cc_mod._MIN_LIVE_EXECUTION_CONF_RELAX = 0.7
+        cc_mod._MIN_LIVE_EXECUTION_LIMIT_FLOOR = 1
+        cc_mod._BOOTSTRAP_PASS_LIMIT = 0
+        self.compiler._last_live_execution_ts = time.time() - 3600.0
+        with self.compiler._lock:
+            self.compiler._execution_outcomes.clear()
+            state = self.compiler._compute_bootstrap_decay_state_unlocked()
+        self.assertTrue(state["starvation_recovery_active"])
+        self.assertEqual(state["effective_limit"], 1)
+        self.assertAlmostEqual(state["effective_min_confidence"], 0.035, places=4)
 
 
 # ---------------------------------------------------------------------------
@@ -489,11 +511,16 @@ class TestFeedbackInstabilityDetector(unittest.TestCase):
 
     def test_stable_history_no_instability(self):
         det = FeedbackInstabilityDetector()
-        # All accepts = no flips
-        for _ in range(10):
-            det.record("SOL-USD", "strong_trend", accepted=True)
-        level, _ = det.check("SOL-USD", "strong_trend")
-        self.assertEqual(level, InstabilityLevel.NONE)
+        original_check = det._check_failure_clusters
+        det._check_failure_clusters = staticmethod(lambda symbol, regime: "")  # type: ignore[assignment]
+        try:
+            # All accepts = no flips
+            for _ in range(10):
+                det.record("SOL-USD", "strong_trend", accepted=True)
+            level, _ = det.check("SOL-USD", "strong_trend")
+            self.assertEqual(level, InstabilityLevel.NONE)
+        finally:
+            det._check_failure_clusters = original_check  # type: ignore[assignment]
 
     def test_get_freezes_reflects_active_freezes(self):
         det = FeedbackInstabilityDetector()
@@ -589,6 +616,18 @@ class TestCompilerHealth(unittest.TestCase):
         compiler.compile(_valid_raw(confidence=2.0)) # invalid
         health = compiler.get_health()
         self.assertEqual(health["rejected"], 2)
+
+    def test_execution_drop_counts_track_confidence_rejects(self):
+        compiler = _fresh_compiler()
+        orig_min_conf = cc_mod._MIN_CONFIDENCE_BASELINE
+        try:
+            cc_mod._MIN_CONFIDENCE_BASELINE = 0.80
+            compiler.compile(_valid_raw(confidence=0.10))
+            health = compiler.get_health()
+            self.assertIn("execution_drop_counts", health)
+            self.assertEqual(health["execution_drop_counts"]["compiler_confidence"], 1)
+        finally:
+            cc_mod._MIN_CONFIDENCE_BASELINE = orig_min_conf
 
     def test_health_contains_k_values(self):
         compiler = _fresh_compiler()

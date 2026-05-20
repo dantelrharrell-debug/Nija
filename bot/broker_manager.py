@@ -2760,7 +2760,9 @@ class CoinbaseBroker(BaseBroker):
                     return False
             else:
                 api_key = os.getenv("COINBASE_API_KEY")
-                api_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
+                api_secret = os.getenv("COINBASE_API_SECRET", "")
+                if not api_secret:
+                    api_secret = os.getenv("COINBASE_PEM_CONTENT", "")
 
             if not api_key or not api_secret:
                 logging.error("❌ Coinbase API credentials not found (need COINBASE_API_KEY + COINBASE_API_SECRET/COINBASE_PEM_CONTENT)")
@@ -2768,8 +2770,13 @@ class CoinbaseBroker(BaseBroker):
 
             # Normalize PEM key: Railway/Docker env vars may store newlines as
             # literal '\n' two-character sequences instead of real newlines.
-            if '\\n' in api_secret:
-                api_secret = api_secret.replace('\\n', '\n')
+            api_secret = api_secret.replace("\\n", "\n").strip()
+            logging.info(
+                "Coinbase PEM loaded: begin=%s end=%s lines=%d",
+                api_secret.startswith("-----BEGIN"),
+                api_secret.endswith("-----END EC PRIVATE KEY-----"),
+                len(api_secret.splitlines()),
+            )
 
             # Initialize REST client
             self.client = RESTClient(api_key=api_key, api_secret=api_secret)
@@ -4006,14 +4013,13 @@ class CoinbaseBroker(BaseBroker):
                 from cryptography.hazmat.primitives import serialization
 
                 api_key = os.getenv("COINBASE_API_KEY")
-                api_secret = os.getenv("COINBASE_API_SECRET") or os.getenv("COINBASE_PEM_CONTENT")
+                api_secret = os.getenv("COINBASE_API_SECRET", "") or os.getenv("COINBASE_PEM_CONTENT", "")
 
                 if not api_secret:
                     raise ValueError("COINBASE_API_SECRET/COINBASE_PEM_CONTENT environment variable not set")
 
                 # Normalize PEM
-                if '\\n' in api_secret:
-                    api_secret = api_secret.replace('\\n', '\n')
+                api_secret = api_secret.replace("\\n", "\n").strip()
 
                 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
                 private_key = serialization.load_pem_private_key(api_secret.encode('utf-8'), password=None)
