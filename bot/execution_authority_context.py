@@ -806,6 +806,36 @@ def can_execute() -> ExecutionDecision:
                 stability_reason=stability.reason,
             )
 
+    # ── Stability governor HALT gate (Phase 3 — disabled by default) ────────────
+    # Consulted only when NIJA_STABILITY_GOVERNOR_HALT_ENABLED is explicitly set so
+    # that Phase 1/2 (observe + guarded) do not block dispatch paths.  The governor
+    # is fail-open: any exception here is silently absorbed so it cannot accidentally
+    # block execution when unavailable.
+    if _env_truthy("NIJA_STABILITY_GOVERNOR_HALT_ENABLED"):
+        try:
+            try:
+                from bot.stability_governor import get_stability_governor
+            except ImportError:
+                from stability_governor import get_stability_governor  # type: ignore[import]
+            _sg = get_stability_governor()
+            if _sg.is_halted():
+                _sg_snap = _sg.get_snapshot()
+                return ExecutionDecision(
+                    allowed=False,
+                    reason=f"stability_governor:HALT:{_sg_snap.reason}",
+                    circuit_state=configured_circuit_state,
+                    state_live_active=state_live_active,
+                    lease_valid=lease_valid,
+                    lease_generation_current=lease_generation_current,
+                    heartbeat_fresh=heartbeat_fresh,
+                    heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+                    broker_health_ok=broker_health_ok,
+                    circuit_breaker_closed=circuit_breaker_closed,
+                    dispatch_enabled=dispatch_enabled,
+                )
+        except Exception as _sg_exc:
+            logger.debug("StabilityGovernor HALT check unavailable (fail-open): %s", _sg_exc)
+
     return ExecutionDecision(
         allowed=True,
         reason="allowed",
