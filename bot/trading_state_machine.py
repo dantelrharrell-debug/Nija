@@ -2307,6 +2307,23 @@ def _execution_circuit_breaker_status() -> tuple[bool, str]:
         return False, _EXECUTION_CIRCUIT_BREAKER_REASON or "execution_circuit_breaker_tripped"
 
 
+def get_execution_anomaly_snapshot() -> Dict[str, Any]:
+    """Return execution anomaly counters and circuit breaker status."""
+    healthy, reason = _execution_circuit_breaker_status()
+    thresholds = _execution_circuit_breaker_thresholds()
+    with _EXECUTION_CIRCUIT_BREAKER_LOCK:
+        counts = dict(_EXECUTION_CIRCUIT_BREAKER_COUNTS)
+        tripped = bool(_EXECUTION_CIRCUIT_BREAKER_TRIPPED)
+    return {
+        "enabled": bool(_execution_circuit_breaker_enabled()),
+        "healthy": bool(healthy),
+        "reason": str(reason or ""),
+        "tripped": tripped,
+        "counts": counts,
+        "thresholds": thresholds,
+    }
+
+
 def report_execution_anomaly(kind: str, detail: str = "") -> None:
     """Public entrypoint for other modules to report execution anomalies."""
     _record_execution_anomaly(str(kind or "").strip(), detail=detail)
