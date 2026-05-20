@@ -20,6 +20,7 @@ import math
 import time
 import unittest
 
+import bot.control_compiler as cc_mod
 from bot.control_compiler import (
     CompileStatus,
     ControlCompiler,
@@ -265,6 +266,44 @@ class TestCompileDict(unittest.TestCase):
         d = {"symbol": "BTC-USD", "action": "hold", "confidence": 0.0, "regime": "unknown"}
         result = self.compiler.compile_dict(d)
         self.assertTrue(result.accepted)
+
+
+# ---------------------------------------------------------------------------
+# 4b. Bootstrap low-friction pass
+# ---------------------------------------------------------------------------
+
+class TestBootstrapPass(unittest.TestCase):
+
+    def setUp(self):
+        self.compiler = _fresh_compiler()
+        self._orig_min_conf = cc_mod._MIN_CONFIDENCE_BASELINE
+        self._orig_bootstrap_enabled = cc_mod._BOOTSTRAP_PASS_ENABLED
+        self._orig_bootstrap_limit = cc_mod._BOOTSTRAP_PASS_LIMIT
+        self._orig_bootstrap_min_conf = cc_mod._BOOTSTRAP_MIN_CONFIDENCE
+        cc_mod._MIN_CONFIDENCE_BASELINE = 0.10
+        cc_mod._BOOTSTRAP_PASS_ENABLED = True
+        cc_mod._BOOTSTRAP_PASS_LIMIT = 1
+        cc_mod._BOOTSTRAP_MIN_CONFIDENCE = 0.05
+
+    def tearDown(self):
+        cc_mod._MIN_CONFIDENCE_BASELINE = self._orig_min_conf
+        cc_mod._BOOTSTRAP_PASS_ENABLED = self._orig_bootstrap_enabled
+        cc_mod._BOOTSTRAP_PASS_LIMIT = self._orig_bootstrap_limit
+        cc_mod._BOOTSTRAP_MIN_CONFIDENCE = self._orig_bootstrap_min_conf
+
+    def test_synthetic_low_threshold_signal_gets_one_bootstrap_pass(self):
+        raw = _valid_raw(confidence=0.08, metadata={"synthetic": True})
+        result = self.compiler.compile(raw)
+        self.assertTrue(result.accepted)
+        self.assertTrue(result.signal.metadata.get("bootstrap_pass"))
+        self.assertEqual(result.signal.metadata.get("bootstrap_pass_index"), 1)
+
+    def test_bootstrap_pass_is_bounded(self):
+        first = self.compiler.compile(_valid_raw(confidence=0.08, metadata={"synthetic": True}))
+        second = self.compiler.compile(_valid_raw(confidence=0.08, metadata={"synthetic": True}))
+        self.assertTrue(first.accepted)
+        self.assertFalse(second.accepted)
+        self.assertEqual(second.status, CompileStatus.K_GATE_FAILED)
 
 
 # ---------------------------------------------------------------------------

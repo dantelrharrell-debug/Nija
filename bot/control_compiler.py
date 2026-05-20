@@ -131,6 +131,19 @@ _K_COOLDOWN_S: float = float(os.getenv("NIJA_CC_K_COOLDOWN_S", "120"))
 _MIN_CONFIDENCE_BASELINE: float = float(os.getenv("NIJA_CC_MIN_CONFIDENCE", "0.0"))
 # Minimum size_usd to accept an execution signal
 _MIN_SIZE_USD_BASELINE: float = float(os.getenv("NIJA_CC_MIN_SIZE_USD", "0.0"))
+# Low-friction bootstrap: allow a bounded number of synthetic or low-threshold
+# signals to pass through the compiler so end-to-end execution can be verified
+# before tightening filters upward.
+_BOOTSTRAP_PASS_ENABLED: bool = os.getenv("NIJA_CC_BOOTSTRAP_PASS_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+_BOOTSTRAP_PASS_LIMIT: int = max(0, int(os.getenv("NIJA_CC_BOOTSTRAP_PASS_LIMIT", "1")))
+_BOOTSTRAP_MIN_CONFIDENCE: float = max(
+    0.0,
+    min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_MIN_CONFIDENCE", "0.05"))),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -829,6 +842,7 @@ class ControlCompiler:
         self._accepted: int = 0
         self._rejected: int = 0
         self._rejection_reasons: Dict[str, int] = {}
+        self._bootstrap_passes_used: int = 0
 
         logger.info(
             "ControlCompiler initialized | K_AI_GATE=%.2f K_CONFIDENCE=%.2f "
@@ -868,6 +882,12 @@ class ControlCompiler:
 
         # ── Phase 1-3: Validation ────────────────────────────────────────
         ok, reason, reason_code, signal = self._validator.validate(raw, self._matrix)
+        if not ok and is_execution:
+            signal = self._try_bootstrap_pass(raw, reason_code)
+            if signal is not None:
+                ok = True
+                reason = ""
+                reason_code = ""
 
         if not ok:
             status = (
@@ -988,6 +1008,7 @@ class ControlCompiler:
             accepted = self._accepted
             rejected = self._rejected
             reasons = dict(self._rejection_reasons)
+            bootstrap_used = self._bootstrap_passes_used
 
         accept_rate = (accepted / total) if total > 0 else 1.0
         return {
@@ -997,6 +1018,13 @@ class ControlCompiler:
             "rejected": rejected,
             "accept_rate": round(accept_rate, 4),
             "rejection_reasons": reasons,
+            "bootstrap_pass": {
+                "enabled": _BOOTSTRAP_PASS_ENABLED,
+                "limit": _BOOTSTRAP_PASS_LIMIT,
+                "used": bootstrap_used,
+                "remaining": max(0, _BOOTSTRAP_PASS_LIMIT - bootstrap_used),
+                "min_confidence": _BOOTSTRAP_MIN_CONFIDENCE,
+            },
             "k_values": self._matrix.get_all(),
             "k_history": self._matrix.get_history(limit=20),
             "active_freezes": self._instability.get_freezes(),
@@ -1073,6 +1101,70 @@ class ControlCompiler:
             )
         except Exception as exc:
             logger.debug("ControlCompiler: trace emission failed: %s", exc)
+
+    def _try_bootstrap_pass(self, raw: RawSignal, reason_code: str) -> Optional[ControlSignal]:
+        """
+        Allow a bounded compiler bootstrap pass for synthetic/low-threshold signals.
+
+        This only applies to K-confidence rejections for execution actions.
+        """
+        if not _BOOTSTRAP_PASS_ENABLED or _BOOTSTRAP_PASS_LIMIT <= 0:
+            return None
+        if reason_code != SignalValidator.RC_K_CONFIDENCE:
+            return None
+        confidence = float(raw.confidence)
+        if confidence < _BOOTSTRAP_MIN_CONFIDENCE:
+            return None
+
+        metadata = raw.metadata or {}
+        synthetic = bool(
+            metadata.get("synthetic")
+            or metadata.get("diagnostic")
+            or metadata.get("probe")
+            or metadata.get("volume_fallback")
+            or metadata.get("bypass_low_quality")
+            or metadata.get("bypass_quality_filter")
+            or metadata.get("weak_signal_entry")
+            or metadata.get("fallback_entry")
+        )
+        low_threshold = bool(metadata.get("bootstrap_low_threshold") or metadata.get("low_threshold"))
+        if not (synthetic or low_threshold):
+            return None
+
+        with self._lock:
+            if self._bootstrap_passes_used >= _BOOTSTRAP_PASS_LIMIT:
+                return None
+            self._bootstrap_passes_used += 1
+            used = self._bootstrap_passes_used
+
+        signal = ControlSignal(
+            symbol=raw.symbol.strip().upper(),
+            side=_normalize_side(raw.side, raw.action),
+            action=(raw.action or "").lower().strip(),
+            size_usd=float(raw.size_usd),
+            confidence=confidence,
+            regime=(raw.regime or "unknown").lower().strip(),
+            strategy=raw.strategy or "",
+            account_id=raw.account_id or "default",
+            order_type=raw.order_type,
+            asset_class=raw.asset_class,
+            preferred_broker=raw.preferred_broker,
+            available_balance_usd=raw.available_balance_usd,
+            price_hint_usd=raw.price_hint_usd,
+            metadata=dict(metadata),
+        )
+        signal.metadata["bootstrap_pass"] = True
+        signal.metadata["bootstrap_pass_index"] = used
+        signal.metadata["bootstrap_reason"] = "k_confidence_override"
+        logger.warning(
+            "COMPILER_BOOTSTRAP_PASS symbol=%s action=%s confidence=%.3f used=%d/%d",
+            signal.symbol,
+            signal.action,
+            signal.confidence,
+            used,
+            _BOOTSTRAP_PASS_LIMIT,
+        )
+        return signal
 
 
 # ---------------------------------------------------------------------------
