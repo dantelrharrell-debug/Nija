@@ -92,11 +92,31 @@ except ImportError:
 # Heartbeat trade configuration
 # ---------------------------------------------------------------------------
 
-_HEARTBEAT_TRADE_AMOUNT_USD: float = float(
-    os.environ.get("HEARTBEAT_TRADE_AMOUNT_USD", "5.0") or "5.0"
+def _env_float(*names: str, default: float) -> float:
+    """Read float env value from the first present key in `names`."""
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        try:
+            return float(str(raw).strip())
+        except (TypeError, ValueError):
+            logger.warning("Invalid float env %s=%r — using fallback", name, raw)
+    return float(default)
+
+
+_HEARTBEAT_TRADE_AMOUNT_USD: float = _env_float(
+    "HEARTBEAT_TRADE_AMOUNT_USD",
+    "HEARTBEAT_TRADE_SIZE",
+    default=5.0,
 )
-_HEARTBEAT_TRADE_INTERVAL_S: float = float(
-    os.environ.get("HEARTBEAT_TRADE_INTERVAL_S", "15") or "15"
+_HEARTBEAT_TRADE_INTERVAL_S: float = _env_float(
+    "HEARTBEAT_TRADE_INTERVAL_S",
+    "HEARTBEAT_TRADE_INTERVAL",
+    default=15.0,
+)
+_HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S: float = float(
+    os.environ.get("HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S", "0") or "0"
 )
 _HEARTBEAT_TRADE_SYMBOL: str = os.environ.get(
     "HEARTBEAT_TRADE_SYMBOL", "BTC-USD"
@@ -236,8 +256,10 @@ class TradingStrategy:
         # ── Start heartbeat trade if enabled ───────────────────────────────
         if self._heartbeat_trade_enabled:
             logger.info(
-                "💓 Heartbeat trade enabled — scheduling $%.2f test trade in %.0fs",
+                "💓 Heartbeat trade enabled — scheduling immediate $%.2f verification "
+                "(first_delay=%.0fs retry_interval=%.0fs)",
                 _HEARTBEAT_TRADE_AMOUNT_USD,
+                _HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S,
                 _HEARTBEAT_TRADE_INTERVAL_S,
             )
             self._schedule_heartbeat_trade()
@@ -336,28 +358,42 @@ class TradingStrategy:
         logger.info("💓 Heartbeat trade thread started")
 
     def _heartbeat_trade_runner(self) -> None:
-        """Background thread: wait for the configured interval then execute the heartbeat trade."""
-        logger.info(
-            "💓 Heartbeat trade runner sleeping %.0fs before first attempt",
-            _HEARTBEAT_TRADE_INTERVAL_S,
-        )
-        time.sleep(_HEARTBEAT_TRADE_INTERVAL_S)
-        try:
-            success = self._execute_heartbeat_trade()
-            with self._heartbeat_trade_lock:
-                self._heartbeat_trade_completed = True
-                self._heartbeat_trade_success = success
-            if success:
-                logger.info("✅ Heartbeat trade PASSED — bot confirmed ready for live trading")
-            else:
+        """Background thread: execute heartbeat immediately and retry until verification succeeds."""
+        first_delay_s = max(0.0, _HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S)
+        retry_interval_s = max(1.0, _HEARTBEAT_TRADE_INTERVAL_S)
+        if first_delay_s > 0:
+            logger.info(
+                "💓 Heartbeat trade runner sleeping %.0fs before first attempt",
+                first_delay_s,
+            )
+            time.sleep(first_delay_s)
+        attempt = 1
+        while True:
+            try:
+                success = self._execute_heartbeat_trade()
+                with self._heartbeat_trade_lock:
+                    self._heartbeat_trade_success = success
+                    self._heartbeat_trade_completed = success
+                if success:
+                    logger.info("✅ Heartbeat trade PASSED — bot confirmed ready for live trading")
+                    return
                 logger.error(
-                    "❌ Heartbeat trade FAILED — trading remains blocked until heartbeat succeeds"
+                    "❌ Heartbeat trade FAILED on attempt %d — retrying in %.0fs",
+                    attempt,
+                    retry_interval_s,
                 )
-        except Exception as _hb_err:
-            logger.error("❌ Heartbeat trade runner raised: %s", _hb_err, exc_info=True)
-            with self._heartbeat_trade_lock:
-                self._heartbeat_trade_completed = True
-                self._heartbeat_trade_success = False
+            except Exception as _hb_err:
+                logger.error(
+                    "❌ Heartbeat trade runner raised on attempt %d: %s",
+                    attempt,
+                    _hb_err,
+                    exc_info=True,
+                )
+                with self._heartbeat_trade_lock:
+                    self._heartbeat_trade_success = False
+                    self._heartbeat_trade_completed = False
+            attempt += 1
+            time.sleep(retry_interval_s)
 
     def _heartbeat_auth_verify(self, broker: Any) -> tuple[bool, str]:
         """Best-effort authenticated request probe for AUTH_VERIFY stage."""
