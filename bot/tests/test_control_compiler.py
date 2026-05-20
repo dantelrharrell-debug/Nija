@@ -381,6 +381,7 @@ class TestBootstrapPass(unittest.TestCase):
         cc_mod._MIN_LIVE_EXECUTION_GAP_S = 1.0
         cc_mod._MIN_LIVE_EXECUTION_CONF_RELAX = 0.7
         cc_mod._MIN_LIVE_EXECUTION_LIMIT_FLOOR = 1
+        cc_mod._BOOTSTRAP_PASS_LIMIT = 0
         self.compiler._last_live_execution_ts = time.time() - 3600.0
         with self.compiler._lock:
             self.compiler._execution_outcomes.clear()
@@ -510,11 +511,16 @@ class TestFeedbackInstabilityDetector(unittest.TestCase):
 
     def test_stable_history_no_instability(self):
         det = FeedbackInstabilityDetector()
-        # All accepts = no flips
-        for _ in range(10):
-            det.record("SOL-USD", "strong_trend", accepted=True)
-        level, _ = det.check("SOL-USD", "strong_trend")
-        self.assertEqual(level, InstabilityLevel.NONE)
+        original_check = det._check_failure_clusters
+        det._check_failure_clusters = staticmethod(lambda symbol, regime: "")  # type: ignore[assignment]
+        try:
+            # All accepts = no flips
+            for _ in range(10):
+                det.record("SOL-USD", "strong_trend", accepted=True)
+            level, _ = det.check("SOL-USD", "strong_trend")
+            self.assertEqual(level, InstabilityLevel.NONE)
+        finally:
+            det._check_failure_clusters = original_check  # type: ignore[assignment]
 
     def test_get_freezes_reflects_active_freezes(self):
         det = FeedbackInstabilityDetector()

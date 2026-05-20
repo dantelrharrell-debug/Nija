@@ -1221,7 +1221,9 @@ class ControlCompiler:
         )
         last_live_ts = self._last_live_execution_ts
         live_execution_gap_s = (time.time() - last_live_ts) if last_live_ts else float("inf")
-        starvation_recovery_active = bool(live_execution_gap_s > _MIN_LIVE_EXECUTION_GAP_S)
+        starvation_recovery_active = bool(
+            last_live_ts is not None and live_execution_gap_s > _MIN_LIVE_EXECUTION_GAP_S
+        )
         if starvation_recovery_active:
             effective_min_confidence *= _MIN_LIVE_EXECUTION_CONF_RELAX
             effective_limit = max(_MIN_LIVE_EXECUTION_LIMIT_FLOOR, effective_limit)
