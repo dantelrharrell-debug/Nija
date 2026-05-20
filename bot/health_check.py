@@ -708,6 +708,30 @@ class HealthCheckManager:
         except Exception as exc:
             runtime_authority["reason"] = f"unavailable ({exc})"
 
+        stability_authority = {
+            "stability_state": "UNKNOWN",
+            "decision": {
+                "allow": False,
+                "size_multiplier": 0.0,
+                "throttle": 0.0,
+                "halt_state": "UNKNOWN",
+                "reason": "unavailable",
+                "stress_score": 1.0,
+                "collapsed_risk_score": 1.0,
+                "active_invariants": ["status_unavailable"],
+            },
+            "controls": {},
+            "predictors": {},
+        }
+        try:
+            try:
+                from bot.stability_governor import get_stability_governor
+            except ImportError:
+                from stability_governor import get_stability_governor  # type: ignore[import]
+            stability_authority = get_stability_governor().get_status()
+        except Exception as exc:
+            stability_authority["decision"]["reason"] = f"unavailable ({exc})"
+
         runtime_env_flags = {
             "LIVE_CAPITAL_VERIFIED": os.getenv("LIVE_CAPITAL_VERIFIED", "false"),
             "LIVE_TRADING": os.getenv("LIVE_TRADING", "false"),
@@ -732,6 +756,7 @@ class HealthCheckManager:
                 "startup_state": self._build_startup_state_signal(),
                 "execution_gate": execution_gate,
                 "runtime_authority": runtime_authority,
+                "stability_authority": stability_authority,
                 "runtime_mode": runtime_mode_snapshot,
                 "runtime_env_flags": runtime_env_flags,
             },
