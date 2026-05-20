@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import time
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -147,23 +148,23 @@ class TestGovernorFSM(unittest.TestCase):
 
     def test_boot_transitions_to_observe_on_first_evaluate(self) -> None:
         g = self._gov(_stable_vector())
-        snap = g.evaluate()
+        snap = g.step()
         self.assertEqual(snap.mode, GovernorMode.OBSERVE)
 
     # -- OBSERVE → STABLE ------------------------------------------------
 
     def test_observe_transitions_to_stable_after_two_healthy_cycles(self) -> None:
         g = self._gov(_stable_vector())
-        g.evaluate()  # BOOT → OBSERVE
-        g.evaluate()  # first OBSERVE cycle (observe_cycles=1 < 2)
-        snap = g.evaluate()  # second OBSERVE cycle → STABLE
+        g.step()  # BOOT → OBSERVE
+        g.step()  # first OBSERVE cycle (observe_cycles=1 < 2)
+        snap = g.step()  # second OBSERVE cycle → STABLE
         self.assertEqual(snap.mode, GovernorMode.STABLE)
 
     def test_observe_stays_in_observe_when_potential_too_high(self) -> None:
         g = self._gov(_failed_vector(kill_switch_active=False, lease_valid=True, nonce_ready=True))
-        g.evaluate()  # BOOT → OBSERVE
+        g.step()  # BOOT → OBSERVE
         for _ in range(5):
-            snap = g.evaluate()
+            snap = g.step()
         # V_t is high → should NOT advance past OBSERVE
         self.assertEqual(snap.mode, GovernorMode.OBSERVE)
 
@@ -173,25 +174,25 @@ class TestGovernorFSM(unittest.TestCase):
         g = self._gov(_stable_vector())
         # Warm up to STABLE
         for _ in range(3):
-            g.evaluate()
+            g.step()
         self.assertEqual(g._mode, GovernorMode.STABLE)
         # Inject rising potential without hard invariants (heartbeat+authority fail → V_t > 0.25)
         g.set_vector(_stable_vector(heartbeat_fresh=False, runtime_authority_ok=False))
         # Need NIJA_SG_RISING_TO_GUARDED=3 consecutive rises
         for _ in range(3):
-            snap = g.evaluate()
+            snap = g.step()
         self.assertEqual(snap.mode, GovernorMode.GUARDED)
 
     def test_stable_does_not_escalate_on_single_spike(self) -> None:
         g = self._gov(_stable_vector())
         for _ in range(3):
-            g.evaluate()
+            g.step()
         self.assertEqual(g._mode, GovernorMode.STABLE)
         # One bad cycle (no hard invariant) then recover
         g.set_vector(_stable_vector(heartbeat_fresh=False, runtime_authority_ok=False))
-        g.evaluate()
+        g.step()
         g.set_vector(_stable_vector())
-        snap = g.evaluate()
+        snap = g.step()
         # Not yet 3 consecutive rises — must still be STABLE
         self.assertEqual(snap.mode, GovernorMode.STABLE)
 
@@ -200,14 +201,14 @@ class TestGovernorFSM(unittest.TestCase):
     def test_guarded_escalates_to_halt_on_critical_potential(self) -> None:
         g = self._gov(_stable_vector())
         for _ in range(3):
-            g.evaluate()
+            g.step()
         # Force GUARDED
         with g._lock:
             g._mode = GovernorMode.GUARDED
         # Inject high-potential vector (everything broken except kill_switch)
         g.set_vector(_failed_vector(kill_switch_active=False, lease_valid=True, nonce_ready=True))
         for _ in range(3):
-            snap = g.evaluate()
+            snap = g.step()
         self.assertEqual(snap.mode, GovernorMode.HALT)
 
     def test_kill_switch_forces_halt_from_any_state(self) -> None:
@@ -215,7 +216,7 @@ class TestGovernorFSM(unittest.TestCase):
             g = self._gov(_stable_vector(kill_switch_active=True))
             with g._lock:
                 g._mode = start_mode
-            snap = g.evaluate()
+            snap = g.step()
             self.assertEqual(
                 snap.mode,
                 GovernorMode.HALT,
@@ -229,7 +230,7 @@ class TestGovernorFSM(unittest.TestCase):
         with g._lock:
             g._mode = GovernorMode.HALT
             g._prev_v = 0.5  # artificially set high prev so delta goes negative
-        snap = g.evaluate()
+        snap = g.step()
         self.assertEqual(snap.mode, GovernorMode.RECOVERING)
 
     def test_halt_stays_halted_when_hard_invariant_remains(self) -> None:
@@ -237,7 +238,7 @@ class TestGovernorFSM(unittest.TestCase):
         with g._lock:
             g._mode = GovernorMode.HALT
             g._prev_v = 0.5
-        snap = g.evaluate()
+        snap = g.step()
         # kill_switch_active → hard_halt → stays HALT
         self.assertEqual(snap.mode, GovernorMode.HALT)
 
@@ -251,7 +252,7 @@ class TestGovernorFSM(unittest.TestCase):
         # NIJA_SG_RECOVERY_QUORUM=5: need 5 cycles with V_t ≤ guarded_threshold.
         # _stable_vector() gives V_t≈0 so each cycle increments _recovery_window.
         for _ in range(6):
-            snap = g.evaluate()
+            snap = g.step()
         self.assertEqual(snap.mode, GovernorMode.STABLE)
 
     def test_recovering_regresses_to_guarded_on_potential_spike(self) -> None:
@@ -261,18 +262,18 @@ class TestGovernorFSM(unittest.TestCase):
             g._prev_v = 0.0
         # Use a vector that raises V_t above guarded_threshold WITHOUT triggering kill_switch
         g.set_vector(_stable_vector(heartbeat_fresh=False, runtime_authority_ok=False))
-        snap = g.evaluate()
+        snap = g.step()
         self.assertEqual(snap.mode, GovernorMode.GUARDED)
 
     # -- Transition counter ----------------------------------------------
 
     def test_transition_count_increments_on_each_mode_change(self) -> None:
         g = self._gov(_stable_vector())
-        snap0 = g.evaluate()  # BOOT → OBSERVE
+        snap0 = g.step()  # BOOT → OBSERVE
         self.assertGreaterEqual(snap0.transition_count, 1)
-        snap1 = g.evaluate()
-        snap2 = g.evaluate()
-        snap3 = g.evaluate()
+        snap1 = g.step()
+        snap2 = g.step()
+        snap3 = g.step()
         self.assertGreater(snap3.transition_count, snap0.transition_count)
 
 
@@ -375,6 +376,67 @@ class TestSingleton(unittest.TestCase):
         g1 = get_stability_governor()
         g2 = get_stability_governor(reset=True)
         self.assertIsNot(g1, g2)
+
+class TestStabilityGovernorEvaluateAPI(unittest.TestCase):
+    """Tests for StabilityGovernor.evaluate() — the explicit-arg API used by
+    execution_authority_context._evaluate_stability_authority().
+    """
+
+    def _make_gov(self) -> StabilityGovernor:
+        return get_stability_governor(reset=True)
+
+    def _evaluate(self, gov, **overrides):
+        base = {
+            "runtime_snapshot": SimpleNamespace(coordinator_state="EXECUTING"),
+            "state_live_active": True,
+            "lease_valid": True,
+            "lease_generation_current": True,
+            "heartbeat_fresh": True,
+            "heartbeat_stage_sufficient": True,
+            "broker_health_ok": True,
+            "dispatch_enabled": True,
+            "circuit_breaker_closed": True,
+        }
+        base.update(overrides)
+        return gov.evaluate(**base)
+
+    def test_authority_ambiguity_fails_closed(self) -> None:
+        gov = self._make_gov()
+        decision = self._evaluate(gov, runtime_snapshot=SimpleNamespace(coordinator_state="UNKNOWN"))
+        self.assertFalse(decision.allow)
+        self.assertEqual(decision.reason, "authority_ambiguity_fail_closed")
+
+    def test_halted_mode_returns_allow_false(self) -> None:
+        gov = self._make_gov()
+        with gov._lock:
+            gov._mode = GovernorMode.HALT
+        decision = self._evaluate(gov)
+        self.assertFalse(decision.allow)
+        self.assertEqual(decision.halt_state, "HALTED")
+        self.assertEqual(decision.size_multiplier, 0.0)
+
+    def test_stable_mode_returns_allow_true_when_all_gates_pass(self) -> None:
+        gov = self._make_gov()
+        with gov._lock:
+            gov._mode = GovernorMode.STABLE
+        decision = self._evaluate(gov)
+        self.assertTrue(decision.allow)
+        self.assertGreater(decision.size_multiplier, 0.0)
+
+    def test_guarded_mode_returns_reduced_size_multiplier(self) -> None:
+        gov = self._make_gov()
+        with gov._lock:
+            gov._mode = GovernorMode.GUARDED
+        decision = self._evaluate(gov)
+        self.assertLess(decision.size_multiplier, 1.0)
+
+    def test_decision_has_required_attributes(self) -> None:
+        gov = self._make_gov()
+        decision = self._evaluate(gov)
+        for attr in ("allow", "halt_state", "throttle", "size_multiplier",
+                     "stress_score", "collapsed_risk_score", "reason"):
+            self.assertTrue(hasattr(decision, attr), f"Missing attribute: {attr}")
+
 
 
 if __name__ == "__main__":

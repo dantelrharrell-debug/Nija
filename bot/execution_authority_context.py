@@ -75,6 +75,24 @@ class ExecutionDecision:
     broker_health_ok: bool
     circuit_breaker_closed: bool
     dispatch_enabled: bool
+    stability_allowed: bool
+    stability_halt_state: str
+    stability_throttle: float
+    stability_size_multiplier: float
+    stability_stress_score: float
+    stability_collapsed_risk_score: float
+    stability_reason: str
+
+
+@dataclass(frozen=True)
+class StabilityAuthoritySnapshot:
+    allowed: bool
+    halt_state: str
+    throttle: float
+    size_multiplier: float
+    stress_score: float
+    collapsed_risk_score: float
+    reason: str
 
 
 class ExecutionBlocked(RuntimeError):
@@ -575,6 +593,56 @@ def assert_execution_dispatch_permitted() -> None:
         raise ExecutionBlocked(decision.reason)
 
 
+def _evaluate_stability_authority(
+    *,
+    runtime_snapshot: RuntimeAuthoritySnapshot,
+    state_live_active: bool,
+    lease_valid: bool,
+    lease_generation_current: bool,
+    heartbeat_fresh: bool,
+    heartbeat_stage_sufficient: bool,
+    broker_health_ok: bool,
+    dispatch_enabled: bool,
+    circuit_breaker_closed: bool,
+) -> StabilityAuthoritySnapshot:
+    try:
+        try:
+            from bot.stability_governor import get_stability_governor
+        except ImportError:
+            from stability_governor import get_stability_governor  # type: ignore[import]
+        decision = get_stability_governor().evaluate(
+            runtime_snapshot=runtime_snapshot,
+            state_live_active=state_live_active,
+            lease_valid=lease_valid,
+            lease_generation_current=lease_generation_current,
+            heartbeat_fresh=heartbeat_fresh,
+            heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+            broker_health_ok=broker_health_ok,
+            dispatch_enabled=dispatch_enabled,
+            circuit_breaker_closed=circuit_breaker_closed,
+        )
+        return StabilityAuthoritySnapshot(
+            allowed=bool(getattr(decision, "allow", False)),
+            halt_state=str(getattr(decision, "halt_state", "UNKNOWN")),
+            throttle=float(getattr(decision, "throttle", 0.0)),
+            size_multiplier=float(getattr(decision, "size_multiplier", 0.0)),
+            stress_score=float(getattr(decision, "stress_score", 1.0)),
+            collapsed_risk_score=float(getattr(decision, "collapsed_risk_score", 1.0)),
+            reason=str(getattr(decision, "reason", "stability_denied")),
+        )
+    except Exception as exc:
+        logger.critical("Stability authority unavailable; failing closed: %s", exc)
+        return StabilityAuthoritySnapshot(
+            allowed=False,
+            halt_state="UNKNOWN",
+            throttle=0.0,
+            size_multiplier=0.0,
+            stress_score=1.0,
+            collapsed_risk_score=1.0,
+            reason=f"stability_unavailable:{exc}",
+        )
+
+
 def can_execute() -> ExecutionDecision:
     """Canonical execution authority decision for all order-dispatch paths."""
     runtime_snapshot = runtime_authority_snapshot()
@@ -675,6 +743,18 @@ def can_execute() -> ExecutionDecision:
     else:
         circuit_breaker_closed = False
 
+    stability = _evaluate_stability_authority(
+        runtime_snapshot=runtime_snapshot,
+        state_live_active=state_live_active,
+        lease_valid=lease_valid,
+        lease_generation_current=lease_generation_current,
+        heartbeat_fresh=heartbeat_fresh,
+        heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+        broker_health_ok=broker_health_ok,
+        dispatch_enabled=dispatch_enabled,
+        circuit_breaker_closed=circuit_breaker_closed,
+    )
+
     checks = (
         ("state.live_active", state_live_active),
         ("lease.valid", lease_valid),
@@ -684,6 +764,7 @@ def can_execute() -> ExecutionDecision:
         ("broker.health_ok", broker_health_ok),
         ("circuit_breaker.closed", circuit_breaker_closed),
         ("dispatch.enabled", dispatch_enabled),
+        ("stability.allowed", stability.allowed),
     )
 
     for check_name, check_ok in checks:
@@ -698,6 +779,12 @@ def can_execute() -> ExecutionDecision:
                 )
             elif check_name.startswith("heartbeat.") and heartbeat_reason:
                 reason = f"{check_name}: {heartbeat_reason}"
+            elif check_name == "stability.allowed":
+                reason = (
+                    f"{check_name}: {stability.reason} "
+                    f"(state={stability.halt_state} throttle={stability.throttle:.2f} "
+                    f"size={stability.size_multiplier:.2f} stress={stability.stress_score:.2f})"
+                )
             return ExecutionDecision(
                 allowed=False,
                 reason=reason,
@@ -710,6 +797,13 @@ def can_execute() -> ExecutionDecision:
                 broker_health_ok=broker_health_ok,
                 circuit_breaker_closed=circuit_breaker_closed,
                 dispatch_enabled=dispatch_enabled,
+                stability_allowed=stability.allowed,
+                stability_halt_state=stability.halt_state,
+                stability_throttle=stability.throttle,
+                stability_size_multiplier=stability.size_multiplier,
+                stability_stress_score=stability.stress_score,
+                stability_collapsed_risk_score=stability.collapsed_risk_score,
+                stability_reason=stability.reason,
             )
 
     # ── Stability governor HALT gate (Phase 3 — disabled by default) ────────────
@@ -754,6 +848,13 @@ def can_execute() -> ExecutionDecision:
         broker_health_ok=broker_health_ok,
         circuit_breaker_closed=circuit_breaker_closed,
         dispatch_enabled=dispatch_enabled,
+        stability_allowed=stability.allowed,
+        stability_halt_state=stability.halt_state,
+        stability_throttle=stability.throttle,
+        stability_size_multiplier=stability.size_multiplier,
+        stability_stress_score=stability.stress_score,
+        stability_collapsed_risk_score=stability.collapsed_risk_score,
+        stability_reason=stability.reason,
     )
 
 

@@ -219,12 +219,12 @@ class StabilityGovernor:
     # Public interface
     # -------------------------------------------------------------------------
 
-    def evaluate(self) -> GovernorSnapshot:
+    def step(self) -> GovernorSnapshot:
         """Gather live signals, update V_t, advance FSM, return snapshot.
 
-        This method is idempotent except for FSM state advancement.  It should
-        be called periodically (e.g. once per trading cycle) or on-demand from
-        health checks.  It does NOT block execution paths — see ``is_halted()``.
+        This is the core FSM tick: idempotent except for state advancement.
+        Called periodically (once per trading cycle) or from ``evaluate()``.
+        It does NOT block execution paths — see ``is_halted()``.
         """
         with self._lock:
             self._enabled = self._read_enabled()
@@ -664,6 +664,90 @@ class StabilityGovernor:
         )
 
 
+
+    def evaluate(
+        self,
+        *,
+        runtime_snapshot: "Optional[Any]" = None,
+        state_live_active: bool = False,
+        lease_valid: bool = False,
+        lease_generation_current: bool = False,
+        heartbeat_fresh: bool = False,
+        heartbeat_stage_sufficient: bool = False,
+        broker_health_ok: bool = False,
+        dispatch_enabled: bool = False,
+        circuit_breaker_closed: bool = False,
+    ) -> "StabilityAuthorityDecision":
+        """Evaluate stability and return a unified authority decision.
+
+        This method satisfies the API contract required by
+        :func:`execution_authority_context._evaluate_stability_authority`.
+
+        It runs the Lyapunov FSM evaluation (gathering live signals from the
+        environment) and then maps the FSM snapshot to a
+        :class:`StabilityAuthorityDecision` that callers can query via
+        ``.allow``, ``.size_multiplier``, ``.throttle``, ``.halt_state``,
+        ``.stress_score``, ``.collapsed_risk_score``, and ``.reason``.
+
+        Parameters
+        ----------
+        runtime_snapshot:
+            Coordinator authority snapshot.  Used to check for authority
+            ambiguity (``coordinator_state`` in {empty, UNKNOWN, UNAVAILABLE}).
+        state_live_active, lease_valid, ..., circuit_breaker_closed:
+            Pre-checked gate conditions from the caller.  All must be True for
+            the base ``allow`` flag to be set.
+        """
+        snap = self.get_snapshot()
+
+        # Collect predictors for meta-data passthrough (best-effort, fail-open)
+        predictors: Dict[str, float] = {}
+        try:
+            with self._lock:
+                preds = self._anomaly_kind_counts
+                predictors = {k: float(v) for k, v in preds.items()}
+        except Exception:
+            pass
+
+        # Authority ambiguity check — fail closed when coordinator state unknown
+        authority_ambiguous = runtime_snapshot is None or str(
+            getattr(runtime_snapshot, "coordinator_state", "")
+        ).strip() in {"", "UNKNOWN", "UNAVAILABLE"}
+        if authority_ambiguous:
+            return StabilityAuthorityDecision(
+                allow=False,
+                size_multiplier=0.0,
+                throttle=0.0,
+                halt_state="UNKNOWN",
+                reason="authority_ambiguity_fail_closed",
+                stability_state=_fsm_mode_to_stability_state(snap.mode).value,
+                stress_score=round(float(snap.v_potential), 4),
+                collapsed_risk_score=1.0,
+                controls=AdaptiveControls(
+                    risk_budget=0.0,
+                    trade_frequency_cap=0.0,
+                    confidence_threshold=0.99,
+                    max_concurrent_exposure=1,
+                ),
+                active_invariants=("authority_ambiguity_fail_closed",),
+                predictors=predictors,
+            )
+
+        base_allow = bool(
+            state_live_active
+            and lease_valid
+            and lease_generation_current
+            and heartbeat_fresh
+            and heartbeat_stage_sufficient
+            and broker_health_ok
+            and dispatch_enabled
+            and circuit_breaker_closed
+        )
+        return _governor_to_authority_decision(snap, base_allow=base_allow, predictors=predictors)
+
+    # -- SEAK compatibility (is_halted/exploration_damping already provided above)
+
+
 # ---------------------------------------------------------------------------
 # Process-wide singleton
 # ---------------------------------------------------------------------------
@@ -685,3 +769,129 @@ def get_stability_governor(reset: bool = False) -> StabilityGovernor:
         if reset or _governor_instance is None:
             _governor_instance = StabilityGovernor()
     return _governor_instance
+# ---------------------------------------------------------------------------
+# Compatibility layer — provides the evaluate() API consumed by
+# execution_authority_context._evaluate_stability_authority()
+# ---------------------------------------------------------------------------
+
+import json as _json
+from pathlib import Path as _Path
+
+_DATA_DIR = _Path(__file__).parent.parent / "data"
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:  # noqa: F811
+    return max(lo, min(hi, value))
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:  # noqa: F811
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+class StabilityState(Enum):
+    """Compatibility state enum matching the older adaptive-governor API."""
+
+    NORMAL = "NORMAL"
+    DEGRADED = "DEGRADED"
+    CONTAINMENT = "CONTAINMENT"
+    HALTED = "HALTED"
+    RECOVERING = "RECOVERING"
+
+
+@dataclass(frozen=True)
+class AdaptiveControls:
+    """Rate-limited adaptive trading controls (compatibility type)."""
+
+    risk_budget: float
+    trade_frequency_cap: float
+    confidence_threshold: float
+    max_concurrent_exposure: int
+
+
+@dataclass(frozen=True)
+class StabilityAuthorityDecision:
+    """Unified stability verdict returned by :meth:`StabilityGovernor.evaluate`."""
+
+    allow: bool
+    size_multiplier: float
+    throttle: float
+    halt_state: str
+    reason: str
+    stability_state: str
+    stress_score: float
+    collapsed_risk_score: float
+    controls: AdaptiveControls
+    active_invariants: tuple = field(default_factory=tuple)
+    predictors: Dict[str, float] = field(default_factory=dict)
+    timestamp: float = field(default_factory=time.time)
+
+
+def _fsm_mode_to_stability_state(mode: GovernorMode) -> StabilityState:
+    """Map our FSM mode to the compatibility StabilityState enum."""
+    _map = {
+        GovernorMode.BOOT: StabilityState.NORMAL,
+        GovernorMode.OBSERVE: StabilityState.NORMAL,
+        GovernorMode.STABLE: StabilityState.NORMAL,
+        GovernorMode.GUARDED: StabilityState.DEGRADED,
+        GovernorMode.HALT: StabilityState.HALTED,
+        GovernorMode.RECOVERING: StabilityState.RECOVERING,
+    }
+    return _map.get(mode, StabilityState.NORMAL)
+
+
+def _governor_to_authority_decision(
+    snap: GovernorSnapshot,
+    *,
+    base_allow: bool,
+    predictors: Dict[str, float],
+) -> StabilityAuthorityDecision:
+    """Convert a :class:`GovernorSnapshot` to a :class:`StabilityAuthorityDecision`."""
+    stability_state = _fsm_mode_to_stability_state(snap.mode)
+    halted = snap.mode == GovernorMode.HALT
+    stress = float(snap.v_potential)
+    allow = bool(base_allow and not halted)
+    size_mult: float
+    throttle: float
+    if halted:
+        size_mult = 0.0
+        throttle = 0.05
+    elif snap.mode == GovernorMode.GUARDED:
+        size_mult = _clamp(snap.exploration_damping, 0.05, 0.75)
+        throttle = 0.5
+    elif snap.mode == GovernorMode.RECOVERING:
+        size_mult = _clamp(snap.exploration_damping, 0.10, 0.35)
+        throttle = 0.6
+    else:
+        size_mult = 1.0
+        throttle = 1.0
+    controls = AdaptiveControls(
+        risk_budget=round(size_mult, 4),
+        trade_frequency_cap=round(throttle, 4),
+        confidence_threshold=0.50 if snap.mode == GovernorMode.STABLE else 0.75,
+        max_concurrent_exposure=12 if snap.mode == GovernorMode.STABLE else 4,
+    )
+    reason: str
+    if halted:
+        reason = "state_halted"
+    elif snap.mode == GovernorMode.GUARDED:
+        reason = f"guarded_mode(v={snap.v_potential:.3f})"
+    elif snap.mode == GovernorMode.RECOVERING:
+        reason = "staged_recovery_active"
+    else:
+        reason = "normal"
+    return StabilityAuthorityDecision(
+        allow=allow,
+        size_multiplier=round(_clamp(size_mult, 0.0, 1.0), 4),
+        throttle=round(_clamp(throttle, 0.05, 1.0), 4),
+        halt_state=stability_state.value,
+        reason=reason,
+        stability_state=stability_state.value,
+        stress_score=round(stress, 4),
+        collapsed_risk_score=round(_clamp(max(stress, 0.95 if halted else 0.0), 0.0, 1.0), 4),
+        controls=controls,
+        active_invariants=(),
+        predictors=dict(predictors),
+    )
