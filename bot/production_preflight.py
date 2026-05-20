@@ -431,8 +431,24 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
             )
 
         if strict_lease and lease_version <= 0:
-            _fail("Redis nonce writer lease missing in strict mode")
-            sys.exit(1)
+            acquire_err = ""
+            try:
+                try:
+                    from bot.distributed_nonce_manager import get_distributed_nonce_manager
+                except (ImportError, AttributeError):
+                    from distributed_nonce_manager import get_distributed_nonce_manager  # type: ignore[import]
+                manager = get_distributed_nonce_manager(redis_client=redis_client)
+                manager.ensure_writer_lock(key_id)
+                lease_version = int(redis_client.get(lease_key) or 0)
+                nonce_value = int(redis_client.get(nonce_key) or 0)
+            except Exception as exc:
+                acquire_err = str(exc)
+                log.warning("Could not acquire nonce writer lease during preflight: %s", exc)
+
+            if lease_version <= 0:
+                detail = f" (acquire_error={acquire_err})" if acquire_err else ""
+                _fail(f"Redis nonce writer lease missing in strict mode{detail}")
+                sys.exit(1)
     else:
         log.warning("Kraken platform key not configured — skipping nonce continuity check")
 
