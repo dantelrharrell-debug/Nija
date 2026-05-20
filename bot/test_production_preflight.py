@@ -148,3 +148,36 @@ def test_writer_lock_token_mismatch_blocks_live(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit):
         preflight._step3_redis_health(redis_client)
+
+
+def test_strict_lease_missing_attempts_acquire_before_fail(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRY_RUN_MODE", "true")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setenv("NIJA_STRICT_REDIS_LEASE", "true")
+    monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "test-key")
+    state_path = tmp_path / "redis_health_state.json"
+    monkeypatch.setenv("NIJA_REDIS_HEALTH_STATE_PATH", str(state_path))
+
+    key_id = make_api_key_id("test-key")
+    lease_key = f"nija:kraken:writer:lease_version:{key_id}"
+    nonce_key = f"nija:kraken:nonce:{key_id}"
+    kv = {
+        nonce_key: 0,
+    }
+    redis_client = FakeRedis(
+        persistence=_base_persistence(),
+        info={"run_id": "r5", "loading": 0},
+        kv=kv,
+    )
+
+    class DummyDNM:
+        def ensure_writer_lock(self, _api_key_id: str) -> None:
+            kv[lease_key] = 7
+
+    monkeypatch.setattr(
+        "bot.distributed_nonce_manager.get_distributed_nonce_manager",
+        lambda redis_client=None: DummyDNM(),
+    )
+
+    preflight._step3_redis_health(redis_client)
+    assert int(kv.get(lease_key, 0)) == 7
