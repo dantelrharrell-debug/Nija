@@ -144,6 +144,16 @@ _BOOTSTRAP_MIN_CONFIDENCE: float = max(
     0.0,
     min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_MIN_CONFIDENCE", "0.05"))),
 )
+_BOOTSTRAP_DECAY_WINDOW_S: float = max(60.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_WINDOW_S", "3600")))
+_BOOTSTRAP_DECAY_MIN_SAMPLES: int = max(1, int(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_MIN_SAMPLES", "20")))
+_BOOTSTRAP_DECAY_ACCEPT_RATE_START: float = max(
+    0.0,
+    min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_ACCEPT_RATE_START", "0.55"))),
+)
+_BOOTSTRAP_DECAY_ACCEPT_RATE_FULL: float = max(
+    0.0,
+    min(1.0, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_ACCEPT_RATE_FULL", "0.90"))),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -843,6 +853,8 @@ class ControlCompiler:
         self._rejected: int = 0
         self._rejection_reasons: Dict[str, int] = {}
         self._bootstrap_passes_used: int = 0
+        self._execution_outcomes: Deque[Tuple[float, bool]] = deque()
+        self._bootstrap_pass_timestamps: Deque[float] = deque()
 
         logger.info(
             "ControlCompiler initialized | K_AI_GATE=%.2f K_CONFIDENCE=%.2f "
@@ -905,7 +917,7 @@ class ControlCompiler:
                 reason=reason,
                 reason_code=reason_code,
             )
-            self._record(raw, accepted=False, reason_code=reason_code)
+            self._record(raw, accepted=False, reason_code=reason_code, bootstrap_used=False)
             self._emit_trace_rejection(raw, stage="compiler_validate", reason=reason, reason_code=reason_code)
             return result
 
@@ -922,7 +934,7 @@ class ControlCompiler:
                     reason=inst_reason,
                     reason_code="instability:frozen",
                 )
-                self._record(raw, accepted=False, reason_code="instability:frozen")
+                self._record(raw, accepted=False, reason_code="instability:frozen", bootstrap_used=False)
                 self._emit_trace_rejection(
                     raw, stage="compiler_instability", reason=inst_reason, reason_code="instability:frozen"
                 )
@@ -947,7 +959,7 @@ class ControlCompiler:
         # ── Accept ───────────────────────────────────────────────────────
         if is_execution:
             self._instability.record(raw.symbol, raw.regime, accepted=True)
-        self._record(raw, accepted=True, reason_code="")
+        self._record(raw, accepted=True, reason_code="", bootstrap_used=bool(signal.metadata.get("bootstrap_pass")))
         return CompileResult(
             accepted=True,
             status=CompileStatus.ACCEPTED,
@@ -1009,6 +1021,7 @@ class ControlCompiler:
             rejected = self._rejected
             reasons = dict(self._rejection_reasons)
             bootstrap_used = self._bootstrap_passes_used
+            calibration = self._get_bootstrap_calibration_locked(time.time())
 
         accept_rate = (accepted / total) if total > 0 else 1.0
         return {
@@ -1021,9 +1034,15 @@ class ControlCompiler:
             "bootstrap_pass": {
                 "enabled": _BOOTSTRAP_PASS_ENABLED,
                 "limit": _BOOTSTRAP_PASS_LIMIT,
+                "effective_limit": calibration["effective_limit"],
                 "used": bootstrap_used,
-                "remaining": max(0, _BOOTSTRAP_PASS_LIMIT - bootstrap_used),
-                "min_confidence": _BOOTSTRAP_MIN_CONFIDENCE,
+                "used_in_decay_window": calibration["window_bootstrap_used"],
+                "remaining": calibration["remaining"],
+                "min_confidence": calibration["effective_min_confidence"],
+                "base_min_confidence": _BOOTSTRAP_MIN_CONFIDENCE,
+                "decay_ratio": calibration["decay_ratio"],
+                "window_acceptance_rate": calibration["acceptance_rate"],
+                "window_samples": calibration["sample_count"],
             },
             "k_values": self._matrix.get_all(),
             "k_history": self._matrix.get_history(limit=20),
@@ -1040,7 +1059,10 @@ class ControlCompiler:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _record(self, raw: RawSignal, accepted: bool, reason_code: str) -> None:
+    def _record(self, raw: RawSignal, accepted: bool, reason_code: str, bootstrap_used: bool = False) -> None:
+        now = time.time()
+        action = (raw.action or "hold").lower().strip()
+        is_execution = action in _EXECUTION_ACTIONS
         with self._lock:
             self._total += 1
             if accepted:
@@ -1051,11 +1073,52 @@ class ControlCompiler:
                     self._rejection_reasons[reason_code] = (
                         self._rejection_reasons.get(reason_code, 0) + 1
                     )
+            if is_execution:
+                self._execution_outcomes.append((now, bool(accepted)))
+                self._prune_bootstrap_histories_locked(now)
         if not accepted:
             # Also record in instability detector for non-schema rejections
-            action = (raw.action or "hold").lower().strip()
             if action in _EXECUTION_ACTIONS and not reason_code.startswith("schema:"):
                 self._instability.record(raw.symbol, raw.regime, accepted=False)
+
+    def _prune_bootstrap_histories_locked(self, now_ts: float) -> None:
+        cutoff = now_ts - _BOOTSTRAP_DECAY_WINDOW_S
+        while self._execution_outcomes and self._execution_outcomes[0][0] < cutoff:
+            self._execution_outcomes.popleft()
+        while self._bootstrap_pass_timestamps and self._bootstrap_pass_timestamps[0] < cutoff:
+            self._bootstrap_pass_timestamps.popleft()
+
+    def _get_bootstrap_calibration_locked(self, now_ts: float) -> Dict[str, Any]:
+        self._prune_bootstrap_histories_locked(now_ts)
+        sample_count = len(self._execution_outcomes)
+        accepted_count = sum(1 for _, accepted in self._execution_outcomes if accepted)
+        acceptance_rate = (accepted_count / sample_count) if sample_count else 0.0
+
+        if sample_count >= _BOOTSTRAP_DECAY_MIN_SAMPLES:
+            span = max(1e-9, _BOOTSTRAP_DECAY_ACCEPT_RATE_FULL - _BOOTSTRAP_DECAY_ACCEPT_RATE_START)
+            decay_ratio = (acceptance_rate - _BOOTSTRAP_DECAY_ACCEPT_RATE_START) / span
+            decay_ratio = max(0.0, min(1.0, decay_ratio))
+        else:
+            decay_ratio = 0.0
+
+        effective_limit = max(0, int(math.ceil(_BOOTSTRAP_PASS_LIMIT * (1.0 - decay_ratio))))
+        bootstrap_used = len(self._bootstrap_pass_timestamps)
+        remaining = max(0, effective_limit - bootstrap_used)
+        effective_conf_floor = _MIN_CONFIDENCE_BASELINE * self._matrix.get("K_CONFIDENCE")
+        target_min_confidence = max(_BOOTSTRAP_MIN_CONFIDENCE, effective_conf_floor)
+        effective_min_confidence = _BOOTSTRAP_MIN_CONFIDENCE + (
+            (target_min_confidence - _BOOTSTRAP_MIN_CONFIDENCE) * decay_ratio
+        )
+
+        return {
+            "sample_count": sample_count,
+            "acceptance_rate": acceptance_rate,
+            "decay_ratio": decay_ratio,
+            "effective_limit": effective_limit,
+            "window_bootstrap_used": bootstrap_used,
+            "remaining": remaining,
+            "effective_min_confidence": effective_min_confidence,
+        }
 
     def _emit_trace_rejection(
         self,
@@ -1113,8 +1176,6 @@ class ControlCompiler:
         if reason_code != SignalValidator.RC_K_CONFIDENCE:
             return None
         confidence = float(raw.confidence)
-        if confidence < _BOOTSTRAP_MIN_CONFIDENCE:
-            return None
 
         metadata = raw.metadata or {}
         synthetic = bool(
@@ -1132,8 +1193,12 @@ class ControlCompiler:
             return None
 
         with self._lock:
-            if self._bootstrap_passes_used >= _BOOTSTRAP_PASS_LIMIT:
+            calibration = self._get_bootstrap_calibration_locked(time.time())
+            if calibration["remaining"] <= 0:
                 return None
+            if confidence < calibration["effective_min_confidence"]:
+                return None
+            self._bootstrap_pass_timestamps.append(time.time())
             self._bootstrap_passes_used += 1
             used = self._bootstrap_passes_used
 
@@ -1157,12 +1222,14 @@ class ControlCompiler:
         signal.metadata["bootstrap_pass_index"] = used
         signal.metadata["bootstrap_reason"] = "k_confidence_override"
         logger.warning(
-            "COMPILER_BOOTSTRAP_PASS symbol=%s action=%s confidence=%.3f used=%d/%d",
+            "COMPILER_BOOTSTRAP_PASS symbol=%s action=%s confidence=%.3f used=%d/%d effective_limit=%d decay_ratio=%.3f",
             signal.symbol,
             signal.action,
             signal.confidence,
             used,
             _BOOTSTRAP_PASS_LIMIT,
+            calibration["effective_limit"],
+            calibration["decay_ratio"],
         )
         return signal
 

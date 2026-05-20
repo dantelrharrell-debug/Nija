@@ -281,16 +281,28 @@ class TestBootstrapPass(unittest.TestCase):
         self._orig_bootstrap_enabled = cc_mod._BOOTSTRAP_PASS_ENABLED
         self._orig_bootstrap_limit = cc_mod._BOOTSTRAP_PASS_LIMIT
         self._orig_bootstrap_min_conf = cc_mod._BOOTSTRAP_MIN_CONFIDENCE
+        self._orig_decay_window_s = cc_mod._BOOTSTRAP_DECAY_WINDOW_S
+        self._orig_decay_min_samples = cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES
+        self._orig_decay_rate_start = cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_START
+        self._orig_decay_rate_full = cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_FULL
         cc_mod._MIN_CONFIDENCE_BASELINE = 0.10
         cc_mod._BOOTSTRAP_PASS_ENABLED = True
         cc_mod._BOOTSTRAP_PASS_LIMIT = 1
         cc_mod._BOOTSTRAP_MIN_CONFIDENCE = 0.05
+        cc_mod._BOOTSTRAP_DECAY_WINDOW_S = 3600.0
+        cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = 20
+        cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_START = 0.55
+        cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_FULL = 0.90
 
     def tearDown(self):
         cc_mod._MIN_CONFIDENCE_BASELINE = self._orig_min_conf
         cc_mod._BOOTSTRAP_PASS_ENABLED = self._orig_bootstrap_enabled
         cc_mod._BOOTSTRAP_PASS_LIMIT = self._orig_bootstrap_limit
         cc_mod._BOOTSTRAP_MIN_CONFIDENCE = self._orig_bootstrap_min_conf
+        cc_mod._BOOTSTRAP_DECAY_WINDOW_S = self._orig_decay_window_s
+        cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = self._orig_decay_min_samples
+        cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_START = self._orig_decay_rate_start
+        cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_FULL = self._orig_decay_rate_full
 
     def test_synthetic_low_threshold_signal_gets_one_bootstrap_pass(self):
         raw = _valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True})
@@ -327,6 +339,23 @@ class TestBootstrapPass(unittest.TestCase):
         )
         self.assertTrue(result.accepted)
         self.assertTrue(result.signal.metadata.get("bootstrap_pass"))
+
+    def test_bootstrap_pass_decays_after_consistent_execution_acceptance(self):
+        cc_mod._BOOTSTRAP_PASS_LIMIT = 3
+        cc_mod._MIN_CONFIDENCE_BASELINE = 0.20
+        cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = 4
+        cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_START = 0.50
+        cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_FULL = 0.75
+
+        for i in range(4):
+            self.compiler.compile(_valid_raw(symbol=f"ETH{i}-USD", confidence=0.90))
+
+        result = self.compiler.compile(
+            _valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={"synthetic": True})
+        )
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.status, CompileStatus.K_GATE_FAILED)
+        self.assertEqual(result.reason_code, SignalValidator.RC_K_CONFIDENCE)
 
     def test_bootstrap_pass_does_not_override_non_k_confidence_rejections(self):
         result = self.compiler.compile(
@@ -589,24 +618,66 @@ class TestCompilerHealth(unittest.TestCase):
         orig_limit = cc_mod._BOOTSTRAP_PASS_LIMIT
         orig_min_conf = cc_mod._BOOTSTRAP_MIN_CONFIDENCE
         orig_min_conf_baseline = cc_mod._MIN_CONFIDENCE_BASELINE
+        orig_decay_min_samples = cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES
         try:
             cc_mod._BOOTSTRAP_PASS_ENABLED = True
             cc_mod._BOOTSTRAP_PASS_LIMIT = 2
             cc_mod._BOOTSTRAP_MIN_CONFIDENCE = 0.05
             cc_mod._MIN_CONFIDENCE_BASELINE = 0.10
+            cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = 20
             compiler.compile(_valid_raw(confidence=0.08, regime="bootstrap_probe_health", metadata={"synthetic": True}))
             health = compiler.get_health()
             self.assertIn("bootstrap_pass", health)
             self.assertEqual(health["bootstrap_pass"]["enabled"], True)
             self.assertEqual(health["bootstrap_pass"]["limit"], 2)
+            self.assertEqual(health["bootstrap_pass"]["effective_limit"], 2)
             self.assertEqual(health["bootstrap_pass"]["used"], 1)
             self.assertEqual(health["bootstrap_pass"]["remaining"], 1)
             self.assertEqual(health["bootstrap_pass"]["min_confidence"], 0.05)
+            self.assertEqual(health["bootstrap_pass"]["window_samples"], 1)
         finally:
             cc_mod._BOOTSTRAP_PASS_ENABLED = orig_enabled
             cc_mod._BOOTSTRAP_PASS_LIMIT = orig_limit
             cc_mod._BOOTSTRAP_MIN_CONFIDENCE = orig_min_conf
             cc_mod._MIN_CONFIDENCE_BASELINE = orig_min_conf_baseline
+            cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = orig_decay_min_samples
+
+    def test_health_reports_bootstrap_decay_after_high_acceptance(self):
+        compiler = _fresh_compiler()
+        orig_enabled = cc_mod._BOOTSTRAP_PASS_ENABLED
+        orig_limit = cc_mod._BOOTSTRAP_PASS_LIMIT
+        orig_min_conf = cc_mod._BOOTSTRAP_MIN_CONFIDENCE
+        orig_min_conf_baseline = cc_mod._MIN_CONFIDENCE_BASELINE
+        orig_decay_min_samples = cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES
+        orig_decay_rate_start = cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_START
+        orig_decay_rate_full = cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_FULL
+        try:
+            cc_mod._BOOTSTRAP_PASS_ENABLED = True
+            cc_mod._BOOTSTRAP_PASS_LIMIT = 3
+            cc_mod._BOOTSTRAP_MIN_CONFIDENCE = 0.05
+            cc_mod._MIN_CONFIDENCE_BASELINE = 0.20
+            cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = 4
+            cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_START = 0.50
+            cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_FULL = 0.75
+
+            for i in range(4):
+                compiler.compile(_valid_raw(symbol=f"BTC{i}-USD", confidence=0.90))
+
+            health = compiler.get_health()
+            self.assertEqual(health["bootstrap_pass"]["window_samples"], 4)
+            self.assertGreaterEqual(health["bootstrap_pass"]["window_acceptance_rate"], 0.99)
+            self.assertGreaterEqual(health["bootstrap_pass"]["decay_ratio"], 0.99)
+            self.assertEqual(health["bootstrap_pass"]["effective_limit"], 0)
+            self.assertEqual(health["bootstrap_pass"]["remaining"], 0)
+            self.assertAlmostEqual(health["bootstrap_pass"]["min_confidence"], 0.20, places=6)
+        finally:
+            cc_mod._BOOTSTRAP_PASS_ENABLED = orig_enabled
+            cc_mod._BOOTSTRAP_PASS_LIMIT = orig_limit
+            cc_mod._BOOTSTRAP_MIN_CONFIDENCE = orig_min_conf
+            cc_mod._MIN_CONFIDENCE_BASELINE = orig_min_conf_baseline
+            cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = orig_decay_min_samples
+            cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_START = orig_decay_rate_start
+            cc_mod._BOOTSTRAP_DECAY_ACCEPT_RATE_FULL = orig_decay_rate_full
 
 
 # ---------------------------------------------------------------------------
