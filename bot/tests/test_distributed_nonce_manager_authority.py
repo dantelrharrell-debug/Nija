@@ -348,5 +348,63 @@ class TestPublishLockAcquiredStateNonOverwrite(unittest.TestCase):
                                  f"Token not updated when NIJA_WRITER_LEASE_ACQUIRED={falsy!r}")
 
 
+class TestLeaseStatusLogging(unittest.TestCase):
+    def _make_backend(self) -> "_PerKeyRedisBackend":
+        backend = _PerKeyRedisBackend.__new__(_PerKeyRedisBackend)
+        backend._client = Mock()
+        backend._lease_status_last_log = {}
+        backend._owner_instance_id = "instance-123"
+        backend._owner_fingerprint = "fp-123"
+        backend._lease_by_key = {
+            "kid": _PerKeyRedisBackend._LeaseState(
+                version=7,
+                owner_id="owner-123",
+                stable_since=90.0,
+                last_renewed_at=95.0,
+            )
+        }
+        return backend
+
+    def test_zero_interval_suppresses_steady_state_lease_status_logs(self) -> None:
+        backend = self._make_backend()
+
+        with patch("bot.distributed_nonce_manager._REDIS_LEASE_STATUS_LOG_INTERVAL_S", 0.0), patch(
+            "bot.distributed_nonce_manager._logger.info"
+        ) as mock_info, patch("bot.distributed_nonce_manager.time.monotonic", return_value=100.0):
+            backend._log_lease_status("kid", 7, "owner-123")
+
+        mock_info.assert_not_called()
+        backend._client.pttl.assert_not_called()
+
+    def test_force_logging_still_emits_when_periodic_status_logs_are_disabled(self) -> None:
+        backend = self._make_backend()
+        backend._client.pttl.return_value = 60000
+
+        with patch("bot.distributed_nonce_manager._REDIS_LEASE_STATUS_LOG_INTERVAL_S", 0.0), patch(
+            "bot.distributed_nonce_manager._logger.info"
+        ) as mock_info, patch("bot.distributed_nonce_manager.time.monotonic", return_value=100.0):
+            backend._log_lease_status("kid", 7, "owner-123", force=True)
+
+        mock_info.assert_called_once()
+        backend._client.pttl.assert_called_once()
+
+    def test_positive_interval_rate_limits_periodic_status_logs(self) -> None:
+        backend = self._make_backend()
+        backend._client.pttl.return_value = 60000
+
+        with patch("bot.distributed_nonce_manager._REDIS_LEASE_STATUS_LOG_INTERVAL_S", 30.0), patch(
+            "bot.distributed_nonce_manager._logger.info"
+        ) as mock_info, patch(
+            "bot.distributed_nonce_manager.time.monotonic",
+            side_effect=[100.0, 110.0, 131.0],
+        ):
+            backend._log_lease_status("kid", 7, "owner-123")
+            backend._log_lease_status("kid", 7, "owner-123")
+            backend._log_lease_status("kid", 7, "owner-123")
+
+        self.assertEqual(mock_info.call_count, 2)
+        self.assertEqual(backend._client.pttl.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
