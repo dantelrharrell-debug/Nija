@@ -1670,6 +1670,19 @@ class TradingStateMachine:
             )
             return False
 
+        # Ensure explicit activation intent is reflected in FSM state even when
+        # downstream commit gates are still converging.
+        if current == TradingState.OFF and _live_activation_intent:
+            try:
+                self.transition_to(
+                    TradingState.LIVE_PENDING_CONFIRMATION,
+                    "commit_activation: intent present, awaiting gate convergence",
+                )
+            except Exception as _arm_err:
+                logger.warning("commit_activation: could not arm LIVE_PENDING_CONFIRMATION: %s", _arm_err)
+            with self._lock:
+                current = self._current_state
+
         # ── Gate 1.5: authority + runtime safety probes are sampled once ──────
         authority_ready = _is_authority_ready()
         try:
@@ -1684,6 +1697,7 @@ class TradingStateMachine:
             with self._lock:
                 if self._current_state == TradingState.OFF:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                current = self._current_state
 
         # ── Gate 2: kill switch must be inactive ─────────────────────────
         kill_state = False
