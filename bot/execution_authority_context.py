@@ -1005,6 +1005,78 @@ def can_execute() -> ExecutionDecision:
         except Exception as _sg_exc:
             logger.debug("StabilityGovernor HALT check unavailable (fail-open): %s", _sg_exc)
 
+    # ── Margin health gate (fail-open when margin is disabled) ───────────────
+    # Only active when NIJA_KRAKEN_MARGIN_ENABLED=true.  Blocks *new entries*
+    # when maintenance margin ratio is low; blocks *all orders* on critical
+    # margin breach.  The gate is fail-open by design so that any exception in
+    # the margin engine cannot accidentally block spot trading.
+    if _env_truthy("NIJA_KRAKEN_MARGIN_ENABLED"):
+        try:
+            try:
+                from bot.kraken_margin_engine import get_margin_engine
+            except ImportError:
+                from kraken_margin_engine import get_margin_engine  # type: ignore[import]
+            _mg = get_margin_engine()
+            _mg_snap = _mg.get_health_snapshot(adapter=None)
+            if _mg_snap.critical_margin_breach:
+                _emit_trade_admission_telemetry(
+                    reason="margin_critical",
+                    drop_bucket="margin_health",
+                    stage="margin_gate",
+                )
+                return ExecutionDecision(
+                    allowed=False,
+                    reason=f"margin_critical:{_mg_snap.reason}",
+                    circuit_state=configured_circuit_state,
+                    state_live_active=state_live_active,
+                    lease_valid=lease_valid,
+                    lease_generation_current=lease_generation_current,
+                    heartbeat_fresh=heartbeat_fresh,
+                    heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+                    broker_health_ok=broker_health_ok,
+                    circuit_breaker_closed=circuit_breaker_closed,
+                    dispatch_enabled=dispatch_enabled,
+                    stability_allowed=stability.allowed,
+                    stability_halt_state=stability.halt_state,
+                    stability_throttle=stability.throttle,
+                    stability_size_multiplier=stability.size_multiplier,
+                    stability_stress_score=stability.stress_score,
+                    stability_collapsed_risk_score=stability.collapsed_risk_score,
+                    stability_reason=stability.reason,
+                    lifecycle_phase=current_lifecycle_phase,
+                )
+            if not _mg_snap.maintenance_margin_ok:
+                # Low margin — block new entries only.  Exit orders (is_reducing)
+                # bypass this gate at the adapter level via is_margin_trade_allowed().
+                _emit_trade_admission_telemetry(
+                    reason="margin_maintenance_low",
+                    drop_bucket="margin_health",
+                    stage="margin_gate",
+                )
+                return ExecutionDecision(
+                    allowed=False,
+                    reason=f"margin_maintenance_low:{_mg_snap.reason}",
+                    circuit_state=configured_circuit_state,
+                    state_live_active=state_live_active,
+                    lease_valid=lease_valid,
+                    lease_generation_current=lease_generation_current,
+                    heartbeat_fresh=heartbeat_fresh,
+                    heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+                    broker_health_ok=broker_health_ok,
+                    circuit_breaker_closed=circuit_breaker_closed,
+                    dispatch_enabled=dispatch_enabled,
+                    stability_allowed=stability.allowed,
+                    stability_halt_state=stability.halt_state,
+                    stability_throttle=stability.throttle,
+                    stability_size_multiplier=stability.size_multiplier,
+                    stability_stress_score=stability.stress_score,
+                    stability_collapsed_risk_score=stability.collapsed_risk_score,
+                    stability_reason=stability.reason,
+                    lifecycle_phase=current_lifecycle_phase,
+                )
+        except Exception as _mg_exc:
+            logger.debug("Margin health gate unavailable (fail-open): %s", _mg_exc)
+
     return ExecutionDecision(
         allowed=True,
         reason="allowed",

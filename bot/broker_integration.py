@@ -1934,7 +1934,8 @@ class KrakenBrokerAdapter(BrokerInterface):
         return (True, kraken_symbol, None)
 
     def place_market_order(self, symbol: str, side: str, size: float,
-                          size_type: str = 'quote') -> Optional[Dict]:
+                          size_type: str = 'quote',
+                          leverage: int = 1) -> Optional[Dict]:
         """
         Place market order on Kraken with comprehensive validation.
 
@@ -1944,6 +1945,12 @@ class KrakenBrokerAdapter(BrokerInterface):
         - Proper symbol conversion (BTC -> XBT)
         - txid confirmation and verification
         - Enhanced error logging
+        - Margin/leverage order parameters (when leverage >= 2 and margin is enabled)
+
+        Args:
+            leverage: Integer leverage multiplier.  1 (default) = spot order.
+                Values ≥ 2 trigger margin order parameters via the margin engine.
+                The hard cap is 3× (HARD_MAX_LEVERAGE).
         """
         _auth_block = _reject_if_unauthorized_order_submit('kraken', symbol, side, size)
         if _auth_block is not None:
@@ -2121,6 +2128,35 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'ordertype': 'market',
                 'volume': str(size)  # Must be string format, in base currency
             }
+
+            # ── Margin / leverage params (injected only when leverage >= 2) ──
+            # The margin engine is fail-closed: if permission is unconfirmed it
+            # blocks the leverage params so the order falls back to spot.
+            if leverage >= 2:
+                try:
+                    from bot.kraken_margin_engine import get_margin_engine
+                    _me = get_margin_engine()
+                    _is_sell = side.lower() == 'sell'
+                    _allowed, _reason = _me.is_margin_trade_allowed(
+                        is_reducing=_is_sell, adapter=self
+                    )
+                    if _allowed:
+                        _margin_fragment = _me.build_order_margin_params(
+                            leverage, is_reducing=_is_sell
+                        )
+                        order_params.update(_margin_fragment)
+                        logger.info(
+                            "📐 Margin order: leverage=%s reducing=%s params=%s",
+                            leverage, _is_sell, _margin_fragment,
+                        )
+                    else:
+                        logger.warning(
+                            "⚠️ Margin order blocked (%s) — falling back to spot", _reason
+                        )
+                except Exception as _me_err:
+                    logger.warning(
+                        "⚠️ Margin engine error — falling back to spot: %s", _me_err
+                    )
 
             # ✅ REQUIREMENT #3: Execute order via serialized API call
             # Use helper method for global nonce management and thread safety
@@ -2326,7 +2362,8 @@ class KrakenBrokerAdapter(BrokerInterface):
             }
 
     def place_limit_order(self, symbol: str, side: str, size: float,
-                         price: float, size_type: str = 'quote') -> Optional[Dict]:
+                         price: float, size_type: str = 'quote',
+                         leverage: int = 1) -> Optional[Dict]:
         """
         Place limit order on Kraken with comprehensive validation.
 
@@ -2336,6 +2373,12 @@ class KrakenBrokerAdapter(BrokerInterface):
         - Proper symbol conversion (BTC -> XBT)
         - txid confirmation
         - Enhanced error logging
+        - Margin/leverage order parameters (when leverage >= 2 and margin is enabled)
+
+        Args:
+            leverage: Integer leverage multiplier.  1 (default) = spot order.
+                Values ≥ 2 trigger margin order parameters via the margin engine.
+                The hard cap is 3× (HARD_MAX_LEVERAGE).
         """
         _auth_block = _reject_if_unauthorized_order_submit('kraken', symbol, side, size)
         if _auth_block is not None:
@@ -2425,6 +2468,34 @@ class KrakenBrokerAdapter(BrokerInterface):
                 'price': str(price),
                 'volume': str(size)
             }
+
+            # ── Margin / leverage params (injected only when leverage >= 2) ──
+            if leverage >= 2:
+                try:
+                    from bot.kraken_margin_engine import get_margin_engine
+                    _me = get_margin_engine()
+                    _is_sell = side.lower() == 'sell'
+                    _allowed, _reason = _me.is_margin_trade_allowed(
+                        is_reducing=_is_sell, adapter=self
+                    )
+                    if _allowed:
+                        _margin_fragment = _me.build_order_margin_params(
+                            leverage, is_reducing=_is_sell
+                        )
+                        order_params.update(_margin_fragment)
+                        logger.info(
+                            "📐 Margin limit order: leverage=%s reducing=%s params=%s",
+                            leverage, _is_sell, _margin_fragment,
+                        )
+                    else:
+                        logger.warning(
+                            "⚠️ Margin limit order blocked (%s) — falling back to spot",
+                            _reason,
+                        )
+                except Exception as _me_err:
+                    logger.warning(
+                        "⚠️ Margin engine error — falling back to spot: %s", _me_err
+                    )
 
             # ✅ REQUIREMENT #3: Execute order via serialized API call
             result = self._kraken_api_call('AddOrder', order_params)
