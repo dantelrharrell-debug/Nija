@@ -39,6 +39,14 @@ _EXECUTION_AUTHORITY_ACTIVE: ContextVar[bool] = ContextVar(
     "nija_execution_authority_active",
     default=False,
 )
+_STARTUP_EXECUTION_PROBE_REASON: ContextVar[str] = ContextVar(
+    "nija_startup_execution_probe_reason",
+    default="",
+)
+_STARTUP_EXECUTION_PROBE_REASONS = {
+    "HEARTBEAT_TRADE",
+    "HEARTBEAT_TRADE_CLOSE",
+}
 
 _FENCE_VERIFY_LOCK = threading.Lock()
 _FENCE_LAST_CHECK_TS: float = 0.0
@@ -554,6 +562,29 @@ def execution_authority_scope() -> Iterator[None]:
 def has_execution_authority() -> bool:
     """Return True when the current context is authorized for order submit."""
     return bool(_EXECUTION_AUTHORITY_ACTIVE.get())
+
+
+@contextmanager
+def startup_execution_probe_scope(reason: str) -> Iterator[None]:
+    """Mark startup probe reason for narrowly scoped pre-live verification submits."""
+    normalized_reason = str(reason or "").strip().upper()
+    token = _STARTUP_EXECUTION_PROBE_REASON.set(normalized_reason)
+    try:
+        yield
+    finally:
+        _STARTUP_EXECUTION_PROBE_REASON.reset(token)
+
+
+def can_execute_startup_probe() -> tuple[bool, str]:
+    """Allow only whitelisted startup probe submits after authority checks."""
+    probe_reason = str(_STARTUP_EXECUTION_PROBE_REASON.get() or "").strip().upper()
+    if probe_reason not in _STARTUP_EXECUTION_PROBE_REASONS:
+        return False, "probe_reason_not_whitelisted"
+    try:
+        assert_startup_write_authority()
+    except Exception as exc:
+        return False, str(exc)
+    return True, probe_reason
 
 
 def is_seak_halted() -> bool:

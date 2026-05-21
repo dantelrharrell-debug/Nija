@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -87,6 +88,14 @@ except ImportError:
     except ImportError:
         BrokerManager = None  # type: ignore[assignment,misc]
         _BM_AVAILABLE = False
+
+try:
+    from bot.execution_authority_context import startup_execution_probe_scope
+except ImportError:
+    try:
+        from execution_authority_context import startup_execution_probe_scope  # type: ignore[import]
+    except ImportError:
+        startup_execution_probe_scope = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Heartbeat trade configuration
@@ -526,13 +535,19 @@ class TradingStrategy:
                 symbol,
                 trade_amount_usd,
             )
-            buy_result = broker.execute_order(
-                symbol=symbol,
-                side="buy",
-                quantity=trade_amount_usd,
-                size_type="quote",
-                metadata={"reason": "HEARTBEAT_TRADE"},
+            buy_scope = (
+                startup_execution_probe_scope("HEARTBEAT_TRADE")
+                if callable(startup_execution_probe_scope)
+                else nullcontext()
             )
+            with buy_scope:
+                buy_result = broker.execute_order(
+                    symbol=symbol,
+                    side="buy",
+                    quantity=trade_amount_usd,
+                    size_type="quote",
+                    metadata={"reason": "HEARTBEAT_TRADE"},
+                )
             buy_status = (buy_result or {}).get("status", "error")
             buy_order_id = (buy_result or {}).get("order_id")
             buy_submitted = bool(buy_result)
@@ -608,13 +623,19 @@ class TradingStrategy:
 
             # ── Place the heartbeat sell order to close the position ────────
             logger.info("💓 Placing heartbeat SELL to close position: %s", symbol)
-            sell_result = broker.execute_order(
-                symbol=symbol,
-                side="sell",
-                quantity=trade_amount_usd,
-                size_type="quote",
-                metadata={"reason": "HEARTBEAT_TRADE_CLOSE"},
+            sell_scope = (
+                startup_execution_probe_scope("HEARTBEAT_TRADE_CLOSE")
+                if callable(startup_execution_probe_scope)
+                else nullcontext()
             )
+            with sell_scope:
+                sell_result = broker.execute_order(
+                    symbol=symbol,
+                    side="sell",
+                    quantity=trade_amount_usd,
+                    size_type="quote",
+                    metadata={"reason": "HEARTBEAT_TRADE_CLOSE"},
+                )
             sell_status = (sell_result or {}).get("status", "error")
             sell_submitted = bool(sell_result)
             sell_filled = sell_status in ("filled", "ok", "success")

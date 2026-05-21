@@ -94,12 +94,14 @@ except ImportError:
 try:
     from bot.execution_authority_context import (
         can_execute,
+        can_execute_startup_probe,
         ExecutionBlocked,
     )
 except ImportError:
     try:
         from execution_authority_context import (  # type: ignore[import]
             can_execute,
+            can_execute_startup_probe,
             ExecutionBlocked,
         )
     except ImportError:
@@ -108,6 +110,9 @@ except ImportError:
                 allowed = False
                 reason = "execution_authority_unavailable"
             return _Decision()
+
+        def can_execute_startup_probe():
+            return False, "startup_probe_unavailable"
 
         class ExecutionBlocked(RuntimeError):
             pass
@@ -638,6 +643,18 @@ def _reject_if_unauthorized_order_submit(
 
     decision = can_execute()
     if decision.allowed:
+        return None
+    probe_allowed, probe_reason = can_execute_startup_probe()
+    if probe_allowed:
+        logger.warning(
+            "⚠️ Startup execution probe authorized before LIVE_ACTIVE "
+            "(broker=%s symbol=%s side=%s qty=%s reason=%s)",
+            broker_name,
+            symbol,
+            side,
+            quantity,
+            probe_reason,
+        )
         return None
 
     msg = (

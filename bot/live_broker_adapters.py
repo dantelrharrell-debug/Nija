@@ -50,12 +50,14 @@ logger = logging.getLogger("nija.live_broker_adapters")
 try:
     from bot.execution_authority_context import (
         can_execute,
+        can_execute_startup_probe,
         ExecutionBlocked,
     )
 except ImportError:
     try:
         from execution_authority_context import (
             can_execute,
+            can_execute_startup_probe,
             ExecutionBlocked,
         )
     except ImportError:
@@ -64,6 +66,9 @@ except ImportError:
                 allowed = False
                 reason = "execution_authority_unavailable"
             return _Decision()
+
+        def can_execute_startup_probe():
+            return False, "startup_probe_unavailable"
 
         class ExecutionBlocked(RuntimeError):
             pass
@@ -107,6 +112,17 @@ def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) ->
 
     decision = can_execute()
     if decision.allowed:
+        return None
+    probe_allowed, probe_reason = can_execute_startup_probe()
+    if probe_allowed:
+        logger.warning(
+            "[Authority] startup probe authorized broker=%s symbol=%s side=%s size=%s reason=%s",
+            broker_name,
+            symbol,
+            side,
+            size,
+            probe_reason,
+        )
         return None
     _emit_rejection_telemetry("execution_authority_blocked")
     msg = f"Execution blocked: {decision.reason}"
