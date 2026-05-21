@@ -64,6 +64,7 @@ Date: March 2026
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 import random
@@ -76,6 +77,34 @@ from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 
 logger = logging.getLogger("nija.execution_pipeline")
+
+# Downstream blocker classifier — imported here for use in _on_order_rejected.
+try:
+    from bot.downstream_blocker_guard import (
+        BlockerType,
+        ExchangeErrorClassifier,
+        get_downstream_blocker_guard,
+    )
+except ImportError:
+    try:
+        from downstream_blocker_guard import (  # type: ignore[import]
+            BlockerType,
+            ExchangeErrorClassifier,
+            get_downstream_blocker_guard,
+        )
+    except ImportError:
+        # Minimal stubs so the pipeline compiles without the guard module.
+        class BlockerType:  # type: ignore[no-redef]
+            UNKNOWN = "unknown"
+        class ExchangeErrorClassifier:  # type: ignore[no-redef]
+            @staticmethod
+            def classify(error: str):
+                return BlockerType.UNKNOWN
+            @staticmethod
+            def is_soft_blocker(b) -> bool:
+                return False
+        def get_downstream_blocker_guard():
+            return None
 
 _RETRYABLE_EXCHANGE_ERROR_KEYWORDS = (
     "rate limit",
@@ -247,7 +276,13 @@ class ExecutionPipeline:
         self._router = self._load_router()
         self._multi_router = self._load_multi_router()
         self._ecel = self._load_ecel()
+        self._downstream_guard = self._load_downstream_guard()
         self._start_ecel_background_refresh()
+
+        # ACK timeout: max seconds to wait for the broker to acknowledge an order.
+        self._ack_timeout_s: float = float(
+            os.getenv("NIJA_ACK_TIMEOUT_S", "30")
+        )
 
         self._run_count: int = 0
         self._blocked_count: int = 0
@@ -640,6 +675,62 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.warning("ExecutionPipeline: throttler check failed: %s", exc)
 
+        # ── Priority-3: Risk Governor ────────────────────────────────────
+        if self._downstream_guard is not None:
+            try:
+                gov_ok, gov_reason, _ = self._downstream_guard.check_risk_governor(
+                    symbol=effective_request.symbol,
+                    proposed_risk_usd=effective_request.size_usd,
+                    portfolio_value=effective_request.available_balance_usd or 0.0,
+                )
+                if not gov_ok:
+                    if reservation_id and self._ecel is not None:
+                        self._ecel.release_reservation(reservation_id)
+                    logger.warning(
+                        "ExecutionPipeline RISK_GOVERNOR | %s %s $%.2f | %s",
+                        effective_request.side.upper(), effective_request.symbol,
+                        effective_request.size_usd, gov_reason,
+                    )
+                    return PipelineResult(
+                        success=False,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size_usd=effective_request.size_usd,
+                        error=f"RiskGovernor blocked: {gov_reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: risk governor gate error: %s", exc)
+
+        # ── Priority-4: Spread / Slippage Guard ──────────────────────────
+        if self._downstream_guard is not None:
+            try:
+                slip_ok, slip_reason, _ = self._downstream_guard.check_slippage(
+                    symbol=effective_request.symbol,
+                    side=self._normalise_side(effective_request.side),
+                    order_size_usd=effective_request.size_usd,
+                    bid=effective_request.price_hint_usd or 0.0,
+                    ask=effective_request.price_hint_usd or 0.0,
+                )
+                if not slip_ok:
+                    if reservation_id and self._ecel is not None:
+                        self._ecel.release_reservation(reservation_id)
+                    logger.warning(
+                        "ExecutionPipeline SLIPPAGE_BLOCKED | %s %s $%.2f | %s",
+                        effective_request.side.upper(), effective_request.symbol,
+                        effective_request.size_usd, slip_reason,
+                    )
+                    return PipelineResult(
+                        success=False,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size_usd=effective_request.size_usd,
+                        error=f"SlippageGuard blocked: {slip_reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: slippage gate error: %s", exc)
+
         # ── Route to execution ───────────────────────────────────────────
         live_mode = os.getenv("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {
             "1", "true", "yes", "enabled", "on"
@@ -732,7 +823,7 @@ class ExecutionPipeline:
             result.throttled = True
 
         if not result.success and not result.throttled:
-            self._on_order_rejected(result.error or "unknown exchange rejection")
+            self._on_order_rejected(effective_request, result.error or "unknown exchange rejection")
 
         if reservation_id and self._ecel is not None and not result.success:
             self._ecel.release_reservation(reservation_id)
@@ -771,13 +862,47 @@ class ExecutionPipeline:
 
         return result
 
-    def _on_order_rejected(self, error: str) -> None:
+    def _on_order_rejected(self, request: PipelineRequest, error: str) -> None:
+        """Handle a non-throttled, non-retryable order rejection.
+
+        Soft blockers (auth, post-only, ACK timeout, slippage, balance,
+        reconciliation, adapter exceptions) are classified and logged but
+        do NOT raise SystemError — they return gracefully so the anomaly
+        circuit breaker is not unnecessarily triggered.
+
+        Hard rejections (order bypassed ECEL validation, unknown exchange
+        error on an ECEL-validated order) still raise SystemError to
+        trigger the anomaly circuit breaker.
+        """
         self._emit_execution_rejection_telemetry(
-            symbol="unknown",
-            side="unknown",
+            symbol=getattr(request, "symbol", "unknown"),
+            side=getattr(request, "side", "unknown"),
             reason=error or "unknown exchange rejection",
         )
-        logger.critical("🚨 EXCHANGE REJECT: %s", error)
+
+        # Classify the error before deciding whether to raise.
+        blocker = BlockerType.UNKNOWN
+        is_soft = False
+        try:
+            blocker = ExchangeErrorClassifier.classify(error)
+            is_soft = ExchangeErrorClassifier.is_soft_blocker(blocker)
+        except Exception:
+            pass
+
+        if is_soft:
+            logger.warning(
+                "🟡 EXCHANGE SOFT-REJECT [%s] | symbol=%s error=%s",
+                blocker.value,
+                getattr(request, "symbol", "unknown"),
+                error,
+            )
+            # Soft blockers return without raising; the PipelineResult.success=False
+            # already signals the caller that the order did not fill.
+            return
+
+        # Hard reject: ECEL-validated order still rejected by exchange.
+        # This indicates a bug or a contract-rule gap that must be fixed.
+        logger.critical("🚨 EXCHANGE HARD-REJECT [%s]: %s", blocker.value, error)
         raise SystemError("ECEL FAILURE — INVALID ORDER ESCAPED")
 
     def _emit_execution_rejection_telemetry(self, *, symbol: str, side: str, reason: str) -> None:
@@ -905,10 +1030,39 @@ class ExecutionPipeline:
     # ------------------------------------------------------------------
 
     def _dispatch(self, request: PipelineRequest, t_start: float) -> PipelineResult:
-        """Try MultiBrokerExecutionRouter, then fall back to ExecutionRouter."""
+        """Try MultiBrokerExecutionRouter, then fall back to ExecutionRouter.
+
+        The call to each router is wrapped in an ACK-timeout guard: if the
+        broker does not respond within ``NIJA_ACK_TIMEOUT_S`` seconds the
+        dispatch is aborted and a soft ACK_TIMEOUT rejection is returned.
+        The caller must reconcile open-order state before retrying.
+        """
 
         if self._ecel_required:
             assert request.validated is True, "FATAL: Order bypassed ECEL"
+
+        timeout_s = max(1.0, self._ack_timeout_s)
+
+        def _run_with_ack_timeout(fn, *args, **kwargs) -> PipelineResult:
+            """Execute *fn* in a thread, returning a timeout PipelineResult on expiry."""
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(fn, *args, **kwargs)
+                try:
+                    return future.result(timeout=timeout_s)
+                except concurrent.futures.TimeoutError:
+                    logger.error(
+                        "ExecutionPipeline: ACK timeout after %.0fs | symbol=%s",
+                        timeout_s,
+                        request.symbol,
+                    )
+                    return PipelineResult(
+                        success=False,
+                        symbol=request.symbol,
+                        side=request.side,
+                        size_usd=request.size_usd,
+                        error=f"ack_timeout: broker did not respond within {timeout_s:.0f}s",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
 
         # --- MultiBrokerExecutionRouter (preferred for multi-venue) ---
         if self._multi_router is not None:
@@ -930,18 +1084,22 @@ class ExecutionPipeline:
                         asset_class=request.asset_class or "",
                         preferred_broker=request.preferred_broker or "",
                     )
-                    route_result = self._multi_router.route(route_req)
-                    return PipelineResult(
-                        success=route_result.success,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
-                        fill_price=getattr(route_result, "fill_price", 0.0),
-                        filled_size_usd=getattr(route_result, "filled_size_usd", 0.0),
-                        broker=getattr(route_result, "broker", ""),
-                        latency_ms=(time.monotonic() - t_start) * 1000,
-                        error=getattr(route_result, "error", "") or "",
-                    )
+
+                    def _do_multi_route():
+                        res = self._multi_router.route(route_req)
+                        return PipelineResult(
+                            success=res.success,
+                            symbol=request.symbol,
+                            side=request.side,
+                            size_usd=request.size_usd,
+                            fill_price=getattr(res, "fill_price", 0.0),
+                            filled_size_usd=getattr(res, "filled_size_usd", 0.0),
+                            broker=getattr(res, "broker", ""),
+                            latency_ms=(time.monotonic() - t_start) * 1000,
+                            error=getattr(res, "error", "") or "",
+                        )
+
+                    return _run_with_ack_timeout(_do_multi_route)
                 except Exception as exc:
                     logger.warning(
                         "ExecutionPipeline: multi_router failed (%s), trying fallback", exc
@@ -966,17 +1124,21 @@ class ExecutionPipeline:
                         size_usd=request.size_usd,
                         order_type=request.order_type,
                     )
-                    exec_result = self._router.execute(order_req)
-                    return PipelineResult(
-                        success=exec_result.success,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
-                        fill_price=getattr(exec_result, "fill_price", 0.0),
-                        filled_size_usd=getattr(exec_result, "filled_size_usd", 0.0),
-                        latency_ms=(time.monotonic() - t_start) * 1000,
-                        error=getattr(exec_result, "error", "") or "",
-                    )
+
+                    def _do_single_route():
+                        res = self._router.execute(order_req)
+                        return PipelineResult(
+                            success=res.success,
+                            symbol=request.symbol,
+                            side=request.side,
+                            size_usd=request.size_usd,
+                            fill_price=getattr(res, "fill_price", 0.0),
+                            filled_size_usd=getattr(res, "filled_size_usd", 0.0),
+                            latency_ms=(time.monotonic() - t_start) * 1000,
+                            error=getattr(res, "error", "") or "",
+                        )
+
+                    return _run_with_ack_timeout(_do_single_route)
                 except Exception as exc:
                     logger.error("ExecutionPipeline: router failed: %s", exc)
                     return PipelineResult(
@@ -1100,6 +1262,16 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.debug("ExecutionPipeline: could not load execution observer %s: %s", mod_name, exc)
         return None
+
+    @staticmethod
+    def _load_downstream_guard():
+        try:
+            guard = get_downstream_blocker_guard()
+            logger.info("ExecutionPipeline: DownstreamBlockerGuard loaded")
+            return guard
+        except Exception as exc:
+            logger.warning("ExecutionPipeline: DownstreamBlockerGuard unavailable: %s", exc)
+            return None
 
     def _load_ecel(self):
         self._ecel_mod = None
