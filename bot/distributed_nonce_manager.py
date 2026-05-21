@@ -259,10 +259,10 @@ except (TypeError, ValueError):
     _REDIS_LEASE_RENEWAL_MIN_S = 1.5
 try:
     _REDIS_LEASE_STATUS_LOG_INTERVAL_S = max(
-        0.0, float(os.environ.get("NIJA_REDIS_LEASE_STATUS_LOG_INTERVAL_S", "30") or "30")
+        0.0, float(os.environ.get("NIJA_REDIS_LEASE_STATUS_LOG_INTERVAL_S", "0") or "0")
     )
 except (TypeError, ValueError):
-    _REDIS_LEASE_STATUS_LOG_INTERVAL_S = 30.0
+    _REDIS_LEASE_STATUS_LOG_INTERVAL_S = 0.0
 
 
 def _runtime_strict_redis_lease() -> bool:

@@ -65,8 +65,10 @@ blocked until reconciliation succeeds or an explicit manual override is set.
   `NIJA_REQUIRE_NONCE_LEASE_STABILITY=1` to enforce in non-live modes or set the
   window to 0 to disable.
 - Lease status logs: `LEASE STATUS: key_id=... token=... owner_id=...
-  ttl_remaining_ms=...` (interval controlled by
-  `NIJA_REDIS_LEASE_STATUS_LOG_INTERVAL_S`).
+  ttl_remaining_ms=...` are emitted on lease acquire/change events. Periodic
+  steady-state status logs are disabled by default; set
+  `NIJA_REDIS_LEASE_STATUS_LOG_INTERVAL_S` to a positive value when you need
+  recurring diagnostics.
 
 ## 4) Redis Failover Strategy
 Recommended approach:
