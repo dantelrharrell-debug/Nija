@@ -91,6 +91,7 @@ Date: April 2026
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import threading
@@ -103,6 +104,20 @@ from enum import Enum
 from typing import Any, Deque, Dict, List, Optional
 
 logger = logging.getLogger("nija.seak")
+
+try:
+    from bot.runtime_contract import build_canonical_intent_id
+except ImportError:
+    from runtime_contract import build_canonical_intent_id  # type: ignore[import]
+
+try:
+    from bot.runtime_correlation import get_runtime_correlation
+except ImportError:
+    try:
+        from runtime_correlation import get_runtime_correlation  # type: ignore[import]
+    except ImportError:
+        def get_runtime_correlation() -> Dict[str, str]:  # type: ignore[no-redef]
+            return {}
 
 # ---------------------------------------------------------------------------
 # Configuration constants
@@ -171,6 +186,7 @@ class ExecutionRequest:
     order_type: Optional[str] = None
     account_id: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
+    intent_id: str = ""
 
     # Auto-assigned by SEAK on receipt; do not set manually.
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -198,6 +214,7 @@ class ExecutionToken:
     caller: str = ""
     reason: str = ""
     rejection_reason: Optional[RejectionReason] = None
+    intent_id: str = ""
     issued_at: float = field(default_factory=time.monotonic)
     expires_at: float = field(default_factory=lambda: time.monotonic() + _SLOT_TIMEOUT_S)
     # Internal — used by release() to locate and free the per-symbol lock.
@@ -231,6 +248,7 @@ class AuditEntry:
     ts: str                    # ISO-8601 timestamp
     outcome: AuditOutcome
     request_id: str
+    intent_id: str
     symbol: str
     side: str
     size_usd: float
@@ -282,6 +300,11 @@ class SingleExecutionAuthorityKernel:
         self._dedup_registry: Dict[str, float] = {}  # fingerprint → expiry_ts
         # Side-table: symbol → active fingerprint (for fast clear-on-release).
         self._active_fp_by_symbol: Dict[str, str] = {}
+        self._completed_intents: Dict[str, float] = {}  # intent_id -> expiry_ts
+        self._idempotency_journal_path: str = (
+            os.getenv("NIJA_SEAK_IDEMPOTENCY_JOURNAL_PATH", "").strip()
+        )
+        self._idempotency_journal_lock = threading.Lock()
 
         # Audit ring buffer.
         self._audit_lock: threading.Lock = threading.Lock()
@@ -310,6 +333,7 @@ class SingleExecutionAuthorityKernel:
             target=self._reaper_loop, name="seak-reaper", daemon=True
         )
         self._reaper_thread.start()
+        self._load_idempotency_journal()
 
         logger.info("SingleExecutionAuthorityKernel initialised — all execution must flow through SEAK")
 
@@ -329,6 +353,7 @@ class SingleExecutionAuthorityKernel:
         self._audit(
             outcome=AuditOutcome.HALT,
             request_id="",
+            intent_id="",
             symbol="*",
             side="",
             size_usd=0.0,
@@ -345,6 +370,7 @@ class SingleExecutionAuthorityKernel:
         self._audit(
             outcome=AuditOutcome.RESUME,
             request_id="",
+            intent_id="",
             symbol="*",
             side="",
             size_usd=0.0,
@@ -406,6 +432,7 @@ class SingleExecutionAuthorityKernel:
             ``token.granted=False`` → caller must NOT submit any order.
         """
         t_start = time.monotonic()
+        correlation = get_runtime_correlation()
         request = ExecutionRequest(
             symbol=symbol.upper(),
             side=side.lower(),
@@ -416,12 +443,30 @@ class SingleExecutionAuthorityKernel:
             account_id=account_id,
             extra=extra or {},
         )
+        request.intent_id = str(
+            request.extra.get("intent_id")
+            or correlation.get("intent_id")
+            or build_canonical_intent_id(
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                strategy=request.strategy,
+                account_id=request.account_id,
+                cycle_id=correlation.get("cycle_id", ""),
+                trace_id=correlation.get("trace_id", ""),
+                broker_identity=correlation.get("broker_identity", ""),
+            )
+        )
+        request.extra.setdefault("intent_id", request.intent_id)
+        if correlation:
+            request.extra.setdefault("correlation", dict(correlation))
 
         def _reject(reason: str, code: RejectionReason) -> ExecutionToken:
             latency_ms = (time.monotonic() - t_start) * 1000
             self._audit(
                 outcome=AuditOutcome.REJECTED,
                 request_id=request.request_id,
+                intent_id=request.intent_id,
                 symbol=request.symbol,
                 side=request.side,
                 size_usd=request.size_usd,
@@ -444,6 +489,7 @@ class SingleExecutionAuthorityKernel:
                 caller=caller,
                 reason=reason,
                 rejection_reason=code,
+                intent_id=request.intent_id,
             )
 
         # ── Validate request ─────────────────────────────────────────────
@@ -536,6 +582,7 @@ class SingleExecutionAuthorityKernel:
         self._audit(
             outcome=AuditOutcome.APPROVED,
             request_id=request.request_id,
+            intent_id=request.intent_id,
             symbol=request.symbol,
             side=request.side,
             size_usd=request.size_usd,
@@ -565,6 +612,7 @@ class SingleExecutionAuthorityKernel:
             size_usd=request.size_usd,
             strategy=strategy,
             caller=caller,
+            intent_id=request.intent_id,
             issued_at=now,
             expires_at=now + _SLOT_TIMEOUT_S,
             _slot_key=slot_key,
@@ -585,6 +633,7 @@ class SingleExecutionAuthorityKernel:
         self._audit(
             outcome=AuditOutcome.RELEASED,
             request_id=token.request_id,
+            intent_id=token.intent_id,
             symbol=token.symbol,
             side=token.side,
             size_usd=token.size_usd,
@@ -593,6 +642,7 @@ class SingleExecutionAuthorityKernel:
             reason="",
             latency_ms=(time.monotonic() - token.issued_at) * 1000,
         )
+        self._record_completed_intent(token.intent_id)
         self._total_released += 1
 
     # ------------------------------------------------------------------
@@ -700,6 +750,7 @@ class SingleExecutionAuthorityKernel:
                 "ts": e.ts,
                 "outcome": e.outcome.value,
                 "request_id": e.request_id,
+                "intent_id": e.intent_id,
                 "symbol": e.symbol,
                 "side": e.side,
                 "size_usd": e.size_usd,
@@ -719,6 +770,7 @@ class SingleExecutionAuthorityKernel:
             ]
         with self._dedup_lock:
             active_fingerprints = len(self._dedup_registry)
+            completed_intents = len(self._completed_intents)
 
         return {
             "halted": self._halt_event.is_set(),
@@ -726,6 +778,7 @@ class SingleExecutionAuthorityKernel:
             "active_slots": active_slots,
             "active_slot_count": len(active_slots),
             "active_fingerprints": active_fingerprints,
+            "completed_intents": completed_intents,
             "total_approved": self._total_approved,
             "total_rejected": self._total_rejected,
             "total_released": self._total_released,
@@ -761,6 +814,13 @@ class SingleExecutionAuthorityKernel:
         # Internal dedup registry (faster, always available).
         now = time.time()
         with self._dedup_lock:
+            if request.intent_id:
+                completed_expiry = self._completed_intents.get(request.intent_id)
+                if completed_expiry is not None and now < completed_expiry:
+                    return (
+                        f"Duplicate canonical intent within dedup window "
+                        f"({_DEDUP_WINDOW_S:.0f}s): {request.intent_id}"
+                    )
             expiry = self._dedup_registry.get(fingerprint)
             if expiry is not None and now < expiry:
                 return (
@@ -857,6 +917,8 @@ class SingleExecutionAuthorityKernel:
     @staticmethod
     def _build_fingerprint(request: ExecutionRequest) -> str:
         """Build a deterministic fingerprint for dedup purposes."""
+        if request.intent_id:
+            return hashlib.sha256(str(request.intent_id).encode()).hexdigest()[:16]
         raw = (
             f"{request.symbol}|{request.side}|"
             f"{int(request.size_usd * 100)}|{request.strategy}|"
@@ -898,6 +960,51 @@ class SingleExecutionAuthorityKernel:
             if fp is not None:
                 self._dedup_registry.pop(fp, None)
 
+    def _record_completed_intent(self, intent_id: str) -> None:
+        intent = str(intent_id or "").strip()
+        if not intent:
+            return
+        with self._dedup_lock:
+            self._completed_intents[intent] = time.time() + _DEDUP_WINDOW_S
+        self._persist_idempotency_journal()
+
+    def _load_idempotency_journal(self) -> None:
+        path = self._idempotency_journal_path
+        if not path:
+            return
+        try:
+            with self._idempotency_journal_lock:
+                with open(path, "r", encoding="utf-8") as fh:
+                    payload = json.load(fh)
+            now = time.time()
+            loaded = {
+                str(k): float(v)
+                for k, v in dict(payload or {}).items()
+                if float(v) > now
+            }
+            with self._dedup_lock:
+                self._completed_intents.update(loaded)
+            if loaded:
+                logger.info("SEAK: loaded %d idempotency journal entries", len(loaded))
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            logger.warning("SEAK: failed loading idempotency journal: %s", exc)
+
+    def _persist_idempotency_journal(self) -> None:
+        path = self._idempotency_journal_path
+        if not path:
+            return
+        try:
+            with self._dedup_lock:
+                payload = dict(self._completed_intents)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with self._idempotency_journal_lock:
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, sort_keys=True)
+        except Exception as exc:
+            logger.debug("SEAK: failed persisting idempotency journal: %s", exc)
+
     def _release_slot(self, slot_key: str, request_id: str) -> None:
         with self._slots_lock:
             slot = self._slots.get(slot_key)
@@ -932,6 +1039,7 @@ class SingleExecutionAuthorityKernel:
         self,
         outcome: AuditOutcome,
         request_id: str,
+        intent_id: str,
         symbol: str,
         side: str,
         size_usd: float,
@@ -944,6 +1052,7 @@ class SingleExecutionAuthorityKernel:
             ts=datetime.now(timezone.utc).isoformat(),
             outcome=outcome,
             request_id=request_id,
+            intent_id=intent_id,
             symbol=symbol,
             side=side,
             size_usd=size_usd,
@@ -977,10 +1086,12 @@ class SingleExecutionAuthorityKernel:
 
     def _reap_expired_fingerprints(self) -> None:
         now = time.time()
+        dirty = False
         with self._dedup_lock:
             expired = [fp for fp, exp in self._dedup_registry.items() if now >= exp]
             for fp in expired:
                 del self._dedup_registry[fp]
+                dirty = True
             # Clean side-table entries whose fingerprint has been reaped.
             stale_syms = [
                 sym for sym, fp in self._active_fp_by_symbol.items()
@@ -988,6 +1099,15 @@ class SingleExecutionAuthorityKernel:
             ]
             for sym in stale_syms:
                 del self._active_fp_by_symbol[sym]
+                dirty = True
+            expired_intents = [
+                intent for intent, exp in self._completed_intents.items() if now >= exp
+            ]
+            for intent in expired_intents:
+                del self._completed_intents[intent]
+                dirty = True
+        if dirty:
+            self._persist_idempotency_journal()
 
     def _reap_timed_out_slots(self) -> None:
         now = time.monotonic()

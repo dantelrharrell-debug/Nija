@@ -61,6 +61,46 @@ import pandas as pd
 logger = logging.getLogger("nija.core_loop")
 
 try:
+    from bot.log_rate_limiter import get_log_rate_limiter
+except ImportError:
+    from log_rate_limiter import get_log_rate_limiter  # type: ignore[import]
+
+try:
+    from bot.runtime_contract import assert_runtime_contract_release_ready
+except ImportError:
+    from runtime_contract import assert_runtime_contract_release_ready  # type: ignore[import]
+
+try:
+    from bot.runtime_correlation import (
+        clear_runtime_correlation,
+        update_runtime_correlation,
+    )
+except ImportError:
+    try:
+        from runtime_correlation import clear_runtime_correlation, update_runtime_correlation  # type: ignore[import]
+    except ImportError:
+        def update_runtime_correlation(**fields):  # type: ignore[no-redef]
+            return {}
+
+        def clear_runtime_correlation() -> None:  # type: ignore[no-redef]
+            return None
+
+_CORE_LOOP_LOG_LIMITER = get_log_rate_limiter()
+
+
+def _rate_limited_critical(category: str, key: str, window_seconds: float, message: str, *args: Any) -> None:
+    allowed, suppressed = _CORE_LOOP_LOG_LIMITER.allow_with_count(
+        category=category,
+        key=key,
+        window_seconds=window_seconds,
+    )
+    if not allowed:
+        return
+    if suppressed:
+        logger.info("[quiet-runtime] suppressed=%d category=%s key=%s", suppressed, category, key)
+    logger.critical(message, *args)
+
+try:
     from bot.runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution
 except ImportError:
     from runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution  # type: ignore[import]
@@ -1808,6 +1848,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     cycle_secs : Seconds to sleep between cycles (default 150 = 2.5 min)
     """
     logger.critical("🧵 TRADING LOOP THREAD ALIVE")
+    _contract_status = assert_runtime_contract_release_ready(context="run_trading_loop")
+    logger.info("Runtime contract status: %s", _contract_status.as_dict())
 
     global _loop_running, _trading_active
     global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
@@ -2045,8 +2087,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         while _trading_active:
             try:
                 # FIX 4: emit every cycle so a silent dead-bot is immediately visible.
-                logger.critical("🟢 LIVE LOOP TICK")
-                print("🚀 MAIN LOOP TICK")
+                _rate_limited_critical("core_loop_tick", "scheduler", 30.0, "🟢 LIVE LOOP TICK")
 
                 _live_now = False
                 _sm_loop = None
@@ -2056,8 +2097,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _live_now = bool(_sm_loop.is_live_trading_active())
                 except Exception as _sm_loop_err:
                     logger.debug("CORE LOOP live probe failed: %s", _sm_loop_err)
-                logger.critical("🧠 CORE LOOP ACTIVE — evaluating activation")
-                logger.critical("CORE LOOP TICK | live=%s", _live_now)
+                _rate_limited_critical(
+                    "core_loop_activation_eval",
+                    "scheduler",
+                    30.0,
+                    "🧠 CORE LOOP ACTIVE — evaluating activation",
+                )
+                _rate_limited_critical(
+                    "core_loop_live_state",
+                    "scheduler",
+                    30.0,
+                    "CORE LOOP TICK | live=%s",
+                    _live_now,
+                )
 
                 if _sm_loop is not None:
                     _runtime_mode_loop = resolve_runtime_mode_safe(logger)
@@ -2210,7 +2262,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         )
 
                 # Shared-cycle snapshot is captured before activation attempts.
-                logger.critical("💰 AVAILABLE CAPITAL: %.2f", _cycle_balance)
+                _rate_limited_critical(
+                    "core_loop_available_capital",
+                    "scheduler",
+                    60.0,
+                    "💰 AVAILABLE CAPITAL: %.2f",
+                    _cycle_balance,
+                )
 
                 # Trigger live-state activation checks using this cycle's frozen
                 # capital snapshot before any strategy execution starts.
@@ -2317,9 +2375,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _current_cycle_capital.get("mabm_brokers_ready"),
                 )
 
-                logger.critical("🔥 TRADE LOOP HEARTBEAT: active=%s", _trading_active)
-
-                logger.critical("🟢 LIVE LOOP TICK — scanning markets")
+                _rate_limited_critical(
+                    "core_loop_heartbeat",
+                    "scheduler",
+                    30.0,
+                    "🔥 TRADE LOOP HEARTBEAT: active=%s",
+                    _trading_active,
+                )
+                _rate_limited_critical(
+                    "core_loop_scan_tick",
+                    "scheduler",
+                    30.0,
+                    "🟢 LIVE LOOP TICK — scanning markets",
+                )
 
                 # ── Proactive broker liveness check before entering run_cycle ─────
                 # If the strategy's broker is disconnected, attempt reconnect here
@@ -2436,10 +2504,25 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         time.sleep(cycle_secs)
                         continue
 
-                logger.critical("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
-                logger.critical("🚀 RUNNING TRADE CYCLE")
+                _rate_limited_critical(
+                    "core_loop_capital_check",
+                    "scheduler",
+                    60.0,
+                    "💰 CAPITAL CHECK: $%.2f",
+                    _cycle_cap,
+                )
+                _rate_limited_critical(
+                    "core_loop_run_cycle",
+                    "scheduler",
+                    60.0,
+                    "🚀 RUNNING TRADE CYCLE",
+                )
                 _cycle_start_ts = time.time()
-                strategy.run_cycle()
+                update_runtime_correlation(cycle_id=_current_cycle_id)
+                try:
+                    strategy.run_cycle()
+                finally:
+                    clear_runtime_correlation()
                 _cycle_elapsed = time.time() - _cycle_start_ts
                 # Retrieve symbol count from strategy for heartbeat diagnostics
                 _hb_symbols = 0
