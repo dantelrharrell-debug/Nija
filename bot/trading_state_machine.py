@@ -1991,10 +1991,11 @@ class TradingStateMachine:
             return False
 
         runtime_mode = resolve_runtime_mode_safe(logger)
-        coordinator_snapshot = _get_startup_coordinator().build_snapshot(
+        global_snapshot = _get_global_state().capture(
             trading_state=self.get_current_state().value,
             activation_intent=_activation_intent_present(runtime_mode),
         )
+        coordinator_snapshot = global_snapshot.startup
         if require_executing:
             return bool(coordinator_snapshot.execution_permitted)
         return bool(coordinator_snapshot.trading_authority)
@@ -2052,10 +2053,10 @@ class TradingStateMachine:
         intent_present = _activation_intent_present(runtime_mode)
         with self._lock:
             trading_state = self._current_state.value
-        coordinator_snapshot = _get_startup_coordinator().build_snapshot(
+        coordinator_snapshot = _get_global_state().capture(
             trading_state=trading_state,
             activation_intent=intent_present,
-        )
+        ).startup
         authority_snapshot.update(
             {
                 "runtime_authority_state": coordinator_snapshot.runtime_authority_state,
@@ -2167,6 +2168,16 @@ def _get_startup_coordinator():
     except ImportError:
         from startup_coordinator import get_startup_coordinator  # type: ignore[import]
         return get_startup_coordinator()
+
+
+def _get_global_state():
+    """Return the GLOBAL_STATE singleton for cross-FSM snapshot caching."""
+    try:
+        from bot.startup_coordinator import GLOBAL_STATE
+        return GLOBAL_STATE
+    except ImportError:
+        from startup_coordinator import GLOBAL_STATE  # type: ignore[import]
+        return GLOBAL_STATE
 
 
 def _bootstrap_running_supervised() -> bool:
