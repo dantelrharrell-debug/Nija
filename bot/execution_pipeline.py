@@ -78,6 +78,29 @@ from contextlib import contextmanager
 
 logger = logging.getLogger("nija.execution_pipeline")
 
+try:
+    from bot.runtime_correlation import get_runtime_correlation
+except ImportError:
+    try:
+        from runtime_correlation import get_runtime_correlation  # type: ignore[import]
+    except ImportError:
+        def get_runtime_correlation() -> Dict[str, str]:  # type: ignore[no-redef]
+            return {}
+
+try:
+    from bot.execution_journal import append_execution_journal_event
+except ImportError:
+    try:
+        from execution_journal import append_execution_journal_event  # type: ignore[import]
+    except ImportError:
+        def append_execution_journal_event(  # type: ignore[no-redef]
+            event_type: str,
+            intent_id: str,
+            payload: Optional[Dict[str, Any]] = None,
+            ts: Optional[str] = None,
+        ) -> None:
+            return None
+
 # Downstream blocker classifier — imported here for use in _on_order_rejected.
 try:
     from bot.downstream_blocker_guard import (
@@ -797,6 +820,20 @@ class ExecutionPipeline:
                 assert_execution_dispatch_permitted()
                 if not runtime_authority_snapshot().ready:
                     raise RuntimeError("Runtime authority convergence lost")
+                _correlation = get_runtime_correlation() or {}
+                _intent_id = str(_correlation.get("intent_id") or "").strip()
+                append_execution_journal_event(
+                    event_type="order_submitted",
+                    intent_id=_intent_id,
+                    payload={
+                        "symbol": effective_request.symbol,
+                        "side": effective_request.side,
+                        "size_usd": effective_request.size_usd,
+                        "strategy": effective_request.strategy,
+                        "account_id": effective_request.account_id,
+                        "broker_hint": effective_request.preferred_broker or "",
+                    },
+                )
                 result = self._dispatch(effective_request, t_start)
         except Exception as exc:
             self._emit_execution_rejection_telemetry(
@@ -811,6 +848,23 @@ class ExecutionPipeline:
                 size_usd=effective_request.size_usd,
                 error=f"ExecutionAuthority reject: {exc}",
                 latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
+        _correlation = get_runtime_correlation() or {}
+        _intent_id = str(_correlation.get("intent_id") or "").strip()
+        if result.success:
+            append_execution_journal_event(
+                event_type="broker_ack",
+                intent_id=_intent_id,
+                payload={
+                    "symbol": effective_request.symbol,
+                    "side": effective_request.side,
+                    "size_usd": effective_request.size_usd,
+                    "broker": result.broker,
+                    "fill_price": result.fill_price,
+                    "filled_size_usd": result.filled_size_usd,
+                    "latency_ms": result.latency_ms,
+                },
             )
 
         if not result.success and self._is_retryable_exchange_rejection(result.error):
@@ -860,6 +914,20 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.warning("ExecutionPipeline: observer update failed: %s", exc)
 
+        append_execution_journal_event(
+            event_type="final_state",
+            intent_id=_intent_id,
+            payload={
+                "symbol": effective_request.symbol,
+                "side": effective_request.side,
+                "size_usd": effective_request.size_usd,
+                "success": result.success,
+                "throttled": result.throttled,
+                "error": result.error,
+                "broker": result.broker,
+                "latency_ms": result.latency_ms,
+            },
+        )
         return result
 
     def _on_order_rejected(self, request: PipelineRequest, error: str) -> None:

@@ -114,6 +114,20 @@ except ImportError:
         def get_runtime_correlation() -> Dict[str, str]:  # type: ignore[no-redef]
             return {}
 
+try:
+    from bot.execution_journal import append_execution_journal_event
+except ImportError:
+    try:
+        from execution_journal import append_execution_journal_event  # type: ignore[import]
+    except ImportError:
+        def append_execution_journal_event(  # type: ignore[no-redef]
+            event_type: str,
+            intent_id: str,
+            payload: Optional[Dict[str, Any]] = None,
+            ts: Optional[str] = None,
+        ) -> None:
+            return None
+
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
@@ -588,6 +602,19 @@ class SingleExecutionAuthorityKernel:
             strategy,
             caller,
             latency_ms,
+        )
+        append_execution_journal_event(
+            event_type="intent_accepted",
+            intent_id=request.intent_id,
+            payload={
+                "request_id": request.request_id,
+                "symbol": request.symbol,
+                "side": request.side,
+                "size_usd": request.size_usd,
+                "strategy": request.strategy,
+                "caller": request.caller,
+                "account_id": request.account_id,
+            },
         )
 
         return ExecutionToken(

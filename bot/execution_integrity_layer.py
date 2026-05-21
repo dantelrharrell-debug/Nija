@@ -51,9 +51,23 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija.execution.integrity")
+
+try:
+    from bot.execution_journal import append_execution_journal_event
+except ImportError:
+    try:
+        from execution_journal import append_execution_journal_event  # type: ignore[import]
+    except ImportError:
+        def append_execution_journal_event(  # type: ignore[no-redef]
+            event_type: str,
+            intent_id: str,
+            payload: Optional[Dict[str, Any]] = None,
+            ts: Optional[str] = None,
+        ) -> None:
+            return None
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -409,6 +423,27 @@ class ExecutionIntegrityLayer:
             actual_fill_usd=actual_fill_usd,
             is_acceptable=is_acceptable,
             reason=reason,
+        )
+        _notes_payload: Dict[str, Any] = {}
+        if notes:
+            _notes_payload["notes"] = notes
+        append_execution_journal_event(
+            event_type="fill_received",
+            intent_id="",
+            payload={
+                "cycle_id": cycle_id,
+                "order_id": order_id,
+                "symbol": symbol,
+                "side": side,
+                "broker": broker,
+                "intended_size_usd": intended_size_usd,
+                "actual_fill_usd": actual_fill_usd,
+                "fill_ratio": fill_ratio,
+                "status": status.value,
+                "is_acceptable": is_acceptable,
+                "reason": reason,
+                **_notes_payload,
+            },
         )
 
         if not is_acceptable:

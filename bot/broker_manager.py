@@ -52,6 +52,20 @@ except ImportError:
             return {}
 
 try:
+    from bot.execution_journal import append_execution_journal_event
+except ImportError:
+    try:
+        from execution_journal import append_execution_journal_event  # type: ignore[import]
+    except ImportError:
+        def append_execution_journal_event(  # type: ignore[no-redef]
+            event_type: str,
+            intent_id: str,
+            payload: Optional[Dict[str, Any]] = None,
+            ts: Optional[str] = None,
+        ) -> None:
+            return None
+
+try:
     from bot.global_kraken_nonce import (
         KrakenNonceManager as NonceManager,
         get_global_kraken_nonce,
@@ -7981,6 +7995,18 @@ class KrakenBroker(BaseBroker):
                 )
             else:
                 intent_id = str(uuid.uuid4())
+        append_execution_journal_event(
+            event_type="intent_created",
+            intent_id=intent_id,
+            payload={
+                "method": str(method or ""),
+                "symbol": str(params.get("pair") or params.get("symbol") or ""),
+                "side": str(params.get("type") or ""),
+                "size": _intent_size,
+                "strategy": str(params.get("strategy") or "kraken_gateway"),
+                "account_id": str(self.account_identifier or ""),
+            },
+        )
         payload = {
             "intent_id": intent_id,
             "method": method,

@@ -111,6 +111,29 @@ except ImportError:
         OrderStatus = None      # type: ignore[assignment,misc]
         log_execution_result = None  # type: ignore[assignment]
 
+try:
+    from bot.runtime_correlation import get_runtime_correlation
+except ImportError:
+    try:
+        from runtime_correlation import get_runtime_correlation  # type: ignore[import]
+    except ImportError:
+        def get_runtime_correlation() -> Dict[str, str]:  # type: ignore[no-redef]
+            return {}
+
+try:
+    from bot.execution_journal import append_execution_journal_event
+except ImportError:
+    try:
+        from execution_journal import append_execution_journal_event  # type: ignore[import]
+    except ImportError:
+        def append_execution_journal_event(  # type: ignore[no-redef]
+            event_type: str,
+            intent_id: str,
+            payload: Optional[Dict[str, Any]] = None,
+            ts: Optional[str] = None,
+        ) -> None:
+            return None
+
 
 # ---------------------------------------------------------------------------
 # ESC error priority resolution rule (item 5)
@@ -585,7 +608,7 @@ class ExecutionStateController:
                     or response.get("id")
                     or response.get("client_order_id")
                 )
-            return ExecutionResult(
+            accepted_result = ExecutionResult(
                 status=OrderStatus.ACCEPTED,
                 symbol=symbol,
                 side=side,
@@ -594,6 +617,19 @@ class ExecutionStateController:
                 latency_ms=latency_ms,
                 retry_policy=None,
             )
+            _intent_id = str((get_runtime_correlation() or {}).get("intent_id") or "").strip()
+            append_execution_journal_event(
+                event_type="final_state",
+                intent_id=_intent_id,
+                payload={
+                    "symbol": symbol,
+                    "side": side,
+                    "status": accepted_result.status.value,
+                    "exchange_order_id": accepted_result.exchange_order_id,
+                    "latency_ms": accepted_result.latency_ms,
+                },
+            )
+            return accepted_result
 
         # All non-COMPLETED terminal states
         error_code: Optional[str] = None
@@ -610,7 +646,7 @@ class ExecutionStateController:
         # HALTED_* → FAILED status to ensure retry_policy is surfaced
         order_status = OrderStatus.FAILED
 
-        return ExecutionResult(
+        failed_result = ExecutionResult(
             status=order_status,
             symbol=symbol,
             side=side,
@@ -619,6 +655,22 @@ class ExecutionStateController:
             latency_ms=latency_ms,
             retry_policy=retry_policy,
         )
+        _intent_id = str((get_runtime_correlation() or {}).get("intent_id") or "").strip()
+        append_execution_journal_event(
+            event_type="final_state",
+            intent_id=_intent_id,
+            payload={
+                "symbol": symbol,
+                "side": side,
+                "status": failed_result.status.value,
+                "error_code": failed_result.error_code,
+                "latency_ms": failed_result.latency_ms,
+                "retry_policy": (
+                    failed_result.retry_policy.value if failed_result.retry_policy is not None else None
+                ),
+            },
+        )
+        return failed_result
 
     @staticmethod
     def _default_success_fn(response: Optional[Dict[str, Any]]) -> bool:
