@@ -16,6 +16,7 @@ import tempfile
 import shutil
 import json
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -250,6 +251,30 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
                 float(first_payload.get("verified_at_epoch", 0)),
                 "Successful re-verification should refresh marker timestamp",
             )
+
+    def test_heartbeat_executes_with_startup_probe_scopes(self):
+        broker = MagicMock()
+        broker.connected = True
+        broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
+        fake_buy = {"status": "filled", "order_id": "hb-013"}
+        fake_sell = {"status": "filled", "order_id": "hb-014"}
+        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
+        strategy = self._make_strategy_with_broker(broker)
+        reasons: list[str] = []
+
+        @contextmanager
+        def _capture_scope(reason):
+            reasons.append(reason)
+            yield
+
+        with patch("bot.trading_strategy.startup_execution_probe_scope", side_effect=_capture_scope):
+            self.assertTrue(strategy._execute_heartbeat_trade())
+
+        self.assertEqual(
+            reasons,
+            ["HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"],
+            "Heartbeat flow must tag startup probe scopes for buy/sell verification orders",
+        )
 
 
 class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
