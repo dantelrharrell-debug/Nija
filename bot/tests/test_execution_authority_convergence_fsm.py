@@ -348,6 +348,84 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
                 sm = TradingStateMachine(state_file=state_path)
                 self.assertFalse(sm.commit_activation())
 
+    def test_commit_activation_arms_pending_when_off_with_live_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "false",
+                    "HEARTBEAT_TRADE": "false",
+                    "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                },
+                clear=False,
+            ), patch(
+                "bot.trading_state_machine._startup_ownership_gate",
+                return_value=(False, "bootstrap_guard_not_held"),
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertEqual(sm.get_current_state(), TradingState.OFF)
+
+                class _ReadyCA:
+                    is_hydrated = True
+
+                    @staticmethod
+                    def get_real_capital() -> float:
+                        return 131.11
+
+                    @staticmethod
+                    def is_stale() -> bool:
+                        return False
+
+                with patch(
+                    "bot.trading_state_machine._collect_live_gate_status",
+                    return_value={
+                        "safe_ok": True,
+                        "safe_err": "",
+                        "recon_ok": True,
+                        "recon_err": "",
+                        "nonce_ok": True,
+                        "nonce_err": "",
+                        "lease_ok": True,
+                        "lease_err": "",
+                        "heartbeat_ok": True,
+                        "heartbeat_err": "",
+                        "strategy_ok": True,
+                        "strategy_err": "",
+                        "breaker_ok": True,
+                        "breaker_err": "",
+                        "execution_allowed": True,
+                    },
+                ), patch(
+                    "bot.trading_state_machine._live_activation_gate",
+                    return_value=(True, ""),
+                ), patch(
+                    "bot.trading_state_machine._is_authority_ready",
+                    return_value=True,
+                ), patch(
+                    "bot.trading_state_machine._nonce_writer_lease_gate",
+                    return_value=(True, ""),
+                ), patch(
+                    "bot.trading_state_machine._capital_bootstrap_state_value",
+                    return_value="RUNNING",
+                ), patch(
+                    "bot.trading_state_machine._bootstrap_state_value",
+                    return_value="RUNNING_SUPERVISED",
+                ), patch(
+                    "bot.trading_state_machine._readiness_snapshot_with_version",
+                    return_value=(1, {"authority_ready": True, "nonce_ready": True}),
+                ), patch(
+                    "bot.trading_state_machine._get_capital_authority_instance",
+                    return_value=_ReadyCA(),
+                ), patch(
+                    "bot.trading_state_machine._global_activation_barrier",
+                    return_value=(False, "execution pipeline pending", True, False, True, False),
+                ):
+                    self.assertFalse(sm.commit_activation(cycle_capital={"ca_total_capital": 131.11}))
+                    self.assertEqual(sm.get_current_state(), TradingState.LIVE_PENDING_CONFIRMATION)
+
     def test_commit_activation_blocks_when_heartbeat_marker_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_path = os.path.join(tmp, "state.json")
