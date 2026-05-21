@@ -354,6 +354,7 @@ class MetricCollector:
 
         def _first_gate_failure(decision_payload: Dict[str, Any]) -> Optional[str]:
             gate_order = [
+                ("lifecycle.phase", "lifecycle_phase"),
                 ("state.live_active", "state_live_active"),
                 ("lease.valid", "lease_valid"),
                 ("lease.generation_current", "lease_generation_current"),
@@ -366,6 +367,12 @@ class MetricCollector:
                 ("stability.allowed", "stability_allowed"),
             ]
             for gate_name, field_name in gate_order:
+                if field_name == "lifecycle_phase":
+                    # lifecycle_phase blocks when its value is not "LIVE"
+                    phase_val = decision_payload.get("lifecycle_phase", "BOOT")
+                    if phase_val != "LIVE":
+                        return gate_name
+                    continue
                 if field_name in decision_payload and not _coerce_bool(decision_payload.get(field_name)):
                     return gate_name
             return None

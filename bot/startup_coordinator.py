@@ -131,6 +131,52 @@ class RuntimeAuthorityState(str, Enum):
     DEGRADED = "DEGRADED"
 
 
+class LifecyclePhase(str, Enum):
+    """Coarse runtime lifecycle phase used as the top-level execution gate.
+
+    Phase is derived from :class:`RuntimeAuthorityState` and acts as the
+    primary control primitive that gates execution, control, and reconciliation
+    across the whole system.
+
+    BOOT
+        Early startup: broker connection, capital hydration, and bootstrap
+        reconciliation only.  No strategy execution or live dispatch.
+
+    WARM
+        Authority has converged (all prerequisites met) but the activation
+        commit has not yet been recorded.  Control logic and reconciliation
+        may proceed; live order dispatch remains blocked.
+
+    LIVE
+        Dispatch commit is in place and the runtime is trading.  Full
+        execution, control, and reconciliation are permitted subject to the
+        lower-level gates in :func:`can_execute`.
+    """
+
+    BOOT = "BOOT"
+    WARM = "WARM"
+    LIVE = "LIVE"
+
+
+def _compute_lifecycle_phase(runtime_authority_state: str) -> LifecyclePhase:
+    """Derive the coarse :class:`LifecyclePhase` from a runtime authority state string.
+
+    Mapping:
+    - ``EXECUTING``  → :attr:`LifecyclePhase.LIVE`  — dispatch committed, trading active
+    - ``AUTHORIZED`` → :attr:`LifecyclePhase.WARM`  — all prerequisites met, awaiting commit
+    - ``READY``      → :attr:`LifecyclePhase.WARM`  — prerequisites ready, converging
+    - anything else  → :attr:`LifecyclePhase.BOOT`  — BOOT / STANDBY / DEGRADED
+    """
+    if runtime_authority_state == RuntimeAuthorityState.EXECUTING.value:
+        return LifecyclePhase.LIVE
+    if runtime_authority_state in {
+        RuntimeAuthorityState.AUTHORIZED.value,
+        RuntimeAuthorityState.READY.value,
+    }:
+        return LifecyclePhase.WARM
+    return LifecyclePhase.BOOT
+
+
 _EARLY_BOOTSTRAP_STATES = frozenset(
     {
         "BOOT_INIT",
@@ -247,6 +293,24 @@ class StartupConvergenceSnapshot:
     @property
     def execution_permitted(self) -> bool:
         return self.runtime_authority_state == RuntimeAuthorityState.EXECUTING.value
+
+    @property
+    def lifecycle_phase(self) -> str:
+        """Coarse lifecycle phase derived from ``runtime_authority_state``.
+
+        Returns the string value of :class:`LifecyclePhase`:
+
+        * ``"LIVE"``  — EXECUTING state (dispatch committed, trading active)
+        * ``"WARM"``  — AUTHORIZED or READY (converging, no execution yet)
+        * ``"BOOT"``  — everything else (early startup, standby, degraded)
+
+        This is the **top-level execution gate**.  Callers that need to check
+        whether order dispatch is even plausible should test::
+
+            if snapshot.lifecycle_phase != LifecyclePhase.LIVE.value:
+                deny(...)
+        """
+        return _compute_lifecycle_phase(self.runtime_authority_state).value
 
 
 @dataclass(frozen=True)
@@ -813,6 +877,15 @@ class GlobalStateSnapshot:
         """Convenience alias: delegates to the startup snapshot."""
         return self.startup.runtime_authority_state
 
+    @property
+    def lifecycle_phase(self) -> str:
+        """Convenience alias: delegates to the startup snapshot.
+
+        Returns the string value of :class:`LifecyclePhase` (``"BOOT"``,
+        ``"WARM"``, or ``"LIVE"``).
+        """
+        return self.startup.lifecycle_phase
+
 
 class GlobalState:
     """Singleton registry that provides atomic cross-FSM state snapshots.
@@ -893,10 +966,12 @@ __all__ = [
     "GlobalState",
     "GlobalStateSnapshot",
     "GLOBAL_STATE",
+    "LifecyclePhase",
     "StartupConvergenceSnapshot",
     "StartupCoordinator",
     "StartupCoordinatorState",
     "StartupEvent",
     "RuntimeAuthorityState",
+    "_compute_lifecycle_phase",
     "get_startup_coordinator",
 ]

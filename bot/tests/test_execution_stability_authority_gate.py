@@ -24,6 +24,7 @@ class TestExecutionStabilityAuthorityGate(unittest.TestCase):
             coordinator_state="EXECUTING",
             runtime_state="EXECUTING",
             reason="ok",
+            lifecycle_phase="LIVE",
         )
 
     def _stability(self, allowed: bool, reason: str = "ok") -> StabilityAuthoritySnapshot:
