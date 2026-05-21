@@ -62,6 +62,7 @@ class TestHealthRuntimeAuthority(unittest.TestCase):
         runtime_authority = status["operational_state"]["runtime_authority"]
 
         self.assertEqual(runtime_authority["state"], RuntimeAuthorityState.AUTHORIZED.value)
+        self.assertEqual(runtime_authority["lifecycle_phase"], "WARM")
         self.assertTrue(runtime_authority["trading_authority"])
         self.assertFalse(runtime_authority["execution_permitted"])
         self.assertEqual(

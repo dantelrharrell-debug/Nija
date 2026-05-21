@@ -683,6 +683,7 @@ class HealthCheckManager:
         runtime_authority = {
             "state": "DEGRADED",
             "reason": "unavailable",
+            "lifecycle_phase": "BOOT",
             "trading_authority": False,
             "execution_permitted": False,
             "coordinator_state": None,
@@ -700,6 +701,7 @@ class HealthCheckManager:
             runtime_authority = {
                 "state": coordinator_snapshot.runtime_authority_state,
                 "reason": coordinator_snapshot.runtime_authority_reason,
+                "lifecycle_phase": coordinator_snapshot.lifecycle_phase,
                 "trading_authority": coordinator_snapshot.trading_authority,
                 "execution_permitted": coordinator_snapshot.execution_permitted,
                 "coordinator_state": coordinator_snapshot.coordinator_state,

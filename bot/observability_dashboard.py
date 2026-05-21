@@ -381,6 +381,7 @@ class MetricCollector:
             return 0
 
         state_payload: Dict[str, Any] = {"available": False}
+        lifecycle_phase = "BOOT"
         try:
             from bot.trading_state_machine import (
                 _collect_live_gate_status,
@@ -399,10 +400,21 @@ class MetricCollector:
             )
             heartbeat_ok, heartbeat_err, heartbeat_meta = _heartbeat_verification_status()
             live_gate_status = _collect_live_gate_status()
+            runtime_lifecycle_phase = str(
+                (
+                    authority_snapshot.get("runtime_lifecycle_phase")
+                    if isinstance(authority_snapshot, dict)
+                    else ""
+                )
+                or "BOOT"
+            ).strip().upper()
+            if runtime_lifecycle_phase in {"BOOT", "WARM", "LIVE"}:
+                lifecycle_phase = runtime_lifecycle_phase
             state_payload = {
                 "available": True,
                 "trading_state": current_state,
                 "activation_committed": activation_committed,
+                "lifecycle_phase": lifecycle_phase,
                 "execution_authority_snapshot": authority_snapshot,
                 "heartbeat_verification": {
                     "ok": heartbeat_ok,
@@ -414,6 +426,7 @@ class MetricCollector:
         except Exception as exc:
             state_payload = {"available": False, "error": str(exc)}
         triage["runtime_state"] = state_payload
+        triage["lifecycle_phase"] = lifecycle_phase
 
         decision_payload: Dict[str, Any] = {"available": False}
         try:
@@ -512,7 +525,7 @@ class MetricCollector:
                 if isinstance(decision_payload.get("decision"), dict)
                 else ""
             )
-            first_blocker = f"can_execute:{gate}:{reason or 'blocked'}"
+            first_blocker = f"{lifecycle_phase}:can_execute:{gate}:{reason or 'blocked'}"
         elif pipeline_payload.get("available"):
             counts = pipeline_payload.get("stage_counts", {})
             generated = int(counts.get("signals_generated", 0) or 0)
@@ -521,15 +534,15 @@ class MetricCollector:
             attempted = int(counts.get("execution_attempted", 0) or 0)
             routed = int(counts.get("orders_routed", 0) or 0)
             if generated <= 0:
-                first_blocker = "strategy:no_signals_generated"
+                first_blocker = f"{lifecycle_phase}:strategy:no_signals_generated"
             elif approved <= 0:
-                first_blocker = "strategy:signals_rejected_before_approval"
+                first_blocker = f"{lifecycle_phase}:strategy:signals_rejected_before_approval"
             elif risk_passed <= 0:
-                first_blocker = "execution:blocked_before_risk_passed"
+                first_blocker = f"{lifecycle_phase}:execution:blocked_before_risk_passed"
             elif attempted <= 0:
-                first_blocker = "execution:dispatch_not_attempted"
+                first_blocker = f"{lifecycle_phase}:execution:dispatch_not_attempted"
             elif routed <= 0:
-                first_blocker = "broker:no_ack_or_order_route"
+                first_blocker = f"{lifecycle_phase}:broker:no_ack_or_order_route"
 
         triage["first_blocking_gate"] = first_blocker or "none_detected"
         return triage
