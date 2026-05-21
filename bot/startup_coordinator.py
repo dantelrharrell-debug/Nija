@@ -402,6 +402,12 @@ class _RuntimeState:
     runtime_authority_reason: str = "boot_init"
     last_system_readiness_proof: Dict[str, Any] = field(default_factory=dict)
     last_committed_system_readiness_proof: Dict[str, Any] = field(default_factory=dict)
+    # Edge-trigger dedup: last bootstrap state string that was published so
+    # idempotent repeated calls to record_bootstrap_state() are suppressed.
+    _last_bootstrap_state_published: str = field(default="", compare=False, repr=False)
+    # Edge-trigger dedup: fingerprint of inputs to _reconcile_runtime_authority_locked().
+    # None means "no cached result yet"; a tuple means the inputs on the last run.
+    _last_reconcile_inputs: Optional[tuple] = field(default=None, compare=False, repr=False)
 
 
 class StartupCoordinator:
@@ -462,6 +468,17 @@ class StartupCoordinator:
                 state,
                 (StartupEvent.READINESS_CHANGED, self._runtime.coordinator_state),
             )
+            # Edge-trigger dedup: skip publish when the same bootstrap state string
+            # is reported again without any intervening state change.  This prevents
+            # periodic heartbeat calls from flooding the history deque with identical
+            # entries.  We still update coordinator_state and threads_confirmed_running
+            # so that idempotent calls remain side-effect-free beyond the publish.
+            if state == self._runtime._last_bootstrap_state_published:
+                self._runtime.coordinator_state = target
+                if state == "RUNNING_SUPERVISED":
+                    self._runtime.threads_confirmed_running = True
+                return self._runtime.event_version
+            self._runtime._last_bootstrap_state_published = state
             version = self._publish_locked(event, {"bootstrap_state": state})
             self._runtime.coordinator_state = target
             if state == "RUNNING_SUPERVISED":
@@ -639,6 +656,37 @@ class StartupCoordinator:
         capital_state = str(self._runtime.capital_state or "unknown")
         trading_state = str(trading_state or "").strip() or "OFF"
         activation_intent = bool(activation_intent or self._runtime.activation_requested)
+
+        # ── Edge-trigger dedup ────────────────────────────────────────────────
+        # Build a fingerprint of every input this function uses.  If the
+        # fingerprint matches the last call, the authority state is guaranteed
+        # to be identical — return the cached result immediately to avoid
+        # redundant computation and spurious state mutations on every polling
+        # cycle (level-trigger → edge-trigger).
+        _inputs = (
+            trading_state,
+            activation_intent,
+            bootstrap_state,
+            capital_state,
+            self._runtime.capital_hydrated,
+            self._runtime.capital_balance,
+            self._runtime.capital_stale,
+            self._runtime.threads_launched,
+            self._runtime.threads_confirmed_running,
+            self._runtime.authority_ready,
+            self._runtime.nonce_ready,
+            self._runtime.dispatch_health_ready,
+            self._runtime.kill_switch_active,
+            self._runtime.activation_epoch,
+            self._runtime.global_epoch,
+            self._runtime.last_committed_snapshot_version,
+            self._runtime.coordinator_state,
+            tuple(sorted(self._runtime.readiness_table.items())),
+        )
+        if _inputs == self._runtime._last_reconcile_inputs:
+            return self._runtime.runtime_authority_state, self._runtime.runtime_authority_reason
+        self._runtime._last_reconcile_inputs = _inputs
+        # ── Full reconcile ────────────────────────────────────────────────────
         pending_readiness = sorted(
             key for key, value in self._runtime.readiness_table.items() if not value
         )
@@ -941,6 +989,15 @@ class StartupCoordinator:
         with self._lock:
             return self._runtime.coordinator_state.value
 
+    def get_event_version(self) -> int:
+        """Return the current event version without building a full snapshot.
+
+        Used by :class:`GlobalState` to cheaply check whether the coordinator's
+        state has changed since the last :meth:`GlobalState.capture` call.
+        """
+        with self._lock:
+            return self._runtime.event_version
+
     def get_history(self) -> list[Dict[str, Any]]:
         with self._lock:
             return list(self._history)
@@ -1027,11 +1084,23 @@ class GlobalState:
     The :meth:`capture` method calls :meth:`StartupCoordinator.build_snapshot`
     under the coordinator's own lock, so the returned snapshot is always
     internally consistent.
+
+    Snapshot caching (edge-trigger)
+    --------------------------------
+    :meth:`capture` avoids redundant reconcile work by caching the last
+    snapshot and returning it immediately when the *cache key* — a tuple of
+    ``(trading_state, activation_intent, esc_state, coordinator_event_version)``
+    — has not changed since the previous call.  The
+    ``coordinator_event_version`` component is obtained via
+    :meth:`StartupCoordinator.get_event_version` and only advances when a
+    ``record_*`` method publishes a real state change, so the cache naturally
+    invalidates on any meaningful coordinator mutation.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._latest: Optional[GlobalStateSnapshot] = None
+        self._cache_key: Optional[tuple] = None
 
     def capture(
         self,
@@ -1056,8 +1125,20 @@ class GlobalState:
         -------
         GlobalStateSnapshot
             A fully consistent, immutable snapshot of the global state.
+            Returns the cached snapshot unchanged when no coordinator state
+            change has occurred since the previous call with the same inputs.
         """
         coordinator = get_startup_coordinator()
+
+        # Fast path: return cached snapshot when coordinator event version and
+        # all caller-provided inputs are unchanged (edge-trigger optimisation).
+        current_ev = coordinator.get_event_version()
+        tentative_key: tuple = (str(trading_state), bool(activation_intent), str(esc_state), current_ev)
+        with self._lock:
+            if self._latest is not None and self._cache_key == tentative_key:
+                return self._latest
+
+        # Slow path: build a fresh snapshot (runs _reconcile_runtime_authority_locked).
         startup = coordinator.build_snapshot(
             trading_state=trading_state,
             activation_intent=activation_intent,
@@ -1068,8 +1149,14 @@ class GlobalState:
             snapshot_ts=time.monotonic(),
             global_epoch=startup.global_epoch,
         )
+        # Use the snapshot_version from the just-built snapshot as the actual
+        # cache key so that any event-version bump that occurred concurrently
+        # between get_event_version() and build_snapshot() is correctly
+        # represented.
+        actual_key: tuple = (str(trading_state), bool(activation_intent), str(esc_state), startup.snapshot_version)
         with self._lock:
             self._latest = snapshot
+            self._cache_key = actual_key
         return snapshot
 
     def latest(self) -> Optional["GlobalStateSnapshot"]:
