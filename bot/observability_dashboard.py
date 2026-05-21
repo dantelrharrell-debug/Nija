@@ -179,6 +179,9 @@ class MetricCollector:
         # 16. Pipeline Funnel Counter (5-stage choke-point finder)
         snap["modules"]["pipeline_funnel"] = self._collect_pipeline_funnel()
 
+        # 17. Live dispatch triage (activation -> authority -> signal -> broker)
+        snap["modules"]["live_dispatch_triage"] = self._collect_live_dispatch_triage()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -330,6 +333,206 @@ class MetricCollector:
             return {"available": True, **summary}
         except Exception as exc:
             return {"available": False, "error": str(exc)}
+
+    def _collect_live_dispatch_triage(self) -> Dict:
+        """Collect a consolidated live-dispatch triage snapshot."""
+        triage: Dict[str, Any] = {
+            "available": True,
+            "key_log_markers": [
+                "[AUTO_ACTIVATE BLOCKED]",
+                "COMMIT_ACTIVATION_INVARIANT",
+                "ExecutionDecision(stage=",
+                "ENTRY REJECTED",
+                "ExecutionAuthority reject",
+                "ExecutionPipeline: ACK timeout",
+                "[HeartbeatTrade] submit=",
+            ],
+        }
+
+        def _coerce_bool(value: Any) -> bool:
+            return bool(value)
+
+        def _first_gate_failure(decision_payload: Dict[str, Any]) -> Optional[str]:
+            gate_order = [
+                ("state.live_active", "state_live_active"),
+                ("lease.valid", "lease_valid"),
+                ("lease.generation_current", "lease_generation_current"),
+                ("nonce.authority", "nonce_ready"),
+                ("heartbeat.fresh", "heartbeat_fresh"),
+                ("heartbeat.stage_sufficient", "heartbeat_stage_sufficient"),
+                ("broker.health_ok", "broker_health_ok"),
+                ("circuit_breaker.closed", "circuit_breaker_closed"),
+                ("dispatch.enabled", "dispatch_enabled"),
+                ("stability.allowed", "stability_allowed"),
+            ]
+            for gate_name, field_name in gate_order:
+                if field_name in decision_payload and not _coerce_bool(decision_payload.get(field_name)):
+                    return gate_name
+            return None
+
+        def _stage_count(summary: Dict[str, Any], stage_name: str) -> int:
+            stages = summary.get("stages", []) if isinstance(summary, dict) else []
+            for stage in stages:
+                if str(stage.get("stage")) == stage_name:
+                    try:
+                        return int(stage.get("count", 0) or 0)
+                    except (TypeError, ValueError):
+                        return 0
+            return 0
+
+        state_payload: Dict[str, Any] = {"available": False}
+        try:
+            from bot.trading_state_machine import (
+                _collect_live_gate_status,
+                _heartbeat_verification_status,
+                get_trading_state_machine,
+            )
+
+            sm = get_trading_state_machine()
+            state_obj = sm.get_current_state() if hasattr(sm, "get_current_state") else None
+            current_state = getattr(state_obj, "value", str(state_obj or "UNKNOWN"))
+            activation_committed = bool(sm.activation_committed()) if hasattr(sm, "activation_committed") else None
+            authority_snapshot = (
+                sm.get_execution_authority_snapshot()
+                if hasattr(sm, "get_execution_authority_snapshot")
+                else {}
+            )
+            heartbeat_ok, heartbeat_err, heartbeat_meta = _heartbeat_verification_status()
+            live_gate_status = _collect_live_gate_status()
+            state_payload = {
+                "available": True,
+                "trading_state": current_state,
+                "activation_committed": activation_committed,
+                "execution_authority_snapshot": authority_snapshot,
+                "heartbeat_verification": {
+                    "ok": heartbeat_ok,
+                    "error": heartbeat_err,
+                    "meta": heartbeat_meta,
+                },
+                "live_gate_status": live_gate_status,
+            }
+        except Exception as exc:
+            state_payload = {"available": False, "error": str(exc)}
+        triage["runtime_state"] = state_payload
+
+        decision_payload: Dict[str, Any] = {"available": False}
+        try:
+            from bot.execution_authority_context import can_execute
+
+            decision = can_execute()
+            if hasattr(decision, "__dataclass_fields__"):
+                decision_data = {
+                    key: getattr(decision, key)
+                    for key in getattr(decision, "__dataclass_fields__", {}).keys()
+                }
+            else:
+                decision_data = dict(getattr(decision, "__dict__", {}))
+            gate_failure = _first_gate_failure(decision_data)
+            decision_payload = {
+                "available": True,
+                "decision": decision_data,
+                "first_failed_gate": gate_failure,
+                "allowed": bool(decision_data.get("allowed")),
+            }
+        except Exception as exc:
+            decision_payload = {"available": False, "error": str(exc)}
+        triage["can_execute"] = decision_payload
+
+        compiler_payload: Dict[str, Any] = {"available": False}
+        try:
+            from bot.control_compiler import get_control_compiler
+
+            health = get_control_compiler().get_health()
+            compiler_payload = {
+                "available": True,
+                "accepted": health.get("accepted"),
+                "rejected": health.get("rejected"),
+                "rejection_reasons": health.get("rejection_reasons", {}),
+                "execution_drop_counts": health.get("execution_drop_counts", {}),
+                "bootstrap_pass": health.get("bootstrap_pass", {}),
+            }
+        except Exception as exc:
+            compiler_payload = {"available": False, "error": str(exc)}
+        triage["control_compiler"] = compiler_payload
+
+        pipeline_payload: Dict[str, Any] = {"available": False}
+        traces_payload: Dict[str, Any] = {"available": False}
+        try:
+            from bot.pipeline_funnel import get_pipeline_funnel
+
+            summary = get_pipeline_funnel().get_summary()
+            generated = _stage_count(summary, "signals_generated")
+            approved = _stage_count(summary, "signals_approved")
+            risk_passed = _stage_count(summary, "risk_passed")
+            attempted = _stage_count(summary, "execution_attempted")
+            routed = _stage_count(summary, "orders_routed")
+            ack_rate_pct = round((routed / attempted) * 100.0, 2) if attempted > 0 else None
+            pipeline_payload = {
+                "available": True,
+                "summary": summary,
+                "stage_counts": {
+                    "signals_generated": generated,
+                    "signals_approved": approved,
+                    "risk_passed": risk_passed,
+                    "execution_attempted": attempted,
+                    "orders_routed": routed,
+                },
+                "ack_rate_pct": ack_rate_pct,
+            }
+        except Exception as exc:
+            pipeline_payload = {"available": False, "error": str(exc)}
+        triage["pipeline_funnel"] = pipeline_payload
+
+        try:
+            from bot.signal_funnel_diagnostics import get_signal_funnel
+
+            traces = get_signal_funnel().get_execution_traces(limit=25)
+            broker_stage_outcomes: Dict[str, int] = {}
+            for trace in traces:
+                stages = trace.get("stages", {}) if isinstance(trace, dict) else {}
+                broker = stages.get("broker", {}) if isinstance(stages, dict) else {}
+                outcome = str((broker or {}).get("outcome") or "").strip().lower()
+                if outcome:
+                    broker_stage_outcomes[outcome] = broker_stage_outcomes.get(outcome, 0) + 1
+            traces_payload = {
+                "available": True,
+                "count": len(traces),
+                "latest": traces[0] if traces else None,
+                "broker_stage_outcomes": broker_stage_outcomes,
+            }
+        except Exception as exc:
+            traces_payload = {"available": False, "error": str(exc)}
+        triage["execution_trace"] = traces_payload
+
+        first_blocker = None
+        if decision_payload.get("available") and not decision_payload.get("allowed", False):
+            gate = decision_payload.get("first_failed_gate") or "unknown"
+            reason = (
+                decision_payload.get("decision", {}).get("reason")
+                if isinstance(decision_payload.get("decision"), dict)
+                else ""
+            )
+            first_blocker = f"can_execute:{gate}:{reason or 'blocked'}"
+        elif pipeline_payload.get("available"):
+            counts = pipeline_payload.get("stage_counts", {})
+            generated = int(counts.get("signals_generated", 0) or 0)
+            approved = int(counts.get("signals_approved", 0) or 0)
+            risk_passed = int(counts.get("risk_passed", 0) or 0)
+            attempted = int(counts.get("execution_attempted", 0) or 0)
+            routed = int(counts.get("orders_routed", 0) or 0)
+            if generated <= 0:
+                first_blocker = "strategy:no_signals_generated"
+            elif approved <= 0:
+                first_blocker = "strategy:signals_rejected_before_approval"
+            elif risk_passed <= 0:
+                first_blocker = "execution:blocked_before_risk_passed"
+            elif attempted <= 0:
+                first_blocker = "execution:dispatch_not_attempted"
+            elif routed <= 0:
+                first_blocker = "broker:no_ack_or_order_route"
+
+        triage["first_blocking_gate"] = first_blocker or "none_detected"
+        return triage
 
     def _collect_profit_lock(self) -> Dict:
         try:
@@ -824,6 +1027,12 @@ class ObservabilityDashboard:
         def pipeline_funnel():
             snap = self._collector.get_snapshot()
             mod = (snap.get("modules", {}) or {}).get("pipeline_funnel", {})
+            return jsonify(mod)
+
+        @bp.route("/api/v1/live-dispatch")
+        def live_dispatch():
+            snap = self._collector.get_snapshot()
+            mod = (snap.get("modules", {}) or {}).get("live_dispatch_triage", {})
             return jsonify(mod)
 
         @bp.route("/api/v1/health")
