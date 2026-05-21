@@ -159,9 +159,9 @@ _BOOTSTRAP_DECAY_TARGET_ACCEPT_RATE: float = max(
 _BOOTSTRAP_DECAY_SHAPE: float = max(0.5, float(os.getenv("NIJA_CC_BOOTSTRAP_DECAY_SHAPE", "1.5")))
 _MIN_LIVE_EXECUTION_GAP_S: float = max(60.0, float(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_GAP_S", "1800")))
 _MIN_LIVE_EXECUTION_CONF_RELAX: float = max(
-    0.1, min(1.0, float(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_CONF_RELAX", "0.7")))
+    0.1, min(1.0, float(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_CONF_RELAX", "0.5")))
 )
-_MIN_LIVE_EXECUTION_LIMIT_FLOOR: int = max(1, int(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_LIMIT_FLOOR", "1")))
+_MIN_LIVE_EXECUTION_LIMIT_FLOOR: int = max(1, int(os.getenv("NIJA_CC_MIN_LIVE_EXECUTION_LIMIT_FLOOR", "2")))
 
 
 # ---------------------------------------------------------------------------
