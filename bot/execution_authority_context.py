@@ -68,6 +68,13 @@ class RuntimeAuthoritySnapshot:
     coordinator_state: str
     runtime_state: str
     reason: str
+    lifecycle_phase: str = "BOOT"
+    """Coarse lifecycle phase: BOOT, WARM, or LIVE.
+
+    This is the top-level execution gate.  Execution is only permitted when
+    ``lifecycle_phase == "LIVE"``.  Startup probes are the only explicit
+    exception for pre-LIVE submissions.
+    """
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,13 @@ class ExecutionDecision:
     stability_stress_score: float
     stability_collapsed_risk_score: float
     stability_reason: str
+    lifecycle_phase: str = "BOOT"
+    """Coarse lifecycle phase captured at decision time.
+
+    ``BOOT`` or ``WARM`` indicates the execution was denied by the lifecycle
+    gate before any lower-level checks were reached.  ``LIVE`` means the
+    lifecycle gate passed and denial (if any) came from a lower-level gate.
+    """
 
 
 @dataclass(frozen=True)
@@ -714,6 +728,47 @@ def _emit_trade_admission_telemetry(
 def can_execute() -> ExecutionDecision:
     """Canonical execution authority decision for all order-dispatch paths."""
     runtime_snapshot = runtime_authority_snapshot()
+
+    # ── Gate 0: lifecycle phase ───────────────────────────────────────────────
+    # The lifecycle phase is the top-level execution primitive.  Normal order
+    # dispatch is only allowed in the LIVE phase (runtime authority state ==
+    # EXECUTING, meaning the activation commit is in place and trading is
+    # active).  BOOT and WARM phases block execution unconditionally here;
+    # startup probes bypass this via can_execute_startup_probe().
+    try:
+        from bot.startup_coordinator import LifecyclePhase
+    except ImportError:
+        from startup_coordinator import LifecyclePhase  # type: ignore[import]
+
+    current_lifecycle_phase = str(runtime_snapshot.lifecycle_phase)
+    if current_lifecycle_phase != LifecyclePhase.LIVE.value:
+        _emit_trade_admission_telemetry(
+            reason=f"lifecycle_phase:{current_lifecycle_phase}",
+            drop_bucket="lifecycle_phase",
+            stage="lifecycle_gate",
+        )
+        return ExecutionDecision(
+            allowed=False,
+            reason=f"lifecycle_phase:{current_lifecycle_phase}",
+            circuit_state="CLOSED",
+            state_live_active=False,
+            lease_valid=False,
+            lease_generation_current=False,
+            heartbeat_fresh=False,
+            heartbeat_stage_sufficient=False,
+            broker_health_ok=bool(runtime_snapshot.dispatch_health_ready),
+            circuit_breaker_closed=False,
+            dispatch_enabled=bool(runtime_snapshot.dispatch_enabled and has_execution_authority()),
+            stability_allowed=False,
+            stability_halt_state="UNKNOWN",
+            stability_throttle=0.0,
+            stability_size_multiplier=0.0,
+            stability_stress_score=1.0,
+            stability_collapsed_risk_score=1.0,
+            stability_reason="lifecycle_phase_not_live",
+            lifecycle_phase=current_lifecycle_phase,
+        )
+
     state_live_active = str(os.getenv("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() == "LIVE_ACTIVE"
 
     local_generation_raw = (
@@ -891,6 +946,7 @@ def can_execute() -> ExecutionDecision:
                 stability_stress_score=stability.stress_score,
                 stability_collapsed_risk_score=stability.collapsed_risk_score,
                 stability_reason=stability.reason,
+                lifecycle_phase=current_lifecycle_phase,
             )
 
     # ── Stability governor HALT gate (Phase 3 — disabled by default) ────────────
@@ -924,6 +980,7 @@ def can_execute() -> ExecutionDecision:
                     broker_health_ok=broker_health_ok,
                     circuit_breaker_closed=circuit_breaker_closed,
                     dispatch_enabled=dispatch_enabled,
+                    lifecycle_phase=current_lifecycle_phase,
                 )
         except Exception as _sg_exc:
             logger.debug("StabilityGovernor HALT check unavailable (fail-open): %s", _sg_exc)
@@ -947,6 +1004,7 @@ def can_execute() -> ExecutionDecision:
         stability_stress_score=stability.stress_score,
         stability_collapsed_risk_score=stability.collapsed_risk_score,
         stability_reason=stability.reason,
+        lifecycle_phase=current_lifecycle_phase,
     )
 
 
@@ -975,6 +1033,7 @@ def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
             coordinator_state=str(snapshot.coordinator_state),
             runtime_state=str(snapshot.runtime_authority_state),
             reason=str(snapshot.runtime_authority_reason),
+            lifecycle_phase=str(snapshot.lifecycle_phase),
         )
     except Exception as exc:
         logger.warning("Runtime authority snapshot unavailable; failing closed: %s", exc)
@@ -988,4 +1047,5 @@ def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
             coordinator_state="unavailable",
             runtime_state="DEGRADED",
             reason="runtime_authority_snapshot_unavailable",
+            lifecycle_phase="BOOT",
         )

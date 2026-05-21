@@ -526,6 +526,7 @@ class HealthCheckManager:
                 "dispatch_enabled": bool(snapshot.dispatch_enabled),
                 "activation_intent": bool(snapshot.activation_intent),
                 "trading_state": str(snapshot.trading_state),
+                "lifecycle_phase": str(snapshot.lifecycle_phase),
             }
         except Exception as exc:
             signal["trading_authority"]["reason"] = f"state_signal_error: {exc}"
@@ -706,6 +707,7 @@ class HealthCheckManager:
                 "execution_permitted": coordinator_snapshot.execution_permitted,
                 "coordinator_state": coordinator_snapshot.coordinator_state,
                 "snapshot_version": coordinator_snapshot.snapshot_version,
+                "lifecycle_phase": coordinator_snapshot.lifecycle_phase,
             }
         except Exception as exc:
             runtime_authority["reason"] = f"unavailable ({exc})"
