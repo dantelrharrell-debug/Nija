@@ -445,16 +445,20 @@ class TradingStrategy:
                 if success:
                     logger.info("✅ Heartbeat trade PASSED — bot confirmed ready for live trading")
                     return
-                _heartbeat_rate_limited_info(
-                    "heartbeat_runner_retry",
-                    "runner",
-                    max(10.0, retry_interval_s),
                 sleep_s = retry_interval_s
                 if _HEARTBEAT_RETRY_BACKOFF_ENABLED:
                     sleep_s = min(
                         retry_backoff_max_s,
                         retry_interval_s * float(2 ** min(attempt - 1, 10)),
                     )
+                _heartbeat_rate_limited_info(
+                    "heartbeat_runner_retry",
+                    "runner",
+                    max(10.0, retry_interval_s),
+                    "❌ Heartbeat trade FAILED on attempt %d — retrying in %.0fs",
+                    attempt,
+                    sleep_s,
+                )
                 logger.error(
                     "❌ Heartbeat trade FAILED on attempt %d — retrying in %.0fs",
                     attempt,
