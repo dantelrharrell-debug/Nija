@@ -73,6 +73,20 @@ def _is_live_mode(existing_mode: Optional[RuntimeModeResolution] = None) -> bool
     return os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
 
 
+def _env_truthy(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in ("true", "1", "yes", "enabled", "on")
+
+
+def _watchdog_backoff_delay(base_s: float, retries: int, enabled: bool, max_multiplier: float) -> float:
+    if not enabled:
+        return max(0.0, float(base_s))
+    safe_base = max(0.0, float(base_s))
+    safe_retries = max(0, int(retries))
+    capped_multiplier = max(1.0, float(max_multiplier))
+    multiplier = min(capped_multiplier, float(2 ** min(safe_retries, 10)))
+    return safe_base * multiplier
+
+
 # ---------------------------------------------------------------------------
 # CycleSnapshot — immutable state captured once per activation tick
 # ---------------------------------------------------------------------------
@@ -2030,6 +2044,15 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _MAX_SKIP_LOG_INTERVAL = 5   # log downtime banner every N skipped cycles
         _activation_idle_since = None
         _activation_idle_timeout_s = float(os.getenv("NIJA_IDLE_ACTIVATION_TIMEOUT_S", "90") or 90)
+        _watchdog_backoff_enabled = _env_truthy("NIJA_WATCHDOG_BACKOFF_ENABLED")
+        _watchdog_backoff_max_multiplier = max(
+            1.0,
+            float(os.getenv("NIJA_WATCHDOG_BACKOFF_MAX_MULTIPLIER", "8") or 8),
+        )
+        _activation_retry_count = 0
+        _next_activation_attempt_ts = 0.0
+        _last_cycle_skip_signature = None
+        _tick_log_every = max(1, int(float(os.getenv("NIJA_CORE_LOOP_TICK_LOG_EVERY", "10") or 10)))
 
         logger.critical("🚀 ENTERING ACTIVE TRADE LOOP")
         try:
@@ -2044,8 +2067,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
-                # FIX 4: emit every cycle so a silent dead-bot is immediately visible.
-                logger.critical("🟢 LIVE LOOP TICK")
+                if cycle == 0 or ((cycle + 1) % _tick_log_every == 0):
+                    logger.info("🟢 LIVE LOOP TICK | cycle=%s", cycle + 1)
                 print("🚀 MAIN LOOP TICK")
 
                 _live_now = False
@@ -2056,8 +2079,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _live_now = bool(_sm_loop.is_live_trading_active())
                 except Exception as _sm_loop_err:
                     logger.debug("CORE LOOP live probe failed: %s", _sm_loop_err)
-                logger.critical("🧠 CORE LOOP ACTIVE — evaluating activation")
-                logger.critical("CORE LOOP TICK | live=%s", _live_now)
+                logger.debug("🧠 CORE LOOP ACTIVE — evaluating activation")
+                logger.debug("CORE LOOP TICK | live=%s", _live_now)
 
                 if _sm_loop is not None:
                     _runtime_mode_loop = resolve_runtime_mode_safe(logger)
@@ -2067,24 +2090,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     except Exception:
                         _current_state_loop = None
 
-                    # Production lifecycle: OFF -> ARM (LIVE_PENDING_CONFIRMATION)
+                    # Unified lifecycle arming path: OFF -> LIVE_PENDING_CONFIRMATION
                     # before attempting final activation to LIVE_ACTIVE.
-                    if (
-                        _live_verified_loop
-                        and _current_state_loop == _TradingState.OFF
-                    ):
-                        try:
-                            logger.critical("🟡 AUTO-TRANSITION OFF → LIVE_PENDING_CONFIRMATION")
-                            _sm_loop.transition_to(
-                                _TradingState.LIVE_PENDING_CONFIRMATION,
-                                "core loop arming: LIVE_CAPITAL_VERIFIED set",
-                            )
-                            _current_state_loop = _TradingState.LIVE_PENDING_CONFIRMATION
-                        except Exception as _off_exit_err:
-                            logger.warning("Core loop OFF->ARM transition failed: %s", _off_exit_err)
-
-                    # Better lifecycle fallback: OFF -> ARMED-like state
-                    # (LIVE_PENDING_CONFIRMATION) -> LIVE_ACTIVE via gate checks.
                     if (
                         _live_verified_loop
                         and _current_state_loop == _TradingState.OFF
@@ -2095,9 +2102,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                 _TradingState.LIVE_PENDING_CONFIRMATION,
                                 "core loop arming: LIVE_CAPITAL_VERIFIED set",
                             )
-                            logger.critical(
-                                "🟡 LIFECYCLE ARM: OFF -> LIVE_PENDING_CONFIRMATION"
-                            )
+                            logger.info("🟡 LIFECYCLE ARM: OFF -> LIVE_PENDING_CONFIRMATION")
                             _current_state_loop = _TradingState.LIVE_PENDING_CONFIRMATION
                         except Exception as _arm_err:
                             logger.warning("Core loop arm transition failed: %s", _arm_err)
@@ -2113,12 +2118,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _cycle_balance = _current_cycle_capital.get("ca_total_capital", 0.0)
 
                 if _sm_loop is not None and not _live_now:
-                    logger.critical("⚡ TRYING TO ACTIVATE")
-                    logger.critical("⚡ ATTEMPTING AUTO-ACTIVATION")
-                    try:
-                        _sm_loop.maybe_auto_activate(cycle_capital=_current_cycle_capital)
-                    except Exception as _auto_act_err:
-                        logger.warning("Core loop maybe_auto_activate failed: %s", _auto_act_err)
+                    _now_mono = time.monotonic()
+                    if _now_mono >= _next_activation_attempt_ts:
+                        logger.debug("⚡ ATTEMPTING AUTO-ACTIVATION")
+                        try:
+                            _sm_loop.maybe_auto_activate(cycle_capital=_current_cycle_capital)
+                            _activation_retry_count = 0
+                            _next_activation_attempt_ts = 0.0
+                        except Exception as _auto_act_err:
+                            _activation_retry_count += 1
+                            _delay_s = _watchdog_backoff_delay(
+                                1.0,
+                                _activation_retry_count - 1,
+                                _watchdog_backoff_enabled,
+                                _watchdog_backoff_max_multiplier,
+                            )
+                            _next_activation_attempt_ts = time.monotonic() + _delay_s
+                            logger.warning("Core loop maybe_auto_activate failed: %s", _auto_act_err)
+                    else:
+                        logger.debug(
+                            "Activation retry backoff active: %.1fs remaining",
+                            max(0.0, _next_activation_attempt_ts - _now_mono),
+                        )
 
                     # Idle fallback: if activation remains inactive too long,
                     # perform a safe re-arm/retry cycle (no gate bypass).
@@ -2144,11 +2165,21 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                 )
                             _sm_loop.maybe_auto_activate(cycle_capital=_current_cycle_capital)
                         except Exception as _idle_retry_err:
+                            _activation_retry_count += 1
+                            _delay_s = _watchdog_backoff_delay(
+                                1.0,
+                                _activation_retry_count - 1,
+                                _watchdog_backoff_enabled,
+                                _watchdog_backoff_max_multiplier,
+                            )
+                            _next_activation_attempt_ts = time.monotonic() + _delay_s
                             logger.warning("Idle activation fallback retry failed: %s", _idle_retry_err)
                         finally:
                             _activation_idle_since = time.monotonic()
                 else:
                     _activation_idle_since = None
+                    _activation_retry_count = 0
+                    _next_activation_attempt_ts = 0.0
 
                     if os.getenv("NIJA_FORCE_LIVE_BYPASS", "false").lower() in (
                         "true", "1", "yes", "enabled"
@@ -2317,9 +2348,10 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _current_cycle_capital.get("mabm_brokers_ready"),
                 )
 
-                logger.critical("🔥 TRADE LOOP HEARTBEAT: active=%s", _trading_active)
+                if cycle == 1 or (cycle % _tick_log_every == 0):
+                    logger.info("🔥 TRADE LOOP HEARTBEAT: active=%s cycle=%s", _trading_active, cycle)
 
-                logger.critical("🟢 LIVE LOOP TICK — scanning markets")
+                logger.debug("🟢 LIVE LOOP TICK — scanning markets")
 
                 # ── Proactive broker liveness check before entering run_cycle ─────
                 # If the strategy's broker is disconnected, attempt reconnect here
@@ -2370,17 +2402,23 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                 if not _broker_ok:
                     _skipped_cycles += 1
+                    _sleep_s = _watchdog_backoff_delay(
+                        cycle_secs,
+                        _skipped_cycles - 1,
+                        _watchdog_backoff_enabled,
+                        _watchdog_backoff_max_multiplier,
+                    )
                     if _skipped_cycles == 1 or _skipped_cycles % _MAX_SKIP_LOG_INTERVAL == 0:
                         logger.warning(
                             "⏸️  Trading paused — no broker connected "
                             "(skipped_cycles=%d, downtime≈%ds). "
-                            "Retrying in %ds …",
+                            "Retrying in %.0fs …",
                             _skipped_cycles,
                             _skipped_cycles * cycle_secs,
-                            cycle_secs,
+                            _sleep_s,
                         )
-                    time.sleep(cycle_secs)
-                    logger.critical("🚧 LOOP BLOCKED PATH REACHED — no broker connected, skipping cycle")
+                    time.sleep(_sleep_s)
+                    logger.debug("🚧 LOOP BLOCKED PATH REACHED — no broker connected, skipping cycle")
                     continue
 
                 # Broker is alive — run the full trading cycle
@@ -2402,7 +2440,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _probe_result = _exec_test_probe(strategy)
                         logger.info("🧪 EXEC TEST RESULT → %s", _probe_result)
                         _exec_test_fired = True
-                        logger.critical("🚧 LOOP BLOCKED PATH REACHED — exec test mode fired, skipping normal cycle")
+                        logger.debug("🚧 LOOP BLOCKED PATH REACHED — exec test mode fired, skipping normal cycle")
                         continue
 
                 # Log available capital so operators can spot a $0.00 balance
@@ -2427,17 +2465,25 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         continue
 
                     if (not _committed_gate) or (not _dispatch_gate) or (not _live_gate):
-                        logger.critical(
-                            "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s",
-                            _committed_gate,
-                            _dispatch_gate,
+                        _skip_signature = (
+                            bool(_committed_gate),
+                            bool(_dispatch_gate),
                             getattr(_state_gate, "value", str(_state_gate)),
                         )
+                        if _skip_signature != _last_cycle_skip_signature:
+                            logger.warning(
+                                "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s",
+                                _committed_gate,
+                                _dispatch_gate,
+                                getattr(_state_gate, "value", str(_state_gate)),
+                            )
+                            _last_cycle_skip_signature = _skip_signature
                         time.sleep(cycle_secs)
                         continue
+                    _last_cycle_skip_signature = None
 
-                logger.critical("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
-                logger.critical("🚀 RUNNING TRADE CYCLE")
+                logger.info("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
+                logger.info("🚀 RUNNING TRADE CYCLE")
                 _cycle_start_ts = time.time()
                 strategy.run_cycle()
                 _cycle_elapsed = time.time() - _cycle_start_ts
@@ -2456,12 +2502,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 time.sleep(cycle_secs)
 
             except Exception as _err:
+                _activation_retry_count += 1
                 logger.critical(
                     "❌ LOOP ERROR: %s",
                     _err,
                     exc_info=True,
                 )
-                time.sleep(15)
+                _error_sleep_s = _watchdog_backoff_delay(
+                    15.0,
+                    _activation_retry_count - 1,
+                    _watchdog_backoff_enabled,
+                    _watchdog_backoff_max_multiplier,
+                )
+                time.sleep(_error_sleep_s)
 
     except Exception as e:
         logger.exception("💥 FATAL ERROR IN TRADING LOOP: %s", e)

@@ -34,7 +34,7 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
-from typing import Optional, Dict, Any, Callable, NamedTuple
+from typing import Optional, Dict, Any, Callable, NamedTuple, Tuple
 from pathlib import Path
 
 logger = logging.getLogger("nija.trading_state_machine")
@@ -56,6 +56,8 @@ class LiveGateSnapshot(NamedTuple):
 
 
 _LIVE_GATE_LAST_STATUS: Optional[LiveGateSnapshot] = None
+_ACTIVATION_DIAG_LOCK = threading.Lock()
+_ACTIVATION_DIAG_LAST: Dict[str, Tuple[Any, ...]] = {}
 _HEARTBEAT_STAGE_ORDER: Dict[str, int] = {
     "AUTH_VERIFY": 1,
     "ORDER_VERIFY": 2,
@@ -689,6 +691,22 @@ def _log_live_gate_status(live_gate_status: Dict[str, object]) -> None:
             "OK" if heartbeat_ok else "FAIL",
             "OK" if breaker_ok else "FAIL",
         )
+
+
+def _log_activation_diag_once(
+    key: str,
+    signature: Tuple[Any, ...],
+    message: str,
+    *args: Any,
+    level: str = "critical",
+) -> None:
+    """Emit activation diagnostics only when the signature changes."""
+    with _ACTIVATION_DIAG_LOCK:
+        if _ACTIVATION_DIAG_LAST.get(key) == signature:
+            return
+        _ACTIVATION_DIAG_LAST[key] = signature
+    log_method = getattr(logger, level, logger.critical)
+    log_method(message, *args)
 
 
 def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) -> tuple[bool, str]:
@@ -1349,6 +1367,14 @@ class TradingStateMachine:
         with self._lock:
             current = self._current_state
 
+            if new_state == current:
+                logger.debug(
+                    "🔁 State transition suppressed: already in %s (Reason: %s)",
+                    current.value,
+                    reason or "No reason provided",
+                )
+                return True
+
             # Check if transition is valid
             if new_state not in self.VALID_TRANSITIONS.get(current, []):
                 error_msg = (
@@ -1512,7 +1538,14 @@ class TradingStateMachine:
         _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
 
         if _heartbeat_required_first and not _heartbeat_ok:
-            logger.critical(
+            _log_activation_diag_once(
+                "auto_activate_blocked",
+                (
+                    "HEARTBEAT_VERIFICATION_REQUIRED",
+                    _heartbeat_err or "verification_missing",
+                    _heartbeat_meta.get("path", _heartbeat_marker_path()),
+                    _heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
+                ),
                 "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_VERIFICATION_REQUIRED detail=%s path=%s heartbeat_trade=%s required_stage=%s max_age_s=%s",
                 _heartbeat_err or "verification_missing",
                 _heartbeat_meta.get("path", _heartbeat_marker_path()),
@@ -1525,7 +1558,9 @@ class TradingStateMachine:
         _live_gate_status = _collect_live_gate_status()
         _live_ok, _live_err = _live_activation_gate(_live_gate_status)
         if not _live_ok:
-            logger.critical(
+            _log_activation_diag_once(
+                "auto_activate_blocked",
+                ("SAFE_START", _live_err),
                 "[AUTO_ACTIVATE BLOCKED] reason=SAFE_START detail=%s",
                 _live_err,
             )
@@ -1547,7 +1582,20 @@ class TradingStateMachine:
                 return True
             current = self._current_state
 
-        logger.critical(
+        _log_activation_diag_once(
+            "activation_gate_snapshot",
+            (
+                current.value,
+                self._activation_committed,
+                _lcv_quick,
+                _dry_run_quick,
+                _force,
+                _heartbeat_required_first,
+                _heartbeat_ok,
+                _heartbeat_err or "",
+                _heartbeat_trade,
+                self._first_snap_accepted,
+            ),
             "ACTIVATION_GATE_SNAPSHOT state=%s committed=%s live_verified=%s dry_run=%s force=%s "
             "heartbeat_required_first=%s heartbeat_ok=%s heartbeat_err=%s heartbeat_trade=%s first_snap=%s",
             current.value,
@@ -1572,7 +1620,9 @@ class TradingStateMachine:
             return True
 
         if current not in (TradingState.OFF, TradingState.LIVE_PENDING_CONFIRMATION):
-            logger.critical(
+            _log_activation_diag_once(
+                "auto_activate_blocked",
+                ("STATE_NOT_ARMABLE", current.value),
                 "[AUTO_ACTIVATE BLOCKED] reason=STATE_NOT_ARMABLE current_state=%s",
                 current.value,
             )
@@ -1640,7 +1690,9 @@ class TradingStateMachine:
                     activation_intent=False,
                 )
             )
-            logger.critical(
+            _log_activation_diag_once(
+                "auto_activate_blocked",
+                ("LIVE_CAPITAL_VERIFIED_NOT_SET", _lcv_raw, _live_trading_raw),
                 "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_NOT_SET "
                 "LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r coordinator_activation_intent=%r",
                 _lcv_raw,
@@ -1660,7 +1712,14 @@ class TradingStateMachine:
         _ca_lcv = _get_capital_authority_instance()
         _ca_hydrated_lcv = _ca_lcv is not None and bool(_ca_lcv.is_hydrated)
         if not _ca_hydrated_lcv:
-            logger.critical(
+            _log_activation_diag_once(
+                "auto_activate_blocked",
+                (
+                    "LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED",
+                    _lcv_raw,
+                    _ca_lcv is not None,
+                    bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False,
+                ),
                 "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED "
                 "flag=%r ca_available=%s ca_hydrated=%s — LIVE_CAPITAL_VERIFIED requires "
                 "CapitalAuthority to have received at least one broker snapshot before activation.",
@@ -1713,7 +1772,9 @@ class TradingStateMachine:
             self,
         )
         if not _barrier_ready:
-            logger.critical(
+            _log_activation_diag_once(
+                "auto_activate_blocked",
+                ("GLOBAL_ACTIVATION_BARRIER", _barrier_reason),
                 "[AUTO_ACTIVATE BLOCKED] reason=GLOBAL_ACTIVATION_BARRIER detail=%s",
                 _barrier_reason,
             )
@@ -1727,7 +1788,18 @@ class TradingStateMachine:
 
         # ── Gate 5: activation_invariant — all subsystems simultaneously valid
 
-        logger.critical(
+        _log_activation_diag_once(
+            "commit_activation_invariant",
+            (
+                _inv_ready,
+                self._first_snap_accepted,
+                _ca_gate.is_hydrated if _ca_gate is not None else None,
+                (not _ca_gate.is_stale()) if _ca_gate is not None else None,
+                _snap.get("ca_valid_brokers", 0),
+                _snap.get("snapshot_source", ""),
+                _snap.get("aggregation_normalized", True),
+                kill_state,
+            ),
             "COMMIT_ACTIVATION_INVARIANT "
             "ready=%s "
             "first_snap=%s "
@@ -1772,7 +1844,16 @@ class TradingStateMachine:
             activation_intent=_live_activation_intent,
         )
         _decision = _coordinator.evaluate_activation(_frozen_snapshot)
-        logger.critical(
+        _log_activation_diag_once(
+            "startup_coordinator_decision",
+            (
+                _decision.snapshot_version,
+                _decision.target_state.value,
+                _decision.reason,
+                _frozen_snapshot.bootstrap_state,
+                _frozen_snapshot.capital_state,
+                _frozen_snapshot.readiness_version,
+            ),
             "STARTUP_COORDINATOR_DECISION version=%s state=%s reason=%s bootstrap=%s capital=%s readiness_v=%s",
             _decision.snapshot_version,
             _decision.target_state.value,
@@ -1783,72 +1864,69 @@ class TradingStateMachine:
         )
 
         if not _decision.allowed or not _inv_ready or not _snapshot_ready:
+            _block_reason = "UNKNOWN"
+            _block_detail = ""
             if kill_state:
-                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=KILL_SWITCH_ACTIVE")
+                _block_reason = "KILL_SWITCH_ACTIVE"
             elif not authority_ready:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_NOT_READY "
-                    "authority_ready=False current_state=%s target_state=LIVE_PENDING_CONFIRMATION",
-                    current.value,
+                _block_reason = "AUTHORITY_NOT_READY"
+                _block_detail = (
+                    f"authority_ready=False current_state={current.value} "
+                    "target_state=LIVE_PENDING_CONFIRMATION"
                 )
             elif not _writer_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=DISTRIBUTED_WRITER_AUTHORITY detail=%s",
-                    _writer_err,
-                )
+                _block_reason = "DISTRIBUTED_WRITER_AUTHORITY"
+                _block_detail = _writer_err
             elif not _nonce_lease_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=NONCE_WRITER_LEASE detail=%s",
-                    _nonce_lease_err,
-                )
+                _block_reason = "NONCE_WRITER_LEASE"
+                _block_detail = _nonce_lease_err
             elif not _nonce_sync_ok:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=NONCE_SYNC detail=%s",
-                    _nonce_sync_err,
-                )
+                _block_reason = "NONCE_SYNC"
+                _block_detail = _nonce_sync_err
             elif not _ca_hydrated_lcv:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED "
-                    "flag=%r ca_available=%s ca_hydrated=%s",
-                    _lcv_raw,
-                    _ca_lcv is not None,
-                    bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False,
+                _block_reason = "LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED"
+                _block_detail = (
+                    f"flag={_lcv_raw!r} ca_available={_ca_lcv is not None} "
+                    f"ca_hydrated={bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False}"
                 )
             elif _ca_lcv is not None and _ca_balance_lcv is None:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=LIVE_CAPITAL_VERIFIED_BALANCE_UNKNOWN "
-                    "flag=%r total_balance=None — capital balance not resolvable from CA.",
-                    _lcv_raw,
+                _block_reason = "LIVE_CAPITAL_VERIFIED_BALANCE_UNKNOWN"
+                _block_detail = (
+                    f"flag={_lcv_raw!r} total_balance=None — capital balance not resolvable from CA."
                 )
             elif not _snapshot_ready:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=SNAPSHOT_MISSING"
-                    " — no valid live-exchange capital snapshot accepted"
-                )
+                _block_reason = "SNAPSHOT_MISSING"
+                _block_detail = "no valid live-exchange capital snapshot accepted"
             elif _ca_gate is not None and not _ca_gate.is_hydrated:
-                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=CA_NOT_HYDRATED")
+                _block_reason = "CA_NOT_HYDRATED"
             elif _ca_gate is not None and _ca_gate.is_stale():
-                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=CA_STALE")
+                _block_reason = "CA_STALE"
             elif (
                 _mabm_gate is not None
                 and hasattr(_mabm_gate, "all_brokers_fully_ready")
                 and not _mabm_gate.all_brokers_fully_ready()
             ):
-                logger.critical("[AUTO_ACTIVATE BLOCKED] reason=BROKERS_NOT_READY")
+                _block_reason = "BROKERS_NOT_READY"
             elif not _snap.get("aggregation_normalized", True):
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=AGGREGATION_NOT_NORMALIZED"
-                    " — MABM viable broker count not yet reflected in CA balance entries."
-                    " Waiting for sequential pipeline: Broker balances"
-                    " → ActiveCapital aggregation → Tier classification."
+                _block_reason = "AGGREGATION_NOT_NORMALIZED"
+                _block_detail = (
+                    "MABM viable broker count not yet reflected in CA balance entries."
+                    " Waiting for sequential pipeline: Broker balances → ActiveCapital aggregation"
+                    " → Tier classification."
                 )
             else:
-                logger.critical(
-                    "[AUTO_ACTIVATE BLOCKED] reason=%s snap_source=%s valid_brokers=%s",
-                    _decision.reason.upper(),
-                    _snap.get("snapshot_source", ""),
-                    _snap.get("ca_valid_brokers", 0),
+                _block_reason = str(_decision.reason or "UNKNOWN").upper()
+                _block_detail = (
+                    f"snap_source={_snap.get('snapshot_source', '')} "
+                    f"valid_brokers={_snap.get('ca_valid_brokers', 0)}"
                 )
+            _log_activation_diag_once(
+                "auto_activate_blocked",
+                (_block_reason, _block_detail),
+                "[AUTO_ACTIVATE BLOCKED] reason=%s detail=%s",
+                _block_reason,
+                _block_detail or "n/a",
+            )
             return False
 
         try:
@@ -2184,7 +2262,9 @@ def _is_authority_ready() -> bool:
             from readiness_table import snapshot as _rt_snapshot  # type: ignore[import]
         return bool((_rt_snapshot() or {}).get("authority_ready", False))
     except Exception as _exc:
-        logger.critical(
+        _log_activation_diag_once(
+            "auto_activate_blocked",
+            ("AUTHORITY_READY_CHECK_FAILED", str(_exc)),
             "[AUTO_ACTIVATE BLOCKED] reason=AUTHORITY_READY_CHECK_FAILED detail=%s",
             _exc,
         )
