@@ -68,4 +68,70 @@ class ExecutionFailed(ExecutionError):
     pass
 
 
+class BrokerAuthError(ExecutionError):
+    """Raised when the broker rejects the request due to authentication failure.
+
+    Covers:
+    - 401 / 403 HTTP responses
+    - Invalid API key / expired key
+    - ECDSA / HMAC signature mismatch
+    - IP-address whitelist violations
+
+    Unlike transient errors, auth failures should trigger a cooldown and
+    operator alert rather than an immediate retry.
+    """
+    pass
+
+
+class ACKTimeoutError(ExecutionError):
+    """Raised when the exchange does not acknowledge an order within the
+    configured timeout window.
+
+    The order may or may not have been accepted by the exchange; the caller
+    must reconcile open-order state before issuing a replacement.
+    """
+    pass
+
+
+class PostOnlyRejectError(ExecutionError):
+    """Raised when a post-only limit order is rejected because it would
+    immediately cross the order book and become a taker fill.
+
+    This is a *normal* exchange response, not a bug.  The appropriate
+    response is to cancel the order and retry at an adjusted price, or
+    switch to a market order if conditions permit.
+    """
+    pass
+
+
+class SlippageGuardError(ExecutionError):
+    """Raised when the pre-trade slippage estimate exceeds the configured
+    maximum-cost threshold.
+
+    This is a soft block: the order was never submitted to the exchange.
+    The caller may retry on the next cycle when market conditions improve.
+    """
+    pass
+
+
+class RiskGovernorBlockedError(ExecutionError):
+    """Raised when the GlobalRiskGovernor returns a RED gate decision that
+    prevents new position entries.
+
+    Examples: daily-loss limit, consecutive-loss cascade breaker, exposure
+    concentration cap, volatility spike suspension.
+    """
+    pass
+
+
+class ReconciliationGateError(ExecutionError):
+    """Raised when a reconciliation failure prevents the execution pipeline
+    from dispatching new orders.
+
+    The bot must re-run reconciliation and confirm clean state before
+    trading is permitted to resume.
+    """
+    pass
+
+
 
