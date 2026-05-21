@@ -435,6 +435,39 @@ class MetricCollector:
         triage["runtime_state"] = state_payload
         triage["lifecycle_phase"] = lifecycle_phase
 
+        readiness_proof_payload: Dict[str, Any] = {"available": False}
+        try:
+            try:
+                from bot.startup_coordinator import get_startup_coordinator
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+            try:
+                from bot.runtime_mode import resolve_runtime_mode
+            except ImportError:
+                from runtime_mode import resolve_runtime_mode  # type: ignore[import]
+            runtime_mode = resolve_runtime_mode()
+            activation_intent = bool(getattr(runtime_mode, "is_live", False))
+            trading_state_for_proof = "UNKNOWN"
+            if isinstance(state_payload, dict) and state_payload.get("available"):
+                trading_state_for_proof = str(state_payload.get("trading_state") or "UNKNOWN")
+            startup_coordinator = get_startup_coordinator()
+            startup_snapshot = startup_coordinator.build_snapshot(
+                trading_state=trading_state_for_proof,
+                activation_intent=activation_intent,
+            )
+            readiness_proof = startup_coordinator.evaluate_system_readiness_proof(startup_snapshot)
+            readiness_proof_payload = {
+                "available": True,
+                "proof": readiness_proof.as_dict(),
+                "first_blocking_gate": readiness_proof.first_blocking_gate,
+                "passed": bool(readiness_proof.passed),
+                "snapshot_version": int(startup_snapshot.snapshot_version),
+                "global_epoch": int(startup_snapshot.global_epoch),
+            }
+        except Exception as exc:
+            readiness_proof_payload = {"available": False, "error": str(exc)}
+        triage["system_readiness_proof"] = readiness_proof_payload
+
         decision_payload: Dict[str, Any] = {"available": False}
         try:
             from bot.execution_authority_context import can_execute
@@ -525,7 +558,9 @@ class MetricCollector:
         triage["execution_trace"] = traces_payload
 
         first_blocker = None
-        if decision_payload.get("available") and not decision_payload.get("allowed", False):
+        if readiness_proof_payload.get("available"):
+            first_blocker = str(readiness_proof_payload.get("first_blocking_gate") or "none")
+        elif decision_payload.get("available") and not decision_payload.get("allowed", False):
             gate = decision_payload.get("first_failed_gate") or "unknown"
             reason = (
                 decision_payload.get("decision", {}).get("reason")
