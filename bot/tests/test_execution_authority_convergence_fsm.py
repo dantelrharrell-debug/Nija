@@ -163,6 +163,46 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 snap = sm.get_execution_authority_snapshot(gates_ok=True)
                 self.assertFalse(snap["intent_present"])
 
+    def test_startup_override_blocks_live_arming_without_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "false",
+                    "FORCE_LIVE_TRANSITION": "false",
+                    "HEARTBEAT_TRADE": "false",
+                },
+                clear=False,
+            ), patch(
+                "bot.trading_state_machine._startup_ownership_gate",
+                return_value=(False, "bootstrap_guard_not_held"),
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertEqual(sm.get_current_state(), TradingState.OFF)
+
+    def test_startup_override_arms_live_when_ownership_is_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "false",
+                    "FORCE_LIVE_TRANSITION": "false",
+                    "HEARTBEAT_TRADE": "false",
+                },
+                clear=False,
+            ), patch(
+                "bot.trading_state_machine._startup_ownership_gate",
+                return_value=(True, ""),
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertEqual(sm.get_current_state(), TradingState.LIVE_PENDING_CONFIRMATION)
+
     def test_startup_coordinator_request_counts_as_activation_intent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_path = os.path.join(tmp, "state.json")

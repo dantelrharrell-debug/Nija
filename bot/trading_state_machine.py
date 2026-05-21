@@ -735,6 +735,24 @@ def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) 
     return True, ""
 
 
+def _startup_ownership_gate() -> tuple[bool, str]:
+    """Require bootstrap ownership + distributed writer authority before startup live arming."""
+    try:
+        try:
+            from bot.bootstrap_guard import is_guard_held
+        except ImportError:
+            from bootstrap_guard import is_guard_held  # type: ignore[import]
+        if not is_guard_held():
+            return False, "bootstrap_guard_not_held"
+    except Exception as exc:
+        return False, f"bootstrap_guard_check_failed:{exc}"
+
+    writer_ok, writer_err = _distributed_writer_authority_gate()
+    if not writer_ok:
+        return False, writer_err or "distributed_writer_authority_unavailable"
+    return True, ""
+
+
 class TradingState(Enum):
     """Trading state enumeration - SINGLE SOURCE OF TRUTH"""
     OFF = "OFF"
@@ -1057,6 +1075,18 @@ class TradingStateMachine:
                 return
 
             if live_verified and (auto_activate or force_live):
+                ownership_ok, ownership_err = _startup_ownership_gate()
+                if not ownership_ok:
+                    self._current_state = TradingState.OFF
+                    self._activation_committed = False
+                    self._execution_authority = False
+                    self._core_loop_owns_execution = True
+                    self._can_dispatch_trades = False
+                    logger.critical(
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s",
+                        ownership_err or "unknown",
+                    )
+                    return
                 if heartbeat_required_first and not heartbeat_ok:
                     self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
                     self._activation_committed = False
@@ -1089,6 +1119,18 @@ class TradingStateMachine:
                 return
 
             if live_verified and not dry_run_mode:
+                ownership_ok, ownership_err = _startup_ownership_gate()
+                if not ownership_ok:
+                    self._current_state = TradingState.OFF
+                    self._activation_committed = False
+                    self._execution_authority = False
+                    self._core_loop_owns_execution = True
+                    self._can_dispatch_trades = False
+                    logger.critical(
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s",
+                        ownership_err or "unknown",
+                    )
+                    return
                 self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
                 self._activation_committed = False
                 self._execution_authority = False
