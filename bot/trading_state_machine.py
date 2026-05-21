@@ -2065,6 +2065,7 @@ class TradingStateMachine:
             {
                 "runtime_authority_state": coordinator_snapshot.runtime_authority_state,
                 "runtime_authority_reason": coordinator_snapshot.runtime_authority_reason,
+                "runtime_lifecycle_phase": coordinator_snapshot.lifecycle_phase,
                 "trading_authority": coordinator_snapshot.trading_authority,
                 "execution_permitted": coordinator_snapshot.execution_permitted,
             }

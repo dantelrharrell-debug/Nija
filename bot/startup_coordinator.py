@@ -131,6 +131,12 @@ class RuntimeAuthorityState(str, Enum):
     DEGRADED = "DEGRADED"
 
 
+class LifecyclePhase(str, Enum):
+    BOOT = "BOOT"
+    WARM = "WARM"
+    LIVE = "LIVE"
+
+
 _EARLY_BOOTSTRAP_STATES = frozenset(
     {
         "BOOT_INIT",
@@ -247,6 +253,26 @@ class StartupConvergenceSnapshot:
     @property
     def execution_permitted(self) -> bool:
         return self.runtime_authority_state == RuntimeAuthorityState.EXECUTING.value
+
+    @property
+    def lifecycle_phase(self) -> str:
+        """Return the canonical 3-phase lifecycle state for containment."""
+        state = str(self.runtime_authority_state or "").strip().upper()
+        reason = str(self.runtime_authority_reason or "").strip().lower()
+
+        if state == RuntimeAuthorityState.EXECUTING.value:
+            return LifecyclePhase.LIVE.value
+        if state in {RuntimeAuthorityState.READY.value, RuntimeAuthorityState.AUTHORIZED.value}:
+            return LifecyclePhase.WARM.value
+        if state in {RuntimeAuthorityState.BOOT.value, RuntimeAuthorityState.STANDBY.value}:
+            return LifecyclePhase.BOOT.value
+        if state == RuntimeAuthorityState.DEGRADED.value:
+            if reason.startswith("capital_") or reason.startswith("bootstrap_state="):
+                return LifecyclePhase.BOOT.value
+            if reason in {"execution_revoked", "dispatch_committed_without_authority"}:
+                return LifecyclePhase.LIVE.value
+            return LifecyclePhase.WARM.value
+        return LifecyclePhase.BOOT.value
 
 
 @dataclass(frozen=True)
@@ -526,6 +552,10 @@ class StartupCoordinator:
         pending_readiness = sorted(
             key for key, value in self._runtime.readiness_table.items() if not value
         )
+        capital_hard_gate_ready = bool(
+            self._runtime.capital_hydrated
+            and self._runtime.capital_balance is not None
+        )
         prereqs_ready = bool(
             bootstrap_state == "RUNNING_SUPERVISED"
             and capital_state == "RUNNING"
@@ -571,7 +601,11 @@ class StartupCoordinator:
             StartupCoordinatorState.DEGRADED_RETRY,
         }:
             severe_degradation = f"coordinator_state={self._runtime.coordinator_state.value}"
-        elif self._runtime.capital_stale:
+        elif (
+            self._runtime.capital_stale
+            and capital_hard_gate_ready
+            and (activation_intent or dispatch_committed or trading_state == "LIVE_ACTIVE")
+        ):
             severe_degradation = "capital_stale"
         elif activation_intent and self._runtime.activation_epoch != self._runtime.global_epoch:
             severe_degradation = "global_epoch_stale"
@@ -594,6 +628,15 @@ class StartupCoordinator:
         if severe_degradation:
             target_state = RuntimeAuthorityState.DEGRADED
             reason = severe_degradation
+        elif not capital_hard_gate_ready:
+            target_state = RuntimeAuthorityState.BOOT
+            if not self._runtime.capital_hydrated:
+                reason = "capital_not_hydrated"
+            else:
+                reason = "capital_balance_unknown"
+        elif self._runtime.capital_stale:
+            target_state = RuntimeAuthorityState.BOOT
+            reason = "capital_stale"
         elif bootstrap_state in _EARLY_BOOTSTRAP_STATES:
             target_state = RuntimeAuthorityState.BOOT
             reason = f"bootstrap_state={bootstrap_state}"
@@ -890,6 +933,7 @@ GLOBAL_STATE = GlobalState()
 __all__ = [
     "ActivationDecision",
     "FailSafeTier",
+    "LifecyclePhase",
     "GlobalState",
     "GlobalStateSnapshot",
     "GLOBAL_STATE",

@@ -198,6 +198,7 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 snap = sm.get_execution_authority_snapshot(gates_ok=True)
                 self.assertIn("runtime_authority_state", snap)
                 self.assertIn("runtime_authority_reason", snap)
+                self.assertIn("runtime_lifecycle_phase", snap)
                 self.assertIn("execution_permitted", snap)
 
 
