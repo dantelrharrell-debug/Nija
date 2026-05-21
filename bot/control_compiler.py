@@ -994,6 +994,16 @@ class ControlCompiler:
         if is_execution:
             self._instability.record(raw.symbol, raw.regime, accepted=True)
         self._record(raw, accepted=True, reason_code="")
+        if is_execution:
+            k_conf_threshold = _MIN_CONFIDENCE_BASELINE * self._matrix.get("K_CONFIDENCE")
+            bootstrap_pass = bool(getattr(signal, "metadata", {}).get("bootstrap_pass"))
+            self._emit_execution_decision(
+                allow=True,
+                reason="compiler_bootstrap_pass" if bootstrap_pass else "compiler_passed",
+                confidence=float(raw.confidence),
+                threshold=float(k_conf_threshold),
+                governor_mode="RECOVERING" if bootstrap_pass else "NORMAL",
+            )
         return CompileResult(
             accepted=True,
             status=CompileStatus.ACCEPTED,
@@ -1120,6 +1130,7 @@ class ControlCompiler:
     def _emit_execution_decision(
         self,
         *,
+        allow: bool = False,
         reason: str,
         confidence: float,
         threshold: float,
@@ -1128,7 +1139,7 @@ class ControlCompiler:
     ) -> None:
         decision = ExecutionDecision(
             stage=stage,
-            allow=False,
+            allow=bool(allow),
             reason=reason,
             confidence=float(confidence),
             threshold=float(threshold),
@@ -1162,6 +1173,7 @@ class ControlCompiler:
         """Record a non-compiler trade-admission deny in canonical telemetry."""
         self._increment_drop_count(drop_bucket)
         self._emit_execution_decision(
+            allow=False,
             stage=stage,
             reason=reason,
             confidence=confidence,
@@ -1185,6 +1197,7 @@ class ControlCompiler:
             self._increment_drop_count("compiler_confidence")
 
         self._emit_execution_decision(
+            allow=False,
             reason=reason,
             confidence=confidence,
             threshold=threshold,
@@ -1221,12 +1234,22 @@ class ControlCompiler:
         )
         last_live_ts = self._last_live_execution_ts
         live_execution_gap_s = (time.time() - last_live_ts) if last_live_ts else float("inf")
-        starvation_recovery_active = bool(
-            last_live_ts is not None and live_execution_gap_s > _MIN_LIVE_EXECUTION_GAP_S
-        )
+        starvation_recovery_active = False
+        if last_live_ts is not None:
+            starvation_recovery_active = bool(live_execution_gap_s > _MIN_LIVE_EXECUTION_GAP_S)
+        elif samples >= _BOOTSTRAP_DECAY_MIN_SAMPLES:
+            # Pre-first-live-execution recovery: only engage after enough
+            # observed execution outcomes to avoid immediate over-bypass.
+            starvation_recovery_active = True
         if starvation_recovery_active:
             effective_min_confidence *= _MIN_LIVE_EXECUTION_CONF_RELAX
-            effective_limit = max(_MIN_LIVE_EXECUTION_LIMIT_FLOOR, effective_limit)
+            # Recovery floor is rolling while starved so bootstrap credits do not
+            # permanently exhaust after the first recovery pass.
+            effective_limit = max(
+                _MIN_LIVE_EXECUTION_LIMIT_FLOOR,
+                self._bootstrap_passes_used + _MIN_LIVE_EXECUTION_LIMIT_FLOOR,
+                effective_limit,
+            )
 
         return {
             "samples": samples,
@@ -1296,7 +1319,7 @@ class ControlCompiler:
 
         This only applies to K-confidence rejections for execution actions.
         """
-        if not _BOOTSTRAP_PASS_ENABLED or _BOOTSTRAP_PASS_LIMIT <= 0:
+        if not _BOOTSTRAP_PASS_ENABLED:
             return None
         if reason_code != SignalValidator.RC_K_CONFIDENCE:
             return None
@@ -1307,6 +1330,7 @@ class ControlCompiler:
             return None
 
         metadata = raw.metadata or {}
+        starvation_recovery_active = bool(decay_state.get("starvation_recovery_active"))
         synthetic = bool(
             metadata.get("synthetic")
             or metadata.get("diagnostic")
@@ -1318,7 +1342,7 @@ class ControlCompiler:
             or metadata.get("fallback_entry")
         )
         low_threshold = bool(metadata.get("bootstrap_low_threshold") or metadata.get("low_threshold"))
-        if not (synthetic or low_threshold):
+        if not (synthetic or low_threshold or starvation_recovery_active):
             return None
 
         with self._lock:
