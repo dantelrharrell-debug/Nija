@@ -1253,6 +1253,18 @@ class ExecutionEngine:
             return broker_type.lower()
         return type(self.broker_client).__name__.lower()
 
+    def _get_balance_cache_key(self) -> str:
+        """Return a balance-cache key that is unique per broker account."""
+        broker_label = self._get_broker_label()
+        if not self.broker_client:
+            return broker_label
+        account_identifier = str(getattr(self.broker_client, "account_identifier", "") or "").strip().lower()
+        if not account_identifier:
+            return broker_label
+        if account_identifier in {"platform", broker_label}:
+            return broker_label
+        return f"{broker_label}:{account_identifier}"
+
     @staticmethod
     def _extract_balance_values(balance_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
         """Return (available_balance, total_balance) from a balance dict.
@@ -1305,7 +1317,8 @@ class ExecutionEngine:
         BalanceService detailed → BalanceService scalar → broker_client._balance_cache →
         broker_client._last_known_balance → (None, None, {}).
         """
-        broker_key = self._get_broker_label()
+        broker_key = self._get_balance_cache_key()
+        broker_label = self._get_broker_label()
 
         if BALANCE_SERVICE_AVAILABLE and BalanceService is not None:
             detailed = BalanceService.get_detailed(broker_key)
@@ -1313,14 +1326,6 @@ class ExecutionEngine:
                 available, total = self._extract_balance_values(detailed)
                 if available is not None or total is not None:
                     return available, total, detailed
-            scalar = BalanceService.get(broker_key)
-            if scalar > 0:
-                cached = {
-                    "trading_balance": scalar,
-                    "total_balance": scalar,
-                    "available_balance": scalar,
-                }
-                return scalar, scalar, cached
 
         # Fallback to broker-local caches (no network call)
         if self.broker_client is not None:
@@ -1329,15 +1334,34 @@ class ExecutionEngine:
                 available, total = self._extract_balance_values(cached_detail)
                 if available is not None or total is not None:
                     return available, total, cached_detail
+            if hasattr(self.broker_client, "get_account_balance_detailed"):
+                try:
+                    detailed = self.broker_client.get_account_balance_detailed(verbose=False)
+                    if isinstance(detailed, dict) and not detailed.get("error", False):
+                        available, total = self._extract_balance_values(detailed)
+                        if available is not None or total is not None:
+                            return available, total, detailed
+                except Exception:
+                    pass
             cached_scalar = getattr(self.broker_client, "_last_known_balance", None)
             if isinstance(cached_scalar, (int, float)) and cached_scalar > 0:
                 scalar = float(cached_scalar)
                 cached = {
-                    "trading_balance": scalar,
                     "total_balance": scalar,
-                    "available_balance": scalar,
+                    "total_funds": scalar,
                 }
-                return scalar, scalar, cached
+                return None, scalar, cached
+
+        if BALANCE_SERVICE_AVAILABLE and BalanceService is not None:
+            scalar = BalanceService.get(broker_key)
+            if scalar <= 0 and broker_key != broker_label:
+                scalar = BalanceService.get(broker_label)
+            if scalar > 0:
+                cached = {
+                    "total_balance": scalar,
+                    "total_funds": scalar,
+                }
+                return None, scalar, cached
 
         return None, None, {}
 
