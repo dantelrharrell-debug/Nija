@@ -1783,6 +1783,26 @@ def _emit_startup_orchestration_snapshot(context: str) -> None:
 
     gate_ready = _rt_is_ready()
     gate_detail = "" if gate_ready else f"pending={_rt_pending()}"
+    readiness_proof_detail = "unavailable"
+    readiness_first_blocker = "unknown"
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator as _get_startup_coordinator_diag
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator as _get_startup_coordinator_diag  # type: ignore[import]
+        _coordinator_diag = _get_startup_coordinator_diag()
+        _proof_snapshot = _coordinator_diag.build_snapshot(
+            trading_state="UNKNOWN",
+            activation_intent=bool(runtime_mode.is_live),
+        )
+        _proof = _coordinator_diag.evaluate_system_readiness_proof(_proof_snapshot)
+        readiness_first_blocker = _proof.first_blocking_gate
+        readiness_proof_detail = (
+            f"passed={_proof.passed} blocker={_proof.first_blocking_gate} "
+            f"version={_proof.proof_version} epoch={_proof.global_epoch}"
+        )
+    except Exception as _proof_exc:
+        readiness_proof_detail = f"error={_proof_exc}"
 
     env_flags = {
         "AUTO_ACTIVATE": os.getenv("AUTO_ACTIVATE", "false"),
@@ -1793,10 +1813,12 @@ def _emit_startup_orchestration_snapshot(context: str) -> None:
 
     if StartupSnapshot is None:
         logger.info(
-            "STARTUP SNAPSHOT (%s) bootstrap_state=%s gate_ready=%s runtime_mode=%s env=%s",
+            "STARTUP SNAPSHOT (%s) bootstrap_state=%s gate_ready=%s proof_first_blocker=%s proof=%s runtime_mode=%s env=%s",
             context,
             bootstrap_state,
             gate_ready,
+            readiness_first_blocker,
+            readiness_proof_detail,
             runtime_mode.as_dict(),
             env_flags,
         )
@@ -1808,6 +1830,12 @@ def _emit_startup_orchestration_snapshot(context: str) -> None:
         snap.record("readiness_gate", True, detail="unavailable")
     else:
         snap.record("readiness_gate", bool(gate_ready), detail=gate_detail)
+    snap.record(
+        "system_readiness_proof",
+        "passed=True" in readiness_proof_detail,
+        detail=readiness_proof_detail,
+    )
+    snap.record("first_blocking_gate", readiness_first_blocker == "none", detail=readiness_first_blocker)
     mode_detail = f"mode={runtime_mode.mode} source={runtime_mode.source}"
     if runtime_mode.conflicts:
         mode_detail = f"{mode_detail} conflicts={','.join(runtime_mode.conflicts)}"

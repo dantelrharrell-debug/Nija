@@ -36,7 +36,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 logger = logging.getLogger("nija.startup_coordinator")
 
@@ -61,6 +61,7 @@ class StartupEvent(str, Enum):
     NONCE_STATUS_CHANGED = "NONCE_STATUS_CHANGED"
     DISPATCH_HEALTH_CHANGED = "DISPATCH_HEALTH_CHANGED"
     DISPATCH_ENABLED = "DISPATCH_ENABLED"
+    SYSTEM_READINESS_PROOF_EVALUATED = "SYSTEM_READINESS_PROOF_EVALUATED"
 
 
 class FailSafeTier(int, Enum):
@@ -267,6 +268,8 @@ class StartupConvergenceSnapshot:
     last_committed_snapshot_version: int
     runtime_authority_state: str
     runtime_authority_reason: str
+    last_system_readiness_proof: Dict[str, Any]
+    last_committed_system_readiness_proof: Dict[str, Any]
 
     @property
     def dispatch_enabled(self) -> bool:
@@ -338,6 +341,36 @@ class ActivationDecision:
     snapshot_version: int
 
 
+@dataclass(frozen=True)
+class SystemReadinessProof:
+    proof_version: int
+    passed: bool
+    reason: str
+    first_blocking_gate: str
+    failed_gates: List[str]
+    snapshot_version: int
+    global_epoch: int
+    activation_epoch: int
+    runtime_authority_state: str
+    lifecycle_phase: str
+    gate_results: Dict[str, bool]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "proof_version": int(self.proof_version),
+            "passed": bool(self.passed),
+            "reason": str(self.reason),
+            "first_blocking_gate": str(self.first_blocking_gate),
+            "failed_gates": list(self.failed_gates),
+            "snapshot_version": int(self.snapshot_version),
+            "global_epoch": int(self.global_epoch),
+            "activation_epoch": int(self.activation_epoch),
+            "runtime_authority_state": str(self.runtime_authority_state),
+            "lifecycle_phase": str(self.lifecycle_phase),
+            "gate_results": dict(self.gate_results),
+        }
+
+
 @dataclass
 class _RuntimeState:
     coordinator_state: StartupCoordinatorState = StartupCoordinatorState.BOOT_INIT
@@ -367,6 +400,8 @@ class _RuntimeState:
     last_committed_snapshot_version: int = 0
     runtime_authority_state: RuntimeAuthorityState = RuntimeAuthorityState.BOOT
     runtime_authority_reason: str = "boot_init"
+    last_system_readiness_proof: Dict[str, Any] = field(default_factory=dict)
+    last_committed_system_readiness_proof: Dict[str, Any] = field(default_factory=dict)
 
 
 class StartupCoordinator:
@@ -773,9 +808,53 @@ class StartupCoordinator:
                 last_committed_snapshot_version=self._runtime.last_committed_snapshot_version,
                 runtime_authority_state=runtime_authority_state.value,
                 runtime_authority_reason=runtime_authority_reason,
+                last_system_readiness_proof=dict(self._runtime.last_system_readiness_proof),
+                last_committed_system_readiness_proof=dict(self._runtime.last_committed_system_readiness_proof),
             )
 
+    def evaluate_system_readiness_proof(self, snapshot: StartupConvergenceSnapshot) -> SystemReadinessProof:
+        """Evaluate canonical pre-LIVE readiness proof from one immutable snapshot."""
+        gate_results: Dict[str, bool] = {
+            "readiness.complete": not snapshot.pending_readiness,
+            "bootstrap.supervised": snapshot.bootstrap_state == "RUNNING_SUPERVISED",
+            "capital.running": snapshot.capital_state == "RUNNING",
+            "capital.hydrated": bool(snapshot.capital_hydrated),
+            "capital.balance_known": snapshot.capital_balance is not None,
+            "capital.not_stale": not bool(snapshot.capital_stale),
+            "threads.running": bool(snapshot.threads_launched > 0 and snapshot.threads_confirmed_running),
+            "activation.intent_present": bool(snapshot.activation_intent),
+            "authority.ready": bool(snapshot.authority_ready),
+            "nonce.ready": bool(snapshot.nonce_ready),
+            "dispatch_health.ready": bool(snapshot.dispatch_health_ready),
+            "kill_switch.clear": not bool(snapshot.kill_switch_active),
+            "epoch.current": int(snapshot.activation_epoch) == int(snapshot.global_epoch),
+            "runtime_authority.authorized": snapshot.runtime_authority_state in {
+                RuntimeAuthorityState.AUTHORIZED.value,
+                RuntimeAuthorityState.EXECUTING.value,
+            },
+        }
+        failed_gates = [name for name, ok in gate_results.items() if not ok]
+        first_blocking_gate = failed_gates[0] if failed_gates else "none"
+        passed = not failed_gates
+        proof = SystemReadinessProof(
+            proof_version=int(snapshot.snapshot_version),
+            passed=passed,
+            reason="system_readiness_proof_passed" if passed else first_blocking_gate,
+            first_blocking_gate=first_blocking_gate,
+            failed_gates=failed_gates,
+            snapshot_version=int(snapshot.snapshot_version),
+            global_epoch=int(snapshot.global_epoch),
+            activation_epoch=int(snapshot.activation_epoch),
+            runtime_authority_state=str(snapshot.runtime_authority_state),
+            lifecycle_phase=str(snapshot.lifecycle_phase),
+            gate_results=gate_results,
+        )
+        with self._lock:
+            self._runtime.last_system_readiness_proof = proof.as_dict()
+        return proof
+
     def evaluate_activation(self, snapshot: StartupConvergenceSnapshot) -> ActivationDecision:
+        proof = self.evaluate_system_readiness_proof(snapshot)
         with self._lock:
             if snapshot.runtime_authority_state == RuntimeAuthorityState.EXECUTING.value:
                 self._runtime.coordinator_state = StartupCoordinatorState.DISPATCH_ENABLED
@@ -786,24 +865,34 @@ class StartupCoordinator:
                     snapshot.snapshot_version,
                 )
 
-            if snapshot.runtime_authority_state == RuntimeAuthorityState.AUTHORIZED.value:
+            if proof.passed:
                 target = StartupCoordinatorState.DISPATCH_ENABLED
-                reason = snapshot.runtime_authority_reason or "runtime_authorized"
+                reason = proof.reason
             elif snapshot.runtime_authority_state == RuntimeAuthorityState.DEGRADED.value:
                 target = StartupCoordinatorState.DEGRADED_RETRY
-                reason = snapshot.runtime_authority_reason or "runtime_degraded"
+                reason = proof.first_blocking_gate or snapshot.runtime_authority_reason or "runtime_degraded"
             elif not snapshot.activation_intent:
                 target = StartupCoordinatorState.ACTIVATION_ARMED
-                reason = snapshot.runtime_authority_reason or "activation_intent_missing"
+                reason = proof.first_blocking_gate or snapshot.runtime_authority_reason or "activation_intent_missing"
             else:
                 target = StartupCoordinatorState.ACTIVATION_CONVERGING
-                reason = snapshot.runtime_authority_reason or "awaiting_runtime_authority"
+                reason = proof.first_blocking_gate or snapshot.runtime_authority_reason or "awaiting_runtime_authority"
 
             self._runtime.coordinator_state = target
             return ActivationDecision(target == StartupCoordinatorState.DISPATCH_ENABLED, target, reason, snapshot.snapshot_version)
 
     def finalize_activation_commit(self, snapshot: StartupConvergenceSnapshot) -> int:
+        proof = self.evaluate_system_readiness_proof(snapshot)
         with self._lock:
+            if not proof.passed:
+                self._runtime.last_committed_system_readiness_proof = proof.as_dict()
+                raise RuntimeError(
+                    f"LIVE commit blocked: system readiness proof failed at {proof.first_blocking_gate}"
+                )
+            proof_dict = proof.as_dict()
+            proof_dict["commit_allowed"] = True
+            proof_dict["commit_snapshot_version"] = int(snapshot.snapshot_version)
+            self._runtime.last_committed_system_readiness_proof = proof_dict
             self._runtime.last_committed_snapshot_version = snapshot.snapshot_version
             # dispatch_enabled is derived — not stored as primary state.
             # Setting last_committed_snapshot_version > 0 is the only durable
@@ -998,6 +1087,7 @@ __all__ = [
     "ActivationDecision",
     "FailSafeTier",
     "LifecyclePhase",
+    "SystemReadinessProof",
     "GlobalState",
     "GlobalStateSnapshot",
     "GLOBAL_STATE",
