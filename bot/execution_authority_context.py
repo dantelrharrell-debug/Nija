@@ -54,6 +54,15 @@ _FENCE_LAST_OK: bool = False
 _FENCE_LAST_ERR: str = ""
 _FENCE_RECOVER_NEXT_ATTEMPT_TS: float = 0.0
 
+# ── Telemetry emit throttle (Fix #4) ─────────────────────────────────────────
+# Limit how often _emit_trade_admission_telemetry fires per gate stage.
+# The hot path (can_execute on every admission check) would otherwise flood
+# logs on sustained BOOT/WARM lifecycle blocks.  One emission per stage per
+# _TELEMETRY_THROTTLE_S is sufficient for observability without log storm.
+_TELEMETRY_THROTTLE_S: float = 1.0
+_TELEMETRY_LAST_EMIT: dict[str, float] = {}
+_TELEMETRY_EMIT_LOCK = threading.Lock()
+
 logger = logging.getLogger("nija.execution_authority")
 
 
@@ -697,6 +706,17 @@ def _emit_trade_admission_telemetry(
     threshold: float = 0.0,
     stage: str = "control_compiler",
 ) -> None:
+    # Edge-trigger throttle: suppress duplicate emissions for the same gate
+    # stage within _TELEMETRY_THROTTLE_S seconds so that a sustained block
+    # (e.g. lifecycle_phase=BOOT for tens of seconds) does not flood logs or
+    # the drop-counter on every trade-admission poll cycle.
+    now = time.time()
+    with _TELEMETRY_EMIT_LOCK:
+        last = _TELEMETRY_LAST_EMIT.get(stage, 0.0)
+        if now - last < _TELEMETRY_THROTTLE_S:
+            return
+        _TELEMETRY_LAST_EMIT[stage] = now
+
     logger.info(
         "ExecutionDecision(stage=%s, allow=%s, reason=%s, confidence=%.4f, threshold=%.4f, governor_mode=%s)",
         stage,
@@ -1009,7 +1029,54 @@ def can_execute() -> ExecutionDecision:
 
 
 def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
-    """Return runtime convergence status for dispatch-time authority checks."""
+    """Return runtime convergence status for dispatch-time authority checks.
+
+    Fast path (Fix #5)
+    ------------------
+    If a recent :class:`~bot.startup_coordinator.GlobalStateSnapshot` is
+    available in ``GLOBAL_STATE`` and was built with the same ``trading_state``
+    as the current environment, that cached snapshot is reused rather than
+    triggering a fresh ``build_snapshot()`` → reconcile cycle.  The staleness
+    threshold (2.5 s, matching one scan cycle) ensures the fast path never
+    returns a snapshot that is more than one scan cycle stale.
+    """
+    _SNAPSHOT_FAST_PATH_MAX_AGE_S: float = 2.5
+    trading_state_env = os.getenv("NIJA_RUNTIME_TRADING_STATE", "")
+    activation_intent = (
+        _env_truthy("LIVE_CAPITAL_VERIFIED")
+        or _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    )
+
+    # ── Fast path: reuse the most recent GLOBAL_STATE snapshot ───────────────
+    try:
+        try:
+            from bot.startup_coordinator import GLOBAL_STATE
+        except ImportError:
+            from startup_coordinator import GLOBAL_STATE  # type: ignore[import]
+
+        latest = GLOBAL_STATE.latest()
+        if (
+            latest is not None
+            and (time.monotonic() - latest.snapshot_ts) < _SNAPSHOT_FAST_PATH_MAX_AGE_S
+            and latest.startup.trading_state == trading_state_env.strip()
+        ):
+            _s = latest.startup
+            return RuntimeAuthoritySnapshot(
+                ready=bool(_s.execution_permitted),
+                authority_ready=bool(_s.authority_ready),
+                nonce_ready=bool(_s.nonce_ready),
+                dispatch_health_ready=bool(_s.dispatch_health_ready),
+                dispatch_enabled=bool(_s.dispatch_enabled),
+                kill_switch_active=bool(_s.kill_switch_active),
+                coordinator_state=str(_s.coordinator_state),
+                runtime_state=str(_s.runtime_authority_state),
+                reason=str(_s.runtime_authority_reason),
+                lifecycle_phase=str(_s.lifecycle_phase),
+            )
+    except Exception:
+        pass  # fall through to slow path
+
+    # ── Slow path: build a fresh snapshot ────────────────────────────────────
     try:
         try:
             from bot.startup_coordinator import get_startup_coordinator
@@ -1018,9 +1085,8 @@ def runtime_authority_snapshot() -> RuntimeAuthoritySnapshot:
 
         coordinator = get_startup_coordinator()
         snapshot = coordinator.build_snapshot(
-            trading_state=os.getenv("NIJA_RUNTIME_TRADING_STATE", ""),
-            activation_intent=_env_truthy("LIVE_CAPITAL_VERIFIED")
-            or _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY"),
+            trading_state=trading_state_env,
+            activation_intent=activation_intent,
         )
         ready = bool(snapshot.execution_permitted)
         return RuntimeAuthoritySnapshot(
