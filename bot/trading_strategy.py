@@ -250,6 +250,8 @@ class TradingStrategy:
         if _IBT_AVAILABLE and IndependentBrokerTrader is not None:
             try:
                 self.independent_trader = IndependentBrokerTrader(
+                    broker_manager=self.broker_manager,
+                    trading_strategy=self,
                     multi_account_manager=self.multi_account_manager,
                 )
                 logger.info("✅ IndependentBrokerTrader initialized")
