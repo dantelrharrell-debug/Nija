@@ -105,6 +105,75 @@ class TestStartupCoordinator(unittest.TestCase):
             StartupCoordinatorState.DISPATCH_ENABLED.value,
         )
 
+    def test_finalize_activation_commit_refuses_when_system_readiness_proof_fails(self) -> None:
+        self._mark_all_readiness()
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=100.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_authority(ready=True)
+        self.coordinator.record_nonce_status(ready=True)
+        self.coordinator.record_dispatch_health(ready=True)
+        # No activation request -> proof must fail on activation.intent_present.
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "system readiness proof failed"):
+            self.coordinator.finalize_activation_commit(snapshot)
+
+        blocked = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=False,
+        )
+        proof = blocked.last_committed_system_readiness_proof
+        self.assertEqual(proof.get("passed"), False)
+        self.assertEqual(proof.get("first_blocking_gate"), "activation.intent_present")
+        self.assertEqual(blocked.last_committed_snapshot_version, 0)
+
+    def test_system_readiness_proof_metadata_is_deterministic_across_recovery(self) -> None:
+        self._mark_all_readiness()
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=100.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_authority(ready=True)
+        self.coordinator.record_nonce_status(ready=True)
+        self.coordinator.record_dispatch_health(ready=True)
+        self.coordinator.record_activation_requested(requested=True, source="test")
+
+        ready_snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        self.coordinator.finalize_activation_commit(ready_snapshot)
+
+        # Simulate post-live regression/recovery input; commit proof metadata must remain replayable.
+        self.coordinator.record_nonce_status(ready=False, detail="nonce lease lost")
+        degraded_snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        last_commit_proof = degraded_snapshot.last_committed_system_readiness_proof
+        current_proof = self.coordinator.evaluate_system_readiness_proof(degraded_snapshot).as_dict()
+
+        self.assertEqual(last_commit_proof.get("passed"), True)
+        self.assertEqual(last_commit_proof.get("snapshot_version"), ready_snapshot.snapshot_version)
+        self.assertEqual(last_commit_proof.get("commit_snapshot_version"), ready_snapshot.snapshot_version)
+        self.assertEqual(current_proof.get("passed"), False)
+        self.assertEqual(current_proof.get("first_blocking_gate"), "nonce.ready")
+
     def test_runtime_authority_reports_ready_without_activation_intent(self) -> None:
         self._mark_all_readiness()
         self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")

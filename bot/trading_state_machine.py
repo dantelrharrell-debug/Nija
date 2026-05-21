@@ -1744,7 +1744,6 @@ class TradingStateMachine:
                     activation_intent=False,
                 ).activation_intent,
             )
-            return False
 
         # Gate 3b: CA must be hydrated (at least one broker snapshot received).
         # Fail-closed: if CA is unavailable (None), we cannot confirm hydration,
@@ -1769,7 +1768,6 @@ class TradingStateMachine:
                 _ca_lcv is not None,
                 bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False,
             )
-            return False
 
         # Gate 3c: CA total_balance must be resolvable (not None — CA initialized).
         _ca_balance_lcv: Optional[float] = None
@@ -1886,82 +1884,37 @@ class TradingStateMachine:
             activation_intent=_live_activation_intent,
         )
         _decision = _coordinator.evaluate_activation(_frozen_snapshot)
+        _system_readiness_proof = _coordinator.evaluate_system_readiness_proof(_frozen_snapshot)
         _log_activation_diag_once(
             "startup_coordinator_decision",
             (
                 _decision.snapshot_version,
                 _decision.target_state.value,
                 _decision.reason,
+                _system_readiness_proof.first_blocking_gate,
+                _system_readiness_proof.passed,
                 _frozen_snapshot.bootstrap_state,
                 _frozen_snapshot.capital_state,
                 _frozen_snapshot.readiness_version,
             ),
-            "STARTUP_COORDINATOR_DECISION version=%s state=%s reason=%s bootstrap=%s capital=%s readiness_v=%s",
+            "STARTUP_COORDINATOR_DECISION version=%s state=%s reason=%s proof_first_blocker=%s proof_passed=%s "
+            "bootstrap=%s capital=%s readiness_v=%s",
             _decision.snapshot_version,
             _decision.target_state.value,
             _decision.reason,
+            _system_readiness_proof.first_blocking_gate,
+            _system_readiness_proof.passed,
             _frozen_snapshot.bootstrap_state,
             _frozen_snapshot.capital_state,
             _frozen_snapshot.readiness_version,
         )
 
-        if not _decision.allowed or not _inv_ready or not _snapshot_ready:
-            _block_reason = "UNKNOWN"
-            _block_detail = ""
-            if kill_state:
-                _block_reason = "KILL_SWITCH_ACTIVE"
-            elif not authority_ready:
-                _block_reason = "AUTHORITY_NOT_READY"
-                _block_detail = (
-                    f"authority_ready=False current_state={current.value} "
-                    "target_state=LIVE_PENDING_CONFIRMATION"
-                )
-            elif not _writer_ok:
-                _block_reason = "DISTRIBUTED_WRITER_AUTHORITY"
-                _block_detail = _writer_err
-            elif not _nonce_lease_ok:
-                _block_reason = "NONCE_WRITER_LEASE"
-                _block_detail = _nonce_lease_err
-            elif not _nonce_sync_ok:
-                _block_reason = "NONCE_SYNC"
-                _block_detail = _nonce_sync_err
-            elif not _ca_hydrated_lcv:
-                _block_reason = "LIVE_CAPITAL_VERIFIED_CA_NOT_HYDRATED"
-                _block_detail = (
-                    f"flag={_lcv_raw!r} ca_available={_ca_lcv is not None} "
-                    f"ca_hydrated={bool(_ca_lcv.is_hydrated) if _ca_lcv is not None else False}"
-                )
-            elif _ca_lcv is not None and _ca_balance_lcv is None:
-                _block_reason = "LIVE_CAPITAL_VERIFIED_BALANCE_UNKNOWN"
-                _block_detail = (
-                    f"flag={_lcv_raw!r} total_balance=None — capital balance not resolvable from CA."
-                )
-            elif not _snapshot_ready:
-                _block_reason = "SNAPSHOT_MISSING"
-                _block_detail = "no valid live-exchange capital snapshot accepted"
-            elif _ca_gate is not None and not _ca_gate.is_hydrated:
-                _block_reason = "CA_NOT_HYDRATED"
-            elif _ca_gate is not None and _ca_gate.is_stale():
-                _block_reason = "CA_STALE"
-            elif (
-                _mabm_gate is not None
-                and hasattr(_mabm_gate, "all_brokers_fully_ready")
-                and not _mabm_gate.all_brokers_fully_ready()
-            ):
-                _block_reason = "BROKERS_NOT_READY"
-            elif not _snap.get("aggregation_normalized", True):
-                _block_reason = "AGGREGATION_NOT_NORMALIZED"
-                _block_detail = (
-                    "MABM viable broker count not yet reflected in CA balance entries."
-                    " Waiting for sequential pipeline: Broker balances → ActiveCapital aggregation"
-                    " → Tier classification."
-                )
-            else:
-                _block_reason = str(_decision.reason or "UNKNOWN").upper()
-                _block_detail = (
-                    f"snap_source={_snap.get('snapshot_source', '')} "
-                    f"valid_brokers={_snap.get('ca_valid_brokers', 0)}"
-                )
+        if not _system_readiness_proof.passed:
+            _block_reason = str(_system_readiness_proof.first_blocking_gate or _decision.reason or "UNKNOWN")
+            _block_detail = (
+                f"proof_reason={_system_readiness_proof.reason} "
+                f"failed_gates={','.join(_system_readiness_proof.failed_gates)}"
+            )
             _log_activation_diag_once(
                 "auto_activate_blocked",
                 (_block_reason, _block_detail),
