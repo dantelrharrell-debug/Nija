@@ -663,6 +663,48 @@ class ExecutionEngine:
         # and its state does not leak across unrelated trade attempts.
         self._execution_controller: Optional[Any] = None
 
+    def _apply_minimum_notional_gate(
+        self,
+        *,
+        symbol: str,
+        position_size: float,
+        broker_name: Optional[str],
+        balance_usd: float,
+        affordable_usd: Optional[float],
+    ) -> Tuple[Optional[float], Optional[str]]:
+        """Return an executable size or a rejection reason after notional gating."""
+        if not (MIN_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate):
+            return position_size, None
+
+        notional_gate = get_minimum_notional_gate()
+        is_valid, rejection_reason = notional_gate.validate_entry_size(
+            symbol=symbol,
+            size_usd=position_size,
+            is_stop_loss=False,
+            broker_name=broker_name,
+            balance=balance_usd,
+        )
+        if is_valid:
+            return position_size, None
+
+        adjusted_size = float(
+            notional_gate.adjust_size_to_minimum(
+                position_size,
+                broker_name=broker_name,
+                balance=balance_usd,
+            )
+            or position_size
+        )
+        if adjusted_size > position_size and (affordable_usd is None or adjusted_size <= affordable_usd):
+            logger.info(
+                "📈 Auto-adjusting size from $%.2f to $%.2f (minimum notional gate)",
+                position_size,
+                adjusted_size,
+            )
+            return adjusted_size, None
+
+        return None, rejection_reason
+
     def _submit_market_order_via_pipeline(
         self,
         broker_client,
@@ -2205,31 +2247,25 @@ class ExecutionEngine:
 
             # ✅ ENHANCEMENT #1: MINIMUM NOTIONAL GATE
             # Check if entry size meets minimum notional requirements
-            if MIN_NOTIONAL_GATE_AVAILABLE and get_minimum_notional_gate:
-                notional_gate = get_minimum_notional_gate()
-                broker_name = None
-                
-                # Get broker name if available
-                if self.broker_client and hasattr(self.broker_client, 'broker_type'):
-                    broker_type = self.broker_client.broker_type
-                    if hasattr(broker_type, 'value'):
-                        broker_name = broker_type.value
-                    else:
-                        broker_name = str(broker_type)
-                
-                # Validate entry size
-                is_valid, rejection_reason = notional_gate.validate_entry_size(
-                    symbol=symbol,
-                    size_usd=position_size,
-                    is_stop_loss=False,
-                    broker_name=broker_name,
-                    balance=_available_usd or 0.0,
-                )
-                
-                if not is_valid:
-                    logger.warning(f"❌ Entry rejected: {rejection_reason}")
-                    _trace("ecel", "rejected", f"minimum_notional_gate:{rejection_reason}", terminal=True)
-                    return None
+            broker_name = None
+            if self.broker_client and hasattr(self.broker_client, 'broker_type'):
+                broker_type = self.broker_client.broker_type
+                if hasattr(broker_type, 'value'):
+                    broker_name = broker_type.value
+                else:
+                    broker_name = str(broker_type)
+
+            position_size, rejection_reason = self._apply_minimum_notional_gate(
+                symbol=symbol,
+                position_size=position_size,
+                broker_name=broker_name,
+                balance_usd=_available_usd or 0.0,
+                affordable_usd=_spendable_usd if _spendable_usd is not None else _available_usd,
+            )
+            if position_size is None:
+                logger.warning(f"❌ Entry rejected: {rejection_reason}")
+                _trace("ecel", "rejected", f"minimum_notional_gate:{rejection_reason}", terminal=True)
+                return None
 
             # ✅ NET EDGE GATE: Reject trades that cannot clear the minimum
             # profitability threshold after fees, slippage, and spread.
