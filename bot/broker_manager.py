@@ -959,7 +959,12 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-def _feed_capital_authority(broker_key: str, balance: float, timestamp=None) -> None:
+def _feed_capital_authority(
+    broker_key: str,
+    balance: float,
+    timestamp=None,
+    source: str = "",
+) -> None:
     """Feed a freshly-fetched balance into CapitalAuthority.
 
     Uses a deferred local import to avoid circular-import issues (capital_authority
@@ -976,7 +981,11 @@ def _feed_capital_authority(broker_key: str, balance: float, timestamp=None) -> 
         Optional ``datetime`` observation timestamp forwarded to
         ``CapitalAuthority.feed_broker_balance``.  Defaults to *now* when
         omitted so callers can pin an explicit wall-clock instant.
+    source:
+        Optional caller/source label for recursion guards.
     """
+    if source == "capital_authority_refresh":
+        return
     if balance <= 0:
         return
     try:
@@ -9380,7 +9389,12 @@ class KrakenBroker(BaseBroker):
                 # time rather than the end of the full parse pipeline.
                 if total > 0:
                     _now = datetime.now(timezone.utc)
-                    _feed_capital_authority("kraken", total, timestamp=_now)
+                    _feed_capital_authority(
+                        "kraken",
+                        total,
+                        timestamp=_now,
+                        source="capital_authority_refresh",
+                    )
 
                 non_usd_assets = []
                 for asset, amount in result.items():
@@ -9500,7 +9514,11 @@ class KrakenBroker(BaseBroker):
                 # Fix 1: Source registration hook — keep CapitalAuthority current
                 # on every balance refresh so the capital pipeline always has a
                 # valid source even after the initial connect cycle.
-                _feed_capital_authority("kraken", total_funds)
+                _feed_capital_authority(
+                    "kraken",
+                    total_funds,
+                    source="capital_authority_refresh",
+                )
 
                 return total_funds
 
