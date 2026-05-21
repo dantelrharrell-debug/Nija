@@ -127,6 +127,32 @@ class TestStartupCoordinator(unittest.TestCase):
         self.assertEqual(snapshot.runtime_authority_state, RuntimeAuthorityState.READY.value)
         self.assertFalse(snapshot.trading_authority)
         self.assertFalse(snapshot.execution_permitted)
+        self.assertEqual(snapshot.lifecycle_phase, "WARM")
+
+    def test_default_snapshot_starts_in_boot_phase(self) -> None:
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="OFF",
+            activation_intent=False,
+        )
+        self.assertEqual(snapshot.runtime_authority_state, RuntimeAuthorityState.BOOT.value)
+        self.assertEqual(snapshot.runtime_authority_reason, "capital_not_hydrated")
+        self.assertEqual(snapshot.lifecycle_phase, "BOOT")
+
+    def test_capital_stale_is_contained_in_boot_until_convergence(self) -> None:
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=100.0,
+            stale=True,
+        )
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="OFF",
+            activation_intent=False,
+        )
+        self.assertEqual(snapshot.runtime_authority_state, RuntimeAuthorityState.BOOT.value)
+        self.assertEqual(snapshot.runtime_authority_reason, "capital_stale")
+        self.assertEqual(snapshot.lifecycle_phase, "BOOT")
 
 
 if __name__ == "__main__":
