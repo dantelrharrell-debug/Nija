@@ -134,6 +134,15 @@ except ImportError:
     except ImportError:
         startup_execution_probe_scope = None  # type: ignore[assignment]
 
+try:
+    from bot.broker_identity import format_broker_identity
+except ImportError:
+    try:
+        from broker_identity import format_broker_identity  # type: ignore[import]
+    except ImportError:
+        def format_broker_identity(broker: Any) -> str:  # type: ignore[misc]
+            return type(broker).__name__.replace("Broker", "").strip().lower() if broker is not None else "unknown"
+
 # ---------------------------------------------------------------------------
 # Heartbeat trade configuration
 # ---------------------------------------------------------------------------
@@ -163,6 +172,13 @@ _HEARTBEAT_TRADE_INTERVAL_S: float = _env_float(
 )
 _HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S: float = float(
     os.environ.get("HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S", "0") or "0"
+)
+_HEARTBEAT_RETRY_BACKOFF_ENABLED: bool = os.environ.get(
+    "NIJA_HEARTBEAT_RETRY_BACKOFF_ENABLED", "false"
+).strip().lower() in ("1", "true", "yes", "enabled", "on")
+_HEARTBEAT_RETRY_BACKOFF_MAX_S: float = _env_float(
+    "NIJA_HEARTBEAT_RETRY_BACKOFF_MAX_S",
+    default=120.0,
 )
 _HEARTBEAT_TRADE_SYMBOL: str = os.environ.get(
     "HEARTBEAT_TRADE_SYMBOL", "BTC-USD"
@@ -409,6 +425,7 @@ class TradingStrategy:
         """Background thread: execute heartbeat immediately and retry until verification succeeds."""
         first_delay_s = max(0.0, _HEARTBEAT_TRADE_FIRST_ATTEMPT_DELAY_S)
         retry_interval_s = max(1.0, _HEARTBEAT_TRADE_INTERVAL_S)
+        retry_backoff_max_s = max(retry_interval_s, float(_HEARTBEAT_RETRY_BACKOFF_MAX_S))
         if first_delay_s > 0:
             _heartbeat_rate_limited_info(
                 "heartbeat_runner_delay",
@@ -432,9 +449,16 @@ class TradingStrategy:
                     "heartbeat_runner_retry",
                     "runner",
                     max(10.0, retry_interval_s),
+                sleep_s = retry_interval_s
+                if _HEARTBEAT_RETRY_BACKOFF_ENABLED:
+                    sleep_s = min(
+                        retry_backoff_max_s,
+                        retry_interval_s * float(2 ** min(attempt - 1, 10)),
+                    )
+                logger.error(
                     "❌ Heartbeat trade FAILED on attempt %d — retrying in %.0fs",
                     attempt,
-                    retry_interval_s,
+                    sleep_s,
                 )
             except Exception as _hb_err:
                 logger.error(
@@ -446,8 +470,14 @@ class TradingStrategy:
                 with self._heartbeat_trade_lock:
                     self._heartbeat_trade_success = False
                     self._heartbeat_trade_completed = False
+                sleep_s = retry_interval_s
+                if _HEARTBEAT_RETRY_BACKOFF_ENABLED:
+                    sleep_s = min(
+                        retry_backoff_max_s,
+                        retry_interval_s * float(2 ** min(attempt - 1, 10)),
+                    )
             attempt += 1
-            time.sleep(retry_interval_s)
+            time.sleep(sleep_s)
 
     def _heartbeat_auth_verify(self, broker: Any) -> tuple[bool, str]:
         """Best-effort authenticated request probe for AUTH_VERIFY stage."""
@@ -490,6 +520,7 @@ class TradingStrategy:
 
         broker_name = type(broker).__name__
         heartbeat_trace_id = f"heartbeat-{int(time.time())}-{broker_name.lower()}"
+        broker_identity = format_broker_identity(broker)
         trade_amount_usd = self._resolve_heartbeat_trade_amount_usd(broker)
         required_stage = _heartbeat_required_stage()
         _heartbeat_rate_limited_info(
@@ -514,6 +545,8 @@ class TradingStrategy:
             "[HeartbeatTrade] required_stage=%s",
             required_stage,
         )
+        logger.info("💓 Heartbeat trade using broker: %s", broker_identity)
+        logger.info("[HeartbeatTrade] required_stage=%s", required_stage)
 
         # ── Stage 1: AUTH_VERIFY ─────────────────────────────────────────────
         auth_ok, auth_detail = self._heartbeat_auth_verify(broker)
@@ -589,7 +622,7 @@ class TradingStrategy:
                 logger.warning(
                     "⚠️  Broker %s has no market discovery method — "
                     "proceeding with symbol %s without market verification",
-                    broker_name,
+                    broker_identity,
                     symbol,
                 )
         except Exception as _market_err:
@@ -658,7 +691,7 @@ class TradingStrategy:
                 "[HeartbeatTrade] submit=%s fill=%s broker=%s pair=%s size=%s",
                 buy_submitted,
                 buy_filled,
-                broker_name,
+                broker_identity,
                 symbol,
                 trade_amount_usd,
             )
@@ -735,7 +768,7 @@ class TradingStrategy:
                 "[HeartbeatTrade] submit=%s fill=%s broker=%s pair=%s size=%s",
                 sell_submitted,
                 sell_filled,
-                broker_name,
+                broker_identity,
                 symbol,
                 trade_amount_usd,
             )
@@ -766,7 +799,7 @@ class TradingStrategy:
 
     def _resolve_heartbeat_trade_amount_usd(self, broker: Any) -> float:
         """Resolve a safe heartbeat notional above exchange minimums."""
-        broker_name = type(broker).__name__.replace("Broker", "").lower().strip()
+        broker_name = format_broker_identity(broker).split(":", 1)[0]
         exchange_minimum = 0.0
 
         try:

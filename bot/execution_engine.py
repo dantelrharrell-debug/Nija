@@ -34,6 +34,18 @@ except ImportError:
     except ImportError:
         get_preferred_execution_venue = None  # type: ignore[assignment]
 
+try:
+    from bot.broker_identity import resolve_broker_label, format_broker_identity
+except ImportError:
+    try:
+        from broker_identity import resolve_broker_label, format_broker_identity  # type: ignore[import]
+    except ImportError:
+        def resolve_broker_label(broker: Any) -> str:  # type: ignore[misc]
+            return type(broker).__name__.strip().lower() if broker is not None else "unknown"
+
+        def format_broker_identity(broker: Any) -> str:  # type: ignore[misc]
+            return resolve_broker_label(broker)
+
 # ── ECEL: mandatory pre-trade choke point ─────────────────────────────────────
 try:
     from bot.ecel_execution_compiler import (
@@ -1243,27 +1255,11 @@ class ExecutionEngine:
 
     def _get_broker_label(self) -> str:
         """Return a stable broker label for execution diagnostics."""
-        if not self.broker_client:
-            return "unknown"
-        broker_type = getattr(self.broker_client, "broker_type", None)
-        _broker_value = getattr(broker_type, "value", None)
-        if _broker_value is not None:
-            return str(_broker_value).lower()
-        if isinstance(broker_type, str):
-            return broker_type.lower()
-        return type(self.broker_client).__name__.lower()
+        return resolve_broker_label(self.broker_client)
 
     def _get_balance_cache_key(self) -> str:
         """Return a balance-cache key that is unique per broker account."""
-        broker_label = self._get_broker_label()
-        if not self.broker_client:
-            return broker_label
-        account_identifier = str(getattr(self.broker_client, "account_identifier", "") or "").strip().lower()
-        if not account_identifier:
-            return broker_label
-        if account_identifier in {"platform", broker_label}:
-            return broker_label
-        return f"{broker_label}:{account_identifier}"
+        return format_broker_identity(self.broker_client)
 
     @staticmethod
     def _extract_balance_values(balance_data: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
@@ -2151,8 +2147,7 @@ class ExecutionEngine:
             # FIX #3 (Jan 19, 2026): Check if broker supports this symbol before attempting trade
             if self.broker_client and hasattr(self.broker_client, 'supports_symbol'):
                 if not self.broker_client.supports_symbol(symbol):
-                    broker_name = getattr(self.broker_client, 'broker_type', 'unknown')
-                    broker_name_str = broker_name.value if hasattr(broker_name, 'value') else str(broker_name)
+                    broker_name_str = resolve_broker_label(self.broker_client)
                     logger.info(f"   ❌ Entry rejected for {symbol}")
                     logger.info(f"      Reason: {broker_name_str.title()} does not support this symbol")
                     logger.info(f"      💡 This symbol may be specific to another exchange (e.g., BUSD is Binance-only)")
@@ -2273,11 +2268,7 @@ class ExecutionEngine:
             # Check if entry size meets minimum notional requirements
             broker_name = None
             if self.broker_client and hasattr(self.broker_client, 'broker_type'):
-                broker_type = self.broker_client.broker_type
-                if hasattr(broker_type, 'value'):
-                    broker_name = broker_type.value
-                else:
-                    broker_name = str(broker_type)
+                broker_name = resolve_broker_label(self.broker_client)
 
             position_size, rejection_reason = self._apply_minimum_notional_gate(
                 symbol=symbol,
@@ -2505,9 +2496,8 @@ class ExecutionEngine:
             if self.broker_client:
                 order_side = 'buy' if side == 'long' else 'sell'
 
-                # Log broker being used for this trade
-                broker_name = getattr(self.broker_client, 'broker_type', 'unknown')
-                broker_name_str = broker_name.value if hasattr(broker_name, 'value') else str(broker_name)
+                # Log canonical broker identity for this trade
+                broker_name_str = format_broker_identity(self.broker_client)
 
                 # Allow ops to keep Coinbase connected for data while disabling execution.
                 _coinbase_exec_disabled = os.getenv("ENABLE_COINBASE_TRADING", "false").strip().lower() in (
@@ -2644,8 +2634,7 @@ class ExecutionEngine:
                     # Pre-hoc canonicalization: constraints → sizing → simulation → approval
                     _broker_name = "unknown"
                     if self.broker_client and hasattr(self.broker_client, "broker_type"):
-                        _broker_type = self.broker_client.broker_type
-                        _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
+                        _broker_name = resolve_broker_label(self.broker_client)
 
                     _compiled_order = None
                     _pricing_snapshot_cls = PricingSnapshot
@@ -3193,8 +3182,7 @@ class ExecutionEngine:
                     # ✅ EXCHANGE ORDER COMPILER: Final authority for exit orders
                     _broker_name = "unknown"
                     if hasattr(self.broker_client, "broker_type"):
-                        _broker_type = self.broker_client.broker_type
-                        _broker_name = _broker_type.value if hasattr(_broker_type, "value") else str(_broker_type)
+                        _broker_name = resolve_broker_label(self.broker_client)
 
                     _exit_compiled_order = None
                     _pricing_snapshot_cls = PricingSnapshot
