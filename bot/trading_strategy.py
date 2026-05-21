@@ -25,6 +25,43 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija.trading_strategy")
 
+try:
+    from bot.log_rate_limiter import get_log_rate_limiter
+except ImportError:
+    from log_rate_limiter import get_log_rate_limiter  # type: ignore[import]
+
+try:
+    from bot.runtime_correlation import runtime_correlation_scope
+except ImportError:
+    try:
+        from runtime_correlation import runtime_correlation_scope  # type: ignore[import]
+    except ImportError:
+        from contextlib import contextmanager
+
+        @contextmanager
+        def runtime_correlation_scope(**_: Any):  # type: ignore[no-redef]
+            yield {}
+
+_HEARTBEAT_LOG_LIMITER = get_log_rate_limiter()
+
+
+def _heartbeat_rate_limited_info(category: str, key: str, window_seconds: float, message: str, *args: Any) -> None:
+    allowed, suppressed = _HEARTBEAT_LOG_LIMITER.allow_with_count(
+        category=category,
+        key=key,
+        window_seconds=window_seconds,
+    )
+    if not allowed:
+        return
+    if suppressed:
+        logger.debug(
+            "[HeartbeatTrade] suppressed=%d category=%s key=%s",
+            suppressed,
+            category,
+            key,
+        )
+    logger.info(message, *args)
+
 # ---------------------------------------------------------------------------
 # Optional imports — degrade gracefully when modules are unavailable
 # ---------------------------------------------------------------------------
@@ -390,7 +427,10 @@ class TradingStrategy:
         retry_interval_s = max(1.0, _HEARTBEAT_TRADE_INTERVAL_S)
         retry_backoff_max_s = max(retry_interval_s, float(_HEARTBEAT_RETRY_BACKOFF_MAX_S))
         if first_delay_s > 0:
-            logger.info(
+            _heartbeat_rate_limited_info(
+                "heartbeat_runner_delay",
+                "runner",
+                60.0,
                 "💓 Heartbeat trade runner sleeping %.0fs before first attempt",
                 first_delay_s,
             )
@@ -405,6 +445,10 @@ class TradingStrategy:
                 if success:
                     logger.info("✅ Heartbeat trade PASSED — bot confirmed ready for live trading")
                     return
+                _heartbeat_rate_limited_info(
+                    "heartbeat_runner_retry",
+                    "runner",
+                    max(10.0, retry_interval_s),
                 sleep_s = retry_interval_s
                 if _HEARTBEAT_RETRY_BACKOFF_ENABLED:
                     sleep_s = min(
@@ -474,13 +518,32 @@ class TradingStrategy:
             logger.error("❌ Heartbeat trade: no active broker available")
             return False
 
+        broker_name = type(broker).__name__
+        heartbeat_trace_id = f"heartbeat-{int(time.time())}-{broker_name.lower()}"
         broker_identity = format_broker_identity(broker)
         trade_amount_usd = self._resolve_heartbeat_trade_amount_usd(broker)
         required_stage = _heartbeat_required_stage()
-        logger.info(
+        _heartbeat_rate_limited_info(
+            "heartbeat_trade_start",
+            broker_name,
+            30.0,
             "💓 Executing heartbeat trade: $%.2f on %s",
             trade_amount_usd,
             _HEARTBEAT_TRADE_SYMBOL,
+        )
+        _heartbeat_rate_limited_info(
+            "heartbeat_trade_broker",
+            broker_name,
+            30.0,
+            "💓 Heartbeat trade using broker: %s",
+            broker_name,
+        )
+        _heartbeat_rate_limited_info(
+            "heartbeat_trade_required_stage",
+            broker_name,
+            30.0,
+            "[HeartbeatTrade] required_stage=%s",
+            required_stage,
         )
         logger.info("💓 Heartbeat trade using broker: %s", broker_identity)
         logger.info("[HeartbeatTrade] required_stage=%s", required_stage)
@@ -509,7 +572,13 @@ class TradingStrategy:
             if _market_getter is not None:
                 available_markets = getattr(broker, _market_getter)()
                 _discovery_count = len(available_markets) if isinstance(available_markets, list) else 0
-                logger.info("[HeartbeatTrade] market_discovery_count=%s", _discovery_count)
+                _heartbeat_rate_limited_info(
+                    "heartbeat_market_discovery_count",
+                    broker_name,
+                    30.0,
+                    "[HeartbeatTrade] market_discovery_count=%s",
+                    _discovery_count,
+                )
                 if isinstance(available_markets, list) and available_markets:
                     # Check if our preferred symbol is available; fall back to
                     # the first available candidate if not.
@@ -532,14 +601,24 @@ class TradingStrategy:
                     else:
                         logger.info("💓 Heartbeat symbol %s confirmed available", symbol)
                 else:
-                    logger.info("[HeartbeatTrade] market_discovery_count=0")
+                    _heartbeat_rate_limited_info(
+                        "heartbeat_market_discovery_count",
+                        broker_name,
+                        30.0,
+                        "[HeartbeatTrade] market_discovery_count=0",
+                    )
                     logger.warning(
                         "⚠️  %s() returned empty list — proceeding with %s",
                         _market_getter,
                         symbol,
                     )
             else:
-                logger.info("[HeartbeatTrade] market_discovery_count=0")
+                _heartbeat_rate_limited_info(
+                    "heartbeat_market_discovery_count",
+                    broker_name,
+                    30.0,
+                    "[HeartbeatTrade] market_discovery_count=0",
+                )
                 logger.warning(
                     "⚠️  Broker %s has no market discovery method — "
                     "proceeding with symbol %s without market verification",
@@ -547,7 +626,12 @@ class TradingStrategy:
                     symbol,
                 )
         except Exception as _market_err:
-            logger.info("[HeartbeatTrade] market_discovery_count=0")
+            _heartbeat_rate_limited_info(
+                "heartbeat_market_discovery_count",
+                broker_name,
+                30.0,
+                "[HeartbeatTrade] market_discovery_count=0",
+            )
             logger.warning(
                 "⚠️  Market availability check failed (%s) — proceeding with %s",
                 _market_err,
@@ -571,14 +655,19 @@ class TradingStrategy:
                 if callable(startup_execution_probe_scope)
                 else nullcontext()
             )
-            with buy_scope:
-                buy_result = broker.execute_order(
-                    symbol=symbol,
-                    side="buy",
-                    quantity=trade_amount_usd,
-                    size_type="quote",
-                    metadata={"reason": "HEARTBEAT_TRADE"},
-                )
+            with runtime_correlation_scope(
+                trace_id=heartbeat_trace_id,
+                account_id=str(getattr(broker, "account_identifier", "") or ""),
+                broker_identity=broker_name,
+            ):
+                with buy_scope:
+                    buy_result = broker.execute_order(
+                        symbol=symbol,
+                        side="buy",
+                        quantity=trade_amount_usd,
+                        size_type="quote",
+                        metadata={"reason": "HEARTBEAT_TRADE"},
+                    )
             buy_status = (buy_result or {}).get("status", "error")
             buy_order_id = (buy_result or {}).get("order_id")
             buy_submitted = bool(buy_result)
@@ -659,14 +748,19 @@ class TradingStrategy:
                 if callable(startup_execution_probe_scope)
                 else nullcontext()
             )
-            with sell_scope:
-                sell_result = broker.execute_order(
-                    symbol=symbol,
-                    side="sell",
-                    quantity=trade_amount_usd,
-                    size_type="quote",
-                    metadata={"reason": "HEARTBEAT_TRADE_CLOSE"},
-                )
+            with runtime_correlation_scope(
+                trace_id=heartbeat_trace_id,
+                account_id=str(getattr(broker, "account_identifier", "") or ""),
+                broker_identity=broker_name,
+            ):
+                with sell_scope:
+                    sell_result = broker.execute_order(
+                        symbol=symbol,
+                        side="sell",
+                        quantity=trade_amount_usd,
+                        size_type="quote",
+                        metadata={"reason": "HEARTBEAT_TRADE_CLOSE"},
+                    )
             sell_status = (sell_result or {}).get("status", "error")
             sell_submitted = bool(sell_result)
             sell_filled = sell_status in ("filled", "ok", "success")

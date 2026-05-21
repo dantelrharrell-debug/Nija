@@ -35,6 +35,23 @@ except ImportError:
 _GATEWAY_BLOCKED_ERROR_TAGS = ("blocked", "lease", "fencing")
 
 try:
+    from bot.runtime_contract import build_canonical_intent_id
+except ImportError:
+    try:
+        from runtime_contract import build_canonical_intent_id  # type: ignore[import]
+    except ImportError:
+        build_canonical_intent_id = None  # type: ignore[assignment]
+
+try:
+    from bot.runtime_correlation import get_runtime_correlation
+except ImportError:
+    try:
+        from runtime_correlation import get_runtime_correlation  # type: ignore[import]
+    except ImportError:
+        def get_runtime_correlation() -> Dict[str, str]:  # type: ignore[no-redef]
+            return {}
+
+try:
     from bot.global_kraken_nonce import (
         KrakenNonceManager as NonceManager,
         get_global_kraken_nonce,
@@ -7944,11 +7961,31 @@ class KrakenBroker(BaseBroker):
                 "mode.  Install it with: pip install requests"
             )
 
-        intent_id = str(uuid.uuid4())
+        correlation = get_runtime_correlation() or {}
+        intent_id = str(params.get("intent_id") or "")
+        try:
+            _intent_size = float(params.get("volume") or params.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            _intent_size = 0.0
+        if not intent_id:
+            if callable(build_canonical_intent_id):
+                intent_id = build_canonical_intent_id(
+                    symbol=str(params.get("pair") or params.get("symbol") or method),
+                    side=str(params.get("type") or method).lower(),
+                    size_usd=_intent_size,
+                    strategy=str(params.get("strategy") or "kraken_gateway"),
+                    account_id=str(self.account_identifier or ""),
+                    cycle_id=correlation.get("cycle_id", ""),
+                    trace_id=correlation.get("trace_id", ""),
+                    broker_identity=str(self.account_identifier or "kraken"),
+                )
+            else:
+                intent_id = str(uuid.uuid4())
         payload = {
             "intent_id": intent_id,
             "method": method,
             "params": params,
+            "correlation": correlation,
         }
         endpoint = gateway_url.rstrip("/") + "/execute"
 
