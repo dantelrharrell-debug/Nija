@@ -390,6 +390,43 @@ class TestBootstrapPass(unittest.TestCase):
         self.assertEqual(state["effective_limit"], 1)
         self.assertAlmostEqual(state["effective_min_confidence"], 0.035, places=4)
 
+    def test_starvation_recovery_activates_before_first_live_execution(self):
+        cc_mod._MIN_LIVE_EXECUTION_GAP_S = 1.0
+        cc_mod._MIN_LIVE_EXECUTION_CONF_RELAX = 0.5
+        cc_mod._MIN_LIVE_EXECUTION_LIMIT_FLOOR = 1
+        cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = 1
+        cc_mod._BOOTSTRAP_PASS_LIMIT = 0
+        self.compiler._last_live_execution_ts = None
+        with self.compiler._lock:
+            self.compiler._execution_outcomes.clear()
+            self.compiler._execution_outcomes.append(False)
+            state = self.compiler._compute_bootstrap_decay_state_unlocked()
+        self.assertTrue(state["starvation_recovery_active"])
+        self.assertEqual(state["effective_limit"], 1)
+
+    def test_starvation_recovery_allows_metadata_free_recovery_pass_and_rolls_floor(self):
+        cc_mod._MIN_LIVE_EXECUTION_GAP_S = 1.0
+        cc_mod._MIN_LIVE_EXECUTION_CONF_RELAX = 0.7
+        cc_mod._MIN_LIVE_EXECUTION_LIMIT_FLOOR = 1
+        cc_mod._BOOTSTRAP_DECAY_MIN_SAMPLES = 1
+        cc_mod._BOOTSTRAP_PASS_LIMIT = 0
+        self.compiler._last_live_execution_ts = None
+        with self.compiler._lock:
+            self.compiler._execution_outcomes.clear()
+            self.compiler._execution_outcomes.append(False)
+
+        first = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={}))
+        self.assertTrue(first.accepted)
+        self.assertTrue(first.signal.metadata.get("bootstrap_pass"))
+
+        # Simulate a new starvation period and ensure a fresh recovery floor is available.
+        self.compiler._last_live_execution_ts = None
+        with self.compiler._lock:
+            self.compiler._execution_outcomes.append(False)
+        second = self.compiler.compile(_valid_raw(confidence=0.08, regime=self._bootstrap_regime, metadata={}))
+        self.assertTrue(second.accepted)
+        self.assertTrue(second.signal.metadata.get("bootstrap_pass"))
+
 
 # ---------------------------------------------------------------------------
 # 5. ControlMatrix K operations
@@ -671,6 +708,12 @@ class TestCompilerHealth(unittest.TestCase):
             cc_mod._BOOTSTRAP_PASS_LIMIT = orig_limit
             cc_mod._BOOTSTRAP_MIN_CONFIDENCE = orig_min_conf
             cc_mod._MIN_CONFIDENCE_BASELINE = orig_min_conf_baseline
+
+    def test_execution_visibility_logs_allow_true_on_compiler_accept(self):
+        compiler = _fresh_compiler()
+        with self.assertLogs("nija.control_compiler", level="INFO") as captured:
+            compiler.compile(_valid_raw(confidence=0.75))
+        self.assertTrue(any("allow=True" in message and "compiler_passed" in message for message in captured.output))
 
 
 # ---------------------------------------------------------------------------
