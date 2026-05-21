@@ -399,6 +399,7 @@ def tre_compute_position_size(
     entry_price: Optional[float] = None,
     win_rate: Optional[float] = None,
     broker: Any = None,
+    leverage: int = 1,
 ) -> float:
     """
     TRE-aware position size calculation.
@@ -407,11 +408,21 @@ def tre_compute_position_size(
     position), resolves live win-rate from the SymbolPerformanceTracker, then
     delegates to :func:`calculate_position_size`.
 
+    Parameters
+    ----------
+    leverage : int
+        Leverage multiplier for margin orders.  ``1`` (default) means spot;
+        values ≥ 2 scale the raw size by the leverage factor, subject to the
+        hard 3× notional cap from ``HARD_MAX_LEVERAGE`` in risk_manager.
+
     Returns
     -------
     float
-        Position size in USD, or 0.0 when the trade is vetoed (below tier
-        minimum or net profit too low after execution friction).
+        Position size in USD (spot notional), or 0.0 when the trade is vetoed
+        (below tier minimum or net profit too low after execution friction).
+        For margin orders the caller must multiply by *leverage* to get the
+        exchange-facing notional; the returned value is always the **equity**
+        portion (margin used), not the full leveraged notional.
     """
     # ── Tier constraints ──────────────────────────────────────────────────────
     tier_min     = _get_tier_min_trade(broker_name)
@@ -427,6 +438,23 @@ def tre_compute_position_size(
     if win_rate is None or win_rate <= 0:
         win_rate = _get_symbol_win_rate(symbol)
 
+    # ── Leverage-aware risk cap adjustment ───────────────────────────────────
+    # When leverage > 1 the stop-loss risk is amplified by the same factor.
+    # Divide max_risk by leverage so the *dollar risk* per trade remains
+    # constant regardless of leverage: risk$  =  size × sl_pct × leverage.
+    # Hard cap: leverage cannot exceed HARD_MAX_LEVERAGE (3×).
+    _hard_max_lev: int = 3  # mirrors risk_manager.HARD_MAX_LEVERAGE
+    effective_leverage = max(1, min(int(leverage), _hard_max_lev))
+    if effective_leverage >= 2:
+        max_risk = max_risk / effective_leverage
+        logger.info(
+            "📐 TRE leverage=%d: max_risk adjusted %.4f%%→%.4f%% for %s",
+            effective_leverage,
+            (max_risk * effective_leverage) * 100,
+            max_risk * 100,
+            symbol,
+        )
+
     # ── Compute raw size ──────────────────────────────────────────────────────
     size = calculate_position_size(
         account_balance  = account_balance,
@@ -440,6 +468,18 @@ def tre_compute_position_size(
         max_position_pct = max_position,
     )
 
+    # ── Hard notional cap for leveraged orders ────────────────────────────────
+    # Ensure notional (size × leverage) ≤ account_balance × HARD_MAX_LEVERAGE.
+    if effective_leverage >= 2:
+        hard_notional_cap = account_balance * _hard_max_lev
+        max_equity_portion = hard_notional_cap / effective_leverage
+        if size > max_equity_portion:
+            logger.info(
+                "📐 TRE notional cap: $%.2f → $%.2f (lev=%d cap=$%.2f)",
+                size, max_equity_portion, effective_leverage, hard_notional_cap,
+            )
+            size = max_equity_portion
+
     # ── Enforce tier minimum ──────────────────────────────────────────────────
     if size < tier_min:
         logger.info(
@@ -449,10 +489,10 @@ def tre_compute_position_size(
         return 0.0
 
     logger.info(
-        "📊 TRE position size: %s $%.2f  (balance=$%.2f sl=%.1f%% tp=%.1f%% atr=%.1f%% wr=%.0f%%)",
+        "📊 TRE position size: %s $%.2f  (balance=$%.2f sl=%.1f%% tp=%.1f%% atr=%.1f%% wr=%.0f%% lev=%d)",
         symbol, size,
         account_balance, stop_loss_pct * 100, take_profit_pct * 100,
-        atr_pct * 100, win_rate * 100,
+        atr_pct * 100, win_rate * 100, effective_leverage,
     )
     return size
 
