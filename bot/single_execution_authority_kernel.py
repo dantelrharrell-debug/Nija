@@ -106,11 +106,6 @@ from typing import Any, Deque, Dict, List, Optional
 logger = logging.getLogger("nija.seak")
 
 try:
-    from bot.runtime_contract import build_canonical_intent_id
-except ImportError:
-    from runtime_contract import build_canonical_intent_id  # type: ignore[import]
-
-try:
     from bot.runtime_correlation import get_runtime_correlation
 except ImportError:
     try:
@@ -443,21 +438,12 @@ class SingleExecutionAuthorityKernel:
             account_id=account_id,
             extra=extra or {},
         )
-        request.intent_id = str(
-            request.extra.get("intent_id")
-            or correlation.get("intent_id")
-            or build_canonical_intent_id(
-                symbol=request.symbol,
-                side=request.side,
-                size_usd=request.size_usd,
-                strategy=request.strategy,
-                account_id=request.account_id,
-                cycle_id=correlation.get("cycle_id", ""),
-                trace_id=correlation.get("trace_id", ""),
-                broker_identity=correlation.get("broker_identity", ""),
-            )
-        )
-        request.extra.setdefault("intent_id", request.intent_id)
+        _intent_value = request.extra.get("intent_id")
+        if _intent_value is None:
+            _intent_value = correlation.get("intent_id")
+        request.intent_id = str(_intent_value).strip() if _intent_value not in (None, "") else ""
+        if request.intent_id:
+            request.extra.setdefault("intent_id", request.intent_id)
         if correlation:
             request.extra.setdefault("correlation", dict(correlation))
 
