@@ -2,7 +2,12 @@ import os
 import unittest
 from unittest.mock import patch
 
-from bot.startup_validation import StartupRisk, validate_operational_environment_config
+from bot.startup_validation import (
+    StartupRisk,
+    StartupValidationResult,
+    display_validation_results,
+    validate_operational_environment_config,
+)
 
 
 class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
@@ -73,6 +78,14 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
             result = validate_operational_environment_config()
             self.assertFalse(result.critical_failure)
             self.assertFalse(any(risk == StartupRisk.ENVIRONMENT_MISCONFIGURATION for risk, _ in result.risks))
+
+    def test_display_validation_results_labels_log_monitoring_as_informational(self):
+        with self.assertLogs("nija", level="INFO") as captured:
+            display_validation_results(StartupValidationResult())
+        self.assertTrue(
+            any("LOG MONITORING (informational)" in line for line in captured.output),
+            "Expected startup validation output to label log monitoring guidance as informational.",
+        )
 
 
 if __name__ == "__main__":
