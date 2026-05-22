@@ -173,6 +173,9 @@ class CycleSnapshot:
     # fired AND ca_is_hydrated is confirmed — prevents stale pre-hydration
     # data from satisfying the activation gate.
     is_post_hydration: bool = False
+    # Capital snapshot lineage metadata propagated from _capture_cycle_capital_state().
+    snapshot_source: str = "placeholder"
+    aggregation_normalized: bool = True
 
 # ---------------------------------------------------------------------------
 # Trading state machine + CapitalAuthority — optional; graceful fallback
@@ -315,17 +318,13 @@ def _capture_cycle_capital_state() -> _types.MappingProxyType:
             )
         if _mabm_inst is not None and hasattr(_mabm_inst, "all_brokers_fully_ready"):
             result["mabm_brokers_ready"] = bool(_mabm_inst.all_brokers_fully_ready())
-        # Approximate valid_brokers from platform_brokers if available
-        _pb = getattr(_mabm_inst, "_platform_brokers", None) if _mabm_inst is not None else None
-        if isinstance(_pb, dict):
-            result["ca_valid_brokers"] = max(
-                result["ca_valid_brokers"], len(_pb)
-            )
-        # Derive snapshot_source from the MABM's last cached refresh result.
-        # "_capital_last_valid_brokers" is updated whenever refresh_capital_authority
-        # returns data from a real exchange call.  "live_exchange" mirrors the value
-        # MABM sets when at least one connected broker contributed a balance payload.
+        # Derive valid_brokers + snapshot_source from MABM's last authoritative
+        # refresh result. Using registered broker count here can drift when some
+        # brokers are configured but not yet contributing balances.
+        # "_capital_last_valid_brokers" only advances when refresh_capital_authority()
+        # confirms viable broker balance payloads.
         _last_vb = int(getattr(_mabm_inst, "_capital_last_valid_brokers", 0) or 0) if _mabm_inst is not None else 0
+        result["ca_valid_brokers"] = max(result["ca_valid_brokers"], _last_vb)
         result["snapshot_source"] = "live_exchange" if _last_vb > 0 else "placeholder"
     except Exception as _me:
         result["sync_failed"] = True
@@ -945,17 +944,26 @@ class NijaCoreLoop:
         _cid = _current_cycle_id or (
             f"cycle-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-scan"
         )
+        _ca_hydrated = bool(_cap.get("ca_is_hydrated", False))
+        _ca_total_capital = float(_cap.get("ca_total_capital", 0.0) or 0.0)
+        # Canonical balance source-of-truth:
+        # - Once CA is hydrated, always use cycle-captured CA capital
+        #   (including legitimate 0.0) so all gates/signals share one value.
+        # - Before hydration, fall back to caller-supplied balance.
+        _canonical_balance = _ca_total_capital if _ca_hydrated else float(balance)
         snapshot = CycleSnapshot(
-            balance=balance,
+            balance=_canonical_balance,
             current_regime=getattr(self.apex, "current_regime", None),
             daily_pnl_usd=getattr(self.apex, "_daily_pnl_usd", 0.0),
             open_positions=open_positions_count,
             cycle_id=_cid,
-            ca_is_hydrated=bool(_cap.get("ca_is_hydrated", False)),
-            ca_total_capital=float(_cap.get("ca_total_capital", 0.0)),
+            ca_is_hydrated=_ca_hydrated,
+            ca_total_capital=_ca_total_capital,
             ca_valid_brokers=int(_cap.get("ca_valid_brokers", 0)),
             mabm_brokers_ready=bool(_cap.get("mabm_brokers_ready", False)),
             is_post_hydration=bool(_cap.get("is_post_hydration", False)),
+            snapshot_source=str(_cap.get("snapshot_source", "placeholder") or "placeholder"),
+            aggregation_normalized=bool(_cap.get("aggregation_normalized", True)),
         )
 
         # Publish the fully-constructed snapshot so that CapitalAllocationBrain
@@ -963,6 +971,7 @@ class NijaCoreLoop:
         # consistent data for the remainder of this cycle.
         global _current_cycle_snapshot
         _current_cycle_snapshot = snapshot
+        self._sync_risk_state_for_cycle(snapshot)
 
         logger.info(
             "🟢 Trading loop alive — scanning %d symbols (balance=$%.2f open=%d)",
@@ -1101,6 +1110,44 @@ class NijaCoreLoop:
     # ------------------------------------------------------------------
     # Phase 1: Safety gate
     # ------------------------------------------------------------------
+
+    def _sync_risk_state_for_cycle(self, snapshot: CycleSnapshot) -> None:
+        """Refresh risk-state consumers from the same cycle snapshot before scans."""
+        try:
+            apex = self.apex
+            bal = float(snapshot.balance)
+
+            if hasattr(apex, "account_balance"):
+                try:
+                    setattr(apex, "account_balance", bal)
+                except Exception:
+                    pass
+
+            _rm = getattr(apex, "risk_manager", None)
+            if _rm is not None:
+                for _method_name in ("update_balance", "update_account_balance", "set_account_balance"):
+                    _method = getattr(_rm, _method_name, None)
+                    if callable(_method):
+                        try:
+                            _method(bal)
+                            break
+                        except Exception:
+                            continue
+                if hasattr(_rm, "account_balance"):
+                    try:
+                        setattr(_rm, "account_balance", bal)
+                    except Exception:
+                        pass
+
+            for _attr_name in ("global_risk_controller", "_global_risk", "global_risk"):
+                _risk_ctrl = getattr(apex, _attr_name, None)
+                if _risk_ctrl is not None and callable(getattr(_risk_ctrl, "update_balance", None)):
+                    try:
+                        _risk_ctrl.update_balance(bal)
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.debug("Risk-state sync skipped: %s", exc)
 
     def _phase1_safety(self, broker: Any, snapshot: CycleSnapshot) -> Tuple[bool, str]:
         """
