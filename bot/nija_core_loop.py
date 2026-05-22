@@ -1437,6 +1437,8 @@ class NijaCoreLoop:
             )
             candidates.append(fallback_sig)
 
+        logger.info("[Scanner] candidates_found=%d", len(candidates))
+
         # ── Rank and select top-N ─────────────────────────────────────────
         if not candidates:
             logger.info(
@@ -2426,6 +2428,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 )
                 if cycle == 1 or (cycle % _tick_log_every == 0):
                     logger.info("🔥 TRADE LOOP HEARTBEAT: active=%s cycle=%s", _trading_active, cycle)
+                logger.info("[ScannerLoop] heartbeat")
 
                 logger.debug("🟢 LIVE LOOP TICK — scanning markets")
 

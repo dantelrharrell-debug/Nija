@@ -489,7 +489,10 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
 
         logger.info("STRATEGY_LOOP_ENTRY marker=supervised_handoff reason=%s", reason)
         logger.info("Starting trading loop from supervised state (%s)", reason)
-        _start_trading_engine(_strategy)
+        _trading_thread = _start_trading_engine(_strategy)
+        if _trading_thread is None or not _trading_thread.is_alive():
+            logger.error("START_TRADING_LOOP_FAILED: trading loop thread did not start (%s)", reason)
+            return False
         # Mark bootstrap handoff so supervisor treats startup-thread exit as expected.
         _bootstrap_complete_flag.set()
         _bootstrap_completed_event.set()
@@ -8461,7 +8464,9 @@ def main():
     logger.info("Step 6: entering main trading loop")
     from bot.nija_core_loop import start_trading_engine
     logger.info("STRATEGY_LOOP_ENTRY marker=main_supervisor_handoff")
-    start_trading_engine(strategy)
+    _trading_thread = start_trading_engine(strategy)
+    if _trading_thread is None or not _trading_thread.is_alive():
+        raise RuntimeError("TradingLoop thread failed to start")
     logger.info("✅ TradingLoop started via start_trading_engine()")
 
     _trading_loop_alive = any(
