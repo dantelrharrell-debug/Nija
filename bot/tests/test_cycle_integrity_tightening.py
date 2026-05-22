@@ -31,32 +31,38 @@ class TestCaptureCycleCapitalStateImmutability(unittest.TestCase):
 
     def _invoke_with_good_ca(self):
         """Run _capture_cycle_capital_state with CA available and healthy."""
-        import bot.nija_core_loop as ncl_mod
+        fake_pandas = types.ModuleType("pandas")
+        fake_pandas.DataFrame = object
+        fake_pandas.Series = object
+        fake_pandas.NA = None
 
-        # Save originals
-        orig_ca_available = ncl_mod._CA_LOOP_AVAILABLE
-        orig_get_ca = ncl_mod._get_ca
-        orig_event = ncl_mod._CAPITAL_HYDRATED_EVENT
+        with patch.dict(sys.modules, {"pandas": fake_pandas}):
+            import bot.nija_core_loop as ncl_mod
 
-        # Stub CA to succeed
-        _ca = SimpleNamespace(is_hydrated=True, total_capital=1000.0)
+            # Save originals
+            orig_ca_available = ncl_mod._CA_LOOP_AVAILABLE
+            orig_get_ca = ncl_mod._get_ca
+            orig_event = ncl_mod._CAPITAL_HYDRATED_EVENT
 
-        # Inject stubs directly into module globals
-        ncl_mod._CA_LOOP_AVAILABLE = True
-        ncl_mod._get_ca = lambda: _ca
-        ncl_mod._CAPITAL_HYDRATED_EVENT = None
+            # Stub CA to succeed
+            _ca = SimpleNamespace(is_hydrated=True, total_capital=1000.0)
 
-        try:
-            # Suppress MABM import noise
-            with patch.dict(sys.modules, {
-                "multi_account_broker_manager": None,
-                "bot.multi_account_broker_manager": None,
-            }):
-                result = ncl_mod._capture_cycle_capital_state()
-        finally:
-            ncl_mod._CA_LOOP_AVAILABLE = orig_ca_available
-            ncl_mod._get_ca = orig_get_ca
-            ncl_mod._CAPITAL_HYDRATED_EVENT = orig_event
+            # Inject stubs directly into module globals
+            ncl_mod._CA_LOOP_AVAILABLE = True
+            ncl_mod._get_ca = lambda: _ca
+            ncl_mod._CAPITAL_HYDRATED_EVENT = None
+
+            try:
+                # Suppress MABM import noise
+                with patch.dict(sys.modules, {
+                    "multi_account_broker_manager": None,
+                    "bot.multi_account_broker_manager": None,
+                }):
+                    result = ncl_mod._capture_cycle_capital_state()
+            finally:
+                ncl_mod._CA_LOOP_AVAILABLE = orig_ca_available
+                ncl_mod._get_ca = orig_get_ca
+                ncl_mod._CAPITAL_HYDRATED_EVENT = orig_event
         return result
 
     def test_returns_mapping_proxy(self):
@@ -90,42 +96,48 @@ class TestSyncFailedFlag(unittest.TestCase):
     """CA/MABM read errors must set sync_failed=True and emit a WARNING."""
 
     def _run_with_ca_failure(self):
-        import bot.nija_core_loop as ncl_mod
+        fake_pandas = types.ModuleType("pandas")
+        fake_pandas.DataFrame = object
+        fake_pandas.Series = object
+        fake_pandas.NA = None
 
-        orig_ca_available = ncl_mod._CA_LOOP_AVAILABLE
-        orig_get_ca = ncl_mod._get_ca
-        orig_event = ncl_mod._CAPITAL_HYDRATED_EVENT
+        with patch.dict(sys.modules, {"pandas": fake_pandas}):
+            import bot.nija_core_loop as ncl_mod
 
-        def bad_ca():
-            raise RuntimeError("CA exploded")
+            orig_ca_available = ncl_mod._CA_LOOP_AVAILABLE
+            orig_get_ca = ncl_mod._get_ca
+            orig_event = ncl_mod._CAPITAL_HYDRATED_EVENT
 
-        ncl_mod._CA_LOOP_AVAILABLE = True
-        ncl_mod._get_ca = bad_ca
-        ncl_mod._CAPITAL_HYDRATED_EVENT = None
+            def bad_ca():
+                raise RuntimeError("CA exploded")
 
-        log_records: list = []
+            ncl_mod._CA_LOOP_AVAILABLE = True
+            ncl_mod._get_ca = bad_ca
+            ncl_mod._CAPITAL_HYDRATED_EVENT = None
 
-        class _Capture(logging.Handler):
-            def emit(self, record):
-                log_records.append(record)
+            log_records: list = []
 
-        handler = _Capture()
-        log = logging.getLogger("nija.core_loop")
-        log.addHandler(handler)
-        old_level = log.level
-        log.setLevel(logging.DEBUG)
-        try:
-            with patch.dict(sys.modules, {
-                "multi_account_broker_manager": None,
-                "bot.multi_account_broker_manager": None,
-            }):
-                result = ncl_mod._capture_cycle_capital_state()
-        finally:
-            log.removeHandler(handler)
-            log.setLevel(old_level)
-            ncl_mod._CA_LOOP_AVAILABLE = orig_ca_available
-            ncl_mod._get_ca = orig_get_ca
-            ncl_mod._CAPITAL_HYDRATED_EVENT = orig_event
+            class _Capture(logging.Handler):
+                def emit(self, record):
+                    log_records.append(record)
+
+            handler = _Capture()
+            log = logging.getLogger("nija.core_loop")
+            log.addHandler(handler)
+            old_level = log.level
+            log.setLevel(logging.DEBUG)
+            try:
+                with patch.dict(sys.modules, {
+                    "multi_account_broker_manager": None,
+                    "bot.multi_account_broker_manager": None,
+                }):
+                    result = ncl_mod._capture_cycle_capital_state()
+            finally:
+                log.removeHandler(handler)
+                log.setLevel(old_level)
+                ncl_mod._CA_LOOP_AVAILABLE = orig_ca_available
+                ncl_mod._get_ca = orig_get_ca
+                ncl_mod._CAPITAL_HYDRATED_EVENT = orig_event
         return result, log_records
 
     def test_sync_failed_true_on_ca_error(self):
