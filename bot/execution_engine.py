@@ -327,7 +327,7 @@ MIN_POSITION_SIZE_EPSILON: float = 1e-9
 
 # Fee-dominated micro-trade guardrails.
 TAKER_FEE_RATE: float = float(os.getenv("TAKER_FEE_RATE", "0.0026"))
-MIN_EDGE_MULTIPLIER: float = float(os.getenv("MIN_EDGE_MULTIPLIER", "2.0"))
+MIN_EDGE_MULTIPLIER: float = float(os.getenv("MIN_EDGE_MULTIPLIER", "1.5"))
 
 # Keep a cash reserve so rounding/fees don't trigger false insufficient-funds rejects.
 BALANCE_BUFFER_PCT: float = float(os.getenv("BALANCE_BUFFER_PCT", "0.10"))

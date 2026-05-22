@@ -43,6 +43,19 @@ class TestApexEntryGateWiring(unittest.TestCase):
             },
         )
 
+    def test_check_kraken_confidence_soft_band_is_advisory(self):
+        try:
+            from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
+        except Exception as exc:
+            self.skipTest(f"NIJAApexStrategyV71 unavailable: {exc}")
+        strategy = object.__new__(NIJAApexStrategyV71)
+        strategy.kraken_min_confidence = 0.50
+        strategy.kraken_confidence_soft_margin = 0.05
+
+        result = strategy._check_kraken_confidence("kraken", {"confidence": 0.47})
+
+        self.assertIsNone(result)
+
     def test_verify_trade_eligibility_blocks_wide_spread(self):
         try:
             import pandas as pd
@@ -78,3 +91,40 @@ class TestApexEntryGateWiring(unittest.TestCase):
 
         self.assertFalse(result["eligible"])
         self.assertIn("Spread too wide", result["reason"])
+
+    def test_verify_trade_eligibility_allows_borderline_spread_with_reduced_size(self):
+        try:
+            import pandas as pd
+            from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
+        except Exception as exc:
+            self.skipTest(f"APEX dependencies unavailable: {exc}")
+        strategy = object.__new__(NIJAApexStrategyV71)
+        strategy._get_broker_name = lambda: "coinbase"
+        strategy.kraken_min_rsi = 28.0
+        strategy.kraken_max_rsi = 72.0
+        strategy.kraken_min_atr_pct = 0.4
+
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 100.0],
+                "volume": [1000.0, 1000.0],
+            }
+        )
+        indicators = {
+            "rsi": pd.Series([50.0]),
+            "atr": pd.Series([0.5]),
+        }
+
+        # 0.80% spread: above 0.75% max but inside 0.90% soft limit.
+        result = strategy.verify_trade_eligibility(
+            "BTC-USD",
+            df,
+            indicators,
+            "long",
+            25.0,
+            bid_price=100.0,
+            ask_price=100.8,
+        )
+
+        self.assertTrue(result["eligible"])
+        self.assertTrue(result["allow_with_reduced_size"])
