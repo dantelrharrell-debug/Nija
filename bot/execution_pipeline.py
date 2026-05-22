@@ -186,6 +186,19 @@ except ImportError:
     except ImportError:
         get_seak = None  # type: ignore[assignment]
 
+# Optional import — used for cycle_id cross-validation at dispatch time.
+# The pipeline must remain importable even when nija_core_loop is absent.
+def _get_pipeline_cycle_snapshot():
+    """Return the active CycleSnapshot or None when unavailable."""
+    try:
+        try:
+            from bot.nija_core_loop import get_current_cycle_snapshot as _gcs
+        except ImportError:
+            from nija_core_loop import get_current_cycle_snapshot as _gcs  # type: ignore[import]
+        return _gcs()
+    except Exception:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -822,6 +835,28 @@ class ExecutionPipeline:
                     raise RuntimeError("Runtime authority convergence lost")
                 _correlation = get_runtime_correlation() or {}
                 _intent_id = str(_correlation.get("intent_id") or "").strip()
+                # ── Cycle integrity cross-check ───────────────────────────
+                # Validate that the cycle_id in the correlation envelope matches
+                # the cycle_id of the currently-active CycleSnapshot.  A mismatch
+                # means execution was invoked with stale or misrouted correlation
+                # state — log at WARNING so the drift is observable in the audit
+                # trail.  This is a non-blocking diagnostic: execution continues
+                # because the snapshot is advisory context (not a hard gate here)
+                # and a mismatch may arise from valid async paths.
+                _corr_cycle_id = str(_correlation.get("cycle_id") or "").strip()
+                if _corr_cycle_id:
+                    _active_snap = _get_pipeline_cycle_snapshot()
+                    _snap_cycle_id = str(getattr(_active_snap, "cycle_id", "") or "").strip()
+                    if _snap_cycle_id and _snap_cycle_id != _corr_cycle_id:
+                        logger.warning(
+                            "[Pipeline] cycle_id lineage drift: correlation cycle_id=%r "
+                            "but active snapshot cycle_id=%r — execution proceeds but "
+                            "journal lineage may be misaligned. symbol=%s side=%s",
+                            _corr_cycle_id,
+                            _snap_cycle_id,
+                            effective_request.symbol,
+                            effective_request.side,
+                        )
                 append_execution_journal_event(
                     event_type="order_submitted",
                     intent_id=_intent_id,
@@ -832,6 +867,7 @@ class ExecutionPipeline:
                         "strategy": effective_request.strategy,
                         "account_id": effective_request.account_id,
                         "broker_hint": effective_request.preferred_broker or "",
+                        "cycle_id": _corr_cycle_id,
                     },
                 )
                 result = self._dispatch(effective_request, t_start)
@@ -1564,7 +1600,19 @@ class ExecutionPipeline:
         # ── Step 8: Fill reconciliation per cycle ─────────────────────────────
         # Reconcile all fills registered against this cycle so underfills that
         # slipped through broker-level checks are surfaced and logged.
-        cycle_id = signal.get("cycle_id") or f"pipeline-{self._run_count}"
+        cycle_id = signal.get("cycle_id")
+        if not cycle_id:
+            # No canonical cycle_id provided — use a synthetic fallback so
+            # reconciliation can still run, but warn so this lineage gap is
+            # visible in the audit trail.  Callers should inject a real cycle_id
+            # (from the runtime correlation or NijaCoreLoop) into the signal dict.
+            cycle_id = f"pipeline-{self._run_count}"
+            logger.warning(
+                "[Pipeline] cycle_id missing from signal — using synthetic fallback %r. "
+                "Fill reconciliation will not be traceable to a canonical cycle. "
+                "Inject cycle_id into the signal dict to maintain full lineage.",
+                cycle_id,
+            )
         if get_execution_integrity_layer is not None:
             try:
                 eil = get_execution_integrity_layer()

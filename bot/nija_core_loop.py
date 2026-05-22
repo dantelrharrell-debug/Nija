@@ -53,8 +53,9 @@ import logging
 import os
 import time
 import threading
+import types as _types
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 
@@ -232,7 +233,7 @@ except ImportError:
 # logged with ``%s`` without a ``None`` guard, and compared with ``if not cid``.
 
 _current_cycle_id: str = ""
-_current_cycle_capital: Dict[str, Any] = {}
+_current_cycle_capital: Mapping[str, Any] = {}
 _current_cycle_snapshot: Optional["CycleSnapshot"] = None
 
 
@@ -249,14 +250,14 @@ def get_current_cycle_snapshot() -> Optional["CycleSnapshot"]:
     return _current_cycle_snapshot
 
 
-def _capture_cycle_capital_state() -> Dict[str, Any]:
+def _capture_cycle_capital_state() -> _types.MappingProxyType:
     """Read CapitalAuthority + MABM broker state exactly ONCE.
 
     Called at the top of each cycle in run_trading_loop() BEFORE
     _supervisor_step_state_machine() so both the state-machine activation
     check and the subsequent strategy cycle see the same frozen capital view.
 
-    Returns a plain dict with keys:
+    Returns an immutable MappingProxyType with keys:
         ca_is_hydrated        (bool)
         ca_total_capital      (float)
         ca_valid_brokers      (int)
@@ -268,6 +269,10 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
                                         consistent with MABM's reported viable broker
                                         count, confirming aggregation pipeline ran
                                         sequentially (FIX 2).
+        sync_failed           (bool) — True when any critical subsystem read raised an
+                                        unexpected exception during this capture.
+                                        Consumers should treat the snapshot as suspect
+                                        when this is True.
     """
     result: Dict[str, Any] = {
         "ca_is_hydrated": False,
@@ -277,6 +282,7 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
         "is_post_hydration": False,
         "snapshot_source": "placeholder",
         "aggregation_normalized": True,  # default True (safe: don't block when unknown)
+        "sync_failed": False,            # set True below on unexpected read errors
     }
 
     # ── CapitalAuthority state ────────────────────────────────────────────
@@ -286,7 +292,10 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
             result["ca_is_hydrated"] = bool(_ca.is_hydrated)
             result["ca_total_capital"] = float(getattr(_ca, "total_capital", 0.0) or 0.0)
         except Exception as _ce:
-            logger.debug("_capture_cycle_capital_state: CA read failed: %s", _ce)
+            result["sync_failed"] = True
+            logger.warning(
+                "_capture_cycle_capital_state: CA read failed — snapshot may be stale: %s", _ce
+            )
 
     # ── is_post_hydration: CAPITAL_HYDRATED_EVENT fired + CA currently hydrated ──
     _hydrated_event_set = (
@@ -319,7 +328,10 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
         _last_vb = int(getattr(_mabm_inst, "_capital_last_valid_brokers", 0) or 0) if _mabm_inst is not None else 0
         result["snapshot_source"] = "live_exchange" if _last_vb > 0 else "placeholder"
     except Exception as _me:
-        logger.debug("_capture_cycle_capital_state: MABM read failed: %s", _me)
+        result["sync_failed"] = True
+        logger.warning(
+            "_capture_cycle_capital_state: MABM read failed — broker readiness unknown: %s", _me
+        )
 
     # ── FIX 2: Broker aggregation consistency check ───────────────────────
     # Verify that the CA's registered broker count is consistent with the
@@ -392,16 +404,19 @@ def _capture_cycle_capital_state() -> Dict[str, Any]:
 
     logger.critical(
         "CYCLE_CAPITAL_SNAPSHOT | ca_hydrated=%s | total=%.8f | valid_brokers=%s | "
-        "mabm_ready=%s | source=%s | aggregation_normalized=%s",
+        "mabm_ready=%s | source=%s | aggregation_normalized=%s | sync_failed=%s",
         result.get("ca_is_hydrated"),
         float(result.get("ca_total_capital", 0.0) or 0.0),
         result.get("ca_valid_brokers"),
         result.get("mabm_brokers_ready"),
         result.get("snapshot_source"),
         result.get("aggregation_normalized"),
+        result.get("sync_failed"),
     )
 
-    return result
+    # Return an immutable view — callers must not mutate the cycle-capital dict
+    # between capture and the end of the cycle.  Use .get() to read values.
+    return _types.MappingProxyType(result)
 
 
 def _supervisor_step_state_machine() -> None:
@@ -431,9 +446,17 @@ def _supervisor_step_state_machine() -> None:
         _runtime_mode = resolve_runtime_mode_safe(logger)
         _live_verified = _is_live_mode(_runtime_mode)
         _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
-        _cycle_capital = _current_cycle_capital if isinstance(_current_cycle_capital, dict) else {}
+        _cycle_capital = _current_cycle_capital if _current_cycle_capital else {}
         _balance = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
         _sufficient_balance = _balance >= _min_balance and _balance > 0.0
+
+        # Warn when the snapshot was captured with read errors — activation and
+        # balance checks may be operating on incomplete/stale data.
+        if bool(_cycle_capital.get("sync_failed", False)):
+            logger.warning(
+                "[SUPERVISOR] cycle capital snapshot has sync_failed=True — "
+                "CA or MABM read error during capture; activation gates may use stale data"
+            )
 
         logger.critical(
             "SUPERVISOR CYCLE CHECK | state=%s | start_signal=%s | live_verified=%s | balance=%.2f | min=%.2f",

@@ -514,8 +514,10 @@ class CapitalAllocationBrain:
                     )
                     return max(0.0, _snap.ca_total_capital)
             except Exception as _sp_err:
-                logger.debug(
-                    "[CapitalAllocationBrain] cycle snapshot fast-path failed: %s", _sp_err
+                logger.warning(
+                    "[CapitalAllocationBrain] cycle snapshot fast-path failed — "
+                    "falling back to live MABM read (single-cycle world-view not guaranteed): %s",
+                    _sp_err,
                 )
 
         # --- BOOTSTRAP ESCAPE HATCH (CRITICAL) ---
