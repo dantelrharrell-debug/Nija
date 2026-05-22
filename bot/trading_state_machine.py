@@ -388,6 +388,11 @@ def _nonce_writer_lease_gate() -> tuple[bool, str]:
     if not platform_key:
         # No Kraken platform key configured in this process; nothing to verify.
         return True, ""
+    if not _kraken_nonce_gates_required():
+        logger.info(
+            "[NONCE LEASE GATE] skipped: Kraken credentials present but Kraken broker is not active"
+        )
+        return True, ""
 
     retries = max(1, int(os.environ.get("NIJA_NONCE_LEASE_RETRIES", "3") or "3"))
     retry_delay_s = max(0.0, float(os.environ.get("NIJA_NONCE_LEASE_RETRY_DELAY_S", "0.20") or "0.20"))
@@ -486,6 +491,37 @@ def _nonce_lease_stability_requirement_s() -> float:
         return 30.0
 
 
+def _kraken_nonce_gates_required() -> bool:
+    """Return True when Kraken nonce/lease safety gates should be enforced.
+
+    Some deployments keep Kraken credentials in environment variables even when
+    Kraken is not an active connected platform broker. In that case, enforcing
+    Kraken nonce gates can block dispatch unnecessarily.
+    """
+    if _env_truthy("NIJA_FORCE_KRAKEN_NONCE_GATES", "false"):
+        return True
+
+    try:
+        mabm = _get_mabm_instance()
+    except Exception:
+        mabm = None
+
+    # Preserve legacy strict behavior if broker topology cannot be inspected.
+    if mabm is None:
+        return True
+
+    try:
+        platform_brokers = getattr(mabm, "platform_brokers", {}) or {}
+        for broker_type, broker in platform_brokers.items():
+            broker_name = str(getattr(broker_type, "value", str(broker_type))).strip().lower()
+            if broker_name == "kraken":
+                return bool(getattr(broker, "connected", False))
+        # Kraken not registered at runtime: nonce gates are not applicable.
+        return False
+    except Exception:
+        return True
+
+
 def _nonce_sync_gate() -> tuple[bool, str]:
     """Verify nonce synchronization state before LIVE activation."""
     if not _env_truthy("NIJA_ENFORCE_NONCE_SYNC", "true"):
@@ -496,6 +532,11 @@ def _nonce_sync_gate() -> tuple[bool, str]:
         or os.environ.get("KRAKEN_API_KEY", "").strip()
     )
     if not platform_key:
+        return True, ""
+    if not _kraken_nonce_gates_required():
+        logger.info(
+            "[NONCE SYNC GATE] skipped: Kraken credentials present but Kraken broker is not active"
+        )
         return True, ""
 
     try:
@@ -2448,6 +2489,11 @@ def _writer_lease_generation_gate() -> tuple[bool, str]:
         or os.environ.get("KRAKEN_API_KEY", "").strip()
     )
     if not platform_key:
+        return True, ""
+    if not _kraken_nonce_gates_required():
+        logger.info(
+            "[LEASE GENERATION GATE] skipped: Kraken credentials present but Kraken broker is not active"
+        )
         return True, ""
     try:
         try:
