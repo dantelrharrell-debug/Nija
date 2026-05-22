@@ -2608,6 +2608,21 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _committed_gate = bool(_sm_loop.get_activation_committed())
                         _dispatch_gate = bool(_sm_loop.can_dispatch_trades())
                         _live_gate = _state_gate == _TradingState.LIVE_ACTIVE
+                        _dispatch_reason = ""
+                        _runtime_authority = ""
+                        try:
+                            _auth_snapshot = _sm_loop.get_execution_authority_snapshot()
+                            _dispatch_reason = str(
+                                _auth_snapshot.get("runtime_authority_reason", "")
+                                or _auth_snapshot.get("safety_reason", "")
+                                or ""
+                            )
+                            _runtime_authority = str(
+                                _auth_snapshot.get("runtime_authority_state", "") or ""
+                            )
+                        except Exception:
+                            _dispatch_reason = ""
+                            _runtime_authority = ""
                     except Exception as _exec_gate_err:
                         logger.warning("Execution gate probe failed; skipping strategy cycle: %s", _exec_gate_err)
                         time.sleep(cycle_secs)
@@ -2621,10 +2636,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         )
                         if _skip_signature != _last_cycle_skip_signature:
                             logger.warning(
-                                "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s",
+                                "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
+                                "runtime_authority=%s reason=%s",
                                 _committed_gate,
                                 _dispatch_gate,
                                 getattr(_state_gate, "value", str(_state_gate)),
+                                _runtime_authority or "unknown",
+                                _dispatch_reason or "not_reported",
                             )
                             _last_cycle_skip_signature = _skip_signature
                         time.sleep(cycle_secs)
