@@ -467,8 +467,16 @@ def _supervisor_step_state_machine() -> None:
         )
 
         # Missing trigger fix: the supervisor attempts activation every cycle
-        # while in OFF, using the same frozen cycle capital snapshot.
-        if _live_verified:
+        # while in OFF/LIVE_PENDING_CONFIRMATION, using the same frozen
+        # cycle capital snapshot.
+        #
+        # Why allow LIVE_PENDING_CONFIRMATION even when _live_verified=False:
+        # once the FSM is explicitly armed, downstream coordinator gates may
+        # still need additional cycles to converge; skipping commit_activation()
+        # in that state can stall lifecycle progression in WARM forever.
+        _state_for_commit = sm.get_current_state()
+        _attempt_commit = _live_verified or _state_for_commit == _TradingState.LIVE_PENDING_CONFIRMATION
+        if _attempt_commit:
             _committed = False
             try:
                 if hasattr(sm, "commit_activation"):
@@ -2410,7 +2418,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                 "⛔ EXECUTION BLOCKED | committed=%s dispatch=%s live=%s reasons=%s",
                                 _committed,
                                 _can_dispatch,
-                                _live_now,
+                                _live_verified_now,
                                 ", ".join(_reasons) if _reasons else "activation gates not converged",
                             )
                 except Exception as _block_diag_err:
