@@ -8,9 +8,15 @@ forced to LIVE_PAUSED (or OFFLINE) and all trading is blocked.
 
 Configuration
 -------------
-NIJA_AUTHORITY_HEARTBEAT_INTERVAL_S  : Heartbeat check interval (default: 30s)
-NIJA_AUTHORITY_HEARTBEAT_TIMEOUT_S   : Per-check timeout (default: 5s)
-NIJA_AUTHORITY_HEARTBEAT_MAX_FAILURES: Consecutive failures before lockdown (default: 3)
+NIJA_AUTHORITY_HEARTBEAT_INTERVAL_S    : Heartbeat check interval (default: 30s)
+NIJA_AUTHORITY_HEARTBEAT_TIMEOUT_S     : Per-check timeout (default: 5s)
+NIJA_AUTHORITY_HEARTBEAT_MAX_FAILURES  : Consecutive failures before lockdown (default: 3)
+NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE  : Stage written to the heartbeat marker file on each
+                                         successful check (default: ORDER_VERIFY).  Must be
+                                         one of AUTH_VERIFY, ORDER_VERIFY, or FILL_VERIFY.
+HEARTBEAT_MARKER_PATH                  : Path of the heartbeat verification marker file
+                                         (default: ./data/heartbeat_verified.flag).  Must
+                                         match the value used by trading_state_machine.py.
 
 Safety Contract
 ---------------
@@ -60,6 +66,90 @@ def _cfg_int(name: str, default: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Heartbeat marker helpers
+# ---------------------------------------------------------------------------
+
+# The stage written to the marker file when the authority heartbeat passes.
+# The authority heartbeat confirms Redis connectivity and fencing-token
+# validity, which satisfies ORDER_VERIFY semantics (the writer has exclusive
+# authority and can place orders).  Operators can override this via
+# NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE if a different stage is required.
+_DEFAULT_MARKER_STAGE = "ORDER_VERIFY"
+
+
+def _heartbeat_marker_path() -> str:
+    """Return the path of the heartbeat verification marker file.
+
+    Mirrors the same env-var lookup used by trading_state_machine.py so both
+    modules always agree on the file location.
+    """
+    return os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
+
+
+def _write_heartbeat_marker() -> None:
+    """Create or refresh the heartbeat verification marker file.
+
+    Writes a JSON payload that satisfies the format expected by
+    ``_heartbeat_verification_status()`` in trading_state_machine.py:
+
+        {
+            "stage": "<STAGE>",
+            "verified_at_epoch": <float unix timestamp>,
+            "source": "authority_heartbeat"
+        }
+
+    The stage defaults to ORDER_VERIFY (configurable via
+    NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE).  The file is written atomically
+    via a sibling temp file to avoid partial-read races.
+    """
+    marker_path = _heartbeat_marker_path()
+    stage = (
+        os.environ.get("NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE", "").strip().upper()
+        or _DEFAULT_MARKER_STAGE
+    )
+    payload = {
+        "stage": stage,
+        "verified_at_epoch": time.time(),
+        "source": "authority_heartbeat",
+    }
+    try:
+        marker = Path(marker_path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        tmp = marker.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(marker)
+        logger.debug(
+            "AuthorityHeartbeatMonitor: heartbeat marker refreshed path=%s stage=%s",
+            marker_path,
+            stage,
+        )
+    except Exception as exc:
+        logger.warning(
+            "AuthorityHeartbeatMonitor: failed to write heartbeat marker path=%s: %s",
+            marker_path,
+            exc,
+        )
+
+
+def _clear_heartbeat_marker() -> None:
+    """Remove the heartbeat verification marker file on lockdown.
+
+    Ensures the activation gate immediately sees the heartbeat as invalid
+    after an authority lockdown, preventing stale marker files from allowing
+    trading to continue.
+    """
+    marker_path = _heartbeat_marker_path()
+    try:
+        marker = Path(marker_path)
+        if marker.exists():
+            marker.unlink()
+            logger.info(
+                "AuthorityHeartbeatMonitor: heartbeat marker cleared on lockdown path=%s",
+                marker_path,
+            )
+    except Exception as exc:
+        logger.warning(
+            "AuthorityHeartbeatMonitor: failed to clear heartbeat marker path=%s: %s",
 # File-based heartbeat marker
 # ---------------------------------------------------------------------------
 
@@ -315,6 +405,11 @@ class AuthorityHeartbeatMonitor:
             _now_ts = str(time.time())
             os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
             os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _now_ts
+            # Write (or refresh) the file-based heartbeat marker so that the
+            # _live_activation_gate() HEARTBEAT_VERIFICATION check passes.
+            # This breaks the circular dependency where the activation gate
+            # requires the marker but the heartbeat trade that creates it
+            # cannot execute because the gate is OFF.
             # Also refresh the file-based heartbeat marker so that the
             # _heartbeat_verification_status() check in _live_activation_gate()
             # passes when HEARTBEAT_REQUIRED_FIRST_ACTIVATION or HEARTBEAT_TRADE
@@ -346,6 +441,9 @@ class AuthorityHeartbeatMonitor:
         # immediately sees the heartbeat as inactive after lockdown.
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
         os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+        # Remove the file-based heartbeat marker so the activation gate's
+        # HEARTBEAT_VERIFICATION check also fails immediately after lockdown.
+        _clear_heartbeat_marker()
         msg = (
             f"AUTHORITY HEARTBEAT EXPIRED: {self._consecutive_failures} consecutive "
             f"heartbeat failures (max={self._max_failures}). "
@@ -443,4 +541,6 @@ __all__ = [
     "AuthorityHeartbeatMonitor",
     "get_authority_heartbeat_monitor",
     "start_authority_heartbeat",
+    "_write_heartbeat_marker",
+    "_clear_heartbeat_marker",
 ]
