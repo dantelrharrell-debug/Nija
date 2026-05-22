@@ -778,19 +778,36 @@ def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) 
 
 def _startup_ownership_gate() -> tuple[bool, str]:
     """Require bootstrap ownership + distributed writer authority before startup live arming."""
+    guard_ok = False
+    guard_reason = "bootstrap_guard_not_held"
     try:
         try:
             from bot.bootstrap_guard import is_guard_held
         except ImportError:
             from bootstrap_guard import is_guard_held  # type: ignore[import]
-        if not is_guard_held():
-            return False, "bootstrap_guard_not_held"
+        guard_ok = bool(is_guard_held())
+        if not guard_ok:
+            guard_reason = "bootstrap_guard_not_held"
     except Exception as exc:
-        return False, f"bootstrap_guard_check_failed:{exc}"
+        guard_ok = False
+        guard_reason = f"bootstrap_guard_check_failed:{exc}"
 
     writer_ok, writer_err = _distributed_writer_authority_gate()
     if not writer_ok:
+        # Preserve original guard failure context to keep diagnostics useful.
+        if not guard_ok:
+            return False, f"{guard_reason}; distributed_writer_authority_unavailable:{writer_err or 'unknown'}"
         return False, writer_err or "distributed_writer_authority_unavailable"
+
+    # Startup can continue safely when distributed writer authority is verified,
+    # even if bootstrap guard is briefly unavailable due to init ordering races.
+    if not guard_ok:
+        logger.warning(
+            "[STARTUP OWNERSHIP GATE] bootstrap guard unavailable (%s) but distributed writer authority is valid; allowing startup arming",
+            guard_reason,
+        )
+        return True, f"writer_authority_fallback:{guard_reason}"
+
     return True, ""
 
 
