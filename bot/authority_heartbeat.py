@@ -68,7 +68,9 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
     Verifies:
     1. NIJA_WRITER_FENCING_TOKEN is present.
     2. Redis is reachable (ping within timeout_s).
-    3. Distributed writer authority is valid (fencing token matches Redis lock).
+    3. Distributed writer authority is valid (fencing token matches Redis lock),
+       OR the Redis lease was not acquired (single-instance / fallback-token mode)
+       in which case only Redis connectivity is verified.
 
     Returns (ok, error_message).
     """
@@ -85,34 +87,77 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
 
     redis_url = get_redis_url()
     if not redis_url:
+        # Redis is not configured.  When a fallback token was generated
+        # (single-instance / no-Redis mode) we still consider the authority
+        # valid as long as the fencing token is present.
+        _truthy = {"1", "true", "yes", "on", "enabled"}
+        is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
+        if is_fallback:
+            logger.debug(
+                "AuthorityHeartbeatMonitor: Redis not configured; "
+                "accepting fallback-token authority (single-instance mode)"
+            )
+            return True, ""
         return False, "Redis URL is not configured — cannot verify authority"
 
     # 3. Verify Redis connectivity and fencing token.
+    # When a process-local fallback token was generated (Redis lock not
+    # acquired), skip the fencing-token lock-key match check and only verify
+    # that Redis is reachable.  When the Redis lease was properly acquired,
+    # perform the full distributed authority check.
+    _truthy = {"1", "true", "yes", "on", "enabled"}
+    is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
     try:
-        try:
-            from bot.execution_authority_context import assert_distributed_writer_authority
-        except ImportError:
-            from execution_authority_context import assert_distributed_writer_authority  # type: ignore[import]
-
-        # Run authority check with a bounded timeout using a thread.
-        result: list[Optional[Exception]] = [None]
-        done = threading.Event()
-
-        def _run() -> None:
+        if not is_fallback:
             try:
-                assert_distributed_writer_authority()
-            except Exception as exc:
-                result[0] = exc
-            finally:
-                done.set()
+                from bot.execution_authority_context import assert_distributed_writer_authority
+            except ImportError:
+                from execution_authority_context import assert_distributed_writer_authority  # type: ignore[import]
 
-        t = threading.Thread(target=_run, daemon=True, name="authority-heartbeat-check")
-        t.start()
-        if not done.wait(timeout=timeout_s):
-            return False, f"Authority check timed out after {timeout_s:.1f}s"
+            # Run authority check with a bounded timeout using a thread.
+            result: list[Optional[Exception]] = [None]
+            done = threading.Event()
 
-        if result[0] is not None:
-            return False, str(result[0])
+            def _run() -> None:
+                try:
+                    assert_distributed_writer_authority()
+                except Exception as exc:
+                    result[0] = exc
+                finally:
+                    done.set()
+
+            t = threading.Thread(target=_run, daemon=True, name="authority-heartbeat-check")
+            t.start()
+            if not done.wait(timeout=timeout_s):
+                return False, f"Authority check timed out after {timeout_s:.1f}s"
+
+            if result[0] is not None:
+                return False, str(result[0])
+        else:
+            # Fallback-token mode: verify Redis is reachable with a simple ping.
+            import redis as _redis_lib
+            _client = _redis_lib.from_url(redis_url, socket_connect_timeout=timeout_s)
+            ping_result: list[Optional[Exception]] = [None]
+            ping_done = threading.Event()
+
+            def _ping() -> None:
+                try:
+                    _client.ping()
+                except Exception as exc:
+                    ping_result[0] = exc
+                finally:
+                    ping_done.set()
+
+            _pt = threading.Thread(target=_ping, daemon=True, name="authority-heartbeat-ping")
+            _pt.start()
+            if not ping_done.wait(timeout=timeout_s):
+                return False, f"Redis ping timed out after {timeout_s:.1f}s"
+            if ping_result[0] is not None:
+                return False, f"Redis ping failed: {ping_result[0]}"
+            logger.debug(
+                "AuthorityHeartbeatMonitor: Redis reachable; "
+                "accepting fallback-token authority (single-instance mode)"
+            )
 
         return True, ""
 
@@ -197,6 +242,9 @@ class AuthorityHeartbeatMonitor:
     def _loop(self) -> None:
         """Main heartbeat loop."""
         logger.info("AuthorityHeartbeatMonitor: heartbeat loop started")
+        # Run an immediate check on startup so the writer-heartbeat gate can
+        # pass without waiting for the first interval to elapse.
+        self._tick()
         while not self._stop_event.wait(timeout=self._interval_s):
             if self._locked_down:
                 break
@@ -213,6 +261,13 @@ class AuthorityHeartbeatMonitor:
                     self._consecutive_failures,
                 )
             self._consecutive_failures = 0
+            # Signal to the writer-heartbeat gate that the authority heartbeat
+            # is active and fresh.  This allows _writer_heartbeat_gate() in
+            # trading_state_machine.py to pass when the Redis lock heartbeat
+            # thread is not running (e.g. single-instance deployments).
+            _now_ts = str(time.time())
+            os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+            os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _now_ts
             return
 
         self._consecutive_failures += 1
@@ -231,6 +286,10 @@ class AuthorityHeartbeatMonitor:
         if self._locked_down:
             return
         self._locked_down = True
+        # Clear the writer-heartbeat gate signals so the activation gate
+        # immediately sees the heartbeat as inactive after lockdown.
+        os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
         msg = (
             f"AUTHORITY HEARTBEAT EXPIRED: {self._consecutive_failures} consecutive "
             f"heartbeat failures (max={self._max_failures}). "
