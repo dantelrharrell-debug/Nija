@@ -5939,12 +5939,29 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # NIJA_WRITER_HEARTBEAT_ALIVE_TS so the writer-heartbeat gate passes.
     # The fallback fencing token (if needed) was already generated at module
     # level before this function was called.
+    logger.info(
+        "AUTHORITY_HEARTBEAT: calling start_authority_heartbeat() "
+        "lock_acquired=%s fencing_token_present=%s",
+        lock_acquired,
+        bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
+    )
     try:
         from bot.authority_heartbeat import start_authority_heartbeat as _start_ahb
-        _start_ahb()
-        logger.info("Authority heartbeat monitor started")
+        _ahb_monitor = _start_ahb()
+        logger.info(
+            "AUTHORITY_HEARTBEAT: monitor started successfully monitor=%r "
+            "interval_s=%.1f timeout_s=%.1f max_failures=%d",
+            _ahb_monitor,
+            _ahb_monitor._interval_s,
+            _ahb_monitor._timeout_s,
+            _ahb_monitor._max_failures,
+        )
     except Exception as _ahb_exc:
-        logger.warning("Authority heartbeat monitor could not be started: %s", _ahb_exc)
+        logger.error(
+            "AUTHORITY_HEARTBEAT: monitor could not be started: %s",
+            _ahb_exc,
+            exc_info=True,
+        )
 
     # Coinbase is enabled by default. Set NIJA_DISABLE_COINBASE=true to disable.
 
