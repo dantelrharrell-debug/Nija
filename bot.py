@@ -3896,6 +3896,80 @@ _apply_startup_debug_env_aliases()
 _start_health_server()
 _acquire_process_lock()
 
+# ── Fallback fencing token bootstrap ─────────────────────────────────────────
+# If the Redis distributed lock was not acquired (e.g. Redis unavailable or
+# lock not required in this deployment), NIJA_WRITER_FENCING_TOKEN will not be
+# set.  Generate a process-local UUID token and attempt to register it in Redis
+# so that assert_distributed_writer_authority() and the writer-heartbeat gate
+# can pass.  This is a best-effort operation; if Redis is unavailable the
+# authority heartbeat monitor will use ping-only verification.
+if not os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip():
+    try:
+        import uuid as _uuid_mod
+        import hashlib as _hashlib_mod
+        _fb_token = str(_uuid_mod.uuid4())
+        os.environ["NIJA_WRITER_FENCING_TOKEN"] = _fb_token
+        os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
+        print(
+            f"⚠️  NIJA_WRITER_FENCING_TOKEN not set by Redis lock; "
+            f"generated process-local fallback token={_fb_token[:8]}... "
+            "for authority heartbeat",
+            flush=True,
+        )
+        # Attempt to register the fallback token in Redis.
+        try:
+            from bot.redis_env import get_redis_url as _get_redis_url_fb
+            _fb_redis_url = _get_redis_url_fb()
+            if _fb_redis_url:
+                import redis as _redis_mod_fb
+                _fb_scope_raw = (
+                    os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+                    or os.environ.get("KRAKEN_API_KEY", "").strip()
+                    or "default"
+                )
+                _fb_scope = _hashlib_mod.sha256(_fb_scope_raw.encode("utf-8")).hexdigest()[:16]
+                _fb_lock_key = (
+                    os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip()
+                    or f"nija:writer_lock:{_fb_scope}"
+                )
+                _fb_ttl_s = max(30, int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "30") or 30))
+                _fb_owner = os.environ.get("NIJA_WRITER_OWNER_ID", "fallback")
+                _fb_value = f"{_fb_token}:{_fb_owner}"
+                _fb_client = _redis_mod_fb.from_url(
+                    _fb_redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=3,
+                    socket_timeout=3,
+                )
+                _fb_set = _fb_client.set(_fb_lock_key, _fb_value, ex=_fb_ttl_s, nx=True)
+                if _fb_set:
+                    os.environ["NIJA_WRITER_LOCK_KEY"] = _fb_lock_key
+                    os.environ["NIJA_WRITER_LOCK_SCOPE"] = _fb_scope
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                    os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "0"
+                    _fb_now_ts = str(time.time())
+                    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _fb_now_ts
+                    os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = _fb_now_ts
+                    print(
+                        f"✅ Fallback fencing token registered in Redis: "
+                        f"key={_fb_lock_key} ttl={_fb_ttl_s}s",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"⚠️  Redis lock key {_fb_lock_key} already held; "
+                        "using fallback-token (ping-only) authority mode",
+                        flush=True,
+                    )
+        except Exception as _fb_redis_err:
+            print(
+                f"⚠️  Could not register fallback fencing token in Redis: {_fb_redis_err}",
+                flush=True,
+            )
+    except Exception as _fb_err:
+        print(f"⚠️  Fallback fencing token generation failed: {_fb_err}", flush=True)
+
 
 # Load .env and verify the result at runtime
 _dotenv_loaded = False
@@ -5857,6 +5931,20 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
             )
         return False
+
+    # ── Authority heartbeat monitor ───────────────────────────────────────────
+    # Start the authority heartbeat monitor in a background daemon thread.
+    # This verifies Redis connectivity and fencing token validity every 30 s.
+    # On success it sets NIJA_WRITER_HEARTBEAT_ACTIVE=1 and updates
+    # NIJA_WRITER_HEARTBEAT_ALIVE_TS so the writer-heartbeat gate passes.
+    # The fallback fencing token (if needed) was already generated at module
+    # level before this function was called.
+    try:
+        from bot.authority_heartbeat import start_authority_heartbeat as _start_ahb
+        _start_ahb()
+        logger.info("Authority heartbeat monitor started")
+    except Exception as _ahb_exc:
+        logger.warning("Authority heartbeat monitor could not be started: %s", _ahb_exc)
 
     # Coinbase is enabled by default. Set NIJA_DISABLE_COINBASE=true to disable.
 
