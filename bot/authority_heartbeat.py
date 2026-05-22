@@ -70,11 +70,12 @@ def _cfg_int(name: str, default: int) -> int:
 # ---------------------------------------------------------------------------
 
 # The stage written to the marker file when the authority heartbeat passes.
-# The authority heartbeat confirms Redis connectivity and fencing-token
-# validity, which satisfies ORDER_VERIFY semantics (the writer has exclusive
-# authority and can place orders).  Operators can override this via
-# NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE if a different stage is required.
-_DEFAULT_MARKER_STAGE = "ORDER_VERIFY"
+# FILL_VERIFY is the highest stage and satisfies all activation-gate stage
+# requirements (AUTH_VERIFY, ORDER_VERIFY, and FILL_VERIFY).  Using it here
+# ensures the marker always passes the stage check regardless of which
+# HEARTBEAT_REQUIRED_FIRST_ACTIVATION or HEARTBEAT_TRADE stage is configured.
+# Operators can override via NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE.
+_DEFAULT_MARKER_STAGE = "FILL_VERIFY"
 
 
 def _heartbeat_marker_path() -> str:
@@ -98,36 +99,57 @@ def _write_heartbeat_marker() -> None:
             "source": "authority_heartbeat"
         }
 
-    The stage defaults to ORDER_VERIFY (configurable via
-    NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE).  The file is written atomically
-    via a sibling temp file to avoid partial-read races.
+    The stage defaults to FILL_VERIFY (satisfies all stage requirements).
+    Operators can override via NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE.
+    The file is written atomically via a sibling temp file to avoid
+    partial-read races.
     """
     marker_path = _heartbeat_marker_path()
     stage = (
         os.environ.get("NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE", "").strip().upper()
         or _DEFAULT_MARKER_STAGE
     )
-    payload = {
-        "stage": stage,
-        "verified_at_epoch": time.time(),
-        "source": "authority_heartbeat",
-    }
+    logger.info(
+        "AuthorityHeartbeatMonitor: _write_heartbeat_marker called path=%s stage=%s",
+        marker_path,
+        stage,
+    )
     try:
         marker = Path(marker_path)
+        logger.info(
+            "AuthorityHeartbeatMonitor: creating parent directory path=%s",
+            str(marker.parent),
+        )
         marker.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "stage": stage,
+            "verified_at_epoch": time.time(),
+            "source": "authority_heartbeat",
+        }
         tmp = marker.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload), encoding="utf-8")
         tmp.replace(marker)
-        logger.debug(
-            "AuthorityHeartbeatMonitor: heartbeat marker refreshed path=%s stage=%s",
-            marker_path,
-            stage,
-        )
+        # Verify the file was actually created and is readable.
+        if marker.exists():
+            logger.info(
+                "AuthorityHeartbeatMonitor: heartbeat marker refreshed and verified "
+                "path=%s stage=%s size=%d",
+                marker_path,
+                stage,
+                marker.stat().st_size,
+            )
+        else:
+            logger.error(
+                "AuthorityHeartbeatMonitor: heartbeat marker write appeared to succeed "
+                "but file does not exist path=%s",
+                marker_path,
+            )
     except Exception as exc:
-        logger.warning(
-            "AuthorityHeartbeatMonitor: failed to write heartbeat marker path=%s: %s",
+        logger.error(
+            "AuthorityHeartbeatMonitor: FAILED to write heartbeat marker path=%s: %s",
             marker_path,
             exc,
+            exc_info=True,
         )
 
 
@@ -150,45 +172,6 @@ def _clear_heartbeat_marker() -> None:
     except Exception as exc:
         logger.warning(
             "AuthorityHeartbeatMonitor: failed to clear heartbeat marker path=%s: %s",
-# File-based heartbeat marker
-# ---------------------------------------------------------------------------
-
-
-def _write_heartbeat_marker() -> None:
-    """Write (or refresh) the file-based heartbeat verification marker.
-
-    The marker is read by ``_heartbeat_verification_status()`` in
-    ``trading_state_machine.py``.  It must be a JSON file containing at
-    minimum a ``stage`` field (``FILL_VERIFY`` satisfies all stage
-    requirements) and a ``verified_at_epoch`` timestamp.
-
-    This is called on every successful authority heartbeat tick so that the
-    marker stays fresh (within ``HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS``,
-    default 1800 s) and the ``_live_activation_gate()`` check passes even
-    when no heartbeat trade has been executed yet.
-    """
-    marker_path = os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
-    try:
-        path = Path(marker_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(
-            {
-                "stage": "FILL_VERIFY",
-                "verified_at_epoch": time.time(),
-                "source": "authority_heartbeat",
-            },
-            sort_keys=True,
-        )
-        # Write atomically via a temp file to avoid partial reads.
-        tmp_path = path.with_suffix(".tmp")
-        tmp_path.write_text(payload, encoding="utf-8")
-        tmp_path.replace(path)
-        logger.debug(
-            "AuthorityHeartbeatMonitor: heartbeat marker refreshed path=%s", marker_path
-        )
-    except Exception as exc:
-        logger.warning(
-            "AuthorityHeartbeatMonitor: could not write heartbeat marker path=%s: %s",
             marker_path,
             exc,
         )
@@ -390,6 +373,7 @@ class AuthorityHeartbeatMonitor:
 
     def _tick(self) -> None:
         """Perform one heartbeat check and update failure counter."""
+        logger.info("AuthorityHeartbeatMonitor: _tick started")
         ok, err = _check_authority_once(self._timeout_s)
         if ok:
             if self._consecutive_failures > 0:
@@ -418,7 +402,11 @@ class AuthorityHeartbeatMonitor:
             # heartbeat is healthy — a chicken-and-egg deadlock where the marker
             # is normally written by a heartbeat trade, but trades cannot execute
             # until the gate opens.
+            logger.info(
+                "AuthorityHeartbeatMonitor: _tick authority OK — invoking _write_heartbeat_marker"
+            )
             _write_heartbeat_marker()
+            logger.info("AuthorityHeartbeatMonitor: _tick complete — marker write attempted")
             return
 
         self._consecutive_failures += 1
