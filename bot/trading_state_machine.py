@@ -1418,12 +1418,23 @@ class TradingStateMachine:
                 logger.critical("[FSM HARD FAIL] %s", error_msg)
                 raise StateTransitionError(error_msg)
 
-            # Enforce fencing token presence.
-            _fencing_token = _resolve_writer_fencing_token()
+            # Enforce fencing token presence using the same fallback chain as
+            # the authority gate (env var -> distributed nonce lease version).
+            _writer_lease_manager = None
+            try:
+                try:
+                    from bot.distributed_nonce_manager import get_distributed_nonce_manager
+                except ImportError:
+                    from distributed_nonce_manager import get_distributed_nonce_manager  # type: ignore[import]
+                _writer_lease_manager = get_distributed_nonce_manager()
+            except Exception:
+                _writer_lease_manager = None
+
+            _fencing_token = _resolve_writer_fencing_token(_writer_lease_manager)
             if not _fencing_token:
                 error_msg = (
                     "LIVE_ACTIVE blocked: NIJA_WRITER_FENCING_TOKEN is not set. "
-                    "A valid Redis fencing token is required for LIVE_ACTIVE."
+                    "A valid Redis fencing token (or active lease version) is required for LIVE_ACTIVE."
                 )
                 logger.critical("[FSM HARD FAIL] %s", error_msg)
                 raise StateTransitionError(error_msg)
