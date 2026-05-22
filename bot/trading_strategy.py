@@ -947,10 +947,44 @@ class TradingStrategy:
     # Public API
     # -----------------------------------------------------------------------
 
+    def _ensure_nija_wiring(self) -> None:
+        """Ensure APEX and NijaCoreLoop references are correctly wired.
+
+        This self-heals runtime ordering issues where TradingStrategy is
+        constructed before all optional modules are fully ready.
+        """
+        if self.apex is None:
+            return
+
+        if self.execution_engine is None:
+            self.execution_engine = getattr(self.apex, "execution_engine", None)
+
+        if not _CORE_LOOP_AVAILABLE or get_nija_core_loop is None:
+            return
+
+        if self.nija_core_loop is None:
+            try:
+                _max_positions = int(os.environ.get("NIJA_MAX_POSITIONS", "5") or 5)
+                self.nija_core_loop = get_nija_core_loop(
+                    apex_strategy=self.apex,
+                    max_positions=max(1, _max_positions),
+                )
+                logger.info("✅ NijaCoreLoop lazily attached during run_cycle")
+            except Exception as _wire_err:
+                logger.warning("⚠️ NijaCoreLoop lazy attach failed: %s", _wire_err)
+                return
+
+        # Keep singleton core loop aligned with the active APEX instance.
+        if getattr(self.nija_core_loop, "apex", None) is not self.apex:
+            self.nija_core_loop.apex = self.apex
+            logger.info("🔗 NijaCoreLoop apex reference re-synchronized")
+
     def run_cycle(self) -> None:
         """Execute one trading cycle."""
         if self.apex is not None:
             try:
+                self._ensure_nija_wiring()
+
                 # Delegate to the APEX strategy
                 _broker = self._get_active_broker()
                 if _broker is not None and self.broker != _broker:
