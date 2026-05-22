@@ -114,6 +114,16 @@ ENTRY_GATE_FALLBACK_CONFIDENCE = 0.18
 ENTRY_GATE_FALLBACK_ADX = 5.0
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
 
+# Unified eligibility tuning knobs (strategic gates)
+ELIGIBILITY_MIN_ATR_PCT: float = float(os.getenv("NIJA_ELIGIBILITY_MIN_ATR_PCT", "0.15"))
+ELIGIBILITY_MAX_SPREAD_PCT: float = float(os.getenv("NIJA_ELIGIBILITY_MAX_SPREAD_PCT", "0.75"))
+ELIGIBILITY_SPREAD_SOFT_BUFFER_PCT: float = float(
+    os.getenv("NIJA_ELIGIBILITY_SPREAD_SOFT_BUFFER_PCT", "0.15")
+)
+
+# Kraken confidence handling: hard block only for materially weak confidence.
+KRAKEN_CONFIDENCE_SOFT_MARGIN: float = float(os.getenv("KRAKEN_CONFIDENCE_SOFT_MARGIN", "0.04"))
+
 # Volume gate for entry confirmation in check_long/short_entry.
 # Widened from 0.6x to 0.4x to unlock quieter markets (where most scalps occur).
 ENTRY_VOLUME_MIN_MULTIPLIER: float = 0.4
@@ -939,6 +949,9 @@ class NIJAApexStrategyV71:
         self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '28'))
         self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '72'))
         self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.18'))
+        self.kraken_confidence_soft_margin = float(
+            os.getenv('KRAKEN_CONFIDENCE_SOFT_MARGIN', str(KRAKEN_CONFIDENCE_SOFT_MARGIN))
+        )
         self.kraken_min_atr_pct = float(os.getenv('KRAKEN_MIN_ATR_PCT', '0.4'))
         
         # Track first trade for sanity check logging
@@ -1238,6 +1251,18 @@ class NIJAApexStrategyV71:
         if broker_name == 'kraken':
             confidence = validation.get('confidence', 0.0)
             if confidence < self.kraken_min_confidence:
+                _soft_margin = float(
+                    getattr(self, 'kraken_confidence_soft_margin', KRAKEN_CONFIDENCE_SOFT_MARGIN)
+                )
+                soft_floor = max(0.0, self.kraken_min_confidence - _soft_margin)
+                if confidence >= soft_floor:
+                    logger.info(
+                        "   ⚠️  Kraken confidence advisory: %.2f < %.2f (soft floor %.2f, proceeding)",
+                        confidence,
+                        self.kraken_min_confidence,
+                        soft_floor,
+                    )
+                    return None
                 reason = (
                     f"Kraken confidence {confidence:.2f} < "
                     f"{self.kraken_min_confidence:.2f}"
@@ -1332,8 +1357,9 @@ class NIJAApexStrategyV71:
         # AGGRESSIVE MODE: widened from 30/70 → 25/75 to allow entries in a broader RSI band
         general_rsi_min = 25
         general_rsi_max = 75
-        general_min_atr_pct = 0.20  # 0.20% minimum volatility (was 0.5%)
-        general_max_spread_pct = 0.50  # 0.50% maximum spread (was 0.20%)
+        general_min_atr_pct = ELIGIBILITY_MIN_ATR_PCT
+        general_max_spread_pct = ELIGIBILITY_MAX_SPREAD_PCT
+        spread_soft_buffer_pct = max(0.0, ELIGIBILITY_SPREAD_SOFT_BUFFER_PCT)
         
         # 1. RSI Range Check
         # NOTE: We use the same RSI range for both long and short to avoid extreme conditions
@@ -1394,15 +1420,19 @@ class NIJAApexStrategyV71:
             spread_absolute = ask_price - bid_price
             spread_pct = (spread_absolute / mid_price) * 100 if mid_price > 0 else 0
             max_spread_pct = general_max_spread_pct
+            spread_soft_limit = max_spread_pct + spread_soft_buffer_pct
             spread_valid = spread_pct <= max_spread_pct
+            spread_borderline = (not spread_valid) and (spread_pct <= spread_soft_limit)
             checks['spread'] = {
                 'spread_pct': spread_pct, 
                 'max_allowed': max_spread_pct, 
-                'valid': spread_valid,
+                'soft_limit': spread_soft_limit,
+                'valid': spread_valid or spread_borderline,
+                'borderline': spread_borderline,
                 'bid': bid_price,
                 'ask': ask_price
             }
-            if not spread_valid:
+            if not spread_valid and not spread_borderline:
                 failures.append(f'Spread too wide: {spread_pct:.3f}% > {max_spread_pct}% maximum')
         else:
             checks['spread'] = {'valid': True, 'note': 'Bid/ask prices not provided, skipping spread check'}
@@ -1437,14 +1467,20 @@ class NIJAApexStrategyV71:
         eligible = len(failures) == 0
         # Collect borderline_volatility flag from the volatility check
         _borderline_vol = checks.get('volatility', {}).get('borderline', False)
-        allow_with_reduced_size = _borderline_vol and eligible
+        _borderline_spread = checks.get('spread', {}).get('borderline', False)
+        allow_with_reduced_size = (_borderline_vol or _borderline_spread) and eligible
 
         if eligible:
             reason = f"✅ Trade eligible: RSI={rsi:.1f}, ATR={atr_pct:.2f}%"
             if 'spread' in checks and 'spread_pct' in checks['spread']:
                 reason += f", Spread={checks['spread']['spread_pct']:.3f}%"
-            if _borderline_vol:
-                reason += " (borderline volatility — reduced size recommended)"
+            if _borderline_vol or _borderline_spread:
+                _conditions = []
+                if _borderline_vol:
+                    _conditions.append("volatility")
+                if _borderline_spread:
+                    _conditions.append("spread")
+                reason += f" (borderline {' + '.join(_conditions)} — reduced size recommended)"
         else:
             reason = f"❌ Trade not eligible: {'; '.join(failures)}"
 
@@ -3815,6 +3851,15 @@ class NIJAApexStrategyV71:
                     # Validate trade quality (position size minimum — physical limit)
                     validation = self._validate_trade_quality(position_size, risk_score,
                                                              account_balance=account_balance)
+                    if validation.get('valid') and validation.get('recommended_size') is not None:
+                        _recommended_size = scalar(validation.get('recommended_size'))
+                        if _recommended_size > 0:
+                            logger.info(
+                                "   📈 Applying adaptive minimum-size recommendation: $%.2f → $%.2f",
+                                position_size,
+                                _recommended_size,
+                            )
+                            position_size = _recommended_size
                     bid_price, ask_price = self._get_bid_ask_prices(symbol)
                     eligibility = self.verify_trade_eligibility(
                         symbol,
@@ -4683,6 +4728,15 @@ class NIJAApexStrategyV71:
                     # Validate trade quality (position size minimum — physical limit)
                     validation = self._validate_trade_quality(position_size, risk_score,
                                                              account_balance=account_balance)
+                    if validation.get('valid') and validation.get('recommended_size') is not None:
+                        _recommended_size = scalar(validation.get('recommended_size'))
+                        if _recommended_size > 0:
+                            logger.info(
+                                "   📈 Applying adaptive minimum-size recommendation: $%.2f → $%.2f",
+                                position_size,
+                                _recommended_size,
+                            )
+                            position_size = _recommended_size
                     if not validation['valid']:
                         logger.info(
                             f"   ⚠️  Trade validation advisory SHORT {symbol}"

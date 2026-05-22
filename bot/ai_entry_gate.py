@@ -170,13 +170,13 @@ _ATR_CRISIS_MAX = 12.00
 # ── Gate 4: Spread + slippage ceilings ──────────────────────────────────────
 # Total execution cost (spread + est. slippage) must be below this ceiling.
 _SPREAD_CEILINGS: Dict[str, float] = {
-    "coinbase": 0.20,   # 0.20% (1.4% fee broker; wider spread hurts less)
-    "kraken":   0.12,   # 0.12% (0.36% fee broker; spread matters more)
-    "binance":  0.10,   # 0.10%
-    "okx":      0.12,
+    "coinbase": float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_COINBASE", "0.25")),
+    "kraken":   float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_KRAKEN", "0.18")),
+    "binance":  float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_BINANCE", "0.12")),
+    "okx":      float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_OKX", "0.15")),
 }
-_SPREAD_CEILING_DEFAULT = 0.20
-_SLIPPAGE_ESTIMATE      = 0.05   # 0.05% estimated market slippage
+_SPREAD_CEILING_DEFAULT = float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_DEFAULT", "0.25"))
+_SLIPPAGE_ESTIMATE      = float(os.getenv("NIJA_AI_GATE_SLIPPAGE_ESTIMATE_PCT", "0.04"))
 
 # ── Gate 5: Regime ↔ entry-type compatibility matrix ────────────────────────
 # Maps regime → set of ALLOWED entry types.
