@@ -135,6 +135,17 @@ except ImportError:
         startup_execution_probe_scope = None  # type: ignore[assignment]
 
 try:
+    from bot.nija_core_loop import get_nija_core_loop
+    _CORE_LOOP_AVAILABLE = True
+except ImportError:
+    try:
+        from nija_core_loop import get_nija_core_loop  # type: ignore[import]
+        _CORE_LOOP_AVAILABLE = True
+    except ImportError:
+        get_nija_core_loop = None  # type: ignore[assignment,misc]
+        _CORE_LOOP_AVAILABLE = False
+
+try:
     from bot.broker_identity import format_broker_identity
 except ImportError:
     try:
@@ -246,6 +257,7 @@ class TradingStrategy:
         self.multi_account_manager: Optional[Any] = None
         self.independent_trader: Optional[Any] = None
         self.apex: Optional[Any] = None
+        self.nija_core_loop: Optional[Any] = None
         self.execution_engine: Optional[Any] = None
         self.symbols: List[str] = []
         self.failed_brokers: Dict = {}
@@ -298,6 +310,21 @@ class TradingStrategy:
             except Exception as _apex_err:
                 logger.error("❌ NIJAApexStrategyV71 init failed: %s", _apex_err)
                 self.apex = None
+
+        if _CORE_LOOP_AVAILABLE and get_nija_core_loop is not None and self.apex is not None:
+            try:
+                _max_positions = int(os.environ.get("NIJA_MAX_POSITIONS", "5") or 5)
+                self.nija_core_loop = get_nija_core_loop(
+                    apex_strategy=self.apex,
+                    max_positions=max(1, _max_positions),
+                )
+                # Ensure the singleton loop points at the currently active apex instance.
+                if getattr(self.nija_core_loop, "apex", None) is not self.apex:
+                    self.nija_core_loop.apex = self.apex
+                logger.info("✅ NijaCoreLoop attached to TradingStrategy")
+            except Exception as _core_loop_err:
+                self.nija_core_loop = None
+                logger.warning("⚠️ Could not attach NijaCoreLoop: %s", _core_loop_err)
 
         # ── Wire up IndependentBrokerTrader ────────────────────────────────
         if _IBT_AVAILABLE and IndependentBrokerTrader is not None:
@@ -931,14 +958,77 @@ class TradingStrategy:
                     if hasattr(self.apex, "update_broker_client"):
                         self.apex.update_broker_client(_broker)
 
+                _account_balance = float(getattr(self.apex, "_last_account_balance", 0.0) or 0.0)
+                if _account_balance <= 0.0 and _broker is not None:
+                    _balance_method = getattr(_broker, "get_account_balance", None)
+                    if callable(_balance_method):
+                        try:
+                            _bal = _balance_method()
+                            if isinstance(_bal, (int, float)):
+                                _account_balance = float(_bal)
+                            elif isinstance(_bal, dict):
+                                for _key in ("total_balance", "balance", "usd_balance", "equity"):
+                                    if _key in _bal:
+                                        _account_balance = float(_bal.get(_key) or 0.0)
+                                        break
+                        except Exception as _balance_err:
+                            logger.debug("run_cycle balance probe failed: %s", _balance_err)
+
+                _open_positions_count = 0
+                _engine = getattr(self.apex, "execution_engine", None)
+                _get_all_positions = getattr(_engine, "get_all_positions", None)
+                if callable(_get_all_positions):
+                    try:
+                        _positions = _get_all_positions() or {}
+                        if isinstance(_positions, dict):
+                            _open_positions_count = len(_positions)
+                        elif isinstance(_positions, list):
+                            _open_positions_count = len(_positions)
+                    except Exception as _pos_err:
+                        logger.debug("run_cycle open-position probe failed: %s", _pos_err)
+
+                if self.nija_core_loop is not None:
+                    _symbols_to_scan = self.symbols or []
+                    if not _symbols_to_scan:
+                        logger.warning("run_cycle: symbol universe is empty — skipping scan")
+                        return
+
+                    _core_result = self.nija_core_loop.run_scan_phase(
+                        broker=_broker,
+                        balance=_account_balance,
+                        symbols=_symbols_to_scan,
+                        open_positions_count=_open_positions_count,
+                        user_mode=False,
+                    )
+                    logger.info(
+                        "run_cycle(core_loop): scored=%d entered=%d blocked=%d exited=%d next=%ss",
+                        _core_result.symbols_scored,
+                        _core_result.entries_taken,
+                        _core_result.entries_blocked,
+                        _core_result.exits_taken,
+                        _core_result.next_interval,
+                    )
+                    return
+
                 # Run the APEX strategy cycle
                 if hasattr(self.apex, "run_cycle"):
                     self.apex.run_cycle()
                 elif hasattr(self.apex, "analyze_market"):
-                    # Fallback: iterate over symbols
+                    # Legacy fallback: fetch market data then call analyze_market(df, symbol, balance).
                     for symbol in self.symbols[:20]:  # cap at 20 per cycle
                         try:
-                            self.apex.analyze_market(symbol)
+                            if _broker is None or not callable(getattr(_broker, "get_candles", None)):
+                                continue
+                            _candles = _broker.get_candles(symbol, limit=200)
+                            if isinstance(_candles, tuple):
+                                _df, _err = _candles
+                                if _err is not None or _df is None:
+                                    continue
+                            else:
+                                _df = _candles
+                            if _df is None:
+                                continue
+                            self.apex.analyze_market(_df, symbol, _account_balance)
                         except Exception as _sym_err:
                             logger.debug("Symbol %s cycle error: %s", symbol, _sym_err)
             except Exception as _cycle_err:
