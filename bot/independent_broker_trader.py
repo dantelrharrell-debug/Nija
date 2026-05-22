@@ -137,6 +137,15 @@ except ImportError:
         get_broker_failure_manager = None  # type: ignore
         _BROKER_FAILURE_MANAGER_AVAILABLE = False
 
+# Import user risk manager — keeps per-user balance in sync for dashboards/alerts
+try:
+    from bot.user_risk_manager import get_user_risk_manager
+except ImportError:
+    try:
+        from user_risk_manager import get_user_risk_manager  # type: ignore
+    except ImportError:
+        get_user_risk_manager = None  # type: ignore
+
 logger = logging.getLogger("nija.independent_trader")
 
 # Minimum balance required for active trading
@@ -548,6 +557,13 @@ class IndependentBrokerTrader:
 
                     logger.info(f"   💰 User: {user_id} | {broker_type.value}: ${balance:,.2f}")
 
+                    # Sync balance into UserRiskManager so dashboards show live capital
+                    if get_user_risk_manager is not None:
+                        try:
+                            get_user_risk_manager().update_balance(user_id, balance)
+                        except Exception as _urm_err:
+                            logger.debug("UserRiskManager balance update skipped: %s", _urm_err)
+
                     if balance >= MINIMUM_FUNDED_BALANCE:
                         if user_id not in funded_users:
                             funded_users[user_id] = {}
@@ -572,6 +588,12 @@ class IndependentBrokerTrader:
                                     f"   🔁 User: {user_id} | {broker_type.value}: "
                                     f"balance recovered after nonce resync: ${balance:,.2f}"
                                 )
+                                # Sync recovered balance into UserRiskManager
+                                if get_user_risk_manager is not None:
+                                    try:
+                                        get_user_risk_manager().update_balance(user_id, balance)
+                                    except Exception as _urm_err:
+                                        logger.debug("UserRiskManager balance update skipped: %s", _urm_err)
                                 if balance >= MINIMUM_FUNDED_BALANCE:
                                     if user_id not in funded_users:
                                         funded_users[user_id] = {}
@@ -1124,9 +1146,21 @@ class IndependentBrokerTrader:
                             'error': f'Underfunded: ${balance:.2f}',
                             'last_check': datetime.now()
                         }
+                        # Sync the (low) balance so dashboards reflect reality
+                        if get_user_risk_manager is not None:
+                            try:
+                                get_user_risk_manager().update_balance(user_id, balance)
+                            except Exception as _urm_err:
+                                logger.debug("UserRiskManager balance update skipped: %s", _urm_err)
                         # Wait before rechecking
                         stop_flag.wait(60)
                         continue
+                    # Sync confirmed live balance into UserRiskManager for dashboards/alerts
+                    if get_user_risk_manager is not None:
+                        try:
+                            get_user_risk_manager().update_balance(user_id, balance)
+                        except Exception as _urm_err:
+                            logger.debug("UserRiskManager balance update skipped: %s", _urm_err)
                     # Mark user as connected now that we have a confirmed live balance
                     if get_platform_account_layer is not None:
                         try:
