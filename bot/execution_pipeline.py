@@ -218,6 +218,10 @@ class PipelineRequest:
     preferred_broker: Optional[str] = None
     available_balance_usd: Optional[float] = None
     price_hint_usd: Optional[float] = None
+    bid_price_usd: Optional[float] = None
+    ask_price_usd: Optional[float] = None
+    volume_24h_usd: Optional[float] = None
+    volatility_pct: Optional[float] = None
     account_id: str = "default"
     validated: bool = False
 
@@ -741,12 +745,24 @@ class ExecutionPipeline:
         # ── Priority-4: Spread / Slippage Guard ──────────────────────────
         if self._downstream_guard is not None:
             try:
+                _bid = float(
+                    effective_request.bid_price_usd
+                    if effective_request.bid_price_usd is not None
+                    else (effective_request.price_hint_usd or 0.0)
+                )
+                _ask = float(
+                    effective_request.ask_price_usd
+                    if effective_request.ask_price_usd is not None
+                    else (effective_request.price_hint_usd or 0.0)
+                )
                 slip_ok, slip_reason, _ = self._downstream_guard.check_slippage(
                     symbol=effective_request.symbol,
                     side=self._normalise_side(effective_request.side),
                     order_size_usd=effective_request.size_usd,
-                    bid=effective_request.price_hint_usd or 0.0,
-                    ask=effective_request.price_hint_usd or 0.0,
+                    bid=_bid,
+                    ask=_ask,
+                    volume_24h_usd=float(effective_request.volume_24h_usd or 0.0),
+                    volatility_pct=float(effective_request.volatility_pct or 0.02),
                 )
                 if not slip_ok:
                     if reservation_id and self._ecel is not None:

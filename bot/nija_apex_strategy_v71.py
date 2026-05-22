@@ -1238,10 +1238,12 @@ class NIJAApexStrategyV71:
         if broker_name == 'kraken':
             confidence = validation.get('confidence', 0.0)
             if confidence < self.kraken_min_confidence:
-                logger.info(
-                    f"   ⚠️  Kraken advisory: Confidence {confidence:.2f} < "
-                    f"{self.kraken_min_confidence:.2f} — proceeding (no hard block)"
+                reason = (
+                    f"Kraken confidence {confidence:.2f} < "
+                    f"{self.kraken_min_confidence:.2f}"
                 )
+                logger.info("   ⏭️  Skipping trade: %s", reason)
+                return {'action': 'hold', 'reason': reason, 'filter_stage': 'kraken_confidence'}
         return None
 
     def _log_first_trade_sanity_check(self, symbol: str, direction: str, current_price: float,
@@ -1452,6 +1454,24 @@ class NIJAApexStrategyV71:
             'checks': checks,
             'allow_with_reduced_size': allow_with_reduced_size,
         }
+
+    def _get_bid_ask_prices(self, symbol: str) -> Tuple[Optional[float], Optional[float]]:
+        """Return best bid/ask prices when the active broker exposes them."""
+        broker_client = getattr(self, "broker_client", None)
+        if broker_client is None or not hasattr(broker_client, "get_best_bid_ask"):
+            return None, None
+        try:
+            ticker = broker_client.get_best_bid_ask(product_ids=[symbol])
+            pricebooks = (ticker or {}).get("pricebooks", [{}])
+            book = pricebooks[0] if pricebooks else {}
+            bid_price = float((book.get("bids") or [{}])[0].get("price", 0) or 0)
+            ask_price = float((book.get("asks") or [{}])[0].get("price", 0) or 0)
+            return (
+                bid_price if bid_price > 0 else None,
+                ask_price if ask_price > 0 else None,
+            )
+        except Exception:
+            return None, None
 
     def check_market_filter(
         self,
@@ -3795,24 +3815,28 @@ class NIJAApexStrategyV71:
                     # Validate trade quality (position size minimum — physical limit)
                     validation = self._validate_trade_quality(position_size, risk_score,
                                                              account_balance=account_balance)
+                    bid_price, ask_price = self._get_bid_ask_prices(symbol)
+                    eligibility = self.verify_trade_eligibility(
+                        symbol,
+                        df,
+                        indicators,
+                        'long',
+                        position_size,
+                        bid_price=bid_price,
+                        ask_price=ask_price,
+                    )
                     if not validation['valid']:
-                        logger.info(
-                            f"   ⚠️  Trade validation advisory LONG {symbol}"
-                            f" (proceeding): {validation['reason']}"
-                        )
-                        logger.info(
-                            f"ADVISORY (validation advisory, proceeding) → reason={validation['reason']}"
-                            f" score={score} conf={score}"
-                        )
+                        return {
+                            'action': 'hold',
+                            'reason': validation['reason'],
+                            'filter_stage': 'trade_validation',
+                        }
                     if not eligibility['eligible']:
-                        logger.info(
-                            f"   ⚠️  Trade eligibility advisory LONG {symbol}"
-                            f" (proceeding): {eligibility['reason']}"
-                        )
-                        logger.info(
-                            f"ADVISORY (eligibility advisory, proceeding) → reason={eligibility['reason']}"
-                            f" score={score} conf={score}"
-                        )
+                        return {
+                            'action': 'hold',
+                            'reason': eligibility['reason'],
+                            'filter_stage': 'trade_eligibility',
+                        }
                     
                     # Apply Kraken-specific confidence threshold if on Kraken
                     kraken_check = self._check_kraken_confidence(broker_name, validation)
@@ -4672,18 +4696,22 @@ class NIJAApexStrategyV71:
                     # ✅ COMPREHENSIVE TRADE ELIGIBILITY CHECK (Jan 30, 2026)
                     # Verify RSI, volatility (ATR), and spread conditions before entering trade
                     # This unified check prevents marginal trades and enforces quality standards
+                    bid_price, ask_price = self._get_bid_ask_prices(symbol)
                     eligibility = self.verify_trade_eligibility(
-                        symbol, df, indicators, 'short', position_size
+                        symbol,
+                        df,
+                        indicators,
+                        'short',
+                        position_size,
+                        bid_price=bid_price,
+                        ask_price=ask_price,
                     )
                     if not eligibility['eligible']:
-                        logger.info(
-                            f"   ⚠️  Trade eligibility advisory SHORT {symbol}"
-                            f" (proceeding): {eligibility['reason']}"
-                        )
-                        logger.info(
-                            f"ADVISORY (eligibility advisory, proceeding) → reason={eligibility['reason']}"
-                            f" score={score} conf={score}"
-                        )
+                        return {
+                            'action': 'hold',
+                            'reason': eligibility['reason'],
+                            'filter_stage': 'trade_eligibility',
+                        }
                     
                     # Apply Kraken-specific confidence threshold if on Kraken
                     kraken_check = self._check_kraken_confidence(broker_name, validation)

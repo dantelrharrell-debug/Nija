@@ -768,6 +768,21 @@ class ExecutionEngine:
         if _preferred_env is not None:
             preferred_broker = _preferred_env
 
+        bid_price_usd: Optional[float] = None
+        ask_price_usd: Optional[float] = None
+        try:
+            if hasattr(broker_client, "get_best_bid_ask"):
+                ticker = broker_client.get_best_bid_ask(product_ids=[symbol])
+                pricebooks = (ticker or {}).get("pricebooks", [{}])
+                book = pricebooks[0] if pricebooks else {}
+                bid_price_usd = float((book.get("bids") or [{}])[0].get("price", 0) or 0) or None
+                ask_price_usd = float((book.get("asks") or [{}])[0].get("price", 0) or 0) or None
+                if (price_hint_usd is None or price_hint_usd <= 0) and bid_price_usd and ask_price_usd:
+                    price_hint_usd = (bid_price_usd + ask_price_usd) / 2.0
+        except Exception:
+            bid_price_usd = None
+            ask_price_usd = None
+
         res = get_execution_pipeline().execute(
             PipelineRequest(
                 strategy=strategy_name,
@@ -778,6 +793,8 @@ class ExecutionEngine:
                 preferred_broker=preferred_broker,
                 available_balance_usd=available_balance_usd,
                 price_hint_usd=price_hint_usd,
+                bid_price_usd=bid_price_usd,
+                ask_price_usd=ask_price_usd,
             )
         )
 

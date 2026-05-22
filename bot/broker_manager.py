@@ -13519,13 +13519,26 @@ class BrokerManager:
                 from execution_pipeline import get_execution_pipeline, PipelineRequest  # type: ignore
 
             price_hint = None
+            bid_price = None
+            ask_price = None
             try:
+                if hasattr(broker, "get_best_bid_ask"):
+                    ticker = broker.get_best_bid_ask(product_ids=[symbol])
+                    pb = (ticker or {}).get("pricebooks", [{}])[0]
+                    bid_raw = float((pb.get("bids") or [{}])[0].get("price", 0) or 0)
+                    ask_raw = float((pb.get("asks") or [{}])[0].get("price", 0) or 0)
+                    bid_price = bid_raw if bid_raw > 0 else None
+                    ask_price = ask_raw if ask_raw > 0 else None
+                    if bid_price is not None and ask_price is not None:
+                        price_hint = (bid_price + ask_price) / 2.0
                 if hasattr(broker, "get_current_price"):
                     p = broker.get_current_price(symbol)
                     if p and p > 0:
-                        price_hint = float(p)
+                        price_hint = price_hint or float(p)
             except Exception:
                 price_hint = None
+                bid_price = None
+                ask_price = None
 
             result = get_execution_pipeline().execute(
                 PipelineRequest(
@@ -13536,6 +13549,8 @@ class BrokerManager:
                     order_type="MARKET",
                     preferred_broker=broker.broker_type.value,
                     price_hint_usd=price_hint,
+                    bid_price_usd=bid_price,
+                    ask_price_usd=ask_price,
                 )
             )
             if not result.success:
