@@ -263,9 +263,22 @@ class IndividualUserConfigLoader:
                         self.enabled_users.append(user_config)
                         logger.info(f"   ✅ {user_config.name} ({user_config.broker}) - ENABLED")
                     else:
-                        logger.warning(f"   ⚠️  {user_config.name} ({user_config.broker}) - NO API KEYS")
-                        if hard_fail and require_api_keys:
-                            invalid_users.append((user_id, "Missing API keys in environment"))
+                        # Missing API keys: soft-disable the user regardless of hard_fail mode.
+                        # A missing config FILE (raised as FileNotFoundError above) is a hard
+                        # error because it indicates a deployment packaging issue.  Missing
+                        # API keys, however, are a credentials-configuration issue that the
+                        # operator can fix at runtime without redeploying — the system should
+                        # continue running for the users that ARE configured.
+                        user_config.enabled = False
+                        logger.warning(
+                            f"   ⚠️  {user_config.name} ({user_config.broker}) - "
+                            f"NO API KEYS: credentials not configured — user disabled. "
+                            f"Set {user_config.broker.upper()}_USER_"
+                            f"{user_id.split('_')[0].upper()}_API_KEY / _API_SECRET "
+                            f"(or the full-name variant) to activate this account."
+                        )
+                        # Do NOT append to invalid_users: missing credentials should not
+                        # crash the bot.  The user config is loaded but inactive.
                 else:
                     missing_users.append(user_id)
             except Exception as e:
@@ -276,7 +289,8 @@ class IndividualUserConfigLoader:
 
         logger.info("=" * 70)
 
-        # Hard fail if required users are missing or invalid
+        # Hard fail only for missing/unreadable config files or invalid JSON —
+        # NOT for missing API keys (those are a runtime credentials issue).
         if hard_fail and (missing_users or invalid_users):
             error_parts = []
 
@@ -293,7 +307,7 @@ class IndividualUserConfigLoader:
             logger.error("=" * 70)
             logger.error("REQUIRED ACTIONS:")
             logger.error("1. Ensure all user config files exist in config/users/")
-            logger.error("2. Verify API keys are set in environment variables")
+            logger.error("2. Verify the JSON format matches the expected schema")
             logger.error("3. Restart the bot after fixing")
             logger.error("=" * 70)
             raise ValueError(error_msg)
