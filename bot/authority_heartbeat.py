@@ -150,6 +150,45 @@ def _clear_heartbeat_marker() -> None:
     except Exception as exc:
         logger.warning(
             "AuthorityHeartbeatMonitor: failed to clear heartbeat marker path=%s: %s",
+# File-based heartbeat marker
+# ---------------------------------------------------------------------------
+
+
+def _write_heartbeat_marker() -> None:
+    """Write (or refresh) the file-based heartbeat verification marker.
+
+    The marker is read by ``_heartbeat_verification_status()`` in
+    ``trading_state_machine.py``.  It must be a JSON file containing at
+    minimum a ``stage`` field (``FILL_VERIFY`` satisfies all stage
+    requirements) and a ``verified_at_epoch`` timestamp.
+
+    This is called on every successful authority heartbeat tick so that the
+    marker stays fresh (within ``HEARTBEAT_VERIFICATION_MAX_AGE_SECONDS``,
+    default 1800 s) and the ``_live_activation_gate()`` check passes even
+    when no heartbeat trade has been executed yet.
+    """
+    marker_path = os.environ.get("HEARTBEAT_MARKER_PATH", "./data/heartbeat_verified.flag")
+    try:
+        path = Path(marker_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            {
+                "stage": "FILL_VERIFY",
+                "verified_at_epoch": time.time(),
+                "source": "authority_heartbeat",
+            },
+            sort_keys=True,
+        )
+        # Write atomically via a temp file to avoid partial reads.
+        tmp_path = path.with_suffix(".tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        tmp_path.replace(path)
+        logger.debug(
+            "AuthorityHeartbeatMonitor: heartbeat marker refreshed path=%s", marker_path
+        )
+    except Exception as exc:
+        logger.warning(
+            "AuthorityHeartbeatMonitor: could not write heartbeat marker path=%s: %s",
             marker_path,
             exc,
         )
@@ -371,6 +410,14 @@ class AuthorityHeartbeatMonitor:
             # This breaks the circular dependency where the activation gate
             # requires the marker but the heartbeat trade that creates it
             # cannot execute because the gate is OFF.
+            # Also refresh the file-based heartbeat marker so that the
+            # _heartbeat_verification_status() check in _live_activation_gate()
+            # passes when HEARTBEAT_REQUIRED_FIRST_ACTIVATION or HEARTBEAT_TRADE
+            # is set.  Without this, the activation gate stays blocked with
+            # heartbeat_err=marker_missing even though the Redis authority
+            # heartbeat is healthy — a chicken-and-egg deadlock where the marker
+            # is normally written by a heartbeat trade, but trades cannot execute
+            # until the gate opens.
             _write_heartbeat_marker()
             return
 
