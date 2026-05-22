@@ -334,6 +334,89 @@ class MetricCollector:
         except Exception as exc:
             return {"available": False, "error": str(exc)}
 
+    @staticmethod
+    def _count_metric(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _classify_gate_reason(cls, reason: str) -> Optional[str]:
+        if not reason:
+            return None
+        low = str(reason).strip().lower()
+        if not low:
+            return None
+
+        if any(token in low for token in ("confidence", "k_confidence")):
+            return "signal_confidence_thresholds"
+        if any(token in low for token in ("adx", "volatility_explosion", "regime_gate")):
+            return "adx_volatility_gating"
+        if any(token in low for token in ("cooldown", "recovery_controller")):
+            return "cooldown_windows"
+        if any(token in low for token in ("throttle", "rate_limit", "rate-limit", "ack_timeout")):
+            return "execution_throttles"
+        if any(token in low for token in ("position_limit", "position limit", "max_position", "atomic_position_cap")):
+            return "position_limits"
+        if any(token in low for token in ("trade_per_hour", "trades_per_hour", "hour_cap", "hf_cap", "hft_cap")):
+            return "hf_trade_per_hour_cap"
+        if any(token in low for token in ("liquidity", "spread", "slippage", "orderbook", "market_quality")):
+            return "orderbook_liquidity_filters"
+        if any(token in low for token in ("no_trade", "no-trade", "hold", "scan_complete_no_signal")):
+            return "strategy_no_trade_conditions"
+        return None
+
+    @classmethod
+    def _infer_signal_gate_blocker(cls, signal_payload: Dict[str, Any], compiler_payload: Dict[str, Any]) -> Optional[str]:
+        rejection_reasons = compiler_payload.get("rejection_reasons", {}) if isinstance(compiler_payload, dict) else {}
+        if isinstance(rejection_reasons, dict):
+            for reason_key, count in rejection_reasons.items():
+                if cls._count_metric(count) <= 0:
+                    continue
+                inferred = cls._classify_gate_reason(str(reason_key))
+                if inferred is not None:
+                    return inferred
+
+        aggregate = signal_payload.get("aggregate", {}) if isinstance(signal_payload, dict) else {}
+        seen = cls._count_metric(aggregate.get("signals_seen"))
+        conf_pass = cls._count_metric(aggregate.get("confidence_pass"))
+        adx_pass = cls._count_metric(aggregate.get("adx_pass"))
+        volume_pass = cls._count_metric(aggregate.get("volume_pass"))
+        ai_gate_pass = cls._count_metric(aggregate.get("ai_gate_pass"))
+
+        if seen > 0 and conf_pass <= 0:
+            return "signal_confidence_thresholds"
+        if conf_pass > 0 and adx_pass <= 0:
+            return "adx_volatility_gating"
+        if adx_pass > 0 and volume_pass <= 0:
+            return "orderbook_liquidity_filters"
+        if volume_pass > 0 and ai_gate_pass <= 0:
+            return "strategy_no_trade_conditions"
+        return None
+
+    @classmethod
+    def _infer_trace_gate_blocker(cls, traces: List[Dict[str, Any]]) -> Optional[str]:
+        if not traces:
+            return None
+        for trace in traces:
+            if str(trace.get("status") or "").lower() != "rejected":
+                continue
+            terminal_reason = str(trace.get("terminal_reason") or "")
+            inferred = cls._classify_gate_reason(terminal_reason)
+            if inferred is not None:
+                return inferred
+            stages = trace.get("stages", {}) if isinstance(trace.get("stages"), dict) else {}
+            for stage_name in ("ecel", "broker", "ai_gate", "signal"):
+                stage = stages.get(stage_name) if isinstance(stages, dict) else None
+                if not isinstance(stage, dict):
+                    continue
+                stage_reason = str(stage.get("reason") or "")
+                inferred = cls._classify_gate_reason(stage_reason)
+                if inferred is not None:
+                    return inferred
+        return None
+
     def _collect_live_dispatch_triage(self) -> Dict:
         """Collect a consolidated live-dispatch triage snapshot."""
         triage: Dict[str, Any] = {
@@ -508,8 +591,28 @@ class MetricCollector:
             compiler_payload = {"available": False, "error": str(exc)}
         triage["control_compiler"] = compiler_payload
 
+        signal_payload: Dict[str, Any] = {"available": False}
+        try:
+            from bot.signal_funnel_diagnostics import get_signal_funnel
+
+            stats = get_signal_funnel().get_all_stats()
+            aggregate = {
+                "pairs_tracked": len(stats),
+                "signals_seen": sum(int(getattr(s, "signals_seen", 0) or 0) for s in stats),
+                "confidence_pass": sum(int(getattr(s, "confidence_pass", 0) or 0) for s in stats),
+                "adx_pass": sum(int(getattr(s, "adx_pass", 0) or 0) for s in stats),
+                "volume_pass": sum(int(getattr(s, "volume_pass", 0) or 0) for s in stats),
+                "ai_gate_pass": sum(int(getattr(s, "ai_gate_pass", 0) or 0) for s in stats),
+                "execution_pass": sum(int(getattr(s, "execution_pass", 0) or 0) for s in stats),
+            }
+            signal_payload = {"available": True, "aggregate": aggregate}
+        except Exception as exc:
+            signal_payload = {"available": False, "error": str(exc)}
+        triage["signal_funnel"] = signal_payload
+
         pipeline_payload: Dict[str, Any] = {"available": False}
         traces_payload: Dict[str, Any] = {"available": False}
+        trace_rows: List[Dict[str, Any]] = []
         try:
             from bot.pipeline_funnel import get_pipeline_funnel
 
@@ -540,6 +643,7 @@ class MetricCollector:
             from bot.signal_funnel_diagnostics import get_signal_funnel
 
             traces = get_signal_funnel().get_execution_traces(limit=25)
+            trace_rows = list(traces or [])
             broker_stage_outcomes: Dict[str, int] = {}
             for trace in traces:
                 stages = trace.get("stages", {}) if isinstance(trace, dict) else {}
@@ -556,6 +660,14 @@ class MetricCollector:
         except Exception as exc:
             traces_payload = {"available": False, "error": str(exc)}
         triage["execution_trace"] = traces_payload
+
+        inferred_signal_gate = self._infer_signal_gate_blocker(signal_payload, compiler_payload)
+        inferred_execution_gate = self._infer_trace_gate_blocker(trace_rows)
+        likely_gates: List[str] = []
+        for gate in (inferred_signal_gate, inferred_execution_gate):
+            if gate and gate not in likely_gates:
+                likely_gates.append(gate)
+        triage["likely_execution_gates"] = likely_gates
 
         first_blocker = None
         if readiness_proof_payload.get("available"):
@@ -578,9 +690,11 @@ class MetricCollector:
             if generated <= 0:
                 first_blocker = f"{lifecycle_phase}:strategy:no_signals_generated"
             elif approved <= 0:
-                first_blocker = f"{lifecycle_phase}:strategy:signals_rejected_before_approval"
+                blocker = inferred_signal_gate or "signals_rejected_before_approval"
+                first_blocker = f"{lifecycle_phase}:strategy:{blocker}"
             elif risk_passed <= 0:
-                first_blocker = f"{lifecycle_phase}:execution:blocked_before_risk_passed"
+                blocker = inferred_execution_gate or "blocked_before_risk_passed"
+                first_blocker = f"{lifecycle_phase}:execution:{blocker}"
             elif attempted <= 0:
                 first_blocker = f"{lifecycle_phase}:execution:dispatch_not_attempted"
             elif routed <= 0:
