@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 
 class TestApexEntryGateWiring(unittest.TestCase):
@@ -128,3 +129,43 @@ class TestApexEntryGateWiring(unittest.TestCase):
 
         self.assertTrue(result["eligible"])
         self.assertTrue(result["allow_with_reduced_size"])
+
+    def test_entry_gate_min_score_relaxes_after_fallback_window(self):
+        try:
+            from bot.nija_apex_strategy_v71 import (
+                NIJAApexStrategyV71,
+                ENTRY_GATE_MIN_SCORE,
+                ENTRY_GATE_SAFETY_FLOOR,
+                ENTRY_GATE_FALLBACK_WINDOW_SECS,
+            )
+        except Exception as exc:
+            self.skipTest(f"NIJAApexStrategyV71 unavailable: {exc}")
+        strategy = object.__new__(NIJAApexStrategyV71)
+        drought = SimpleNamespace(
+            secs_since_last_trade=ENTRY_GATE_FALLBACK_WINDOW_SECS + 1,
+            active=False,
+            score_reduction=0.0,
+        )
+
+        effective_score = strategy._get_entry_gate_min_score(drought)
+
+        self.assertEqual(effective_score, max(ENTRY_GATE_SAFETY_FLOOR, ENTRY_GATE_MIN_SCORE - 1))
+
+    def test_entry_gate_min_score_respects_safety_floor_under_active_drought(self):
+        try:
+            from bot.nija_apex_strategy_v71 import (
+                NIJAApexStrategyV71,
+                ENTRY_GATE_SAFETY_FLOOR,
+            )
+        except Exception as exc:
+            self.skipTest(f"NIJAApexStrategyV71 unavailable: {exc}")
+        strategy = object.__new__(NIJAApexStrategyV71)
+        drought = SimpleNamespace(
+            secs_since_last_trade=10_000,
+            active=True,
+            score_reduction=10.0,
+        )
+
+        effective_score = strategy._get_entry_gate_min_score(drought)
+
+        self.assertEqual(effective_score, ENTRY_GATE_SAFETY_FLOOR)
