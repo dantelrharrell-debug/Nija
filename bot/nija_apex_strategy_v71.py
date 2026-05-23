@@ -114,6 +114,15 @@ ENTRY_GATE_MIN_SCORE = 2
 # the binary gate into a continuous confidence dial so near-miss signals trade at
 # proportionally smaller notional rather than being completely suppressed.
 ENTRY_GATE_SAFETY_FLOOR = int(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "1"))
+# Keep a hard safety floor but allow drought/fallback to reduce gate score
+# from 2/5 → 1/5 when configured so valid entries are not starved.
+ENTRY_GATE_SAFETY_FLOOR = max(
+    1,
+    min(
+        ENTRY_GATE_MIN_SCORE,
+        int(float(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "1"))),
+    ),
+)
 ENTRY_GATE_FALLBACK_CONFIDENCE = 0.18
 ENTRY_GATE_FALLBACK_ADX = 5.0
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
