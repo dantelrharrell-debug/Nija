@@ -363,11 +363,19 @@ class ExplorationGovernor:
 
             probability = max(0.0, min(0.45, probability))
             shadow_sampled = self._shadow_enabled
+            # Execution authority is set to "1" by TradingStateMachine when the
+            # instance reaches LIVE_ACTIVE and holds the distributed writer lock.
+            # Near-miss budget slots must not be consumed when this process is not
+            # the active writer — the trade would be blocked downstream anyway.
+            _writer_authority_active = os.getenv(
+                "NIJA_RUNTIME_EXECUTION_AUTHORITY", "0"
+            ).strip() in ("1", "true", "yes")
             allow_live = (
                 self._live_enabled
                 and hour_remaining > 0
                 and day_remaining > 0
                 and probability > 0.0
+                and _writer_authority_active
                 and self._random.random() < probability
             )
 
@@ -391,6 +399,8 @@ class ExplorationGovernor:
                     f"unstable operating region(score={region_assessment.score:.2f},"
                     f" limit={region_assessment.max_cluster_pressure:.2f})"
                 )
+            elif not _writer_authority_active:
+                reason = "no_execution_authority"
             elif allow_live:
                 reason = f"approved(stable_region={region_assessment.score:.2f})"
             decision = ExplorationDecision(

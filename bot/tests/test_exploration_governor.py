@@ -119,7 +119,8 @@ class ExplorationGovernorTests(unittest.TestCase):
         )
         with patch.object(self.gov, "_collect_metrics_locked", return_value=stable_metrics):
             with patch.object(self.gov._random, "random", return_value=0.0):
-                decision = self.gov.evaluate_candidate(candidate)
+                with patch.dict("os.environ", {"NIJA_RUNTIME_EXECUTION_AUTHORITY": "1"}):
+                    decision = self.gov.evaluate_candidate(candidate)
 
         self.assertTrue(decision.allow_live)
         self.assertIn("stable_region=", decision.reason)
@@ -154,6 +155,36 @@ class ExplorationGovernorTests(unittest.TestCase):
         self.assertIn("unstable operating region", decision.reason)
         state = self.gov.get_state_vector("trending")
         self.assertGreater(state.regime_confidence, 0.0)
+
+    def test_live_blocked_when_execution_authority_absent(self) -> None:
+        """allow_live must be False when NIJA_RUNTIME_EXECUTION_AUTHORITY is not set."""
+        self.gov._live_enabled = True
+        stable_metrics = {
+            "win_rate": 0.72,
+            "sharpe_ratio": 0.35,
+            "current_drawdown_pct": 1.0,
+            "drawdown_pressure": 0.1,
+            "ev_per_hour": 1.1,
+            "frequency_gap": 0.0,
+            "win_rate_gap": 0.0,
+        }
+        candidate = ExplorationCandidate(
+            symbol="BTC-USD",
+            regime="trending",
+            side="long",
+            gate_score=3.6,
+            effective_threshold=4.0,
+            confidence=0.7,
+            volume_ratio=1.6,
+            spread_pct=0.03,
+        )
+        with patch.object(self.gov, "_collect_metrics_locked", return_value=stable_metrics):
+            with patch.object(self.gov._random, "random", return_value=0.0):
+                with patch.dict("os.environ", {"NIJA_RUNTIME_EXECUTION_AUTHORITY": "0"}):
+                    decision = self.gov.evaluate_candidate(candidate)
+
+        self.assertFalse(decision.allow_live)
+        self.assertEqual(decision.reason, "no_execution_authority")
 
 
 if __name__ == "__main__":
