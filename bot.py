@@ -5932,6 +5932,43 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # _ensure_state_machine_loop_started() is idempotent; a second call on the
     # fast-path (which also calls it at line ~1536) is a safe no-op.
     _ensure_state_machine_loop_started()
+    # ── Authority heartbeat monitor ───────────────────────────────────────────
+    # IMPORTANT: Start the authority heartbeat monitor BEFORE the fast-path
+    # early return so it runs on both first boot AND restarts/retries.
+    # The monitor is a singleton (idempotent start) so calling it here is safe
+    # even if it was already started by a previous code path.
+    # This verifies Redis connectivity and fencing token validity every 30 s.
+    # On success it sets NIJA_WRITER_HEARTBEAT_ACTIVE=1, updates
+    # NIJA_WRITER_HEARTBEAT_ALIVE_TS, and writes the heartbeat marker file so
+    # the activation gate's HEARTBEAT_VERIFICATION check passes.
+    logger.info(
+        "AUTHORITY_HEARTBEAT: pre-startup check — about to call start_authority_heartbeat() "
+        "fencing_token_present=%s fallback=%s",
+        bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
+        os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", ""),
+    )
+    try:
+        from bot.authority_heartbeat import start_authority_heartbeat as _start_ahb
+        _ahb_monitor = _start_ahb()
+        logger.info(
+            "AUTHORITY_HEARTBEAT: monitor started successfully monitor=%r "
+            "interval_s=%.1f timeout_s=%.1f max_failures=%d "
+            "thread_name=%s thread_alive=%s thread_daemon=%s",
+            _ahb_monitor,
+            _ahb_monitor._interval_s,
+            _ahb_monitor._timeout_s,
+            _ahb_monitor._max_failures,
+            _ahb_monitor._thread.name if _ahb_monitor._thread else "None",
+            _ahb_monitor._thread.is_alive() if _ahb_monitor._thread else False,
+            _ahb_monitor._thread.daemon if _ahb_monitor._thread else False,
+        )
+    except Exception as _ahb_exc:
+        logger.error(
+            "AUTHORITY_HEARTBEAT: monitor could not be started: %s",
+            _ahb_exc,
+            exc_info=True,
+        )
+
     if _state_copy.get("strategy") is not None and "active_threads" in _state_copy:
         logger.warning("⚠️ Bypassing init - forcing run loop")
         logger.info(
@@ -5960,36 +5997,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             )
         return False
 
-    # ── Authority heartbeat monitor ───────────────────────────────────────────
-    # Start the authority heartbeat monitor in a background daemon thread.
-    # This verifies Redis connectivity and fencing token validity every 30 s.
-    # On success it sets NIJA_WRITER_HEARTBEAT_ACTIVE=1 and updates
-    # NIJA_WRITER_HEARTBEAT_ALIVE_TS so the writer-heartbeat gate passes.
-    # The fallback fencing token (if needed) was already generated at module
-    # level before this function was called.
     logger.info(
-        "AUTHORITY_HEARTBEAT: calling start_authority_heartbeat() "
+        "AUTHORITY_HEARTBEAT: slow-path (first boot) — heartbeat monitor already started above "
         "lock_acquired=%s fencing_token_present=%s",
         lock_acquired,
         bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
     )
-    try:
-        from bot.authority_heartbeat import start_authority_heartbeat as _start_ahb
-        _ahb_monitor = _start_ahb()
-        logger.info(
-            "AUTHORITY_HEARTBEAT: monitor started successfully monitor=%r "
-            "interval_s=%.1f timeout_s=%.1f max_failures=%d",
-            _ahb_monitor,
-            _ahb_monitor._interval_s,
-            _ahb_monitor._timeout_s,
-            _ahb_monitor._max_failures,
-        )
-    except Exception as _ahb_exc:
-        logger.error(
-            "AUTHORITY_HEARTBEAT: monitor could not be started: %s",
-            _ahb_exc,
-            exc_info=True,
-        )
 
     # Coinbase is enabled by default. Set NIJA_DISABLE_COINBASE=true to disable.
 
