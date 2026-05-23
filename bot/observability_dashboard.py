@@ -391,6 +391,19 @@ class MetricCollector:
         if not low:
             return None
 
+        if any(
+            token in low
+            for token in (
+                "shadow-only",
+                "shadow_only",
+                "no_execution_authority",
+                "nija_exp_live_mode",
+                "exploration_live_mode",
+            )
+        ):
+            return "exploration_shadow_mode"
+        if any(token in low for token in ("below minimum", "min_balance_to_trade", "minimum balance to trade")):
+            return "capital_minimum_balance"
         if any(token in low for token in ("confidence", "k_confidence")):
             return "signal_confidence_thresholds"
         if any(token in low for token in ("adx", "volatility_explosion", "regime_gate")):
@@ -458,6 +471,55 @@ class MetricCollector:
                 if inferred is not None:
                     return inferred
         return None
+
+    @classmethod
+    def _resolve_first_blocking_gate(
+        cls,
+        *,
+        lifecycle_phase: str,
+        readiness_proof_payload: Dict[str, Any],
+        decision_payload: Dict[str, Any],
+        pipeline_payload: Dict[str, Any],
+        inferred_signal_gate: Optional[str],
+        inferred_execution_gate: Optional[str],
+    ) -> str:
+        first_blocker: Optional[str] = None
+
+        if readiness_proof_payload.get("available"):
+            readiness_gate = str(readiness_proof_payload.get("first_blocking_gate") or "").strip()
+            if readiness_gate and readiness_gate.lower() != "none":
+                first_blocker = readiness_gate
+
+        if first_blocker is None and decision_payload.get("available") and not decision_payload.get("allowed", False):
+            gate = decision_payload.get("first_failed_gate") or "unknown"
+            reason = (
+                decision_payload.get("decision", {}).get("reason")
+                if isinstance(decision_payload.get("decision"), dict)
+                else ""
+            )
+            first_blocker = f"{lifecycle_phase}:can_execute:{gate}:{reason or 'blocked'}"
+
+        if first_blocker is None and pipeline_payload.get("available"):
+            counts = pipeline_payload.get("stage_counts", {})
+            generated = cls._count_metric(counts.get("signals_generated"))
+            approved = cls._count_metric(counts.get("signals_approved"))
+            risk_passed = cls._count_metric(counts.get("risk_passed"))
+            attempted = cls._count_metric(counts.get("execution_attempted"))
+            routed = cls._count_metric(counts.get("orders_routed"))
+            if generated <= 0:
+                first_blocker = f"{lifecycle_phase}:strategy:no_signals_generated"
+            elif approved <= 0:
+                blocker = inferred_signal_gate or "signals_rejected_before_approval"
+                first_blocker = f"{lifecycle_phase}:strategy:{blocker}"
+            elif risk_passed <= 0:
+                blocker = inferred_execution_gate or "blocked_before_risk_passed"
+                first_blocker = f"{lifecycle_phase}:execution:{blocker}"
+            elif attempted <= 0:
+                first_blocker = f"{lifecycle_phase}:execution:dispatch_not_attempted"
+            elif routed <= 0:
+                first_blocker = f"{lifecycle_phase}:broker:no_ack_or_order_route"
+
+        return first_blocker or "none_detected"
 
     def _collect_live_dispatch_triage(self) -> Dict:
         """Collect a consolidated live-dispatch triage snapshot."""
@@ -711,38 +773,14 @@ class MetricCollector:
                 likely_gates.append(gate)
         triage["likely_execution_gates"] = likely_gates
 
-        first_blocker = None
-        if readiness_proof_payload.get("available"):
-            first_blocker = str(readiness_proof_payload.get("first_blocking_gate") or "none")
-        elif decision_payload.get("available") and not decision_payload.get("allowed", False):
-            gate = decision_payload.get("first_failed_gate") or "unknown"
-            reason = (
-                decision_payload.get("decision", {}).get("reason")
-                if isinstance(decision_payload.get("decision"), dict)
-                else ""
-            )
-            first_blocker = f"{lifecycle_phase}:can_execute:{gate}:{reason or 'blocked'}"
-        elif pipeline_payload.get("available"):
-            counts = pipeline_payload.get("stage_counts", {})
-            generated = int(counts.get("signals_generated", 0) or 0)
-            approved = int(counts.get("signals_approved", 0) or 0)
-            risk_passed = int(counts.get("risk_passed", 0) or 0)
-            attempted = int(counts.get("execution_attempted", 0) or 0)
-            routed = int(counts.get("orders_routed", 0) or 0)
-            if generated <= 0:
-                first_blocker = f"{lifecycle_phase}:strategy:no_signals_generated"
-            elif approved <= 0:
-                blocker = inferred_signal_gate or "signals_rejected_before_approval"
-                first_blocker = f"{lifecycle_phase}:strategy:{blocker}"
-            elif risk_passed <= 0:
-                blocker = inferred_execution_gate or "blocked_before_risk_passed"
-                first_blocker = f"{lifecycle_phase}:execution:{blocker}"
-            elif attempted <= 0:
-                first_blocker = f"{lifecycle_phase}:execution:dispatch_not_attempted"
-            elif routed <= 0:
-                first_blocker = f"{lifecycle_phase}:broker:no_ack_or_order_route"
-
-        triage["first_blocking_gate"] = first_blocker or "none_detected"
+        triage["first_blocking_gate"] = self._resolve_first_blocking_gate(
+            lifecycle_phase=lifecycle_phase,
+            readiness_proof_payload=readiness_proof_payload,
+            decision_payload=decision_payload,
+            pipeline_payload=pipeline_payload,
+            inferred_signal_gate=inferred_signal_gate,
+            inferred_execution_gate=inferred_execution_gate,
+        )
         return triage
 
     def _collect_profit_lock(self) -> Dict:

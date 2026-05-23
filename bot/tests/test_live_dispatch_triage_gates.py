@@ -17,6 +17,14 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
             MetricCollector._classify_gate_reason("market_quality_gate:0.12"),
             "orderbook_liquidity_filters",
         )
+        self.assertEqual(
+            MetricCollector._classify_gate_reason("shadow-only"),
+            "exploration_shadow_mode",
+        )
+        self.assertEqual(
+            MetricCollector._classify_gate_reason("Balance $4.00 below minimum $5.00"),
+            "capital_minimum_balance",
+        )
 
     def test_infer_signal_gate_from_funnel_aggregate(self):
         signal_payload = {
@@ -52,6 +60,61 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
         ]
         inferred = MetricCollector._infer_trace_gate_blocker(traces)
         self.assertEqual(inferred, "cooldown_windows")
+
+    def test_resolve_first_blocking_gate_uses_pipeline_when_readiness_passed(self):
+        blocker = MetricCollector._resolve_first_blocking_gate(
+            lifecycle_phase="LIVE",
+            readiness_proof_payload={
+                "available": True,
+                "first_blocking_gate": "none",
+            },
+            decision_payload={
+                "available": True,
+                "allowed": True,
+                "decision": {},
+            },
+            pipeline_payload={
+                "available": True,
+                "stage_counts": {
+                    "signals_generated": 8,
+                    "signals_approved": 0,
+                    "risk_passed": 0,
+                    "execution_attempted": 0,
+                    "orders_routed": 0,
+                },
+            },
+            inferred_signal_gate="exploration_shadow_mode",
+            inferred_execution_gate=None,
+        )
+        self.assertEqual(blocker, "LIVE:strategy:exploration_shadow_mode")
+
+    def test_resolve_first_blocking_gate_prefers_readiness_failure(self):
+        blocker = MetricCollector._resolve_first_blocking_gate(
+            lifecycle_phase="WARM",
+            readiness_proof_payload={
+                "available": True,
+                "first_blocking_gate": "nonce.ready",
+            },
+            decision_payload={
+                "available": True,
+                "allowed": False,
+                "first_failed_gate": "nonce.authority",
+                "decision": {"reason": "nonce.authority"},
+            },
+            pipeline_payload={
+                "available": True,
+                "stage_counts": {
+                    "signals_generated": 0,
+                    "signals_approved": 0,
+                    "risk_passed": 0,
+                    "execution_attempted": 0,
+                    "orders_routed": 0,
+                },
+            },
+            inferred_signal_gate=None,
+            inferred_execution_gate=None,
+        )
+        self.assertEqual(blocker, "nonce.ready")
 
 
 if __name__ == "__main__":
