@@ -8,6 +8,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -94,6 +95,65 @@ class ExplorationGovernorTests(unittest.TestCase):
         )
         self.assertTrue(decision.shadow_sampled)
         self.assertFalse(decision.allow_live)
+
+    def test_live_candidate_executes_when_operating_region_is_stable(self) -> None:
+        self.gov._live_enabled = True
+        stable_metrics = {
+            "win_rate": 0.72,
+            "sharpe_ratio": 0.35,
+            "current_drawdown_pct": 1.0,
+            "drawdown_pressure": 0.1,
+            "ev_per_hour": 1.1,
+            "frequency_gap": 0.0,
+            "win_rate_gap": 0.0,
+        }
+        candidate = ExplorationCandidate(
+            symbol="BTC-USD",
+            regime="trending",
+            side="long",
+            gate_score=3.6,
+            effective_threshold=4.0,
+            confidence=0.7,
+            volume_ratio=1.6,
+            spread_pct=0.03,
+        )
+        with patch.object(self.gov, "_collect_metrics_locked", return_value=stable_metrics):
+            with patch.object(self.gov._random, "random", return_value=0.0):
+                decision = self.gov.evaluate_candidate(candidate)
+
+        self.assertTrue(decision.allow_live)
+        self.assertIn("stable_region=", decision.reason)
+
+    def test_live_candidate_stays_shadow_only_when_operating_region_is_unstable(self) -> None:
+        self.gov._live_enabled = True
+        self.gov._stable_region_min_score = 0.80
+        weak_metrics = {
+            "win_rate": 0.55,
+            "sharpe_ratio": 0.11,
+            "current_drawdown_pct": 2.0,
+            "drawdown_pressure": 0.45,
+            "ev_per_hour": 0.8,
+            "frequency_gap": 0.0,
+            "win_rate_gap": 0.0,
+        }
+        candidate = ExplorationCandidate(
+            symbol="ADA-USD",
+            regime="trending",
+            side="long",
+            gate_score=3.5,
+            effective_threshold=4.0,
+            confidence=0.6,
+            volume_ratio=0.45,
+            spread_pct=0.28,
+        )
+        with patch.object(self.gov, "_collect_metrics_locked", return_value=weak_metrics):
+            with patch.object(self.gov._random, "random", return_value=0.0):
+                decision = self.gov.evaluate_candidate(candidate)
+
+        self.assertFalse(decision.allow_live)
+        self.assertIn("unstable operating region", decision.reason)
+        state = self.gov.get_state_vector("trending")
+        self.assertGreater(state.regime_confidence, 0.0)
 
 
 if __name__ == "__main__":
