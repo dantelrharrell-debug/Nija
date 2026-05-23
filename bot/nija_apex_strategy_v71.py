@@ -109,7 +109,11 @@ ENTRY_GATE_VOLUME_THRESHOLD = 0.006
 # Gate score reduced from 3 → 2 (May 2026): require 2/5 conditions instead of 3/5
 # so borderline signals aren't blocked when most but not all conditions align.
 ENTRY_GATE_MIN_SCORE = 2
-ENTRY_GATE_SAFETY_FLOOR = 2
+# Safety floor = 1 (dynamic thresholding): score=0 hard-blocks; score=1 allows a
+# reduced-size entry (40–70% of normal size) instead of a hard block.  This converts
+# the binary gate into a continuous confidence dial so near-miss signals trade at
+# proportionally smaller notional rather than being completely suppressed.
+ENTRY_GATE_SAFETY_FLOOR = int(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "1"))
 ENTRY_GATE_FALLBACK_CONFIDENCE = 0.18
 ENTRY_GATE_FALLBACK_ADX = 5.0
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
@@ -458,6 +462,18 @@ except ImportError:
     except ImportError:
         _get_pipeline_funnel = None  # type: ignore
         _PIPELINE_FUNNEL_AVAILABLE = False
+
+# ── Rejection Histogram — per-stage/reason rejection counters ─────────────────
+try:
+    from bot.rejection_histogram import get_rejection_histogram as _get_rejection_histogram
+    _REJECTION_HISTOGRAM_AVAILABLE = True
+except ImportError:
+    try:
+        from rejection_histogram import get_rejection_histogram as _get_rejection_histogram  # type: ignore[import]
+        _REJECTION_HISTOGRAM_AVAILABLE = True
+    except ImportError:
+        _get_rejection_histogram = None  # type: ignore
+        _REJECTION_HISTOGRAM_AVAILABLE = False
 
 
 # Tracks trade cadence and relaxes filters when no trade in drought_window hours.
@@ -2161,6 +2177,27 @@ class NIJAApexStrategyV71:
             f"reason={reason}"
         )
 
+    def _record_rejection(self, stage: str, reason: str) -> None:
+        """
+        Record a rejection event in the process-wide RejectionHistogram.
+
+        Safe to call from any path — silently no-ops when the histogram module
+        is unavailable.
+        """
+        if not _REJECTION_HISTOGRAM_AVAILABLE or _get_rejection_histogram is None:
+            return
+        try:
+            regime_label = str(
+                getattr(self.current_regime, "value", self.current_regime) or "unknown"
+            )
+            _get_rejection_histogram().record(
+                stage=stage,
+                reason=reason[:128],
+                regime=regime_label,
+            )
+        except Exception:
+            pass
+
     @staticmethod
     def _apply_executable_trade_floor(
         raw_size: float,
@@ -2814,6 +2851,7 @@ class NIJAApexStrategyV71:
                     )
                 else:
                     logger.info(f"   🔇 TRACE [smart_filter] {symbol}: {filter_reason}")
+                    self._record_rejection("smart_filter", filter_reason[:80])
                     return {
                         'action': 'hold',
                         'reason': filter_reason,
@@ -2884,6 +2922,7 @@ class NIJAApexStrategyV71:
                     decision='SKIP',
                     reason=market_reason,
                 )
+                self._record_rejection("market_filter", "no_trade_allowed")
                 return {
                     'action': 'hold',
                     'reason': market_reason,
@@ -2982,6 +3021,7 @@ class NIJAApexStrategyV71:
                     decision='SKIP',
                     reason=market_reason,
                 )
+                self._record_rejection("market_filter", "trend_none_no_scalp")
                 return {'action': 'hold', 'reason': market_reason, 'filter_stage': 'market_filter'}
 
             # ── 4-Layer Drawdown Risk Controller (pre-entry authority) ────────
@@ -3027,6 +3067,7 @@ class NIJAApexStrategyV71:
                             decision='SKIP',
                             reason=_risk_result.reason,
                         )
+                        self._record_rejection("drawdown_risk", _risk_result.reason[:80])
                         return {'action': 'hold', 'reason': _risk_result.reason}
                 except Exception as _drc_check_err:
                     logger.debug("DrawdownRiskController check error: %s", _drc_check_err)
@@ -3198,6 +3239,7 @@ class NIJAApexStrategyV71:
                     decision='SKIP',
                     reason='ENTRY BLOCKED: insufficient capital for this strategy',
                 )
+                self._record_rejection("min_notional", "insufficient_capital")
                 if min_position_pct > 0:
                     min_balance_needed = min_required_balance / min_position_pct
                     logger.info(
@@ -3313,7 +3355,13 @@ class NIJAApexStrategyV71:
                         _threshold_adx,
                         _threshold_vol,
                     )
-                    if _gate_score < _min_gate_score_l:
+                    # ── Dynamic entry gate: proportional sizing instead of binary block ──
+                    # Score below safety floor → hard block (insufficient signal quality).
+                    # Score ≥ safety floor but below target → allow at reduced position
+                    # size proportional to the shortfall, rather than hard-blocking.
+                    # This converts a binary reject/pass into a continuous confidence dial.
+                    _legacy_gate_size_mult_l = 1.0  # position size multiplier from legacy gate
+                    if _gate_score < ENTRY_GATE_SAFETY_FLOOR:
                         self._log_entry_gate_diagnostics(
                             _confidence,
                             adx,
@@ -3324,7 +3372,7 @@ class NIJAApexStrategyV71:
                             _gate_score,
                             _min_gate_score_l,
                         )
-                        reject_reason = f"Entry gate score {_gate_score}/5 < {_min_gate_score_l}"
+                        reject_reason = f"Entry gate score {_gate_score}/5 < safety floor {ENTRY_GATE_SAFETY_FLOOR}"
                         _regime_label = str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN")
                         logger.info(
                             "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
@@ -3361,11 +3409,30 @@ class NIJAApexStrategyV71:
                                 )
                             except Exception:
                                 pass
+                        self._record_rejection(
+                            "entry_gate",
+                            f"long_gate_score_{_gate_score}_of_5",
+                        )
                         return {
                             'action': 'hold',
                             'reason': reject_reason,
                             'filter_stage': 'entry_gate',
                         }
+                    elif _gate_score < _min_gate_score_l:
+                        # Partial-credit path: score is above safety floor but below the
+                        # preferred minimum.  Allow the trade at reduced position size
+                        # (e.g. score=1/2 target → 50% size) rather than hard-blocking.
+                        _shortfall = _min_gate_score_l - _gate_score  # e.g. 1 point short
+                        _legacy_gate_size_mult_l = max(
+                            0.40,
+                            1.0 - (_shortfall / max(_min_gate_score_l, 1)) * 0.6,
+                        )
+                        logger.info(
+                            "   ⚡ %s: LONG legacy gate partial-credit "
+                            "(score=%d/%d) → size ×%.2f",
+                            symbol, _gate_score, _min_gate_score_l,
+                            _legacy_gate_size_mult_l,
+                        )
 
                     # ── Score-based AI Entry Gate (LONG) ──────────────────────
                     # Gates contribute weighted points; trade passes when total ≥ threshold.
@@ -3679,6 +3746,13 @@ class NIJAApexStrategyV71:
                         logger.debug(
                             "   🧭 Exploration LONG size: $%.2f × %.2f = $%.2f",
                             _pre_exp_long, _exploration_size_mult_l, position_size,
+                        )
+                    if _legacy_gate_size_mult_l < 1.0:
+                        _pre_lgm = position_size
+                        position_size = scalar(position_size * _legacy_gate_size_mult_l)
+                        logger.info(
+                            "   🔻 Legacy gate partial-credit LONG: $%.2f × %.2f = $%.2f",
+                            _pre_lgm, _legacy_gate_size_mult_l, position_size,
                         )
 
                     # ── ATR-Based Dynamic Position Sizing (LONG) ──────────────
@@ -4200,7 +4274,9 @@ class NIJAApexStrategyV71:
                         _threshold_adx,
                         _threshold_vol,
                     )
-                    if _gate_score < _min_gate_score_s:
+                    # ── Dynamic entry gate: proportional sizing (SHORT) ───────
+                    _legacy_gate_size_mult_s = 1.0
+                    if _gate_score < ENTRY_GATE_SAFETY_FLOOR:
                         self._log_entry_gate_diagnostics(
                             _confidence,
                             adx,
@@ -4211,7 +4287,7 @@ class NIJAApexStrategyV71:
                             _gate_score,
                             _min_gate_score_s,
                         )
-                        reject_reason = f"Entry gate score {_gate_score}/5 < {_min_gate_score_s}"
+                        reject_reason = f"Entry gate score {_gate_score}/5 < safety floor {ENTRY_GATE_SAFETY_FLOOR}"
                         _regime_label = str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN")
                         logger.info(
                             "ENTRY CHECK | symbol=%s confidence=%.3f adx=%.2f volume=%.2f%% regime=%s",
@@ -4248,11 +4324,28 @@ class NIJAApexStrategyV71:
                                 )
                             except Exception:
                                 pass
+                        self._record_rejection(
+                            "entry_gate",
+                            f"short_gate_score_{_gate_score}_of_5",
+                        )
                         return {
                             'action': 'hold',
                             'reason': reject_reason,
                             'filter_stage': 'entry_gate',
                         }
+                    elif _gate_score < _min_gate_score_s:
+                        # Partial-credit path for SHORT: allow at reduced size
+                        _shortfall_s = _min_gate_score_s - _gate_score
+                        _legacy_gate_size_mult_s = max(
+                            0.40,
+                            1.0 - (_shortfall_s / max(_min_gate_score_s, 1)) * 0.6,
+                        )
+                        logger.info(
+                            "   ⚡ %s: SHORT legacy gate partial-credit "
+                            "(score=%d/%d) → size ×%.2f",
+                            symbol, _gate_score, _min_gate_score_s,
+                            _legacy_gate_size_mult_s,
+                        )
 
                     # ── Score-based AI Entry Gate (SHORT) ─────────────────────
                     _entry_type_s = _momentum_entry_type_s or self._get_entry_type_for_regime(self.current_regime)
@@ -4558,6 +4651,13 @@ class NIJAApexStrategyV71:
                         logger.debug(
                             "   🧭 Exploration SHORT size: $%.2f × %.2f = $%.2f",
                             _pre_exp_short, _exploration_size_mult_s, position_size,
+                        )
+                    if _legacy_gate_size_mult_s < 1.0:
+                        _pre_lgm_s = position_size
+                        position_size = scalar(position_size * _legacy_gate_size_mult_s)
+                        logger.info(
+                            "   🔻 Legacy gate partial-credit SHORT: $%.2f × %.2f = $%.2f",
+                            _pre_lgm_s, _legacy_gate_size_mult_s, position_size,
                         )
 
                     # ── ATR-Based Dynamic Position Sizing (SHORT) ─────────────
@@ -5209,6 +5309,19 @@ class NIJAApexStrategyV71:
                     else:
                         pnl_usd = 0.0
                     is_win = pnl_usd > 0
+
+                    # ── Bayesian threshold tuner: record outcome ──────────
+                    if _REJECTION_HISTOGRAM_AVAILABLE:  # module imports available
+                        try:
+                            from bot.ai_entry_gate import get_online_threshold_tuner
+                            _regime_for_tuner = str(
+                                getattr(self.current_regime, "value", self.current_regime) or "unknown"
+                            )
+                            get_online_threshold_tuner().record_outcome(
+                                regime=_regime_for_tuner, won=is_win
+                            )
+                        except Exception:
+                            pass
 
                     # Accumulate this trade's P&L into the current cycle tracker
                     self._cycle_pnl += pnl_usd
