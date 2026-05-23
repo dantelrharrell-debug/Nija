@@ -109,7 +109,15 @@ ENTRY_GATE_VOLUME_THRESHOLD = 0.006
 # Gate score reduced from 3 → 2 (May 2026): require 2/5 conditions instead of 3/5
 # so borderline signals aren't blocked when most but not all conditions align.
 ENTRY_GATE_MIN_SCORE = 2
-ENTRY_GATE_SAFETY_FLOOR = 2
+# Keep a hard safety floor but allow drought/fallback to reduce gate score
+# from 2/5 → 1/5 when configured so valid entries are not starved.
+ENTRY_GATE_SAFETY_FLOOR = max(
+    1,
+    min(
+        ENTRY_GATE_MIN_SCORE,
+        int(float(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "1"))),
+    ),
+)
 ENTRY_GATE_FALLBACK_CONFIDENCE = 0.18
 ENTRY_GATE_FALLBACK_ADX = 5.0
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
