@@ -5641,9 +5641,20 @@ def _run_bot_startup_and_trading_with_retry():
                     _reset_startup_events_for_fresh_attempt(clear_initialized_state=True)
 
                 # Attempt to start the bot
+                logger.info(
+                    "DIAG_RETRY_WRAPPER: about to call _run_bot_startup_and_trading() "
+                    "attempt=%d init_done=%s",
+                    _next_attempt,
+                    _init_done,
+                )
                 _run_bot_startup_and_trading()
                 # Normal exit — supervisor loop inside returned cleanly
                 _set_startup_last_error("")
+                logger.info(
+                    "DIAG_RETRY_WRAPPER: _run_bot_startup_and_trading() returned normally "
+                    "attempt=%d",
+                    _next_attempt,
+                )
                 logger.info("✅ Bootstrap success - setting event")
                 return
 
@@ -5653,6 +5664,14 @@ def _run_bot_startup_and_trading_with_retry():
                 raise
 
             except Exception as e:
+                logger.error(
+                    "DIAG_RETRY_WRAPPER: _run_bot_startup_and_trading() raised %s: %s "
+                    "attempt=%d",
+                    type(e).__name__,
+                    e,
+                    _next_attempt,
+                    exc_info=True,
+                )
                 if _is_fatal_nonce_restart_error(e):
                     _fatal_nonce_error_streak += 1
                     logger.critical(
@@ -5901,6 +5920,27 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     """
     global _initialized_state
 
+    # ── DIAGNOSTIC: function entry ────────────────────────────────────────────
+    import threading as _diag_threading
+    _diag_ts = datetime.now(timezone.utc).isoformat()
+    _diag_thread = _diag_threading.current_thread()
+    _diag_pid = os.getpid()
+    _diag_state_keys = list(_initialized_state.keys()) if isinstance(_initialized_state, dict) else repr(_initialized_state)
+    _diag_state_has_strategy = isinstance(_initialized_state, dict) and _initialized_state.get("strategy") is not None
+    _diag_state_has_threads = isinstance(_initialized_state, dict) and "active_threads" in _initialized_state
+    logger.info(
+        "DIAG_ENTRY: _run_bot_startup_and_trading() called "
+        "ts=%s pid=%d thread_name=%s thread_id=%d "
+        "_initialized_state_keys=%s has_strategy=%s has_active_threads=%s",
+        _diag_ts,
+        _diag_pid,
+        _diag_thread.name,
+        _diag_thread.ident or -1,
+        _diag_state_keys,
+        _diag_state_has_strategy,
+        _diag_state_has_threads,
+    )
+
     _live_capital_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes", "enabled")
     if _live_capital_verified:
         logger.warning(
@@ -5923,7 +5963,21 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # Requires full state (strategy + active_threads) to be present so that a
     # retry after a partial-init failure falls through and finishes setup instead
     # of calling _rerun_supervisor_loop with an incomplete state dict.
+    logger.info(
+        "DIAG_FASTPATH_CHECK: reading _initialized_state snapshot "
+        "raw_state_keys=%s",
+        list(_initialized_state.keys()) if isinstance(_initialized_state, dict) else repr(_initialized_state),
+    )
     _state_copy = _read_initialized_state_snapshot(context="fast-path check")
+    logger.info(
+        "DIAG_FASTPATH_CHECK: snapshot acquired "
+        "state_copy_keys=%s has_strategy=%s has_active_threads=%s — "
+        "fast-path will be taken=%s",
+        list(_state_copy.keys()),
+        _state_copy.get("strategy") is not None,
+        "active_threads" in _state_copy,
+        (_state_copy.get("strategy") is not None and "active_threads" in _state_copy),
+    )
     logger.debug("Init lock acquired; continuing to preflight")
     # Force state machine loop alive immediately after INIT lock is released —
     # before any potentially blocking broker I/O.  This guarantees the loop is
@@ -5984,7 +6038,14 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
         # so a late-start or missed activation cannot silently skip runtime execution.
         _ensure_state_machine_loop_started()
         _rerun_supervisor_loop(_state_copy)
+        logger.info("DIAG_EXIT: fast-path return — _rerun_supervisor_loop completed")
         return
+
+    logger.info(
+        "DIAG_SLOWPATH: fast-path NOT taken — proceeding to slow-path (first boot) "
+        "state_copy_keys=%s",
+        list(_state_copy.keys()),
+    )
 
     lock_acquired = acquire_writer_lock()
     if not lock_acquired:
@@ -5992,9 +6053,15 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             "STARTUP_OBSERVER_STANDBY: distributed writer authority denied"
         )
         if is_live_trading():
+            logger.critical(
+                "DIAG_EXIT: raising RuntimeError — lock not acquired and live trading active"
+            )
             raise RuntimeError(
                 "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
             )
+        logger.critical(
+            "DIAG_EXIT: returning False — lock not acquired (non-live mode)"
+        )
         return False
 
     logger.info(
