@@ -79,6 +79,17 @@ class ExplorationDecision:
     budget_remaining_day: int
 
 
+@dataclass(frozen=True)
+class OperatingRegionAssessment:
+    """Assessment of whether a candidate sits in a stable operating region."""
+
+    regime: str
+    score: float
+    is_stable: bool
+    max_cluster_pressure: float
+    reasons: tuple[str, ...] = ()
+
+
 @dataclass
 class _ClusterBucket:
     pressure: float = 0.0
@@ -126,6 +137,8 @@ class ExplorationGovernor:
         self._min_win_rate = float(os.getenv("NIJA_EXP_MIN_WIN_RATE", "0.50"))
         self._min_sharpe = float(os.getenv("NIJA_EXP_MIN_SHARPE", "0.05"))
         self._max_drawdown = float(os.getenv("NIJA_EXP_MAX_DRAWDOWN_PCT", "8.0"))
+        self._stable_region_min_score = float(os.getenv("NIJA_EXP_STABLE_REGION_MIN_SCORE", "0.58"))
+        self._stable_region_cluster_max = float(os.getenv("NIJA_EXP_STABLE_REGION_CLUSTER_MAX", "0.45"))
 
         self._control_delta = 0.0
         self._current_mode = "neutral"
@@ -139,6 +152,7 @@ class ExplorationGovernor:
         self._cluster_buckets: Dict[str, _ClusterBucket] = {}
         self._context_buckets: Dict[str, _ContextBucket] = defaultdict(_ContextBucket)
         self._last_decision_by_symbol: Dict[str, ExplorationDecision] = {}
+        self._last_region_assessment_by_regime: Dict[str, OperatingRegionAssessment] = {}
 
         logger.info(
             "🧭 ExplorationGovernor initialised | α_tighten=%.2f α_loosen=%.2f "
@@ -321,6 +335,11 @@ class ExplorationGovernor:
                 self._track_context_exposure_locked(candidate, live=False)
                 self._last_decision_by_symbol[candidate.symbol] = decision
                 return decision
+            region_assessment = self._assess_operating_region_locked(
+                candidate=candidate,
+                metrics=metrics,
+                cluster_pressure=cluster_pressure,
+            )
 
             strat_key = self._strata_key(candidate)
             strat_bucket = self._context_buckets[strat_key]
@@ -333,11 +352,14 @@ class ExplorationGovernor:
             probability -= min(0.20, regret_score * 0.30)
             probability -= min(0.25, cluster_pressure * 0.35)
             probability -= strat_penalty
+            probability += min(0.12, max(0.0, region_assessment.score) * 0.12)
 
             if candidate.spread_pct > 0.0 and candidate.spread_pct > 0.15:
                 probability *= 0.3
             if candidate.volume_ratio > 0.0 and candidate.volume_ratio < 0.5:
                 probability *= 0.5
+            if not region_assessment.is_stable:
+                probability = 0.0
 
             probability = max(0.0, min(0.45, probability))
             shadow_sampled = self._shadow_enabled
@@ -357,12 +379,26 @@ class ExplorationGovernor:
                 day_remaining -= 1
 
             self._track_context_exposure_locked(candidate, live=allow_live)
+            size_multiplier = 1.0
+            if allow_live:
+                size_multiplier = max(
+                    0.1,
+                    min(1.0, self._size_multiplier * (0.80 + 0.40 * region_assessment.score)),
+                )
+            reason = "approved" if allow_live else "shadow-only"
+            if not region_assessment.is_stable:
+                reason = (
+                    f"unstable operating region(score={region_assessment.score:.2f},"
+                    f" limit={region_assessment.max_cluster_pressure:.2f})"
+                )
+            elif allow_live:
+                reason = f"approved(stable_region={region_assessment.score:.2f})"
             decision = ExplorationDecision(
                 shadow_sampled=shadow_sampled,
                 allow_live=allow_live,
                 probability=round(probability, 4),
-                size_multiplier=self._size_multiplier if allow_live else 1.0,
-                reason="approved" if allow_live else "shadow-only",
+                size_multiplier=size_multiplier,
+                reason=reason,
                 near_miss_gap=round(gap, 4),
                 cluster_pressure=round(cluster_pressure, 4),
                 regret_score=round(regret_score, 4),
@@ -467,12 +503,14 @@ class ExplorationGovernor:
             budget_util = 0.0
             if self._daily_budget > 0:
                 budget_util = min(1.0, len(self._day_timestamps) / float(self._daily_budget))
+            regime_key = str(regime or "unknown").lower()
+            regime_assessment = self._last_region_assessment_by_regime.get(regime_key)
             return ExplorationStateVector(
                 frequency_gap=metrics["frequency_gap"],
                 win_rate_gap=metrics["win_rate_gap"],
                 ev_per_hour=metrics["ev_per_hour"],
                 drawdown_pressure=metrics["drawdown_pressure"],
-                regime_confidence=0.0,
+                regime_confidence=float(regime_assessment.score) if regime_assessment else 0.0,
                 cluster_pressure=self._get_decayed_cluster_pressure_locked(self._cluster_key("*", regime), regime),
                 budget_utilization=budget_util,
             )
@@ -531,6 +569,54 @@ class ExplorationGovernor:
         if metrics["sharpe_ratio"] < self._min_sharpe:
             return False
         return True
+
+    def _assess_operating_region_locked(
+        self,
+        *,
+        candidate: ExplorationCandidate,
+        metrics: Dict[str, float],
+        cluster_pressure: float,
+    ) -> OperatingRegionAssessment:
+        """Assess whether the current regime is stable enough for live exploration trades."""
+        win_component = min(1.0, max(0.0, (float(metrics.get("win_rate", 0.0)) - self._min_win_rate) / 0.20))
+        sharpe_component = min(1.0, max(0.0, (float(metrics.get("sharpe_ratio", 0.0)) - self._min_sharpe) / 0.30))
+        drawdown_component = 1.0 - min(1.0, max(0.0, float(metrics.get("drawdown_pressure", 1.0))))
+        cluster_component = 1.0 - min(1.0, max(0.0, cluster_pressure / max(0.01, self._stable_region_cluster_max)))
+        spread_component = 1.0
+        if candidate.spread_pct > 0.15:
+            spread_component = max(0.0, 1.0 - min(1.0, (candidate.spread_pct - 0.15) / 0.35))
+        volume_component = min(1.0, max(0.0, candidate.volume_ratio / 1.2))
+        score = (
+            0.26 * win_component
+            + 0.20 * sharpe_component
+            + 0.20 * drawdown_component
+            + 0.20 * cluster_component
+            + 0.08 * spread_component
+            + 0.06 * volume_component
+        )
+        reasons = []
+        if cluster_pressure > self._stable_region_cluster_max:
+            reasons.append("cluster_pressure_high")
+        if float(metrics.get("drawdown_pressure", 1.0)) >= 1.0:
+            reasons.append("drawdown_pressure_high")
+        if float(metrics.get("win_rate", 0.0)) < self._min_win_rate:
+            reasons.append("win_rate_below_floor")
+        is_stable = (
+            score >= self._stable_region_min_score
+            and cluster_pressure <= self._stable_region_cluster_max
+            and float(metrics.get("drawdown_pressure", 1.0)) < 1.0
+            and float(metrics.get("win_rate", 0.0)) >= self._min_win_rate
+        )
+        regime_key = str(candidate.regime or "unknown").lower()
+        assessment = OperatingRegionAssessment(
+            regime=regime_key,
+            score=round(min(1.0, max(0.0, score)), 4),
+            is_stable=bool(is_stable),
+            max_cluster_pressure=float(self._stable_region_cluster_max),
+            reasons=tuple(reasons),
+        )
+        self._last_region_assessment_by_regime[regime_key] = assessment
+        return assessment
 
     # ------------------------------------------------------------------
     # Internal helpers
