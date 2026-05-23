@@ -72,6 +72,18 @@ import pandas as pd
 
 logger = logging.getLogger("nija.ai_entry_gate")
 
+# ── Rejection histogram (optional — degrades gracefully when unavailable) ────
+try:
+    from bot.rejection_histogram import get_rejection_histogram as _get_rej_hist
+    _REJECTION_HIST_AVAILABLE = True
+except ImportError:
+    try:
+        from rejection_histogram import get_rejection_histogram as _get_rej_hist  # type: ignore[import]
+        _REJECTION_HIST_AVAILABLE = True
+    except ImportError:
+        _get_rej_hist = None  # type: ignore
+        _REJECTION_HIST_AVAILABLE = False
+
 # ── DIAGNOSTIC BYPASS FLAGS ──────────────────────────────────────────────────
 # NIJA_DISABLE_REGIME_GATE=true → Gate 5 (regime compatibility check) always
 #   passes regardless of entry-type/regime mismatch.  Use during pipeline
@@ -247,6 +259,109 @@ _MAX_TOTAL_THRESHOLD_REDUCTION = 0.55
 
 
 # ---------------------------------------------------------------------------
+# Bayesian Online Threshold Tuner
+# ---------------------------------------------------------------------------
+
+class OnlineThresholdTuner:
+    """
+    Per-regime Bayesian (Beta-Binomial) online threshold adjuster.
+
+    Tracks win/loss outcomes per market regime using a Beta distribution as the
+    conjugate prior for a Bernoulli win-rate process.  As trades accumulate the
+    posterior mean win-rate shifts ``BASE_ENTRY_SCORE_THRESHOLD`` up or down:
+
+    * **Win-rate > target** → loosen threshold by up to ``max_delta`` points
+      (the model has evidence that the current signal quality is alpha-positive)
+    * **Win-rate < target** → tighten threshold by up to ``max_delta`` points
+      (alpha degrades; raise the bar to protect capital)
+
+    The adjustment is proportional to the distance from the target win-rate and
+    is capped at ``max_delta`` to prevent extreme swings.  A minimum sample size
+    ``min_n`` is required before the tuner has any effect (guards against noise
+    in early data).
+
+    Thread-safe.  Obtain the process-wide singleton via ``get_online_threshold_tuner()``.
+    """
+
+    _TARGET_WIN_RATE:  float = 0.55   # desired long-run win rate
+    _MAX_DELTA:        float = 1.0    # maximum threshold adjustment (gate-score points)
+    _MIN_N:            int   = 10     # minimum outcomes before tuning kicks in
+    _ALPHA0:           float = 3.0    # prior alpha (weak belief in 50% win rate)
+    _BETA0:            float = 3.0    # prior beta
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        # regime → [alpha, beta]  (Beta distribution parameters)
+        self._params: Dict[str, list] = {}
+
+    def _get_params(self, regime: str) -> list:
+        if regime not in self._params:
+            self._params[regime] = [self._ALPHA0, self._BETA0]
+        return self._params[regime]
+
+    def record_outcome(self, regime: str, won: bool) -> None:
+        """Record the outcome of a completed trade."""
+        regime = (regime or "unknown")[:32]
+        with self._lock:
+            p = self._get_params(regime)
+            if won:
+                p[0] += 1.0   # alpha += 1 (success)
+            else:
+                p[1] += 1.0   # beta  += 1 (failure)
+
+    def get_threshold_adjustment(self, regime: str) -> float:
+        """
+        Return a signed threshold delta for the given regime.
+
+        Positive delta → tighten (more selective).
+        Negative delta → loosen (more permissive).
+        Returns 0.0 until ``min_n`` outcomes are observed.
+        """
+        regime = (regime or "unknown")[:32]
+        with self._lock:
+            p = list(self._get_params(regime))   # [alpha, beta]
+        alpha, beta = p
+        n = (alpha - self._ALPHA0) + (beta - self._BETA0)
+        if n < self._MIN_N:
+            return 0.0
+        win_rate = alpha / (alpha + beta)
+        deviation = win_rate - self._TARGET_WIN_RATE
+        # Positive deviation → high win rate → loosen (negative delta)
+        # Negative deviation → low win rate  → tighten (positive delta)
+        return float(-deviation * (self._MAX_DELTA / self._TARGET_WIN_RATE))
+
+    def get_state(self) -> Dict[str, Any]:
+        """Return regime-level posterior summary for observability."""
+        with self._lock:
+            state: Dict[str, Any] = {}
+            for regime, (alpha, beta) in self._params.items():
+                n = (alpha - self._ALPHA0) + (beta - self._BETA0)
+                win_rate = alpha / (alpha + beta) if (alpha + beta) > 0 else 0.0
+                state[regime] = {
+                    "n": int(n),
+                    "win_rate": round(win_rate, 3),
+                    "alpha": round(alpha, 1),
+                    "beta":  round(beta, 1),
+                    "threshold_adj": round(self.get_threshold_adjustment(regime), 3),
+                }
+        return state
+
+
+_TUNER_SINGLETON: Optional[OnlineThresholdTuner] = None
+_TUNER_LOCK = threading.Lock()
+
+
+def get_online_threshold_tuner() -> OnlineThresholdTuner:
+    """Return the process-wide singleton :class:`OnlineThresholdTuner`."""
+    global _TUNER_SINGLETON
+    if _TUNER_SINGLETON is None:
+        with _TUNER_LOCK:
+            if _TUNER_SINGLETON is None:
+                _TUNER_SINGLETON = OnlineThresholdTuner()
+    return _TUNER_SINGLETON
+
+
+# ---------------------------------------------------------------------------
 # Gate class
 # ---------------------------------------------------------------------------
 
@@ -346,6 +461,15 @@ class AIEntryGate:
         if regime_key == "volatility_explosion":
             reason = "❌ VOLATILITY_EXPLOSION: all new entries hard-blocked (capital protection)"
             logger.debug("AIEntryGate: %s", reason)
+            if _REJECTION_HIST_AVAILABLE and _get_rej_hist is not None:
+                try:
+                    _get_rej_hist().record(
+                        stage="ai_gate",
+                        reason="volatility_explosion",
+                        regime=regime_key,
+                    )
+                except Exception:
+                    pass
             return GateResult(
                 passed=False,
                 reason=reason,
@@ -457,6 +581,26 @@ class AIEntryGate:
             2,
             int(_adaptive_base * (1.0 - total_reduction)),
         )
+
+        # ── Bayesian online threshold adjustment ──────────────────────
+        # Apply the per-regime posterior win-rate adjustment so the gate
+        # automatically loosens in high-alpha regimes and tightens when
+        # win rate deteriorates.  Only active after min_n outcomes.
+        try:
+            _bayes_adj = get_online_threshold_tuner().get_threshold_adjustment(regime_key)
+            if abs(_bayes_adj) > 0.01:
+                _pre_thresh = effective_threshold
+                # Clamp final threshold to [1, _GATE_MAX_SCORE]
+                effective_threshold = max(
+                    1,
+                    min(_GATE_MAX_SCORE, effective_threshold + _bayes_adj),
+                )
+                logger.debug(
+                    "AIEntryGate Bayesian adj regime=%s delta=%.2f threshold %.1f→%.1f",
+                    regime_key, _bayes_adj, _pre_thresh, effective_threshold,
+                )
+        except Exception:
+            pass
         _gate_feedback_enabled = str(os.getenv("NIJA_EIL_GATE_FEEDBACK_ENABLED", "false")).lower() in (
             "1",
             "true",
@@ -502,6 +646,21 @@ class AIEntryGate:
                 f"< {effective_threshold} threshold | "
                 f"failed: {', '.join(failed_gates)}"
             )
+            # Record in rejection histogram — bin by first failing gate
+            if _REJECTION_HIST_AVAILABLE and _get_rej_hist is not None:
+                try:
+                    _hist_reason = (
+                        f"score_{total_score:.1f}_below_{effective_threshold}"
+                        if not failed_gates
+                        else f"{first_failure}_score_{total_score:.1f}"
+                    )
+                    _get_rej_hist().record(
+                        stage="ai_gate",
+                        reason=_hist_reason,
+                        regime=regime_key,
+                    )
+                except Exception:
+                    pass
 
         logger.info(
             f"FINAL DECISION → score={total_score:.2f} threshold={effective_threshold:.2f}"
@@ -540,7 +699,7 @@ class AIEntryGate:
     def get_stats(self) -> Dict[str, Any]:
         """Return aggregate pass/fail statistics."""
         with self._lock:
-            return {
+            stats = {
                 "total_checked": self._total_checked,
                 "total_passed":  self._total_passed,
                 "pass_rate":     (
@@ -549,6 +708,11 @@ class AIEntryGate:
                 ),
                 "gate_failures": dict(self._gate_failures),
             }
+        try:
+            stats["bayesian_tuner"] = get_online_threshold_tuner().get_state()
+        except Exception:
+            pass
+        return stats
 
     # ------------------------------------------------------------------
     # Individual gate implementations

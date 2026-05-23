@@ -182,6 +182,9 @@ class MetricCollector:
         # 17. Live dispatch triage (activation -> authority -> signal -> broker)
         snap["modules"]["live_dispatch_triage"] = self._collect_live_dispatch_triage()
 
+        # 18. Rejection Histogram (per-stage/reason rejection counters)
+        snap["modules"]["rejection_histogram"] = self._collect_rejection_histogram()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -330,6 +333,21 @@ class MetricCollector:
                 return {"available": False, "error": "pipeline_funnel unavailable"}
         try:
             summary = get_pipeline_funnel().get_summary()
+            return {"available": True, **summary}
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def _collect_rejection_histogram(self) -> Dict:
+        """Return rejection histogram summary for the observability snapshot."""
+        try:
+            from bot.rejection_histogram import get_rejection_histogram
+        except ImportError:
+            try:
+                from rejection_histogram import get_rejection_histogram  # type: ignore[import]
+            except ImportError:
+                return {"available": False, "error": "rejection_histogram unavailable"}
+        try:
+            summary = get_rejection_histogram().get_summary(top_n=20)
             return {"available": True, **summary}
         except Exception as exc:
             return {"available": False, "error": str(exc)}
