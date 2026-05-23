@@ -309,6 +309,12 @@ class AuthorityHeartbeatMonitor:
         max_failures: Optional[int] = None,
         lockdown_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
+        logger.info(
+            "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor.__init__ called "
+            "pid=%d thread=%s",
+            os.getpid(),
+            threading.current_thread().name,
+        )
         self._interval_s = interval_s or _cfg_float(
             "NIJA_AUTHORITY_HEARTBEAT_INTERVAL_S", _DEFAULT_INTERVAL_S
         )
@@ -324,25 +330,57 @@ class AuthorityHeartbeatMonitor:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        logger.info(
+            "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor.__init__ complete "
+            "interval_s=%.1f timeout_s=%.1f max_failures=%d",
+            self._interval_s,
+            self._timeout_s,
+            self._max_failures,
+        )
 
     def start(self) -> None:
         """Start the heartbeat monitor in a background daemon thread."""
+        logger.info(
+            "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor.start() called "
+            "pid=%d caller_thread=%s",
+            os.getpid(),
+            threading.current_thread().name,
+        )
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                logger.warning("AuthorityHeartbeatMonitor: already running")
+                logger.warning(
+                    "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor already running "
+                    "thread=%s is_alive=%s",
+                    self._thread.name,
+                    self._thread.is_alive(),
+                )
                 return
             self._stop_event.clear()
+            logger.info("AUTHORITY_HEARTBEAT: creating daemon thread authority-heartbeat-monitor")
             self._thread = threading.Thread(
                 target=self._loop,
                 name="authority-heartbeat-monitor",
                 daemon=True,
             )
+            logger.info(
+                "AUTHORITY_HEARTBEAT: starting thread ident=%s daemon=%s",
+                self._thread.ident,
+                self._thread.daemon,
+            )
             self._thread.start()
+            logger.info(
+                "AUTHORITY_HEARTBEAT: thread started ident=%s is_alive=%s",
+                self._thread.ident,
+                self._thread.is_alive(),
+            )
         logger.info(
-            "AuthorityHeartbeatMonitor started: interval=%.1fs timeout=%.1fs max_failures=%d",
+            "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor.start() complete "
+            "interval=%.1fs timeout=%.1fs max_failures=%d thread=%s is_alive=%s",
             self._interval_s,
             self._timeout_s,
             self._max_failures,
+            self._thread.name if self._thread else "None",
+            self._thread.is_alive() if self._thread else False,
         )
 
     def stop(self) -> None:
@@ -361,24 +399,87 @@ class AuthorityHeartbeatMonitor:
 
     def _loop(self) -> None:
         """Main heartbeat loop."""
-        logger.info("AuthorityHeartbeatMonitor: heartbeat loop started")
+        logger.info(
+            "AUTHORITY_HEARTBEAT: _loop entered pid=%d thread=%s ident=%s",
+            os.getpid(),
+            threading.current_thread().name,
+            threading.current_thread().ident,
+        )
         # Run an immediate check on startup so the writer-heartbeat gate can
         # pass without waiting for the first interval to elapse.
-        self._tick()
-        while not self._stop_event.wait(timeout=self._interval_s):
-            if self._locked_down:
-                break
+        logger.info("AUTHORITY_HEARTBEAT: _loop running immediate startup tick")
+        try:
             self._tick()
-        logger.info("AuthorityHeartbeatMonitor: heartbeat loop stopped")
+        except Exception as _loop_tick_exc:
+            logger.error(
+                "AUTHORITY_HEARTBEAT: _loop startup tick raised exception: %s",
+                _loop_tick_exc,
+                exc_info=True,
+            )
+        logger.info(
+            "AUTHORITY_HEARTBEAT: _loop startup tick complete — entering interval loop "
+            "interval_s=%.1f locked_down=%s",
+            self._interval_s,
+            self._locked_down,
+        )
+        _iteration = 0
+        while not self._stop_event.wait(timeout=self._interval_s):
+            _iteration += 1
+            if self._locked_down:
+                logger.info(
+                    "AUTHORITY_HEARTBEAT: _loop exiting — locked_down=True iteration=%d",
+                    _iteration,
+                )
+                break
+            logger.info(
+                "AUTHORITY_HEARTBEAT: _loop iteration=%d consecutive_failures=%d",
+                _iteration,
+                self._consecutive_failures,
+            )
+            try:
+                self._tick()
+            except Exception as _iter_exc:
+                logger.error(
+                    "AUTHORITY_HEARTBEAT: _loop iteration=%d tick raised exception: %s",
+                    _iteration,
+                    _iter_exc,
+                    exc_info=True,
+                )
+        logger.info(
+            "AUTHORITY_HEARTBEAT: _loop exited iteration=%d locked_down=%s stop_set=%s",
+            _iteration,
+            self._locked_down,
+            self._stop_event.is_set(),
+        )
 
     def _tick(self) -> None:
         """Perform one heartbeat check and update failure counter."""
-        logger.info("AuthorityHeartbeatMonitor: _tick started")
-        ok, err = _check_authority_once(self._timeout_s)
+        logger.info(
+            "AUTHORITY_HEARTBEAT: _tick started pid=%d thread=%s",
+            os.getpid(),
+            threading.current_thread().name,
+        )
+        try:
+            ok, err = _check_authority_once(self._timeout_s)
+        except Exception as _check_exc:
+            logger.error(
+                "AUTHORITY_HEARTBEAT: _tick _check_authority_once raised exception: %s",
+                _check_exc,
+                exc_info=True,
+            )
+            ok, err = False, f"_check_authority_once exception: {_check_exc}"
+        logger.info(
+            "AUTHORITY_HEARTBEAT: _tick check result ok=%s err=%r "
+            "consecutive_failures=%d max_failures=%d",
+            ok,
+            err,
+            self._consecutive_failures,
+            self._max_failures,
+        )
         if ok:
             if self._consecutive_failures > 0:
                 logger.info(
-                    "AuthorityHeartbeatMonitor: authority restored after %d failure(s)",
+                    "AUTHORITY_HEARTBEAT: authority restored after %d failure(s)",
                     self._consecutive_failures,
                 )
             self._consecutive_failures = 0
@@ -389,6 +490,11 @@ class AuthorityHeartbeatMonitor:
             _now_ts = str(time.time())
             os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
             os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _now_ts
+            logger.info(
+                "AUTHORITY_HEARTBEAT: _tick set NIJA_WRITER_HEARTBEAT_ACTIVE=1 "
+                "NIJA_WRITER_HEARTBEAT_ALIVE_TS=%s",
+                _now_ts,
+            )
             # Write (or refresh) the file-based heartbeat marker so that the
             # _live_activation_gate() HEARTBEAT_VERIFICATION check passes.
             # This breaks the circular dependency where the activation gate
@@ -403,15 +509,25 @@ class AuthorityHeartbeatMonitor:
             # is normally written by a heartbeat trade, but trades cannot execute
             # until the gate opens.
             logger.info(
-                "AuthorityHeartbeatMonitor: _tick authority OK — invoking _write_heartbeat_marker"
+                "AUTHORITY_HEARTBEAT: _tick authority OK — invoking _write_heartbeat_marker "
+                "marker_path=%s",
+                _heartbeat_marker_path(),
             )
-            _write_heartbeat_marker()
-            logger.info("AuthorityHeartbeatMonitor: _tick complete — marker write attempted")
+            try:
+                _write_heartbeat_marker()
+                logger.info("AUTHORITY_HEARTBEAT: _tick _write_heartbeat_marker returned successfully")
+            except Exception as _write_exc:
+                logger.error(
+                    "AUTHORITY_HEARTBEAT: _tick _write_heartbeat_marker raised exception: %s",
+                    _write_exc,
+                    exc_info=True,
+                )
+            logger.info("AUTHORITY_HEARTBEAT: _tick complete — marker write attempted")
             return
 
         self._consecutive_failures += 1
         logger.critical(
-            "AuthorityHeartbeatMonitor: HEARTBEAT FAILURE #%d/%d — %s",
+            "AUTHORITY_HEARTBEAT: HEARTBEAT FAILURE #%d/%d — %s",
             self._consecutive_failures,
             self._max_failures,
             err,
