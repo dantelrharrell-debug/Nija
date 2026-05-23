@@ -3346,13 +3346,37 @@ def _acquire_distributed_process_lock() -> None:
                     _cross_deployment = bool(
                         _current_deployment and _holder_deployment and _current_deployment != _holder_deployment
                     )
+                    # "other-instance" means the holder shares NO identity attribute
+                    # (instance_id, container, hostname, deployment, replica) with this
+                    # process.  That is already stronger evidence of a stale foreign lock
+                    # than a cross-deployment check alone, so the rescue is allowed for
+                    # that relationship without requiring deployment IDs to be present.
+                    _is_other_instance = _holder_inspection.get("relationship") == "other-instance"
                     _allow_railway_rescue = bool(
                         _auto_clear_stale_railway
-                        and _cross_deployment
+                        and (_cross_deployment or _is_other_instance)
                         and _holder_token
                         and _meta_token == _holder_token
                         and _heartbeat_is_stale
                     )
+                    # Emit a single diagnostic when rescue is eligible but waiting on
+                    # heartbeat staleness, so operators can see what is blocking.
+                    if (
+                        _auto_clear_stale_railway
+                        and (_cross_deployment or _is_other_instance)
+                        and _holder_token
+                        and _meta_token == _holder_token
+                        and not _heartbeat_is_stale
+                        and isinstance(_heartbeat_age, (int, float))
+                    ):
+                        logger.warning(
+                            "Stale-lock rescue eligible but heartbeat not yet stale "
+                            "(relationship=%s age=%.1fs threshold=%.1fs remaining=%.1fs)",
+                            _holder_inspection.get("relationship"),
+                            float(_heartbeat_age),
+                            _stale_heartbeat_timeout_s,
+                            max(0.0, _stale_heartbeat_timeout_s - float(_heartbeat_age)),
+                        )
                     _rescued = int(
                         _client.eval(
                             """
@@ -3383,8 +3407,12 @@ def _acquire_distributed_process_lock() -> None:
                     logger.warning("Stale-lock rescue check failed: %s", _stale_exc)
 
                 if _rescued == 1:
+                    _rescue_trigger = "other-instance" if _is_other_instance else "cross-deployment"
                     logger.info(
-                        "🔓 Cleared and recovered stale writer lock; retrying acquire"
+                        "🔓 Cleared and recovered stale writer lock; retrying acquire "
+                        "(trigger=%s relationship=%s)",
+                        _rescue_trigger,
+                        _holder_inspection.get("relationship"),
                     )
                     _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
                     _holder_info = parse_distributed_lock_holder(_holder)
