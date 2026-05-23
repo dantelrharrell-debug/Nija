@@ -185,6 +185,9 @@ class MetricCollector:
         # 18. Rejection Histogram (per-stage/reason rejection counters)
         snap["modules"]["rejection_histogram"] = self._collect_rejection_histogram()
 
+        # 19. Scanner Funnel Tracker (per-cycle candidates baseline + scarcity classifier)
+        snap["modules"]["scanner_funnel"] = self._collect_scanner_funnel()
+
         # Derived top-level fields for quick status bar
         snap["status"] = self._compute_top_level_status(snap["modules"])
 
@@ -349,6 +352,27 @@ class MetricCollector:
         try:
             summary = get_rejection_histogram().get_summary(top_n=20)
             return {"available": True, **summary}
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def _collect_scanner_funnel(self) -> Dict:
+        """Return scanner funnel tracker summary and rollback-signal status."""
+        try:
+            try:
+                from bot.scanner_funnel_tracker import get_scanner_funnel_tracker
+            except ImportError:
+                from scanner_funnel_tracker import get_scanner_funnel_tracker  # type: ignore[import]
+        except ImportError:
+            return {"available": False, "error": "scanner_funnel_tracker unavailable"}
+        try:
+            tracker = get_scanner_funnel_tracker()
+            summary = tracker.get_summary()
+            rollback = tracker.check_rollback_signal()
+            return {
+                "available": True,
+                **summary,
+                "rollback_signal": rollback,
+            }
         except Exception as exc:
             return {"available": False, "error": str(exc)}
 
@@ -1117,6 +1141,38 @@ async function refresh() {
       cards.push(buildCard('Pipeline Funnel', [metricRow('Available', badge(null))]));
     }
 
+    // Scanner Funnel Tracker (per-cycle alpha-generation baseline + scarcity)
+    const sf = mods.scanner_funnel || {};
+    if (sf.available) {
+      const scarcityColor = sf.scarcity_type === 'generation' ? '#d29922'
+                          : sf.scarcity_type === 'filter'     ? '#f85149'
+                          : '#3fb950';
+      const rb = sf.rollback_signal || {};
+      const rbLevel = (rb.level || 'ok').toLowerCase();
+      const rbColor = rbLevel === 'critical' ? '#f85149'
+                    : rbLevel === 'warning'  ? '#d29922'
+                    : '#3fb950';
+      const sfRows = [
+        metricRow('Recorded Cycles', sf.recorded_cycles ?? '—'),
+        metricRow('Window Cycles', sf.window_cycles ?? '—'),
+        metricRow('Median Candidates', sf.median_candidates != null ? sf.median_candidates.toFixed(1) : '—'),
+        metricRow('P25 / P75', (sf.p25_candidates != null && sf.p75_candidates != null)
+          ? sf.p25_candidates.toFixed(1) + ' / ' + sf.p75_candidates.toFixed(1) : '—'),
+        metricRow('Zero-Candidate %', sf.zero_pct != null ? sf.zero_pct.toFixed(1) + ' %' : '—'),
+        metricRow('Avg Symbols Scored', sf.mean_symbols_scored != null ? sf.mean_symbols_scored.toFixed(0) : '—'),
+        `<div class="metric"><span class="label">Scarcity Type</span>
+          <span class="value" style="color:${scarcityColor};font-weight:600">${(sf.scarcity_type || '—').toUpperCase()}</span></div>`,
+        `<div class="metric"><span class="label">Rollback Signal</span>
+          <span class="value" style="color:${rbColor};font-weight:600">${(rb.level || 'ok').toUpperCase()}</span></div>`,
+        rb.drawdown_risk_pct != null
+          ? metricRow('Drawdown Risk Rej%', rb.drawdown_risk_pct.toFixed(1) + ' %')
+          : '',
+      ].filter(Boolean);
+      cards.push(buildCard('Scanner Funnel Baseline', sfRows));
+    } else {
+      cards.push(buildCard('Scanner Funnel Baseline', [metricRow('Available', badge(null))]));
+    }
+
     document.getElementById('cards-container').innerHTML = cards.join('');
 
     // Alerts
@@ -1214,6 +1270,12 @@ class ObservabilityDashboard:
         def pipeline_funnel():
             snap = self._collector.get_snapshot()
             mod = (snap.get("modules", {}) or {}).get("pipeline_funnel", {})
+            return jsonify(mod)
+
+        @bp.route("/api/v1/scanner-funnel")
+        def scanner_funnel():
+            snap = self._collector.get_snapshot()
+            mod = (snap.get("modules", {}) or {}).get("scanner_funnel", {})
             return jsonify(mod)
 
         @bp.route("/api/v1/live-dispatch")
