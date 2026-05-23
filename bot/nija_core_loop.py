@@ -712,6 +712,21 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Scanner Funnel Tracker — per-cycle alpha-generation quality baseline
+# ---------------------------------------------------------------------------
+_FUNNEL_TRACKER_AVAILABLE = False
+_get_funnel_tracker = None  # type: ignore
+try:
+    from scanner_funnel_tracker import get_scanner_funnel_tracker as _get_funnel_tracker  # type: ignore
+    _FUNNEL_TRACKER_AVAILABLE = True
+except ImportError:
+    try:
+        from bot.scanner_funnel_tracker import get_scanner_funnel_tracker as _get_funnel_tracker  # type: ignore
+        _FUNNEL_TRACKER_AVAILABLE = True
+    except ImportError:
+        pass
+
+# ---------------------------------------------------------------------------
 # Result dataclass
 # ---------------------------------------------------------------------------
 
@@ -1516,6 +1531,17 @@ class NijaCoreLoop:
             candidates.append(fallback_sig)
 
         logger.info("[Scanner] candidates_found=%d", len(candidates))
+
+        # ── Record scan-cycle result in funnel tracker ────────────────────
+        if _FUNNEL_TRACKER_AVAILABLE and _get_funnel_tracker is not None:
+            try:
+                _get_funnel_tracker().record(
+                    candidates_found=len(candidates),
+                    symbols_scored=scored,
+                    regime=str(snapshot.current_regime or "unknown"),
+                )
+            except Exception as _ftr_err:
+                logger.debug("scanner_funnel_tracker.record failed: %s", _ftr_err)
 
         # ── Rank and select top-N ─────────────────────────────────────────
         if not candidates:
