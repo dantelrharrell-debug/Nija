@@ -26,6 +26,34 @@ import subprocess
 from urllib.parse import urlparse
 from typing import Any, Callable, cast
 
+# ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
+# These print() calls fire at import/exec time — before any function is called,
+# before logging is configured, and before any conditional logic runs.
+# They are the earliest possible signal that bot.py is being loaded.
+print(
+    f"DIAG_BOT_MODULE_EXEC: bot.py executing at module level "
+    f"pid={os.getpid()} "
+    f"python={sys.version.split()[0]} "
+    f"thread={threading.current_thread().name} "
+    f"thread_id={threading.get_ident()} "
+    f"__name__={__name__!r} "
+    f"__file__={__file__!r}",
+    flush=True,
+)
+print(
+    f"DIAG_BOT_ENV_STARTUP: "
+    f"RAILWAY_DEPLOYMENT_ID={os.environ.get('RAILWAY_DEPLOYMENT_ID', '<unset>')} "
+    f"RAILWAY_SERVICE_ID={os.environ.get('RAILWAY_SERVICE_ID', '<unset>')} "
+    f"RAILWAY_REPLICA_ID={os.environ.get('RAILWAY_REPLICA_ID', '<unset>')} "
+    f"LIVE_CAPITAL_VERIFIED={os.environ.get('LIVE_CAPITAL_VERIFIED', '<unset>')} "
+    f"DRY_RUN_MODE={os.environ.get('DRY_RUN_MODE', '<unset>')} "
+    f"FORCE_TRADE={os.environ.get('FORCE_TRADE', '<unset>')} "
+    f"HF_SCALP_MODE={os.environ.get('HF_SCALP_MODE', '<unset>')} "
+    f"NIJA_EXECUTION_ACTIVE={os.environ.get('NIJA_EXECUTION_ACTIVE', '<unset>')} "
+    f"NIJA_RUNTIME_EXECUTION_AUTHORITY={os.environ.get('NIJA_RUNTIME_EXECUTION_AUTHORITY', '<unset>')}",
+    flush=True,
+)
+
 from bot.redis_env import (
     get_all_redis_urls,
     get_redis_env_presence,
@@ -3710,6 +3738,38 @@ def _emit_boot_trace(stage: str, detail: str) -> None:
     print(f"{stage}: {detail}", flush=True)
 
 
+def _log_startup_trace(context: str) -> None:
+    """Log the current call stack and thread state for startup path tracing.
+
+    Call this from every possible entry point so we can identify which code
+    path is actually being used when the bot starts.  Uses both print() and
+    logger so the trace appears in both stdout and the rotating log file.
+    """
+    import traceback as _tb
+    _stack_lines = _tb.format_stack()
+    _stack_str = "".join(_stack_lines).strip()
+    _ts = datetime.now(timezone.utc).isoformat()
+    _thread = threading.current_thread()
+    _all_threads = [
+        f"{t.name}(id={t.ident},daemon={t.daemon},alive={t.is_alive()})"
+        for t in threading.enumerate()
+    ]
+    _msg = (
+        f"DIAG_STARTUP_TRACE context={context!r} "
+        f"ts={_ts} "
+        f"pid={os.getpid()} "
+        f"thread={_thread.name} "
+        f"thread_id={_thread.ident} "
+        f"all_threads=[{', '.join(_all_threads)}] "
+        f"stack=\n{_stack_str}"
+    )
+    print(_msg, flush=True)
+    try:
+        logger.info(_msg)
+    except Exception:
+        pass
+
+
 _health_server_started: bool = False
 
 
@@ -5582,10 +5642,14 @@ def _run_bot_startup_and_trading_with_retry():
     transient errors (Kraken nonce, network blip, etc.) never kill the thread
     permanently.  Only a clean KeyboardInterrupt stops the loop.
     """
+    # ── ENTRY POINT TRACE ────────────────────────────────────────────────────
+    _log_startup_trace("_run_bot_startup_and_trading_with_retry() entry")
     logger.info(
-        "DIAG_BOOTSTRAP_BEGIN: entering _run_bot_startup_and_trading_with_retry pid=%d thread=%s",
+        "DIAG_BOOTSTRAP_BEGIN: entering _run_bot_startup_and_trading_with_retry "
+        "pid=%d thread=%s thread_id=%d",
         os.getpid(),
         threading.current_thread().name,
+        threading.get_ident(),
     )
 
     # ── Single-owner bootstrap kernel ────────────────────────────────────────
@@ -5930,6 +5994,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     jump straight to ``_rerun_supervisor_loop()``.
     """
     global _initialized_state
+
+    # ── ENTRY POINT TRACE ────────────────────────────────────────────────────
+    _log_startup_trace("_run_bot_startup_and_trading() entry")
 
     # ── DIAGNOSTIC: function entry ────────────────────────────────────────────
     import threading as _diag_threading
@@ -8330,10 +8397,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
 def main():
     """Main entry point for NIJA trading bot - Railway optimized"""
     _emit_boot_trace("BOOT 1", "main() entered")
+    # ── ENTRY POINT TRACE ────────────────────────────────────────────────────
+    # Log the call stack immediately so we can confirm which code path reached
+    # main() and whether it was called from __main__, runpy, or elsewhere.
+    _log_startup_trace("main() entry")
     logger.info(
-        "DIAG_MAIN_ENTRY: main entered pid=%d thread=%s",
+        "DIAG_MAIN_ENTRY: main() called in bot.py "
+        "pid=%d thread=%s thread_id=%d "
+        "__name__=%r __file__=%r",
         os.getpid(),
         threading.current_thread().name,
+        threading.get_ident(),
+        __name__,
+        __file__,
     )
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -8530,12 +8606,26 @@ def main():
     logger.info("=" * 70)
     
     logger.info("Step 4: initializing broker and spawning startup thread")
+    logger.info(
+        "DIAG_THREAD_SPAWN: spawning BotStartup thread "
+        "target=_run_bot_startup_and_trading_with_retry "
+        "pid=%d caller_thread=%s caller_thread_id=%d",
+        os.getpid(),
+        threading.current_thread().name,
+        threading.get_ident(),
+    )
     startup_thread = threading.Thread(
         target=_run_bot_startup_and_trading_with_retry,  # single-owner kernel, always with retry
         daemon=False,  # NOT daemon - we want this to keep running
         name="BotStartup"
     )
     startup_thread.start()
+    logger.info(
+        "DIAG_THREAD_SPAWNED: BotStartup thread started "
+        "thread_id=%s thread_alive=%s",
+        startup_thread.ident,
+        startup_thread.is_alive(),
+    )
     
     # Wait briefly to ensure thread starts
     time.sleep(0.2)
@@ -8871,6 +8961,33 @@ def main():
 
 
 if __name__ == "__main__":
+    # ── ENTRY POINT DIAGNOSTICS ───────────────────────────────────────────────
+    # These fire immediately when bot.py is executed as __main__ (via runpy or
+    # direct invocation).  They confirm which code path reached this block and
+    # capture the full call stack so we can trace the actual entry point.
+    print(
+        f"DIAG_BOT_DUNDER_MAIN: bot.py __name__=='__main__' block executing "
+        f"pid={os.getpid()} "
+        f"python={sys.version.split()[0]} "
+        f"thread={threading.current_thread().name} "
+        f"thread_id={threading.get_ident()} "
+        f"__file__={__file__!r}",
+        flush=True,
+    )
+    import traceback as _entry_tb
+    _entry_stack = "".join(_entry_tb.format_stack()).strip()
+    print(
+        f"DIAG_BOT_DUNDER_MAIN_STACK: call stack at __main__ entry:\n{_entry_stack}",
+        flush=True,
+    )
+    print(
+        f"DIAG_BOT_DUNDER_MAIN_THREADS: active threads at __main__ entry: "
+        + ", ".join(
+            f"{t.name}(id={t.ident},daemon={t.daemon})"
+            for t in threading.enumerate()
+        ),
+        flush=True,
+    )
     try:
         main()
     except Exception as e:
