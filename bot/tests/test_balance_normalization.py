@@ -60,6 +60,9 @@ class DictBalanceBroker(BaseBroker):
     ):
         return {"status": "filled", "symbol": symbol, "side": side, "quantity": quantity}
 
+    def get_available_markets(self):
+        return ["BTC-USD"]
+
 
 # ---------------------------------------------------------------------------
 # Scalar inputs
