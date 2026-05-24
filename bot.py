@@ -8960,6 +8960,78 @@ def main():
     sys.exit(0)
 
 
+# ── MODULE-LEVEL AUTHORITY HEARTBEAT STARTUP ─────────────────────────────────
+# Start the authority heartbeat monitor at module level so it runs regardless
+# of how bot.py is loaded (runpy.run_path(), direct execution, or import).
+# The monitor is a singleton (idempotent) so calling it here is safe even if
+# _run_bot_startup_and_trading() also calls it later.
+# This must execute BEFORE main() so the heartbeat marker file exists before
+# the activation gate's HEARTBEAT_VERIFICATION check runs.
+print(
+    "DIAG_MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor at module level "
+    f"pid={os.getpid()} __name__={__name__!r}",
+    flush=True,
+)
+logger.info(
+    "MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor at module level "
+    "pid=%d __name__=%r fencing_token_present=%s fallback=%s",
+    os.getpid(),
+    __name__,
+    bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
+    os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", ""),
+)
+try:
+    from bot.authority_heartbeat import start_authority_heartbeat as _module_start_ahb
+    _module_ahb_monitor = _module_start_ahb()
+    logger.info(
+        "MODULE_LEVEL_HEARTBEAT: monitor started successfully monitor=%r "
+        "thread_name=%s thread_alive=%s thread_daemon=%s",
+        _module_ahb_monitor,
+        _module_ahb_monitor._thread.name if _module_ahb_monitor._thread else "None",
+        _module_ahb_monitor._thread.is_alive() if _module_ahb_monitor._thread else False,
+        _module_ahb_monitor._thread.daemon if _module_ahb_monitor._thread else False,
+    )
+    print(
+        f"DIAG_MODULE_LEVEL_HEARTBEAT_OK: monitor started "
+        f"thread={_module_ahb_monitor._thread.name if _module_ahb_monitor._thread else 'None'} "
+        f"alive={_module_ahb_monitor._thread.is_alive() if _module_ahb_monitor._thread else False}",
+        flush=True,
+    )
+except Exception as _module_ahb_exc:
+    logger.error(
+        "MODULE_LEVEL_HEARTBEAT: monitor could not be started: %s",
+        _module_ahb_exc,
+        exc_info=True,
+    )
+    print(
+        f"DIAG_MODULE_LEVEL_HEARTBEAT_ERR: {_module_ahb_exc}",
+        flush=True,
+    )
+
+# ── MODULE-LEVEL MAIN() CALL ──────────────────────────────────────────────────
+# Call main() unconditionally at module level so the bot starts whether bot.py
+# is executed directly (python bot.py), via runpy.run_path(), or any other
+# loader that does not set __name__ == "__main__".
+# The if __name__ == "__main__" guard below is kept for compatibility but the
+# authoritative entry point is this unconditional call.
+print(
+    "DIAG_MODULE_LEVEL_MAIN: calling main() at module level "
+    f"pid={os.getpid()} __name__={__name__!r}",
+    flush=True,
+)
+logger.info(
+    "MODULE_LEVEL_MAIN: calling main() at module level pid=%d __name__=%r",
+    os.getpid(),
+    __name__,
+)
+try:
+    main()
+except Exception as _module_main_exc:
+    traceback.print_exc()
+    logger.critical("💥 FATAL ERROR — BOT CRASHED (module-level main): %s", _module_main_exc, exc_info=True)
+    sys.exit(1)
+
+
 if __name__ == "__main__":
     # ── ENTRY POINT DIAGNOSTICS ───────────────────────────────────────────────
     # These fire immediately when bot.py is executed as __main__ (via runpy or
@@ -8988,11 +9060,15 @@ if __name__ == "__main__":
         ),
         flush=True,
     )
-    try:
-        main()
-    except Exception as e:
-        # Always print a raw traceback so container logs include the fatal root
-        # cause even if logging handlers are unavailable or misconfigured.
-        traceback.print_exc()
-        logger.critical(f"💥 FATAL ERROR — BOT CRASHED: {e}", exc_info=True)
-        sys.exit(1)
+    # NOTE: main() was already called unconditionally at module level above.
+    # This block is retained for compatibility but main() is NOT called again
+    # here to prevent a double-invocation when __name__ == "__main__".
+    print(
+        "DIAG_BOT_DUNDER_MAIN: __main__ block reached but main() already called "
+        "at module level — skipping duplicate invocation",
+        flush=True,
+    )
+    logger.info(
+        "DUNDER_MAIN_BLOCK: __name__=='__main__' block reached; "
+        "main() was already invoked at module level — no duplicate call needed"
+    )
