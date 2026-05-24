@@ -125,9 +125,9 @@ class TestConfidenceValidation(unittest.TestCase):
         self.assertIsNotNone(compiled)
 
     def test_swing_strategy_below_floor_rejected(self):
-        # swing floor = 0.65; confidence 0.50 should fail
+        # swing floor = 0.50; confidence 0.49 should fail
         compiled, notes = self.compiler.compile(
-            _valid_raw(strategy="swing", confidence=0.50, action="enter_long")
+            _valid_raw(strategy="swing", confidence=0.49, action="enter_long")
         )
         self.assertIsNone(compiled)
         self.assertTrue(any("confidence_invalid" in n for n in notes))
@@ -147,9 +147,9 @@ class TestConfidenceValidation(unittest.TestCase):
         self.assertIsNone(compiled)
 
     def test_confidence_exactly_at_floor_accepted(self):
-        # swing floor = 0.65; exactly 0.65 should pass
+        # swing floor = 0.50; exactly 0.50 should pass
         compiled, notes = self.compiler.compile(
-            _valid_raw(strategy="swing", confidence=0.65, action="enter_long")
+            _valid_raw(strategy="swing", confidence=0.50, action="enter_long")
         )
         self.assertIsNotNone(compiled)
 
