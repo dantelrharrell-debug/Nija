@@ -14,6 +14,7 @@ Covers:
 
 import threading
 import unittest
+import os
 from contextlib import nullcontext
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,8 @@ from bot.bootstrap_state_machine import (
     BootstrapStateMachine,
     get_bootstrap_fsm,
 )
+
+os.environ.setdefault("UNITTEST_RUNNING", "1")
 
 
 # ---------------------------------------------------------------------------

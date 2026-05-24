@@ -204,7 +204,7 @@ class TestStopBot(unittest.TestCase):
         mock_ks = MagicMock()
         mock_ks.is_active.return_value = False
 
-        with patch('emergency_reset.get_kill_switch', return_value=mock_ks):
+        with patch('bot.emergency_reset.get_kill_switch', return_value=mock_ks):
             from bot.emergency_reset import stop_bot
             result = stop_bot("unit test")
 
@@ -215,7 +215,7 @@ class TestStopBot(unittest.TestCase):
         mock_ks = MagicMock()
         mock_ks.is_active.return_value = True
 
-        with patch('emergency_reset.get_kill_switch', return_value=mock_ks):
+        with patch('bot.emergency_reset.get_kill_switch', return_value=mock_ks):
             from bot.emergency_reset import stop_bot
             result = stop_bot("already active")
 
@@ -262,7 +262,7 @@ class TestLiquidateAllPositions(unittest.TestCase):
         ]
 
         with patch(
-            'emergency_reset.submit_market_order_via_pipeline',
+            'bot.emergency_reset.submit_market_order_via_pipeline',
             return_value={'status': 'filled'},
         ) as helper:
             results = liquidate_all_positions([mock_broker])
@@ -286,7 +286,7 @@ class TestLiquidateAllPositions(unittest.TestCase):
             {'symbol': 'BTC-USD', 'quantity': 0.01}
         ]
 
-        with patch('emergency_reset.submit_market_order_via_pipeline', None):
+        with patch('bot.emergency_reset.submit_market_order_via_pipeline', None):
             results = liquidate_all_positions([mock_broker])
 
         self.assertEqual(results.get('coinbase', results.get(str(mock_broker.broker_type))), 0)
