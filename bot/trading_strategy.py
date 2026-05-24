@@ -202,6 +202,15 @@ _HEARTBEAT_SYMBOL_CANDIDATES: List[str] = [
     "SOL-USD",
     "XRP-USD",
 ]
+
+# Backward-compatibility constants retained for legacy test/import paths.
+ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase"]
+BROKER_MIN_BALANCE: Dict[str, float] = {
+    "default": 10.0,
+    "kraken": 10.0,
+    "coinbase": 10.0,
+}
+
 _HEARTBEAT_STAGE_ORDER: Dict[str, int] = {
     "AUTH_VERIFY": 1,
     "ORDER_VERIFY": 2,
