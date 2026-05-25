@@ -227,6 +227,20 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
     # perform the full distributed authority check.
     _truthy = {"1", "true", "yes", "on", "enabled"}
     is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
+    # If the writer lease has not been acquired yet (startup phase before lock
+    # acquisition completes), treat this as a ping-only check rather than a
+    # full distributed authority verification.  This prevents false
+    # "fencing mismatch" failures when the heartbeat fires at module-level
+    # before _acquire_distributed_writer_lock() has run and set the lock key
+    # in Redis.  Once the lease is acquired (NIJA_WRITER_LEASE_ACQUIRED=1),
+    # subsequent ticks perform the full token match check.
+    lease_acquired = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip() in _truthy
+    if not lease_acquired and not is_fallback:
+        logger.debug(
+            "AuthorityHeartbeatMonitor: writer lease not yet acquired — "
+            "using ping-only check during startup phase"
+        )
+        is_fallback = True
     try:
         if not is_fallback:
             try:
