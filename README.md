@@ -17,6 +17,19 @@
 
 ---
 
+## ✅ CURRENT SUCCESS POINT (Recovery Anchor)
+
+If anything happens to NIJA, recover to this known-good state first:
+
+1. Use this README top section (`v7.6.0`) as the active operating baseline.
+2. Follow **[RECOVERY_GUIDE.md](RECOVERY_GUIDE.md)** to restore safely.
+3. Use **[SUCCESS_STATE_2026_01_25.md](SUCCESS_STATE_2026_01_25.md)** to verify expected balances, account status, and copy-trading behavior after restart.
+4. Restart NIJA and confirm startup/balance snapshot logs before allowing live execution.
+
+This recovery anchor is the primary reference point for getting NIJA back to a verified working state.
+
+---
+
 ## 🚀 QUICK START — Enable Live Trading
 
 > **NIJA defaults to DISABLED mode (safe state) until credentials and the live-trading flag are set.**
