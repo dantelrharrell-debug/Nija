@@ -860,6 +860,46 @@ class NijaCoreLoop:
         key = self._normalize_reason(reason)
         self.reject_reason_counts[key] = self.reject_reason_counts.get(key, 0) + 1
 
+    @staticmethod
+    def _normalize_funnel_reason(reason: Any) -> str:
+        """Return a stable, uppercase reason code for trade funnel traces."""
+        raw = str(reason or "").strip()
+        if not raw:
+            return "UNSPECIFIED"
+        upper = raw.upper()
+        if "MIN_NOTIONAL_AFTER_FEES" in upper:
+            return "MIN_NOTIONAL_AFTER_FEES"
+        if "MIN_NOTIONAL" in upper:
+            return "MIN_NOTIONAL_AFTER_FEES"
+        if "LOW_EXPECTANCY" in upper:
+            return "LOW_EXPECTANCY"
+        if "RSI" in upper:
+            return "RSI_BELOW_THRESHOLD"
+        chars = [ch if ch.isalnum() else "_" for ch in upper]
+        code = "".join(chars).strip("_")
+        while "__" in code:
+            code = code.replace("__", "_")
+        return code or "UNSPECIFIED"
+
+    def _emit_trade_funnel_trace(self, pair: str, stages: Mapping[str, Tuple[str, str]]) -> None:
+        """Emit deterministic per-symbol trade funnel trace lines."""
+        stage_order = ("market_data", "regime", "signal", "ai_gate", "profitability")
+        lines: List[str] = [f"PAIR={str(pair or '').replace('-', '/')}"]
+        reason_code: Optional[str] = None
+        for stage in stage_order:
+            item = stages.get(stage)
+            if not item:
+                continue
+            outcome, reason = item
+            outcome_code = "PASS" if str(outcome).upper() == "PASS" else "FAIL"
+            lines.append(f"{stage}={outcome_code}")
+            if outcome_code == "FAIL":
+                reason_code = self._normalize_funnel_reason(reason)
+                break
+        if reason_code:
+            lines.append(f"reason={reason_code}")
+        logger.info("\n".join(lines))
+
     def _maybe_emit_veto_summary(self) -> None:
         """Emit [CYCLE_TRACE_SUMMARY] every VETO_SUMMARY_INTERVAL completed cycles."""
         if self._summary_cycle_count >= VETO_SUMMARY_INTERVAL and self._summary_cycle_count % VETO_SUMMARY_INTERVAL == 0:
@@ -1350,13 +1390,19 @@ class NijaCoreLoop:
             _sdd.start_cycle()
 
         # ── Score every symbol ────────────────────────────────────────────
-        for symbol in symbols:
+        funnel_traces: Dict[str, Dict[str, Tuple[str, str]]] = {}
+        for _symbol_idx, symbol in enumerate(symbols):
+            _funnel = funnel_traces.setdefault(symbol, {})
             # Cap: stop scoring once we have 10× the available slots — enough
             # diversity to find the top-N without scanning every symbol when the
             # market has 700+ pairs.
             if len(candidates) >= available_slots * 10:
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "cap_reached")
+                _funnel.setdefault("signal", ("FAIL", "CAP_REACHED"))
+                for _remaining_symbol in symbols[_symbol_idx + 1:]:
+                    _remaining_funnel = funnel_traces.setdefault(_remaining_symbol, {})
+                    _remaining_funnel.setdefault("signal", ("FAIL", "CAP_REACHED"))
                 break
 
             try:
@@ -1364,7 +1410,9 @@ class NijaCoreLoop:
                 if df is None or len(df) < 100:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "data_insufficient")
+                    _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     continue
+                _funnel["market_data"] = ("PASS", "")
 
                 # Always track top-volume symbol (feeds volume fallback)
                 if "volume" in df.columns:
@@ -1380,18 +1428,22 @@ class NijaCoreLoop:
                 if not indicators:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "indicators_failed")
+                    _funnel["signal"] = ("FAIL", "INDICATORS_FAILED")
                     continue
 
                 # Determine trend from apex market filter
                 try:
-                    allow, trend, _ = self.apex.check_market_filter(df, indicators)
+                    allow, trend, market_reason = self.apex.check_market_filter(df, indicators)
                     if not allow:
                         blocked += 1
                         if _sdd is not None:
                             _sdd.record_skip(symbol, "market_filter")
+                        _funnel["regime"] = ("FAIL", market_reason or "MARKET_FILTER_BLOCKED")
                         continue
+                    _funnel["regime"] = ("PASS", "")
                 except Exception:
                     trend = "uptrend"
+                    _funnel["regime"] = ("PASS", "MARKET_FILTER_FALLBACK")
 
                 side = "long" if trend == "uptrend" else "short"
                 entry_type = (
@@ -1423,15 +1475,19 @@ class NijaCoreLoop:
                         symbol=symbol,
                     )
                     if sig is not None:
+                        _funnel["signal"] = ("PASS", "")
                         logger.info(
                             "✅ Signal passed — %s score=%.1f threshold=%.1f",
                             symbol, sig.composite_score, sig.threshold_used,
                         )
                         candidates.append(sig)
+                    else:
+                        _funnel["signal"] = ("FAIL", "RSI_BELOW_THRESHOLD")
                 elif _AISignal is not None:
                     # Fallback: use apex.analyze_market directly and wrap result
                     analysis = self.apex.analyze_market(df, symbol, snapshot.balance)
                     if analysis.get("action") in ("enter_long", "enter_short"):
+                        _funnel["signal"] = ("PASS", "")
                         sig = _AISignal(
                             symbol=symbol,
                             side=side,
@@ -1443,6 +1499,8 @@ class NijaCoreLoop:
                             metadata={"apex_analysis": analysis},
                         )
                         candidates.append(sig)
+                    else:
+                        _funnel["signal"] = ("FAIL", analysis.get("reason", "NO_ENTRY_SIGNAL"))
 
                 # ── Momentum-Only Entry Mode (dead zone) ──────────────────
                 # When in a dead zone run the lightweight relaxed momentum
@@ -1482,6 +1540,7 @@ class NijaCoreLoop:
                 logger.debug("Phase3 scoring error for %s: %s", symbol, sym_err)
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
+                _funnel["signal"] = ("FAIL", f"SCORING_EXCEPTION:{sym_err}")
 
         # ── Merge momentum candidates when AI candidates are scarce ──────
         # If we're in dead-zone mode and have fewer AI candidates than slots,
@@ -1647,8 +1706,10 @@ class NijaCoreLoop:
             if entries >= MAX_ENTRIES_PER_CYCLE:
                 break
             try:
+                _funnel = funnel_traces.setdefault(sig.symbol, {})
                 df = self._fetch_df(broker, sig.symbol)
                 if df is None or len(df) < 100:
+                    _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     continue
 
                 # ── Trade Permission Engine ───────────────────────────────
@@ -1686,6 +1747,7 @@ class NijaCoreLoop:
                             blocked += 1
                             # ── Entry-to-Order Trace: per-signal veto (TPE) ──
                             _tpe_reason = getattr(_perm, "reason", "trade_permission_engine")
+                            _funnel["ai_gate"] = ("FAIL", _tpe_reason)
                             emit_cycle_trace(
                                 CycleOutcome.ENTRY_VETOED,
                                 reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
@@ -1693,6 +1755,7 @@ class NijaCoreLoop:
                             self._n_vetoed += 1
                             self._record_reject(_tpe_reason)
                             continue
+                        _funnel["ai_gate"] = ("PASS", "")
                     except Exception as _tpe_err:
                         logger.debug(
                             "TradePermissionEngine error for %s (non-fatal): %s",
@@ -1723,7 +1786,9 @@ class NijaCoreLoop:
 
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
+                    _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
                     continue
+                _funnel["profitability"] = ("PASS", "")
 
                 # Apply AI engine position multiplier to analysis size hint
                 if "position_size" in analysis and sig.position_multiplier != 1.0:
@@ -1770,11 +1835,18 @@ class NijaCoreLoop:
             except Exception as exec_err:
                 logger.warning("Phase3 execute error for %s: %s", sig.symbol, exec_err)
                 blocked += 1
+                _funnel = funnel_traces.setdefault(sig.symbol, {})
+                _funnel["profitability"] = ("FAIL", f"EXECUTION_EXCEPTION:{exec_err}")
                 try:
                     from bot.trading_state_machine import report_execution_anomaly
                     report_execution_anomaly("rejected_orders", f"execute_exception:{exec_err}")
                 except Exception:
                     pass
+
+        for symbol in symbols:
+            stages = funnel_traces.get(symbol)
+            if stages:
+                self._emit_trade_funnel_trace(symbol, stages)
 
         # ── Emit score histogram for this cycle ──────────────────────────
         if _sdd is not None:
