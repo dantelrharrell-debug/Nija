@@ -1094,7 +1094,6 @@ class StartupCoordinator:
     def finalize_activation_commit(self, snapshot: StartupConvergenceSnapshot) -> int:
         proof = self.evaluate_system_readiness_proof(snapshot)
         proof_fingerprint = (
-            int(snapshot.snapshot_version),
             int(snapshot.global_epoch),
             int(snapshot.activation_epoch),
             str(snapshot.runtime_authority_state),

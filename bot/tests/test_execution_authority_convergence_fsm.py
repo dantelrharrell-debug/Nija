@@ -306,6 +306,7 @@ class TestCommitActivationConcurrency(unittest.TestCase):
                     "LIVE_TRADING": "true",
                     "DRY_RUN_MODE": "false",
                     "AUTO_ACTIVATE": "false",
+                    "NIJA_WRITER_FENCING_TOKEN": "unit-test-token",
                 },
                 clear=False,
             ), patch("bot.trading_state_machine._heartbeat_verification_required", return_value=False), patch(
@@ -335,9 +336,17 @@ class TestCommitActivationConcurrency(unittest.TestCase):
             ), patch(
                 "bot.trading_state_machine._is_authority_ready",
                 return_value=True,
+            ), patch(
+                "bot.trading_state_machine._distributed_writer_authority_gate",
+                return_value=(True, ""),
+            ), patch(
+                "bot.revocation_guard.check_revocation_or_raise",
+                return_value=None,
             ):
                 sm = TradingStateMachine(state_file=state_path)
                 coordinator = get_startup_coordinator()
+                coordinator.record_threads_launched(1)
+                coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
                 results: list[bool] = []
                 errors: list[str] = []
 

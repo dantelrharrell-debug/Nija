@@ -252,16 +252,16 @@ class TestStartupCoordinator(unittest.TestCase):
         )
         self.coordinator.record_threads_launched(1)
         self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_authority(ready=True, status={"ok": True})
         self.coordinator.record_nonce_status(ready=True)
         self.coordinator.record_dispatch_health(ready=True)
         self.coordinator.record_activation_requested(requested=True, source="test")
 
-        snapshot, decision = self.coordinator.record_authority_and_evaluate(
-            ready=True,
-            status={"ok": True},
+        snapshot = self.coordinator.build_snapshot(
             trading_state="LIVE_PENDING_CONFIRMATION",
             activation_intent=True,
         )
+        decision = self.coordinator.evaluate_activation(snapshot)
         self.assertTrue(decision.allowed)
 
         first_version = self.coordinator.finalize_activation_commit(snapshot)
