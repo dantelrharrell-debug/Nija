@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from bot import readiness_table
 from bot.health_check import HealthCheckManager
@@ -58,7 +59,18 @@ class TestHealthStartupStateSignal(unittest.TestCase):
         self.assertTrue(decision.allowed)
         coord.finalize_activation_commit(snap)
 
-        status, http_code = self.manager.get_readiness_status()
+        class _LiveStateMachine:
+            def get_current_state(self):
+                class _State:
+                    value = "LIVE_ACTIVE"
+
+                return _State()
+
+            def get_activation_committed(self) -> bool:
+                return True
+
+        with patch("bot.trading_state_machine.get_state_machine", return_value=_LiveStateMachine()):
+            status, http_code = self.manager.get_readiness_status()
         self.assertEqual(http_code, 200)
         startup_state = status["startup_state"]
         self.assertEqual(startup_state["trading_authority"]["state"], "AUTHORIZED")

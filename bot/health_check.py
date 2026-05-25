@@ -519,7 +519,7 @@ class HealthCheckManager:
                 activation_intent=activation_intent,
             )
             decision = coordinator.evaluate_activation(snapshot)
-            authorized = bool(decision.allowed or snapshot.execution_permitted)
+            authorized = bool(snapshot.execution_permitted)
             reason = str(decision.reason)
             if (
                 not authorized
