@@ -1146,6 +1146,11 @@ class TradingStateMachine:
         #       -> LIVE_PENDING_CONFIRMATION (armed, not monitor/OFF)
         self._apply_startup_state_override()
 
+        # Sync NIJA_RUNTIME_TRADING_STATE with the post-startup FSM state so that
+        # execution_authority_context.runtime_authority_snapshot() builds snapshots
+        # with the correct trading_state from the very first cycle.
+        os.environ["NIJA_RUNTIME_TRADING_STATE"] = self._current_state.value
+
         # Validate state consistency with kill switch
         self._validate_state_consistency()
 
@@ -1568,6 +1573,14 @@ class TradingStateMachine:
                 self._core_loop_owns_execution = False
                 self._can_dispatch_trades = True
                 os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+
+            # Sync NIJA_RUNTIME_TRADING_STATE with the new FSM state so that
+            # execution_authority_context.can_execute() and
+            # runtime_authority_snapshot() see the correct trading_state when
+            # building lifecycle-phase snapshots.  Without this, the env var is
+            # never set to "LIVE_ACTIVE" and the lifecycle_phase gate in
+            # can_execute() permanently blocks broker order submission.
+            os.environ["NIJA_RUNTIME_TRADING_STATE"] = new_state.value
 
         # ── Post-transition I/O (outside the lock) ────────────────────────────
         # Persist and trigger callbacks after releasing the lock so that
