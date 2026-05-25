@@ -477,6 +477,7 @@ class MetricCollector:
         cls,
         *,
         lifecycle_phase: str,
+        runtime_state_payload: Dict[str, Any],
         readiness_proof_payload: Dict[str, Any],
         decision_payload: Dict[str, Any],
         pipeline_payload: Dict[str, Any],
@@ -489,6 +490,14 @@ class MetricCollector:
             readiness_gate = str(readiness_proof_payload.get("first_blocking_gate") or "").strip()
             if readiness_gate and readiness_gate.lower() != "none":
                 first_blocker = readiness_gate
+
+        if first_blocker is None and runtime_state_payload.get("available"):
+            trading_state = str(runtime_state_payload.get("trading_state") or "").strip().upper()
+            activation_committed = runtime_state_payload.get("activation_committed")
+            if lifecycle_phase == "WARM" and (
+                trading_state == "LIVE_PENDING_CONFIRMATION" or activation_committed is False
+            ):
+                first_blocker = "fsm.activation_completion"
 
         if first_blocker is None and decision_payload.get("available") and not decision_payload.get("allowed", False):
             gate = decision_payload.get("first_failed_gate") or "unknown"
@@ -775,6 +784,7 @@ class MetricCollector:
 
         triage["first_blocking_gate"] = self._resolve_first_blocking_gate(
             lifecycle_phase=lifecycle_phase,
+            runtime_state_payload=state_payload,
             readiness_proof_payload=readiness_proof_payload,
             decision_payload=decision_payload,
             pipeline_payload=pipeline_payload,

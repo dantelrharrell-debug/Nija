@@ -64,6 +64,11 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
     def test_resolve_first_blocking_gate_uses_pipeline_when_readiness_passed(self):
         blocker = MetricCollector._resolve_first_blocking_gate(
             lifecycle_phase="LIVE",
+            runtime_state_payload={
+                "available": True,
+                "trading_state": "LIVE_ACTIVE",
+                "activation_committed": True,
+            },
             readiness_proof_payload={
                 "available": True,
                 "first_blocking_gate": "none",
@@ -91,6 +96,11 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
     def test_resolve_first_blocking_gate_prefers_readiness_failure(self):
         blocker = MetricCollector._resolve_first_blocking_gate(
             lifecycle_phase="WARM",
+            runtime_state_payload={
+                "available": True,
+                "trading_state": "LIVE_PENDING_CONFIRMATION",
+                "activation_committed": False,
+            },
             readiness_proof_payload={
                 "available": True,
                 "first_blocking_gate": "nonce.ready",
@@ -115,6 +125,30 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
             inferred_execution_gate=None,
         )
         self.assertEqual(blocker, "nonce.ready")
+
+    def test_resolve_first_blocking_gate_reports_fsm_activation_completion(self):
+        blocker = MetricCollector._resolve_first_blocking_gate(
+            lifecycle_phase="WARM",
+            runtime_state_payload={
+                "available": True,
+                "trading_state": "LIVE_PENDING_CONFIRMATION",
+                "activation_committed": False,
+            },
+            readiness_proof_payload={
+                "available": True,
+                "first_blocking_gate": "none",
+            },
+            decision_payload={
+                "available": True,
+                "allowed": False,
+                "first_failed_gate": "lifecycle.phase",
+                "decision": {"reason": "lifecycle_phase:WARM"},
+            },
+            pipeline_payload={"available": False},
+            inferred_signal_gate=None,
+            inferred_execution_gate=None,
+        )
+        self.assertEqual(blocker, "fsm.activation_completion")
 
 
 if __name__ == "__main__":

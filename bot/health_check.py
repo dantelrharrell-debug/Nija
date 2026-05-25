@@ -502,8 +502,16 @@ class HealthCheckManager:
                 _state = sm.get_current_state()
                 if _state is not None:
                     trading_state = str(getattr(_state, "value", _state))
+                activation_committed = (
+                    bool(sm.get_activation_committed())
+                    if hasattr(sm, "get_activation_committed")
+                    else bool(sm.activation_committed())
+                    if hasattr(sm, "activation_committed")
+                    else None
+                )
             except Exception:
                 trading_state = "UNKNOWN"
+                activation_committed = None
 
             coordinator = get_startup_coordinator()
             snapshot = coordinator.build_snapshot(
@@ -511,21 +519,31 @@ class HealthCheckManager:
                 activation_intent=activation_intent,
             )
             decision = coordinator.evaluate_activation(snapshot)
-            # Use trading_authority (AUTHORIZED or EXECUTING) rather than
-            # dispatch_enabled (EXECUTING only) — dispatch_enabled is now
-            # a derived property that reflects the narrower EXECUTING state.
-            authorized = bool(decision.allowed or snapshot.trading_authority)
+            authorized = bool(decision.allowed or snapshot.execution_permitted)
+            reason = str(decision.reason)
+            if (
+                not authorized
+                and snapshot.trading_authority
+                and str(snapshot.lifecycle_phase).upper() == "WARM"
+                and (
+                    str(trading_state).upper() == "LIVE_PENDING_CONFIRMATION"
+                    or activation_committed is False
+                )
+            ):
+                reason = "fsm.activation_completion"
             authority_state = "AUTHORIZED" if authorized else "BLOCKED"
 
             signal["trading_authority"] = {
                 "authorized": authorized,
                 "state": authority_state,
-                "reason": str(decision.reason),
+                "reason": reason,
                 "coordinator_state": str(decision.target_state.value),
                 "snapshot_version": int(decision.snapshot_version),
                 "dispatch_enabled": bool(snapshot.dispatch_enabled),
                 "activation_intent": bool(snapshot.activation_intent),
+                "activation_committed": activation_committed,
                 "trading_state": str(snapshot.trading_state),
+                "runtime_authority_state": str(snapshot.runtime_authority_state),
                 "lifecycle_phase": str(snapshot.lifecycle_phase),
             }
         except Exception as exc:
