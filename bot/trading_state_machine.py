@@ -1624,14 +1624,14 @@ class TradingStateMachine:
         runtime_mode = resolve_runtime_mode_safe(logger)
         _lcv_quick = runtime_mode.is_live if runtime_mode is not None else _env_truthy("LIVE_CAPITAL_VERIFIED")
         _coordinator = _get_startup_coordinator()
-        if _lcv_quick or _force:
-            try:
-                _coordinator.record_activation_requested(
-                    requested=True,
-                    source="commit_activation:operator_intent",
-                )
-            except Exception:
-                logger.debug("commit_activation: coordinator activation request update failed", exc_info=True)
+        # NOTE: record_activation_requested() is intentionally deferred to after
+        # all record_authority / record_nonce_status / record_dispatch_health calls
+        # below.  Each of those calls may increment global_epoch; calling
+        # record_activation_requested() early would set activation_epoch to a
+        # stale epoch value, causing the epoch.current gate in
+        # evaluate_system_readiness_proof() to fail on every activation attempt.
+        # The call is made just before build_snapshot() so activation_epoch
+        # always equals the final global_epoch at snapshot time.
         _live_activation_intent = _activation_intent_present(runtime_mode)
         _dry_run_quick = runtime_mode.dry_run if runtime_mode is not None else _env_truthy("DRY_RUN_MODE")
         _lcv_raw = (
@@ -1947,6 +1947,29 @@ class TradingStateMachine:
             _snap.get("aggregation_normalized", True),
             kill_state,
         )
+
+        # ── Deferred activation request — must come after all record_* calls ──
+        # record_activation_requested() stamps activation_epoch = global_epoch.
+        # All record_authority / record_nonce_status / record_dispatch_health
+        # calls above may have incremented global_epoch.  Calling this here
+        # (after all epoch-advancing calls) ensures activation_epoch == global_epoch
+        # when build_snapshot() is called, so the epoch.current gate passes.
+        if _lcv_quick or _force or _live_activation_intent:
+            try:
+                _coordinator.record_activation_requested(
+                    requested=True,
+                    source="commit_activation:operator_intent",
+                )
+                logger.info(
+                    "[COMMIT_ACTIVATION] activation_requested recorded after all epoch-advancing calls "
+                    "(state=%s heartbeat_ok=%s live_verified=%s force=%s)",
+                    current.value,
+                    _heartbeat_ok,
+                    _lcv_quick,
+                    _force,
+                )
+            except Exception:
+                logger.debug("commit_activation: coordinator activation request update failed", exc_info=True)
 
         # Final consolidated gate diagnostic — single source of truth for activation state.
         _live_verified_bool = bool(_live_activation_intent)
