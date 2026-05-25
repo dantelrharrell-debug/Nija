@@ -2416,6 +2416,68 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 # capital snapshot before any strategy execution starts.
                 _supervisor_step_state_machine()
 
+                # ── Explicit commit_activation gate ───────────────────────────
+                # When the bot is in LIVE_PENDING_CONFIRMATION and the authority
+                # heartbeat is confirmed active, call commit_activation() directly
+                # so the FSM can transition to LIVE_ACTIVE as soon as all gates
+                # converge.  This is a belt-and-suspenders call that runs after
+                # _supervisor_step_state_machine() to ensure activation is never
+                # silently skipped due to a missed condition in the supervisor path.
+                #
+                # Conditions checked before calling:
+                #   1. State machine is available and in LIVE_PENDING_CONFIRMATION
+                #   2. Authority heartbeat is active (NIJA_WRITER_HEARTBEAT_ACTIVE=1)
+                #   3. Activation has not already been committed
+                try:
+                    if (
+                        _SM_AVAILABLE
+                        and _get_state_machine is not None
+                        and _sm_loop is not None
+                    ):
+                        _pending_state = _sm_loop.get_current_state()
+                        _already_committed = bool(_sm_loop.get_activation_committed())
+                        _hb_active = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "0").strip() == "1"
+
+                        if (
+                            _pending_state == _TradingState.LIVE_PENDING_CONFIRMATION
+                            and not _already_committed
+                            and _hb_active
+                        ):
+                            logger.critical(
+                                "🔑 COMMIT_ACTIVATION: state=LIVE_PENDING_CONFIRMATION "
+                                "heartbeat=OK committed=False — calling commit_activation() "
+                                "cycle=%d balance=%.2f",
+                                cycle,
+                                float(_cycle_balance or 0.0),
+                            )
+                            try:
+                                _direct_committed = bool(
+                                    _sm_loop.commit_activation(
+                                        cycle_capital=_current_cycle_capital
+                                    )
+                                )
+                                if _direct_committed:
+                                    logger.critical(
+                                        "✅ COMMIT_ACTIVATION SUCCESS: transitioned to LIVE_ACTIVE "
+                                        "cycle=%d",
+                                        cycle,
+                                    )
+                                else:
+                                    logger.critical(
+                                        "⏳ COMMIT_ACTIVATION PENDING: gates not yet converged "
+                                        "cycle=%d state=%s",
+                                        cycle,
+                                        _sm_loop.get_current_state().value,
+                                    )
+                            except Exception as _direct_commit_err:
+                                logger.warning(
+                                    "commit_activation direct call failed: %s",
+                                    _direct_commit_err,
+                                )
+                except Exception as _commit_gate_err:
+                    logger.debug("commit_activation gate check failed: %s", _commit_gate_err)
+                # ── End explicit commit_activation gate ───────────────────────
+
                 # Single-line blocked diagnostic so operators can immediately
                 # see why the loop is monitoring but not fully executing.
                 try:
