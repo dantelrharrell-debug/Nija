@@ -251,11 +251,53 @@ def _heartbeat_verification_required() -> bool:
 
 
 def _writer_heartbeat_gate() -> tuple[bool, str]:
-    """Require an active + fresh distributed-writer heartbeat in live activation."""
+    """Require an active + fresh distributed-writer heartbeat in live activation.
+
+    Distinguishes three cases for NIJA_WRITER_HEARTBEAT_ACTIVE:
+      - Not set at all: heartbeat monitor has not started yet (pre-activation
+        startup phase).  Eagerly start the monitor so its immediate tick can
+        set the env var, then re-read.  If still unset after the eager start,
+        pass the gate so activation can proceed and the monitor will be started
+        by the LIVE_ACTIVE transition callback.
+      - Set to "1": monitor is running and healthy — gate passes.
+      - Set to "0": monitor ran but failed / locked down — gate blocks.
+    """
     if not _env_truthy("NIJA_ENFORCE_WRITER_HEARTBEAT_GATE", "true"):
         return True, ""
 
-    if os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "0").strip() != "1":
+    _hb_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE")
+    if _hb_raw is None:
+        # Heartbeat monitor has never been started (env var not set at all).
+        # Eagerly start it so the immediate startup tick can set the env var
+        # before the activation gate is evaluated on the next cycle.
+        logger.info(
+            "[WRITER HEARTBEAT GATE] NIJA_WRITER_HEARTBEAT_ACTIVE not set — "
+            "eagerly starting authority heartbeat monitor for pre-activation tick"
+        )
+        try:
+            try:
+                from bot.authority_heartbeat import start_authority_heartbeat
+            except ImportError:
+                from authority_heartbeat import start_authority_heartbeat  # type: ignore[import]
+            start_authority_heartbeat()
+        except Exception as _hb_start_err:
+            logger.warning(
+                "[WRITER HEARTBEAT GATE] eager heartbeat start failed: %s", _hb_start_err
+            )
+        # Re-read after eager start — the immediate tick may have set the var.
+        _hb_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE")
+        if _hb_raw is None:
+            # Monitor started but tick hasn't completed yet; allow activation
+            # to proceed so the LIVE_ACTIVE transition callback can start the
+            # monitor properly.  The gate will enforce on subsequent cycles
+            # once the monitor has had a chance to run its first tick.
+            logger.info(
+                "[WRITER HEARTBEAT GATE] heartbeat monitor started but first tick "
+                "not yet complete — passing gate for initial activation cycle"
+            )
+            return True, ""
+
+    if _hb_raw.strip() != "1":
         return False, "writer_heartbeat_inactive"
 
     alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0").strip()
@@ -1665,6 +1707,37 @@ class TradingStateMachine:
                 _heartbeat_meta.get("max_age_s", _heartbeat_verification_max_age_seconds()),
             )
             return False
+
+        # ── Pre-gate: eagerly start authority heartbeat monitor ──────────────
+        # The _writer_heartbeat_gate() inside _live_activation_gate() requires
+        # NIJA_WRITER_HEARTBEAT_ACTIVE=1, which is set by the heartbeat monitor
+        # after its first successful tick.  Normally the monitor is started by
+        # the LIVE_ACTIVE transition callback — but that creates a circular
+        # dependency: the gate blocks activation, so the monitor never starts,
+        # so the gate never passes.  Starting the monitor here (before the gate
+        # is evaluated) breaks the deadlock: the monitor's immediate startup
+        # tick runs in a daemon thread and sets NIJA_WRITER_HEARTBEAT_ACTIVE=1
+        # so the gate can pass on this or the next commit_activation() cycle.
+        if os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE") is None:
+            logger.info(
+                "[COMMIT_ACTIVATION] NIJA_WRITER_HEARTBEAT_ACTIVE not set — "
+                "eagerly starting authority heartbeat monitor before gate evaluation"
+            )
+            try:
+                try:
+                    from bot.authority_heartbeat import start_authority_heartbeat
+                except ImportError:
+                    from authority_heartbeat import start_authority_heartbeat  # type: ignore[import]
+                start_authority_heartbeat()
+                logger.info(
+                    "[COMMIT_ACTIVATION] authority heartbeat monitor started; "
+                    "NIJA_WRITER_HEARTBEAT_ACTIVE=%s",
+                    os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "<not set>"),
+                )
+            except Exception as _early_hb_err:
+                logger.warning(
+                    "[COMMIT_ACTIVATION] eager heartbeat start failed: %s", _early_hb_err
+                )
 
         _live_gate_status = _collect_live_gate_status()
         _live_ok, _live_err = _live_activation_gate(_live_gate_status)
