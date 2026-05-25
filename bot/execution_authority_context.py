@@ -342,8 +342,13 @@ def assert_distributed_writer_authority() -> None:
         client = _connect_redis_for_authority(redis_url, timeout_s=2)
         current = client.get(lock_key)
         current_token = ""
-        if isinstance(current, str) and current:
-            current_token = current.split(":", 1)[0]
+        if current is not None:
+            # decode_responses=True should give str, but guard against bytes
+            # in case a connection with different settings is reused.
+            if isinstance(current, bytes):
+                current = current.decode("utf-8", errors="replace")
+            if isinstance(current, str) and current:
+                current_token = current.split(":", 1)[0]
 
         ok = (current_token == token)
         err = ""
