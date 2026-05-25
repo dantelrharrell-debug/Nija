@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+import threading
 
 from bot import readiness_table
 from bot.startup_coordinator import (
@@ -204,8 +205,113 @@ class TestStartupCoordinator(unittest.TestCase):
             activation_intent=False,
         )
         self.assertEqual(snapshot.runtime_authority_state, RuntimeAuthorityState.BOOT.value)
-        self.assertEqual(snapshot.runtime_authority_reason, "capital_not_hydrated")
+        self.assertTrue(snapshot.runtime_authority_reason.startswith("suppressed_zone:"))
         self.assertEqual(snapshot.lifecycle_phase, "BOOT")
+
+    def test_build_snapshot_suppressed_zone_skips_reconcile(self) -> None:
+        self.assertIsNone(self.coordinator._runtime._last_reconcile_inputs)
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="OFF",
+            activation_intent=False,
+        )
+        self.assertEqual(snapshot.runtime_authority_state, RuntimeAuthorityState.BOOT.value)
+        self.assertTrue(snapshot.runtime_authority_reason.startswith("suppressed_zone:"))
+        self.assertIsNone(self.coordinator._runtime._last_reconcile_inputs)
+
+    def test_record_authority_in_capital_suppression_does_not_advance_global_epoch(self) -> None:
+        self.coordinator.record_bootstrap_state("STARTUP_VALIDATED")
+        self.coordinator.record_capital_state(
+            state="REFRESHING",
+            hydrated=False,
+            balance=None,
+            stale=True,
+        )
+        before = self.coordinator.build_snapshot(
+            trading_state="OFF",
+            activation_intent=False,
+        )
+        self.coordinator.record_authority(ready=True, status={"source": "unit-test"})
+        after = self.coordinator.build_snapshot(
+            trading_state="OFF",
+            activation_intent=False,
+        )
+        self.assertEqual(before.global_epoch, 0)
+        self.assertEqual(after.global_epoch, 0)
+
+    def test_finalize_activation_commit_is_idempotent_for_same_snapshot(self) -> None:
+        self._mark_all_readiness()
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=100.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_nonce_status(ready=True)
+        self.coordinator.record_dispatch_health(ready=True)
+        self.coordinator.record_activation_requested(requested=True, source="test")
+
+        snapshot, decision = self.coordinator.record_authority_and_evaluate(
+            ready=True,
+            status={"ok": True},
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        self.assertTrue(decision.allowed)
+
+        first_version = self.coordinator.finalize_activation_commit(snapshot)
+        event_version_after_first = self.coordinator.get_event_version()
+        second_version = self.coordinator.finalize_activation_commit(snapshot)
+        self.assertEqual(first_version, event_version_after_first)
+        self.assertEqual(second_version, event_version_after_first)
+        self.assertEqual(self.coordinator.get_event_version(), event_version_after_first)
+
+    def test_parallel_finalize_commit_emits_single_dispatch_enabled_phase_event(self) -> None:
+        self._mark_all_readiness()
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=100.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_authority(ready=True)
+        self.coordinator.record_nonce_status(ready=True)
+        self.coordinator.record_dispatch_health(ready=True)
+        self.coordinator.record_activation_requested(requested=True, source="test")
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+
+        errors: list[str] = []
+
+        def _commit() -> None:
+            try:
+                self.coordinator.finalize_activation_commit(snapshot)
+            except Exception as exc:  # pragma: no cover - defensive capture
+                errors.append(str(exc))
+
+        t1 = threading.Thread(target=_commit, daemon=True)
+        t2 = threading.Thread(target=_commit, daemon=True)
+        t1.start()
+        t2.start()
+        t1.join(timeout=2)
+        t2.join(timeout=2)
+        self.assertEqual(errors, [])
+
+        history = self.coordinator.get_history()
+        dispatch_enabled_phase_events = [
+            e
+            for e in history
+            if e.get("event") == "DISPATCH_ENABLED"
+            and e.get("payload", {}).get("phase") == StartupCoordinatorState.DISPATCH_ENABLED.value
+        ]
+        self.assertEqual(len(dispatch_enabled_phase_events), 1)
 
     def test_capital_stale_is_contained_in_boot_until_convergence(self) -> None:
         self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")

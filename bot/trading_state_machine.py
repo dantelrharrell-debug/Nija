@@ -1754,14 +1754,6 @@ class TradingStateMachine:
 
         # ── Gate 1.5: authority + runtime safety probes are sampled once ──────
         authority_ready = _is_authority_ready()
-        try:
-            _coordinator.record_authority(
-                ready=authority_ready,
-                status={"current_state": current.value},
-            )
-        except Exception:
-            logger.debug("commit_activation: coordinator authority update failed", exc_info=True)
-
         if not authority_ready:
             with self._lock:
                 if self._current_state == TradingState.OFF:
@@ -1985,11 +1977,12 @@ class TradingStateMachine:
             invariant=_inv_ready,
             snapshot_ready=_snapshot_ready,
         )
-        _frozen_snapshot = _coordinator.build_snapshot(
+        _frozen_snapshot, _decision = _coordinator.record_authority_and_evaluate(
+            ready=authority_ready,
+            status={"current_state": current.value},
             trading_state=current.value,
             activation_intent=_live_activation_intent,
         )
-        _decision = _coordinator.evaluate_activation(_frozen_snapshot)
         _system_readiness_proof = _coordinator.evaluate_system_readiness_proof(_frozen_snapshot)
         _log_activation_diag_once(
             "startup_coordinator_decision",
