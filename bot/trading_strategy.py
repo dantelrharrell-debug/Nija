@@ -194,6 +194,10 @@ _HEARTBEAT_RETRY_BACKOFF_MAX_S: float = _env_float(
 _HEARTBEAT_TRADE_SYMBOL: str = os.environ.get(
     "HEARTBEAT_TRADE_SYMBOL", "BTC-USD"
 ).strip()
+_SYMBOL_UNIVERSE_REFRESH_INTERVAL_S: float = _env_float(
+    "NIJA_SYMBOL_UNIVERSE_REFRESH_INTERVAL_S",
+    default=900.0,
+)
 
 # Default symbols to try for the heartbeat trade (in order of preference)
 _HEARTBEAT_SYMBOL_CANDIDATES: List[str] = [
@@ -270,6 +274,11 @@ class TradingStrategy:
         self.execution_engine: Optional[Any] = None
         self.symbols: List[str] = []
         self.failed_brokers: Dict = {}
+        self._symbol_universe_refresh_interval_s: float = max(
+            0.0,
+            float(_SYMBOL_UNIVERSE_REFRESH_INTERVAL_S),
+        )
+        self._last_symbol_refresh_ts: float = 0.0
 
         # Heartbeat trade state
         self._heartbeat_trade_enabled: bool = (
@@ -426,6 +435,7 @@ class TradingStrategy:
                 products = self.broker.get_all_products()
                 if isinstance(products, list):
                     self.symbols = [str(p) for p in products if p]
+                    self._last_symbol_refresh_ts = time.time()
                     logger.info(
                         "✅ Loaded %d symbols from broker", len(self.symbols)
                     )
@@ -434,10 +444,38 @@ class TradingStrategy:
             logger.debug("Symbol population failed: %s", _sym_err)
 
         # Fallback: use a curated default list
-        self.symbols = _HEARTBEAT_SYMBOL_CANDIDATES.copy()
-        logger.info(
-            "ℹ️  Using default symbol list (%d symbols)", len(self.symbols)
-        )
+        if not self.symbols:
+            self.symbols = _HEARTBEAT_SYMBOL_CANDIDATES.copy()
+            self._last_symbol_refresh_ts = time.time()
+            logger.info(
+                "ℹ️  Using default symbol list (%d symbols)", len(self.symbols)
+            )
+        else:
+            logger.debug(
+                "Symbol refresh fallback: keeping existing universe (%d symbols)",
+                len(self.symbols),
+            )
+
+    def _maybe_refresh_symbols(self, *, force: bool = False) -> None:
+        """Refresh the symbol universe periodically to capture newly listed markets."""
+        interval = float(self._symbol_universe_refresh_interval_s)
+        if interval <= 0.0 and not force:
+            return
+        now_ts = time.time()
+        if (
+            not force
+            and self._last_symbol_refresh_ts > 0.0
+            and (now_ts - self._last_symbol_refresh_ts) < interval
+        ):
+            return
+        prev_count = len(self.symbols)
+        self._populate_symbols()
+        if len(self.symbols) != prev_count:
+            logger.info(
+                "🔄 Symbol universe refreshed: %d → %d",
+                prev_count,
+                len(self.symbols),
+            )
 
     # -----------------------------------------------------------------------
     # Heartbeat trade
@@ -988,11 +1026,13 @@ class TradingStrategy:
             self.nija_core_loop.apex = self.apex
             logger.info("🔗 NijaCoreLoop apex reference re-synchronized")
 
-    def run_cycle(self) -> None:
-        """Execute one trading cycle."""
+    def run_cycle(self) -> int:
+        """Execute one trading cycle and return the recommended next interval in seconds."""
+        next_interval_s = 150
         if self.apex is not None:
             try:
                 self._ensure_nija_wiring()
+                self._maybe_refresh_symbols()
 
                 # Delegate to the APEX strategy
                 _broker = self._get_active_broker()
@@ -1033,8 +1073,11 @@ class TradingStrategy:
                 if self.nija_core_loop is not None:
                     _symbols_to_scan = self.symbols or []
                     if not _symbols_to_scan:
+                        self._maybe_refresh_symbols(force=True)
+                        _symbols_to_scan = self.symbols or []
+                    if not _symbols_to_scan:
                         logger.warning("run_cycle: symbol universe is empty — skipping scan")
-                        return
+                        return next_interval_s
 
                     _core_result = self.nija_core_loop.run_scan_phase(
                         broker=_broker,
@@ -1051,7 +1094,11 @@ class TradingStrategy:
                         _core_result.exits_taken,
                         _core_result.next_interval,
                     )
-                    return
+                    try:
+                        next_interval_s = max(1, int(_core_result.next_interval))
+                    except Exception:
+                        next_interval_s = 150
+                    return next_interval_s
 
                 # Run the APEX strategy cycle
                 if hasattr(self.apex, "run_cycle"):
@@ -1078,6 +1125,7 @@ class TradingStrategy:
                 logger.error("❌ run_cycle error: %s", _cycle_err, exc_info=True)
         else:
             logger.debug("run_cycle: no APEX strategy available")
+        return next_interval_s
 
     def log_multi_broker_status(self) -> None:
         """Log the status of all connected brokers."""

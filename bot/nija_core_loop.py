@@ -2699,9 +2699,12 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 logger.info("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
                 logger.info("🚀 RUNNING TRADE CYCLE")
                 _cycle_start_ts = time.time()
+                _next_sleep_s = float(cycle_secs)
                 update_runtime_correlation(cycle_id=_current_cycle_id)
                 try:
-                    strategy.run_cycle()
+                    _strategy_next_interval = strategy.run_cycle()
+                    if isinstance(_strategy_next_interval, (int, float)):
+                        _next_sleep_s = max(1.0, float(_strategy_next_interval))
                 finally:
                     clear_runtime_correlation()
                 _cycle_elapsed = time.time() - _cycle_start_ts
@@ -2712,12 +2715,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 except Exception:
                     _hb_symbols = 0
                 logger.info(
-                    "STRATEGY HEARTBEAT | cycle=%s symbols=%s runtime=%.1fs",
+                    "STRATEGY HEARTBEAT | cycle=%s symbols=%s runtime=%.1fs next_sleep=%.0fs",
                     cycle,
                     _hb_symbols,
                     _cycle_elapsed,
+                    _next_sleep_s,
                 )
-                time.sleep(cycle_secs)
+                time.sleep(_next_sleep_s)
 
             except Exception as _err:
                 _activation_retry_count += 1
