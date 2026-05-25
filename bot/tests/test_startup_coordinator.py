@@ -237,6 +237,9 @@ class TestStartupCoordinator(unittest.TestCase):
         )
         self.assertEqual(before.global_epoch, 0)
         self.assertEqual(after.global_epoch, 0)
+        hydration_log = self.coordinator.get_hydration_event_log()
+        self.assertTrue(len(hydration_log) > 0)
+        self.assertTrue(all(entry.get("zone") != "AUTHORITY_LIVE" for entry in hydration_log))
 
     def test_finalize_activation_commit_is_idempotent_for_same_snapshot(self) -> None:
         self._mark_all_readiness()

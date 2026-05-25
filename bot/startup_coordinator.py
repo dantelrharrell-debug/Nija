@@ -571,10 +571,11 @@ class StartupCoordinator:
                 StartupEvent.READINESS_CHANGED,
                 {"key": key, "value": bool(value), "readiness_version": self._runtime.readiness_version},
             )
-            if table.get("bootstrap_ready"):
-                self._runtime.coordinator_state = StartupCoordinatorState.INIT_COMMITTED
-            if key == "broker_connected" and value:
-                self._runtime.coordinator_state = StartupCoordinatorState.BROKER_READY
+            if not self._reconcile_permitted_locked():
+                if table.get("bootstrap_ready"):
+                    self._runtime.coordinator_state = StartupCoordinatorState.INIT_COMMITTED
+                if key == "broker_connected" and value:
+                    self._runtime.coordinator_state = StartupCoordinatorState.BROKER_READY
             return event_version
 
     def record_capital_state(
@@ -608,11 +609,12 @@ class StartupCoordinator:
                     "stale": self._runtime.capital_stale,
                 },
             )
-            self._runtime.coordinator_state = (
-                StartupCoordinatorState.CAPITAL_READY
-                if self._runtime.capital_state == "RUNNING" and self._runtime.capital_hydrated
-                else StartupCoordinatorState.CAPITAL_PENDING
-            )
+            if not self._reconcile_permitted_locked():
+                self._runtime.coordinator_state = (
+                    StartupCoordinatorState.CAPITAL_READY
+                    if self._runtime.capital_state == "RUNNING" and self._runtime.capital_hydrated
+                    else StartupCoordinatorState.CAPITAL_PENDING
+                )
             return event_version
 
     def record_authority(self, *, ready: bool, status: Optional[Dict[str, Any]] = None) -> int:
@@ -954,6 +956,71 @@ class StartupCoordinator:
             )
             decision = self.evaluate_activation(snapshot)
             return snapshot, decision
+
+    def apply_bootstrap_transaction(
+        self,
+        *,
+        bootstrap_state: str,
+        capital_state: str,
+        capital_hydrated: bool,
+        capital_balance: Optional[float],
+        capital_stale: bool,
+        readiness_key: str,
+        readiness_value: bool,
+        readiness_version: int,
+        readiness_table: Dict[str, bool],
+        authority_ready: bool,
+        authority_status: Optional[Dict[str, Any]],
+        nonce_ready: bool,
+        nonce_detail: str,
+        dispatch_health_ready: bool,
+        dispatch_health_detail: str,
+        activation_requested: bool,
+        activation_source: str,
+        kill_switch_active: bool,
+        trading_state: str,
+        activation_intent: bool,
+    ) -> tuple[StartupConvergenceSnapshot, ActivationDecision, SystemReadinessProof]:
+        """Apply a deterministic bootstrap transaction in one lock window."""
+        with self._lock:
+            self.record_bootstrap_state(str(bootstrap_state or "unknown"))
+            self.record_capital_state(
+                state=str(capital_state or "unknown"),
+                hydrated=bool(capital_hydrated),
+                balance=capital_balance,
+                stale=bool(capital_stale),
+            )
+            self.record_readiness(
+                key=str(readiness_key or "__snapshot__"),
+                value=bool(readiness_value),
+                version=int(readiness_version or 0),
+                table=dict(readiness_table or {}),
+            )
+            self.record_kill_switch(active=bool(kill_switch_active))
+            self.record_authority(
+                ready=bool(authority_ready),
+                status=dict(authority_status or {}),
+            )
+            self.record_nonce_status(
+                ready=bool(nonce_ready),
+                detail=str(nonce_detail or ""),
+            )
+            self.record_dispatch_health(
+                ready=bool(dispatch_health_ready),
+                detail=str(dispatch_health_detail or ""),
+            )
+            if activation_requested:
+                self.record_activation_requested(
+                    requested=True,
+                    source=str(activation_source or "bootstrap_transaction"),
+                )
+            snapshot = self.build_snapshot(
+                trading_state=str(trading_state),
+                activation_intent=bool(activation_intent),
+            )
+            decision = self.evaluate_activation(snapshot)
+            proof = self.evaluate_system_readiness_proof(snapshot)
+            return snapshot, decision, proof
 
     def evaluate_system_readiness_proof(self, snapshot: StartupConvergenceSnapshot) -> SystemReadinessProof:
         """Evaluate canonical pre-LIVE readiness proof from one immutable snapshot."""

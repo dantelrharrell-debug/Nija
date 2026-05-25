@@ -189,6 +189,7 @@ class TestReconcileEdgeTrigger(unittest.TestCase):
     def test_last_reconcile_inputs_stored(self) -> None:
         """_last_reconcile_inputs is populated after first build_snapshot call."""
         self.assertIsNone(self.coordinator._runtime._last_reconcile_inputs)
+        _fully_ready_coordinator(self.coordinator)
         self.coordinator.build_snapshot(trading_state="OFF", activation_intent=False)
         self.assertIsNotNone(self.coordinator._runtime._last_reconcile_inputs)
 
