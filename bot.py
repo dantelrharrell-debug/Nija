@@ -79,6 +79,53 @@ except ImportError:
 # nonce init) can log safely before the full logging pipeline is configured.
 logger = logging.getLogger("nija.bootstrap")
 
+# ── AUTHORITY HEARTBEAT — IMMEDIATE POST-IMPORT STARTUP ──────────────────────
+# This block executes immediately after imports, before any function
+# definitions, before any conditional logic, and before main() is called.
+# Moving it here ensures it runs as early as possible in the module load
+# sequence regardless of how bot.py is loaded (runpy, direct exec, or import).
+# The monitor is a singleton (idempotent) so calling it again later is safe.
+print(
+    "DIAG_MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor immediately after imports "
+    f"pid={os.getpid()} __name__={__name__!r}",
+    flush=True,
+)
+logger.info(
+    "MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor immediately after imports "
+    "pid=%d __name__=%r fencing_token_present=%s fallback=%s",
+    os.getpid(),
+    __name__,
+    bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
+    os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", ""),
+)
+try:
+    from bot.authority_heartbeat import start_authority_heartbeat as _early_start_ahb
+    _early_ahb_monitor = _early_start_ahb()
+    logger.info(
+        "MODULE_LEVEL_HEARTBEAT: monitor started successfully monitor=%r "
+        "thread_name=%s thread_alive=%s thread_daemon=%s",
+        _early_ahb_monitor,
+        _early_ahb_monitor._thread.name if _early_ahb_monitor._thread else "None",
+        _early_ahb_monitor._thread.is_alive() if _early_ahb_monitor._thread else False,
+        _early_ahb_monitor._thread.daemon if _early_ahb_monitor._thread else False,
+    )
+    print(
+        f"DIAG_MODULE_LEVEL_HEARTBEAT_OK: monitor started "
+        f"thread={_early_ahb_monitor._thread.name if _early_ahb_monitor._thread else 'None'} "
+        f"alive={_early_ahb_monitor._thread.is_alive() if _early_ahb_monitor._thread else False}",
+        flush=True,
+    )
+except Exception as _early_ahb_exc:
+    logger.error(
+        "MODULE_LEVEL_HEARTBEAT: monitor could not be started: %s",
+        _early_ahb_exc,
+        exc_info=True,
+    )
+    print(
+        f"DIAG_MODULE_LEVEL_HEARTBEAT_ERR: {_early_ahb_exc}",
+        flush=True,
+    )
+
 # Reserved process exit code used when startup is blocked by an active
 # distributed writer lock holder. This is an expected fail-closed condition
 # in singleton deployments, not an application crash.
@@ -8959,54 +9006,6 @@ def main():
     logger.info("✅ Main supervisor exiting gracefully")
     sys.exit(0)
 
-
-# ── MODULE-LEVEL AUTHORITY HEARTBEAT STARTUP ─────────────────────────────────
-# Start the authority heartbeat monitor at module level so it runs regardless
-# of how bot.py is loaded (runpy.run_path(), direct execution, or import).
-# The monitor is a singleton (idempotent) so calling it here is safe even if
-# _run_bot_startup_and_trading() also calls it later.
-# This must execute BEFORE main() so the heartbeat marker file exists before
-# the activation gate's HEARTBEAT_VERIFICATION check runs.
-print(
-    "DIAG_MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor at module level "
-    f"pid={os.getpid()} __name__={__name__!r}",
-    flush=True,
-)
-logger.info(
-    "MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor at module level "
-    "pid=%d __name__=%r fencing_token_present=%s fallback=%s",
-    os.getpid(),
-    __name__,
-    bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
-    os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", ""),
-)
-try:
-    from bot.authority_heartbeat import start_authority_heartbeat as _module_start_ahb
-    _module_ahb_monitor = _module_start_ahb()
-    logger.info(
-        "MODULE_LEVEL_HEARTBEAT: monitor started successfully monitor=%r "
-        "thread_name=%s thread_alive=%s thread_daemon=%s",
-        _module_ahb_monitor,
-        _module_ahb_monitor._thread.name if _module_ahb_monitor._thread else "None",
-        _module_ahb_monitor._thread.is_alive() if _module_ahb_monitor._thread else False,
-        _module_ahb_monitor._thread.daemon if _module_ahb_monitor._thread else False,
-    )
-    print(
-        f"DIAG_MODULE_LEVEL_HEARTBEAT_OK: monitor started "
-        f"thread={_module_ahb_monitor._thread.name if _module_ahb_monitor._thread else 'None'} "
-        f"alive={_module_ahb_monitor._thread.is_alive() if _module_ahb_monitor._thread else False}",
-        flush=True,
-    )
-except Exception as _module_ahb_exc:
-    logger.error(
-        "MODULE_LEVEL_HEARTBEAT: monitor could not be started: %s",
-        _module_ahb_exc,
-        exc_info=True,
-    )
-    print(
-        f"DIAG_MODULE_LEVEL_HEARTBEAT_ERR: {_module_ahb_exc}",
-        flush=True,
-    )
 
 # ── MODULE-LEVEL MAIN() CALL ──────────────────────────────────────────────────
 # Call main() unconditionally at module level so the bot starts whether bot.py
