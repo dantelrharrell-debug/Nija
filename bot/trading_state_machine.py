@@ -1754,14 +1754,6 @@ class TradingStateMachine:
 
         # ── Gate 1.5: authority + runtime safety probes are sampled once ──────
         authority_ready = _is_authority_ready()
-        try:
-            _coordinator.record_authority(
-                ready=authority_ready,
-                status={"current_state": current.value},
-            )
-        except Exception:
-            logger.debug("commit_activation: coordinator authority update failed", exc_info=True)
-
         if not authority_ready:
             with self._lock:
                 if self._current_state == TradingState.OFF:
@@ -1775,10 +1767,6 @@ class TradingStateMachine:
             kill_state = get_kill_switch().is_active()
         except Exception as _ks_err:
             logger.debug("commit_activation: could not check kill switch: %s", _ks_err)
-        try:
-            _coordinator.record_kill_switch(active=kill_state)
-        except Exception:
-            logger.debug("commit_activation: coordinator kill-switch update failed", exc_info=True)
 
         # ── Gate 2b: distributed writer authority must be valid ──────────
         # Prevent split-brain activation when another container/process owns
@@ -1791,13 +1779,8 @@ class TradingStateMachine:
         _nonce_lease_ok, _nonce_lease_err = _nonce_writer_lease_gate()
         _nonce_sync_ok = bool(_live_gate_status.get("nonce_ok"))
         _nonce_sync_err = str(_live_gate_status.get("nonce_err") or "")
-        try:
-            _coordinator.record_nonce_status(
-                ready=bool(_nonce_lease_ok and _nonce_sync_ok),
-                detail="; ".join(_d for _d in (_nonce_lease_err, _nonce_sync_err) if _d),
-            )
-        except Exception:
-            logger.debug("commit_activation: coordinator nonce update failed", exc_info=True)
+        _nonce_ready = bool(_nonce_lease_ok and _nonce_sync_ok)
+        _nonce_detail = "; ".join(_d for _d in (_nonce_lease_err, _nonce_sync_err) if _d)
 
         # ── Gate 3: LIVE_CAPITAL_VERIFIED — composite semantic check ──────────
         # Semantics: flag==true AND capital_hydrated==true AND total_balance is not None.
@@ -1862,27 +1845,7 @@ class TradingStateMachine:
 
         _capital_state_value = _capital_bootstrap_state_value()
         _bootstrap_state_value_now = _bootstrap_state_value()
-        try:
-            _coordinator.record_bootstrap_state(_bootstrap_state_value_now)
-            _coordinator.record_capital_state(
-                state=_capital_state_value,
-                hydrated=_ca_hydrated_lcv,
-                balance=_ca_balance_lcv,
-                stale=bool(_ca_lcv.is_stale()) if _ca_lcv is not None and hasattr(_ca_lcv, "is_stale") else True,
-            )
-        except Exception:
-            logger.debug("commit_activation: coordinator bootstrap/capital update failed", exc_info=True)
-
         _readiness_version, _readiness_snapshot = _readiness_snapshot_with_version()
-        try:
-            _coordinator.record_readiness(
-                key="__snapshot__",
-                value=bool(all(_readiness_snapshot.values())) if _readiness_snapshot else False,
-                version=_readiness_version,
-                table=_readiness_snapshot,
-            )
-        except Exception:
-            logger.debug("commit_activation: coordinator readiness update failed", exc_info=True)
 
         # ── Gate 4: single global activation barrier ──────────────────────
         _mabm_gate = _get_mabm_instance()
@@ -1901,13 +1864,9 @@ class TradingStateMachine:
                 "[AUTO_ACTIVATE BLOCKED] reason=GLOBAL_ACTIVATION_BARRIER detail=%s",
                 _barrier_reason,
             )
-        try:
-            _coordinator.record_dispatch_health(
-                ready=bool(_barrier_ready and _exec_ready and _venue_ready and _writer_ok and _nonce_lease_ok and _nonce_sync_ok),
-                detail=_barrier_reason,
-            )
-        except Exception:
-            logger.debug("commit_activation: coordinator dispatch-health update failed", exc_info=True)
+        _dispatch_health_ready = bool(
+            _barrier_ready and _exec_ready and _venue_ready and _writer_ok and _nonce_lease_ok and _nonce_sync_ok
+        )
 
         # ── Gate 5: activation_invariant — all subsystems simultaneously valid
 
@@ -1948,28 +1907,7 @@ class TradingStateMachine:
             kill_state,
         )
 
-        # ── Deferred activation request — must come after all record_* calls ──
-        # record_activation_requested() stamps activation_epoch = global_epoch.
-        # All record_authority / record_nonce_status / record_dispatch_health
-        # calls above may have incremented global_epoch.  Calling this here
-        # (after all epoch-advancing calls) ensures activation_epoch == global_epoch
-        # when build_snapshot() is called, so the epoch.current gate passes.
-        if _lcv_quick or _force or _live_activation_intent:
-            try:
-                _coordinator.record_activation_requested(
-                    requested=True,
-                    source="commit_activation:operator_intent",
-                )
-                logger.info(
-                    "[COMMIT_ACTIVATION] activation_requested recorded after all epoch-advancing calls "
-                    "(state=%s heartbeat_ok=%s live_verified=%s force=%s)",
-                    current.value,
-                    _heartbeat_ok,
-                    _lcv_quick,
-                    _force,
-                )
-            except Exception:
-                logger.debug("commit_activation: coordinator activation request update failed", exc_info=True)
+        _activation_requested = bool(_lcv_quick or _force or _live_activation_intent)
 
         # Final consolidated gate diagnostic — single source of truth for activation state.
         _live_verified_bool = bool(_live_activation_intent)
@@ -1985,12 +1923,28 @@ class TradingStateMachine:
             invariant=_inv_ready,
             snapshot_ready=_snapshot_ready,
         )
-        _frozen_snapshot = _coordinator.build_snapshot(
+        _frozen_snapshot, _decision, _system_readiness_proof = _coordinator.apply_bootstrap_transaction(
+            bootstrap_state=_bootstrap_state_value_now,
+            capital_state=_capital_state_value,
+            capital_hydrated=_ca_hydrated_lcv,
+            capital_balance=_ca_balance_lcv,
+            capital_stale=bool(_ca_lcv.is_stale()) if _ca_lcv is not None and hasattr(_ca_lcv, "is_stale") else True,
+            readiness_key="__snapshot__",
+            readiness_value=bool(all(_readiness_snapshot.values())) if _readiness_snapshot else False,
+            readiness_version=_readiness_version,
+            readiness_table=_readiness_snapshot,
+            authority_ready=authority_ready,
+            authority_status={"current_state": current.value},
+            nonce_ready=_nonce_ready,
+            nonce_detail=_nonce_detail,
+            dispatch_health_ready=_dispatch_health_ready,
+            dispatch_health_detail=_barrier_reason,
+            activation_requested=_activation_requested,
+            activation_source="commit_activation:operator_intent",
+            kill_switch_active=kill_state,
             trading_state=current.value,
             activation_intent=_live_activation_intent,
         )
-        _decision = _coordinator.evaluate_activation(_frozen_snapshot)
-        _system_readiness_proof = _coordinator.evaluate_system_readiness_proof(_frozen_snapshot)
         _log_activation_diag_once(
             "startup_coordinator_decision",
             (

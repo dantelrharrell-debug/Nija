@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import time
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from bot.trading_state_machine import (
     _live_activation_gate,
 )
 from bot.startup_coordinator import get_startup_coordinator
+from bot import readiness_table
 
 
 class TestExecutionAuthorityConvergenceFSM(unittest.TestCase):
@@ -270,6 +272,108 @@ class TestRuntimeAuthorityRevocation(unittest.TestCase):
                 ):
                     self.assertFalse(sm.can_dispatch_trades())
                     self.assertFalse(sm.has_execution_authority())
+
+
+class _StubCapitalAuthority:
+    is_hydrated = True
+
+    @staticmethod
+    def get_real_capital():
+        return 100.0
+
+    @staticmethod
+    def is_stale():
+        return False
+
+
+class TestCommitActivationConcurrency(unittest.TestCase):
+    def setUp(self) -> None:
+        get_startup_coordinator().reset_for_testing()
+        readiness_table.reset()
+
+    def tearDown(self) -> None:
+        get_startup_coordinator().reset_for_testing()
+        readiness_table.reset()
+
+    def test_parallel_commit_activation_emits_single_dispatch_enabled_phase_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            readiness_snapshot = {k: True for k in readiness_table.KEYS}
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "LIVE_TRADING": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "false",
+                    "NIJA_WRITER_FENCING_TOKEN": "unit-test-token",
+                },
+                clear=False,
+            ), patch("bot.trading_state_machine._heartbeat_verification_required", return_value=False), patch(
+                "bot.trading_state_machine._collect_live_gate_status",
+                return_value={"lease_ok": True, "nonce_ok": True, "lease_err": "", "nonce_err": ""},
+            ), patch(
+                "bot.trading_state_machine._live_activation_gate",
+                return_value=(True, ""),
+            ), patch(
+                "bot.trading_state_machine._nonce_writer_lease_gate",
+                return_value=(True, ""),
+            ), patch(
+                "bot.trading_state_machine._get_capital_authority_instance",
+                return_value=_StubCapitalAuthority(),
+            ), patch(
+                "bot.trading_state_machine._capital_bootstrap_state_value",
+                return_value="RUNNING",
+            ), patch(
+                "bot.trading_state_machine._bootstrap_state_value",
+                return_value="RUNNING_SUPERVISED",
+            ), patch(
+                "bot.trading_state_machine._readiness_snapshot_with_version",
+                return_value=(1, readiness_snapshot),
+            ), patch(
+                "bot.trading_state_machine._global_activation_barrier",
+                return_value=(True, "ok", True, True, True, True),
+            ), patch(
+                "bot.trading_state_machine._is_authority_ready",
+                return_value=True,
+            ), patch(
+                "bot.trading_state_machine._distributed_writer_authority_gate",
+                return_value=(True, ""),
+            ), patch(
+                "bot.revocation_guard.check_revocation_or_raise",
+                return_value=None,
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                coordinator = get_startup_coordinator()
+                coordinator.record_threads_launched(1)
+                coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+                results: list[bool] = []
+                errors: list[str] = []
+
+                def _run() -> None:
+                    try:
+                        results.append(bool(sm.commit_activation(cycle_capital={"ca_valid_brokers": 1, "snapshot_source": "live_exchange"})))
+                    except Exception as exc:  # pragma: no cover - defensive
+                        errors.append(str(exc))
+
+                t1 = threading.Thread(target=_run, daemon=True)
+                t2 = threading.Thread(target=_run, daemon=True)
+                t1.start()
+                t2.start()
+                t1.join(timeout=3)
+                t2.join(timeout=3)
+
+                self.assertEqual(errors, [])
+                self.assertEqual(len(results), 2)
+                self.assertTrue(all(results))
+                history = coordinator.get_history()
+                dispatch_enabled_phase_events = [
+                    e
+                    for e in history
+                    if e.get("event") == "DISPATCH_ENABLED"
+                    and e.get("payload", {}).get("phase") == "DISPATCH_ENABLED"
+                ]
+                self.assertEqual(len(dispatch_enabled_phase_events), 1)
 
 
 class TestHeartbeatSafetyGating(unittest.TestCase):

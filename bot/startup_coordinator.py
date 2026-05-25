@@ -237,6 +237,22 @@ _RUNTIME_ALLOWED_TRANSITIONS = {
     },
 }
 
+_AUTHORITY_LIVE_STATES = frozenset(
+    {
+        StartupCoordinatorState.SUPERVISED_RUNNING,
+        StartupCoordinatorState.ACTIVATION_ARMED,
+        StartupCoordinatorState.ACTIVATION_CONVERGING,
+        StartupCoordinatorState.LIVE_COMMITTED,
+        StartupCoordinatorState.DISPATCH_ENABLED,
+        StartupCoordinatorState.DEGRADED_RETRY,
+        StartupCoordinatorState.FAIL_SAFE,
+        StartupCoordinatorState.FAIL_SAFE_WARN,
+        StartupCoordinatorState.FAIL_SAFE_HALT,
+        StartupCoordinatorState.FAIL_SAFE_SHUTDOWN,
+        StartupCoordinatorState.RESTART_REQUIRED,
+    }
+)
+
 
 @dataclass(frozen=True)
 class StartupConvergenceSnapshot:
@@ -408,6 +424,15 @@ class _RuntimeState:
     # Edge-trigger dedup: fingerprint of inputs to _reconcile_runtime_authority_locked().
     # None means "no cached result yet"; a tuple means the inputs on the last run.
     _last_reconcile_inputs: Optional[tuple] = field(default=None, compare=False, repr=False)
+    # Suppression-zone audit buffer for early bootstrap event flow.
+    _hydration_event_log: Deque[Dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=256),
+        compare=False,
+        repr=False,
+    )
+    # One-shot commit idempotency guards.
+    _activation_committed: bool = False
+    _last_commit_fingerprint: Optional[tuple] = field(default=None, compare=False, repr=False)
 
 
 class StartupCoordinator:
@@ -427,6 +452,7 @@ class StartupCoordinator:
         payload = dict(payload or {})
         self._runtime.event_version += 1
         version = self._runtime.event_version
+        suppression_zone = self._suppression_zone_locked()
         self._history.append(
             {
                 "version": version,
@@ -435,7 +461,52 @@ class StartupCoordinator:
                 "state": self._runtime.coordinator_state.value,
             }
         )
+        if suppression_zone != "AUTHORITY_LIVE":
+            self._runtime._hydration_event_log.append(
+                {
+                    "version": version,
+                    "event": event.value,
+                    "payload": payload,
+                    "state": self._runtime.coordinator_state.value,
+                    "zone": suppression_zone,
+                }
+            )
         return version
+
+    def _suppression_zone_locked(self) -> str:
+        state = self._runtime.coordinator_state
+        if state in {
+            StartupCoordinatorState.BOOT_INIT,
+            StartupCoordinatorState.LOCKED,
+            StartupCoordinatorState.HEALTHY,
+            StartupCoordinatorState.ENV_READY,
+            StartupCoordinatorState.MODE_READY,
+        }:
+            return "HYDRATION_SUPPRESSED"
+        if state in {
+            StartupCoordinatorState.BROKER_READY,
+            StartupCoordinatorState.BALANCE_READY,
+            StartupCoordinatorState.CAPABILITY_READY,
+            StartupCoordinatorState.PREFLIGHT_READY,
+        }:
+            return "BROKER_SUPPRESSED"
+        if state in {
+            StartupCoordinatorState.CAPITAL_PENDING,
+            StartupCoordinatorState.CAPITAL_READY,
+            StartupCoordinatorState.INIT_COMMITTED,
+        }:
+            return "CAPITAL_SUPPRESSED"
+        if state == StartupCoordinatorState.THREADS_PENDING:
+            return "THREAD_SUPPRESSED"
+        return "AUTHORITY_LIVE"
+
+    def _reconcile_permitted_locked(self) -> bool:
+        return self._runtime.coordinator_state in _AUTHORITY_LIVE_STATES
+
+    def _revoke_activation_commit_locked(self) -> None:
+        self._runtime.last_committed_snapshot_version = 0
+        self._runtime._activation_committed = False
+        self._runtime._last_commit_fingerprint = None
 
     def record_bootstrap_state(self, state: str) -> int:
         with self._lock:
@@ -500,10 +571,11 @@ class StartupCoordinator:
                 StartupEvent.READINESS_CHANGED,
                 {"key": key, "value": bool(value), "readiness_version": self._runtime.readiness_version},
             )
-            if table.get("bootstrap_ready"):
-                self._runtime.coordinator_state = StartupCoordinatorState.INIT_COMMITTED
-            if key == "broker_connected" and value:
-                self._runtime.coordinator_state = StartupCoordinatorState.BROKER_READY
+            if not self._reconcile_permitted_locked():
+                if table.get("bootstrap_ready"):
+                    self._runtime.coordinator_state = StartupCoordinatorState.INIT_COMMITTED
+                if key == "broker_connected" and value:
+                    self._runtime.coordinator_state = StartupCoordinatorState.BROKER_READY
             return event_version
 
     def record_capital_state(
@@ -537,11 +609,12 @@ class StartupCoordinator:
                     "stale": self._runtime.capital_stale,
                 },
             )
-            self._runtime.coordinator_state = (
-                StartupCoordinatorState.CAPITAL_READY
-                if self._runtime.capital_state == "RUNNING" and self._runtime.capital_hydrated
-                else StartupCoordinatorState.CAPITAL_PENDING
-            )
+            if not self._reconcile_permitted_locked():
+                self._runtime.coordinator_state = (
+                    StartupCoordinatorState.CAPITAL_READY
+                    if self._runtime.capital_state == "RUNNING" and self._runtime.capital_hydrated
+                    else StartupCoordinatorState.CAPITAL_PENDING
+                )
             return event_version
 
     def record_authority(self, *, ready: bool, status: Optional[Dict[str, Any]] = None) -> int:
@@ -549,8 +622,9 @@ class StartupCoordinator:
             status = dict(status or {})
             if self._runtime.authority_ready != bool(ready) or self._runtime.authority_status != status:
                 self._runtime.authority_version += 1
-                self._runtime.global_epoch += 1
-                self._runtime.last_committed_snapshot_version = 0
+                if self._reconcile_permitted_locked():
+                    self._runtime.global_epoch += 1
+                    self._revoke_activation_commit_locked()
             self._runtime.authority_ready = bool(ready)
             self._runtime.authority_status = status
             return self._publish_locked(
@@ -566,8 +640,9 @@ class StartupCoordinator:
         with self._lock:
             if self._runtime.nonce_ready != bool(ready):
                 self._runtime.nonce_version += 1
-                self._runtime.global_epoch += 1
-                self._runtime.last_committed_snapshot_version = 0
+                if self._reconcile_permitted_locked():
+                    self._runtime.global_epoch += 1
+                    self._revoke_activation_commit_locked()
             self._runtime.nonce_ready = bool(ready)
             return self._publish_locked(
                 StartupEvent.NONCE_STATUS_CHANGED,
@@ -583,8 +658,9 @@ class StartupCoordinator:
         with self._lock:
             if self._runtime.dispatch_health_ready != bool(ready):
                 self._runtime.dispatch_health_version += 1
-                self._runtime.global_epoch += 1
-                self._runtime.last_committed_snapshot_version = 0
+                if self._reconcile_permitted_locked():
+                    self._runtime.global_epoch += 1
+                    self._revoke_activation_commit_locked()
             self._runtime.dispatch_health_ready = bool(ready)
             return self._publish_locked(
                 StartupEvent.DISPATCH_HEALTH_CHANGED,
@@ -824,10 +900,14 @@ class StartupCoordinator:
 
     def build_snapshot(self, *, trading_state: str, activation_intent: bool) -> StartupConvergenceSnapshot:
         with self._lock:
-            runtime_authority_state, runtime_authority_reason = self._reconcile_runtime_authority_locked(
-                trading_state=str(trading_state),
-                activation_intent=bool(activation_intent),
-            )
+            if self._reconcile_permitted_locked():
+                runtime_authority_state, runtime_authority_reason = self._reconcile_runtime_authority_locked(
+                    trading_state=str(trading_state),
+                    activation_intent=bool(activation_intent),
+                )
+            else:
+                runtime_authority_state = RuntimeAuthorityState.BOOT
+                runtime_authority_reason = f"suppressed_zone:{self._suppression_zone_locked()}"
             return StartupConvergenceSnapshot(
                 snapshot_version=self._runtime.event_version,
                 coordinator_state=self._runtime.coordinator_state.value,
@@ -859,6 +939,88 @@ class StartupCoordinator:
                 last_system_readiness_proof=dict(self._runtime.last_system_readiness_proof),
                 last_committed_system_readiness_proof=dict(self._runtime.last_committed_system_readiness_proof),
             )
+
+    def record_authority_and_evaluate(
+        self,
+        *,
+        ready: bool,
+        trading_state: str,
+        activation_intent: bool,
+        status: Optional[Dict[str, Any]] = None,
+    ) -> tuple[StartupConvergenceSnapshot, ActivationDecision]:
+        with self._lock:
+            self.record_authority(ready=ready, status=status)
+            snapshot = self.build_snapshot(
+                trading_state=str(trading_state),
+                activation_intent=bool(activation_intent),
+            )
+            decision = self.evaluate_activation(snapshot)
+            return snapshot, decision
+
+    def apply_bootstrap_transaction(
+        self,
+        *,
+        bootstrap_state: str,
+        capital_state: str,
+        capital_hydrated: bool,
+        capital_balance: Optional[float],
+        capital_stale: bool,
+        readiness_key: str,
+        readiness_value: bool,
+        readiness_version: int,
+        readiness_table: Dict[str, bool],
+        authority_ready: bool,
+        authority_status: Optional[Dict[str, Any]],
+        nonce_ready: bool,
+        nonce_detail: str,
+        dispatch_health_ready: bool,
+        dispatch_health_detail: str,
+        activation_requested: bool,
+        activation_source: str,
+        kill_switch_active: bool,
+        trading_state: str,
+        activation_intent: bool,
+    ) -> tuple[StartupConvergenceSnapshot, ActivationDecision, SystemReadinessProof]:
+        """Apply a deterministic bootstrap transaction in one lock window."""
+        with self._lock:
+            self.record_bootstrap_state(str(bootstrap_state or "unknown"))
+            self.record_capital_state(
+                state=str(capital_state or "unknown"),
+                hydrated=bool(capital_hydrated),
+                balance=capital_balance,
+                stale=bool(capital_stale),
+            )
+            self.record_readiness(
+                key=str(readiness_key or "__snapshot__"),
+                value=bool(readiness_value),
+                version=int(readiness_version or 0),
+                table=dict(readiness_table or {}),
+            )
+            self.record_kill_switch(active=bool(kill_switch_active))
+            self.record_authority(
+                ready=bool(authority_ready),
+                status=dict(authority_status or {}),
+            )
+            self.record_nonce_status(
+                ready=bool(nonce_ready),
+                detail=str(nonce_detail or ""),
+            )
+            self.record_dispatch_health(
+                ready=bool(dispatch_health_ready),
+                detail=str(dispatch_health_detail or ""),
+            )
+            if activation_requested:
+                self.record_activation_requested(
+                    requested=True,
+                    source=str(activation_source or "bootstrap_transaction"),
+                )
+            snapshot = self.build_snapshot(
+                trading_state=str(trading_state),
+                activation_intent=bool(activation_intent),
+            )
+            decision = self.evaluate_activation(snapshot)
+            proof = self.evaluate_system_readiness_proof(snapshot)
+            return snapshot, decision, proof
 
     def evaluate_system_readiness_proof(self, snapshot: StartupConvergenceSnapshot) -> SystemReadinessProof:
         """Evaluate canonical pre-LIVE readiness proof from one immutable snapshot."""
@@ -931,17 +1093,27 @@ class StartupCoordinator:
 
     def finalize_activation_commit(self, snapshot: StartupConvergenceSnapshot) -> int:
         proof = self.evaluate_system_readiness_proof(snapshot)
+        proof_fingerprint = (
+            int(snapshot.global_epoch),
+            int(snapshot.activation_epoch),
+            str(snapshot.runtime_authority_state),
+            tuple(sorted((proof.gate_results or {}).items())),
+        )
         with self._lock:
             if not proof.passed:
                 self._runtime.last_committed_system_readiness_proof = proof.as_dict()
                 raise RuntimeError(
                     f"LIVE commit blocked: system readiness proof failed at {proof.first_blocking_gate}"
                 )
+            if self._runtime._activation_committed and self._runtime._last_commit_fingerprint == proof_fingerprint:
+                return self._runtime.event_version
             proof_dict = proof.as_dict()
             proof_dict["commit_allowed"] = True
             proof_dict["commit_snapshot_version"] = int(snapshot.snapshot_version)
             self._runtime.last_committed_system_readiness_proof = proof_dict
             self._runtime.last_committed_snapshot_version = snapshot.snapshot_version
+            self._runtime._activation_committed = True
+            self._runtime._last_commit_fingerprint = proof_fingerprint
             # dispatch_enabled is derived — not stored as primary state.
             # Setting last_committed_snapshot_version > 0 is the only durable
             # latch.  The snapshot's dispatch_enabled property computes the
@@ -1001,6 +1173,10 @@ class StartupCoordinator:
     def get_history(self) -> list[Dict[str, Any]]:
         with self._lock:
             return list(self._history)
+
+    def get_hydration_event_log(self) -> list[Dict[str, Any]]:
+        with self._lock:
+            return list(self._runtime._hydration_event_log)
 
 
 _startup_coordinator: Optional[StartupCoordinator] = None
