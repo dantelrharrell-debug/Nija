@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger("nija.portfolio_risk_tuner")
@@ -360,7 +360,7 @@ class PortfolioRiskTuner:
         """Return a point-in-time snapshot of tuner state."""
         with self._lock:
             return TunerSnapshot(
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
                 trading_allowed=not self._halted,
                 halt_reason=self._halt_reason,
                 strategy_weights=dict(self._strategy_weights),
