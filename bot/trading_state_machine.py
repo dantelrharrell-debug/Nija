@@ -271,13 +271,14 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
         return True, ""
 
     _hb_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE")
-    if _hb_raw is None:
-        # Heartbeat monitor has never been started (env var not set at all).
-        # Eagerly start it so the immediate startup tick can set the env var
-        # before the activation gate is evaluated on the next cycle.
+    if _hb_raw is None or _hb_raw.strip() != "1":
+        # Heartbeat monitor may not be started yet (including common startup
+        # defaults where ACTIVE is pre-seeded to "0"). Eagerly start it so the
+        # immediate startup tick can set ACTIVE=1 before gate evaluation.
         logger.info(
-            "[WRITER HEARTBEAT GATE] NIJA_WRITER_HEARTBEAT_ACTIVE not set — "
-            "eagerly starting authority heartbeat monitor for pre-activation tick"
+            "[WRITER HEARTBEAT GATE] NIJA_WRITER_HEARTBEAT_ACTIVE=%r — "
+            "eagerly starting authority heartbeat monitor for pre-activation tick",
+            _hb_raw,
         )
         try:
             try:
@@ -1742,10 +1743,11 @@ class TradingStateMachine:
         # is evaluated) breaks the deadlock: the monitor's immediate startup
         # tick runs in a daemon thread and sets NIJA_WRITER_HEARTBEAT_ACTIVE=1
         # so the gate can pass on this or the next commit_activation() cycle.
-        if os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE") is None:
+        if os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip() != "1":
             logger.info(
-                "[COMMIT_ACTIVATION] NIJA_WRITER_HEARTBEAT_ACTIVE not set — "
-                "eagerly starting authority heartbeat monitor before gate evaluation"
+                "[COMMIT_ACTIVATION] NIJA_WRITER_HEARTBEAT_ACTIVE=%r — "
+                "eagerly starting authority heartbeat monitor before gate evaluation",
+                os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE"),
             )
             try:
                 try:
