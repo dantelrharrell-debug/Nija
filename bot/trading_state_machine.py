@@ -261,6 +261,11 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
         by the LIVE_ACTIVE transition callback.
       - Set to "1": monitor is running and healthy — gate passes.
       - Set to "0": monitor ran but failed / locked down — gate blocks.
+
+    Manual recovery path:
+      - If ACTIVE is explicitly set to "1" but ALIVE_TS is missing/invalid,
+         seed ALIVE_TS to "now" once and allow this cycle so operators can use
+         NIJA_WRITER_HEARTBEAT_ACTIVE=1 as an emergency unblock during rollouts.
     """
     if not _env_truthy("NIJA_ENFORCE_WRITER_HEARTBEAT_GATE", "true"):
         return True, ""
@@ -300,13 +305,19 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
     if _hb_raw.strip() != "1":
         return False, "writer_heartbeat_inactive"
 
-    alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0").strip()
+    alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "").strip()
     try:
         alive_ts = float(alive_raw or "0")
     except (TypeError, ValueError):
-        return False, "writer_heartbeat_invalid_timestamp"
+        alive_ts = 0.0
     if alive_ts <= 0:
-        return False, "writer_heartbeat_missing_timestamp"
+        alive_ts = time.time()
+        os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = f"{alive_ts:.6f}"
+        logger.warning(
+            "[WRITER HEARTBEAT GATE] NIJA_WRITER_HEARTBEAT_ACTIVE=1 without valid "
+            "NIJA_WRITER_HEARTBEAT_ALIVE_TS — seeding manual timestamp for "
+            "activation recovery"
+        )
 
     try:
         max_age_s = max(
