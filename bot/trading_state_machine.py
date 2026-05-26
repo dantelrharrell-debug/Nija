@@ -260,7 +260,8 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
         pass the gate so activation can proceed and the monitor will be started
         by the LIVE_ACTIVE transition callback.
       - Set to "1": monitor is running and healthy — gate passes.
-      - Set to "0": monitor ran but failed / locked down — gate blocks.
+      - Set to "0": allow one bootstrap grace cycle when the monitor has just
+        been started and no alive timestamp exists yet; otherwise gate blocks.
 
     Manual recovery path:
       - If ACTIVE is explicitly set to "1" but ALIVE_TS is missing/invalid,
@@ -271,6 +272,10 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
         return True, ""
 
     _hb_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE")
+    _bootstrap_pending = (
+        os.environ.get("NIJA_WRITER_HEARTBEAT_BOOTSTRAP_PENDING", "").strip() == "1"
+    )
+    _monitor_locked_down = False
     if _hb_raw is None or _hb_raw.strip() != "1":
         # Heartbeat monitor may not be started yet (including common startup
         # defaults where ACTIVE is pre-seeded to "0"). Eagerly start it so the
@@ -285,7 +290,8 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
                 from bot.authority_heartbeat import start_authority_heartbeat
             except ImportError:
                 from authority_heartbeat import start_authority_heartbeat  # type: ignore[import]
-            start_authority_heartbeat()
+            _monitor = start_authority_heartbeat()
+            _monitor_locked_down = bool(getattr(_monitor, "is_locked_down", False))
         except Exception as _hb_start_err:
             logger.warning(
                 "[WRITER HEARTBEAT GATE] eager heartbeat start failed: %s", _hb_start_err
@@ -302,9 +308,25 @@ def _writer_heartbeat_gate() -> tuple[bool, str]:
                 "not yet complete — passing gate for initial activation cycle"
             )
             return True, ""
+        if _hb_raw.strip() != "1":
+            alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "").strip()
+            try:
+                alive_ts = float(alive_raw or "0")
+            except (TypeError, ValueError):
+                alive_ts = 0.0
+            if alive_ts <= 0 and not _bootstrap_pending and not _monitor_locked_down:
+                os.environ["NIJA_WRITER_HEARTBEAT_BOOTSTRAP_PENDING"] = "1"
+                logger.info(
+                    "[WRITER HEARTBEAT GATE] heartbeat monitor bootstrap pending "
+                    "(active=%r alive_ts=%s) — passing one activation cycle",
+                    _hb_raw,
+                    alive_raw or "0",
+                )
+                return True, ""
 
     if _hb_raw.strip() != "1":
         return False, "writer_heartbeat_inactive"
+    os.environ["NIJA_WRITER_HEARTBEAT_BOOTSTRAP_PENDING"] = "0"
 
     alive_raw = os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "").strip()
     try:
