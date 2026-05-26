@@ -126,6 +126,13 @@ class MinimumNotionalGate:
                     logger.info(f"      {broker.upper()}: ${limit:.2f}")
         else:
             logger.warning("⚠️ Minimum Notional Gate DISABLED")
+
+    @staticmethod
+    def _cap_to_available_capital(min_notional: float, balance: float) -> float:
+        """Never require a minimum larger than available capital."""
+        if balance > 0:
+            return min(min_notional, balance)
+        return min_notional
     
     def validate_entry_size(
         self, 
@@ -161,6 +168,7 @@ class MinimumNotionalGate:
             min_notional = self.config.get_min_notional_for_broker(broker_name, balance=balance)
         else:
             min_notional = self.config.min_entry_notional_usd
+        min_notional = self._cap_to_available_capital(min_notional, balance)
         
         # Validate size
         if size_usd < min_notional:
@@ -224,6 +232,7 @@ class MinimumNotionalGate:
             if broker_name
             else self.config.min_entry_notional_usd
         )
+        min_notional = self._cap_to_available_capital(min_notional, balance)
         
         if size_usd < min_notional:
             logger.info(f"📈 Auto-adjusting size from ${size_usd:.2f} to ${min_notional:.2f} (minimum)")
