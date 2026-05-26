@@ -19,6 +19,7 @@ from bot.trading_state_machine import (
     _collect_live_gate_status,
     _heartbeat_verification_required,
     _live_activation_gate,
+    _writer_heartbeat_gate,
 )
 from bot.startup_coordinator import get_startup_coordinator
 from bot import readiness_table
@@ -377,6 +378,21 @@ class TestCommitActivationConcurrency(unittest.TestCase):
 
 
 class TestHeartbeatSafetyGating(unittest.TestCase):
+    def test_writer_heartbeat_gate_allows_manual_active_override_without_timestamp(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "NIJA_ENFORCE_WRITER_HEARTBEAT_GATE": "true",
+                "NIJA_WRITER_HEARTBEAT_ACTIVE": "1",
+            },
+            clear=False,
+        ):
+            os.environ.pop("NIJA_WRITER_HEARTBEAT_ALIVE_TS", None)
+            ok, reason = _writer_heartbeat_gate()
+            self.assertTrue(ok)
+            self.assertEqual(reason, "")
+            self.assertGreater(float(os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0")), 0.0)
+
     def test_heartbeat_verification_required_when_heartbeat_trade_enabled(self) -> None:
         with patch.dict(
             os.environ,
