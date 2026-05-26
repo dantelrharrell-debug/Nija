@@ -715,10 +715,12 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.warning("ExecutionPipeline: throttler check failed: %s", exc)
 
+        downstream_guard = getattr(self, "_downstream_guard", None)
+
         # ── Priority-3: Risk Governor ────────────────────────────────────
-        if self._downstream_guard is not None:
+        if downstream_guard is not None:
             try:
-                gov_ok, gov_reason, _ = self._downstream_guard.check_risk_governor(
+                gov_ok, gov_reason, _ = downstream_guard.check_risk_governor(
                     symbol=effective_request.symbol,
                     proposed_risk_usd=effective_request.size_usd,
                     portfolio_value=effective_request.available_balance_usd or 0.0,
@@ -743,7 +745,7 @@ class ExecutionPipeline:
                 logger.warning("ExecutionPipeline: risk governor gate error: %s", exc)
 
         # ── Priority-4: Spread / Slippage Guard ──────────────────────────
-        if self._downstream_guard is not None:
+        if downstream_guard is not None:
             try:
                 _bid = float(
                     effective_request.bid_price_usd
@@ -755,7 +757,7 @@ class ExecutionPipeline:
                     if effective_request.ask_price_usd is not None
                     else (effective_request.price_hint_usd or 0.0)
                 )
-                slip_ok, slip_reason, _ = self._downstream_guard.check_slippage(
+                slip_ok, slip_reason, _ = downstream_guard.check_slippage(
                     symbol=effective_request.symbol,
                     side=self._normalise_side(effective_request.side),
                     order_size_usd=effective_request.size_usd,
