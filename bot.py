@@ -3331,9 +3331,13 @@ def _acquire_distributed_process_lock() -> None:
         # Initialize FSM state  
         _wait_started_at = time.time()
         _next_checkpoint = _wait_started_at + _checkpoint_interval_s
-        _holder_info = parse_distributed_lock_holder(_holder)
-        _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
-        _holder_meta = _read_lock_meta()
+        def _resolve_holder_state(holder_raw: str) -> tuple[dict[str, str], dict[str, object], dict[str, object]]:
+            holder_info_local = parse_distributed_lock_holder(holder_raw)
+            holder_inspection_local = inspect_lock_holder(_instance_identity, holder_info_local)
+            holder_meta_local = _read_lock_meta()
+            return holder_info_local, holder_inspection_local, holder_meta_local
+
+        _holder_info, _holder_inspection, _holder_meta = _resolve_holder_state(_holder)
 
         try:
             _stale_heartbeat_timeout_s = max(
@@ -3397,6 +3401,7 @@ def _acquire_distributed_process_lock() -> None:
             
             # Checkpoint: emit warnings and attempt stale-lock rescue
             if _now >= _next_checkpoint:
+                _holder_info, _holder_inspection, _holder_meta = _resolve_holder_state(_holder)
                 logger.warning(
                     "Distributed lock still unavailable (timeout in %.1fs, elapsed=%.1fs). "
                     "holder=%s parsed=%s inspection=%s pttl_ms=%s",
@@ -3490,9 +3495,7 @@ def _acquire_distributed_process_lock() -> None:
                         _holder_inspection.get("relationship"),
                     )
                     _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
-                    _holder_info = parse_distributed_lock_holder(_holder)
-                    _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
-                    _holder_meta = _read_lock_meta()
+                    _holder_info, _holder_inspection, _holder_meta = _resolve_holder_state(_holder)
                     if _fencing_token > 0:
                         break  # Acquired after rescue — exit loop
                 
@@ -3505,10 +3508,8 @@ def _acquire_distributed_process_lock() -> None:
             time.sleep(_lock_retry_interval)
             try:
                 _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+                _holder_info, _holder_inspection, _holder_meta = _resolve_holder_state(_holder)
                 if _fencing_token > 0:
-                    _holder_info = parse_distributed_lock_holder(_holder)
-                    _holder_inspection = inspect_lock_holder(_instance_identity, _holder_info)
-                    _holder_meta = _read_lock_meta()
                     break  # Successfully acquired — exit loop
             except Exception as _retry_err:
                 logger.debug("Lock retry attempt failed: %s", _retry_err)
