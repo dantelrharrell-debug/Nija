@@ -393,6 +393,47 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
             self.assertEqual(reason, "")
             self.assertGreater(float(os.environ.get("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0")), 0.0)
 
+    def test_writer_heartbeat_gate_bootstraps_monitor_when_default_flag_zero(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "NIJA_ENFORCE_WRITER_HEARTBEAT_GATE": "true",
+                "NIJA_WRITER_HEARTBEAT_ACTIVE": "0",
+            },
+            clear=False,
+        ):
+            os.environ.pop("NIJA_WRITER_HEARTBEAT_ALIVE_TS", None)
+
+            def _start_monitor() -> None:
+                os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
+                os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = str(time.time())
+
+            with patch(
+                "bot.authority_heartbeat.start_authority_heartbeat",
+                side_effect=_start_monitor,
+            ) as start_mock:
+                ok, reason = _writer_heartbeat_gate()
+
+            self.assertTrue(ok)
+            self.assertEqual(reason, "")
+            start_mock.assert_called_once()
+
+    def test_writer_heartbeat_gate_blocks_when_flag_stays_zero_after_bootstrap_attempt(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "NIJA_ENFORCE_WRITER_HEARTBEAT_GATE": "true",
+                "NIJA_WRITER_HEARTBEAT_ACTIVE": "0",
+            },
+            clear=False,
+        ):
+            os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = "0"
+            with patch("bot.authority_heartbeat.start_authority_heartbeat", return_value=None):
+                ok, reason = _writer_heartbeat_gate()
+
+            self.assertFalse(ok)
+            self.assertEqual(reason, "writer_heartbeat_inactive")
+
     def test_heartbeat_verification_required_when_heartbeat_trade_enabled(self) -> None:
         with patch.dict(
             os.environ,
