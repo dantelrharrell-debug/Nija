@@ -118,6 +118,21 @@ def test_min_notional_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "below minimum" in (reason or "").lower()
 
 
+def test_min_notional_caps_to_available_capital(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIN_NOTIONAL_OVERRIDE", "10")
+    gate = MinimumNotionalGate(NotionalGateConfig())
+    adjusted = gate.adjust_size_to_minimum(3.0, broker_name="coinbase", balance=4.0)
+    assert adjusted == 4.0
+
+
+def test_validate_entry_size_uses_capital_adjusted_minimum(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIN_NOTIONAL_OVERRIDE", "10")
+    gate = MinimumNotionalGate(NotionalGateConfig())
+    ok, reason = gate.validate_entry_size("BTC-USD", 4.0, broker_name="coinbase", balance=4.0)
+    assert ok
+    assert reason is None
+
+
 def test_jitter_applied_per_account(monkeypatch: pytest.MonkeyPatch) -> None:
     delays = iter([31.0, 33.0])
     monkeypatch.setattr(ibt.random, "uniform", lambda _a, _b: next(delays))
