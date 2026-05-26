@@ -2107,6 +2107,10 @@ class TradingStateMachine:
         with self._lock:
             return self._activation_committed
 
+    def activation_committed(self) -> bool:
+        """Compatibility wrapper for observability callers expecting a method-style probe."""
+        return self.get_activation_committed()
+
     def has_execution_authority(self) -> bool:
         """Return True when dispatch authority has been granted."""
         return self.can_execute(require_executing=False)
