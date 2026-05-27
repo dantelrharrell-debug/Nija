@@ -79,6 +79,44 @@ from contextlib import contextmanager
 logger = logging.getLogger("nija.execution_pipeline")
 
 try:
+    from bot.pipeline_request_contract import (
+        PipelineRequest,
+        normalize_pipeline_request,
+        validate_pipeline_request,
+    )
+except ImportError:
+    try:
+        from pipeline_request_contract import (  # type: ignore[import]
+            PipelineRequest,
+            normalize_pipeline_request,
+            validate_pipeline_request,
+        )
+    except ImportError:
+        @dataclass(frozen=True)
+        class PipelineRequest:  # type: ignore[no-redef]
+            symbol: str
+            side: str
+            size_usd: float
+            strategy: str = ""
+            order_type: Optional[str] = None
+            asset_class: Optional[str] = None
+            preferred_broker: Optional[str] = None
+            available_balance_usd: Optional[float] = None
+            price_hint_usd: Optional[float] = None
+            bid_price_usd: Optional[float] = None
+            ask_price_usd: Optional[float] = None
+            volume_24h_usd: Optional[float] = None
+            volatility_pct: Optional[float] = None
+            account_id: str = "default"
+            validated: bool = False
+
+        def normalize_pipeline_request(value):  # type: ignore[no-redef]
+            return value
+
+        def validate_pipeline_request(_):  # type: ignore[no-redef]
+            return True, "ok"
+
+try:
     from bot.runtime_correlation import get_runtime_correlation
 except ImportError:
     try:
@@ -187,6 +225,20 @@ except ImportError:
         get_seak = None  # type: ignore[assignment]
 
 try:
+    from bot.margin_position_ledger import get_margin_position_ledger
+except ImportError:
+    try:
+        from margin_position_ledger import get_margin_position_ledger  # type: ignore[import]
+    except ImportError:
+        get_margin_position_ledger = None  # type: ignore[assignment]
+
+try:
+    from bot.execution_broker_capabilities import get_broker_capability_registry
+except ImportError:
+    try:
+        from execution_broker_capabilities import get_broker_capability_registry  # type: ignore[import]
+    except ImportError:
+        get_broker_capability_registry = None  # type: ignore[assignment]
     from bot.margin_health_gate import MarginHealthGate, MarginHealthSnapshot
 except ImportError:
     try:
@@ -202,6 +254,14 @@ except ImportError:
         from exchange_capabilities import EXCHANGE_CAPABILITIES  # type: ignore[import]
     except ImportError:
         EXCHANGE_CAPABILITIES = None  # type: ignore[assignment]
+
+try:
+    from bot.kraken_margin_engine import get_margin_engine
+except ImportError:
+    try:
+        from kraken_margin_engine import get_margin_engine  # type: ignore[import]
+    except ImportError:
+        get_margin_engine = None  # type: ignore[assignment]
 
 # Optional import — used for cycle_id cross-validation at dispatch time.
 # The pipeline must remain importable even when nija_core_loop is absent.
@@ -352,7 +412,10 @@ class ExecutionPipeline:
         self._capability_matrix = EXCHANGE_CAPABILITIES
         self._ecel = self._load_ecel()
         self._downstream_guard = self._load_downstream_guard()
+        self._margin_position_ledger = self._load_margin_position_ledger()
+        self._broker_capability_registry = self._load_broker_capability_registry()
         self._start_ecel_background_refresh()
+        self._start_margin_position_sync_loop()
 
         # ACK timeout: max seconds to wait for the broker to acknowledge an order.
         self._ack_timeout_s: float = float(
@@ -365,7 +428,8 @@ class ExecutionPipeline:
 
         logger.info(
             "ExecutionPipeline initialised | throttler=%s | router=%s | multi_router=%s | "
-            "ecel_required=%s | ecel_fail_closed=%s | ecel_loaded=%s",
+            "pre_trade_risk=%s | exchange_normalizer=%s | allocation_clamp=%s | execution_observer=%s | "
+            "margin_ledger=%s | broker_capability_registry=%s | ecel_required=%s | ecel_fail_closed=%s | ecel_loaded=%s",
             self._throttler is not None,
             self._router is not None,
             self._multi_router is not None,
@@ -373,6 +437,8 @@ class ExecutionPipeline:
             self._exchange_normalizer is not None,
             self._allocation_clamp is not None,
             self._execution_observer is not None,
+            self._margin_position_ledger is not None,
+            self._broker_capability_registry is not None,
             self._ecel_required,
             self._ecel_fail_closed,
             self._ecel is not None,
@@ -381,6 +447,17 @@ class ExecutionPipeline:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _deny(request: PipelineRequest, t_start: float, reason: str) -> PipelineResult:
+        return PipelineResult(
+            success=False,
+            symbol=request.symbol,
+            side=request.side,
+            size_usd=float(getattr(request, "size_usd", 0.0) or 0.0),
+            error=reason,
+            latency_ms=(time.monotonic() - t_start) * 1000,
+        )
 
     def _enforce_execution_gate(
         self,
@@ -392,6 +469,7 @@ class ExecutionPipeline:
         if safety_mod is None:
             logger.warning("ExecutionPipeline: safety_controller unavailable; skipping safety gate")
             return None
+
         get_safety_controller = getattr(safety_mod, "get_safety_controller", None)
         TradingMode = getattr(safety_mod, "TradingMode", None)
         if get_safety_controller is None or TradingMode is None:
@@ -455,6 +533,58 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.warning("ExecutionPipeline: trading_state_machine gate skipped: %s", exc)
 
+        return None
+
+    def _gate_capital_margin_authorization(
+        self,
+        request: PipelineRequest,
+        t_start: float,
+    ) -> Optional[PipelineResult]:
+        side = str(getattr(request, "side", "")).lower()
+        sizing_mode = str(getattr(request, "sizing_mode", "") or "")
+        notional = float(getattr(request, "notional_usd", 0.0) or 0.0)
+        if notional <= 0 and sizing_mode == "notional_usd":
+            notional = float(getattr(request, "size_usd", 0.0) or 0.0)
+
+        ledger_row: Dict[str, Any] = {}
+        margin_ledger = getattr(self, "_margin_position_ledger", None)
+        if margin_ledger is not None:
+            try:
+                ledger_row = margin_ledger.get_record(
+                    broker=str(getattr(request, "preferred_broker", None) or "coinbase"),
+                    account_id=str(getattr(request, "account_id", "default") or "default"),
+                    subaccount_id=str(getattr(request, "subaccount_id", "") or ""),
+                    symbol=str(getattr(request, "symbol", "") or ""),
+                    asset_class=str(getattr(request, "asset_class", None) or "crypto"),
+                )
+            except Exception as exc:
+                return self._deny(request, t_start, f"CapitalAuthorization deny: ledger_read_error:{exc}")
+
+        exposure_required = side in ("buy", "long")
+        if exposure_required and notional > 0 and margin_ledger is not None and not ledger_row:
+            return self._deny(request, t_start, "CapitalAuthorization deny: missing_ledger_state")
+
+        buying_power = ledger_row.get("buying_power_usd") if ledger_row else getattr(request, "buying_power_usd", None)
+        available_margin = ledger_row.get("available_margin_usd") if ledger_row else getattr(request, "available_balance_usd", None)
+        financial_cap = buying_power if buying_power is not None else available_margin
+        if exposure_required and notional > 0 and financial_cap is not None and float(financial_cap) < notional:
+            return self._deny(request, t_start, "CapitalAuthorization deny: insufficient_buying_power")
+
+        leverage = int(getattr(request, "leverage", 1) or 1)
+        ledger_leverage = int(ledger_row.get("leverage") or 1) if ledger_row else 1
+        if leverage > ledger_leverage and ledger_row:
+            return self._deny(request, t_start, "CapitalAuthorization deny: leverage_exceeds_ledger")
+
+        margin_mode = str(ledger_row.get("margin_mode") or "")
+        reduce_only = getattr(request, "reduce_only", None)
+        intent_type = str(getattr(request, "intent_type", "") or "").lower()
+        if leverage > 1:
+            if margin_mode not in ("cross", "isolated"):
+                return self._deny(request, t_start, "CapitalAuthorization deny: invalid_margin_mode")
+            if intent_type == "entry" and reduce_only is not False:
+                return self._deny(request, t_start, "CapitalAuthorization deny: reduce_only_false_required_for_entry")
+            if intent_type in ("reduce", "exit") and reduce_only is not True:
+                return self._deny(request, t_start, "CapitalAuthorization deny: reduce_only_true_required_for_reduce")
         return None
 
     def _simulate_execution(
@@ -577,30 +707,41 @@ class ExecutionPipeline:
             On execution: reflects fill/failure from the underlying router.
         """
         t_start = time.monotonic()
-        reservation_id: Optional[str] = None
-        working_request = request
-        effective_request = request
+        canonical_request = normalize_pipeline_request(request)
+        if not getattr(canonical_request, "strategy", ""):
+            canonical_request = replace(canonical_request, strategy="unknown_strategy")
+        valid, reason = validate_pipeline_request(canonical_request)
+        if not valid:
+            return self._deny(canonical_request, t_start, f"RequestContract deny: {reason}")
+
+        working_request = canonical_request
+        effective_request = canonical_request
         order_validated = False
         compiled = None
 
-        gate_result = self._enforce_execution_gate(request, t_start)
+        gate_result = self._enforce_execution_gate(canonical_request, t_start)
+        if gate_result is not None:
+            return gate_result
+
+        intent_type = str(getattr(canonical_request, "intent_type", "") or "").strip().lower()
+        should_persist_pending = intent_type not in {"reduce", "exit"}
+        if should_persist_pending and getattr(self, "_margin_position_ledger", None) is not None:
+            try:
+                self._margin_position_ledger.apply_submit(canonical_request)
+            except Exception as exc:
+                return self._deny(canonical_request, t_start, f"OrderFeasibility deny: ledger_submit_error:{exc}")
+
+        gate_result = self._gate_capital_margin_authorization(canonical_request, t_start)
         if gate_result is not None:
             return gate_result
 
         if self._execution_observer is not None:
             try:
-                suppressed, suppression_reason = self._execution_observer.is_strategy_suppressed(request.strategy)
+                suppressed, suppression_reason = self._execution_observer.is_strategy_suppressed(canonical_request.strategy)
                 if suppressed:
-                    return PipelineResult(
-                        success=False,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
-                        error=f"ExecutionObserver suppress: {suppression_reason}",
-                        latency_ms=(time.monotonic() - t_start) * 1000,
-                    )
+                    return self._deny(canonical_request, t_start, f"OrderFeasibility deny: {suppression_reason}")
             except Exception as exc:
-                logger.warning("ExecutionPipeline: observer suppression check failed: %s", exc)
+                return self._deny(canonical_request, t_start, f"OrderFeasibility deny: observer_error:{exc}")
 
         if self._execution_observer is not None and self._allocation_clamp is not None:
             try:
@@ -608,11 +749,15 @@ class ExecutionPipeline:
                 requested_with_feedback = float(request.size_usd) * allocation_multiplier
                 clamp_result = self._allocation_clamp.clamp(
                     requested_usd=requested_with_feedback,
-                    baseline_usd=float(request.size_usd),
+                    baseline_usd=float(canonical_request.size_usd or 0.0),
                 )
-                working_request = replace(request, size_usd=clamp_result.clamped_usd)
+                working_request = replace(
+                    working_request,
+                    size_usd=clamp_result.clamped_usd,
+                    notional_usd=clamp_result.clamped_usd,
+                )
             except Exception as exc:
-                logger.warning("ExecutionPipeline: allocation clamp failed: %s", exc)
+                return self._deny(canonical_request, t_start, f"OrderFeasibility deny: allocation_clamp_error:{exc}")
 
         if self._exchange_normalizer is not None:
             try:
@@ -656,10 +801,19 @@ class ExecutionPipeline:
                     preferred_broker=normalized.broker,
                 )
             except Exception as exc:
-                logger.warning("ExecutionPipeline: exchange normalizer failed: %s", exc)
+                return self._deny(canonical_request, t_start, f"OrderFeasibility deny: normalizer_error:{exc}")
 
         capability_matrix = getattr(self, "_capability_matrix", None)
         broker_for_caps = (working_request.preferred_broker or "coinbase").lower()
+        margin_engine = get_margin_engine() if get_margin_engine is not None else None
+        runtime_capability_overrides: Dict[str, Any] = {}
+        if margin_engine is not None:
+            try:
+                runtime_capability_overrides = margin_engine.get_runtime_capability_overrides(
+                    account_id=working_request.account_id
+                ) or {}
+            except Exception:
+                runtime_capability_overrides = {}
         if capability_matrix is not None:
             try:
                 allowed, reason = capability_matrix.enforce_order_capabilities(
@@ -670,6 +824,7 @@ class ExecutionPipeline:
                     account_type=working_request.account_type,
                     leverage=working_request.leverage,
                     margin_mode=working_request.margin_mode,
+                    runtime_overrides=runtime_capability_overrides,
                 )
                 if not allowed:
                     return PipelineResult(
@@ -686,28 +841,73 @@ class ExecutionPipeline:
         margin_gate = getattr(self, "_margin_health_gate", None)
         margin_requested = bool(
             working_request.margin_mode
-            or working_request.leverage
+            or (working_request.leverage is not None and float(working_request.leverage) > 1.0)
             or working_request.borrow_intent
             or working_request.account_type == "margin"
         )
         if margin_requested and margin_gate is not None:
             try:
+                # Deterministic authority boundary:
+                # ledger/margin-engine is the source of risk truth; execution gates consume it.
+                if margin_engine is not None:
+                    reduce_intent = bool(
+                        working_request.reduce_only
+                        or str(working_request.position_effect or "").lower() in {"close", "close_only", "reduce"}
+                    )
+                    ledger_allowed, ledger_reason = margin_engine.is_margin_trade_allowed(
+                        is_reducing=reduce_intent,
+                        adapter=None,
+                    )
+                    if not ledger_allowed:
+                        return PipelineResult(
+                            success=False,
+                            symbol=working_request.symbol,
+                            side=working_request.side,
+                            size_usd=working_request.size_usd,
+                            error=f"MarginLedger reject: {ledger_reason}",
+                            latency_ms=(time.monotonic() - t_start) * 1000,
+                        )
+                    ledger_snapshot = margin_engine.get_health_snapshot(adapter=None)
+                else:
+                    ledger_snapshot = None
+
                 snapshot = None
                 if MarginHealthSnapshot is not None:
-                    snapshot = MarginHealthSnapshot(
-                        buying_power_usd=float(
+                    inferred_buying_power = (
+                        float(ledger_snapshot.free_margin_usd)
+                        if ledger_snapshot is not None and ledger_snapshot.free_margin_usd > 0
+                        else float(
                             working_request.available_balance_usd
                             if working_request.available_balance_usd is not None
                             else 0.0
-                        ),
-                        maintenance_margin_ratio=float(working_request.maintenance_margin_ratio or 0.0),
+                        )
+                    )
+                    if ledger_snapshot is not None and ledger_snapshot.margin_level_pct > 0:
+                        inferred_maintenance_ratio = min(1.0, max(0.0, 100.0 / ledger_snapshot.margin_level_pct))
+                    else:
+                        inferred_maintenance_ratio = float(working_request.maintenance_margin_ratio or 0.0)
+                    snapshot = MarginHealthSnapshot(
+                        buying_power_usd=inferred_buying_power,
+                        maintenance_margin_ratio=inferred_maintenance_ratio,
                         liquidation_buffer_ratio=float(
-                            1.0 if working_request.liquidation_buffer_ratio is None
-                            else working_request.liquidation_buffer_ratio
+                            (
+                                0.0 if ledger_snapshot is not None and ledger_snapshot.critical_margin_breach
+                                else (
+                                    0.05
+                                    if ledger_snapshot is not None and not ledger_snapshot.maintenance_margin_ok
+                                    else (
+                                        1.0 if working_request.liquidation_buffer_ratio is None
+                                        else working_request.liquidation_buffer_ratio
+                                    )
+                                )
+                            )
                         ),
                         borrow_available=bool(
-                            True if working_request.borrow_available is None
-                            else working_request.borrow_available
+                            (
+                                not ledger_snapshot.critical_margin_breach and ledger_snapshot.maintenance_margin_ok
+                                if ledger_snapshot is not None
+                                else (True if working_request.borrow_available is None else working_request.borrow_available)
+                            )
                         ),
                     )
                 decision = margin_gate.assess(
@@ -748,7 +948,7 @@ class ExecutionPipeline:
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
             except Exception as exc:
-                logger.warning("ExecutionPipeline: pre-trade risk check failed: %s", exc)
+                return self._deny(canonical_request, t_start, f"OrderFeasibility deny: pre_trade_risk_error:{exc}")
 
         if self._ecel is None and self._ecel_required:
             error = "ECEL unavailable: strict execution gate blocks order dispatch"
@@ -771,8 +971,14 @@ class ExecutionPipeline:
                     symbol=working_request.symbol,
                     side=self._normalise_side(working_request.side),
                     order_type=(working_request.order_type or "MARKET").upper(),
-                    desired_notional_usd=working_request.size_usd,
-                    available_balance_usd=working_request.available_balance_usd,
+                    desired_notional_usd=float(working_request.size_usd or 0.0),
+                    sizing_mode=getattr(working_request, "sizing_mode", None),
+                    desired_units=getattr(working_request, "units", None),
+                    unit_type=getattr(working_request, "unit_type", None),
+                    leverage=getattr(working_request, "leverage", None),
+                    reduce_only=getattr(working_request, "reduce_only", None),
+                    margin_mode=getattr(working_request, "margin_mode", None),
+                    intent_type=getattr(working_request, "intent_type", None),
                     price_hint_usd=working_request.price_hint_usd,
                     account_id=working_request.account_id,
                 )
@@ -787,10 +993,11 @@ class ExecutionPipeline:
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
 
-                reservation_id = compiled.reservation_id
                 effective_request = replace(
                     working_request,
                     size_usd=compiled.compiled_notional_usd,
+                    notional_usd=compiled.compiled_notional_usd,
+                    units=compiled.compiled_base_size,
                     validated=True,
                 )
                 order_validated = True
@@ -814,13 +1021,15 @@ class ExecutionPipeline:
 
         self._log_ecel_final_order(request=effective_request, compiled=compiled)
 
-        # ── Priority-2: Trade Throttler ──────────────────────────────────
+        gate_result = self._gate_broker_capabilities(effective_request, t_start)
+        if gate_result is not None:
+            return gate_result
+
+        # ── Gate 5: Execution dispatch control (throttling eligibility) ───
         if self._throttler is not None:
             try:
                 allowed, throttle_reason = self._throttler.check()
                 if not allowed:
-                    if reservation_id and self._ecel is not None:
-                        self._ecel.release_reservation(reservation_id)
                     logger.warning(
                         "ExecutionPipeline THROTTLED | %s %s $%.2f | %s",
                         effective_request.side.upper(), effective_request.symbol,
@@ -836,7 +1045,7 @@ class ExecutionPipeline:
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
             except Exception as exc:
-                logger.warning("ExecutionPipeline: throttler check failed: %s", exc)
+                return self._deny(effective_request, t_start, f"OrderFeasibility deny: throttler_error:{exc}")
 
         downstream_guard = getattr(self, "_downstream_guard", None)
 
@@ -849,8 +1058,6 @@ class ExecutionPipeline:
                     portfolio_value=effective_request.available_balance_usd or 0.0,
                 )
                 if not gov_ok:
-                    if reservation_id and self._ecel is not None:
-                        self._ecel.release_reservation(reservation_id)
                     logger.warning(
                         "ExecutionPipeline RISK_GOVERNOR | %s %s $%.2f | %s",
                         effective_request.side.upper(), effective_request.symbol,
@@ -865,7 +1072,7 @@ class ExecutionPipeline:
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
             except Exception as exc:
-                logger.warning("ExecutionPipeline: risk governor gate error: %s", exc)
+                return self._deny(effective_request, t_start, f"OrderFeasibility deny: risk_governor_error:{exc}")
 
         # ── Priority-4: Spread / Slippage Guard ──────────────────────────
         if downstream_guard is not None:
@@ -890,8 +1097,6 @@ class ExecutionPipeline:
                     volatility_pct=float(effective_request.volatility_pct or 0.02),
                 )
                 if not slip_ok:
-                    if reservation_id and self._ecel is not None:
-                        self._ecel.release_reservation(reservation_id)
                     logger.warning(
                         "ExecutionPipeline SLIPPAGE_BLOCKED | %s %s $%.2f | %s",
                         effective_request.side.upper(), effective_request.symbol,
@@ -906,7 +1111,7 @@ class ExecutionPipeline:
                         latency_ms=(time.monotonic() - t_start) * 1000,
                     )
             except Exception as exc:
-                logger.warning("ExecutionPipeline: slippage gate error: %s", exc)
+                return self._deny(effective_request, t_start, f"PostGuard deny: slippage_error:{exc}")
 
         # ── Route to execution ───────────────────────────────────────────
         live_mode = os.getenv("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {
@@ -1043,6 +1248,11 @@ class ExecutionPipeline:
                     "latency_ms": result.latency_ms,
                 },
             )
+            if getattr(self, "_margin_position_ledger", None) is not None:
+                try:
+                    self._margin_position_ledger.apply_ack_fill(effective_request, result)
+                except Exception as exc:
+                    logger.warning("ExecutionPipeline: margin ledger ack/fill update failed: %s", exc)
 
         if not result.success and self._is_retryable_exchange_rejection(result.error):
             logger.warning(
@@ -1054,10 +1264,15 @@ class ExecutionPipeline:
             result.throttled = True
 
         if not result.success and not result.throttled:
+            if getattr(self, "_margin_position_ledger", None) is not None:
+                try:
+                    self._margin_position_ledger.apply_reject_or_cancel(
+                        effective_request,
+                        result.error or "unknown exchange rejection",
+                    )
+                except Exception as exc:
+                    logger.warning("ExecutionPipeline: margin ledger reject/cancel update failed: %s", exc)
             self._on_order_rejected(effective_request, result.error or "unknown exchange rejection")
-
-        if reservation_id and self._ecel is not None and not result.success:
-            self._ecel.release_reservation(reservation_id)
 
         # Auto-register successful trades with the throttler
         if result.success and self._throttler is not None:
@@ -1269,6 +1484,12 @@ class ExecutionPipeline:
     def stop_background_tasks(self) -> None:
         """Request graceful stop of background workers."""
         self._ecel_refresh_stop.set()
+        margin_ledger = getattr(self, "_margin_position_ledger", None)
+        if margin_ledger is not None:
+            try:
+                margin_ledger.stop_periodic_reconcile()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1325,9 +1546,32 @@ class ExecutionPipeline:
                         strategy=request.strategy,
                         symbol=request.symbol,
                         side=self._normalise_side(request.side),
-                        size_usd=request.size_usd,
+                        size_usd=float(request.size_usd or 0.0),
                         asset_class=request.asset_class or "",
+                        order_type=(request.order_type or "market"),
+                        limit_price=getattr(request, "limit_price", None),
                         preferred_broker=request.preferred_broker or "",
+                        account_id=getattr(request, "account_id", "default"),
+                        subaccount_id=getattr(request, "subaccount_id", None),
+                        time_in_force=getattr(request, "time_in_force", None),
+                        buying_power_usd=getattr(request, "buying_power_usd", None),
+                        available_balance_usd=getattr(request, "available_balance_usd", None),
+                        leverage=getattr(request, "leverage", None),
+                        reduce_only=getattr(request, "reduce_only", None),
+                        margin_mode=getattr(request, "margin_mode", None),
+                        short_sell=getattr(request, "short_sell", None),
+                        extended_hours=getattr(request, "extended_hours", None),
+                        metadata={
+                            **dict(getattr(request, "metadata", {}) or {}),
+                            "request_id": getattr(request, "request_id", ""),
+                            "intent_id": getattr(request, "intent_id", None),
+                            "cycle_id": getattr(request, "cycle_id", None),
+                            "sizing_mode": getattr(request, "sizing_mode", None),
+                            "notional_usd": getattr(request, "notional_usd", None),
+                            "units": getattr(request, "units", None),
+                            "unit_type": getattr(request, "unit_type", None),
+                            "price_hint_usd": getattr(request, "price_hint_usd", None),
+                            "stop_price": getattr(request, "stop_price", None),
                         metadata={
                             "instrument_type": request.instrument_type or "",
                             "quantity_mode": request.quantity_mode,
@@ -1381,8 +1625,32 @@ class ExecutionPipeline:
                         strategy=request.strategy,
                         symbol=request.symbol,
                         side=self._normalise_side(request.side),
-                        size_usd=request.size_usd,
+                        size_usd=float(request.size_usd or 0.0),
                         order_type=request.order_type,
+                        metadata={
+                            **dict(getattr(request, "metadata", {}) or {}),
+                            "request_id": getattr(request, "request_id", ""),
+                            "intent_id": getattr(request, "intent_id", None),
+                            "cycle_id": getattr(request, "cycle_id", None),
+                            "asset_class": getattr(request, "asset_class", None),
+                            "account_id": getattr(request, "account_id", "default"),
+                            "subaccount_id": getattr(request, "subaccount_id", None),
+                            "time_in_force": getattr(request, "time_in_force", None),
+                            "limit_price": getattr(request, "limit_price", None),
+                            "stop_price": getattr(request, "stop_price", None),
+                            "sizing_mode": getattr(request, "sizing_mode", None),
+                            "notional_usd": getattr(request, "notional_usd", None),
+                            "units": getattr(request, "units", None),
+                            "unit_type": getattr(request, "unit_type", None),
+                            "price_hint_usd": getattr(request, "price_hint_usd", None),
+                            "leverage": getattr(request, "leverage", None),
+                            "reduce_only": getattr(request, "reduce_only", None),
+                            "margin_mode": getattr(request, "margin_mode", None),
+                            "short_sell": getattr(request, "short_sell", None),
+                            "extended_hours": getattr(request, "extended_hours", None),
+                            "buying_power_usd": getattr(request, "buying_power_usd", None),
+                            "available_balance_usd": getattr(request, "available_balance_usd", None),
+                        },
                     )
 
                     def _do_single_route():
@@ -1531,6 +1799,59 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.debug("ExecutionPipeline: could not load execution observer %s: %s", mod_name, exc)
         return None
+
+    @staticmethod
+    def _load_margin_position_ledger():
+        if get_margin_position_ledger is None:
+            return None
+        try:
+            return get_margin_position_ledger()
+        except Exception as exc:
+            logger.warning("ExecutionPipeline: margin position ledger unavailable: %s", exc)
+            return None
+
+    @staticmethod
+    def _load_broker_capability_registry():
+        if get_broker_capability_registry is None:
+            return None
+        try:
+            return get_broker_capability_registry()
+        except Exception as exc:
+            logger.warning("ExecutionPipeline: broker capability registry unavailable: %s", exc)
+            return None
+
+    def _gate_broker_capabilities(
+        self,
+        request: PipelineRequest,
+        t_start: float,
+    ) -> Optional[PipelineResult]:
+        registry = getattr(self, "_broker_capability_registry", None)
+        if registry is None:
+            return None
+        try:
+            allowed, reason = registry.validate_pre_dispatch(request)
+            if not allowed:
+                return self._deny(request, t_start, f"BrokerCapability deny: {reason}")
+        except Exception as exc:
+            return self._deny(request, t_start, f"BrokerCapability deny: registry_error:{exc}")
+        return None
+
+    def _start_margin_position_sync_loop(self) -> None:
+        margin_ledger = getattr(self, "_margin_position_ledger", None)
+        if margin_ledger is None:
+            return
+        poll_fn = None
+        if self._multi_router is not None and callable(getattr(self._multi_router, "get_margin_position_snapshots", None)):
+            poll_fn = self._multi_router.get_margin_position_snapshots
+        elif self._router is not None and callable(getattr(self._router, "get_margin_position_snapshots", None)):
+            poll_fn = self._router.get_margin_position_snapshots
+        if poll_fn is None:
+            return
+        try:
+            interval_s = float(os.getenv("NIJA_MARGIN_LEDGER_SYNC_INTERVAL_S", "30"))
+            margin_ledger.start_periodic_reconcile(poll_fn, interval_s=interval_s)
+        except Exception as exc:
+            logger.warning("ExecutionPipeline: margin position sync loop unavailable: %s", exc)
 
     @staticmethod
     def _load_downstream_guard():
