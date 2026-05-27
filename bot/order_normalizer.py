@@ -54,6 +54,19 @@ class NormalizedOrder:
     current_price: float = 0.0          # used to derive base qty when needed
     base_qty: float = 0.0               # base currency qty (overrides usd_size if > 0)
     size_type: str = "quote"            # "quote" (USD) | "base" (crypto amount)
+    asset_class: str = "crypto"
+    instrument_type: str = "spot"
+    quantity_mode: str = "usd"          # "usd" | "shares" | "contracts"
+    shares: float = 0.0
+    contracts: float = 0.0
+    account_type: str = ""
+    leverage: float = 1.0
+    reduce_only: bool = False
+    position_effect: str = ""
+    borrow_intent: str = ""
+    margin_mode: str = ""
+    time_in_force: str = ""
+    extended_hours: Optional[bool] = None
     extra: Dict = field(default_factory=dict)
 
 
@@ -65,6 +78,7 @@ class ExchangeOrder:
     size: float                         # amount in the exchange's expected denomination
     size_type: str                      # "quote" | "base"
     broker_name: str = ""
+    params: Dict = field(default_factory=dict)
     raw: NormalizedOrder = field(default_factory=lambda: NormalizedOrder("", "", 0.0))
 
 
@@ -86,6 +100,26 @@ class _BaseNormalizer:
     def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
         raise NotImplementedError
 
+    def _compile_margin_params(self, order: NormalizedOrder) -> Dict:
+        params: Dict[str, object] = {}
+        if order.account_type:
+            params["account_type"] = order.account_type
+        if order.leverage and order.leverage > 1:
+            params["leverage"] = float(order.leverage)
+        if order.reduce_only:
+            params["reduce_only"] = True
+        if order.position_effect:
+            params["position_effect"] = order.position_effect
+        if order.borrow_intent:
+            params["borrow_intent"] = order.borrow_intent
+        if order.margin_mode:
+            params["margin_mode"] = order.margin_mode
+        if order.time_in_force:
+            params["time_in_force"] = order.time_in_force
+        if order.extended_hours is not None:
+            params["extended_hours"] = bool(order.extended_hours)
+        return params
+
 
 class CoinbaseNormalizer(_BaseNormalizer):
     """Coinbase: symbol unchanged, size in USD (quote)."""
@@ -97,6 +131,7 @@ class CoinbaseNormalizer(_BaseNormalizer):
             size=order.usd_size,
             size_type="quote",
             broker_name=broker_name,
+            params=self._compile_margin_params(order),
             raw=order,
         )
 
@@ -117,6 +152,7 @@ class KrakenNormalizer(_BaseNormalizer):
             size=order.usd_size,
             size_type="quote",
             broker_name=broker_name,
+            params=self._compile_margin_params(order),
             raw=order,
         )
 
@@ -126,7 +162,7 @@ class AlpacaNormalizer(_BaseNormalizer):
 
     def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
         native_sym = order.symbol.replace("-", "/").upper()
-        qty = self._base_qty(order)
+        qty = order.shares if order.quantity_mode == "shares" and order.shares > 0 else self._base_qty(order)
         try:
             from bot.exchange_plugin import get_plugin_registry
             plugin = get_plugin_registry().get("alpaca")
@@ -140,6 +176,7 @@ class AlpacaNormalizer(_BaseNormalizer):
             size=qty,
             size_type="base",
             broker_name=broker_name,
+            params=self._compile_margin_params(order),
             raw=order,
         )
 
@@ -161,6 +198,7 @@ class BinanceNormalizer(_BaseNormalizer):
             size=size,
             size_type=size_type,
             broker_name=broker_name,
+            params=self._compile_margin_params(order),
             raw=order,
         )
 
@@ -184,6 +222,54 @@ class OKXNormalizer(_BaseNormalizer):
             size=size,
             size_type="base",
             broker_name=broker_name,
+            params=self._compile_margin_params(order),
+            raw=order,
+        )
+
+
+class EquityNormalizer(_BaseNormalizer):
+    """Equity normalizer: symbol passthrough + share/notional aware sizing."""
+
+    def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
+        params = self._compile_margin_params(order)
+        tif = order.time_in_force or "day"
+        params.setdefault("time_in_force", tif.lower())
+        if order.extended_hours is not None:
+            params["extended_hours"] = bool(order.extended_hours)
+
+        if order.quantity_mode == "shares" and order.shares > 0:
+            return ExchangeOrder(
+                symbol=order.symbol.upper(),
+                side=order.side.lower(),
+                size=float(order.shares),
+                size_type="base",
+                broker_name=broker_name,
+                params=params,
+                raw=order,
+            )
+
+        # Notional mode for fractional-friendly brokers.
+        if broker_name.lower() in {"alpaca", "alpaca_equity", "interactive_brokers_equity"}:
+            params["quantity_mode"] = "notional"
+            return ExchangeOrder(
+                symbol=order.symbol.upper(),
+                side=order.side.lower(),
+                size=float(order.usd_size),
+                size_type="quote",
+                broker_name=broker_name,
+                params=params,
+                raw=order,
+            )
+
+        qty = self._base_qty(order)
+        params["quantity_mode"] = "shares"
+        return ExchangeOrder(
+            symbol=order.symbol.upper(),
+            side=order.side.lower(),
+            size=qty,
+            size_type="base",
+            broker_name=broker_name,
+            params=params,
             raw=order,
         )
 
@@ -198,6 +284,7 @@ class PassthroughNormalizer(_BaseNormalizer):
             size=order.usd_size,
             size_type=order.size_type,
             broker_name=broker_name,
+            params=self._compile_margin_params(order),
             raw=order,
         )
 
@@ -212,6 +299,8 @@ _NORMALIZERS: Dict[str, _BaseNormalizer] = {
     "alpaca": AlpacaNormalizer(),
     "binance": BinanceNormalizer(),
     "okx": OKXNormalizer(),
+    "alpaca_equity": EquityNormalizer(),
+    "interactive_brokers_equity": EquityNormalizer(),
 }
 
 
@@ -243,6 +332,7 @@ class OrderNormalizer:
         quantity: float,
         size_type: str = "quote",
         current_price: float = 0.0,
+        **kwargs,
     ) -> ExchangeOrder:
         """Convenience: build a :class:`NormalizedOrder` from raw broker-call args
         and normalise it in one step.
@@ -254,6 +344,23 @@ class OrderNormalizer:
             base_qty=quantity if size_type == "base" else 0.0,
             size_type=size_type,
             current_price=current_price,
+            asset_class=str(kwargs.get("asset_class") or "crypto"),
+            instrument_type=str(kwargs.get("instrument_type") or "spot"),
+            quantity_mode=str(kwargs.get("quantity_mode") or ("usd" if size_type == "quote" else "base")),
+            shares=float(kwargs.get("quantity") or kwargs.get("shares") or 0.0) if str(kwargs.get("quantity_mode")) == "shares" else float(kwargs.get("shares") or 0.0),
+            contracts=float(kwargs.get("contracts") or 0.0),
+            account_type=str(kwargs.get("account_type") or ""),
+            leverage=float(kwargs.get("leverage") or 1.0),
+            reduce_only=bool(kwargs.get("reduce_only", False)),
+            position_effect=str(kwargs.get("position_effect") or ""),
+            borrow_intent=str(kwargs.get("borrow_intent") or ""),
+            margin_mode=str(kwargs.get("margin_mode") or ""),
+            time_in_force=str(kwargs.get("time_in_force") or ""),
+            extended_hours=kwargs.get("extended_hours"),
+            extra={
+                "quantity_mode": kwargs.get("quantity_mode"),
+                "asset_class": kwargs.get("asset_class"),
+            },
         )
         return OrderNormalizer().normalize(broker_name, raw)
 

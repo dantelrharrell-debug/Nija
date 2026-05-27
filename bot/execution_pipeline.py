@@ -186,6 +186,23 @@ except ImportError:
     except ImportError:
         get_seak = None  # type: ignore[assignment]
 
+try:
+    from bot.margin_health_gate import MarginHealthGate, MarginHealthSnapshot
+except ImportError:
+    try:
+        from margin_health_gate import MarginHealthGate, MarginHealthSnapshot  # type: ignore[import]
+    except ImportError:
+        MarginHealthGate = None  # type: ignore[assignment]
+        MarginHealthSnapshot = None  # type: ignore[assignment]
+
+try:
+    from bot.exchange_capabilities import EXCHANGE_CAPABILITIES
+except ImportError:
+    try:
+        from exchange_capabilities import EXCHANGE_CAPABILITIES  # type: ignore[import]
+    except ImportError:
+        EXCHANGE_CAPABILITIES = None  # type: ignore[assignment]
+
 # Optional import — used for cycle_id cross-validation at dispatch time.
 # The pipeline must remain importable even when nija_core_loop is absent.
 def _get_pipeline_cycle_snapshot():
@@ -215,6 +232,10 @@ class PipelineRequest:
     strategy: str = ""
     order_type: Optional[str] = None
     asset_class: Optional[str] = None
+    instrument_type: Optional[str] = None
+    quantity_mode: str = "usd"
+    shares: Optional[float] = None
+    contracts: Optional[float] = None
     preferred_broker: Optional[str] = None
     available_balance_usd: Optional[float] = None
     price_hint_usd: Optional[float] = None
@@ -223,6 +244,18 @@ class PipelineRequest:
     volume_24h_usd: Optional[float] = None
     volatility_pct: Optional[float] = None
     account_id: str = "default"
+    account_type: Optional[str] = None
+    leverage: Optional[float] = None
+    reduce_only: bool = False
+    position_effect: Optional[str] = None
+    borrow_intent: Optional[str] = None
+    margin_mode: Optional[str] = None
+    maintenance_margin_ratio: Optional[float] = None
+    liquidation_buffer_ratio: Optional[float] = None
+    borrow_available: Optional[bool] = None
+    time_in_force: Optional[str] = None
+    extended_hours: Optional[bool] = None
+    strategy_metadata: Dict[str, Any] = field(default_factory=dict)
     validated: bool = False
 
 
@@ -315,6 +348,8 @@ class ExecutionPipeline:
         self._throttler = self._load_throttler()
         self._router = self._load_router()
         self._multi_router = self._load_multi_router()
+        self._margin_health_gate = self._load_margin_health_gate()
+        self._capability_matrix = EXCHANGE_CAPABILITIES
         self._ecel = self._load_ecel()
         self._downstream_guard = self._load_downstream_guard()
         self._start_ecel_background_refresh()
@@ -581,12 +616,28 @@ class ExecutionPipeline:
 
         if self._exchange_normalizer is not None:
             try:
+                quantity_value = working_request.size_usd
+                if working_request.quantity_mode == "shares" and working_request.shares is not None:
+                    quantity_value = float(working_request.shares)
+                elif working_request.quantity_mode == "contracts" and working_request.contracts is not None:
+                    quantity_value = float(working_request.contracts)
                 normalized = self._exchange_normalizer.normalize(
                     symbol=working_request.symbol,
                     side=self._normalise_side(working_request.side),
                     broker=(working_request.preferred_broker or "coinbase"),
                     size_usd=working_request.size_usd,
                     price_hint_usd=working_request.price_hint_usd,
+                    asset_class=working_request.asset_class,
+                    quantity_mode=working_request.quantity_mode,
+                    quantity=quantity_value,
+                    account_type=working_request.account_type,
+                    leverage=working_request.leverage,
+                    reduce_only=working_request.reduce_only,
+                    position_effect=working_request.position_effect,
+                    borrow_intent=working_request.borrow_intent,
+                    margin_mode=working_request.margin_mode,
+                    time_in_force=working_request.time_in_force,
+                    extended_hours=working_request.extended_hours,
                 )
                 if not normalized.accepted:
                     return PipelineResult(
@@ -599,13 +650,85 @@ class ExecutionPipeline:
                     )
                 working_request = replace(
                     working_request,
-                    symbol=normalized.symbol,
+                    symbol=normalized.native_symbol or normalized.symbol,
                     side=normalized.side,
                     size_usd=normalized.normalized_notional_usd,
                     preferred_broker=normalized.broker,
                 )
             except Exception as exc:
                 logger.warning("ExecutionPipeline: exchange normalizer failed: %s", exc)
+
+        capability_matrix = getattr(self, "_capability_matrix", None)
+        broker_for_caps = (working_request.preferred_broker or "coinbase").lower()
+        if capability_matrix is not None:
+            try:
+                allowed, reason = capability_matrix.enforce_order_capabilities(
+                    broker=broker_for_caps,
+                    symbol=working_request.symbol,
+                    side=self._normalise_side(working_request.side),
+                    asset_class=working_request.asset_class,
+                    account_type=working_request.account_type,
+                    leverage=working_request.leverage,
+                    margin_mode=working_request.margin_mode,
+                )
+                if not allowed:
+                    return PipelineResult(
+                        success=False,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size_usd=working_request.size_usd,
+                        error=f"CapabilityMatrix reject: {reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: capability check failed: %s", exc)
+
+        margin_gate = getattr(self, "_margin_health_gate", None)
+        margin_requested = bool(
+            working_request.margin_mode
+            or working_request.leverage
+            or working_request.borrow_intent
+            or working_request.account_type == "margin"
+        )
+        if margin_requested and margin_gate is not None:
+            try:
+                snapshot = None
+                if MarginHealthSnapshot is not None:
+                    snapshot = MarginHealthSnapshot(
+                        buying_power_usd=float(
+                            working_request.available_balance_usd
+                            if working_request.available_balance_usd is not None
+                            else 0.0
+                        ),
+                        maintenance_margin_ratio=float(working_request.maintenance_margin_ratio or 0.0),
+                        liquidation_buffer_ratio=float(
+                            1.0 if working_request.liquidation_buffer_ratio is None
+                            else working_request.liquidation_buffer_ratio
+                        ),
+                        borrow_available=bool(
+                            True if working_request.borrow_available is None
+                            else working_request.borrow_available
+                        ),
+                    )
+                decision = margin_gate.assess(
+                    requested_notional_usd=float(working_request.size_usd),
+                    side=self._normalise_side(working_request.side),
+                    leverage=working_request.leverage,
+                    reduce_only=working_request.reduce_only,
+                    borrow_intent=working_request.borrow_intent,
+                    snapshot=snapshot,
+                )
+                if not decision.allowed:
+                    return PipelineResult(
+                        success=False,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size_usd=working_request.size_usd,
+                        error=f"MarginHealthGate reject: {decision.reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+            except Exception as exc:
+                logger.warning("ExecutionPipeline: margin health gate failed: %s", exc)
 
         if self._pre_trade_risk_engine is not None:
             try:
@@ -1205,6 +1328,21 @@ class ExecutionPipeline:
                         size_usd=request.size_usd,
                         asset_class=request.asset_class or "",
                         preferred_broker=request.preferred_broker or "",
+                        metadata={
+                            "instrument_type": request.instrument_type or "",
+                            "quantity_mode": request.quantity_mode,
+                            "shares": request.shares,
+                            "contracts": request.contracts,
+                            "account_type": request.account_type,
+                            "leverage": request.leverage,
+                            "reduce_only": request.reduce_only,
+                            "position_effect": request.position_effect,
+                            "borrow_intent": request.borrow_intent,
+                            "margin_mode": request.margin_mode,
+                            "time_in_force": request.time_in_force,
+                            "extended_hours": request.extended_hours,
+                            "strategy_metadata": dict(request.strategy_metadata or {}),
+                        },
                     )
 
                     def _do_multi_route():
@@ -1336,6 +1474,15 @@ class ExecutionPipeline:
             except Exception as exc:
                 logger.debug("ExecutionPipeline: could not load %s: %s", mod_name, exc)
         return None
+
+    @staticmethod
+    def _load_margin_health_gate():
+        if MarginHealthGate is None:
+            return None
+        try:
+            return MarginHealthGate()
+        except Exception:
+            return None
 
     @staticmethod
     def _load_pre_trade_risk_engine():
