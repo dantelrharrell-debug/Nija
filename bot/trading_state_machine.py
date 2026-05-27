@@ -1924,10 +1924,22 @@ class TradingStateMachine:
 
         # ── Gate 1.5: authority + runtime safety probes are sampled once ──────
         authority_ready = _is_authority_ready()
-        if not authority_ready:
+        if (
+            not authority_ready
+            and current == TradingState.OFF
+            and _live_activation_intent
+        ):
+            try:
+                self.transition_to(
+                    TradingState.LIVE_PENDING_CONFIRMATION,
+                    "commit_activation: authority pending, awaiting gate convergence",
+                )
+            except Exception as _pending_arm_err:
+                logger.debug(
+                    "commit_activation: authority-pending arming skipped: %s",
+                    _pending_arm_err,
+                )
             with self._lock:
-                if self._current_state == TradingState.OFF:
-                    self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
                 current = self._current_state
 
         # ── Gate 2: kill switch must be inactive ─────────────────────────
