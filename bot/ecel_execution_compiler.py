@@ -8,9 +8,8 @@ exchange-valid order payload with deterministic rejection reasons.
 Goals
 -----
 1. Maintain a canonical Coinbase + Kraken contract schema map.
-2. Reserve balance before dispatch to avoid overlapping capital commitments.
-3. Compile quantity and price to exchange step-size and precision rules.
-4. Produce deterministic pre-trade rejections before a broker API call.
+2. Compile quantity and price to exchange step-size and precision rules.
+3. Produce deterministic compiler outputs for broker-native payload mapping.
 """
 
 from __future__ import annotations
@@ -56,7 +55,13 @@ class CompileRequest:
     side: str
     order_type: str
     desired_notional_usd: float
-    available_balance_usd: Optional[float] = None
+    sizing_mode: Optional[str] = None
+    desired_units: Optional[float] = None
+    unit_type: Optional[str] = None
+    leverage: Optional[int] = None
+    reduce_only: Optional[bool] = None
+    margin_mode: Optional[str] = None
+    intent_type: Optional[str] = None
     price_hint_usd: Optional[float] = None
     account_id: str = "default"
 
@@ -450,10 +455,9 @@ class PrecisionCompiler:
 
 
 # ---------------------------------------------------------------------------
-# Fee and safety constants — used for balance-aware sizing
+# Compiler constants
 # ---------------------------------------------------------------------------
 _FEE_RATE: Decimal = Decimal(os.getenv("ECEL_FEE_RATE", "0.006"))          # 0.6% worst-case taker fee
-_BALANCE_SAFETY_FACTOR: Decimal = Decimal(os.getenv("ECEL_SAFETY_FACTOR", "0.985"))  # 1.5% buffer on top of fee
 
 
 class ECELExecutionCompiler:
@@ -461,7 +465,6 @@ class ECELExecutionCompiler:
 
     def __init__(self) -> None:
         self.schema = ContractSchemaMap()
-        self.reservations = PreTradeBalanceReservationSystem()
         self.precision = PrecisionCompiler()
         self._require_price_hint = os.getenv("ECEL_REQUIRE_PRICE_HINT", "true").strip().lower() in (
             "1", "true", "yes"
@@ -519,7 +522,6 @@ class ECELExecutionCompiler:
         price_step: Decimal,
         min_qty: Decimal,
         min_notional: Decimal,
-        balance: Optional[Decimal],
     ) -> Optional[str]:
         """Return a rejection code string if any invariant is violated, else None."""
         if qty <= 0 or price <= 0:
@@ -532,10 +534,6 @@ class ECELExecutionCompiler:
             return "DUST_ORDER"
         if qty * price < min_notional:
             return "BELOW_MIN_NOTIONAL"
-        if balance is not None:
-            effective_cost = qty * price * (Decimal("1") + _FEE_RATE)
-            if effective_cost > balance:
-                return "INSUFFICIENT_FUNDS"
         return None
 
     @staticmethod
@@ -575,24 +573,15 @@ class ECELExecutionCompiler:
                                 desired_notional_usd=req.desired_notional_usd)
 
         # ---------------------------------------------------------------------------
-        # Diagnostic: emit a WARNING when the available balance is below the minimum
-        # notional required by the exchange — this would produce DUST_ORDER / BELOW_MIN_NOTIONAL
-        # rejections further down the compile path.
-        # ---------------------------------------------------------------------------
-        if req.available_balance_usd is not None:
-            if req.available_balance_usd < rule.min_notional_usd:
-                logger.warning(
-                    "ECEL_BALANCE_BELOW_MIN broker=%s symbol=%s "
-                    "available_balance=%.4f USD min_notional=%.2f USD "
-                    "— order will be rejected; top up account or increase size",
-                    broker, symbol,
-                    req.available_balance_usd, rule.min_notional_usd,
-                )
-
-        # ---------------------------------------------------------------------------
         # Step 1: Establish working notional (at least min notional)
         # ---------------------------------------------------------------------------
-        compiled_notional = float(max(desired_notional, self._to_decimal(rule.min_notional_usd)))
+        if (req.sizing_mode or "").lower() == "units" and req.desired_units is not None:
+            raw_units = self._to_decimal(req.desired_units)
+            if raw_units <= 0:
+                return self._reject("ZERO_UNITS", broker, symbol, side, rule, desired_units=req.desired_units)
+            compiled_notional = float(raw_units * self._to_decimal(req.price_hint_usd or 0.0))
+        else:
+            compiled_notional = float(max(desired_notional, self._to_decimal(rule.min_notional_usd)))
 
         compiled_price: Optional[float] = None
         compiled_base: Optional[float] = None
@@ -630,67 +619,24 @@ class ECELExecutionCompiler:
             )
 
         # ---------------------------------------------------------------------------
-        # Step 4: Balance-aware sizing (fee + safety buffer prevents INSUFFICIENT_FUNDS)
-        # ---------------------------------------------------------------------------
-        balance_d: Optional[Decimal] = None
-        if req.available_balance_usd is not None and req.available_balance_usd > 0:
-            balance_d = Decimal(str(req.available_balance_usd))
-            usable = balance_d * _BALANCE_SAFETY_FACTOR          # e.g. 98.5% of balance
-            price_d = Decimal(str(compiled_price))
-            step_d = Decimal(str(rule.base_step_size))
-
-            max_affordable = usable / price_d
-            compiled_base_d = Decimal(str(compiled_base))
-
-            if compiled_base_d > max_affordable:
-                # Floor to the largest affordable step-aligned quantity
-                if step_d > 0:
-                    units = (max_affordable / step_d).to_integral_value(rounding=ROUND_DOWN)
-                    compiled_base_d = (units * step_d).quantize(
-                        Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN
-                    )
-                else:
-                    compiled_base_d = max_affordable.quantize(
-                        Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN
-                    )
-
-            # Secondary check: ensure effective cost (with fee) fits the raw balance
-            effective_cost = compiled_base_d * price_d * (Decimal("1") + _FEE_RATE)
-            if effective_cost > balance_d:
-                if step_d > 0:
-                    units = (balance_d / (price_d * (Decimal("1") + _FEE_RATE)) / step_d).to_integral_value(
-                        rounding=ROUND_DOWN
-                    )
-                    compiled_base_d = (units * step_d).quantize(
-                        Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN
-                    )
-                else:
-                    compiled_base_d = (
-                        balance_d / (price_d * (Decimal("1") + _FEE_RATE))
-                    ).quantize(Decimal(10) ** -rule.base_precision, rounding=ROUND_DOWN)
-
-            compiled_base = float(compiled_base_d)
-
-        # ---------------------------------------------------------------------------
-        # Step 5: Dust prevention — hard floor at min_base_size
+        # Step 4: Dust prevention — hard floor at min_base_size
         # ---------------------------------------------------------------------------
         if compiled_base < rule.min_base_size:
             return self._reject(
                 "DUST_ORDER", broker, symbol, side, rule,
                 attempted_qty=compiled_base,
                 min_required=rule.min_base_size,
-                available_balance_usd=req.available_balance_usd,
             )
 
         # ---------------------------------------------------------------------------
-        # Step 6: Recompute final notional
+        # Step 5: Recompute final notional
         # ---------------------------------------------------------------------------
         compiled_notional = float(
             Decimal(str(compiled_base)) * Decimal(str(compiled_price))
         )
 
         # ---------------------------------------------------------------------------
-        # Step 7: Min-notional gate
+        # Step 6: Min-notional gate
         # ---------------------------------------------------------------------------
         if compiled_notional < rule.min_notional_usd:
             return self._reject(
@@ -701,7 +647,7 @@ class ECELExecutionCompiler:
             )
 
         # ---------------------------------------------------------------------------
-        # Step 8: Pre-flight assertion — reject-proof guarantee before exchange
+        # Step 7: Pre-flight assertion — deterministic compile invariant checks
         # ---------------------------------------------------------------------------
         pf_err = self._preflight_assert(
             qty=Decimal(str(compiled_base)),
@@ -710,36 +656,16 @@ class ECELExecutionCompiler:
             price_step=Decimal(str(rule.price_step_size)),
             min_qty=Decimal(str(rule.min_base_size)),
             min_notional=Decimal(str(rule.min_notional_usd)),
-            balance=balance_d,
         )
         if pf_err is not None:
             return self._reject(
                 pf_err, broker, symbol, side, rule,
                 qty=compiled_base,
                 price=compiled_price,
-                balance=req.available_balance_usd,
             )
 
         # ---------------------------------------------------------------------------
-        # Step 9: Capital reservation
-        # ---------------------------------------------------------------------------
-        reservation_id = None
-        if req.available_balance_usd is not None:
-            ok, message, reservation_id = self.reservations.reserve(
-                account_id=req.account_id,
-                broker=broker,
-                symbol=symbol,
-                amount_usd=compiled_notional,
-                total_balance_usd=req.available_balance_usd,
-            )
-            if not ok:
-                return self._reject(
-                    f"RESERVATION_REJECTED:{message}", broker, symbol, side, rule,
-                    compiled_notional=compiled_notional,
-                )
-
-        # ---------------------------------------------------------------------------
-        # Step 10: Build immutable CompiledOrder — the single execution truth
+        # Step 8: Build immutable CompiledOrder — the single execution truth
         # ---------------------------------------------------------------------------
         compiled_order = CompiledOrder(
             symbol=symbol,
@@ -751,11 +677,10 @@ class ECELExecutionCompiler:
         )
 
         logger.info(
-            "✅ ECEL ACCEPTED | %s %s  qty=%s  price=%s  notional=$%.4f  reservation=%s",
+            "✅ ECEL ACCEPTED | %s %s  qty=%s  price=%s  notional=$%.4f",
             side.upper(), symbol,
             compiled_order.qty, compiled_order.price,
             compiled_notional,
-            reservation_id or "none",
         )
 
         return CompileResult(
@@ -767,7 +692,7 @@ class ECELExecutionCompiler:
             compiled_notional_usd=compiled_notional,
             compiled_base_size=compiled_base,
             compiled_price_usd=compiled_price,
-            reservation_id=reservation_id,
+            reservation_id=None,
             rule=rule,
             compiled_order=compiled_order,
             diagnostics={
@@ -776,12 +701,11 @@ class ECELExecutionCompiler:
                 "base_step_size": rule.base_step_size,
                 "price_step_size": rule.price_step_size,
                 "fee_rate": float(_FEE_RATE),
-                "balance_safety_factor": float(_BALANCE_SAFETY_FACTOR),
             },
         )
 
     def release_reservation(self, reservation_id: Optional[str]) -> None:
-        self.reservations.release(reservation_id)
+        _ = reservation_id
 
 
 _INSTANCE: Optional[ECELExecutionCompiler] = None

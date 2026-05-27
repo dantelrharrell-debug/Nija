@@ -1935,7 +1935,9 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote',
-                          leverage: int = 1) -> Optional[Dict]:
+                          leverage: int = 1,
+                          reduce_only: Optional[bool] = None,
+                          margin_mode: Optional[str] = None) -> Optional[Dict]:
         """
         Place market order on Kraken with comprehensive validation.
 
@@ -2136,18 +2138,20 @@ class KrakenBrokerAdapter(BrokerInterface):
                 try:
                     from bot.kraken_margin_engine import get_margin_engine
                     _me = get_margin_engine()
-                    _is_sell = side.lower() == 'sell'
+                    _is_reducing = bool(reduce_only) if reduce_only is not None else (side.lower() == 'sell')
                     _allowed, _reason = _me.is_margin_trade_allowed(
-                        is_reducing=_is_sell, adapter=self
+                        is_reducing=_is_reducing, adapter=self
                     )
                     if _allowed:
                         _margin_fragment = _me.build_order_margin_params(
-                            leverage, is_reducing=_is_sell
+                            leverage, is_reducing=_is_reducing
                         )
+                        if margin_mode in ("cross", "isolated"):
+                            _margin_fragment["margin_mode"] = margin_mode
                         order_params.update(_margin_fragment)
                         logger.info(
                             "📐 Margin order: leverage=%s reducing=%s params=%s",
-                            leverage, _is_sell, _margin_fragment,
+                            leverage, _is_reducing, _margin_fragment,
                         )
                     else:
                         logger.warning(
@@ -2363,7 +2367,9 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def place_limit_order(self, symbol: str, side: str, size: float,
                          price: float, size_type: str = 'quote',
-                         leverage: int = 1) -> Optional[Dict]:
+                         leverage: int = 1,
+                         reduce_only: Optional[bool] = None,
+                         margin_mode: Optional[str] = None) -> Optional[Dict]:
         """
         Place limit order on Kraken with comprehensive validation.
 
@@ -2474,18 +2480,20 @@ class KrakenBrokerAdapter(BrokerInterface):
                 try:
                     from bot.kraken_margin_engine import get_margin_engine
                     _me = get_margin_engine()
-                    _is_sell = side.lower() == 'sell'
+                    _is_reducing = bool(reduce_only) if reduce_only is not None else (side.lower() == 'sell')
                     _allowed, _reason = _me.is_margin_trade_allowed(
-                        is_reducing=_is_sell, adapter=self
+                        is_reducing=_is_reducing, adapter=self
                     )
                     if _allowed:
                         _margin_fragment = _me.build_order_margin_params(
-                            leverage, is_reducing=_is_sell
+                            leverage, is_reducing=_is_reducing
                         )
+                        if margin_mode in ("cross", "isolated"):
+                            _margin_fragment["margin_mode"] = margin_mode
                         order_params.update(_margin_fragment)
                         logger.info(
                             "📐 Margin limit order: leverage=%s reducing=%s params=%s",
-                            leverage, _is_sell, _margin_fragment,
+                            leverage, _is_reducing, _margin_fragment,
                         )
                     else:
                         logger.warning(
