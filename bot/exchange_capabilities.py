@@ -510,6 +510,49 @@ class ExchangeCapabilityMatrix:
 
         return "\n".join(lines)
 
+    def enforce_order_capabilities(
+        self,
+        *,
+        broker: str,
+        symbol: str,
+        side: str,
+        asset_class: Optional[str] = None,
+        account_type: Optional[str] = None,
+        leverage: Optional[float] = None,
+        margin_mode: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        market_mode = self._detect_market_mode(symbol)
+        if margin_mode and str(margin_mode).lower() not in {"spot", "none"}:
+            market_mode = MarketMode.MARGIN
+        if asset_class and str(asset_class).lower() == "futures":
+            market_mode = MarketMode.FUTURES
+
+        caps = self.get_capabilities(broker, market_mode)
+        if caps is None:
+            return False, f"missing_capability_matrix:{broker}:{market_mode.value}"
+
+        side_lower = side.lower()
+        if side_lower in {"sell", "short"} and not caps.supports_short:
+            return False, f"short_not_supported:{broker}:{market_mode.value}"
+        if side_lower in {"buy", "long"} and not caps.supports_long:
+            return False, f"long_not_supported:{broker}:{market_mode.value}"
+
+        if leverage is not None:
+            if leverage > 1.0 and not caps.supports_leverage:
+                return False, f"leverage_not_supported:{broker}:{market_mode.value}"
+            if leverage > caps.max_leverage:
+                return False, f"leverage_exceeds_max:{leverage}>{caps.max_leverage}"
+
+        if caps.requires_margin_account:
+            account_type_lower = (account_type or "").lower()
+            if account_type_lower and account_type_lower not in {"margin", "portfolio_margin"}:
+                return False, f"margin_account_required:{broker}:{market_mode.value}"
+
+        if margin_mode and str(margin_mode).lower() not in {"spot", "none"} and not caps.supports_margin and market_mode != MarketMode.FUTURES:
+            return False, f"margin_not_supported:{broker}:{market_mode.value}"
+
+        return True, "ok"
+
 
 # Global instance
 EXCHANGE_CAPABILITIES = ExchangeCapabilityMatrix()

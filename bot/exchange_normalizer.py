@@ -39,6 +39,17 @@ class ExchangeNormalizer:
         broker: str,
         size_usd: float,
         price_hint_usd: Optional[float] = None,
+        asset_class: Optional[str] = None,
+        quantity_mode: str = "usd",
+        quantity: Optional[float] = None,
+        account_type: Optional[str] = None,
+        leverage: Optional[float] = None,
+        reduce_only: bool = False,
+        position_effect: Optional[str] = None,
+        borrow_intent: Optional[str] = None,
+        margin_mode: Optional[str] = None,
+        time_in_force: Optional[str] = None,
+        extended_hours: Optional[bool] = None,
     ) -> ExchangeNormalizationResult:
         broker_name = (broker or "coinbase").lower()
         normalized_notional = round(float(size_usd), 2)
@@ -52,11 +63,18 @@ class ExchangeNormalizer:
                 outcome = self._validator.validate_and_normalize(
                     symbol=symbol,
                     side=side,
-                    quantity=normalized_notional,
+                    quantity=float(quantity if quantity is not None else normalized_notional),
                     price=float(price_hint_usd or 0.0),
-                    size_type="quote",
+                    size_type="base" if quantity_mode in {"shares", "contracts", "base"} else "quote",
+                    asset_class=asset_class,
+                    quantity_mode=quantity_mode,
+                    time_in_force=time_in_force,
+                    extended_hours=extended_hours,
                 )
-                normalized_notional = float(outcome.adjusted_qty)
+                if quantity_mode in {"shares", "contracts", "base"}:
+                    normalized_notional = round(float(outcome.adjusted_qty) * float(price_hint_usd or 0.0), 2)
+                else:
+                    normalized_notional = float(outcome.adjusted_qty)
                 adjustments.extend(list(outcome.adjustments or []))
                 if not outcome.is_valid:
                     return ExchangeNormalizationResult(
@@ -81,13 +99,25 @@ class ExchangeNormalizer:
                     broker_name=broker_name,
                     symbol=symbol,
                     side=side,
-                    quantity=normalized_notional,
-                    size_type="quote",
+                    quantity=float(quantity if quantity is not None else normalized_notional),
+                    size_type="base" if quantity_mode in {"shares", "contracts", "base"} else "quote",
                     current_price=float(price_hint_usd or 0.0),
+                    asset_class=asset_class,
+                    quantity_mode=quantity_mode,
+                    account_type=account_type,
+                    leverage=leverage,
+                    reduce_only=reduce_only,
+                    position_effect=position_effect,
+                    borrow_intent=borrow_intent,
+                    margin_mode=margin_mode,
+                    time_in_force=time_in_force,
+                    extended_hours=extended_hours,
                 )
                 native_symbol = native.symbol
                 native_size = float(native.size)
                 native_size_type = native.size_type
+                if native.raw.extra:
+                    adjustments.extend([f"native:{k}" for k in sorted(native.raw.extra.keys())])
             except Exception as exc:
                 logger.warning("ExchangeNormalizer: order normalization failed for %s: %s", symbol, exc)
 
@@ -102,6 +132,18 @@ class ExchangeNormalizer:
             native_size=native_size,
             native_size_type=native_size_type,
             adjustments=adjustments,
+            details={
+                "asset_class": asset_class or "",
+                "quantity_mode": quantity_mode,
+                "account_type": account_type or "",
+                "leverage": leverage,
+                "reduce_only": bool(reduce_only),
+                "position_effect": position_effect or "",
+                "borrow_intent": borrow_intent or "",
+                "margin_mode": margin_mode or "",
+                "time_in_force": time_in_force or "",
+                "extended_hours": bool(extended_hours) if extended_hours is not None else None,
+            },
         )
 
     @staticmethod
