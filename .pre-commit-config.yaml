@@ -170,6 +170,14 @@ repos:
         files: \.py$
         stages: [pre-commit]
 
+      - id: check-direct-broker-execution
+        name: Enforce ExecutionPipeline routing
+        entry: python .pre-commit-hooks/check-direct-broker-exec.py
+        language: system
+        pass_filenames: false
+        files: \.py$
+        stages: [pre-commit]
+
       - id: risk_freeze_check
         name: 🔒 RISK FREEZE - Check for unauthorized risk parameter changes
         entry: python .pre-commit-hooks/risk_freeze_check.py

@@ -19,11 +19,11 @@ Architecture
 Signal flow
 -----------
     Platform account executes a trade →
-        trade_signal_emitter.emit() / broker.execute_order() →
+        trade_signal_emitter.emit() / ExecutionPipeline submit helper →
             copy_engine.broadcast(signal) →
                 for each connected user:
                     size = allocator.compute_user_size(user_id, platform_size_usd)
-                    user_broker.execute_order(symbol, side, size, size_type="quote")
+                    submit_market_order_via_pipeline(...)
                     ledger.record_copy_trade(...)
 
 Usage
@@ -69,6 +69,14 @@ logger = logging.getLogger("nija.copy_trade_engine")
 
 #: Maximum characters stored for error messages in audit records.
 _MAX_ERROR_LENGTH = 120
+
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline  # type: ignore[import]
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +195,7 @@ class CopyTradeEngine:
         3. For every connected user broker on the target exchange:
            a. Compute proportional size via ``CrossAccountCapitalAllocator``.
            b. Skip if size is below minimum or allocation is not approved.
-           c. Execute ``broker.execute_order(symbol, side, size, size_type="quote")``.
+           c. Execute via ``submit_market_order_via_pipeline(...)``.
            d. Record the result to ``TradeLedgerDB``.
         4. Return a list of :class:`CopyResult` objects.
 
@@ -289,12 +297,20 @@ class CopyTradeEngine:
 
                 # -- b. Execute order ------------------------------------
                 try:
-                    order_result = broker.execute_order(
-                        symbol=signal.symbol,
-                        side=signal.side,
-                        quantity=size_usd,
-                        size_type="quote",
-                    )
+                    if submit_market_order_via_pipeline is None:
+                        order_result = {
+                            "status": "error",
+                            "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
+                        }
+                    else:
+                        order_result = submit_market_order_via_pipeline(
+                            broker=broker,
+                            symbol=signal.symbol,
+                            side=signal.side,
+                            quantity=size_usd,
+                            size_type="quote",
+                            strategy="CopyTradeEngine",
+                        )
                     is_dict = isinstance(order_result, dict)
                     status = order_result.get("status", "unknown") if is_dict else "unknown"
                     user_order_id = order_result.get("order_id", "") if is_dict else ""

@@ -116,6 +116,14 @@ except ImportError:
         _GCM_AVAILABLE = False
         get_global_capital_manager = None  # type: ignore[assignment]
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline  # type: ignore[import]
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Data structures (non-default fields FIRST)
@@ -435,12 +443,20 @@ class SignalBroadcaster:
             )
             self._account_last_exec_ts[account.account_id] = time.monotonic()
 
-            order = broker.execute_order(
-                symbol=symbol,
-                side=side,
-                quantity=size,
-                size_type="quote",
-            )
+            if submit_market_order_via_pipeline is None:
+                order = {
+                    "status": "error",
+                    "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
+                }
+            else:
+                order = submit_market_order_via_pipeline(
+                    broker=broker,
+                    symbol=symbol,
+                    side=side,
+                    quantity=size,
+                    size_type="quote",
+                    strategy="SignalBroadcaster",
+                )
 
             status = order.get("status", "error") if order else "error"
             if status in ("filled", "open", "pending"):
