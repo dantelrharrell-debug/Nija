@@ -7,7 +7,9 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional
+import json
+from dataclasses import asdict, dataclass
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger("nija.margin_position_ledger")
 
@@ -201,15 +203,59 @@ class MarginPositionLedger:
         )
 
     def get_record(
-import json
-import logging
-import os
-import threading
-import time
-from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Tuple
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        subaccount_id: str,
+        symbol: str,
+        asset_class: str,
+    ) -> Dict[str, Any]:
+        identity = {
+            "broker": str(broker or "coinbase").strip().lower() or "coinbase",
+            "account_id": str(account_id or "default").strip() or "default",
+            "subaccount_id": str(subaccount_id or "").strip(),
+            "symbol": str(symbol or "").strip().upper(),
+            "asset_class": str(asset_class or "crypto").strip().lower() or "crypto",
+        }
+        with self._connect() as conn:
+            row = self._get_row(conn.cursor(), **identity)
+            return self._row_to_dict(row)
 
-logger = logging.getLogger("nija.margin_ledger")
+    def reconcile_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
+        return self.reconcile_positions(**kwargs)
+
+    def start_periodic_reconcile(
+        self,
+        poll_fn: Callable[[], Iterable[Dict[str, Any]]],
+        *,
+        interval_s: float = 30.0,
+    ) -> None:
+        if self._sync_thread and self._sync_thread.is_alive():
+            return
+        self._sync_stop.clear()
+
+        def _worker() -> None:
+            while not self._sync_stop.is_set():
+                try:
+                    snapshots = poll_fn() or []
+                    for snapshot in snapshots:
+                        try:
+                            self.reconcile_positions(**dict(snapshot))
+                        except Exception as exc:
+                            logger.debug("margin ledger reconcile failed: %s", exc)
+                except Exception as exc:
+                    logger.debug("margin ledger poll failed: %s", exc)
+                self._sync_stop.wait(max(1.0, float(interval_s or 30.0)))
+
+        self._sync_thread = threading.Thread(target=_worker, name="nija-margin-ledger-sync", daemon=True)
+        self._sync_thread.start()
+
+    def stop_periodic_reconcile(self) -> None:
+        self._sync_stop.set()
+        if self._sync_thread and self._sync_thread.is_alive():
+            self._sync_thread.join(timeout=1.0)
+        self._sync_thread = None
 
 
 @dataclass
@@ -260,8 +306,7 @@ class MarginRiskSnapshot:
     ts: float
 
 
-class MarginPositionLedger:
-    """Broker-agnostic margin/position ledger; authoritative risk truth source."""
+class MarginPositionTracker:
 
     def __init__(self, *, persist_path: Optional[str] = None, stale_after_s: float = 45.0) -> None:
         self._lock = threading.RLock()
@@ -484,6 +529,10 @@ class MarginPositionLedger:
             return self._row_to_dict(self._get_row(cursor, **identity))
 
     def reconcile_snapshot(
+        self,
+        *,
+        broker: str,
+        account_id: str,
         symbol: str,
         position_id: str,
         side: str,
@@ -651,22 +700,13 @@ class MarginPositionLedger:
         self._sync_stop.set()
         if self._sync_thread and self._sync_thread.is_alive():
             self._sync_thread.join(timeout=1.0)
+        self._sync_thread = None
 
-
-_LEDGER_SINGLETON: Optional[MarginPositionLedger] = None
-_LEDGER_SINGLETON_LOCK = threading.Lock()
-
-
-def get_margin_position_ledger(db_path: Optional[str] = None) -> MarginPositionLedger:
-    global _LEDGER_SINGLETON
-    if db_path is not None:
-        return MarginPositionLedger(db_path=db_path)
-    if _LEDGER_SINGLETON is not None:
-        return _LEDGER_SINGLETON
-    with _LEDGER_SINGLETON_LOCK:
-        if _LEDGER_SINGLETON is None:
-            _LEDGER_SINGLETON = MarginPositionLedger()
-    return _LEDGER_SINGLETON
+    def reconcile_position_tracking(
+        self,
+        *,
+        broker: str,
+        account_id: str,
         truth_positions: List[Dict[str, Any]],
     ) -> str:
         acct_key = (str(broker).lower(), str(account_id))
@@ -704,7 +744,7 @@ def get_margin_position_ledger(db_path: Optional[str] = None) -> MarginPositionL
         if reduce_only:
             self.remove_position(broker=broker, account_id=account_id, symbol=symbol, position_id=pid)
             return
-        self.ingest_position_snapshot(
+        self.reconcile_snapshot(
             broker=broker,
             account_id=account_id,
             symbol=symbol,
@@ -715,7 +755,7 @@ def get_margin_position_ledger(db_path: Optional[str] = None) -> MarginPositionL
             reduce_only=reduce_only,
         )
 
-    def get_account_risk_snapshot(self, *, broker: str, account_id: str) -> MarginRiskSnapshot:
+    def get_account_risk_snapshot(self, *, broker: str, account_id: str) -> "MarginRiskSnapshot":
         acct_key = (str(broker).lower(), str(account_id))
         with self._lock:
             eq = self._equity.get(
@@ -807,7 +847,7 @@ def get_margin_position_ledger(db_path: Optional[str] = None) -> MarginPositionL
                     if len(parts) == 2:
                         self._last_update_ts[(parts[0], parts[1])] = float(v)
         except Exception as exc:
-            logger.debug("MarginPositionLedger load skipped: %s", exc)
+            logger.debug("MarginPositionTracker load skipped: %s", exc)
 
     def _persist(self) -> None:
         if not self._persist_path:
@@ -825,18 +865,20 @@ def get_margin_position_ledger(db_path: Optional[str] = None) -> MarginPositionL
                 json.dump(payload, fh, indent=2, sort_keys=True)
             os.replace(tmp, self._persist_path)
         except Exception as exc:
-            logger.debug("MarginPositionLedger persist skipped: %s", exc)
+            logger.debug("MarginPositionTracker persist skipped: %s", exc)
 
 
-_ledger_singleton: Optional[MarginPositionLedger] = None
-_ledger_lock = threading.Lock()
+_LEDGER_SINGLETON: Optional[MarginPositionLedger] = None
+_LEDGER_SINGLETON_LOCK = threading.Lock()
 
 
-def get_margin_position_ledger() -> MarginPositionLedger:
-    global _ledger_singleton
-    if _ledger_singleton is not None:
-        return _ledger_singleton
-    with _ledger_lock:
-        if _ledger_singleton is None:
-            _ledger_singleton = MarginPositionLedger()
-    return _ledger_singleton
+def get_margin_position_ledger(db_path: Optional[str] = None) -> MarginPositionLedger:
+    global _LEDGER_SINGLETON
+    if db_path is not None:
+        return MarginPositionLedger(db_path=db_path)
+    if _LEDGER_SINGLETON is not None:
+        return _LEDGER_SINGLETON
+    with _LEDGER_SINGLETON_LOCK:
+        if _LEDGER_SINGLETON is None:
+            _LEDGER_SINGLETON = MarginPositionLedger()
+    return _LEDGER_SINGLETON
