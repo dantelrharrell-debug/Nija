@@ -203,6 +203,14 @@ except ImportError:
     except ImportError:
         EXCHANGE_CAPABILITIES = None  # type: ignore[assignment]
 
+try:
+    from bot.kraken_margin_engine import get_margin_engine
+except ImportError:
+    try:
+        from kraken_margin_engine import get_margin_engine  # type: ignore[import]
+    except ImportError:
+        get_margin_engine = None  # type: ignore[assignment]
+
 # Optional import — used for cycle_id cross-validation at dispatch time.
 # The pipeline must remain importable even when nija_core_loop is absent.
 def _get_pipeline_cycle_snapshot():
@@ -660,6 +668,15 @@ class ExecutionPipeline:
 
         capability_matrix = getattr(self, "_capability_matrix", None)
         broker_for_caps = (working_request.preferred_broker or "coinbase").lower()
+        margin_engine = get_margin_engine() if get_margin_engine is not None else None
+        runtime_capability_overrides: Dict[str, Any] = {}
+        if margin_engine is not None:
+            try:
+                runtime_capability_overrides = margin_engine.get_runtime_capability_overrides(
+                    account_id=working_request.account_id
+                ) or {}
+            except Exception:
+                runtime_capability_overrides = {}
         if capability_matrix is not None:
             try:
                 allowed, reason = capability_matrix.enforce_order_capabilities(
@@ -670,6 +687,7 @@ class ExecutionPipeline:
                     account_type=working_request.account_type,
                     leverage=working_request.leverage,
                     margin_mode=working_request.margin_mode,
+                    runtime_overrides=runtime_capability_overrides,
                 )
                 if not allowed:
                     return PipelineResult(
@@ -686,28 +704,73 @@ class ExecutionPipeline:
         margin_gate = getattr(self, "_margin_health_gate", None)
         margin_requested = bool(
             working_request.margin_mode
-            or working_request.leverage
+            or (working_request.leverage is not None and float(working_request.leverage) > 1.0)
             or working_request.borrow_intent
             or working_request.account_type == "margin"
         )
         if margin_requested and margin_gate is not None:
             try:
+                # Deterministic authority boundary:
+                # ledger/margin-engine is the source of risk truth; execution gates consume it.
+                if margin_engine is not None:
+                    reduce_intent = bool(
+                        working_request.reduce_only
+                        or str(working_request.position_effect or "").lower() in {"close", "close_only", "reduce"}
+                    )
+                    ledger_allowed, ledger_reason = margin_engine.is_margin_trade_allowed(
+                        is_reducing=reduce_intent,
+                        adapter=None,
+                    )
+                    if not ledger_allowed:
+                        return PipelineResult(
+                            success=False,
+                            symbol=working_request.symbol,
+                            side=working_request.side,
+                            size_usd=working_request.size_usd,
+                            error=f"MarginLedger reject: {ledger_reason}",
+                            latency_ms=(time.monotonic() - t_start) * 1000,
+                        )
+                    ledger_snapshot = margin_engine.get_health_snapshot(adapter=None)
+                else:
+                    ledger_snapshot = None
+
                 snapshot = None
                 if MarginHealthSnapshot is not None:
-                    snapshot = MarginHealthSnapshot(
-                        buying_power_usd=float(
+                    inferred_buying_power = (
+                        float(ledger_snapshot.free_margin_usd)
+                        if ledger_snapshot is not None and ledger_snapshot.free_margin_usd > 0
+                        else float(
                             working_request.available_balance_usd
                             if working_request.available_balance_usd is not None
                             else 0.0
-                        ),
-                        maintenance_margin_ratio=float(working_request.maintenance_margin_ratio or 0.0),
+                        )
+                    )
+                    if ledger_snapshot is not None and ledger_snapshot.margin_level_pct > 0:
+                        inferred_maintenance_ratio = min(1.0, max(0.0, 100.0 / ledger_snapshot.margin_level_pct))
+                    else:
+                        inferred_maintenance_ratio = float(working_request.maintenance_margin_ratio or 0.0)
+                    snapshot = MarginHealthSnapshot(
+                        buying_power_usd=inferred_buying_power,
+                        maintenance_margin_ratio=inferred_maintenance_ratio,
                         liquidation_buffer_ratio=float(
-                            1.0 if working_request.liquidation_buffer_ratio is None
-                            else working_request.liquidation_buffer_ratio
+                            (
+                                0.0 if ledger_snapshot is not None and ledger_snapshot.critical_margin_breach
+                                else (
+                                    0.05
+                                    if ledger_snapshot is not None and not ledger_snapshot.maintenance_margin_ok
+                                    else (
+                                        1.0 if working_request.liquidation_buffer_ratio is None
+                                        else working_request.liquidation_buffer_ratio
+                                    )
+                                )
+                            )
                         ),
                         borrow_available=bool(
-                            True if working_request.borrow_available is None
-                            else working_request.borrow_available
+                            (
+                                not ledger_snapshot.critical_margin_breach and ledger_snapshot.maintenance_margin_ok
+                                if ledger_snapshot is not None
+                                else (True if working_request.borrow_available is None else working_request.borrow_available)
+                            )
                         ),
                     )
                 decision = margin_gate.assess(

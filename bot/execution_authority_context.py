@@ -1010,11 +1010,11 @@ def can_execute() -> ExecutionDecision:
         except Exception as _sg_exc:
             logger.debug("StabilityGovernor HALT check unavailable (fail-open): %s", _sg_exc)
 
-    # ── Margin health gate (fail-open when margin is disabled) ───────────────
-    # Only active when NIJA_KRAKEN_MARGIN_ENABLED=true.  Blocks *new entries*
-    # when maintenance margin ratio is low; blocks *all orders* on critical
-    # margin breach.  The gate is fail-open by design so that any exception in
-    # the margin engine cannot accidentally block spot trading.
+    # ── Margin health gate (ledger-authoritative boundary) ───────────────────
+    # Deterministic authority boundary:
+    #   - Margin ledger/engine computes risk truth.
+    #   - Execution authority consumes that truth and never recomputes margin math.
+    # Gate remains fail-open on engine exceptions so spot execution is not blocked.
     if _env_truthy("NIJA_KRAKEN_MARGIN_ENABLED"):
         try:
             try:
@@ -1023,7 +1023,8 @@ def can_execute() -> ExecutionDecision:
                 from kraken_margin_engine import get_margin_engine  # type: ignore[import]
             _mg = get_margin_engine()
             _mg_snap = _mg.get_health_snapshot(adapter=None)
-            if _mg_snap.critical_margin_breach:
+            _has_margin_exposure = float(getattr(_mg_snap, "borrowed_exposure_usd", 0.0) or 0.0) > 0.0
+            if _has_margin_exposure and _mg_snap.critical_margin_breach:
                 _emit_trade_admission_telemetry(
                     reason="margin_critical",
                     drop_bucket="margin_health",
@@ -1050,7 +1051,7 @@ def can_execute() -> ExecutionDecision:
                     stability_reason=stability.reason,
                     lifecycle_phase=current_lifecycle_phase,
                 )
-            if not _mg_snap.maintenance_margin_ok:
+            if _has_margin_exposure and not _mg_snap.maintenance_margin_ok:
                 # Low margin — block new entries only.  Exit orders (is_reducing)
                 # bypass this gate at the adapter level via is_margin_trade_allowed().
                 _emit_trade_admission_telemetry(
