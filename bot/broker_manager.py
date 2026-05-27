@@ -1080,6 +1080,31 @@ def _feed_capital_authority(
             _exc,
         )
 
+
+def _get_authoritative_broker_balance_usd(broker_key: str) -> float:
+    """Return broker balance from CapitalAuthority as the sole balance truth source."""
+    key = str(broker_key or "").strip().lower()
+    if not key:
+        raise RuntimeError("capital_authority_lookup_failed:missing_broker_key")
+    try:
+        try:
+            from bot.capital_authority import get_capital_authority as _get_ca
+        except ImportError:
+            from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+        authority = _get_ca()
+    except Exception as exc:
+        raise RuntimeError(f"capital_authority_lookup_failed:{exc}") from exc
+
+    if not bool(getattr(authority, "is_hydrated", False)):
+        raise RuntimeError("capital_authority_not_hydrated")
+
+    try:
+        balance = float(authority.get_raw_per_broker(key))
+    except Exception as exc:
+        raise RuntimeError(f"capital_authority_balance_read_failed:{exc}") from exc
+    return max(0.0, balance)
+
+
 KRAKEN_STARTUP_DELAY_SECONDS: float = _float_env("NIJA_KRAKEN_STARTUP_DELAY_S", 1.0)
 KRAKEN_STARTUP_DELAY_JITTER:  float = _float_env("NIJA_KRAKEN_STARTUP_DELAY_JITTER_S", 1.0)
 # Minimum inter-call spacing injected in _kraken_private_call() to prevent
@@ -4639,8 +4664,21 @@ class CoinbaseBroker(BaseBroker):
             # SELL orders ALWAYS bypass this check
             # SKIP if force_liquidate or ignore_balance is True
             if side.lower() == 'buy' and not (force_liquidate or ignore_balance):
-                balance_data = self._get_account_balance_detailed()
-                trading_balance = float(balance_data.get('trading_balance', 0.0))
+                try:
+                    trading_balance = _get_authoritative_broker_balance_usd(self.broker_type.value)
+                except Exception as bal_exc:
+                    logger.error(
+                        "❌ PRE-FLIGHT CHECK FAILED: CapitalAuthority unavailable for %s (%s)",
+                        self.broker_type.value,
+                        bal_exc,
+                    )
+                    return {
+                        "status": "unfilled",
+                        "error": "CAPITAL_AUTHORITY_UNAVAILABLE",
+                        "message": "CapitalAuthority is not ready; broker balance checks are blocked",
+                        "partial_fill": False,
+                        "filled_pct": 0.0
+                    }
                 try:
                     min_trade_floor = max(
                         1.0,
@@ -4713,8 +4751,8 @@ class CoinbaseBroker(BaseBroker):
                     # Get current positions for validation
                     current_positions = self.get_positions()
                     
-                    # Get account balance
-                    account_balance = self.get_account_balance()
+                    # Get account balance from CapitalAuthority (exclusive financial truth source)
+                    account_balance = _get_authoritative_broker_balance_usd(self.broker_type.value)
                     
                     # Get hardening enforcer
                     hardening: Any = get_execution_layer_hardening(broker_type='coinbase')

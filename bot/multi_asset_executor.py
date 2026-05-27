@@ -226,9 +226,6 @@ class CoinbaseBrokerAdapter(BrokerAdapter):
         self._client = client  # coinbase_advanced_trader.RESTClient or None
 
     def place_order(self, symbol, side, size, order_type="MARKET", limit_price=None):
-        if self._client is None:
-            logger.warning("[Coinbase] No client configured — simulating order")
-            return {"order_id": "sim_" + symbol, "status": "SIMULATED", "filled_size": size}
         try:
             assert_distributed_writer_authority()
         except Exception as exc:
@@ -244,6 +241,14 @@ class CoinbaseBrokerAdapter(BrokerAdapter):
             return {
                 "status": "ERROR",
                 "error": "EXECUTION_AUTHORITY_REQUIRED",
+                "symbol": symbol,
+                "side": side,
+            }
+        if self._client is None:
+            logger.error("[Coinbase] blocked order submit: live client unavailable")
+            return {
+                "status": "ERROR",
+                "error": "BROKER_ADAPTER_NOT_CONNECTED",
                 "symbol": symbol,
                 "side": side,
             }

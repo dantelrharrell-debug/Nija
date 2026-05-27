@@ -141,6 +141,21 @@ def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) ->
     }
 
 
+def _disconnected_adapter_rejection(broker_name: str, symbol: str, side: str, size: float) -> Dict:
+    logger.error(
+        "[Authority] disconnected adapter execution rejected broker=%s symbol=%s side=%s size=%s",
+        broker_name,
+        symbol,
+        side,
+        size,
+    )
+    return {
+        "status": "ERROR",
+        "error": "BROKER_ADAPTER_NOT_CONNECTED",
+        "broker": broker_name,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 1. Alpaca Equity Broker Adapter (live wiring)
 # ---------------------------------------------------------------------------
@@ -240,12 +255,11 @@ class AlpacaEquityBrokerAdapter(BrokerAdapter):
         Supports fractional shares when size < 1.0 (uses 'notional' qty mode
         for fractional; integer shares use 'qty' mode).
         """
-        if not self._connected or self._client is None:
-            return self._stub_fill(symbol, side, size)
-
         blocked = _authority_blocked(self.NAME, symbol, side, size)
         if blocked is not None:
             return blocked
+        if not self._connected or self._client is None:
+            return _disconnected_adapter_rejection(self.NAME, symbol, side, size)
 
         try:
             from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
@@ -435,12 +449,11 @@ class InteractiveBrokersFuturesAdapter(BrokerAdapter):
         symbol format: ``ES2506`` (symbol + expiry YYMM) or ``BTC`` for crypto futures.
         The adapter maps NIJA symbol strings to IB Contract objects.
         """
-        if not self._connected or self._ib is None:
-            return self._stub_fill(symbol, side, size)
-
         blocked = _authority_blocked(self.NAME, symbol, side, size)
         if blocked is not None:
             return blocked
+        if not self._connected or self._ib is None:
+            return _disconnected_adapter_rejection(self.NAME, symbol, side, size)
 
         try:
             import ib_insync as ibi
@@ -621,12 +634,11 @@ class TradierOptionsAdapter(BrokerAdapter):
               or plain BUY / SELL (mapped to BUY_TO_OPEN / SELL_TO_CLOSE).
         size: number of contracts.
         """
-        if not self._connected:
-            return self._stub_fill(symbol, side, size)
-
         blocked = _authority_blocked(self.NAME, symbol, side, size)
         if blocked is not None:
             return blocked
+        if not self._connected:
+            return _disconnected_adapter_rejection(self.NAME, symbol, side, size)
 
         try:
             import requests
