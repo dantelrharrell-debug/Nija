@@ -22,9 +22,9 @@ Exchange-Specific Rules:
 - Alpaca: YES shorting (stocks via locate/borrow)
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 import logging
 
 logger = logging.getLogger("nija.capabilities")
@@ -520,6 +520,7 @@ class ExchangeCapabilityMatrix:
         account_type: Optional[str] = None,
         leverage: Optional[float] = None,
         margin_mode: Optional[str] = None,
+        runtime_overrides: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, str]:
         market_mode = self._detect_market_mode(symbol)
         if margin_mode and str(margin_mode).lower() not in {"spot", "none"}:
@@ -527,9 +528,21 @@ class ExchangeCapabilityMatrix:
         if asset_class and str(asset_class).lower() == "futures":
             market_mode = MarketMode.FUTURES
 
-        caps = self.get_capabilities(broker, market_mode)
-        if caps is None:
+        base_caps = self.get_capabilities(broker, market_mode)
+        if base_caps is None:
             return False, f"missing_capability_matrix:{broker}:{market_mode.value}"
+        caps = replace(base_caps)
+        if runtime_overrides:
+            if "supports_short" in runtime_overrides:
+                caps.supports_short = bool(runtime_overrides.get("supports_short"))
+            if "supports_margin" in runtime_overrides:
+                caps.supports_margin = bool(runtime_overrides.get("supports_margin"))
+            if "max_leverage" in runtime_overrides:
+                try:
+                    caps.max_leverage = max(1.0, float(runtime_overrides.get("max_leverage")))
+                    caps.supports_leverage = caps.max_leverage > 1.0
+                except Exception:
+                    pass
 
         side_lower = side.lower()
         if side_lower in {"sell", "short"} and not caps.supports_short:
