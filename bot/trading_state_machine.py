@@ -848,7 +848,22 @@ def _live_activation_gate(live_gate_status: Optional[Dict[str, object]] = None) 
     if _heartbeat_verification_required():
         hb_verified_ok, hb_verified_err, _ = _heartbeat_verification_status()
         if not hb_verified_ok:
-            return False, f"HEARTBEAT_VERIFICATION {hb_verified_err or 'missing_or_stale'}"
+            # Allow the same bootstrap grace that commit_activation() grants when
+            # the marker is missing on a fresh deployment.  The heartbeat monitor
+            # was started eagerly by commit_activation() before this gate runs;
+            # its first async tick writes the marker.  Blocking here in that
+            # window would re-introduce the deadlock that commit_activation()'s
+            # bootstrap grace is meant to break.  Only marker_missing qualifies.
+            _marker_bootstrap_pending = (
+                os.environ.get("NIJA_HEARTBEAT_MARKER_BOOTSTRAP_PENDING", "").strip() == "1"
+            )
+            if _marker_bootstrap_pending and hb_verified_err == "marker_missing":
+                logger.info(
+                    "[LIVE GATE] heartbeat marker bootstrap grace active — "
+                    "passing HEARTBEAT_VERIFICATION for this cycle"
+                )
+            else:
+                return False, f"HEARTBEAT_VERIFICATION {hb_verified_err or 'missing_or_stale'}"
     return True, ""
 
 
@@ -1733,38 +1748,23 @@ class TradingStateMachine:
             if runtime_mode is not None
             else os.environ.get("LIVE_TRADING", "false")
         )
-        _heartbeat_required_first = _heartbeat_verification_required()
-        _heartbeat_ok, _heartbeat_err, _heartbeat_meta = _heartbeat_verification_status()
-        _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
-
-        if _heartbeat_required_first and not _heartbeat_ok:
-            _log_activation_diag_once(
-                "auto_activate_blocked",
-                (
-                    "HEARTBEAT_VERIFICATION_REQUIRED",
-                    _heartbeat_err or "verification_missing",
-                    _heartbeat_meta.get("path", _heartbeat_marker_path()),
-                    _heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
-                ),
-                "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_VERIFICATION_REQUIRED detail=%s path=%s heartbeat_trade=%s required_stage=%s max_age_s=%s",
-                _heartbeat_err or "verification_missing",
-                _heartbeat_meta.get("path", _heartbeat_marker_path()),
-                _heartbeat_trade,
-                _heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
-                _heartbeat_meta.get("max_age_s", _heartbeat_verification_max_age_seconds()),
-            )
-            return False
-
         # ── Pre-gate: eagerly start authority heartbeat monitor ──────────────
-        # The _writer_heartbeat_gate() inside _live_activation_gate() requires
-        # NIJA_WRITER_HEARTBEAT_ACTIVE=1, which is set by the heartbeat monitor
-        # after its first successful tick.  Normally the monitor is started by
-        # the LIVE_ACTIVE transition callback — but that creates a circular
-        # dependency: the gate blocks activation, so the monitor never starts,
-        # so the gate never passes.  Starting the monitor here (before the gate
-        # is evaluated) breaks the deadlock: the monitor's immediate startup
-        # tick runs in a daemon thread and sets NIJA_WRITER_HEARTBEAT_ACTIVE=1
-        # so the gate can pass on this or the next commit_activation() cycle.
+        # Must run BEFORE all heartbeat gate checks below.  Two independent
+        # deadlocks both require the authority heartbeat monitor to be running:
+        #
+        # 1. File-based marker deadlock (HEARTBEAT_TRADE / HEARTBEAT_REQUIRED_
+        #    FIRST_ACTIVATION mode): the activation gate at lines below requires
+        #    heartbeat_verified.flag to exist.  That file is written by the
+        #    monitor's first successful Redis authority tick.  Starting the
+        #    monitor here allows its tick to run and write the marker before the
+        #    next commit_activation() cycle.
+        #
+        # 2. NIJA_WRITER_HEARTBEAT_ACTIVE deadlock (PR #1817): the
+        #    _writer_heartbeat_gate() inside _live_activation_gate() requires
+        #    NIJA_WRITER_HEARTBEAT_ACTIVE=1, also set by the monitor's first
+        #    tick.  The monitor must be started before the gate is evaluated.
+        #
+        # Both deadlocks are broken by the same fix: start the monitor first.
         if os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip() != "1":
             logger.info(
                 "[COMMIT_ACTIVATION] NIJA_WRITER_HEARTBEAT_ACTIVE=%r — "
@@ -1786,6 +1786,55 @@ class TradingStateMachine:
                 logger.warning(
                     "[COMMIT_ACTIVATION] eager heartbeat start failed: %s", _early_hb_err
                 )
+
+        _heartbeat_required_first = _heartbeat_verification_required()
+        _heartbeat_ok, _heartbeat_err, _heartbeat_meta = _heartbeat_verification_status()
+        _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
+
+        if _heartbeat_required_first and not _heartbeat_ok:
+            # Bootstrap grace: on a fresh deployment the heartbeat_verified.flag
+            # marker does not yet exist (marker_missing).  The authority heartbeat
+            # monitor was just started above; its first tick writes the marker
+            # when Redis authority is healthy.  Grant one grace cycle so the
+            # monitor's async tick can complete before the next
+            # commit_activation() call re-evaluates this gate.
+            #
+            # Only marker_missing qualifies for grace — stale, malformed, or
+            # stage-insufficient markers are hard-blocked as before because they
+            # indicate a real authority or freshness problem, not a cold start.
+            _marker_bootstrap_key = "NIJA_HEARTBEAT_MARKER_BOOTSTRAP_PENDING"
+            if (
+                _heartbeat_err == "marker_missing"
+                and os.environ.get(_marker_bootstrap_key, "").strip() != "1"
+            ):
+                os.environ[_marker_bootstrap_key] = "1"
+                logger.info(
+                    "[COMMIT_ACTIVATION] heartbeat marker absent on startup — "
+                    "granting one bootstrap grace cycle for heartbeat monitor first tick "
+                    "(path=%s heartbeat_trade=%s required_stage=%s)",
+                    _heartbeat_meta.get("path", _heartbeat_marker_path()),
+                    _heartbeat_trade,
+                    _heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
+                )
+                # Fall through — allow this cycle to continue so the live gate
+                # and system readiness proof can also make forward progress.
+            else:
+                _log_activation_diag_once(
+                    "auto_activate_blocked",
+                    (
+                        "HEARTBEAT_VERIFICATION_REQUIRED",
+                        _heartbeat_err or "verification_missing",
+                        _heartbeat_meta.get("path", _heartbeat_marker_path()),
+                        _heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
+                    ),
+                    "[AUTO_ACTIVATE BLOCKED] reason=HEARTBEAT_VERIFICATION_REQUIRED detail=%s path=%s heartbeat_trade=%s required_stage=%s max_age_s=%s",
+                    _heartbeat_err or "verification_missing",
+                    _heartbeat_meta.get("path", _heartbeat_marker_path()),
+                    _heartbeat_trade,
+                    _heartbeat_meta.get("required_stage", _heartbeat_min_required_stage()),
+                    _heartbeat_meta.get("max_age_s", _heartbeat_verification_max_age_seconds()),
+                )
+                return False
 
         _live_gate_status = _collect_live_gate_status()
         _live_ok, _live_err = _live_activation_gate(_live_gate_status)
