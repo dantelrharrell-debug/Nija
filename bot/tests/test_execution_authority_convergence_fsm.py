@@ -546,6 +546,9 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
                         return False
 
                 with patch(
+                    "bot.authority_heartbeat.start_authority_heartbeat",
+                    return_value=None,
+                ), patch(
                     "bot.trading_state_machine._collect_live_gate_status",
                     return_value={
                         "safe_ok": True,
@@ -591,6 +594,66 @@ class TestHeartbeatSafetyGating(unittest.TestCase):
                 ):
                     self.assertFalse(sm.commit_activation(cycle_capital={"ca_total_capital": 131.11}))
                     self.assertEqual(sm.get_current_state(), TradingState.LIVE_PENDING_CONFIRMATION)
+
+    def test_commit_activation_does_not_arm_pending_without_live_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "false",
+                    "LIVE_TRADING": "false",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "false",
+                    "HEARTBEAT_TRADE": "false",
+                    "HEARTBEAT_REQUIRED_FIRST_ACTIVATION": "false",
+                },
+                clear=False,
+            ), patch(
+                "bot.trading_state_machine._startup_ownership_gate",
+                return_value=(False, "bootstrap_guard_not_held"),
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertEqual(sm.get_current_state(), TradingState.OFF)
+
+                with patch(
+                    "bot.authority_heartbeat.start_authority_heartbeat",
+                    return_value=None,
+                ), patch(
+                    "bot.trading_state_machine._activation_intent_present",
+                    return_value=False,
+                ), patch(
+                    "bot.trading_state_machine._collect_live_gate_status",
+                    return_value={
+                        "safe_ok": True,
+                        "safe_err": "",
+                        "recon_ok": True,
+                        "recon_err": "",
+                        "nonce_ok": True,
+                        "nonce_err": "",
+                        "lease_ok": True,
+                        "lease_err": "",
+                        "heartbeat_ok": True,
+                        "heartbeat_err": "",
+                        "strategy_ok": True,
+                        "strategy_err": "",
+                        "breaker_ok": True,
+                        "breaker_err": "",
+                        "execution_allowed": True,
+                    },
+                ), patch(
+                    "bot.trading_state_machine._live_activation_gate",
+                    return_value=(True, ""),
+                ), patch(
+                    "bot.trading_state_machine._is_authority_ready",
+                    return_value=False,
+                ), patch(
+                    "bot.trading_state_machine._global_activation_barrier",
+                    return_value=(False, "execution pipeline pending", True, False, True, False),
+                ):
+                    self.assertFalse(sm.commit_activation(cycle_capital={"ca_total_capital": 131.11}))
+                    self.assertEqual(sm.get_current_state(), TradingState.OFF)
+                    self.assertEqual(os.environ.get("NIJA_RUNTIME_TRADING_STATE"), TradingState.OFF.value)
 
     def test_commit_activation_blocks_when_heartbeat_marker_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
