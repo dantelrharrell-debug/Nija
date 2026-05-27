@@ -1431,6 +1431,17 @@ class CapitalRefreshCoordinator:
         # and a fully-hydrated CSM-v2 (ingested above).
         if bootstrap_owner_thread and bootstrap_active:
             self._boot.transition(_boot_target, _boot_reason)
+            # Drive the FSM all the way to its documented terminal success state
+            # (RUNNING) in the same pipeline tick.  READY is an intermediate
+            # "callbacks-fired" waypoint; leaving the FSM at READY causes
+            # _capital_bootstrap_running() to return False, which keeps the
+            # ExecutionAuthorityConvergenceFSM permanently in ARMED state and
+            # blocks trading activation.
+            if _boot_target == CapitalBootstrapState.READY:
+                self._boot.transition(
+                    CapitalBootstrapState.RUNNING,
+                    "capital_pipeline_complete",
+                )
         else:
             _skip_reason = (
                 "bootstrap_owner_thread=false"

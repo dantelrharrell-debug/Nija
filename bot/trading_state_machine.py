@@ -2379,14 +2379,20 @@ def _bootstrap_running_supervised() -> bool:
 
 
 def _capital_bootstrap_running() -> bool:
-    """Return True when CapitalBootstrapFSM reached RUNNING."""
+    """Return True when CapitalBootstrapFSM reached READY or RUNNING.
+
+    READY is the "callbacks-fired" waypoint and RUNNING is the documented
+    terminal success state.  Both represent a fully-bootstrapped capital
+    layer.  Accepting either prevents the ExecutionAuthorityConvergenceFSM
+    from staying permanently ARMED when the FSM stalls at READY.
+    """
     try:
         try:
             from bot.capital_flow_state_machine import get_capital_bootstrap_fsm
         except ImportError:
             from capital_flow_state_machine import get_capital_bootstrap_fsm  # type: ignore[import]
         _state = getattr(get_capital_bootstrap_fsm().state, "value", "")
-        return _state == "RUNNING"
+        return _state in ("READY", "RUNNING")
     except Exception:
         return False
 

@@ -1027,7 +1027,7 @@ class StartupCoordinator:
         gate_results: Dict[str, bool] = {
             "readiness.complete": not snapshot.pending_readiness,
             "bootstrap.supervised": snapshot.bootstrap_state == "RUNNING_SUPERVISED",
-            "capital.running": snapshot.capital_state == "RUNNING",
+            "capital.running": snapshot.capital_state in ("READY", "RUNNING"),
             "capital.hydrated": bool(snapshot.capital_hydrated),
             "capital.balance_known": snapshot.capital_balance is not None,
             "capital.not_stale": not bool(snapshot.capital_stale),
