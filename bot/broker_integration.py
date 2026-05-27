@@ -235,6 +235,9 @@ logger = logging.getLogger("nija.exchange")
 
 try:
     from bot.execution_authority_context import (
+        can_execute,
+        can_execute_startup_probe,
+        ExecutionBlocked,
         assert_execution_dispatch_permitted,
         assert_distributed_writer_authority,
         assert_startup_write_authority,
@@ -242,11 +245,26 @@ try:
 except ImportError:
     try:
         from execution_authority_context import (
+            can_execute,
+            can_execute_startup_probe,
+            ExecutionBlocked,
             assert_execution_dispatch_permitted,
             assert_distributed_writer_authority,
             assert_startup_write_authority,
         )
     except ImportError:
+        def can_execute():
+            class _Decision:
+                allowed = False
+                reason = "execution_authority_unavailable"
+            return _Decision()
+
+        def can_execute_startup_probe():
+            return False, "startup_probe_unavailable"
+
+        class ExecutionBlocked(RuntimeError):
+            pass
+
         def assert_distributed_writer_authority() -> None:
             return
 
@@ -298,34 +316,39 @@ def _reject_if_unauthorized_order_submit(
         except Exception:
             pass
 
-    try:
-        assert_execution_dispatch_permitted()
+    decision = can_execute()
+    if decision.allowed:
         return None
-    except Exception as exc:
-        message = str(exc)
-        if "Distributed writer fence" in message or "fencing" in message.lower() or "writer authority" in message.lower():
-            _emit_rejection_telemetry("distributed_writer_fence")
-            logger.critical(
-                "🔒 Distributed writer fence violation | broker=%s symbol=%s side=%s size=%s err=%s",
-                broker_name,
-                symbol,
-                side,
-                size,
-                exc,
-            )
-            raise RuntimeError(f"FATAL: Distributed writer fence violation: {exc}") from exc
-
-        _emit_rejection_telemetry("execution_authority_violation")
-        logger.critical(
-            "🔒 Execution authority violation: order submission must originate from ExecutionPipeline "
-            "| broker=%s symbol=%s side=%s size=%s err=%s",
+    probe_allowed, probe_reason = can_execute_startup_probe()
+    if probe_allowed:
+        logger.warning(
+            "⚠️ Startup execution probe authorized before LIVE_ACTIVE "
+            "(broker=%s symbol=%s side=%s size=%s reason=%s)",
             broker_name,
             symbol,
             side,
             size,
-            exc,
+            probe_reason,
         )
-        raise RuntimeError("FATAL: Order bypassed ECEL") from exc
+        return None
+
+    reason = str(getattr(decision, "reason", "execution_authority_violation") or "execution_authority_violation")
+    telemetry_reason = (
+        "distributed_writer_fence"
+        if ("fencing" in reason.lower() or "writer authority" in reason.lower())
+        else "execution_authority_violation"
+    )
+    _emit_rejection_telemetry(telemetry_reason)
+    logger.critical(
+        "🔒 Execution authority violation: order submission blocked "
+        "| broker=%s symbol=%s side=%s size=%s reason=%s",
+        broker_name,
+        symbol,
+        side,
+        size,
+        reason,
+    )
+    raise ExecutionBlocked(f"FATAL: Execution authority violation ({reason})")
 
 
 def requires_nonce_ready(func):
