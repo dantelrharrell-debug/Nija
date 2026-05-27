@@ -29,7 +29,7 @@ Architecture
 
     # 3. Gate individual trade against global risk ceiling:
     if allocator.approve_trade(user_id, size_usd):
-        broker.execute_order(symbol, side, size_usd, size_type="quote")
+        submit_market_order_via_pipeline(...)
 
 Design Goals
 ------------

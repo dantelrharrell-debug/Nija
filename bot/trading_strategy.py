@@ -146,6 +146,14 @@ except ImportError:
         _CORE_LOOP_AVAILABLE = False
 
 try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline  # type: ignore[import]
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore[assignment]
+
+try:
     from bot.broker_identity import format_broker_identity
 except ImportError:
     try:
@@ -739,13 +747,20 @@ class TradingStrategy:
                 broker_identity=broker_name,
             ):
                 with buy_scope:
-                    buy_result = broker.execute_order(
-                        symbol=symbol,
-                        side="buy",
-                        quantity=trade_amount_usd,
-                        size_type="quote",
-                        metadata={"reason": "HEARTBEAT_TRADE"},
-                    )
+                    if submit_market_order_via_pipeline is None:
+                        buy_result = {
+                            "status": "error",
+                            "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
+                        }
+                    else:
+                        buy_result = submit_market_order_via_pipeline(
+                            broker=broker,
+                            symbol=symbol,
+                            side="buy",
+                            quantity=trade_amount_usd,
+                            size_type="quote",
+                            strategy="HEARTBEAT_TRADE",
+                        )
             buy_status = (buy_result or {}).get("status", "error")
             buy_order_id = (buy_result or {}).get("order_id")
             buy_submitted = bool(buy_result)
@@ -832,13 +847,20 @@ class TradingStrategy:
                 broker_identity=broker_name,
             ):
                 with sell_scope:
-                    sell_result = broker.execute_order(
-                        symbol=symbol,
-                        side="sell",
-                        quantity=trade_amount_usd,
-                        size_type="quote",
-                        metadata={"reason": "HEARTBEAT_TRADE_CLOSE"},
-                    )
+                    if submit_market_order_via_pipeline is None:
+                        sell_result = {
+                            "status": "error",
+                            "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
+                        }
+                    else:
+                        sell_result = submit_market_order_via_pipeline(
+                            broker=broker,
+                            symbol=symbol,
+                            side="sell",
+                            quantity=trade_amount_usd,
+                            size_type="quote",
+                            strategy="HEARTBEAT_TRADE_CLOSE",
+                        )
             sell_status = (sell_result or {}).get("status", "error")
             sell_submitted = bool(sell_result)
             sell_filled = sell_status in ("filled", "ok", "success")

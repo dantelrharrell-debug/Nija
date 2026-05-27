@@ -106,6 +106,14 @@ try:
 except ImportError:
     from runtime_mode import resolve_runtime_mode_safe, RuntimeModeResolution  # type: ignore[import]
 
+try:
+    from bot.pipeline_order_submitter import submit_market_order_via_pipeline
+except ImportError:
+    try:
+        from pipeline_order_submitter import submit_market_order_via_pipeline  # type: ignore[import]
+    except ImportError:
+        submit_market_order_via_pipeline = None  # type: ignore[assignment]
+
 
 def _is_live_mode(existing_mode: Optional[RuntimeModeResolution] = None) -> bool:
     runtime_mode = existing_mode or resolve_runtime_mode_safe(logger)
@@ -1976,24 +1984,19 @@ def _exec_test_probe(strategy: Any) -> Dict:
         getattr(getattr(broker, "broker_type", None), "value", type(broker).__name__),
     )
 
-    try:
-        result = broker.execute_order(
+    if submit_market_order_via_pipeline is None:
+        result = {
+            "status": "error",
+            "error": "ExecutionPipeline submit helper unavailable; direct broker fallback blocked",
+        }
+    else:
+        result = submit_market_order_via_pipeline(
+            broker=broker,
             symbol=symbol,
             side="buy",
             quantity=size,
             size_type="quote",
-            ignore_min_trade=True,
-            metadata={"reason": "EXEC_TEST_PROBE"},
-        )
-    except TypeError:
-        # Broker implementation does not accept the metadata kwarg yet —
-        # fall back to call without it (still honours ignore_min_trade).
-        result = broker.execute_order(
-            symbol=symbol,
-            side="buy",
-            quantity=size,
-            size_type="quote",
-            ignore_min_trade=True,
+            strategy="EXEC_TEST_PROBE",
         )
 
     return result
