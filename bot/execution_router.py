@@ -607,9 +607,23 @@ class ExecutionRouter:
     ) -> ExecutionResult:
         """Execute a single MARKET or LIMIT order."""
         if venue.broker_fn is not None:
-            fill_price, filled_usd = venue.broker_fn(
-                request.symbol, request.side, request.size_usd
-            )
+            payload = dict(request.metadata or {})
+            payload.setdefault("order_type", order_type)
+            if "limit_price" not in payload:
+                payload["limit_price"] = payload.get("limit_price")
+            try:
+                fill_price, filled_usd = venue.broker_fn(
+                    symbol=request.symbol,
+                    side=request.side,
+                    size_usd=request.size_usd,
+                    order_type=order_type,
+                    limit_price=payload.get("limit_price"),
+                    metadata=payload,
+                )
+            except TypeError:
+                fill_price, filled_usd = venue.broker_fn(
+                    request.symbol, request.side, request.size_usd
+                )
         else:
             # Simulation: assume perfect fill (no live broker wired)
             fill_price = 0.0

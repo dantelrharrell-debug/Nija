@@ -41,7 +41,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from bot.multi_asset_executor import AssetClass, BrokerAdapter
 
@@ -227,6 +227,12 @@ class AlpacaEquityBrokerAdapter(BrokerAdapter):
         size: float,
         order_type: str = "MARKET",
         limit_price: Optional[float] = None,
+        time_in_force: Optional[str] = None,
+        notional_usd: Optional[float] = None,
+        short_sell: Optional[bool] = None,
+        extended_hours: Optional[bool] = None,
+        reduce_only: Optional[bool] = None,
+        **_: Any,
     ) -> Dict:
         """
         Place an equity order on Alpaca.
@@ -250,29 +256,39 @@ class AlpacaEquityBrokerAdapter(BrokerAdapter):
             # Fractional share support: use qty for whole shares, notional otherwise
             use_fractional = size < 1.0 or (size != int(size))
 
+            tif_map = {
+                "day": TimeInForce.DAY,
+                "gtc": TimeInForce.GTC,
+                "ioc": TimeInForce.IOC,
+                "fok": TimeInForce.FOK,
+            }
+            tif = tif_map.get((time_in_force or "day").strip().lower(), TimeInForce.DAY)
+            effective_size = float(notional_usd) if (notional_usd is not None and notional_usd > 0) else size
+
             if order_type.upper() == "LIMIT" and limit_price:
                 req = LimitOrderRequest(
                     symbol=symbol,
-                    qty=size,
+                    qty=effective_size,
                     side=alpaca_side,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=tif,
                     limit_price=limit_price,
+                    extended_hours=bool(extended_hours),
                 )
             else:
                 if use_fractional:
                     # Alpaca fractional: pass qty as float
                     req = MarketOrderRequest(
                         symbol=symbol,
-                        qty=round(size, 6),
+                        qty=round(effective_size, 6),
                         side=alpaca_side,
-                        time_in_force=TimeInForce.DAY,
+                        time_in_force=tif,
                     )
                 else:
                     req = MarketOrderRequest(
                         symbol=symbol,
-                        qty=int(size),
+                        qty=int(effective_size),
                         side=alpaca_side,
-                        time_in_force=TimeInForce.DAY,
+                        time_in_force=tif,
                     )
 
             with self._lock:
@@ -411,6 +427,7 @@ class InteractiveBrokersFuturesAdapter(BrokerAdapter):
         size: float,
         order_type: str = "MARKET",
         limit_price: Optional[float] = None,
+        **_: Any,
     ) -> Dict:
         """
         Place a futures order via IB.
@@ -594,6 +611,7 @@ class TradierOptionsAdapter(BrokerAdapter):
         size: float,
         order_type: str = "MARKET",
         limit_price: Optional[float] = None,
+        **_: Any,
     ) -> Dict:
         """
         Place an options order via Tradier.

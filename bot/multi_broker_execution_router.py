@@ -245,6 +245,16 @@ class RouteRequest:
     order_type: Optional[str] = None    # "MARKET" | "LIMIT" | "TWAP"
     limit_price: Optional[float] = None
     preferred_broker: Optional[str] = None   # force a specific broker
+    account_id: Optional[str] = None
+    subaccount_id: Optional[str] = None
+    time_in_force: Optional[str] = None
+    buying_power_usd: Optional[float] = None
+    available_balance_usd: Optional[float] = None
+    leverage: Optional[int] = None
+    reduce_only: Optional[bool] = None
+    margin_mode: Optional[str] = None
+    short_sell: Optional[bool] = None
+    extended_hours: Optional[bool] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -944,6 +954,7 @@ class MultiBrokerExecutionRouter:
                 order_type=request.order_type or "MARKET",
                 limit_price=request.limit_price,
                 broker_name=broker.name,
+                metadata=request.metadata,
             )
             return fill_price, filled_usd, None
         except Exception as exc:
@@ -986,6 +997,7 @@ class MultiBrokerExecutionRouter:
         order_type: str = "MARKET",
         limit_price: Optional[float] = None,
         broker_name: str = "coinbase",
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[float, float]:
         """
         Dispatch crypto orders through the existing ExecutionRouter.
@@ -1005,6 +1017,7 @@ class MultiBrokerExecutionRouter:
                 size_usd=size_usd,
                 order_type=order_type,
                 venue=broker_name,
+                metadata=dict(metadata or {}),
             )
             res = inner.execute(req)
             if res.success:
@@ -1284,6 +1297,16 @@ class MultiBrokerExecutionRouter:
             order_type=request.order_type,
             limit_price=request.limit_price,
             preferred_broker=broker.name,
+            account_id=request.account_id,
+            subaccount_id=request.subaccount_id,
+            time_in_force=request.time_in_force,
+            buying_power_usd=request.buying_power_usd,
+            available_balance_usd=request.available_balance_usd,
+            leverage=request.leverage,
+            reduce_only=request.reduce_only,
+            margin_mode=request.margin_mode,
+            short_sell=request.short_sell,
+            extended_hours=request.extended_hours,
             metadata=request.metadata,
         )
 
