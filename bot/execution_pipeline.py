@@ -239,6 +239,8 @@ except ImportError:
         from execution_broker_capabilities import get_broker_capability_registry  # type: ignore[import]
     except ImportError:
         get_broker_capability_registry = None  # type: ignore[assignment]
+
+try:
     from bot.margin_health_gate import MarginHealthGate, MarginHealthSnapshot
 except ImportError:
     try:
