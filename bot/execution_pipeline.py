@@ -1572,7 +1572,6 @@ class ExecutionPipeline:
                             "unit_type": getattr(request, "unit_type", None),
                             "price_hint_usd": getattr(request, "price_hint_usd", None),
                             "stop_price": getattr(request, "stop_price", None),
-                        metadata={
                             "instrument_type": request.instrument_type or "",
                             "quantity_mode": request.quantity_mode,
                             "shares": request.shares,
