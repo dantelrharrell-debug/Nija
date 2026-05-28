@@ -737,6 +737,60 @@ def _step7_adversarial_validation() -> None:
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _step8_graceful_handoff_lock() -> None:
+    """Acquire the distributed writer lock via the graceful handoff protocol.
+
+    This step replaces the raw SET NX lock acquisition with the full handoff
+    protocol that:
+      - Detects an existing lock held by the previous instance
+      - Waits for the old instance to release gracefully (up to NIJA_HANDOFF_WAIT_TIMEOUT_S)
+      - Falls back to force-acquisition after timeout
+      - Increments the global generation counter on every acquisition
+      - Starts the heartbeat renewal thread
+
+    The step is skipped when NIJA_GRACEFUL_HANDOFF_ENABLED is not set to a
+    truthy value so existing deployments are not affected until operators
+    explicitly opt in.
+    """
+    _step(8, "Graceful handoff lock acquisition")
+
+    if not _env_truthy("NIJA_GRACEFUL_HANDOFF_ENABLED"):
+        log.info(
+            "ℹ️  Graceful handoff lock acquisition skipped "
+            "(set NIJA_GRACEFUL_HANDOFF_ENABLED=true to enable)"
+        )
+        return
+
+    try:
+        from bot.graceful_handoff import get_handoff_coordinator
+    except ImportError as exc:
+        log.warning("⚠️  graceful_handoff module unavailable: %s — skipping step", exc)
+        return
+
+    coordinator = get_handoff_coordinator()
+    result = coordinator.startup()
+
+    if not result.acquired:
+        _fail(
+            f"Graceful handoff lock acquisition failed: {result.error or 'unknown'} "
+            f"(instance={result.instance_id})"
+        )
+        sys.exit(1)
+
+    log.info(
+        "✅  Graceful handoff lock acquired — generation=%d instance=%s "
+        "waited_for_release=%s forced=%s",
+        result.generation,
+        result.instance_id,
+        result.waited_for_release,
+        result.forced,
+    )
+    _ok(
+        f"Graceful handoff lock acquired (generation={result.generation}, "
+        f"instance={result.instance_id})"
+    )
+
+
 def run_preflight() -> None:
     """Execute all pre-flight checks.  Exits with code 1 on any failure."""
     log.info(SEPARATOR)
@@ -751,6 +805,7 @@ def run_preflight() -> None:
     _step5_clear_stale_locks(redis_client)
     _step6_live_mode_check()
     _step7_adversarial_validation()
+    _step8_graceful_handoff_lock()
 
     elapsed = time.monotonic() - start
     log.info(SEPARATOR)
