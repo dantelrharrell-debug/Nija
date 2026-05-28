@@ -1173,9 +1173,8 @@ def can_execute() -> ExecutionDecision:
 
     # ── Stability governor HALT gate (Phase 3 — disabled by default) ────────────
     # Consulted only when NIJA_STABILITY_GOVERNOR_HALT_ENABLED is explicitly set so
-    # that Phase 1/2 (observe + guarded) do not block dispatch paths.  The governor
-    # is fail-open: any exception here is silently absorbed so it cannot accidentally
-    # block execution when unavailable.
+    # that Phase 1/2 (observe + guarded) do not block dispatch paths. Exceptions in
+    # this gate fail closed to prevent silent authority bypasses.
     if _env_truthy("NIJA_STABILITY_GOVERNOR_HALT_ENABLED"):
         try:
             try:
@@ -1216,13 +1215,44 @@ def can_execute() -> ExecutionDecision:
                     lifecycle_phase=current_lifecycle_phase,
                 )
         except Exception as _sg_exc:
-            logger.debug("StabilityGovernor HALT check unavailable (fail-open): %s", _sg_exc)
+            _reason_detail = f"stability_halt_gate_unavailable:{_sg_exc}"
+            logger.error("StabilityGovernor HALT check unavailable (fail-closed): %s", _sg_exc)
+            _emit_trade_admission_telemetry(
+                reason="governor_guarded",
+                drop_bucket="governor_guarded",
+                governor_mode="HALT_UNAVAILABLE",
+            )
+            return ExecutionDecision(
+                allowed=False,
+                reason=_reason_detail,
+                circuit_state=configured_circuit_state,
+                state_live_active=state_live_active,
+                lease_valid=lease_valid,
+                lease_generation_current=lease_generation_current,
+                nonce_ready=nonce_ready,
+                heartbeat_fresh=heartbeat_fresh,
+                heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+                broker_health_ok=broker_health_ok,
+                circuit_breaker_closed=circuit_breaker_closed,
+                dispatch_enabled=dispatch_enabled,
+                stability_allowed=False,
+                stability_halt_state="HALT_UNAVAILABLE",
+                stability_throttle=0.0,
+                stability_size_multiplier=0.0,
+                stability_stress_score=1.0,
+                stability_collapsed_risk_score=1.0,
+                stability_reason=_reason_detail,
+                first_failed_gate="stability.allowed",
+                reason_code=_gate_reason_code("stability.allowed"),
+                reason_detail=_reason_detail,
+                lifecycle_phase=current_lifecycle_phase,
+            )
 
     # ── Margin health gate (ledger-authoritative boundary) ───────────────────
     # Deterministic authority boundary:
     #   - Margin ledger/engine computes risk truth.
     #   - Execution authority consumes that truth and never recomputes margin math.
-    # Gate remains fail-open on engine exceptions so spot execution is not blocked.
+    # Gate fails closed on engine exceptions to avoid silent authority bypasses.
     if _env_truthy("NIJA_KRAKEN_MARGIN_ENABLED"):
         try:
             try:
@@ -1297,7 +1327,38 @@ def can_execute() -> ExecutionDecision:
                     lifecycle_phase=current_lifecycle_phase,
                 )
         except Exception as _mg_exc:
-            logger.debug("Margin health gate unavailable (fail-open): %s", _mg_exc)
+            _reason_detail = f"margin_health_gate_unavailable:{_mg_exc}"
+            logger.error("Margin health gate unavailable (fail-closed): %s", _mg_exc)
+            _emit_trade_admission_telemetry(
+                reason="margin_gate_unavailable",
+                drop_bucket="margin_health",
+                stage="margin_gate",
+            )
+            return ExecutionDecision(
+                allowed=False,
+                reason=_reason_detail,
+                circuit_state=configured_circuit_state,
+                state_live_active=state_live_active,
+                lease_valid=lease_valid,
+                lease_generation_current=lease_generation_current,
+                nonce_ready=nonce_ready,
+                heartbeat_fresh=heartbeat_fresh,
+                heartbeat_stage_sufficient=heartbeat_stage_sufficient,
+                broker_health_ok=broker_health_ok,
+                circuit_breaker_closed=circuit_breaker_closed,
+                dispatch_enabled=dispatch_enabled,
+                stability_allowed=stability.allowed,
+                stability_halt_state=stability.halt_state,
+                stability_throttle=stability.throttle,
+                stability_size_multiplier=stability.size_multiplier,
+                stability_stress_score=stability.stress_score,
+                stability_collapsed_risk_score=stability.collapsed_risk_score,
+                stability_reason=stability.reason,
+                first_failed_gate="margin.critical_ok",
+                reason_code=_gate_reason_code("margin.critical_ok"),
+                reason_detail=_reason_detail,
+                lifecycle_phase=current_lifecycle_phase,
+            )
 
     return ExecutionDecision(
         allowed=True,
