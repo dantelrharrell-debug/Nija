@@ -1124,11 +1124,18 @@ class StartupCoordinator:
                 )
             if self._runtime._activation_committed and self._runtime._last_commit_fingerprint == proof_fingerprint:
                 return self._runtime.event_version
+            # Commit-latch safety: snapshot_version can legitimately be 0 in
+            # cold-start paths that have not published prior events yet.  The
+            # dispatch latch must still become strictly positive to unlock LIVE
+            # execution gates.
+            commit_snapshot_version = int(snapshot.snapshot_version)
+            if commit_snapshot_version <= 0:
+                commit_snapshot_version = max(1, int(self._runtime.event_version))
             proof_dict = proof.as_dict()
             proof_dict["commit_allowed"] = True
-            proof_dict["commit_snapshot_version"] = int(snapshot.snapshot_version)
+            proof_dict["commit_snapshot_version"] = commit_snapshot_version
             self._runtime.last_committed_system_readiness_proof = proof_dict
-            self._runtime.last_committed_snapshot_version = snapshot.snapshot_version
+            self._runtime.last_committed_snapshot_version = commit_snapshot_version
             self._runtime._activation_committed = True
             self._runtime._last_commit_fingerprint = proof_fingerprint
             # dispatch_enabled is derived — not stored as primary state.
