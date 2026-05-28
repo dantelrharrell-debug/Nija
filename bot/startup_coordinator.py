@@ -31,6 +31,7 @@ FAIL_SAFE (3-tier)
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -762,6 +763,22 @@ class StartupCoordinator:
         if _inputs == self._runtime._last_reconcile_inputs:
             return self._runtime.runtime_authority_state, self._runtime.runtime_authority_reason
         self._runtime._last_reconcile_inputs = _inputs
+        # ── NIJA_FORCE_ACTIVATION bypass ──────────────────────────────────────
+        # When the trading-state machine has force-activated (via
+        # NIJA_FORCE_ACTIVATION=1) it bypasses all distributed-authority gates.
+        # Honour that bypass here so that subsequent reconcile calls see
+        # EXECUTING (and thus lifecycle_phase=LIVE) rather than falling back to
+        # BOOT/WARM due to absent Redis/heartbeat prerequisites.
+        # Kill-switch and emergency-stop always take precedence.
+        if (
+            os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "enabled")
+            and trading_state == "LIVE_ACTIVE"
+            and self._runtime.last_committed_snapshot_version > 0
+            and not self._runtime.kill_switch_active
+        ):
+            self._runtime.runtime_authority_state = RuntimeAuthorityState.EXECUTING
+            self._runtime.runtime_authority_reason = "force_activation_bypass"
+            return RuntimeAuthorityState.EXECUTING, "force_activation_bypass"
         # ── Full reconcile ────────────────────────────────────────────────────
         pending_readiness = sorted(
             key for key, value in self._runtime.readiness_table.items() if not value
@@ -1127,6 +1144,45 @@ class StartupCoordinator:
             return self._publish_locked(
                 StartupEvent.DISPATCH_ENABLED,
                 {"snapshot_version": snapshot.snapshot_version, "phase": StartupCoordinatorState.DISPATCH_ENABLED.value},
+            )
+
+    def force_activate_bypass(self, reason: str) -> None:
+        """Directly commit force-activation state, bypassing readiness-proof gates.
+
+        Called exclusively by :meth:`TradingStateMachine._force_live_active_transition`
+        when ``NIJA_FORCE_ACTIVATION=1`` is set.  Sets the coordinator runtime to
+        ``EXECUTING`` and records a non-zero commit version so that subsequent
+        calls to :meth:`_reconcile_runtime_authority_locked` treat this as a valid
+        LIVE dispatch (via the force-activation early-return guard in reconcile).
+
+        The method is idempotent: if the coordinator is already ``EXECUTING`` with a
+        committed version it is a no-op.  Kill-switch and emergency-stop are NOT
+        bypassed; those must be cleared before calling this method.
+        """
+        with self._lock:
+            if (
+                self._runtime.runtime_authority_state == RuntimeAuthorityState.EXECUTING
+                and self._runtime.last_committed_snapshot_version > 0
+            ):
+                return  # already committed; idempotent
+
+            self._runtime.event_version += 1
+            new_version = self._runtime.event_version
+            self._runtime.last_committed_snapshot_version = new_version
+            self._runtime._activation_committed = True
+            self._runtime.coordinator_state = StartupCoordinatorState.DISPATCH_ENABLED
+            self._runtime.runtime_authority_state = RuntimeAuthorityState.EXECUTING
+            self._runtime.runtime_authority_reason = reason or "force_activation_bypass"
+            # Invalidate edge-trigger cache so the next reconcile re-evaluates and
+            # writes back EXECUTING via the force-activation early-return guard.
+            self._runtime._last_reconcile_inputs = None
+            self._history.append(
+                {
+                    "version": new_version,
+                    "event": "FORCE_ACTIVATION_BYPASS",
+                    "payload": {"reason": reason},
+                    "state": StartupCoordinatorState.DISPATCH_ENABLED.value,
+                }
             )
 
     def record_fail_safe(self, tier: "FailSafeTier", reason: str = "") -> int:
