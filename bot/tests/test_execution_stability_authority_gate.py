@@ -117,6 +117,48 @@ class TestExecutionStabilityAuthorityGate(unittest.TestCase):
         self.assertIn("stability.allowed", decision.reason)
         self.assertIn("hard_collapse_containment", decision.reason)
 
+    def test_can_execute_blocks_when_runtime_nonce_invariant_drifts(self) -> None:
+        env = {
+            "NIJA_RUNTIME_TRADING_STATE": "LIVE_ACTIVE",
+            "NIJA_WRITER_LEASE_GENERATION": "7",
+            "NIJA_EXECUTION_CIRCUIT_STATE": "CLOSED",
+        }
+        with patch.dict(os.environ, env, clear=False), execution_authority_scope(), patch(
+            "bot.execution_authority_context.runtime_authority_snapshot",
+            return_value=self._runtime_snapshot(),
+        ), patch(
+            "bot.execution_authority_context.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.execution_authority_context._read_current_lease_generation",
+            return_value=(7, ""),
+        ), patch(
+            "bot.execution_authority_context._runtime_nonce_authority_status",
+            return_value=(False, "nonce_lease:lease_drift_detected"),
+        ), patch(
+            "bot.trading_state_machine._heartbeat_marker_path",
+            return_value="/tmp/heartbeat_verified.flag",
+        ), patch(
+            "bot.trading_state_machine.heartbeat_marker_is_fresh",
+            return_value=True,
+            create=True,
+        ), patch(
+            "bot.trading_state_machine._required_heartbeat_stage",
+            return_value="ORDER_VERIFY",
+            create=True,
+        ), patch(
+            "bot.trading_state_machine.heartbeat_marker_stage_is_sufficient",
+            return_value=True,
+            create=True,
+        ), patch(
+            "bot.execution_authority_context._evaluate_stability_authority",
+            return_value=self._stability(True),
+        ):
+            decision = can_execute()
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.first_failed_gate, "nonce.authority")
+        self.assertIn("lease_drift_detected", decision.reason_detail)
+
     def test_can_execute_blocks_when_stability_halt_gate_unavailable(self) -> None:
         env = {
             "NIJA_RUNTIME_TRADING_STATE": "LIVE_ACTIVE",
