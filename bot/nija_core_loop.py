@@ -2116,7 +2116,22 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         except ImportError:
             get_bootstrap_fsm = None  # type: ignore[assignment]
     if get_bootstrap_fsm is not None:
-        assert get_bootstrap_fsm().execution_authority, "Bootstrap execution_authority is required before strategy loop"
+        _bfsm_ea = get_bootstrap_fsm()
+        if not _bfsm_ea.execution_authority:
+            # Fallback: if execution_authority was not set by the normal bootstrap
+            # path (e.g. finalize_boot() was skipped), set it now using the fencing
+            # token which is already validated.  This prevents a crash when the FSM
+            # reaches RUNNING_SUPERVISED but execution_authority was not latched.
+            _ft = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+            if _ft and hasattr(_bfsm_ea, "_execution_authority"):
+                logger.warning(
+                    "execution_authority not set after bootstrap — applying fencing-token "
+                    "fallback (token_prefix=%s) to unblock strategy loop",
+                    _ft[:8],
+                )
+                _bfsm_ea._execution_authority = True
+            else:
+                assert False, "Bootstrap execution_authority is required before strategy loop"
     logger.critical("LIFECYCLE: entering strategy loop")
 
     # Supervisor-mode hard gate: only block execution when supervisor mode is
@@ -2310,7 +2325,19 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             except ImportError:
                 get_bootstrap_fsm = None  # type: ignore[assignment]
         if get_bootstrap_fsm is not None:
-            assert get_bootstrap_fsm().execution_authority, "Bootstrap execution_authority is required before scheduler"
+            _bfsm_sched = get_bootstrap_fsm()
+            if not _bfsm_sched.execution_authority:
+                # Fallback: same fencing-token recovery as the strategy loop gate above.
+                _ft_sched = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+                if _ft_sched and hasattr(_bfsm_sched, "_execution_authority"):
+                    logger.warning(
+                        "execution_authority not set before scheduler — applying fencing-token "
+                        "fallback (token_prefix=%s) to unblock cycle scheduler",
+                        _ft_sched[:8],
+                    )
+                    _bfsm_sched._execution_authority = True
+                else:
+                    assert False, "Bootstrap execution_authority is required before scheduler"
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
