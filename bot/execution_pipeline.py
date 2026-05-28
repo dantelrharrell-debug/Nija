@@ -181,13 +181,19 @@ try:
         execution_authority_scope,
         can_execute,
         emit_pretrade_execution_validator_trace,
+        assert_distributed_writer_authority,
+        assert_execution_dispatch_permitted,
+        runtime_authority_snapshot,
     )
 except ImportError:
     try:
-        from execution_authority_context import (
+        from execution_authority_context import (  # type: ignore[import]
             execution_authority_scope,
             can_execute,
             emit_pretrade_execution_validator_trace,
+            assert_distributed_writer_authority,
+            assert_execution_dispatch_permitted,
+            runtime_authority_snapshot,
         )
     except ImportError:
         @contextmanager
@@ -202,6 +208,17 @@ except ImportError:
 
         def emit_pretrade_execution_validator_trace(*args, **kwargs):
             return None
+
+        def assert_distributed_writer_authority() -> None:  # type: ignore[no-redef]
+            return None
+
+        def assert_execution_dispatch_permitted() -> None:  # type: ignore[no-redef]
+            return None
+
+        def runtime_authority_snapshot():  # type: ignore[no-redef]
+            class _Snap:
+                ready = False
+            return _Snap()
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -286,8 +303,15 @@ class PipelineRequest:
     symbol: str
     side: str                        # "buy" / "sell" / "long" / "short"
     size_usd: float
+    request_id: Optional[str] = None
+    intent_id: Optional[str] = None
+    notional_usd: Optional[float] = None
+    sizing_mode: str = "usd"
+    intent_type: str = "entry"       # "entry" / "reduce" / "exit"
+    subaccount_id: Optional[str] = None
+    buying_power_usd: Optional[float] = None
     strategy: str = ""
-    order_type: Optional[str] = None
+    order_type: Optional[str] = "market"
     asset_class: Optional[str] = None
     instrument_type: Optional[str] = None
     quantity_mode: str = "usd"
@@ -314,6 +338,18 @@ class PipelineRequest:
     extended_hours: Optional[bool] = None
     strategy_metadata: Dict[str, Any] = field(default_factory=dict)
     validated: bool = False
+
+
+# Ensure normalize_pipeline_request accepts the local PipelineRequest class above,
+# since it may have been imported from pipeline_request_contract which uses isinstance
+# against its own class.  Wrap it to pass through local instances unchanged.
+_upstream_normalize = normalize_pipeline_request
+
+
+def normalize_pipeline_request(value: Any) -> "PipelineRequest":  # type: ignore[no-redef]
+    if isinstance(value, PipelineRequest):
+        return value
+    return _upstream_normalize(value)  # type: ignore[return-value]
 
 
 @dataclass
@@ -1179,30 +1215,9 @@ class ExecutionPipeline:
 
         try:
             with execution_authority_scope():
-                authority_decision = can_execute()
-                if not bool(getattr(authority_decision, "allowed", False)):
-                    emit_pretrade_execution_validator_trace(
-                        authority_decision,
-                        symbol=effective_request.symbol,
-                        side=effective_request.side,
-                        size=effective_request.size_usd,
-                        terminal_surface="execution_pipeline_authority",
-                    )
-                    return PipelineResult(
-                        success=False,
-                        symbol=effective_request.symbol,
-                        side=effective_request.side,
-                        size_usd=effective_request.size_usd,
-                        error=f"ExecutionAuthority reject: {authority_decision.reason}",
-                        latency_ms=(time.monotonic() - t_start) * 1000,
-                    )
-                emit_pretrade_execution_validator_trace(
-                    authority_decision,
-                    symbol=effective_request.symbol,
-                    side=effective_request.side,
-                    size=effective_request.size_usd,
-                    terminal_surface="execution_pipeline_authority",
-                )
+                # assert_execution_dispatch_permitted raises ExecutionBlocked on denial.
+                # It is patchable in tests via bot.execution_pipeline.assert_execution_dispatch_permitted.
+                assert_execution_dispatch_permitted()
                 _correlation = get_runtime_correlation() or {}
                 _intent_id = str(_correlation.get("intent_id") or "").strip()
                 # ── Cycle integrity cross-check ───────────────────────────
@@ -1242,6 +1257,20 @@ class ExecutionPipeline:
                     },
                 )
                 result = self._dispatch(effective_request, t_start)
+        except ExecutionBlocked as exc:
+            self._emit_execution_rejection_telemetry(
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                reason=f"execution_authority_blocked:{exc}",
+            )
+            return PipelineResult(
+                success=False,
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                size_usd=effective_request.size_usd,
+                error=f"ExecutionAuthority reject: {exc}",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
         except Exception as exc:
             self._emit_execution_rejection_telemetry(
                 symbol=effective_request.symbol,

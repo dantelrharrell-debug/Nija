@@ -28,6 +28,7 @@ class MarginPositionLedger:
         self._sync_stop = threading.Event()
         self._sync_thread: Optional[threading.Thread] = None
         self._init_database()
+        self._tracker = MarginPositionTracker()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self._db_path), timeout=30.0, check_same_thread=False)
@@ -223,7 +224,7 @@ class MarginPositionLedger:
             return self._row_to_dict(row)
 
     def reconcile_snapshot(self, **kwargs: Any) -> Dict[str, Any]:
-        return self.reconcile_positions(**kwargs)
+        return self._reconcile_position_drift(**kwargs)
 
     def start_periodic_reconcile(
         self,
@@ -256,6 +257,339 @@ class MarginPositionLedger:
         if self._sync_thread and self._sync_thread.is_alive():
             self._sync_thread.join(timeout=1.0)
         self._sync_thread = None
+
+    # -------------------------------------------------------------------------
+    # Lifecycle mutation methods (SQLite-backed)
+    # -------------------------------------------------------------------------
+
+    def apply_submit(self, request: Any) -> Dict[str, Any]:
+        identity = self._identity_from_request(request)
+        request_id = self._clean_id(getattr(request, "request_id", None))
+        intent_id = self._clean_id(getattr(request, "intent_id", None))
+        with self._lock, self._connect() as conn:
+            cursor = conn.cursor()
+            if self._operation_seen(cursor, op_type="submit", request_id=request_id, intent_id=intent_id):
+                return self._row_to_dict(self._get_row(cursor, **identity))
+
+            row = self._ensure_row(cursor, identity, lifecycle_status="pending_open")
+            current_state = str(row["lifecycle_status"] or "pending_open")
+            self._assert_transition(current_state, "pending_open")
+
+            now = _utc_now()
+            cursor.execute(
+                """
+                UPDATE margin_position_ledger
+                SET lifecycle_status=?,
+                    buying_power_usd=COALESCE(?, buying_power_usd),
+                    available_margin_usd=COALESCE(?, available_margin_usd),
+                    leverage=COALESCE(?, leverage),
+                    margin_mode=COALESCE(?, margin_mode),
+                    reduce_only=?,
+                    last_request_id=COALESCE(?, last_request_id),
+                    last_intent_id=COALESCE(?, last_intent_id),
+                    broker_status='submitted',
+                    updated_at=?
+                WHERE broker=? AND account_id=? AND subaccount_id=? AND symbol=? AND asset_class=?
+                """,
+                (
+                    "pending_open",
+                    getattr(request, "buying_power_usd", None),
+                    getattr(request, "available_balance_usd", None),
+                    getattr(request, "leverage", None),
+                    getattr(request, "margin_mode", None),
+                    None if getattr(request, "reduce_only", None) is None else (1 if bool(getattr(request, "reduce_only")) else 0),
+                    request_id,
+                    intent_id,
+                    now,
+                    identity["broker"],
+                    identity["account_id"],
+                    identity["subaccount_id"],
+                    identity["symbol"],
+                    identity["asset_class"],
+                ),
+            )
+            self._record_operation(cursor, op_type="submit", request_id=request_id, intent_id=intent_id)
+            conn.commit()
+            return self._row_to_dict(self._get_row(cursor, **identity))
+
+    def apply_ack_fill(self, request: Any, result: Any) -> Dict[str, Any]:
+        identity = self._identity_from_request(request)
+        request_id = self._clean_id(getattr(request, "request_id", None))
+        intent_id = self._clean_id(getattr(request, "intent_id", None))
+        with self._lock, self._connect() as conn:
+            cursor = conn.cursor()
+            if self._operation_seen(cursor, op_type="ack_fill", request_id=request_id, intent_id=intent_id):
+                return self._row_to_dict(self._get_row(cursor, **identity))
+
+            row = self._ensure_row(cursor, identity, lifecycle_status="pending_open")
+            lifecycle = str(row["lifecycle_status"] or "pending_open")
+            if lifecycle == "rejected":
+                raise ValueError("invalid_lifecycle_transition:rejected->ack_fill")
+
+            current_notional = float(row["position_notional_usd"] or 0.0)
+            current_units = float(row["position_units"] or 0.0)
+            filled_notional = max(0.0, float(getattr(result, "filled_size_usd", 0.0) or 0.0))
+            filled_units = max(0.0, float(getattr(request, "units", 0.0) or 0.0))
+            intent_type = str(getattr(request, "intent_type", "") or "").strip().lower()
+
+            if intent_type in {"reduce", "exit"}:
+                next_notional = max(0.0, current_notional - filled_notional)
+                next_units = max(0.0, current_units - filled_units)
+                next_lifecycle = "closed" if next_notional <= 1e-9 else "reducing"
+            else:
+                next_notional = current_notional + filled_notional
+                next_units = current_units + filled_units
+                next_lifecycle = "open" if next_notional > 0 else lifecycle
+
+            self._assert_transition(lifecycle, next_lifecycle)
+            now = _utc_now()
+            cursor.execute(
+                """
+                UPDATE margin_position_ledger
+                SET lifecycle_status=?,
+                    position_units=?,
+                    position_notional_usd=?,
+                    last_request_id=COALESCE(?, last_request_id),
+                    last_intent_id=COALESCE(?, last_intent_id),
+                    broker_status=?,
+                    updated_at=?
+                WHERE broker=? AND account_id=? AND subaccount_id=? AND symbol=? AND asset_class=?
+                """,
+                (
+                    next_lifecycle,
+                    next_units,
+                    next_notional,
+                    request_id,
+                    intent_id,
+                    "filled" if filled_notional > 0 else "ack",
+                    now,
+                    identity["broker"],
+                    identity["account_id"],
+                    identity["subaccount_id"],
+                    identity["symbol"],
+                    identity["asset_class"],
+                ),
+            )
+            self._record_operation(cursor, op_type="ack_fill", request_id=request_id, intent_id=intent_id)
+            conn.commit()
+            return self._row_to_dict(self._get_row(cursor, **identity))
+
+    def apply_reject_or_cancel(self, request: Any, reason: str) -> Dict[str, Any]:
+        identity = self._identity_from_request(request)
+        request_id = self._clean_id(getattr(request, "request_id", None))
+        intent_id = self._clean_id(getattr(request, "intent_id", None))
+        with self._lock, self._connect() as conn:
+            cursor = conn.cursor()
+            if self._operation_seen(cursor, op_type="reject_cancel", request_id=request_id, intent_id=intent_id):
+                return self._row_to_dict(self._get_row(cursor, **identity))
+
+            row = self._ensure_row(cursor, identity, lifecycle_status="pending_open")
+            lifecycle = str(row["lifecycle_status"] or "pending_open")
+            current_notional = float(row["position_notional_usd"] or 0.0)
+            intent_type = str(getattr(request, "intent_type", "") or "").strip().lower()
+
+            next_lifecycle = "closed" if intent_type in {"reduce", "exit"} and current_notional <= 1e-9 else "rejected"
+            self._assert_transition(lifecycle, next_lifecycle)
+
+            cursor.execute(
+                """
+                UPDATE margin_position_ledger
+                SET lifecycle_status=?,
+                    last_reason=?,
+                    last_request_id=COALESCE(?, last_request_id),
+                    last_intent_id=COALESCE(?, last_intent_id),
+                    broker_status='rejected',
+                    updated_at=?
+                WHERE broker=? AND account_id=? AND subaccount_id=? AND symbol=? AND asset_class=?
+                """,
+                (
+                    next_lifecycle,
+                    str(reason or "unknown_rejection"),
+                    request_id,
+                    intent_id,
+                    _utc_now(),
+                    identity["broker"],
+                    identity["account_id"],
+                    identity["subaccount_id"],
+                    identity["symbol"],
+                    identity["asset_class"],
+                ),
+            )
+            self._record_operation(cursor, op_type="reject_cancel", request_id=request_id, intent_id=intent_id)
+            conn.commit()
+            return self._row_to_dict(self._get_row(cursor, **identity))
+
+    def _reconcile_position_drift(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        subaccount_id: str,
+        symbol: str,
+        asset_class: str,
+        broker_units: float,
+        broker_notional_usd: float,
+        buying_power_usd: Optional[float] = None,
+        available_margin_usd: Optional[float] = None,
+        leverage: Optional[int] = None,
+        margin_mode: Optional[str] = None,
+        leverage_authoritative: bool = False,
+        margin_mode_authoritative: bool = False,
+        drift_threshold_usd: float = 0.01,
+    ) -> Dict[str, Any]:
+        identity = {
+            "broker": str(broker or "coinbase").strip().lower() or "coinbase",
+            "account_id": str(account_id or "default").strip() or "default",
+            "subaccount_id": str(subaccount_id or "").strip(),
+            "symbol": str(symbol or "").strip().upper(),
+            "asset_class": str(asset_class or "crypto").strip().lower() or "crypto",
+        }
+        with self._lock, self._connect() as conn:
+            cursor = conn.cursor()
+            row = self._ensure_row(cursor, identity, lifecycle_status="pending_open")
+            local_notional = float(row["position_notional_usd"] or 0.0)
+            broker_notional_val = max(0.0, float(broker_notional_usd or 0.0))
+            broker_units_val = max(0.0, float(broker_units or 0.0))
+            drift = abs(local_notional - broker_notional_val)
+            corrected = drift > max(0.0, float(drift_threshold_usd or 0.0))
+
+            lifecycle = str(row["lifecycle_status"] or "pending_open")
+            next_lifecycle = lifecycle
+            if corrected:
+                next_lifecycle = "open" if broker_notional_val > 1e-9 else "closed"
+                try:
+                    self._assert_transition(lifecycle, next_lifecycle)
+                except ValueError:
+                    next_lifecycle = "open" if broker_notional_val > 1e-9 else "closed"
+                logger.warning(
+                    "margin ledger drift corrected | broker=%s account=%s symbol=%s local=%.6f broker=%.6f drift=%.6f",
+                    identity["broker"],
+                    identity["account_id"],
+                    identity["symbol"],
+                    local_notional,
+                    broker_notional_val,
+                    drift,
+                )
+
+            next_leverage = leverage if leverage_authoritative else row["leverage"]
+            next_margin_mode = margin_mode if margin_mode_authoritative else row["margin_mode"]
+            cursor.execute(
+                """
+                UPDATE margin_position_ledger
+                SET lifecycle_status=?,
+                    position_units=?,
+                    position_notional_usd=?,
+                    buying_power_usd=COALESCE(?, buying_power_usd),
+                    available_margin_usd=COALESCE(?, available_margin_usd),
+                    leverage=?,
+                    margin_mode=?,
+                    broker_status=?,
+                    last_broker_sync_at=?,
+                    updated_at=?
+                WHERE broker=? AND account_id=? AND subaccount_id=? AND symbol=? AND asset_class=?
+                """,
+                (
+                    next_lifecycle,
+                    broker_units_val if corrected else float(row["position_units"] or 0.0),
+                    broker_notional_val if corrected else local_notional,
+                    buying_power_usd,
+                    available_margin_usd,
+                    next_leverage,
+                    next_margin_mode,
+                    "reconciled" if corrected else "in_sync",
+                    _utc_now(),
+                    _utc_now(),
+                    identity["broker"],
+                    identity["account_id"],
+                    identity["subaccount_id"],
+                    identity["symbol"],
+                    identity["asset_class"],
+                ),
+            )
+            conn.commit()
+            final_row = self._row_to_dict(self._get_row(cursor, **identity))
+            return {
+                "corrected": corrected,
+                "drift_usd": drift,
+                "record": final_row,
+            }
+
+    # -------------------------------------------------------------------------
+    # Tracker delegation methods (JSON/in-memory margin state)
+    # -------------------------------------------------------------------------
+
+    def ingest_account_snapshot(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        equity_usd: float,
+        free_balance_usd: float,
+        margin_obligation_usd: float,
+        free_margin_usd: float,
+        unrealised_pnl_usd: float = 0.0,
+        ts: Optional[float] = None,
+    ) -> None:
+        self._tracker.ingest_account_snapshot(
+            broker=broker,
+            account_id=account_id,
+            equity_usd=equity_usd,
+            free_balance_usd=free_balance_usd,
+            margin_obligation_usd=margin_obligation_usd,
+            free_margin_usd=free_margin_usd,
+            unrealised_pnl_usd=unrealised_pnl_usd,
+            ts=ts,
+        )
+
+    def ingest_position_snapshot(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        symbol: str,
+        position_id: str,
+        side: str,
+        notional_usd: float,
+        leverage: float,
+        entry_price: float = 0.0,
+        mark_price: float = 0.0,
+        unrealised_pnl_usd: float = 0.0,
+        reduce_only: bool = False,
+        ts: Optional[float] = None,
+    ) -> None:
+        self._tracker.reconcile_snapshot(
+            broker=broker,
+            account_id=account_id,
+            symbol=symbol,
+            position_id=position_id,
+            side=side,
+            notional_usd=notional_usd,
+            leverage=leverage,
+            entry_price=entry_price,
+            mark_price=mark_price,
+            unrealised_pnl_usd=unrealised_pnl_usd,
+            reduce_only=reduce_only,
+            ts=ts,
+        )
+
+    def reconcile_positions(
+        self,
+        *,
+        broker: str,
+        account_id: str,
+        truth_positions: List[Dict[str, Any]],
+    ) -> str:
+        return self._tracker.reconcile_position_tracking(
+            broker=broker,
+            account_id=account_id,
+            truth_positions=truth_positions,
+        )
+
+    def get_account_risk_snapshot(self, *, broker: str, account_id: str) -> "MarginRiskSnapshot":
+        return self._tracker.get_account_risk_snapshot(broker=broker, account_id=account_id)
+
+    def get_runtime_capability_overrides(self, *, broker: str, account_id: str) -> Dict[str, Any]:
+        return self._tracker.get_runtime_capability_overrides(broker=broker, account_id=account_id)
 
 
 @dataclass
