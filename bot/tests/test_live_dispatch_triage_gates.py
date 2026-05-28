@@ -78,6 +78,7 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
                 "allowed": True,
                 "decision": {},
             },
+            validator_trace_payload={"available": False},
             pipeline_payload={
                 "available": True,
                 "stage_counts": {
@@ -111,6 +112,7 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
                 "first_failed_gate": "nonce.authority",
                 "decision": {"reason": "nonce.authority"},
             },
+            validator_trace_payload={"available": False},
             pipeline_payload={
                 "available": True,
                 "stage_counts": {
@@ -144,6 +146,7 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
                 "first_failed_gate": "lifecycle.phase",
                 "decision": {"reason": "lifecycle_phase:WARM"},
             },
+            validator_trace_payload={"available": False},
             pipeline_payload={"available": False},
             inferred_signal_gate=None,
             inferred_execution_gate=None,

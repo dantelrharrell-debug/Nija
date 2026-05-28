@@ -241,6 +241,7 @@ try:
         assert_execution_dispatch_permitted,
         assert_distributed_writer_authority,
         assert_startup_write_authority,
+        emit_pretrade_execution_validator_trace,
     )
 except ImportError:
     try:
@@ -251,6 +252,7 @@ except ImportError:
             assert_execution_dispatch_permitted,
             assert_distributed_writer_authority,
             assert_startup_write_authority,
+            emit_pretrade_execution_validator_trace,
         )
     except ImportError:
         def can_execute():
@@ -273,6 +275,9 @@ except ImportError:
 
         def assert_startup_write_authority() -> None:
             return
+
+        def emit_pretrade_execution_validator_trace(*args, **kwargs):
+            return None
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -318,9 +323,23 @@ def _reject_if_unauthorized_order_submit(
 
     decision = can_execute()
     if decision.allowed:
+        emit_pretrade_execution_validator_trace(
+            decision,
+            symbol=symbol,
+            side=side,
+            size=size,
+            terminal_surface="broker_integration",
+        )
         return None
     probe_allowed, probe_reason = can_execute_startup_probe()
     if probe_allowed:
+        emit_pretrade_execution_validator_trace(
+            decision,
+            symbol=symbol,
+            side=side,
+            size=size,
+            terminal_surface="broker_integration_startup_probe",
+        )
         logger.warning(
             "⚠️ Startup execution probe authorized before LIVE_ACTIVE "
             "(broker=%s symbol=%s side=%s size=%s reason=%s)",
@@ -337,6 +356,13 @@ def _reject_if_unauthorized_order_submit(
         "distributed_writer_fence"
         if ("fencing" in reason.lower() or "writer authority" in reason.lower())
         else "execution_authority_violation"
+    )
+    emit_pretrade_execution_validator_trace(
+        decision,
+        symbol=symbol,
+        side=side,
+        size=size,
+        terminal_surface="broker_integration",
     )
     _emit_rejection_telemetry(telemetry_reason)
     logger.critical(

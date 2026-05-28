@@ -480,6 +480,7 @@ class MetricCollector:
         runtime_state_payload: Dict[str, Any],
         readiness_proof_payload: Dict[str, Any],
         decision_payload: Dict[str, Any],
+        validator_trace_payload: Dict[str, Any],
         pipeline_payload: Dict[str, Any],
         inferred_signal_gate: Optional[str],
         inferred_execution_gate: Optional[str],
@@ -507,6 +508,17 @@ class MetricCollector:
                 else ""
             )
             first_blocker = f"{lifecycle_phase}:can_execute:{gate}:{reason or 'blocked'}"
+
+        if (
+            first_blocker is None
+            and validator_trace_payload.get("available")
+            and isinstance(validator_trace_payload.get("latest"), dict)
+        ):
+            latest = validator_trace_payload.get("latest", {})
+            if str(latest.get("decision") or "").upper() == "BLOCK":
+                gate = str(latest.get("first_failed_gate") or "").strip() or "unknown"
+                reason = str(latest.get("reason_code") or latest.get("reason_detail") or "").strip() or "blocked"
+                first_blocker = f"{lifecycle_phase}:validator:{gate}:{reason}"
 
         if first_blocker is None and pipeline_payload.get("available"):
             counts = pipeline_payload.get("stage_counts", {})
@@ -687,6 +699,20 @@ class MetricCollector:
             decision_payload = {"available": False, "error": str(exc)}
         triage["can_execute"] = decision_payload
 
+        validator_trace_payload: Dict[str, Any] = {"available": False}
+        try:
+            from bot.execution_authority_context import get_pretrade_execution_validator_traces
+
+            validator_rows = get_pretrade_execution_validator_traces(limit=25)
+            validator_trace_payload = {
+                "available": True,
+                "count": len(validator_rows),
+                "latest": validator_rows[0] if validator_rows else None,
+            }
+        except Exception as exc:
+            validator_trace_payload = {"available": False, "error": str(exc)}
+        triage["pretrade_validator_trace"] = validator_trace_payload
+
         compiler_payload: Dict[str, Any] = {"available": False}
         try:
             from bot.control_compiler import get_control_compiler
@@ -787,6 +813,7 @@ class MetricCollector:
             runtime_state_payload=state_payload,
             readiness_proof_payload=readiness_proof_payload,
             decision_payload=decision_payload,
+            validator_trace_payload=validator_trace_payload,
             pipeline_payload=pipeline_payload,
             inferred_signal_gate=inferred_signal_gate,
             inferred_execution_gate=inferred_execution_gate,
