@@ -191,6 +191,7 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
     3. Distributed writer authority is valid (fencing token matches Redis lock),
        OR the Redis lease was not acquired (single-instance / fallback-token mode)
        in which case only Redis connectivity is verified.
+    4. Authority lineage generation number matches Redis (generation tracking).
 
     Returns (ok, error_message).
     """
@@ -292,6 +293,32 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
                 "AuthorityHeartbeatMonitor: Redis reachable; "
                 "accepting fallback-token authority (single-instance mode)"
             )
+
+        # 4. Validate authority lineage generation number.
+        # This check runs after the fencing-token check so that generation
+        # mismatches are only reported when the token itself is valid.
+        # Skipped in fallback/single-instance mode (no Redis lease to track).
+        if not is_fallback:
+            try:
+                try:
+                    from bot.writer_generation_tracker import validate_generation_for_heartbeat
+                except ImportError:
+                    from writer_generation_tracker import validate_generation_for_heartbeat  # type: ignore[import]
+
+                gen_ok, gen_err = validate_generation_for_heartbeat()
+                if not gen_ok:
+                    logger.critical(
+                        "AuthorityHeartbeatMonitor: authority lineage generation mismatch "
+                        "detected during heartbeat — %s",
+                        gen_err,
+                    )
+                    return False, f"authority_lineage_generation_mismatch: {gen_err}"
+            except Exception as gen_exc:
+                logger.warning(
+                    "AuthorityHeartbeatMonitor: generation validation raised unexpected error "
+                    "(non-fatal, continuing): %s",
+                    gen_exc,
+                )
 
         return True, ""
 
