@@ -1,0 +1,70 @@
+name: Governance settings audit
+
+on:
+  schedule:
+    - cron: "0 10 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Audit branch protection and auto-delete settings
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const requiredBranches = ['main', 'develop'];
+            const findings = [];
+
+            const repoInfo = await github.rest.repos.get({ owner, repo });
+            const autoDelete = Boolean(repoInfo.data.delete_branch_on_merge);
+            if (!autoDelete) {
+              findings.push('Repository setting "Automatically delete head branches" is disabled.');
+            }
+
+            for (const branch of requiredBranches) {
+              try {
+                const protection = await github.rest.repos.getBranchProtection({
+                  owner,
+                  repo,
+                  branch
+                });
+                const rules = protection.data;
+
+                if (!rules.required_pull_request_reviews) {
+                  findings.push(`Branch ${branch}: required PR reviews are not configured.`);
+                } else {
+                  if (!rules.required_pull_request_reviews.dismiss_stale_reviews) {
+                    findings.push(`Branch ${branch}: dismiss stale approvals is disabled.`);
+                  }
+                }
+
+                if (!rules.required_status_checks) {
+                  findings.push(`Branch ${branch}: required status checks are not configured.`);
+                }
+              } catch (error) {
+                findings.push(`Branch ${branch}: unable to read protection (${error.message}).`);
+              }
+            }
+
+            const now = new Date().toISOString();
+            const body = [
+              '# Governance settings audit',
+              '',
+              `Generated: ${now}`,
+              '',
+              findings.length
+                ? '## Findings\n' + findings.map((f) => `- ${f}`).join('\n')
+                : '## Findings\n- No policy gaps detected.'
+            ].join('\n');
+
+            core.summary.addRaw(body).write();
+            if (findings.length) {
+              core.setFailed('Governance settings audit found policy gaps.');
+            }

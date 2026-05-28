@@ -1,0 +1,219 @@
+name: Branch and PR hygiene
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      prune_mode:
+        description: "none | merged | merged_and_stale"
+        required: true
+        default: "none"
+        type: choice
+        options:
+          - none
+          - merged
+          - merged_and_stale
+      stale_days:
+        description: "Stale threshold in days for unmerged branches"
+        required: true
+        default: "90"
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Analyze branches and PRs
+        id: analyze
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branchPrefix = `${owner}:`;
+            const staleDays = Number(core.getInput('stale_days') || '90');
+            const pruneMode = core.getInput('prune_mode') || 'none';
+            const pruneMerged = pruneMode === 'merged' || pruneMode === 'merged_and_stale';
+            const pruneStale = pruneMode === 'merged_and_stale';
+
+            const protectedPatterns = [
+              /^main$/,
+              /^develop$/,
+              /^release\//,
+              /^hotfix\//
+            ];
+
+            const isProtected = (name) => protectedPatterns.some((pattern) => pattern.test(name));
+            const now = new Date();
+
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            const merged = [];
+            const staleUnmerged = [];
+            const active = [];
+            const deleted = [];
+
+            for (const branch of branches) {
+              const name = branch.name;
+              if (isProtected(name)) {
+                continue;
+              }
+
+              const branchRef = `${branchPrefix}${name}`;
+              const prs = await github.rest.pulls.list({
+                owner,
+                repo,
+                head: branchRef,
+                state: 'all',
+                per_page: 100
+              });
+
+              const openPr = prs.data.find((pr) => pr.state === 'open');
+              const mergedPr = prs.data.find((pr) => Boolean(pr.merged_at));
+              const commitDateRaw =
+                branch.commit?.commit?.author?.date ||
+                branch.commit?.commit?.committer?.date;
+              const commitDate = commitDateRaw ? new Date(commitDateRaw) : null;
+              const ageDays = commitDate
+                ? Math.floor((now - commitDate) / (1000 * 60 * 60 * 24))
+                : null;
+
+              if (mergedPr) {
+                merged.push({ name, ageDays, mergedPr: mergedPr.number });
+                if (pruneMerged) {
+                  try {
+                    await github.rest.git.deleteRef({
+                      owner,
+                      repo,
+                      ref: `heads/${name}`
+                    });
+                    deleted.push({ name, reason: 'merged' });
+                  } catch (error) {
+                    core.warning(`Failed to delete merged branch ${name}: ${error.message}`);
+                  }
+                }
+                continue;
+              }
+
+              if (!openPr && ageDays !== null && ageDays >= staleDays) {
+                staleUnmerged.push({ name, ageDays });
+                if (pruneStale) {
+                  try {
+                    await github.rest.git.deleteRef({
+                      owner,
+                      repo,
+                      ref: `heads/${name}`
+                    });
+                    deleted.push({ name, reason: 'stale-unmerged' });
+                  } catch (error) {
+                    core.warning(`Failed to delete stale branch ${name}: ${error.message}`);
+                  }
+                }
+                continue;
+              }
+
+              active.push({ name, ageDays, hasOpenPr: Boolean(openPr) });
+            }
+
+            const openPrs = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100
+            });
+            const stalePrThresholdDate = new Date(now.getTime() - (14 * 24 * 60 * 60 * 1000));
+            const stalePrs = openPrs.filter((pr) => new Date(pr.updated_at) < stalePrThresholdDate);
+
+            const summaryLines = [
+              `# Branch/PR Hygiene Digest`,
+              ``,
+              `- Generated: ${now.toISOString()}`,
+              `- Branches scanned: ${branches.length}`,
+              `- Prune mode: \`${pruneMode}\``,
+              `- Merged branches pending deletion: ${merged.length}`,
+              `- Stale unmerged branches: ${staleUnmerged.length}`,
+              `- Active branches: ${active.length}`,
+              `- Open PRs: ${openPrs.length}`,
+              `- Stale PRs (no update >14d): ${stalePrs.length}`,
+              `- Branches deleted this run: ${deleted.length}`,
+              ``,
+              `## Top merged branches`,
+              ...merged.slice(0, 20).map((b) => `- \`${b.name}\` (PR #${b.mergedPr})`),
+              ``,
+              `## Top stale-unmerged branches`,
+              ...staleUnmerged.slice(0, 20).map((b) => `- \`${b.name}\` (${b.ageDays} days old)`),
+              ``,
+              `## Top stale PRs`,
+              ...stalePrs.slice(0, 20).map((pr) => `- #${pr.number} ${pr.title}`),
+              ``,
+              `## Deleted branches this run`,
+              ...(deleted.length
+                ? deleted.slice(0, 50).map((b) => `- \`${b.name}\` (${b.reason})`)
+                : ['- none'])
+            ];
+
+            const body = summaryLines.join('\n');
+            core.summary.addRaw(body).write();
+            core.setOutput('digest_body', body);
+
+      - name: Create or update weekly digest issue
+        uses: actions/github-script@v7
+        env:
+          DIGEST_BODY: ${{ steps.analyze.outputs.digest_body }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const title = 'Branch/PR Hygiene Weekly Digest';
+            const labelName = 'branch-hygiene-digest';
+            const body = process.env.DIGEST_BODY || 'No digest output produced.';
+
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: labelName });
+            } catch {
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: labelName,
+                color: '1d76db',
+                description: 'Weekly branch/PR hygiene digest'
+              });
+            }
+
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              labels: labelName,
+              per_page: 100
+            });
+
+            const existing = openIssues.find((issue) => issue.title === title);
+            if (existing) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body
+              });
+              core.info(`Updated digest issue #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: [labelName]
+              });
+              core.info(`Created digest issue #${created.data.number}`);
+            }

@@ -1,0 +1,9 @@
+# Default owners
+* @dantelrharrell-debug
+
+# Governance and CI ownership
+/.github/ @dantelrharrell-debug
+/.github/workflows/ @dantelrharrell-debug
+
+# Core bot ownership
+/bot/ @dantelrharrell-debug
