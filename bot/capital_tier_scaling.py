@@ -121,7 +121,7 @@ class TierConfiguration:
 TIER_CONFIGURATIONS = {
     TierLevel.MICRO: TierConfiguration(
         tier_level=TierLevel.MICRO,
-        min_capital=50.0,
+        min_capital=10.0,   # was 50.0 — lowered for micro-capital ($10–$49 accounts)
         max_capital=500.0,
         risk_per_trade_pct=(0.02, 0.03),  # 2-3% per trade
         max_positions=(1, 2),               # 1-2 positions
@@ -136,7 +136,7 @@ TIER_CONFIGURATIONS = {
         daily_loss_limit_pct=0.05,         # 5% daily max loss
         weekly_loss_limit_pct=0.10,        # 10% weekly max loss
         allow_aggressive_entries=True,
-        require_high_confidence=True,
+        require_high_confidence=False,      # was True — allow LOW confidence for micro-capital
         prioritize_stability=False,
     ),
     
@@ -478,9 +478,9 @@ class CapitalTierSystem:
         """
         config = self.get_config()
         
-        # High confidence requirement check
-        if config.require_high_confidence and confidence < 0.65:
-            return False, f"Tier {self.current_tier.value} requires high confidence (≥65%)"
+        # High confidence requirement check — threshold lowered to 0.40 for micro-capital
+        if config.require_high_confidence and confidence < 0.40:
+            return False, f"Tier {self.current_tier.value} requires high confidence (≥40%)"
         
         # Stability priority check (stricter quality requirements)
         if config.prioritize_stability and quality_score < 75:

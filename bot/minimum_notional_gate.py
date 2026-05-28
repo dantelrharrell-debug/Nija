@@ -50,10 +50,9 @@ class NotionalGateConfig:
         self.min_entry_notional_usd = env_floor
 
         if self.broker_specific_limits is None:
-            # Kraken hard floor: configurable via KRAKEN_MIN_NOTIONAL_USD (default $5,
-            # matching BaseBroker.min_trade_size). The old hard-coded $10.5 was too
-            # aggressive for small accounts; the exchange itself requires ~$5 minimum.
-            _kraken_hard_floor = float(os.getenv("KRAKEN_MIN_NOTIONAL_USD", "5.0"))
+            # Kraken hard floor: configurable via KRAKEN_MIN_NOTIONAL_USD (default $1,
+            # lowered from $5 for micro-capital mode — actual exchange minimum is ~$1).
+            _kraken_hard_floor = float(os.getenv("KRAKEN_MIN_NOTIONAL_USD", "1.0"))
             self.broker_specific_limits = {
                 'coinbase': max(1.0, env_floor),
                 'kraken': max(_kraken_hard_floor, env_floor),

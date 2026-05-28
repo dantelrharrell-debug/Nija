@@ -110,8 +110,12 @@ logger = logging.getLogger("nija.capital_csm_v2")
 # ---------------------------------------------------------------------------
 # Confidence threshold — mirrors capital_flow_state_machine.CONFIDENCE_MEDIUM_THRESHOLD
 # Inlined here to avoid a circular import; keep in sync if the source changes.
+# Lowered from 0.55 → 0.40 to allow LOW-confidence snapshots to reach READY
+# state for micro-capital accounts where only 1 broker may be connected.
 # ---------------------------------------------------------------------------
-_MEDIUM_CONFIDENCE_THRESHOLD: float = 0.55
+_MEDIUM_CONFIDENCE_THRESHOLD: float = float(
+    os.getenv("NIJA_CSM_CONFIDENCE_THRESHOLD", "0.40")
+)
 
 
 # ---------------------------------------------------------------------------

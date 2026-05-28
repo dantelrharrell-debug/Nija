@@ -168,17 +168,18 @@ class TierPositionRules:
 # Rules are ENFORCED, not advisory
 
 TIER_POSITION_RULES: Dict[CapitalTier, TierPositionRules] = {
-    # STARTER ($50-99): MULTI-POSITION SCALING
+    # STARTER ($10-99): MULTI-POSITION SCALING
+    # Lowered balance_min from $50 → $10 to cover micro-capital accounts ($10–$49).
     # Problem: $50 split into too many positions = below minimum size
     # Solution: up to 5 positions at 18% each = 90% max exposure
+    # At $46.50: 1-2 positions recommended via calculate_optimal_position_count
     # At $70-$100: 5 × 18% = $12.6-$18 per position (fee-viable)
-    # At $50-$69: 2-3 positions recommended via calculate_optimal_position_count
     CapitalTier.STARTER: TierPositionRules(
         tier_name="STARTER",
-        balance_min=50.0,
+        balance_min=10.0,   # was 50.0 — lowered for micro-capital ($10–$49 accounts)
         balance_max=99.0,
         max_positions=5,  # HARD CAP: Up to 5 positions for $70-$100 accounts
-        min_position_size_usd=15.0,  # Minimum $15 per position (fee viability)
+        min_position_size_usd=5.0,   # was 15.0 — lowered for micro-capital fee viability
         target_position_pct=0.18,  # Target 18% per position (5 × 18% = 90% max exposure)
         concentration_strategy="CONCENTRATED",
         exposure_compression_factor=1.0  # Maximum concentration

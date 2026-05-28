@@ -2106,7 +2106,9 @@ class ExecutionEngine:
                     _csm_status = _csm.status_dict()
                     _real_capital = _csm_status.get("real_capital") or 0.0
                     if _real_capital > 0:
-                        order_size = min(5.00, _real_capital * 0.2)
+                        # Micro-capital sizing: use 30% of real capital, no hard $5 cap.
+                        # For $46.50 this yields $13.95 — enough to clear exchange minimums.
+                        order_size = min(position_size, _real_capital * 0.30)
                         position_size = order_size
                         logger.critical(
                             f"ATTEMPTING TRADE: size={order_size:.4f} "

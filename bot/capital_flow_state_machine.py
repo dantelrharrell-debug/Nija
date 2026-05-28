@@ -131,7 +131,11 @@ elif __name__ == "capital_flow_state_machine":
 CONFIDENCE_HIGH_THRESHOLD: float = 0.80
 
 #: Confidence threshold above which a snapshot is classified as MEDIUM quality.
-CONFIDENCE_MEDIUM_THRESHOLD: float = 0.55
+#: Lowered from 0.55 → 0.40 for micro-capital mode (1-broker deployments produce
+#: lower confidence scores; 0.40 is sufficient for safe trading with $46.50).
+CONFIDENCE_MEDIUM_THRESHOLD: float = float(
+    os.getenv("NIJA_CONFIDENCE_MEDIUM_THRESHOLD", "0.40")
+)
 
 #: Default snapshot freshness TTL (seconds).  Matches
 #: ``_DEFAULT_FRESHNESS_TTL_S`` in ``capital_authority.py`` and the per-cycle
