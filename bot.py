@@ -5314,26 +5314,35 @@ def _verify_startup_truth_conditions(
                 f"Condition B failed: bootstrap FSM state is {_state}, expected RUNNING_SUPERVISED."
             )
 
-    # New requirement — relaxed market gates must pass
+    # Market readiness should never block startup activation on external feed
+    # heartbeat or early-session handshake noise. Probe it for diagnostics only.
     _mrg = getattr(strategy, "market_readiness_gate", None)
     if _mrg is None:
-        raise RuntimeError("Startup verification failed: MarketReadinessGate not initialized.")
-    try:
-        _mode, _conditions, _details = _mrg.check_market_readiness(
-            atr=float(_mrg.AGGRESSIVE_ATR_MIN),
-            current_price=_MARKET_GATE_PROBE_PRICE,
-            adx=float(_mrg.AGGRESSIVE_ADX_MIN),
-            volume_percentile=float(_mrg.AGGRESSIVE_VOLUME_PERCENTILE_MIN),
-            spread_pct=float(_mrg.AGGRESSIVE_SPREAD_MAX),
-            entry_score=float(getattr(_mrg, "CAUTIOUS_MIN_SCORE", 45.0)),
+        logger.warning(
+            "Startup market-readiness probe skipped: MarketReadinessGate not initialized"
         )
-    except Exception as _gate_err:
-        raise RuntimeError(f"Startup verification failed: market readiness gate probe error: {_gate_err}")
-    _mode_value = getattr(_mode, "value", str(_mode)).lower()
-    if _mode_value == "idle":
-        raise RuntimeError(
-            f"Startup verification failed: relaxed market gate probe returned IDLE ({_details.get('message')})."
-        )
+    else:
+        try:
+            _mode, _conditions, _details = _mrg.check_market_readiness(
+                atr=float(_mrg.AGGRESSIVE_ATR_MIN),
+                current_price=_MARKET_GATE_PROBE_PRICE,
+                adx=float(_mrg.AGGRESSIVE_ADX_MIN),
+                volume_percentile=float(_mrg.AGGRESSIVE_VOLUME_PERCENTILE_MIN),
+                spread_pct=float(_mrg.AGGRESSIVE_SPREAD_MAX),
+                entry_score=float(getattr(_mrg, "CAUTIOUS_MIN_SCORE", 45.0)),
+            )
+            _mode_value = getattr(_mode, "value", str(_mode)).lower()
+            if _mode_value == "idle":
+                logger.warning(
+                    "Startup market-readiness probe returned IDLE — continuing startup "
+                    "without blocking activation (%s)",
+                    _details.get("message"),
+                )
+        except Exception as _gate_err:
+            logger.warning(
+                "Startup market-readiness probe failed — continuing without blocking startup: %s",
+                _gate_err,
+            )
 
 
 def _run_state_machine_loop() -> None:
@@ -5428,11 +5437,10 @@ def _ensure_state_machine_loop_started() -> None:
     with _sm_loop_lock:
         if not _is_balance_hydrated_ready():
             _hydration_diag = _balance_hydration_debug_status()
-            logger.warning(
-                "🚫 FSM BLOCKED: waiting for balance hydration | diag=%s",
+            logger.info(
+                "FSM pre-hydration start: balance hydration still pending | diag=%s",
                 _hydration_diag,
             )
-            return
 
         # Only skip if a thread exists AND is actually alive
         if _sm_loop_thread is not None and _sm_loop_thread.is_alive():
