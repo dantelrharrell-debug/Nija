@@ -391,6 +391,22 @@ class TradingStrategy:
         # ── Populate symbol list ───────────────────────────────────────────
         self._populate_symbols()
 
+        # ── Wire up MarketReadinessGate ────────────────────────────────────
+        self.market_readiness_gate: Optional[Any] = None
+        try:
+            from bot.market_readiness_gate import MarketReadinessGate as _MRG
+            self.market_readiness_gate = _MRG()
+            logger.info("✅ MarketReadinessGate initialized")
+        except ImportError:
+            try:
+                from market_readiness_gate import MarketReadinessGate as _MRG  # type: ignore[import]
+                self.market_readiness_gate = _MRG()
+                logger.info("✅ MarketReadinessGate initialized (fallback import)")
+            except ImportError:
+                logger.warning("⚠️  MarketReadinessGate not available")
+        except Exception as _mrg_err:
+            logger.warning("⚠️  MarketReadinessGate init failed: %s", _mrg_err)
+
         # ── Start heartbeat trade if enabled ───────────────────────────────
         if self._heartbeat_trade_enabled:
             logger.info(

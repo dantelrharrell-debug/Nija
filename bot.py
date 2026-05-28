@@ -5314,6 +5314,12 @@ def _verify_startup_truth_conditions(
                 f"Condition B failed: bootstrap FSM state is {_state}, expected RUNNING_SUPERVISED."
             )
 
+    # Diagnostic-only — relaxed market gates are checked but do not block startup.
+    # Missing gate, probe errors, or IDLE responses emit warnings so external
+    # feed timing and broker handshake noise cannot strand the bot pre-activation.
+    _mrg = getattr(strategy, "market_readiness_gate", None)
+    if _mrg is None:
+        logger.warning("Startup market-readiness probe skipped: MarketReadinessGate not initialized")
     # Market readiness should never block startup activation on external feed
     # heartbeat or early-session handshake noise. Probe it for diagnostics only.
     _mrg = getattr(strategy, "market_readiness_gate", None)
@@ -5331,6 +5337,9 @@ def _verify_startup_truth_conditions(
                 spread_pct=float(_mrg.AGGRESSIVE_SPREAD_MAX),
                 entry_score=float(getattr(_mrg, "CAUTIOUS_MIN_SCORE", 45.0)),
             )
+            if getattr(_mode, "value", str(_mode)).lower() == "idle":
+                logger.warning(
+                    "Startup market-readiness probe returned IDLE — continuing startup without blocking activation (%s)",
             _mode_value = getattr(_mode, "value", str(_mode)).lower()
             if _mode_value == "idle":
                 logger.warning(
@@ -5437,6 +5446,11 @@ def _ensure_state_machine_loop_started() -> None:
     with _sm_loop_lock:
         if not _is_balance_hydrated_ready():
             _hydration_diag = _balance_hydration_debug_status()
+            logger.warning(
+                "⚠️ FSM starting before balance hydration completes | diag=%s",
+                _hydration_diag,
+            )
+            # Diagnostic only — do not block the FSM loop on hydration state.
             logger.info(
                 "FSM pre-hydration start: balance hydration still pending | diag=%s",
                 _hydration_diag,
