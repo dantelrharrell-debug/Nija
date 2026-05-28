@@ -6990,6 +6990,76 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     if _boot_user_delay > 0:
                         time.sleep(_boot_user_delay)
                     _boot_connected_users = _boot_mabm.connect_users_from_config()
+
+                    # ── NIJA_FORCE_NONCE_RESYNC: one-shot startup nonce resync ──────────
+                    # If NIJA_FORCE_NONCE_RESYNC=true, call probe_server_sync() for every
+                    # Kraken API key (platform + all users) before trading starts.
+                    # This resets stuck nonces to a fresh server-time floor so that
+                    # EAPI:Invalid nonce errors are cleared on the next request.
+                    # Only runs once at startup; does NOT affect Coinbase or other brokers.
+                    if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip().lower() in ("1", "true", "yes", "on"):
+                        logger.warning(
+                            "NIJA_FORCE_NONCE_RESYNC=true — running one-shot Kraken nonce resync "
+                            "for all configured API keys before trading starts"
+                        )
+                        try:
+                            from bot.distributed_nonce_manager import (
+                                get_distributed_nonce_manager as _resync_get_dnm,
+                                make_api_key_id as _resync_make_key_id,
+                            )
+                            _resync_dnm = _resync_get_dnm()
+                            # Collect all Kraken API keys: platform + all configured users
+                            _resync_keys: list = []
+                            # Platform key
+                            _platform_raw_key = (
+                                os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+                                or os.environ.get("KRAKEN_API_KEY", "").strip()
+                            )
+                            if _platform_raw_key:
+                                _resync_keys.append(("platform", _platform_raw_key))
+                            # User keys: scan known user_ids from connected users config
+                            _resync_user_ids = []
+                            try:
+                                from config.user_loader import get_user_config_loader as _resync_ucl
+                                for _u in _resync_ucl().get_all_enabled_users():
+                                    if _u.broker_type.upper() == "KRAKEN":
+                                        _resync_user_ids.append(_u.user_id)
+                            except Exception as _resync_ucl_err:
+                                logger.debug("NONCE_RESYNC: user config load error: %s", _resync_ucl_err)
+                            for _resync_uid in _resync_user_ids:
+                                _short, _full = _resync_uid.upper().split("_")[0], _resync_uid.upper().replace("-", "_")
+                                for _env_suffix in (_short, _full):
+                                    _ukey = os.environ.get(f"KRAKEN_USER_{_env_suffix}_API_KEY", "").strip()
+                                    if _ukey:
+                                        _resync_keys.append((_resync_uid, _ukey))
+                                        break
+                            # Call probe_server_sync for each unique key
+                            _resync_seen: set = set()
+                            for _resync_label, _resync_raw in _resync_keys:
+                                _resync_kid = _resync_make_key_id(_resync_raw)
+                                if _resync_kid in _resync_seen:
+                                    continue
+                                _resync_seen.add(_resync_kid)
+                                try:
+                                    _resync_dnm.probe_server_sync(_resync_kid)
+                                    logger.warning(
+                                        "NONCE_RESYNC: probe_server_sync complete for %s key_id=%s",
+                                        _resync_label, _resync_kid,
+                                    )
+                                except Exception as _resync_key_err:
+                                    logger.warning(
+                                        "NONCE_RESYNC: probe_server_sync failed for %s key_id=%s: %s",
+                                        _resync_label, _resync_kid, _resync_key_err,
+                                    )
+                            logger.warning(
+                                "NONCE_RESYNC: complete — resynced %d key(s). "
+                                "Remove NIJA_FORCE_NONCE_RESYNC after nonces are stable.",
+                                len(_resync_seen),
+                            )
+                        except Exception as _resync_err:
+                            logger.error("NONCE_RESYNC: unexpected error during force resync: %s", _resync_err)
+                    # ── END NIJA_FORCE_NONCE_RESYNC ────────────────────────────────────
+
                     try:
                         try:
                             from bot.capital_flow_state_machine import (
