@@ -563,6 +563,48 @@ def assert_distributed_writer_authority() -> None:
             if isinstance(current, str) and current:
                 current_token = current.split(":", 1)[0]
 
+        # ── Missing-key recovery ──────────────────────────────────────────────
+        # When the lock key is absent (expired TTL or transient Redis flush) but
+        # this process still holds the correct fencing token, attempt a one-shot
+        # atomic re-acquisition using SET NX.  This mirrors the heartbeat's own
+        # re-acquisition path and prevents a spurious hard-stop when the key
+        # simply expired between heartbeat renewals.
+        #
+        # Safety: SET NX is atomic — if another process wins the race it holds a
+        # different token and the subsequent comparison will still fail closed.
+        if current is None and token:
+            try:
+                ttl_s = max(
+                    30,
+                    int(os.getenv("NIJA_WRITER_LOCK_TTL_S", "30") or 30),
+                )
+                owner_id = os.getenv("NIJA_WRITER_OWNER_ID", "recovered")
+                lock_value = f"{token}:{owner_id}"
+                reacquired = client.set(lock_key, lock_value, ex=ttl_s, nx=True)
+                if reacquired:
+                    current_token = token
+                    logger.warning(
+                        "assert_distributed_writer_authority: lock key was missing; "
+                        "re-acquired atomically with same fencing token "
+                        "(lock_key=%s token_prefix=%s ttl_s=%d)",
+                        lock_key,
+                        token[:8],
+                        ttl_s,
+                    )
+                else:
+                    # Another process won the NX race — read back the new holder.
+                    new_current = client.get(lock_key)
+                    if new_current is not None:
+                        if isinstance(new_current, bytes):
+                            new_current = new_current.decode("utf-8", errors="replace")
+                        if isinstance(new_current, str) and new_current:
+                            current_token = new_current.split(":", 1)[0]
+            except Exception as _reacq_exc:
+                logger.warning(
+                    "assert_distributed_writer_authority: lock re-acquisition attempt failed: %s",
+                    _reacq_exc,
+                )
+
         ok = (current_token == token)
         err = ""
         if not ok:
@@ -1094,6 +1136,26 @@ def can_execute() -> ExecutionDecision:
     if immediate_halt_triggered and configured_circuit_state == "CLOSED":
         configured_circuit_state = "HALTED"
         os.environ["NIJA_EXECUTION_CIRCUIT_STATE"] = "HALTED"
+
+    # ── Auto-reset HALTED circuit when lease is fully recovered ──────────────
+    # If the circuit was halted due to a previous fencing mismatch (missing lock
+    # key) and the lease has since been re-acquired successfully, reset the
+    # circuit back to CLOSED so trading can resume without a manual operator
+    # intervention.  Only reset when the halt was caused by a lease/fencing
+    # issue (not an explicit OPEN or operator-set HALTED for other reasons).
+    if (
+        configured_circuit_state == "HALTED"
+        and lease_valid
+        and lease_generation_current
+        and nonce_ready
+        and not ("other-instance" in lease_error.lower())
+    ):
+        configured_circuit_state = "CLOSED"
+        os.environ["NIJA_EXECUTION_CIRCUIT_STATE"] = "CLOSED"
+        logger.warning(
+            "can_execute: circuit auto-reset HALTED→CLOSED after successful "
+            "lease re-acquisition (lease_valid=True, generation_current=True)"
+        )
 
     circuit_breaker_closed = False
     if configured_circuit_state == "CLOSED":
