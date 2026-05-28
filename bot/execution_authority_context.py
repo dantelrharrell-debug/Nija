@@ -1087,7 +1087,7 @@ def can_execute() -> ExecutionDecision:
     immediate_halt_triggered = bool(
         (not lease_valid)
         or (not lease_generation_current)
-        or (not bool(runtime_snapshot.nonce_ready))
+        or (not nonce_ready)
         or ("other-instance" in lease_error.lower())
         or ("mismatch" in lease_error.lower())
     )
@@ -1107,7 +1107,7 @@ def can_execute() -> ExecutionDecision:
             and heartbeat_fresh
             and heartbeat_stage_sufficient
             and broker_health_ok
-            and bool(runtime_snapshot.nonce_ready)
+            and nonce_ready
         )
     else:
         circuit_breaker_closed = False
