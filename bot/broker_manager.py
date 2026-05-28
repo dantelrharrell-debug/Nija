@@ -7807,6 +7807,176 @@ class KrakenBroker(BaseBroker):
         self.connected = False
         logger.critical("⛔ Kraken HARD STOP (%s): %s", self.account_identifier, reason)
 
+    # ── Nonce reconnect resync ─────────────────────────────────────────────────
+
+    def _nonce_reconnect_resync(self) -> None:
+        """Validate and resync nonce state after a broker reconnect (DOWN→UP).
+
+        Called automatically by the ConnectionStabilityManager reconnect hook
+        immediately after the connection transitions from DISCONNECTED/DEGRADED
+        back to CONNECTED.
+
+        Protocol
+        --------
+        1. Fetch the current server-side nonce high-water mark via
+           ``DistributedNonceManager.get_last_nonce()``.
+        2. Compare with the local wall-clock time (ms) to classify the state:
+
+           SYNCED  — local nonce is within ``_NONCE_RESYNC_THRESHOLD_MS`` of
+                     wall-clock time.  No action needed.
+           DRIFTED — local nonce is *ahead* of wall-clock time (safe; Kraken
+                     will accept it once wall-clock catches up).  No action.
+           BEHIND  — local nonce is *behind* wall-clock time (unsafe; Kraken
+                     will reject it immediately).  Resync triggered.
+           UNKNOWN — nonce state cannot be determined (manager unavailable or
+                     key not yet registered).  Resync triggered as a precaution.
+
+        3. If BEHIND or UNKNOWN, call ``probe_server_sync()`` to re-anchor the
+           nonce to ``now_ms + NIJA_REDIS_NONCE_RESET_BUFFER_MS``.
+
+        Safety
+        ------
+        * Resync is atomic — protected by the DistributedNonceManager's own
+          internal lock.
+        * Resync only fires during reconnect, never during normal operation.
+        * A failed resync is logged at WARNING level but does NOT raise — the
+          next nonce issuance will self-correct via the monotonic floor formula.
+        * A timeout guard (``_NONCE_RESYNC_TIMEOUT_S``) prevents the hook from
+          blocking the watchdog thread indefinitely.
+        """
+        import threading as _threading
+
+        _NONCE_RESYNC_THRESHOLD_MS: int = int(
+            os.environ.get("NIJA_NONCE_RESYNC_THRESHOLD_MS", "100")
+        )
+        _NONCE_RESYNC_SAFETY_OFFSET_MS: int = int(
+            os.environ.get("NIJA_NONCE_RESYNC_SAFETY_OFFSET_MS", "5000")
+        )
+        _NONCE_RESYNC_TIMEOUT_S: float = float(
+            os.environ.get("NIJA_NONCE_RESYNC_TIMEOUT_S", "10.0")
+        )
+
+        _label = self.account_identifier
+        _ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        logger.info(
+            "🔄 [NonceResync:%s] Reconnect detected at %s — validating nonce state",
+            _label, _ts,
+        )
+
+        # Resolve the nonce manager and key id for this broker instance.
+        _dnm = getattr(self, "nonce_manager", None)
+        _kid = getattr(self, "api_key_id", None)
+
+        if _dnm is None or _kid is None:
+            logger.warning(
+                "⚠️ [NonceResync:%s] Nonce manager or key_id not available — "
+                "skipping resync (broker may not be fully initialised)",
+                _label,
+            )
+            return
+
+        # ── Classify nonce sync state ──────────────────────────────────────────
+        _result_holder: dict = {}
+        _exc_holder: list = []
+
+        def _do_resync() -> None:
+            try:
+                now_ms = int(time.time() * 1000)
+                last_nonce = 0
+                try:
+                    last_nonce = int(_dnm.get_last_nonce(_kid))
+                except Exception as _ge:
+                    logger.debug(
+                        "[NonceResync:%s] get_last_nonce failed: %s", _label, _ge
+                    )
+
+                if last_nonce == 0:
+                    sync_state = "UNKNOWN"
+                else:
+                    delta_ms = last_nonce - now_ms
+                    if abs(delta_ms) <= _NONCE_RESYNC_THRESHOLD_MS:
+                        sync_state = "SYNCED"
+                    elif delta_ms > _NONCE_RESYNC_THRESHOLD_MS:
+                        sync_state = "DRIFTED"
+                    else:
+                        sync_state = "BEHIND"
+
+                _result_holder["sync_state"] = sync_state
+                _result_holder["last_nonce"] = last_nonce
+                _result_holder["now_ms"] = now_ms
+                _result_holder["delta_ms"] = last_nonce - now_ms if last_nonce else None
+
+                logger.info(
+                    "🔍 [NonceResync:%s] Nonce state: %s  "
+                    "last_nonce=%d  now_ms=%d  delta_ms=%s",
+                    _label, sync_state, last_nonce, now_ms,
+                    _result_holder["delta_ms"],
+                )
+
+                if sync_state in ("BEHIND", "UNKNOWN"):
+                    logger.warning(
+                        "⚠️ [NonceResync:%s] Nonce is %s — triggering resync "
+                        "(last_nonce=%d, now_ms=%d, safety_offset_ms=%d)",
+                        _label, sync_state, last_nonce, now_ms,
+                        _NONCE_RESYNC_SAFETY_OFFSET_MS,
+                    )
+                    _probe_fn = getattr(_dnm, "probe_server_sync", None)
+                    if callable(_probe_fn):
+                        _probe_fn(_kid)
+                        new_nonce = 0
+                        try:
+                            new_nonce = int(_dnm.get_last_nonce(_kid))
+                        except Exception:
+                            pass
+                        logger.info(
+                            "✅ [NonceResync:%s] Resync complete — "
+                            "before=%d  after=%d  state_was=%s",
+                            _label, last_nonce, new_nonce, sync_state,
+                        )
+                        _result_holder["resynced"] = True
+                        _result_holder["new_nonce"] = new_nonce
+                    else:
+                        logger.warning(
+                            "⚠️ [NonceResync:%s] probe_server_sync not available on "
+                            "nonce manager — resync skipped",
+                            _label,
+                        )
+                else:
+                    logger.info(
+                        "✅ [NonceResync:%s] Nonce state %s — no resync needed",
+                        _label, sync_state,
+                    )
+                    _result_holder["resynced"] = False
+
+            except Exception as _exc:
+                _exc_holder.append(_exc)
+
+        # Run resync in a thread with a hard timeout so the watchdog is never
+        # blocked indefinitely by a slow Redis call or network hiccup.
+        _t = _threading.Thread(
+            target=_do_resync,
+            name=f"nonce-reconnect-resync-{_label}",
+            daemon=True,
+        )
+        _t.start()
+        _t.join(timeout=_NONCE_RESYNC_TIMEOUT_S)
+
+        if _t.is_alive():
+            logger.warning(
+                "⚠️ [NonceResync:%s] Resync timed out after %.1fs — "
+                "nonce will self-correct on next issuance",
+                _label, _NONCE_RESYNC_TIMEOUT_S,
+            )
+            return
+
+        if _exc_holder:
+            logger.warning(
+                "⚠️ [NonceResync:%s] Resync raised an exception: %s — "
+                "nonce will self-correct on next issuance",
+                _label, _exc_holder[0],
+            )
+
     def _initialize_kraken_market_data(self):
         """
         Initialize Kraken market data for dynamic minimum volumes.
@@ -9032,6 +9202,37 @@ class KrakenBroker(BaseBroker):
                                 broker=self,
                                 reconnect_fn=self.connect,
                             )
+                            # Register reconnect hooks once so every subsequent
+                            # DOWN→UP reconnect automatically:
+                            #   1. Resets _connection_already_complete so the full
+                            #      connect routine runs (pre-reconnect hook).
+                            #   2. Validates and resyncs nonce state after the
+                            #      connection is re-established (post-reconnect hook).
+                            if not getattr(self, "_nonce_resync_hook_registered", False):
+                                # Pre-reconnect: reset connection guard so connect()
+                                # runs the full handshake instead of returning early.
+                                def _reset_connection_guard(
+                                    _broker_ref=self,
+                                ) -> None:
+                                    _broker_ref._connection_already_complete = False
+                                    logger.info(
+                                        "🔄 [NonceResync:%s] Connection guard reset — "
+                                        "full reconnect handshake will run",
+                                        _broker_ref.account_identifier,
+                                    )
+
+                                self._connection_stability_manager.register_pre_reconnect_hook(
+                                    _reset_connection_guard
+                                )
+                                # Post-reconnect: validate and resync nonce state.
+                                self._connection_stability_manager.register_reconnect_hook(
+                                    self._nonce_reconnect_resync
+                                )
+                                self._nonce_resync_hook_registered = True
+                                logger.info(
+                                    "✅ [NonceResync:%s] Nonce reconnect resync hook registered",
+                                    self.account_identifier,
+                                )
                             self._connection_stability_manager.mark_connected()
                             self._connection_stability_manager.start_watchdog()
 
