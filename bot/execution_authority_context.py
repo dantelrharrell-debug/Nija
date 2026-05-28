@@ -13,10 +13,12 @@ import threading
 import time
 import logging
 import importlib
+import json
 from dataclasses import dataclass
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator
+from collections import deque
+from typing import Any, Dict, Iterator, Optional
 
 from bot.instance_identity import (
     current_instance_identity,
@@ -65,6 +67,46 @@ _TELEMETRY_EMIT_LOCK = threading.Lock()
 
 logger = logging.getLogger("nija.execution_authority")
 
+PRE_TRADE_VALIDATOR_VERSION = "v1"
+PRE_TRADE_GATE_ORDER = (
+    "lifecycle.phase",
+    "state.live_active",
+    "lease.valid",
+    "lease.generation_current",
+    "nonce.authority",
+    "heartbeat.fresh",
+    "heartbeat.stage_sufficient",
+    "broker.health_ok",
+    "circuit_breaker.closed",
+    "dispatch.enabled",
+    "stability.allowed",
+    "margin.critical_ok",
+    "margin.maintenance_ok",
+)
+_PRE_TRADE_GATE_REASON_CODES = {
+    "lifecycle.phase": "lifecycle_phase_not_live",
+    "state.live_active": "state_not_live_active",
+    "lease.valid": "lease_invalid",
+    "lease.generation_current": "lease_generation_mismatch",
+    "nonce.authority": "nonce_authority_missing",
+    "heartbeat.fresh": "heartbeat_stale",
+    "heartbeat.stage_sufficient": "heartbeat_stage_insufficient",
+    "broker.health_ok": "broker_health_not_ready",
+    "circuit_breaker.closed": "circuit_breaker_open",
+    "dispatch.enabled": "dispatch_scope_missing",
+    "stability.allowed": "stability_denied",
+    "margin.critical_ok": "margin_critical",
+    "margin.maintenance_ok": "margin_maintenance_low",
+}
+_PRE_TRADE_TRACE_MAX = max(
+    50,
+    int(float(os.getenv("NIJA_PRE_TRADE_TRACE_BUFFER_SIZE", "400") or "400")),
+)
+_PRE_TRADE_TRACE_BUFFER: deque[Dict[str, Any]] = deque(maxlen=_PRE_TRADE_TRACE_MAX)
+_PRE_TRADE_TRACE_LOCK = threading.Lock()
+_PRE_TRADE_TRACE_EMITTED_BY_ATTEMPT: dict[str, float] = {}
+_PRE_TRADE_TRACE_EMIT_LOCK = threading.Lock()
+
 
 @dataclass(frozen=True)
 class RuntimeAuthoritySnapshot:
@@ -94,6 +136,7 @@ class ExecutionDecision:
     state_live_active: bool
     lease_valid: bool
     lease_generation_current: bool
+    nonce_ready: bool
     heartbeat_fresh: bool
     heartbeat_stage_sufficient: bool
     broker_health_ok: bool
@@ -106,6 +149,10 @@ class ExecutionDecision:
     stability_stress_score: float
     stability_collapsed_risk_score: float
     stability_reason: str
+    first_failed_gate: str = ""
+    reason_code: str = ""
+    reason_detail: str = ""
+    validator_version: str = PRE_TRADE_VALIDATOR_VERSION
     lifecycle_phase: str = "BOOT"
     """Coarse lifecycle phase captured at decision time.
 
@@ -128,6 +175,146 @@ class StabilityAuthoritySnapshot:
 
 class ExecutionBlocked(RuntimeError):
     """Raised when canonical execution gate denies order dispatch."""
+
+
+def _gate_reason_code(gate_name: str, default: str = "execution_blocked") -> str:
+    return str(_PRE_TRADE_GATE_REASON_CODES.get(gate_name) or default)
+
+
+def _decision_gate_status(decision: ExecutionDecision) -> Dict[str, bool]:
+    reason_lower = str(decision.reason_detail or decision.reason or "").lower()
+    margin_critical_ok = "margin_critical" not in reason_lower
+    margin_maintenance_ok = "margin_maintenance_low" not in reason_lower
+    if str(decision.first_failed_gate or "") == "margin.critical_ok":
+        margin_critical_ok = False
+    if str(decision.first_failed_gate or "") == "margin.maintenance_ok":
+        margin_maintenance_ok = False
+    return {
+        "lifecycle.phase": str(decision.lifecycle_phase).upper() == "LIVE",
+        "state.live_active": bool(decision.state_live_active),
+        "lease.valid": bool(decision.lease_valid),
+        "lease.generation_current": bool(decision.lease_generation_current),
+        "nonce.authority": bool(getattr(decision, "nonce_ready", False)),
+        "heartbeat.fresh": bool(decision.heartbeat_fresh),
+        "heartbeat.stage_sufficient": bool(decision.heartbeat_stage_sufficient),
+        "broker.health_ok": bool(decision.broker_health_ok),
+        "circuit_breaker.closed": bool(decision.circuit_breaker_closed),
+        "dispatch.enabled": bool(decision.dispatch_enabled),
+        "stability.allowed": bool(decision.stability_allowed),
+        "margin.critical_ok": bool(margin_critical_ok),
+        "margin.maintenance_ok": bool(margin_maintenance_ok),
+    }
+
+
+def _first_failed_gate_for_decision(decision: ExecutionDecision) -> Optional[str]:
+    gate_status = _decision_gate_status(decision)
+    for gate in PRE_TRADE_GATE_ORDER:
+        if gate in gate_status and not bool(gate_status[gate]):
+            return gate
+        if gate in {"margin.critical_ok", "margin.maintenance_ok"}:
+            # Margin gates are represented in reason fields when they block.
+            reason = str(decision.reason_detail or decision.reason or "").lower()
+            if gate == "margin.critical_ok" and "margin_critical" in reason:
+                return gate
+            if gate == "margin.maintenance_ok" and "margin_maintenance_low" in reason:
+                return gate
+    return None
+
+
+def _correlation_envelope() -> Dict[str, str]:
+    try:
+        from bot.runtime_correlation import get_runtime_correlation
+        return dict(get_runtime_correlation() or {})
+    except Exception:
+        return {}
+
+
+def emit_pretrade_execution_validator_trace(
+    decision: ExecutionDecision,
+    *,
+    symbol: str = "",
+    side: str = "",
+    size: float = 0.0,
+    order_id: str = "",
+    attempt_id: str = "",
+    terminal_surface: str = "can_execute",
+    block_reason_code: str = "",
+    block_reason_detail: str = "",
+    first_failed_gate: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Emit and store one canonical terminal validator trace line."""
+    envelope = _correlation_envelope()
+    trace_attempt_id = str(attempt_id or order_id or envelope.get("intent_id") or "").strip()
+    if trace_attempt_id:
+        with _PRE_TRADE_TRACE_EMIT_LOCK:
+            if trace_attempt_id in _PRE_TRADE_TRACE_EMITTED_BY_ATTEMPT:
+                return None
+            _PRE_TRADE_TRACE_EMITTED_BY_ATTEMPT[trace_attempt_id] = time.monotonic()
+            if len(_PRE_TRADE_TRACE_EMITTED_BY_ATTEMPT) > 4000:
+                cutoff = time.monotonic() - 1200.0
+                _existing = dict(_PRE_TRADE_TRACE_EMITTED_BY_ATTEMPT)
+                _PRE_TRADE_TRACE_EMITTED_BY_ATTEMPT.clear()
+                _PRE_TRADE_TRACE_EMITTED_BY_ATTEMPT.update({
+                    k: v
+                    for k, v in _existing.items()
+                    if v >= cutoff
+                })
+
+    gate_status = _decision_gate_status(decision)
+    decision_value = "ALLOW" if bool(decision.allowed) else "BLOCK"
+    terminal_first_failed = (
+        str(first_failed_gate or decision.first_failed_gate or _first_failed_gate_for_decision(decision) or "").strip()
+        or None
+    )
+    reason_detail = str(
+        block_reason_detail
+        or decision.reason_detail
+        or decision.reason
+        or ("allowed" if decision.allowed else "blocked")
+    )
+    reason_code = str(
+        block_reason_code
+        or decision.reason_code
+        or (_gate_reason_code(str(terminal_first_failed)) if terminal_first_failed else "allowed")
+    )
+    payload: Dict[str, Any] = {
+        "validator_version": PRE_TRADE_VALIDATOR_VERSION,
+        "decision": decision_value,
+        "first_failed_gate": terminal_first_failed if decision_value == "BLOCK" else None,
+        "reason_code": reason_code if decision_value == "BLOCK" else "allowed",
+        "reason_detail": reason_detail,
+        "lifecycle_phase": str(decision.lifecycle_phase),
+        "circuit_state": str(decision.circuit_state),
+        "gates": gate_status,
+        "symbol": str(symbol or ""),
+        "side": str(side or ""),
+        "size": float(size or 0.0),
+        "order_id": str(order_id or ""),
+        "attempt_id": trace_attempt_id or "",
+        "terminal_surface": str(terminal_surface or "can_execute"),
+        "correlation": envelope,
+        "timestamp": time.time(),
+    }
+    with _PRE_TRADE_TRACE_LOCK:
+        _PRE_TRADE_TRACE_BUFFER.append(payload)
+    logger.info(
+        "PRE_TRADE_EXECUTION_VALIDATOR_TRACE %s",
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+    )
+    return payload
+
+
+def get_pretrade_execution_validator_traces(limit: int = 25) -> list[Dict[str, Any]]:
+    with _PRE_TRADE_TRACE_LOCK:
+        rows = list(_PRE_TRADE_TRACE_BUFFER)[-max(1, int(limit or 1)):]
+    return list(reversed(rows))
+
+
+def get_latest_pretrade_execution_validator_trace() -> Optional[Dict[str, Any]]:
+    with _PRE_TRADE_TRACE_LOCK:
+        if not _PRE_TRADE_TRACE_BUFFER:
+            return None
+        return dict(_PRE_TRADE_TRACE_BUFFER[-1])
 
 
 def _env_truthy(name: str) -> bool:
@@ -767,18 +954,20 @@ def can_execute() -> ExecutionDecision:
 
     current_lifecycle_phase = str(runtime_snapshot.lifecycle_phase)
     if current_lifecycle_phase != LifecyclePhase.LIVE.value:
+        reason_detail = f"lifecycle_phase:{current_lifecycle_phase}"
         _emit_trade_admission_telemetry(
-            reason=f"lifecycle_phase:{current_lifecycle_phase}",
+            reason=reason_detail,
             drop_bucket="lifecycle_phase",
             stage="lifecycle_gate",
         )
         return ExecutionDecision(
             allowed=False,
-            reason=f"lifecycle_phase:{current_lifecycle_phase}",
+            reason=reason_detail,
             circuit_state="CLOSED",
             state_live_active=False,
             lease_valid=False,
             lease_generation_current=False,
+            nonce_ready=bool(runtime_snapshot.nonce_ready),
             heartbeat_fresh=False,
             heartbeat_stage_sufficient=False,
             broker_health_ok=bool(runtime_snapshot.dispatch_health_ready),
@@ -791,6 +980,9 @@ def can_execute() -> ExecutionDecision:
             stability_stress_score=1.0,
             stability_collapsed_risk_score=1.0,
             stability_reason="lifecycle_phase_not_live",
+            first_failed_gate="lifecycle.phase",
+            reason_code=_gate_reason_code("lifecycle.phase"),
+            reason_detail=reason_detail,
             lifecycle_phase=current_lifecycle_phase,
         )
 
@@ -903,11 +1095,12 @@ def can_execute() -> ExecutionDecision:
         circuit_breaker_closed=circuit_breaker_closed,
     )
 
+    nonce_ready = bool(runtime_snapshot.nonce_ready)
     checks = (
         ("state.live_active", state_live_active),
         ("lease.valid", lease_valid),
         ("lease.generation_current", lease_generation_current),
-        ("nonce.authority", bool(runtime_snapshot.nonce_ready)),
+        ("nonce.authority", nonce_ready),
         ("heartbeat.fresh", heartbeat_fresh),
         ("heartbeat.stage_sufficient", heartbeat_stage_sufficient),
         ("broker.health_ok", broker_health_ok),
@@ -918,25 +1111,25 @@ def can_execute() -> ExecutionDecision:
 
     for check_name, check_ok in checks:
         if not check_ok:
-            reason = check_name
+            reason_detail = check_name
             if check_name == "lease.valid" and lease_error:
-                reason = f"{check_name}: {lease_error}"
+                reason_detail = f"{check_name}: {lease_error}"
             elif check_name == "lease.generation_current":
-                reason = (
+                reason_detail = (
                     f"{check_name}: local={local_generation} current={current_generation} "
                     f"detail={generation_error or 'generation_mismatch'}"
                 )
             elif check_name.startswith("heartbeat.") and heartbeat_reason:
-                reason = f"{check_name}: {heartbeat_reason}"
+                reason_detail = f"{check_name}: {heartbeat_reason}"
             elif check_name == "stability.allowed":
-                reason = (
+                reason_detail = (
                     f"{check_name}: {stability.reason} "
                     f"(state={stability.halt_state} throttle={stability.throttle:.2f} "
                     f"size={stability.size_multiplier:.2f} stress={stability.stress_score:.2f})"
                 )
             drop_bucket = None
             governor_mode = "NORMAL"
-            telemetry_reason = reason
+            telemetry_reason = reason_detail
             if check_name == "stability.allowed":
                 drop_bucket = "governor_guarded"
                 governor_mode = stability.halt_state or "GUARDED"
@@ -954,11 +1147,12 @@ def can_execute() -> ExecutionDecision:
             )
             return ExecutionDecision(
                 allowed=False,
-                reason=reason,
+                reason=reason_detail,
                 circuit_state=configured_circuit_state,
                 state_live_active=state_live_active,
                 lease_valid=lease_valid,
                 lease_generation_current=lease_generation_current,
+                nonce_ready=nonce_ready,
                 heartbeat_fresh=heartbeat_fresh,
                 heartbeat_stage_sufficient=heartbeat_stage_sufficient,
                 broker_health_ok=broker_health_ok,
@@ -971,6 +1165,9 @@ def can_execute() -> ExecutionDecision:
                 stability_stress_score=stability.stress_score,
                 stability_collapsed_risk_score=stability.collapsed_risk_score,
                 stability_reason=stability.reason,
+                first_failed_gate=check_name,
+                reason_code=_gate_reason_code(check_name),
+                reason_detail=reason_detail,
                 lifecycle_phase=current_lifecycle_phase,
             )
 
@@ -1000,11 +1197,22 @@ def can_execute() -> ExecutionDecision:
                     state_live_active=state_live_active,
                     lease_valid=lease_valid,
                     lease_generation_current=lease_generation_current,
+                    nonce_ready=nonce_ready,
                     heartbeat_fresh=heartbeat_fresh,
                     heartbeat_stage_sufficient=heartbeat_stage_sufficient,
                     broker_health_ok=broker_health_ok,
                     circuit_breaker_closed=circuit_breaker_closed,
                     dispatch_enabled=dispatch_enabled,
+                    stability_allowed=False,
+                    stability_halt_state="HALT",
+                    stability_throttle=0.0,
+                    stability_size_multiplier=0.0,
+                    stability_stress_score=1.0,
+                    stability_collapsed_risk_score=1.0,
+                    stability_reason=f"stability_governor_halt:{_sg_snap.reason}",
+                    first_failed_gate="stability.allowed",
+                    reason_code=_gate_reason_code("stability.allowed"),
+                    reason_detail=f"stability_governor:HALT:{_sg_snap.reason}",
                     lifecycle_phase=current_lifecycle_phase,
                 )
         except Exception as _sg_exc:
@@ -1037,6 +1245,7 @@ def can_execute() -> ExecutionDecision:
                     state_live_active=state_live_active,
                     lease_valid=lease_valid,
                     lease_generation_current=lease_generation_current,
+                    nonce_ready=nonce_ready,
                     heartbeat_fresh=heartbeat_fresh,
                     heartbeat_stage_sufficient=heartbeat_stage_sufficient,
                     broker_health_ok=broker_health_ok,
@@ -1049,6 +1258,9 @@ def can_execute() -> ExecutionDecision:
                     stability_stress_score=stability.stress_score,
                     stability_collapsed_risk_score=stability.collapsed_risk_score,
                     stability_reason=stability.reason,
+                    first_failed_gate="margin.critical_ok",
+                    reason_code=_gate_reason_code("margin.critical_ok"),
+                    reason_detail=f"margin_critical:{_mg_snap.reason}",
                     lifecycle_phase=current_lifecycle_phase,
                 )
             if _has_margin_exposure and not _mg_snap.maintenance_margin_ok:
@@ -1066,6 +1278,7 @@ def can_execute() -> ExecutionDecision:
                     state_live_active=state_live_active,
                     lease_valid=lease_valid,
                     lease_generation_current=lease_generation_current,
+                    nonce_ready=nonce_ready,
                     heartbeat_fresh=heartbeat_fresh,
                     heartbeat_stage_sufficient=heartbeat_stage_sufficient,
                     broker_health_ok=broker_health_ok,
@@ -1078,6 +1291,9 @@ def can_execute() -> ExecutionDecision:
                     stability_stress_score=stability.stress_score,
                     stability_collapsed_risk_score=stability.collapsed_risk_score,
                     stability_reason=stability.reason,
+                    first_failed_gate="margin.maintenance_ok",
+                    reason_code=_gate_reason_code("margin.maintenance_ok"),
+                    reason_detail=f"margin_maintenance_low:{_mg_snap.reason}",
                     lifecycle_phase=current_lifecycle_phase,
                 )
         except Exception as _mg_exc:
@@ -1090,6 +1306,7 @@ def can_execute() -> ExecutionDecision:
         state_live_active=state_live_active,
         lease_valid=lease_valid,
         lease_generation_current=lease_generation_current,
+        nonce_ready=nonce_ready,
         heartbeat_fresh=heartbeat_fresh,
         heartbeat_stage_sufficient=heartbeat_stage_sufficient,
         broker_health_ok=broker_health_ok,
@@ -1102,6 +1319,9 @@ def can_execute() -> ExecutionDecision:
         stability_stress_score=stability.stress_score,
         stability_collapsed_risk_score=stability.collapsed_risk_score,
         stability_reason=stability.reason,
+        first_failed_gate="",
+        reason_code="allowed",
+        reason_detail="allowed",
         lifecycle_phase=current_lifecycle_phase,
     )
 

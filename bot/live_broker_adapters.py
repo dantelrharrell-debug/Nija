@@ -52,6 +52,7 @@ try:
         can_execute,
         can_execute_startup_probe,
         ExecutionBlocked,
+        emit_pretrade_execution_validator_trace,
     )
 except ImportError:
     try:
@@ -59,6 +60,7 @@ except ImportError:
             can_execute,
             can_execute_startup_probe,
             ExecutionBlocked,
+            emit_pretrade_execution_validator_trace,
         )
     except ImportError:
         def can_execute():
@@ -72,6 +74,9 @@ except ImportError:
 
         class ExecutionBlocked(RuntimeError):
             pass
+
+        def emit_pretrade_execution_validator_trace(*args, **kwargs):
+            return None
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -112,9 +117,23 @@ def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) ->
 
     decision = can_execute()
     if decision.allowed:
+        emit_pretrade_execution_validator_trace(
+            decision,
+            symbol=symbol,
+            side=side,
+            size=size,
+            terminal_surface="live_broker_adapter",
+        )
         return None
     probe_allowed, probe_reason = can_execute_startup_probe()
     if probe_allowed:
+        emit_pretrade_execution_validator_trace(
+            decision,
+            symbol=symbol,
+            side=side,
+            size=size,
+            terminal_surface="live_broker_adapter_startup_probe",
+        )
         logger.warning(
             "[Authority] startup probe authorized broker=%s symbol=%s side=%s size=%s reason=%s",
             broker_name,
@@ -124,6 +143,13 @@ def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) ->
             probe_reason,
         )
         return None
+    emit_pretrade_execution_validator_trace(
+        decision,
+        symbol=symbol,
+        side=side,
+        size=size,
+        terminal_surface="live_broker_adapter",
+    )
     _emit_rejection_telemetry("execution_authority_blocked")
     msg = f"Execution blocked: {decision.reason}"
     logger.error(

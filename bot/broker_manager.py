@@ -127,6 +127,7 @@ try:
         can_execute,
         can_execute_startup_probe,
         ExecutionBlocked,
+        emit_pretrade_execution_validator_trace,
     )
 except ImportError:
     try:
@@ -134,6 +135,7 @@ except ImportError:
             can_execute,
             can_execute_startup_probe,
             ExecutionBlocked,
+            emit_pretrade_execution_validator_trace,
         )
     except ImportError:
         def can_execute():
@@ -147,6 +149,9 @@ except ImportError:
 
         class ExecutionBlocked(RuntimeError):
             pass
+
+        def emit_pretrade_execution_validator_trace(*args, **kwargs):
+            return None
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -674,9 +679,23 @@ def _reject_if_unauthorized_order_submit(
 
     decision = can_execute()
     if decision.allowed:
+        emit_pretrade_execution_validator_trace(
+            decision,
+            symbol=symbol,
+            side=side,
+            size=quantity,
+            terminal_surface="broker_manager",
+        )
         return None
     probe_allowed, probe_reason = can_execute_startup_probe()
     if probe_allowed:
+        emit_pretrade_execution_validator_trace(
+            decision,
+            symbol=symbol,
+            side=side,
+            size=quantity,
+            terminal_surface="broker_manager_startup_probe",
+        )
         logger.warning(
             "⚠️ Startup execution probe authorized before LIVE_ACTIVE "
             "(broker=%s symbol=%s side=%s qty=%s reason=%s)",
@@ -691,6 +710,13 @@ def _reject_if_unauthorized_order_submit(
     msg = (
         "Execution authority violation: broker order submission blocked "
         f"(reason={decision.reason})"
+    )
+    emit_pretrade_execution_validator_trace(
+        decision,
+        symbol=symbol,
+        side=side,
+        size=quantity,
+        terminal_surface="broker_manager",
     )
     _emit_rejection_telemetry("execution_authority_blocked")
     logger.critical(

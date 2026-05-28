@@ -179,34 +179,29 @@ _RETRYABLE_EXCHANGE_ERROR_KEYWORDS = (
 try:
     from bot.execution_authority_context import (
         execution_authority_scope,
-        assert_distributed_writer_authority,
-        assert_execution_dispatch_permitted,
-        runtime_authority_snapshot,
+        can_execute,
+        emit_pretrade_execution_validator_trace,
     )
 except ImportError:
     try:
         from execution_authority_context import (
             execution_authority_scope,
-            assert_distributed_writer_authority,
-            assert_execution_dispatch_permitted,
-            runtime_authority_snapshot,
+            can_execute,
+            emit_pretrade_execution_validator_trace,
         )
     except ImportError:
         @contextmanager
         def execution_authority_scope():
             yield
 
-        def assert_distributed_writer_authority() -> None:
-            return
+        def can_execute():
+            class _Decision:
+                allowed = False
+                reason = "execution_authority_unavailable"
+            return _Decision()
 
-        def assert_execution_dispatch_permitted() -> None:
-            return
-
-        class _RuntimeAuthoritySnapshotFallback:
-            ready = True
-
-        def runtime_authority_snapshot():
-            return _RuntimeAuthoritySnapshotFallback()
+        def emit_pretrade_execution_validator_trace(*args, **kwargs):
+            return None
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -921,6 +916,18 @@ class ExecutionPipeline:
                     snapshot=snapshot,
                 )
                 if not decision.allowed:
+                    with execution_authority_scope():
+                        auth_decision = can_execute()
+                    emit_pretrade_execution_validator_trace(
+                        auth_decision,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size=working_request.size_usd,
+                        terminal_surface="execution_pipeline_margin_gate",
+                        block_reason_code="margin_health_gate_reject",
+                        block_reason_detail=str(decision.reason),
+                        first_failed_gate="margin.critical_ok",
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -941,6 +948,18 @@ class ExecutionPipeline:
                     available_balance_usd=working_request.available_balance_usd,
                 )
                 if not risk_decision.approved:
+                    with execution_authority_scope():
+                        auth_decision = can_execute()
+                    emit_pretrade_execution_validator_trace(
+                        auth_decision,
+                        symbol=working_request.symbol,
+                        side=working_request.side,
+                        size=working_request.size_usd,
+                        terminal_surface="execution_pipeline_pre_trade_risk",
+                        block_reason_code="pre_trade_risk_reject",
+                        block_reason_detail=str(risk_decision.reason),
+                        first_failed_gate="risk.pre_trade",
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -1125,23 +1144,6 @@ class ExecutionPipeline:
                 "LIVE EXECUTION DISABLED: Missing fencing token"
             )
 
-        try:
-            assert_distributed_writer_authority()
-        except Exception as exc:
-            self._emit_execution_rejection_telemetry(
-                symbol=effective_request.symbol,
-                side=effective_request.side,
-                reason=f"distributed_writer_fence:{exc}",
-            )
-            return PipelineResult(
-                success=False,
-                symbol=effective_request.symbol,
-                side=effective_request.side,
-                size_usd=effective_request.size_usd,
-                error=f"DistributedWriterFence reject: {exc}",
-                latency_ms=(time.monotonic() - t_start) * 1000,
-            )
-
         if get_seak is not None:
             try:
                 seak = get_seak()
@@ -1177,10 +1179,30 @@ class ExecutionPipeline:
 
         try:
             with execution_authority_scope():
-                assert_distributed_writer_authority()
-                assert_execution_dispatch_permitted()
-                if not runtime_authority_snapshot().ready:
-                    raise RuntimeError("Runtime authority convergence lost")
+                authority_decision = can_execute()
+                if not bool(getattr(authority_decision, "allowed", False)):
+                    emit_pretrade_execution_validator_trace(
+                        authority_decision,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size=effective_request.size_usd,
+                        terminal_surface="execution_pipeline_authority",
+                    )
+                    return PipelineResult(
+                        success=False,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size_usd=effective_request.size_usd,
+                        error=f"ExecutionAuthority reject: {authority_decision.reason}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+                emit_pretrade_execution_validator_trace(
+                    authority_decision,
+                    symbol=effective_request.symbol,
+                    side=effective_request.side,
+                    size=effective_request.size_usd,
+                    terminal_surface="execution_pipeline_authority",
+                )
                 _correlation = get_runtime_correlation() or {}
                 _intent_id = str(_correlation.get("intent_id") or "").strip()
                 # ── Cycle integrity cross-check ───────────────────────────
