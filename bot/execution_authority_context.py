@@ -182,25 +182,25 @@ def _gate_reason_code(gate_name: str, default: str = "execution_blocked") -> str
 
 
 def _decision_gate_status(decision: ExecutionDecision) -> Dict[str, bool]:
-    reason_lower = str(decision.reason_detail or decision.reason or "").lower()
+    reason_lower = str(getattr(decision, "reason_detail", None) or getattr(decision, "reason", None) or "").lower()
     margin_critical_ok = "margin_critical" not in reason_lower
     margin_maintenance_ok = "margin_maintenance_low" not in reason_lower
-    if str(decision.first_failed_gate or "") == "margin.critical_ok":
+    if str(getattr(decision, "first_failed_gate", None) or "") == "margin.critical_ok":
         margin_critical_ok = False
-    if str(decision.first_failed_gate or "") == "margin.maintenance_ok":
+    if str(getattr(decision, "first_failed_gate", None) or "") == "margin.maintenance_ok":
         margin_maintenance_ok = False
     return {
-        "lifecycle.phase": str(decision.lifecycle_phase).upper() == "LIVE",
-        "state.live_active": bool(decision.state_live_active),
-        "lease.valid": bool(decision.lease_valid),
-        "lease.generation_current": bool(decision.lease_generation_current),
+        "lifecycle.phase": str(getattr(decision, "lifecycle_phase", "BOOT")).upper() == "LIVE",
+        "state.live_active": bool(getattr(decision, "state_live_active", False)),
+        "lease.valid": bool(getattr(decision, "lease_valid", False)),
+        "lease.generation_current": bool(getattr(decision, "lease_generation_current", False)),
         "nonce.authority": bool(getattr(decision, "nonce_ready", False)),
-        "heartbeat.fresh": bool(decision.heartbeat_fresh),
-        "heartbeat.stage_sufficient": bool(decision.heartbeat_stage_sufficient),
-        "broker.health_ok": bool(decision.broker_health_ok),
-        "circuit_breaker.closed": bool(decision.circuit_breaker_closed),
-        "dispatch.enabled": bool(decision.dispatch_enabled),
-        "stability.allowed": bool(decision.stability_allowed),
+        "heartbeat.fresh": bool(getattr(decision, "heartbeat_fresh", False)),
+        "heartbeat.stage_sufficient": bool(getattr(decision, "heartbeat_stage_sufficient", False)),
+        "broker.health_ok": bool(getattr(decision, "broker_health_ok", False)),
+        "circuit_breaker.closed": bool(getattr(decision, "circuit_breaker_closed", False)),
+        "dispatch.enabled": bool(getattr(decision, "dispatch_enabled", False)),
+        "stability.allowed": bool(getattr(decision, "stability_allowed", False)),
         "margin.critical_ok": bool(margin_critical_ok),
         "margin.maintenance_ok": bool(margin_maintenance_ok),
     }
@@ -213,7 +213,7 @@ def _first_failed_gate_for_decision(decision: ExecutionDecision) -> Optional[str
             return gate
         if gate in {"margin.critical_ok", "margin.maintenance_ok"}:
             # Margin gates are represented in reason fields when they block.
-            reason = str(decision.reason_detail or decision.reason or "").lower()
+            reason = str(getattr(decision, "reason_detail", None) or getattr(decision, "reason", None) or "").lower()
             if gate == "margin.critical_ok" and "margin_critical" in reason:
                 return gate
             if gate == "margin.maintenance_ok" and "margin_maintenance_low" in reason:
@@ -263,18 +263,18 @@ def emit_pretrade_execution_validator_trace(
     gate_status = _decision_gate_status(decision)
     decision_value = "ALLOW" if bool(decision.allowed) else "BLOCK"
     terminal_first_failed = (
-        str(first_failed_gate or decision.first_failed_gate or _first_failed_gate_for_decision(decision) or "").strip()
+        str(first_failed_gate or getattr(decision, "first_failed_gate", None) or _first_failed_gate_for_decision(decision) or "").strip()
         or None
     )
     reason_detail = str(
         block_reason_detail
-        or decision.reason_detail
-        or decision.reason
+        or getattr(decision, "reason_detail", None)
+        or getattr(decision, "reason", None)
         or ("allowed" if decision.allowed else "blocked")
     )
     reason_code = str(
         block_reason_code
-        or decision.reason_code
+        or getattr(decision, "reason_code", None)
         or (_gate_reason_code(str(terminal_first_failed)) if terminal_first_failed else "allowed")
     )
     payload: Dict[str, Any] = {
@@ -283,8 +283,8 @@ def emit_pretrade_execution_validator_trace(
         "first_failed_gate": terminal_first_failed if decision_value == "BLOCK" else None,
         "reason_code": reason_code if decision_value == "BLOCK" else "allowed",
         "reason_detail": reason_detail,
-        "lifecycle_phase": str(decision.lifecycle_phase),
-        "circuit_state": str(decision.circuit_state),
+        "lifecycle_phase": str(getattr(decision, "lifecycle_phase", "BOOT")),
+        "circuit_state": str(getattr(decision, "circuit_state", "")),
         "gates": gate_status,
         "symbol": str(symbol or ""),
         "side": str(side or ""),

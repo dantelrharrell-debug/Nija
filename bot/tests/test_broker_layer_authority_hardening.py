@@ -6,14 +6,8 @@ import types
 from types import SimpleNamespace
 from unittest.mock import patch
 
-# execution_pipeline currently contains a repository-level syntax error.
-# Inject a minimal stub so imports in broker modules can still resolve.
-if "bot.execution_pipeline" not in sys.modules:
-    _stub = types.ModuleType("bot.execution_pipeline")
-    _stub.get_execution_pipeline = lambda: None
-    _stub.PipelineRequest = object
-    sys.modules["bot.execution_pipeline"] = _stub
-    sys.modules.setdefault("execution_pipeline", _stub)
+# Import the real execution_pipeline module (syntax errors previously required a stub).
+import bot.execution_pipeline as _ep_real  # noqa: F401  # ensure it's fully loaded
 
 from bot import broker_manager
 from bot.live_broker_adapters import AlpacaEquityBrokerAdapter
