@@ -103,6 +103,8 @@ class ConnectionStabilityManager:
     2. Runs an optional background watchdog thread that probes connection
        health and triggers automatic reconnection on repeated failure.
     3. Exposes helpers to configure HTTP connection pooling.
+    4. Fires registered post-reconnect hooks after each successful reconnect
+       so callers (e.g. KrakenBroker) can resync nonce state on DOWN→UP.
     """
 
     def __init__(
@@ -128,6 +130,18 @@ class ConnectionStabilityManager:
         self._broker: Optional[Any] = None
         self._reconnect_fn: Optional[Callable[[], bool]] = None
         self._health_probe_fn: Optional[Callable[[], bool]] = None
+
+        # Post-reconnect hooks: callables fired after each successful reconnect.
+        # Each hook receives no arguments and its return value is ignored.
+        # Hooks are called in registration order; exceptions are caught and logged.
+        self._reconnect_hooks: list[Callable[[], None]] = []
+        self._reconnect_hooks_lock = threading.Lock()
+
+        # Pre-reconnect hooks: callables fired before each reconnect attempt.
+        # Useful for resetting broker-side guards (e.g. _connection_already_complete)
+        # so the full connect routine runs on reconnect rather than short-circuiting.
+        self._pre_reconnect_hooks: list[Callable[[], None]] = []
+        self._pre_reconnect_hooks_lock = threading.Lock()
 
         # Watchdog thread management
         self._watchdog_thread: Optional[threading.Thread] = None
@@ -167,6 +181,74 @@ class ConnectionStabilityManager:
         self._reconnect_fn = reconnect_fn
         self._health_probe_fn = health_probe_fn
         logger.info(f"🔌 [{self.broker_name}] Broker registered with ConnectionStabilityManager")
+
+    def register_pre_reconnect_hook(self, hook: Callable[[], None]) -> None:
+        """Register a callable to be invoked before each reconnect attempt.
+
+        Pre-reconnect hooks fire once per reconnect cycle, immediately before
+        the first call to ``reconnect_fn``.  They are intended for resetting
+        broker-side connection guards (e.g. ``_connection_already_complete``)
+        so the full connect routine executes on reconnect rather than returning
+        early via a short-circuit guard.
+
+        Args:
+            hook: Zero-argument callable.  Return value is ignored.
+        """
+        with self._pre_reconnect_hooks_lock:
+            self._pre_reconnect_hooks.append(hook)
+        logger.debug(
+            f"[{self.broker_name}] Pre-reconnect hook registered "
+            f"(total pre-hooks: {len(self._pre_reconnect_hooks)})"
+        )
+
+    def _fire_pre_reconnect_hooks(self) -> None:
+        """Invoke all registered pre-reconnect hooks in order."""
+        with self._pre_reconnect_hooks_lock:
+            hooks = list(self._pre_reconnect_hooks)
+        for hook in hooks:
+            try:
+                hook()
+            except Exception as exc:
+                logger.warning(
+                    f"⚠️ [{self.broker_name}] Pre-reconnect hook {hook!r} raised: {exc}"
+                )
+
+    def register_reconnect_hook(self, hook: Callable[[], None]) -> None:
+        """Register a callable to be invoked after each successful reconnect.
+
+        Hooks are fired in registration order immediately after the connection
+        state transitions to CONNECTED following a DOWN→UP recovery.  Each hook
+        is called with no arguments; exceptions are caught and logged so a
+        failing hook never prevents subsequent hooks from running.
+
+        Typical use: nonce resynchronisation on Kraken broker reconnect.
+
+        Args:
+            hook: Zero-argument callable.  Return value is ignored.
+        """
+        with self._reconnect_hooks_lock:
+            self._reconnect_hooks.append(hook)
+        logger.debug(
+            f"[{self.broker_name}] Reconnect hook registered "
+            f"(total hooks: {len(self._reconnect_hooks)})"
+        )
+
+    def _fire_reconnect_hooks(self) -> None:
+        """Invoke all registered post-reconnect hooks in order.
+
+        Called internally after a successful reconnect.  Each hook runs in the
+        watchdog thread; long-running hooks should be non-blocking or delegate
+        to a background thread.
+        """
+        with self._reconnect_hooks_lock:
+            hooks = list(self._reconnect_hooks)
+        for hook in hooks:
+            try:
+                hook()
+            except Exception as exc:
+                logger.warning(
+                    f"⚠️ [{self.broker_name}] Reconnect hook {hook!r} raised: {exc}"
+                )
 
     def mark_connected(self) -> None:
         """Signal that the broker is now connected (call after successful connect())."""
@@ -344,6 +426,11 @@ class ConnectionStabilityManager:
         with self._state_lock:
             self._state = ConnectionState.RECONNECTING
 
+        # Fire pre-reconnect hooks once before the first attempt so broker-side
+        # guards (e.g. _connection_already_complete) are reset and the full
+        # connect routine runs rather than short-circuiting.
+        self._fire_pre_reconnect_hooks()
+
         while attempt < max_attempts:
             attempt += 1
             logger.info(
@@ -365,6 +452,7 @@ class ConnectionStabilityManager:
                     self._last_success_time = time.monotonic()
                     self._total_reconnects += 1
                 logger.info(f"✅ [{self.broker_name}] Reconnected after {attempt} attempt(s)")
+                self._fire_reconnect_hooks()
                 return True
 
             # Back off before next attempt; honour a stop request during the wait
