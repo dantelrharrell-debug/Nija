@@ -114,6 +114,13 @@ except ImportError:
     except ImportError:
         submit_market_order_via_pipeline = None  # type: ignore[assignment]
 
+try:
+    from bot.graceful_handoff import get_handoff_coordinator as _get_handoff_coordinator
+    _GRACEFUL_HANDOFF_AVAILABLE = True
+except ImportError:
+    _get_handoff_coordinator = None  # type: ignore[assignment]
+    _GRACEFUL_HANDOFF_AVAILABLE = False
+
 
 def _is_live_mode(existing_mode: Optional[RuntimeModeResolution] = None) -> bool:
     runtime_mode = existing_mode or resolve_runtime_mode_safe(logger)
@@ -2019,6 +2026,23 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
     threading.Thread — the started daemon thread
     """
     logger.critical("🚀 STARTING TRADING ENGINE THREAD")
+
+    # Install graceful shutdown handler before spawning the trading thread so
+    # SIGTERM is handled from the main thread (required by Python's signal API).
+    if _GRACEFUL_HANDOFF_AVAILABLE and _get_handoff_coordinator is not None:
+        try:
+            _get_handoff_coordinator().install_shutdown_handler()
+            logger.info(
+                "start_trading_engine: graceful shutdown handler installed "
+                "(SIGTERM will trigger clean lock release)"
+            )
+        except Exception as _hh_exc:
+            logger.warning(
+                "start_trading_engine: graceful shutdown handler install failed "
+                "(non-fatal): %s",
+                _hh_exc,
+            )
+
     t = threading.Thread(
         target=run_trading_loop,
         args=(strategy,),
@@ -2290,6 +2314,25 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
+                # Graceful shutdown gate: stop accepting new cycles when SIGTERM
+                # has been received.  The shutdown handler waits for in-flight
+                # trades to complete before releasing the lock, so we exit the
+                # loop cleanly here rather than starting a new cycle.
+                if _GRACEFUL_HANDOFF_AVAILABLE and _get_handoff_coordinator is not None:
+                    try:
+                        if _get_handoff_coordinator().is_shutting_down:
+                            logger.critical(
+                                "🛑 GRACEFUL SHUTDOWN: trading loop exiting — "
+                                "SIGTERM received, no new cycles will start"
+                            )
+                            _trading_active = False
+                            break
+                    except Exception as _shutdown_check_err:
+                        logger.debug(
+                            "Graceful shutdown check failed (non-fatal): %s",
+                            _shutdown_check_err,
+                        )
+
                 # FIX 4: emit every cycle so a silent dead-bot is immediately visible.
                 _rate_limited_critical("core_loop_tick", "scheduler", 30.0, "🟢 LIVE LOOP TICK")
                 if cycle == 0 or ((cycle + 1) % _tick_log_every == 0):
