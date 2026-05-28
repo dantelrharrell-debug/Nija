@@ -1263,22 +1263,6 @@ def _publish_strategy_runtime_readiness(strategy_obj: Any, *, context: str) -> b
     # strategy has been initialized and published.  This unblocks signal
     # broadcaster, market regime detector, and any other daemon that requires
     # a live strategy before starting.
-    if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-        try:
-            _get_bootstrap_coordinator().advance_to(
-                _BootstrapPhase.STRATEGY_READY,
-                f"TradingStrategy published and strategy_ready set ({context})",
-                allow_skip=True,
-            )
-            logger.info(
-                "BootstrapCoordinator: STRATEGY_READY phase signaled — "
-                "signal broadcaster and market regime detector unblocked"
-            )
-        except Exception as _bc_sr_err:
-            logger.warning(
-                "BootstrapCoordinator: STRATEGY_READY advance failed (non-fatal): %s",
-                _bc_sr_err,
-            )
 
     _exec_engine = getattr(strategy_obj, "execution_engine", None)
     if _exec_engine is None:
@@ -3765,13 +3749,6 @@ def _acquire_process_lock() -> bool:
         logger.critical(
             "STARTUP_OBSERVER_STANDBY: distributed writer authority denied"
         )
-        if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-            try:
-                _get_bootstrap_coordinator().mark_failed(
-                    "distributed writer authority denied — another instance owns writer authority"
-                )
-            except Exception:
-                pass
         if _is_live_trading_active_now():
             raise RuntimeError(
                 "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: another instance owns writer authority"
@@ -3779,24 +3756,7 @@ def _acquire_process_lock() -> bool:
         return False
     print(f"🔒 Process lock acquired (PID {os.getpid()}) — {_PID_FILE}")
 
-    # BootstrapCoordinator: advance to LOCK_ACQUIRED now that the distributed
-    # writer lock has been confirmed.  This unblocks the nonce manager and any
-    # other daemon that requires the lock before starting.
-    if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-        try:
-            _get_bootstrap_coordinator().advance_to(
-                _BootstrapPhase.LOCK_ACQUIRED,
-                f"distributed writer lock acquired pid={os.getpid()}",
-                allow_skip=True,
-            )
-            logger.info(
-                "BootstrapCoordinator: LOCK_ACQUIRED phase signaled — nonce manager unblocked"
-            )
-        except Exception as _bc_lock_err:
-            logger.warning(
-                "BootstrapCoordinator: LOCK_ACQUIRED advance failed (non-fatal): %s",
-                _bc_lock_err,
-            )
+
 
     return True
 
@@ -3951,13 +3911,6 @@ def _start_health_server():
                                 status["writer_lock_ok"] = bool(_writer_lock_status.get("ok", False))
                             else:
                                 status["writer_lock_ok"] = False
-
-                            # Include BootstrapCoordinator phase status.
-                            if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-                                try:
-                                    status["bootstrap_coordinator"] = _get_bootstrap_coordinator().get_status()
-                                except Exception as _bc_status_err:
-                                    status["bootstrap_coordinator"] = {"error": str(_bc_status_err)}
 
                             self.send_response(200)
                             self.send_header("Content-Type", "application/json")
@@ -4857,11 +4810,6 @@ def _handle_signal(sig, frame):
         signal_shutdown()
     if _BOOTSTRAP_FSM_AVAILABLE:
         _bfsm_transition(_BootstrapState.SHUTDOWN, f"signal {sig} received")
-    if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-        try:
-            _get_bootstrap_coordinator().mark_shutdown(f"signal {sig} received")
-        except Exception:
-            pass
     signal_name = signal.Signals(sig).name if hasattr(signal, 'Signals') else str(sig)
     _log_exit_point(
         f"Signal {signal_name} received",
@@ -5809,21 +5757,6 @@ def _run_bot_startup_and_trading_with_retry():
         if _BOOTSTRAP_FSM_AVAILABLE:
             _get_bootstrap_fsm().claim_bootstrap_ownership()
 
-        # Claim BootstrapCoordinator ownership so phase barriers are enforced
-        # against the single bootstrap kernel thread.
-        if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-            try:
-                _get_bootstrap_coordinator().claim_ownership()
-                logger.info(
-                    "BootstrapCoordinator: ownership claimed by BotStartup thread %d",
-                    threading.get_ident(),
-                )
-            except Exception as _bc_claim_err:
-                logger.warning(
-                    "BootstrapCoordinator: ownership claim failed (non-fatal): %s",
-                    _bc_claim_err,
-                )
-
         import time
 
         _INITIAL_DELAY_SECONDS = 5
@@ -6119,27 +6052,6 @@ def _try_finalize_running_supervised_handoff(
                     _bootstrap_completed_event.set()
                 _force_trade_handoff_complete_event.set()
 
-                # BootstrapCoordinator: advance to RUNNING_SUPERVISED now that
-                # the bootstrap FSM has completed its final handoff.  This
-                # unblocks the core trading loop and any other daemon that
-                # requires full supervised runtime before starting.
-                if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-                    try:
-                        _get_bootstrap_coordinator().advance_to(
-                            _BootstrapPhase.RUNNING_SUPERVISED,
-                            f"bootstrap finalize_boot complete: {reason}",
-                            allow_skip=True,
-                        )
-                        logger.info(
-                            "BootstrapCoordinator: RUNNING_SUPERVISED phase signaled — "
-                            "core trading loop unblocked"
-                        )
-                    except Exception as _bc_rs_err:
-                        logger.warning(
-                            "BootstrapCoordinator: RUNNING_SUPERVISED advance failed (non-fatal): %s",
-                            _bc_rs_err,
-                        )
-
                 return True
 
         logger.info(
@@ -6277,23 +6189,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             _ahb_monitor._thread.is_alive() if _ahb_monitor._thread else False,
             _ahb_monitor._thread.daemon if _ahb_monitor._thread else False,
         )
-        # BootstrapCoordinator: advance to HEARTBEATS_READY now that the
-        # authority heartbeat monitor is running.
-        if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-            try:
-                _get_bootstrap_coordinator().advance_to(
-                    _BootstrapPhase.HEARTBEATS_READY,
-                    "authority heartbeat monitor started",
-                    allow_skip=True,
-                )
-                logger.info(
-                    "BootstrapCoordinator: HEARTBEATS_READY phase signaled"
-                )
-            except Exception as _bc_hb_err:
-                logger.warning(
-                    "BootstrapCoordinator: HEARTBEATS_READY advance failed (non-fatal): %s",
-                    _bc_hb_err,
-                )
     except Exception as _ahb_exc:
         logger.error(
             "AUTHORITY_HEARTBEAT: monitor could not be started: %s",
@@ -7001,26 +6896,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     "TradingStrategy broker connection starting",
                 )
 
-            # BootstrapCoordinator: advance to FSM_READY now that the trading
-            # state machine mode has been confirmed and broker connection is
-            # starting.  This unblocks any daemon that requires the FSM to be
-            # initialized before starting.
-            if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-                try:
-                    _get_bootstrap_coordinator().advance_to(
-                        _BootstrapPhase.FSM_READY,
-                        "trading state machine mode confirmed; broker connection starting",
-                        allow_skip=True,
-                    )
-                    logger.info(
-                        "BootstrapCoordinator: FSM_READY phase signaled"
-                    )
-                except Exception as _bc_fsm_err:
-                    logger.warning(
-                        "BootstrapCoordinator: FSM_READY advance failed (non-fatal): %s",
-                        _bc_fsm_err,
-                    )
-
             logger.debug("Init stage A2: after Bootstrap FSM, before initialized_state_lock")
             # STEP 2 — initialize strategy ONCE.
             # If a previous attempt created TradingStrategy but crashed before
@@ -7216,26 +7091,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _BootstrapState.PLATFORM_READY,
                 "TradingStrategy initialized; platform broker(s) connected",
             )
-
-            # BootstrapCoordinator: advance to BROKERS_READY now that the
-            # TradingStrategy has been initialized and platform brokers are
-            # connected.  This unblocks capital authority and any other daemon
-            # that requires broker connectivity before starting.
-            if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-                try:
-                    _get_bootstrap_coordinator().advance_to(
-                        _BootstrapPhase.BROKERS_READY,
-                        "TradingStrategy initialized; platform broker(s) connected",
-                        allow_skip=True,
-                    )
-                    logger.info(
-                        "BootstrapCoordinator: BROKERS_READY phase signaled — capital authority unblocked"
-                    )
-                except Exception as _bc_br_err:
-                    logger.warning(
-                        "BootstrapCoordinator: BROKERS_READY advance failed (non-fatal): %s",
-                        _bc_br_err,
-                    )
 
             _total_balance = _hydrate_startup_balances(strategy)
             if _BOOTSTRAP_FSM_AVAILABLE:
@@ -8695,22 +8550,6 @@ def main():
         except Exception as _bfsm_state_err:
             logger.debug("[BootstrapFSM] startup transition guard skipped: %s", _bfsm_state_err)
 
-    # BootstrapCoordinator: advance to PRECHECK now that the health server is
-    # bound and the process lock has been acquired.  This unblocks any daemon
-    # that is waiting on PRECHECK before starting.
-    if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-        try:
-            _get_bootstrap_coordinator().advance_to(
-                _BootstrapPhase.PRECHECK,
-                "health server bound; environment pre-flight starting",
-                allow_skip=True,
-            )
-        except Exception as _bc_precheck_err:
-            logger.warning(
-                "BootstrapCoordinator: PRECHECK advance failed (non-fatal): %s",
-                _bc_precheck_err,
-            )
-
     # Small delay to ensure health server is fully bound
     time.sleep(0.2)
 
@@ -8723,11 +8562,6 @@ def main():
     # ═══════════════════════════════════════════════════════════════════════
     _emit_boot_trace("BOOT 3", "running synchronous preflight checks")
     if not _run_preflight_check():
-        if _BOOTSTRAP_COORDINATOR_AVAILABLE and _get_bootstrap_coordinator is not None:
-            try:
-                _get_bootstrap_coordinator().mark_failed("preflight check failed")
-            except Exception:
-                pass
         _release_process_lock()
         sys.exit(1)
     _emit_boot_trace("BOOT 4", "preflight passed; launching startup pipeline")
