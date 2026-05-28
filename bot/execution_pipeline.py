@@ -1238,6 +1238,7 @@ class ExecutionPipeline:
                         "account_id": effective_request.account_id,
                         "broker_hint": effective_request.preferred_broker or "",
                         "cycle_id": _corr_cycle_id,
+                        "attempt_n": getattr(effective_request, "attempt_n", 0),
                     },
                 )
                 result = self._dispatch(effective_request, t_start)
@@ -1270,6 +1271,7 @@ class ExecutionPipeline:
                     "fill_price": result.fill_price,
                     "filled_size_usd": result.filled_size_usd,
                     "latency_ms": result.latency_ms,
+                    "attempt_n": getattr(effective_request, "attempt_n", 0),
                 },
             )
             if getattr(self, "_margin_position_ledger", None) is not None:
@@ -1342,6 +1344,7 @@ class ExecutionPipeline:
                 "error": result.error,
                 "broker": result.broker,
                 "latency_ms": result.latency_ms,
+                "attempt_n": getattr(effective_request, "attempt_n", 0),
             },
         )
         return result

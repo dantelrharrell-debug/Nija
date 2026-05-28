@@ -278,6 +278,43 @@ class RetryHandler:
         logger.error(f"❌ Failed to verify order status after {max_checks} checks")
         return None
 
+    @staticmethod
+    def should_retry_attempt(record: object) -> bool:
+        """
+        Return ``True`` if the ``AttemptRecord`` from the entry validator
+        permits a retry under the attached ``ExecutionContractSpec``.
+
+        This is the canonical retry decision point for the pipeline and broker
+        layers.  Callers import this method instead of inspecting
+        ``RejectionClass`` directly so the spec's ``max_retries`` and
+        ``retry_*`` flags are always obeyed.
+
+        If ``record`` is ``None`` or not an ``AttemptRecord`` (e.g. when the
+        validator is not wired in yet) the method returns ``False`` to fail
+        closed.
+
+        Parameters
+        ----------
+        record:
+            ``AttemptRecord`` returned by
+            ``DeterministicEntryValidator.reduce()``.
+
+        Returns
+        -------
+        bool
+        """
+        try:
+            # Avoid a hard import cycle: use duck-typing on the AttemptRecord
+            validator_attr = getattr(record, "_validator_ref", None)
+            if validator_attr is not None:
+                return validator_attr.should_retry(record)
+            # Fallback: call should_retry via the global validator singleton
+            from bot.deterministic_entry_validator import get_entry_validator
+            return get_entry_validator().should_retry(record)
+        except Exception as exc:
+            logger.debug("should_retry_attempt: unable to evaluate record: %s", exc)
+            return False
+
 
 # Global retry handler instance
 # Tuned for Kraken RemoteDisconnected recovery:

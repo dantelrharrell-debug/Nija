@@ -84,6 +84,7 @@ class PipelineRequest:
 
     # Internal pipeline state
     validated: bool = False
+    attempt_n: int = 0  # Incremented by the retry layer; ties to AttemptKey.attempt_n
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
