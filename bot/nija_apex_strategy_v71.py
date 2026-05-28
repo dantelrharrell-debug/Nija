@@ -72,14 +72,17 @@ KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exc
 # Minimum order sizes per broker (USD).  Keeps all four check-sites in sync
 # and prevents sub-minimum orders from being scored, sized, or submitted.
 # Lowered from $10 → $5 (Apr 2026) to allow micro-account setups to pass the notional gate.
+# Lowered from $5 → $1 for coinbase/kraken (micro-capital mode) so that a $46.50 account
+# with 2% min sizing ($0.93) is not blocked by the notional gate.  The actual exchange
+# minimums are ~$1 (Coinbase) and ~$1 (Kraken); $1 is the correct operational floor.
 BROKER_MIN_ORDER_USD: Dict[str, float] = {
-    'coinbase': 5.0,    # Coinbase operational minimum — allows micro accounts ($50+) to trade
-    'kraken':   5.0,    # Kraken minimum (exchange floor is ~$1; $5 is our fee-efficiency target)
+    'coinbase': 1.0,    # Coinbase actual exchange minimum — micro-capital compatible
+    'kraken':   1.0,    # Kraken actual exchange minimum — micro-capital compatible (was $5)
     'binance':  5.0,    # Binance minimum notional
     'okx':      5.0,    # OKX minimum notional
     'alpaca':   1.0,    # Alpaca (stocks/crypto) minimum
 }
-_DEFAULT_MIN_ORDER_USD = 5.0   # Conservative fallback for any unlisted broker (was $10)
+_DEFAULT_MIN_ORDER_USD = 1.0   # Micro-capital compatible fallback (was $5)
 
 # Trade quality thresholds — loosened to fix 0-trade issue (entry filters too strict)
 # NOTE: Kraken is the active broker; kraken_min_confidence was blocking all trades at 0.70

@@ -47,9 +47,9 @@ class CapitalMinimumLock:
     - Accounts < $10: Trading disabled
     """
     
-    # Capital thresholds
-    MINIMUM_INDEPENDENT_CAPITAL = 100.0  # $100 minimum for independent trading
-    MINIMUM_COPY_CAPITAL = 10.0          # $10 minimum for copy trading
+    # Capital thresholds — relaxed for micro-capital mode ($10–$50 accounts)
+    MINIMUM_INDEPENDENT_CAPITAL = 10.0   # $10 minimum for independent trading (was $100)
+    MINIMUM_COPY_CAPITAL = 1.0           # $1 minimum for copy trading (was $10)
     
     def __init__(self, broker_integration):
         """

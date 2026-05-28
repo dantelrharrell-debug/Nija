@@ -488,7 +488,7 @@ class CapitalAuthority:
         # Override: set NIJA_SINGLE_BROKER_MODE=true (or NIJA_CAPITAL_EXPECTED_BROKERS=1)
         # to allow a single-broker deployment to reach READY.
         _single_broker_mode: bool = os.environ.get(
-            "NIJA_SINGLE_BROKER_MODE", ""
+            "NIJA_SINGLE_BROKER_MODE", "true"  # default ON for micro-capital (was "")
         ).strip().lower() in {"1", "true", "yes", "on"}
         _explicit_expected: str = os.environ.get("NIJA_CAPITAL_EXPECTED_BROKERS", "").strip()
         if _explicit_expected:
@@ -496,7 +496,7 @@ class CapitalAuthority:
         elif _single_broker_mode:
             self._expected_brokers: int = 1
         else:
-            self._expected_brokers: int = 2
+            self._expected_brokers: int = 1  # relaxed: 1 broker sufficient (was 2)
         # Opportunistic mode: when True, ACTIVE_CAPITAL is reached (and
         # CAPITAL_SYSTEM_READY is set) as soon as ≥1 broker reports a positive
         # balance, without waiting for all expected_brokers to connect.
@@ -505,7 +505,7 @@ class CapitalAuthority:
         # Set via env var NIJA_CAPITAL_OPPORTUNISTIC (accepted: "1", "true", "yes")
         # or programmatically via set_opportunistic().
         self._opportunistic: bool = os.environ.get(
-            "NIJA_CAPITAL_OPPORTUNISTIC", "false"
+            "NIJA_CAPITAL_OPPORTUNISTIC", "true"  # default ON for micro-capital (was "false")
         ).strip().lower() in ("1", "true", "yes")
         # Maximum age for retaining a previous non-zero balance when a refresh
         # call returns zero/errors (prevents indefinite stale-capital retention).
