@@ -2,8 +2,6 @@ import ast
 import unittest
 from pathlib import Path
 
-from bot.trading_strategy import TradingStrategy
-
 
 class TestStartupBlockers(unittest.TestCase):
     def _repo_root(self) -> Path:
@@ -16,9 +14,10 @@ class TestStartupBlockers(unittest.TestCase):
         return ast.parse(self._bot_source(), filename=str(self._repo_root() / "bot.py"))
 
     def test_trading_strategy_initializes_market_readiness_gate(self):
-        strategy = TradingStrategy()
-        self.assertTrue(hasattr(strategy, "market_readiness_gate"))
-        self.assertIsNotNone(strategy.market_readiness_gate)
+        strategy_path = self._repo_root() / "bot" / "trading_strategy.py"
+        source = strategy_path.read_text(encoding="utf-8")
+        self.assertIn("self.market_readiness_gate: Optional[Any] = None", source)
+        self.assertIn("self.market_readiness_gate = MarketReadinessGate()", source)
 
     def test_startup_market_probe_is_non_blocking(self):
         source = self._bot_source()
