@@ -253,6 +253,21 @@ def _heartbeat_stage_is_sufficient(stage: str, required_stage: str) -> bool:
     return _HEARTBEAT_STAGE_ORDER.get(stage, 0) >= _HEARTBEAT_STAGE_ORDER.get(required_stage, 0)
 
 
+def _is_nonce_auth_error(exc: BaseException) -> bool:
+    """Return True when an auth/probe exception indicates nonce desynchronization."""
+    detail = str(exc or "").strip().lower()
+    if not detail:
+        return False
+    nonce_markers = (
+        "invalid nonce",
+        "eapi:invalid nonce",
+        "nonce window",
+        "nonce out of window",
+        "nonce not authorized",
+    )
+    return any(marker in detail for marker in nonce_markers)
+
+
 # ---------------------------------------------------------------------------
 # TradingStrategy
 # ---------------------------------------------------------------------------
@@ -409,6 +424,33 @@ class TradingStrategy:
     # -----------------------------------------------------------------------
     # Internal helpers
     # -----------------------------------------------------------------------
+
+    def _recover_nonce_auth_probe(self) -> tuple[bool, str]:
+        """Best-effort nonce recovery used when heartbeat auth probe hits nonce drift."""
+        platform_key = (
+            os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+            or os.environ.get("KRAKEN_API_KEY", "").strip()
+        )
+        if not platform_key:
+            return False, "kraken_key_missing"
+        try:
+            try:
+                from bot.distributed_nonce_manager import (
+                    get_distributed_nonce_manager,
+                    make_api_key_id,
+                )
+            except ImportError:
+                from distributed_nonce_manager import (  # type: ignore[import]
+                    get_distributed_nonce_manager,
+                    make_api_key_id,
+                )
+            manager = get_distributed_nonce_manager()
+            key_id = make_api_key_id(platform_key)
+            manager.probe_server_sync(key_id)
+            manager.ensure_writer_lock(key_id)
+            return True, "probe_server_sync"
+        except Exception as exc:
+            return False, str(exc)
 
     def _resolve_primary_broker(self, broker_results: Optional[Dict]) -> None:
         """Resolve the primary broker from bootstrap results or manager."""
@@ -593,9 +635,34 @@ class TradingStrategy:
             method = getattr(broker, method_name, None)
             if callable(method):
                 try:
-                    method()
+                    probe_scope = (
+                        startup_execution_probe_scope("HEARTBEAT_TRADE")
+                        if callable(startup_execution_probe_scope)
+                        else nullcontext()
+                    )
+                    with probe_scope:
+                        method()
                     return True, method_name
                 except Exception as exc:
+                    if _is_nonce_auth_error(exc):
+                        recovered, recovery_detail = self._recover_nonce_auth_probe()
+                        if recovered:
+                            try:
+                                probe_scope = (
+                                    startup_execution_probe_scope("HEARTBEAT_TRADE")
+                                    if callable(startup_execution_probe_scope)
+                                    else nullcontext()
+                                )
+                                with probe_scope:
+                                    method()
+                                logger.warning(
+                                    "⚠️  Heartbeat AUTH_VERIFY nonce drift recovered via %s; continuing",
+                                    recovery_detail,
+                                )
+                                return True, f"{method_name}:nonce_recovered"
+                            except Exception as retry_exc:
+                                return False, f"{method_name}:{retry_exc}"
+                        return False, f"{method_name}:{exc} nonce_recovery={recovery_detail}"
                     return False, f"{method_name}:{exc}"
         # Fallback for broker test doubles that don't expose auth probe methods.
         if getattr(broker, "connected", False) and callable(getattr(broker, "execute_order", None)):
