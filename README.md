@@ -30,6 +30,15 @@ This recovery anchor is the primary reference point for getting NIJA back to a v
 
 ---
 
+## 🌿 Branch & PR Governance
+
+Repository branch and pull-request hygiene policy lives in
+[`BRANCH_LIFECYCLE.md`](BRANCH_LIFECYCLE.md).
+Use the policy for naming, branch lifetime limits, stale cleanup, and merge
+requirements.
+
+---
+
 ## 🚀 QUICK START — Enable Live Trading
 
 > **NIJA defaults to DISABLED mode (safe state) until credentials and the live-trading flag are set.**
