@@ -1173,6 +1173,16 @@ class TradingStateMachine:
         # as the sole authority for the OFF → LIVE_ACTIVE transition.
         self._activation_committed: bool = False
 
+        # Timestamp (monotonic) when the FSM first entered LIVE_PENDING_CONFIRMATION.
+        # Used by the 5-minute auto-transition timeout and the 30-second monitoring
+        # log inside commit_activation().  Reset to None whenever the state leaves
+        # LIVE_PENDING_CONFIRMATION (either forward to LIVE_ACTIVE or back to OFF).
+        self._pending_confirmation_since: Optional[float] = None
+
+        # Timestamp (monotonic) of the last periodic "stuck in LIVE_PENDING_CONFIRMATION"
+        # monitoring log emission.  Ensures the log fires at most once every 30 s.
+        self._last_pending_log_time: Optional[float] = None
+
         # Runtime dispatch authority handshake.
         # execution_authority=True is the canonical permission signal for order
         # dispatch. core_loop_owns_execution is true during bootstrap until the
@@ -1247,6 +1257,8 @@ class TradingStateMachine:
                     self._execution_authority = False
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
+                    self._pending_confirmation_since = time.monotonic()
+                    self._last_pending_log_time = None
                     logger.critical(
                         "[STARTUP STATE OVERRIDE] BLOCKED LIVE_ACTIVE: heartbeat_verification_required=true reason=%s path=%s heartbeat_trade=%s required_stage=%s max_age_s=%s",
                         heartbeat_err or "verification_missing",
@@ -1262,6 +1274,8 @@ class TradingStateMachine:
                 self._execution_authority = False
                 self._core_loop_owns_execution = True
                 self._can_dispatch_trades = False
+                self._pending_confirmation_since = time.monotonic()
+                self._last_pending_log_time = None
                 if heartbeat_trade:
                     logger.critical(
                         "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE + HEARTBEAT_TRADE=true -> LIVE_PENDING_CONFIRMATION (awaiting commit_activation gate)"
@@ -1271,6 +1285,7 @@ class TradingStateMachine:
                         "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED + AUTO_ACTIVATE=true -> LIVE_PENDING_CONFIRMATION (awaiting commit_activation gate)"
                     )
                 return
+
 
             if live_verified and not dry_run_mode:
                 ownership_ok, ownership_err = _startup_ownership_gate()
@@ -1290,6 +1305,8 @@ class TradingStateMachine:
                 self._execution_authority = False
                 self._core_loop_owns_execution = True
                 self._can_dispatch_trades = False
+                self._pending_confirmation_since = time.monotonic()
+                self._last_pending_log_time = None
                 logger.critical(
                     "[STARTUP STATE OVERRIDE] LIVE_CAPITAL_VERIFIED=true and DRY_RUN_MODE=false -> LIVE_PENDING_CONFIRMATION (awaiting commit_activation gate)"
                 )
@@ -1298,6 +1315,7 @@ class TradingStateMachine:
                     self._current_state.value,
                     self._current_state == TradingState.LIVE_ACTIVE,
                 )
+
 
     def _load_state(self):
         """
@@ -1615,12 +1633,23 @@ class TradingStateMachine:
                 self._execution_authority = False
                 self._core_loop_owns_execution = True
                 self._can_dispatch_trades = False
+                self._pending_confirmation_since = None
+                self._last_pending_log_time = None
                 os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+            elif new_state == TradingState.LIVE_PENDING_CONFIRMATION:
+                # Record when we first enter LIVE_PENDING_CONFIRMATION so the
+                # timeout and monitoring log in commit_activation() can measure
+                # elapsed time.  Only set if not already set (idempotent).
+                if self._pending_confirmation_since is None:
+                    self._pending_confirmation_since = time.monotonic()
+                    self._last_pending_log_time = None
             elif new_state == TradingState.LIVE_ACTIVE:
                 self._activation_committed = True
                 self._execution_authority = True
                 self._core_loop_owns_execution = False
                 self._can_dispatch_trades = True
+                self._pending_confirmation_since = None
+                self._last_pending_log_time = None
                 os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
 
             # Sync NIJA_RUNTIME_TRADING_STATE with the new FSM state so that
@@ -1679,6 +1708,88 @@ class TradingStateMachine:
                 callback()
             except Exception as e:
                 logger.error(f"❌ Error executing state callback: {e}")
+
+    def _force_live_active_transition(self, reason: str) -> bool:
+        """Directly mutate FSM state to LIVE_ACTIVE, bypassing all pre-flight gates.
+
+        Used exclusively by the NIJA_FORCE_ACTIVATION override and the
+        LIVE_PENDING_CONFIRMATION timeout path.  All other callers MUST use
+        transition_to() or commit_activation() so that safety gates are enforced.
+
+        The method still validates the FSM transition graph (current state must
+        allow → LIVE_ACTIVE), persists state to disk, fires callbacks, and starts
+        the authority heartbeat monitor — it only skips the distributed-authority
+        and live-gate pre-flight checks that are the source of the deadlock.
+        """
+        with self._lock:
+            current = self._current_state
+            if current == TradingState.LIVE_ACTIVE:
+                self._activation_committed = True
+                self._execution_authority = True
+                self._core_loop_owns_execution = False
+                self._can_dispatch_trades = True
+                self._pending_confirmation_since = None
+                self._last_pending_log_time = None
+                return True
+
+            allowed = self.VALID_TRANSITIONS.get(current, [])
+            if TradingState.LIVE_ACTIVE not in allowed:
+                # Arm to LIVE_PENDING_CONFIRMATION first if needed.
+                if TradingState.LIVE_PENDING_CONFIRMATION in self.VALID_TRANSITIONS.get(current, []):
+                    transition_record = {
+                        "from": current.value,
+                        "to": TradingState.LIVE_PENDING_CONFIRMATION.value,
+                        "reason": f"{reason} [arm step]",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }
+                    self._state_history.append(transition_record)
+                    self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                    if self._pending_confirmation_since is None:
+                        self._pending_confirmation_since = time.monotonic()
+                    current = TradingState.LIVE_PENDING_CONFIRMATION
+                    os.environ["NIJA_RUNTIME_TRADING_STATE"] = current.value
+                else:
+                    logger.critical(
+                        "[_force_live_active_transition] cannot reach LIVE_ACTIVE from %s",
+                        current.value,
+                    )
+                    return False
+
+            transition_record = {
+                "from": current.value,
+                "to": TradingState.LIVE_ACTIVE.value,
+                "reason": reason,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            self._state_history.append(transition_record)
+            old_state = current
+            self._current_state = TradingState.LIVE_ACTIVE
+            self._activation_committed = True
+            self._execution_authority = True
+            self._core_loop_owns_execution = False
+            self._can_dispatch_trades = True
+            self._pending_confirmation_since = None
+            self._last_pending_log_time = None
+            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+            os.environ["NIJA_RUNTIME_TRADING_STATE"] = TradingState.LIVE_ACTIVE.value
+
+        # Post-transition I/O outside the lock.
+        self._persist_state()
+        logger.critical(
+            "🔄 [FORCED] State transition: %s -> LIVE_ACTIVE (Reason: %s)",
+            old_state.value,
+            reason,
+        )
+        self._trigger_callbacks(TradingState.LIVE_ACTIVE)
+        try:
+            try:
+                from bot.authority_heartbeat import start_authority_heartbeat
+            except ImportError:
+                from authority_heartbeat import start_authority_heartbeat  # type: ignore[import]
+            start_authority_heartbeat()
+        except Exception as _hb_exc:
+            logger.warning("_force_live_active_transition: heartbeat start failed: %s", _hb_exc)
+        return True
 
     def commit_activation(
         self,
@@ -1748,6 +1859,149 @@ class TradingStateMachine:
             if runtime_mode is not None
             else os.environ.get("LIVE_TRADING", "false")
         )
+
+        # ── NIJA_FORCE_ACTIVATION override ───────────────────────────────────
+        # When NIJA_FORCE_ACTIVATION=1 is set and the basic live-trading
+        # conditions are satisfied (LIVE_CAPITAL_VERIFIED=true, DRY_RUN_MODE=false,
+        # kill switch inactive), bypass all distributed-authority gates and
+        # transition directly to LIVE_ACTIVE.  This is the manual operator
+        # escape hatch for the LIVE_PENDING_CONFIRMATION deadlock.
+        if _env_truthy("NIJA_FORCE_ACTIVATION"):
+            _kill_for_force = False
+            try:
+                from kill_switch import get_kill_switch
+                _kill_for_force = get_kill_switch().is_active()
+            except Exception:
+                pass
+            if _kill_for_force:
+                logger.critical(
+                    "[NIJA_FORCE_ACTIVATION] BLOCKED: kill switch is active — "
+                    "clear the kill switch before using NIJA_FORCE_ACTIVATION"
+                )
+            elif not _lcv_quick:
+                logger.critical(
+                    "[NIJA_FORCE_ACTIVATION] BLOCKED: LIVE_CAPITAL_VERIFIED is not set — "
+                    "set LIVE_CAPITAL_VERIFIED=true to use NIJA_FORCE_ACTIVATION"
+                )
+            elif _dry_run_quick:
+                logger.critical(
+                    "[NIJA_FORCE_ACTIVATION] BLOCKED: DRY_RUN_MODE=true — "
+                    "set DRY_RUN_MODE=false to use NIJA_FORCE_ACTIVATION"
+                )
+            else:
+                with self._lock:
+                    _cur_for_force = self._current_state
+                if _cur_for_force == TradingState.LIVE_ACTIVE:
+                    logger.critical(
+                        "[NIJA_FORCE_ACTIVATION] already LIVE_ACTIVE — no action needed"
+                    )
+                    with self._lock:
+                        self._activation_committed = True
+                        self._execution_authority = True
+                        self._core_loop_owns_execution = False
+                        self._can_dispatch_trades = True
+                    return True
+                logger.critical(
+                    "[NIJA_FORCE_ACTIVATION] BYPASSING all activation gates — "
+                    "transitioning %s → LIVE_ACTIVE (LIVE_CAPITAL_VERIFIED=true, "
+                    "DRY_RUN_MODE=false, kill_switch=inactive)",
+                    _cur_for_force.value,
+                )
+                _force_ok = self._force_live_active_transition(
+                    "NIJA_FORCE_ACTIVATION: operator-forced bypass of activation gate"
+                )
+                if _force_ok:
+                    logger.critical(
+                        "[NIJA_FORCE_ACTIVATION] ✅ LIVE_ACTIVE — bot is now trading"
+                    )
+                    return True
+                else:
+                    logger.critical(
+                        "[NIJA_FORCE_ACTIVATION] _force_live_active_transition returned False — "
+                        "check current FSM state"
+                    )
+
+        # ── Periodic monitoring log (every 30 s while stuck in LIVE_PENDING_CONFIRMATION) ──
+        # Emits a structured log so operators can see the activation gate state
+        # without waiting for a full gate evaluation to surface a blocking reason.
+        with self._lock:
+            _cur_state_for_log = self._current_state
+            _pending_since_for_log = self._pending_confirmation_since
+            _last_log_for_log = self._last_pending_log_time
+        if _cur_state_for_log == TradingState.LIVE_PENDING_CONFIRMATION and _pending_since_for_log is not None:
+            _now_mono = time.monotonic()
+            _elapsed_pending = _now_mono - _pending_since_for_log
+            _log_interval_s = max(
+                1.0,
+                float(os.environ.get("NIJA_PENDING_CONFIRMATION_LOG_INTERVAL_S", "30") or 30),
+            )
+            if _last_log_for_log is None or (_now_mono - _last_log_for_log) >= _log_interval_s:
+                with self._lock:
+                    self._last_pending_log_time = _now_mono
+                logger.critical(
+                    "[ACTIVATION MONITOR] state=LIVE_PENDING_CONFIRMATION elapsed=%.1fs — "
+                    "bot is waiting for activation gates to pass. "
+                    "LIVE_CAPITAL_VERIFIED=%s DRY_RUN_MODE=%s "
+                    "Set NIJA_FORCE_ACTIVATION=1 to bypass all gates immediately.",
+                    _elapsed_pending,
+                    _lcv_quick,
+                    _dry_run_quick,
+                )
+
+        # ── 5-minute auto-transition timeout ─────────────────────────────────
+        # If the bot has been stuck in LIVE_PENDING_CONFIRMATION for longer than
+        # NIJA_PENDING_CONFIRMATION_TIMEOUT_S (default 300 s / 5 min) and the
+        # basic live-trading conditions are met, auto-transition to LIVE_ACTIVE
+        # without requiring the full gate stack to pass.  This prevents the
+        # deadlock where commit_activation() never fires because a distributed
+        # dependency (Redis, heartbeat marker) is permanently unavailable.
+        _pending_timeout_s = max(
+            30.0,
+            float(os.environ.get("NIJA_PENDING_CONFIRMATION_TIMEOUT_S", "300") or 300),
+        )
+        with self._lock:
+            _cur_state_for_timeout = self._current_state
+            _pending_since_for_timeout = self._pending_confirmation_since
+        if (
+            _cur_state_for_timeout == TradingState.LIVE_PENDING_CONFIRMATION
+            and _pending_since_for_timeout is not None
+            and (time.monotonic() - _pending_since_for_timeout) >= _pending_timeout_s
+            and _lcv_quick
+            and not _dry_run_quick
+        ):
+            _kill_for_timeout = False
+            try:
+                from kill_switch import get_kill_switch
+                _kill_for_timeout = get_kill_switch().is_active()
+            except Exception:
+                pass
+            if not _kill_for_timeout:
+                _elapsed_timeout = time.monotonic() - _pending_since_for_timeout
+                logger.critical(
+                    "[ACTIVATION TIMEOUT] LIVE_PENDING_CONFIRMATION for %.1fs (limit=%.1fs) — "
+                    "auto-transitioning to LIVE_ACTIVE. "
+                    "LIVE_CAPITAL_VERIFIED=true DRY_RUN_MODE=false kill_switch=inactive. "
+                    "Set NIJA_PENDING_CONFIRMATION_TIMEOUT_S to adjust the timeout.",
+                    _elapsed_timeout,
+                    _pending_timeout_s,
+                )
+                _timeout_ok = self._force_live_active_transition(
+                    f"ACTIVATION_TIMEOUT: auto-transition after {_elapsed_timeout:.1f}s in LIVE_PENDING_CONFIRMATION"
+                )
+                if _timeout_ok:
+                    logger.critical(
+                        "[ACTIVATION TIMEOUT] ✅ LIVE_ACTIVE — bot is now trading "
+                        "(elapsed=%.1fs timeout=%.1fs)",
+                        _elapsed_timeout,
+                        _pending_timeout_s,
+                    )
+                    return True
+                else:
+                    logger.critical(
+                        "[ACTIVATION TIMEOUT] _force_live_active_transition returned False — "
+                        "continuing with normal gate evaluation"
+                    )
+
         # ── Pre-gate: eagerly start authority heartbeat monitor ──────────────
         # Must run BEFORE all heartbeat gate checks below.  Two independent
         # deadlocks both require the authority heartbeat monitor to be running:
