@@ -1789,6 +1789,21 @@ class TradingStateMachine:
             start_authority_heartbeat()
         except Exception as _hb_exc:
             logger.warning("_force_live_active_transition: heartbeat start failed: %s", _hb_exc)
+        # Notify the startup coordinator so that runtime_authority_snapshot()
+        # returns lifecycle_phase=LIVE and can_execute() gate 0 passes.
+        # Without this, last_committed_snapshot_version stays 0 (dispatch_committed
+        # is False) and the lifecycle gate always blocks broker order submission.
+        try:
+            try:
+                from bot.startup_coordinator import get_startup_coordinator
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+            get_startup_coordinator().force_activate_bypass(reason)
+        except Exception as _coord_exc:
+            logger.warning(
+                "_force_live_active_transition: startup coordinator force-bypass failed: %s",
+                _coord_exc,
+            )
         return True
 
     def commit_activation(
