@@ -42,6 +42,18 @@ except ImportError:
         def runtime_correlation_scope(**_: Any):  # type: ignore[no-redef]
             yield {}
 
+try:
+    from bot.market_readiness_gate import MarketReadinessGate
+    _MARKET_READINESS_GATE_AVAILABLE = True
+except ImportError:
+    try:
+        from market_readiness_gate import MarketReadinessGate  # type: ignore[import]
+        _MARKET_READINESS_GATE_AVAILABLE = True
+    except ImportError:
+        MarketReadinessGate = None  # type: ignore[assignment,misc]
+        _MARKET_READINESS_GATE_AVAILABLE = False
+        logger.warning("MarketReadinessGate not available — startup market probe will run degraded")
+
 _HEARTBEAT_LOG_LIMITER = get_log_rate_limiter()
 
 
@@ -280,6 +292,7 @@ class TradingStrategy:
         self.apex: Optional[Any] = None
         self.nija_core_loop: Optional[Any] = None
         self.execution_engine: Optional[Any] = None
+        self.market_readiness_gate: Optional[Any] = None
         self.symbols: List[str] = []
         self.failed_brokers: Dict = {}
         self._symbol_universe_refresh_interval_s: float = max(
@@ -366,6 +379,14 @@ class TradingStrategy:
                 self.independent_trader = None
         else:
             self.independent_trader = None
+
+        if _MARKET_READINESS_GATE_AVAILABLE and MarketReadinessGate is not None:
+            try:
+                self.market_readiness_gate = MarketReadinessGate()
+                logger.info("✅ MarketReadinessGate attached")
+            except Exception as _mrg_err:
+                self.market_readiness_gate = None
+                logger.warning("⚠️ Could not attach MarketReadinessGate: %s", _mrg_err)
 
         # ── Populate symbol list ───────────────────────────────────────────
         self._populate_symbols()
