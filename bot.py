@@ -4289,6 +4289,7 @@ _execution_layer_init_lock = threading.Lock()
 # Consolidates all startup authority into one coordinator with explicit phase
 # barriers.  All auxiliary daemons block on their prerequisite phase before
 # starting.  Imported here so the coordinator is available throughout the module.
+_BOOTSTRAP_COORDINATOR_AVAILABLE = False  # default; set to True on successful import below
 try:
     from bot.bootstrap_coordinator import (
         BootstrapCoordinator as _BootstrapCoordinator,
