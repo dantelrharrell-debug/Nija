@@ -5320,13 +5320,6 @@ def _verify_startup_truth_conditions(
     _mrg = getattr(strategy, "market_readiness_gate", None)
     if _mrg is None:
         logger.warning("Startup market-readiness probe skipped: MarketReadinessGate not initialized")
-    # Market readiness should never block startup activation on external feed
-    # heartbeat or early-session handshake noise. Probe it for diagnostics only.
-    _mrg = getattr(strategy, "market_readiness_gate", None)
-    if _mrg is None:
-        logger.warning(
-            "Startup market-readiness probe skipped: MarketReadinessGate not initialized"
-        )
     else:
         try:
             _mode, _conditions, _details = _mrg.check_market_readiness(
@@ -5340,12 +5333,7 @@ def _verify_startup_truth_conditions(
             if getattr(_mode, "value", str(_mode)).lower() == "idle":
                 logger.warning(
                     "Startup market-readiness probe returned IDLE — continuing startup without blocking activation (%s)",
-            _mode_value = getattr(_mode, "value", str(_mode)).lower()
-            if _mode_value == "idle":
-                logger.warning(
-                    "Startup market-readiness probe returned IDLE — continuing startup "
-                    "without blocking activation (%s)",
-                    _details.get("message"),
+                    _mode,
                 )
         except Exception as _gate_err:
             logger.warning(
@@ -5451,10 +5439,6 @@ def _ensure_state_machine_loop_started() -> None:
                 _hydration_diag,
             )
             # Diagnostic only — do not block the FSM loop on hydration state.
-            logger.info(
-                "FSM pre-hydration start: balance hydration still pending | diag=%s",
-                _hydration_diag,
-            )
 
         # Only skip if a thread exists AND is actually alive
         if _sm_loop_thread is not None and _sm_loop_thread.is_alive():
