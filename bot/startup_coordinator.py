@@ -733,6 +733,19 @@ class StartupCoordinator:
         capital_state = str(self._runtime.capital_state or "unknown")
         trading_state = str(trading_state or "").strip() or "OFF"
         activation_intent = bool(activation_intent or self._runtime.activation_requested)
+        force_activation = os.getenv("NIJA_FORCE_ACTIVATION", "0") == "1"
+        kill_switch_active = self._runtime.kill_switch_active
+        logger.critical(
+            "[RECONCILE] "
+            "force_activation=%s "
+            "trading_state=%s "
+            "commit_version=%s "
+            "kill_switch=%s",
+            force_activation,
+            trading_state,
+            self._runtime.last_committed_snapshot_version,
+            kill_switch_active,
+        )
 
         # ── Edge-trigger dedup ────────────────────────────────────────────────
         # Build a fingerprint of every input this function uses.  If the
@@ -743,6 +756,7 @@ class StartupCoordinator:
         _inputs = (
             trading_state,
             activation_intent,
+            force_activation,
             bootstrap_state,
             capital_state,
             self._runtime.capital_hydrated,
@@ -753,7 +767,7 @@ class StartupCoordinator:
             self._runtime.authority_ready,
             self._runtime.nonce_ready,
             self._runtime.dispatch_health_ready,
-            self._runtime.kill_switch_active,
+            kill_switch_active,
             self._runtime.activation_epoch,
             self._runtime.global_epoch,
             self._runtime.last_committed_snapshot_version,
@@ -771,11 +785,12 @@ class StartupCoordinator:
         # BOOT/WARM due to absent Redis/heartbeat prerequisites.
         # Kill-switch and emergency-stop always take precedence.
         if (
-            os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "enabled")
+            force_activation
             and trading_state == "LIVE_ACTIVE"
             and self._runtime.last_committed_snapshot_version > 0
-            and not self._runtime.kill_switch_active
+            and not kill_switch_active
         ):
+            logger.critical("[RECONCILE] FORCE EXECUTING BYPASS ACTIVE")
             self._runtime.runtime_authority_state = RuntimeAuthorityState.EXECUTING
             self._runtime.runtime_authority_reason = "force_activation_bypass"
             return RuntimeAuthorityState.EXECUTING, "force_activation_bypass"
@@ -1167,10 +1182,33 @@ class StartupCoordinator:
         bypassed; those must be cleared before calling this method.
         """
         with self._lock:
+            before_version = self._runtime.last_committed_snapshot_version
+            before_state = self._runtime.runtime_authority_state
+            before_coord = self._runtime.coordinator_state
+            logger.critical(
+                "[FORCE_ACTIVATION] entering "
+                "reason=%s "
+                "before_version=%s "
+                "before_runtime_state=%s "
+                "before_coord_state=%s",
+                reason,
+                before_version,
+                before_state,
+                before_coord,
+            )
             if (
                 self._runtime.runtime_authority_state == RuntimeAuthorityState.EXECUTING
                 and self._runtime.last_committed_snapshot_version > 0
             ):
+                logger.critical(
+                    "[FORCE_ACTIVATION] applied "
+                    "version=%s "
+                    "runtime_state=%s "
+                    "coord_state=%s",
+                    self._runtime.last_committed_snapshot_version,
+                    self._runtime.runtime_authority_state,
+                    self._runtime.coordinator_state,
+                )
                 return  # already committed; idempotent
 
             self._runtime.event_version += 1
@@ -1190,6 +1228,15 @@ class StartupCoordinator:
                     "payload": {"reason": reason},
                     "state": StartupCoordinatorState.DISPATCH_ENABLED.value,
                 }
+            )
+            logger.critical(
+                "[FORCE_ACTIVATION] applied "
+                "version=%s "
+                "runtime_state=%s "
+                "coord_state=%s",
+                self._runtime.last_committed_snapshot_version,
+                self._runtime.runtime_authority_state,
+                self._runtime.coordinator_state,
             )
 
     def record_fail_safe(self, tier: "FailSafeTier", reason: str = "") -> int:
