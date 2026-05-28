@@ -337,6 +337,32 @@ def _read_current_lease_generation() -> tuple[int, str]:
         return 0, str(exc)
 
 
+def _runtime_nonce_authority_status() -> tuple[bool, str]:
+    """Return live nonce authority status for the active Kraken runtime."""
+    try:
+        try:
+            from bot import trading_state_machine as _tsm
+        except ImportError:
+            import trading_state_machine as _tsm  # type: ignore[import]
+    except Exception as exc:
+        return False, f"nonce_runtime_gate_unavailable:{exc}"
+
+    gate_checks = (
+        ("nonce_sync", getattr(_tsm, "_nonce_sync_gate", None)),
+        ("nonce_lease", getattr(_tsm, "_nonce_writer_lease_gate", None)),
+    )
+    for gate_name, gate_fn in gate_checks:
+        if not callable(gate_fn):
+            return False, f"{gate_name}_gate_unavailable"
+        try:
+            ok, detail = gate_fn()
+        except Exception as exc:
+            return False, f"{gate_name}_gate_exception:{exc}"
+        if not bool(ok):
+            return False, f"{gate_name}:{detail or 'blocked'}"
+    return True, ""
+
+
 def _single_instance_lock_opt_out(live_mode: bool) -> bool:
     """True when operator explicitly allows single-instance live mode without strict lock."""
     if not live_mode:
@@ -1047,6 +1073,9 @@ def can_execute() -> ExecutionDecision:
 
     broker_health_ok = bool(runtime_snapshot.dispatch_health_ready)
     dispatch_enabled = bool(runtime_snapshot.dispatch_enabled and has_execution_authority())
+    startup_nonce_ready = bool(runtime_snapshot.nonce_ready)
+    runtime_nonce_ready, runtime_nonce_error = _runtime_nonce_authority_status()
+    nonce_ready = bool(startup_nonce_ready and runtime_nonce_ready)
 
     configured_circuit_state = (
         os.getenv("NIJA_EXECUTION_CIRCUIT_STATE", "CLOSED").strip().upper() or "CLOSED"
@@ -1058,7 +1087,7 @@ def can_execute() -> ExecutionDecision:
     immediate_halt_triggered = bool(
         (not lease_valid)
         or (not lease_generation_current)
-        or (not bool(runtime_snapshot.nonce_ready))
+        or (not nonce_ready)
         or ("other-instance" in lease_error.lower())
         or ("mismatch" in lease_error.lower())
     )
@@ -1078,7 +1107,7 @@ def can_execute() -> ExecutionDecision:
             and heartbeat_fresh
             and heartbeat_stage_sufficient
             and broker_health_ok
-            and bool(runtime_snapshot.nonce_ready)
+            and nonce_ready
         )
     else:
         circuit_breaker_closed = False
@@ -1095,7 +1124,6 @@ def can_execute() -> ExecutionDecision:
         circuit_breaker_closed=circuit_breaker_closed,
     )
 
-    nonce_ready = bool(runtime_snapshot.nonce_ready)
     checks = (
         ("state.live_active", state_live_active),
         ("lease.valid", lease_valid),
@@ -1119,6 +1147,14 @@ def can_execute() -> ExecutionDecision:
                     f"{check_name}: local={local_generation} current={current_generation} "
                     f"detail={generation_error or 'generation_mismatch'}"
                 )
+            elif check_name == "nonce.authority":
+                nonce_detail_parts = []
+                if not startup_nonce_ready:
+                    nonce_detail_parts.append("startup_snapshot_not_ready")
+                if runtime_nonce_error:
+                    nonce_detail_parts.append(runtime_nonce_error)
+                if nonce_detail_parts:
+                    reason_detail = f"{check_name}: {'; '.join(nonce_detail_parts)}"
             elif check_name.startswith("heartbeat.") and heartbeat_reason:
                 reason_detail = f"{check_name}: {heartbeat_reason}"
             elif check_name == "stability.allowed":
