@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 import threading
+from dataclasses import replace
 
 from bot import readiness_table
 from bot.startup_coordinator import (
@@ -105,6 +106,36 @@ class TestStartupCoordinator(unittest.TestCase):
             self.coordinator.get_state(),
             StartupCoordinatorState.DISPATCH_ENABLED.value,
         )
+
+    def test_finalize_activation_commit_with_zero_snapshot_version_still_latches_dispatch(self) -> None:
+        self._mark_all_readiness()
+        self.coordinator.record_bootstrap_state("RUNNING_SUPERVISED")
+        self.coordinator.record_capital_state(
+            state="RUNNING",
+            hydrated=True,
+            balance=100.0,
+            stale=False,
+        )
+        self.coordinator.record_threads_launched(1)
+        self.coordinator.record_threads_confirmed_running(bootstrap_state="RUNNING_SUPERVISED")
+        self.coordinator.record_authority(ready=True)
+        self.coordinator.record_nonce_status(ready=True)
+        self.coordinator.record_dispatch_health(ready=True)
+        self.coordinator.record_activation_requested(requested=True, source="test")
+
+        snapshot = self.coordinator.build_snapshot(
+            trading_state="LIVE_PENDING_CONFIRMATION",
+            activation_intent=True,
+        )
+        zero_version_snapshot = replace(snapshot, snapshot_version=0)
+        self.coordinator.finalize_activation_commit(zero_version_snapshot)
+        committed = self.coordinator.build_snapshot(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        )
+        self.assertGreater(committed.last_committed_snapshot_version, 0)
+        self.assertEqual(committed.runtime_authority_state, RuntimeAuthorityState.EXECUTING.value)
+        self.assertEqual(committed.lifecycle_phase, "LIVE")
 
     def test_finalize_activation_commit_refuses_when_system_readiness_proof_fails(self) -> None:
         self._mark_all_readiness()
