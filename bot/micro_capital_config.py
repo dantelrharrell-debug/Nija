@@ -184,8 +184,8 @@ FORCE_CASH_BUFFER = 5.0  # Keep 5% of capital unallocated (reduced from 10% — 
 EXCHANGE_PRIORITY = ["KRAKEN", "COINBASE"]  # Kraken primary, Coinbase secondary
 
 # Minimum balances per exchange
-MIN_BALANCE_KRAKEN = 10.0
-MIN_BALANCE_COINBASE = 10.0
+MIN_BALANCE_KRAKEN = 5.0
+MIN_BALANCE_COINBASE = 5.0
 
 # ============================================================================
 # MICRO-CAP COMPOUNDING MODE (balance < $150)
