@@ -726,9 +726,12 @@ class BootstrapStateMachine:
         Algorithm
         ---------
         Iterates :data:`_HAPPY_PATH_TO_CAPITAL_READY` in order and calls
-        :meth:`transition` for each step.  Steps that are already behind the
-        FSM's current position silently return ``False`` and are skipped;
-        steps that match the current allowed transition advance the FSM.
+        :meth:`transition` for each step.  States that are already at or
+        behind the FSM's current position are skipped so that no illegal
+        self-transition (e.g. ``LOCK_ACQUIRED → LOCK_ACQUIRED``) is
+        attempted.  Ownership is temporarily claimed for the duration of
+        the fast-forward so that the capital-ready callback thread (which
+        is not the bootstrap kernel thread) can legally drive transitions.
         This is safe to call from any pre-capital happy-path state.
 
         Returns
@@ -769,10 +772,33 @@ class BootstrapStateMachine:
             )
             return False
 
-        for target in _HAPPY_PATH_TO_CAPITAL_READY:
-            if self.state in _STRATEGY_ARM_ALLOWED_STATES:
-                break
-            self.transition(target, reason)
+        # Temporarily claim bootstrap ownership so the capital-ready callback
+        # thread (which is not the bootstrap kernel thread) can legally drive
+        # the fast-forward transitions.  The previous owner is restored
+        # unconditionally after the loop completes.
+        _caller_id = threading.get_ident()
+        with self._lock:
+            _prev_owner = self._owner_thread_id
+            self._owner_thread_id = _caller_id
+
+        try:
+            for target in _HAPPY_PATH_TO_CAPITAL_READY:
+                # Skip states that are already at or behind the current FSM
+                # position — attempting them would produce an illegal
+                # self-transition (e.g. LOCK_ACQUIRED → LOCK_ACQUIRED).
+                current_state = self.state
+                if current_state in _STRATEGY_ARM_ALLOWED_STATES:
+                    break
+                allowed_from_current = _VALID_TRANSITIONS.get(current_state, [])
+                if target not in allowed_from_current:
+                    # Target is either already passed or not reachable from
+                    # here — skip silently.
+                    continue
+                self.transition(target, reason)
+        finally:
+            # Always restore the previous owner, even if an exception occurs.
+            with self._lock:
+                self._owner_thread_id = _prev_owner
 
         reached = self.state in _STRATEGY_ARM_ALLOWED_STATES
         if reached:
