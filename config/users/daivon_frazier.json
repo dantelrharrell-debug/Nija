@@ -2,11 +2,12 @@
   "name": "Daivon Frazier",
   "broker": "kraken",
   "role": "user",
-  "enabled": true,
+  "enabled": false,
   "copy_from_platform": true,
   "independent_trading": true,
-  "active_trading": true,
+  "active_trading": false,
   "risk_multiplier": 1.0,
   "disabled_symbols": ["XRP-USD"],
-  "mode": "normal"
+  "mode": "normal",
+  "_disabled_reason": "Kraken nonce errors — re-enable after nonce issue is resolved"
 }
