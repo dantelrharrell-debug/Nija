@@ -5084,6 +5084,92 @@ class MultiAccountBrokerManager:
             'users': users_list
         }
 
+    def _resync_user_kraken_nonces(self, enabled_users: List) -> None:
+        """Resync every Kraken user API key to server time before the first API call.
+
+        Extracted into a standalone method so that ``os`` and all imports are
+        resolved at function-call time in a clean local scope, eliminating the
+        Python scoping bug where ``os`` was treated as a local variable inside
+        the deeply-nested try/except blocks of ``connect_users_from_config()``.
+
+        Args:
+            enabled_users: List of enabled user config objects (from user_loader).
+        """
+        import os as _resync_os  # explicit local import — immune to outer-scope shadowing
+
+        _kraken_users = [u for u in enabled_users if u.broker_type.upper() == "KRAKEN"]
+        if not _kraken_users:
+            return
+
+        # Resolve imports with dual bot.* / bare fallback
+        try:
+            from bot.distributed_nonce_manager import (
+                get_distributed_nonce_manager as _get_dnm,
+                make_api_key_id as _make_kid,
+            )
+            from bot.broker_manager import _user_env_prefix as _uep
+        except ImportError:
+            try:
+                from distributed_nonce_manager import (  # type: ignore[import]
+                    get_distributed_nonce_manager as _get_dnm,
+                    make_api_key_id as _make_kid,
+                )
+                from broker_manager import _user_env_prefix as _uep  # type: ignore[import]
+            except ImportError as _imp_err:
+                logger.warning(
+                    "⚠️ User nonce resync skipped (DistributedNonceManager unavailable): %s",
+                    _imp_err,
+                )
+                return
+
+        try:
+            _dnm = _get_dnm()
+            _probe_fn = getattr(_dnm, "probe_server_sync", None)
+            if not callable(_probe_fn):
+                logger.warning(
+                    "⚠️ User nonce resync skipped: probe_server_sync not available on %s",
+                    type(_dnm).__name__,
+                )
+                return
+
+            success_count = 0
+            fail_count = 0
+            for _ku in _kraken_users:
+                _short, _full = _uep(_ku.user_id)
+                _raw_key = (
+                    _resync_os.environ.get(f"KRAKEN_USER_{_short}_API_KEY", "")
+                    or _resync_os.environ.get(f"KRAKEN_USER_{_full}_API_KEY", "")
+                ).strip()
+                if not _raw_key:
+                    logger.debug(
+                        "🔍 No Kraken API key found for user=%s — skipping nonce resync",
+                        _ku.user_id,
+                    )
+                    continue
+                try:
+                    _kid = _make_kid(_raw_key)
+                    _probe_fn(_kid)
+                    logger.info(
+                        "🔄 Startup nonce resync complete for user=%s key=%s",
+                        _ku.user_id, _kid,
+                    )
+                    success_count += 1
+                except Exception as _ue:
+                    logger.warning(
+                        "⚠️ Startup nonce resync failed for user=%s: %s",
+                        _ku.user_id, _ue,
+                    )
+                    fail_count += 1
+
+            logger.info(
+                "🔄 User Kraken nonce resync complete: %d succeeded, %d failed",
+                success_count, fail_count,
+            )
+        except Exception as _err:
+            logger.warning(
+                "⚠️ User nonce resync encountered unexpected error: %s", _err,
+            )
+
     def connect_users_from_config(self) -> Dict[str, List[str]]:
         """
         Connect all users from configuration files.
@@ -5178,49 +5264,11 @@ class MultiAccountBrokerManager:
         connected_users = {}
 
         # ── Pre-connection nonce resync for user Kraken API keys ─────────────
-        # Resync every user Kraken key to Kraken server time BEFORE the first
-        # API call.  This prevents stale-nonce "Connection failed" errors for
-        # Daivon, Tania, and any future Kraken users on every container restart.
-        _kraken_users = [u for u in enabled_users if u.broker_type.upper() == "KRAKEN"]
-        if _kraken_users:
-            try:
-                try:
-                    from bot.distributed_nonce_manager import get_distributed_nonce_manager as _get_dnm_users
-                    from bot.broker_manager import _user_env_prefix as _uep
-                except ImportError:
-                    from distributed_nonce_manager import get_distributed_nonce_manager as _get_dnm_users  # type: ignore[import]
-                    from broker_manager import _user_env_prefix as _uep  # type: ignore[import]
-                _dnm_users = _get_dnm_users()
-                _probe_fn_users = getattr(_dnm_users, "probe_server_sync", None)
-                if callable(_probe_fn_users):
-                    try:
-                        from bot.distributed_nonce_manager import make_api_key_id as _make_kid
-                    except ImportError:
-                        from distributed_nonce_manager import make_api_key_id as _make_kid  # type: ignore[import]
-                    for _ku in _kraken_users:
-                        _short, _full = _uep(_ku.user_id)
-                        _raw_key = (
-                            os.environ.get(f"KRAKEN_USER_{_short}_API_KEY", "")
-                            or os.environ.get(f"KRAKEN_USER_{_full}_API_KEY", "")
-                        ).strip()
-                        if _raw_key:
-                            try:
-                                _kid_u = _make_kid(_raw_key)
-                                _probe_fn_users(_kid_u)
-                                logger.info(
-                                    "🔄 Startup nonce resync complete for user=%s key=%s",
-                                    _ku.user_id, _kid_u,
-                                )
-                            except Exception as _ue:
-                                logger.warning(
-                                    "⚠️ Startup nonce resync failed for user=%s: %s",
-                                    _ku.user_id, _ue,
-                                )
-            except Exception as _nonce_user_err:
-                logger.warning(
-                    "⚠️ User nonce resync skipped (DistributedNonceManager unavailable): %s",
-                    _nonce_user_err,
-                )
+        # Delegate to _resync_user_kraken_nonces() which runs in its own clean
+        # scope with an explicit local ``import os`` — this permanently fixes the
+        # Python scoping bug where ``os`` was shadowed by inner try/except
+        # assignments and raised UnboundLocalError / NameError at runtime.
+        self._resync_user_kraken_nonces(enabled_users)
 
         # Track last connection time for each broker type to add delays between sequential connections
         # This prevents nonce conflicts and server-side rate limiting issues, especially for Kraken
