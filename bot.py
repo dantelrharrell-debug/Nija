@@ -6369,11 +6369,75 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             "LIVE_CAPITAL_VERIFIED startup bypass disabled — continuing through strict bootstrap flow"
         )
 
-    # FORCE_TRADE/FORCE_TRADE_MODE: bypass readiness enforcement only
+    # FORCE_TRADE/FORCE_TRADE_MODE: nuclear bypass — skip ALL startup FSM gates
     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
         logger.warning(
-            "FORCE_TRADE active — startup readiness barrier remains enforced (startup)",
+            "⚡ FORCE_TRADE: NUCLEAR BYPASS — skipping entire startup FSM in "
+            "_run_bot_startup_and_trading(); forcing trading engine start immediately",
         )
+        # Mark all readiness gates so every downstream check passes.
+        for _ft_gate in ("broker_connected", "strategy_ready", "risk_ready",
+                         "authority_ready", "capital_ready", "execution_ready",
+                         "balance_hydrated", "bootstrap_ready"):
+            try:
+                _rt_mark_ready(_ft_gate)
+            except Exception:
+                pass
+        # Force execution env vars.
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        # Force the bootstrap FSM to RUNNING_SUPERVISED.
+        try:
+            _try_finalize_running_supervised_handoff(
+                reason="FORCE_TRADE nuclear bypass (_run_bot_startup_and_trading)",
+                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (nuclear bypass)",
+                set_bootstrap_events=True,
+            )
+        except Exception as _ft_fsm_err:
+            logger.warning("⚡ FORCE_TRADE: FSM handoff raised (non-fatal): %s", _ft_fsm_err)
+        # Signal TRADING_ENGINE_READY.
+        try:
+            try:
+                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_nb
+            except ImportError:
+                from nija_core_loop import TRADING_ENGINE_READY as _ter_nb  # type: ignore[import]
+            if not _ter_nb.is_set():
+                logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (nuclear bypass)")
+                _ter_nb.set()
+        except Exception as _ter_nb_err:
+            logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY: %s", _ter_nb_err)
+        # Wait briefly for strategy to be published (up to 60 s).
+        _ft_strategy = _read_initialized_state_snapshot(
+            context="FORCE_TRADE nuclear bypass"
+        ).get("strategy")
+        if _ft_strategy is None:
+            logger.warning("⚡ FORCE_TRADE: strategy not yet in state — waiting up to 60s")
+            _ft_nb_deadline = time.monotonic() + 60.0
+            while _ft_strategy is None and time.monotonic() < _ft_nb_deadline:
+                time.sleep(0.5)
+                _ft_strategy = _read_initialized_state_snapshot(
+                    context="FORCE_TRADE nuclear bypass wait"
+                ).get("strategy")
+        if _ft_strategy is None:
+            logger.error(
+                "⚡ FORCE_TRADE: strategy still None after 60s — falling through to normal startup"
+            )
+        else:
+            logger.warning("⚡ FORCE_TRADE: starting trading engine immediately (nuclear bypass)")
+            try:
+                from bot.nija_core_loop import start_trading_engine as _ste_nb
+            except ImportError:
+                from nija_core_loop import start_trading_engine as _ste_nb  # type: ignore[import]
+            _ft_thread = _ste_nb(_ft_strategy)
+            if _ft_thread is not None and _ft_thread.is_alive():
+                _bootstrap_complete_flag.set()
+                _bootstrap_completed_event.set()
+                logger.warning("⚡ FORCE_TRADE: trading engine started — nuclear bypass complete")
+                return
+            else:
+                logger.error(
+                    "⚡ FORCE_TRADE: trading engine thread did not start — falling through to normal startup"
+                )
 
     elif _is_live_trading_active_now():
         logger.warning(
@@ -8170,16 +8234,37 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 )
 
                 if not _b1_preflight_ready:
-                    logger.critical("CRITICAL B1 RESULT: FAIL")
-                    logger.critical("❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE")
-                    with _b1_executed_lock:
-                        # Mark executed even on failure so the barrier below does not re-run
-                        globals()["_b1_executed"] = True
-                    try:
-                        from bot.exceptions import CapitalIntegrityError as _CIE_b1
-                    except ImportError:
-                        from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
-                    raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
+                    # ── FORCE_TRADE: bypass B1 failure — do not raise, proceed to B2 ──
+                    _b1_force_trade = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _b1_force_trade:
+                        logger.warning(
+                            "⚡ FORCE_TRADE: B1 PRE-FLIGHT INCOMPLETE but FORCE_TRADE=true — "
+                            "bypassing B1 failure and proceeding to B2 "
+                            "(brokers_ready=%s aggregation_normalized=%s "
+                            "capital_hydrated=%s nonce_ready=%s)",
+                            _b1_brokers_ready,
+                            _b1_aggregation_normalized,
+                            _b1_capital_hydrated,
+                            _b1_nonce_ready,
+                        )
+                        with _b1_executed_lock:
+                            globals()["_b1_executed"] = True
+                    else:
+                        logger.critical("CRITICAL B1 RESULT: FAIL")
+                        logger.critical("❌ B1 BLOCKED — PRE-FLIGHT INCOMPLETE")
+                        with _b1_executed_lock:
+                            # Mark executed even on failure so the barrier below does not re-run
+                            globals()["_b1_executed"] = True
+                        try:
+                            from bot.exceptions import CapitalIntegrityError as _CIE_b1
+                        except ImportError:
+                            from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
+                        raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
 
                 logger.info("B1 preflight result: PASS")
                 logger.info("✅ B1 passed - transitioning to B2")
@@ -9088,7 +9173,68 @@ def main():
     # with a bounded timeout and explicit failure state handling.
     logger.info("🧭 Before bootstrap observer wait")
     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
-        logger.warning("FORCE_TRADE active — startup readiness barrier remains enforced")
+        logger.warning(
+            "⚡ FORCE_TRADE: NUCLEAR BYPASS — skipping bootstrap observer barrier in main(); "
+            "forcing all readiness gates and starting trading engine immediately"
+        )
+        # Mark all readiness gates.
+        for _ft_main_gate in ("broker_connected", "strategy_ready", "risk_ready",
+                              "authority_ready", "capital_ready", "execution_ready",
+                              "balance_hydrated", "bootstrap_ready"):
+            try:
+                _rt_mark_ready(_ft_main_gate)
+            except Exception:
+                pass
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        # Force FSM to RUNNING_SUPERVISED.
+        try:
+            _try_finalize_running_supervised_handoff(
+                reason="FORCE_TRADE nuclear bypass (main)",
+                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (main bypass)",
+                set_bootstrap_events=True,
+            )
+        except Exception as _ft_main_fsm_err:
+            logger.warning("⚡ FORCE_TRADE: main FSM handoff raised (non-fatal): %s", _ft_main_fsm_err)
+        # Signal TRADING_ENGINE_READY.
+        try:
+            try:
+                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_main
+            except ImportError:
+                from nija_core_loop import TRADING_ENGINE_READY as _ter_main  # type: ignore[import]
+            if not _ter_main.is_set():
+                logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (main bypass)")
+                _ter_main.set()
+        except Exception as _ter_main_err:
+            logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY in main: %s", _ter_main_err)
+        # Wait for strategy (up to 90 s) then start trading engine directly.
+        _ft_main_strategy = _read_initialized_state_snapshot(
+            context="FORCE_TRADE main bypass"
+        ).get("strategy")
+        if _ft_main_strategy is None:
+            logger.warning("⚡ FORCE_TRADE: strategy not yet available in main — waiting up to 90s")
+            _ft_main_deadline = time.monotonic() + 90.0
+            while _ft_main_strategy is None and time.monotonic() < _ft_main_deadline:
+                time.sleep(0.5)
+                _ft_main_strategy = _read_initialized_state_snapshot(
+                    context="FORCE_TRADE main bypass wait"
+                ).get("strategy")
+        if _ft_main_strategy is not None:
+            logger.warning("⚡ FORCE_TRADE: starting trading engine from main() nuclear bypass")
+            try:
+                from bot.nija_core_loop import start_trading_engine as _ste_main
+            except ImportError:
+                from nija_core_loop import start_trading_engine as _ste_main  # type: ignore[import]
+            _ft_main_thread = _ste_main(_ft_main_strategy)
+            if _ft_main_thread is not None and _ft_main_thread.is_alive():
+                _bootstrap_complete_flag.set()
+                _bootstrap_completed_event.set()
+                logger.warning("⚡ FORCE_TRADE: trading engine started from main() — nuclear bypass complete")
+                # Fall through to the supervisor keep-alive loop below.
+            else:
+                logger.error("⚡ FORCE_TRADE: trading engine thread did not start from main() — continuing to observer wait")
+        else:
+            logger.error("⚡ FORCE_TRADE: strategy still None after 90s in main() — continuing to observer wait")
 
     # READINESS DEBUG: snapshot flag state immediately before entering the
     # system_ready wait loop so the log shows which subsystem is blocked even
