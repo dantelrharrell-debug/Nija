@@ -5781,6 +5781,75 @@ def _run_bot_startup_and_trading_with_retry():
         connection_attempts = 0
         _fatal_nonce_error_streak = 0
 
+        # ── NIJA_FORCE_NONCE_RESYNC: early one-shot nonce resync ──────────────
+        # Runs ONCE here — before any broker connection attempt — so that stuck
+        # nonces are cleared before connect_users_from_config() is called.
+        # This is the canonical execution point: it is guaranteed to run on
+        # every startup regardless of fast-path / slow-path branching inside
+        # _run_bot_startup_and_trading(), and it runs before the retry loop so
+        # it fires exactly once per process lifetime.
+        if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip().lower() in ("1", "true", "yes", "on"):
+            logger.warning(
+                "NIJA_FORCE_NONCE_RESYNC=true — running one-shot Kraken nonce resync "
+                "BEFORE broker connections (early startup point)"
+            )
+            print("NIJA_FORCE_NONCE_RESYNC=true — running one-shot nonce resync at early startup", flush=True)
+            try:
+                from bot.distributed_nonce_manager import (
+                    get_distributed_nonce_manager as _early_resync_get_dnm,
+                    make_api_key_id as _early_resync_make_key_id,
+                )
+                _early_resync_dnm = _early_resync_get_dnm()
+                # Collect all Kraken API keys: platform key + all user keys
+                _early_resync_keys: list = []
+                _platform_raw_key = (
+                    os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
+                    or os.environ.get("KRAKEN_API_KEY", "").strip()
+                )
+                if _platform_raw_key:
+                    _early_resync_keys.append(("platform", _platform_raw_key))
+                # User keys: scan all enabled Kraken users from config
+                try:
+                    from config.user_loader import get_user_config_loader as _early_resync_ucl
+                    for _eu in _early_resync_ucl().get_all_enabled_users():
+                        if _eu.broker_type.upper() == "KRAKEN":
+                            _eu_short = _eu.user_id.upper().split("_")[0]
+                            _eu_full = _eu.user_id.upper().replace("-", "_")
+                            for _eu_suffix in (_eu_short, _eu_full):
+                                _eu_key = os.environ.get(f"KRAKEN_USER_{_eu_suffix}_API_KEY", "").strip()
+                                if _eu_key:
+                                    _early_resync_keys.append((_eu.user_id, _eu_key))
+                                    break
+                except Exception as _early_ucl_err:
+                    logger.debug("NONCE_RESYNC (early): user config load error: %s", _early_ucl_err)
+                # Call probe_server_sync for each unique key
+                _early_resync_seen: set = set()
+                for _early_label, _early_raw in _early_resync_keys:
+                    _early_kid = _early_resync_make_key_id(_early_raw)
+                    if _early_kid in _early_resync_seen:
+                        continue
+                    _early_resync_seen.add(_early_kid)
+                    try:
+                        _early_resync_dnm.probe_server_sync(_early_kid)
+                        logger.warning(
+                            "NONCE_RESYNC (early): probe_server_sync complete for %s key_id=%s",
+                            _early_label, _early_kid,
+                        )
+                    except Exception as _early_key_err:
+                        logger.warning(
+                            "NONCE_RESYNC (early): probe_server_sync failed for %s key_id=%s: %s",
+                            _early_label, _early_kid, _early_key_err,
+                        )
+                logger.warning(
+                    "NIJA_FORCE_NONCE_RESYNC: complete — resynced %d key(s). "
+                    "Remove NIJA_FORCE_NONCE_RESYNC after nonces are stable.",
+                    len(_early_resync_seen),
+                )
+                print(f"NIJA_FORCE_NONCE_RESYNC: complete — resynced {len(_early_resync_seen)} key(s)", flush=True)
+            except Exception as _early_resync_err:
+                logger.error("NONCE_RESYNC (early): unexpected error: %s", _early_resync_err, exc_info=True)
+        # ── END NIJA_FORCE_NONCE_RESYNC (early) ──────────────────────────────
+
         logger.info("Bootstrap start")
         while True:
             _next_attempt = attempt + 1
