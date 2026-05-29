@@ -5231,11 +5231,31 @@ class MultiAccountBrokerManager:
                 return True
 
             _kid = _make_kid(_raw_key)
-            _probe_fn(_kid)
+
+            # Log nonce value BEFORE resync so we can confirm it changed
+            _get_last_fn = getattr(_dnm, "get_last_nonce", None)
+            _nonce_before = _get_last_fn(_kid) if callable(_get_last_fn) else None
             logger.info(
-                "🔄 Per-user nonce resync complete for user=%s key=%s",
-                user.user_id, _kid,
+                "🔍 Per-user nonce resync starting for user=%s key=%s nonce_before=%s",
+                user.user_id, _kid, _nonce_before,
             )
+
+            _probe_fn(_kid)
+
+            # Log nonce value AFTER resync to confirm the manager is using the new value
+            _nonce_after = _get_last_fn(_kid) if callable(_get_last_fn) else None
+            if _nonce_before is not None and _nonce_after is not None and _nonce_before == _nonce_after:
+                logger.warning(
+                    "⚠️ Per-user nonce resync may not have taken effect for user=%s key=%s: "
+                    "nonce unchanged (before=%s after=%s) — manager may be using a cached value",
+                    user.user_id, _kid, _nonce_before, _nonce_after,
+                )
+            else:
+                logger.info(
+                    "🔄 Per-user nonce resync complete for user=%s key=%s "
+                    "nonce_before=%s nonce_after=%s",
+                    user.user_id, _kid, _nonce_before, _nonce_after,
+                )
             return True
         except Exception as _err:
             logger.warning(
