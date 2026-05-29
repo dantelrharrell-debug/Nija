@@ -402,11 +402,12 @@ except ImportError:
 # ✅ REQUIREMENT 2: KRAKEN MINIMUM ORDER COST
 # FIX #3: Kraken hard minimum enforcement with safety buffer
 # UPDATE (Jan 22, 2026): Raised to $10.00 to align with exchange rules
-# Even with $5.50 global min, Kraken needs $10.00 to prevent:
+# LOWERED (small-capital mode): Reduced to $5.00 to allow trades on $46 Coinbase balance
+# Even with $5.00 global min, Kraken needs this floor to prevent:
 # - Fee erosion on small orders
 # - False "position opened" logs
 # - User copy mismatches
-KRAKEN_MIN_ORDER_COST = 10.00  # USD (updated to $10.00 best practice minimum)
+KRAKEN_MIN_ORDER_COST = 5.00  # USD (lowered to $5.00 for small-capital accounts)
 
 # ✅ REQUIREMENT 3: DUST EXCLUSION - Positions below this value are IGNORED COMPLETELY
 # ✅ FIX (MANDATORY): Dust threshold for position tracking
@@ -1866,9 +1867,9 @@ class KrakenBrokerAdapter(BrokerInterface):
         else:
             order_size_usd = size  # Assume it's in USD if we can't calculate
 
-        # FIX #3: Kraken minimum order size enforcement with $10.00 best practice
-        # Always enforce our FIX #3 constant ($10.00), regardless of KrakenAdapter setting
-        KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($10.00)
+        # FIX #3: Kraken minimum order size enforcement with $5.00 floor (small-capital mode)
+        # Always enforce our FIX #3 constant, regardless of KrakenAdapter setting
+        KRAKEN_MIN_ORDER_USD = KRAKEN_MIN_ORDER_COST  # Use module constant ($5.00)
 
         if order_size_usd < KRAKEN_MIN_ORDER_USD:
             return (False, kraken_symbol,
@@ -1887,7 +1888,7 @@ class KrakenBrokerAdapter(BrokerInterface):
 
                     # Check if balance meets minimum to operate bot (SAVER tier minimum)
                     # Get minimum from tier config for consistency
-                    min_balance = 10.0  # Default if tier_config not available
+                    min_balance = 5.0  # Default if tier_config not available (lowered for small-capital accounts)
                     if get_tier_config and TradingTier:
                         try:
                             saver_config = get_tier_config(TradingTier.SAVER)
@@ -2064,8 +2065,8 @@ class KrakenBrokerAdapter(BrokerInterface):
                 current_price = 0.0
 
             # ✅ REQUIREMENT 2: VALIDATE ORDER MEETS KRAKEN MINIMUMS
-            # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
-            # Kraken requires $10.00 minimum to prevent fee erosion
+            # FIX #3: Kraken hard minimum enforcement ($5.00 small-capital floor)
+            # Kraken requires minimum order size to prevent fee erosion
             if current_price > 0:
                 # Calculate order cost in USD
                 if size_type == 'quote':
@@ -2099,7 +2100,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
                     if size_type == 'quote':
                         logger.error(f"   Volume (base): {volume_to_validate:.8f}")
-                    logger.error("   ⚠️  $10.00 minimum prevents fee erosion and ghost trades")
+                    logger.error("   ⚠️  $5.00 minimum prevents fee erosion and ghost trades")
                     logger.error("=" * 70)
                     return {
                         'order_id': None,
@@ -2108,7 +2109,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                         'size': size,
                         'filled_price': 0.0,
                         'status': 'skipped',
-                        'error': f'FIX #3: Below Kraken $10.00 minimum (${order_cost_usd:.2f})',
+                        'error': f'FIX #3: Below Kraken ${KRAKEN_MIN_ORDER_COST:.2f} minimum (${order_cost_usd:.2f})',
                         'timestamp': datetime.now()
                     }
 
@@ -2454,7 +2455,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 }
 
             # ✅ COMPREHENSIVE ORDER VALIDATION (REQUIREMENT #1)
-            # FIX #3: Kraken hard minimum enforcement ($10.00 best practice)
+            # FIX #3: Kraken hard minimum enforcement ($5.00 small-capital floor)
             # Calculate USD size for validation (limit orders use price)
             order_size_usd = size * price if size_type == 'base' else size
 
@@ -2465,7 +2466,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 logger.error("=" * 70)
                 logger.error(f"   Order Cost: ${order_size_usd:.2f} < ${KRAKEN_MIN_ORDER_COST:.2f} minimum")
                 logger.error(f"   Symbol: {symbol}, Side: {side}, Size: {size}, Price: {price}")
-                logger.error("   ⚠️  $10.00 minimum prevents fee erosion and ghost trades")
+                logger.error("   ⚠️  $5.00 minimum prevents fee erosion and ghost trades")
                 logger.error("=" * 70)
                 return {
                     'order_id': None,
@@ -2474,7 +2475,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                     'size': size,
                     'filled_price': 0.0,
                     'status': 'skipped',
-                    'error': f'FIX #3: Below Kraken $10.00 minimum (${order_size_usd:.2f})',
+                    'error': f'FIX #3: Below Kraken ${KRAKEN_MIN_ORDER_COST:.2f} minimum (${order_size_usd:.2f})',
                     'timestamp': datetime.now()
                 }
 
