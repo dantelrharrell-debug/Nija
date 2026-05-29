@@ -336,10 +336,52 @@ class UserConfigLoader:
         """
         Get all enabled users across all account types and brokerages.
 
+        Respects two runtime kill-switches (checked in order):
+
+        1. ``NIJA_DISABLE_USER_ACCOUNTS=true``
+           Disables ALL user/investor accounts regardless of broker.
+           Use this to run platform-only mode while debugging user issues.
+
+        2. ``ENABLE_KRAKEN_USER_TRADING=false``
+           Disables only Kraken user accounts.  Coinbase/Alpaca user accounts
+           are unaffected.  Use this to bypass Kraken nonce errors without
+           touching other brokers.
+
+        Both flags default to the permissive value (all users enabled) when
+        absent, so existing deployments are unaffected.
+
         Returns:
-            List of all enabled UserConfig objects
+            List of all enabled UserConfig objects after env-var filtering
         """
-        return [u for u in self.all_users if u.enabled]
+        # ── Global user kill-switch ──────────────────────────────────────────
+        _disable_all = os.environ.get("NIJA_DISABLE_USER_ACCOUNTS", "").strip().lower()
+        if _disable_all in ("1", "true", "yes", "on"):
+            logger.warning(
+                "⚠️  NIJA_DISABLE_USER_ACCOUNTS=true — ALL user/investor accounts "
+                "are disabled at runtime.  Platform accounts continue trading."
+            )
+            return []
+
+        # ── Per-broker kill-switches ─────────────────────────────────────────
+        _kraken_users_enabled = os.environ.get(
+            "ENABLE_KRAKEN_USER_TRADING", "true"
+        ).strip().lower()
+        _block_kraken_users = _kraken_users_enabled in ("0", "false", "no", "off")
+
+        candidates = [u for u in self.all_users if u.enabled]
+
+        if _block_kraken_users:
+            before = len(candidates)
+            candidates = [u for u in candidates if u.broker_type.lower() != "kraken"]
+            skipped = before - len(candidates)
+            if skipped:
+                logger.warning(
+                    "⚠️  ENABLE_KRAKEN_USER_TRADING=false — %d Kraken user account(s) "
+                    "suppressed at runtime.  Kraken platform account continues trading.",
+                    skipped,
+                )
+
+        return candidates
 
     def get_user_by_id(self, user_id: str) -> Optional[UserConfig]:
         """
