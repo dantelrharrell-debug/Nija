@@ -5155,8 +5155,6 @@ class MultiAccountBrokerManager:
             from config.user_loader import get_user_config_loader
         except ImportError:
             try:
-                import sys
-                import os
                 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 from config.user_loader import get_user_config_loader
             except ImportError:
