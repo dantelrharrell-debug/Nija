@@ -1563,6 +1563,19 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
             "⚡ FORCE_TRADE: bypassing _enable_execution_after_bootstrap_supervised wait (%s)",
             context,
         )
+        # Advance the FSM to RUNNING_SUPERVISED so _verify_runtime_transition_states
+        # (called immediately after this function) finds the FSM in the correct state.
+        try:
+            _try_finalize_running_supervised_handoff(
+                reason=f"FORCE_TRADE enable_execution bypass ({context})",
+                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED via enable_execution bypass",
+                set_bootstrap_events=True,
+            )
+        except Exception as _ee_handoff_err:
+            logger.warning(
+                "⚡ FORCE_TRADE: enable_execution bypass FSM handoff raised (non-fatal): %s",
+                _ee_handoff_err,
+            )
         os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
         os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
         return True
@@ -1798,6 +1811,38 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
 
 def _verify_runtime_transition_states(*, context: str) -> None:
     """Fail closed unless runtime transitions reached RUNNING/RUNNING_SUPERVISED/LIVE_ACTIVE."""
+    # ── FORCE_TRADE: bypass strict state verification ─────────────────────────
+    _force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE: bypassing _verify_runtime_transition_states strict checks (%s) — "
+            "forcing FSM to RUNNING_SUPERVISED and enabling execution",
+            context,
+        )
+        # Attempt to advance the FSM to RUNNING_SUPERVISED so downstream checks pass.
+        try:
+            _try_finalize_running_supervised_handoff(
+                reason=f"FORCE_TRADE verify_runtime_transition_states bypass ({context})",
+                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED via verify bypass",
+                set_bootstrap_events=True,
+            )
+        except Exception as _vrt_handoff_err:
+            logger.warning(
+                "⚡ FORCE_TRADE: verify bypass FSM handoff raised (non-fatal): %s", _vrt_handoff_err
+            )
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        _bootstrap_state = _bootstrap_state_value()
+        logger.warning(
+            "⚡ FORCE_TRADE: EXECUTION_ACTIVE set (context=%s bootstrap_state=%s)",
+            context,
+            _bootstrap_state,
+        )
+        return
+    # ── Normal path ───────────────────────────────────────────────────────────
     _bootstrap_state = _bootstrap_state_value()
     if _bootstrap_state != "RUNNING_SUPERVISED":
         raise RuntimeError(
