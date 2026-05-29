@@ -2183,26 +2183,57 @@ class BaseBroker(ABC):
         Minimum trade size for this broker (hard block).
         Trades below this size will be rejected.
 
-        Broker-specific minimums:
-        - Coinbase: $5.00 (higher fees require larger trades)
-        - Kraken: $5.00 (allows smaller positions)
-        - Default: $5.00
+        Broker-specific minimums are env-overridable so that small-capital
+        accounts (e.g. $46 Coinbase) are not blocked by a hard-coded $5 floor
+        that exceeds the strategy's computed position size.
+
+        Override precedence (highest → lowest):
+          1. MIN_CASH_TO_BUY  — global policy floor (default $1)
+          2. COINBASE_MIN_ORDER_USD / COINBASE_MIN_ORDER  — Coinbase-specific
+          3. Hard-coded exchange floor ($1 Coinbase, $1 Kraken)
 
         Returns:
             float: Minimum trade size in USD
         """
+        import os as _mts_os
         broker_name = self.broker_type.value.lower()
 
-        # Broker-specific minimums
-        minimums = {
-            'coinbase': 5.00,
-            'kraken': 5.00,
+        # Hard-coded exchange floors (actual exchange minimums, not policy)
+        exchange_floors = {
+            'coinbase': 1.00,
+            'kraken': 1.00,
             'binance': 5.00,
             'okx': 5.00,
-            'alpaca': 1.00,  # Stocks/traditional assets have lower minimums
+            'alpaca': 1.00,
         }
+        exchange_floor = exchange_floors.get(broker_name, 1.00)
 
-        return minimums.get(broker_name, 5.00)
+        if broker_name == 'coinbase':
+            # Respect COINBASE_MIN_ORDER_USD → MIN_CASH_TO_BUY → exchange floor
+            try:
+                env_min = float(
+                    _mts_os.getenv('MIN_CASH_TO_BUY')
+                    or _mts_os.getenv('COINBASE_MIN_ORDER_USD')
+                    or _mts_os.getenv('COINBASE_MIN_ORDER')
+                    or str(exchange_floor)
+                )
+            except (TypeError, ValueError):
+                env_min = exchange_floor
+            return max(exchange_floor, env_min)
+
+        if broker_name == 'kraken':
+            # Respect MIN_CASH_TO_BUY → KRAKEN_MIN_NOTIONAL_USD → exchange floor
+            try:
+                env_min = float(
+                    _mts_os.getenv('MIN_CASH_TO_BUY')
+                    or _mts_os.getenv('KRAKEN_MIN_NOTIONAL_USD')
+                    or str(exchange_floor)
+                )
+            except (TypeError, ValueError):
+                env_min = exchange_floor
+            return max(exchange_floor, env_min)
+
+        return exchange_floors.get(broker_name, 1.00)
 
     @property
     def warn_trade_size(self) -> float:
