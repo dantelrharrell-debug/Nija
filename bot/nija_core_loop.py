@@ -1952,6 +1952,14 @@ _exec_test_fired = False
 # Single deterministic start-signal gate.
 # Emitted exactly once by bot.py when BootstrapFSM reaches RUNNING_SUPERVISED.
 TRADING_ENGINE_READY = threading.Event()
+# ── FORCE_TRADE: pre-set the start gate so run_trading_loop() never waits ────
+if os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled") \
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled"):
+    logger.warning(
+        "⚡ FORCE_TRADE: TRADING_ENGINE_READY pre-set at module load — "
+        "trading loop will not wait for bootstrap FSM"
+    )
+    TRADING_ENGINE_READY.set()
 
 
 # ---------------------------------------------------------------------------

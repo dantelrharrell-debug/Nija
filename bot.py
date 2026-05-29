@@ -477,6 +477,78 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     _wait_started = time.monotonic()
     _last_wait_log = 0.0
 
+    # ── FORCE_TRADE fast path ─────────────────────────────────────────────────
+    _force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE: skipping strategy_ready wait and readiness barrier in "
+            "_start_trading_loop_from_initialized_state (reason=%s)",
+            reason,
+        )
+        _state_snapshot = dict(_initialized_state)
+        _strategy = _state_snapshot.get("strategy")
+        if _strategy is None:
+            logger.warning(
+                "⚡ FORCE_TRADE: no strategy in initialized state yet — "
+                "waiting up to 30s before giving up (reason=%s)",
+                reason,
+            )
+            _ft_deadline = time.monotonic() + 30.0
+            while _strategy is None and time.monotonic() < _ft_deadline:
+                time.sleep(0.5)
+                _state_snapshot = dict(_initialized_state)
+                _strategy = _state_snapshot.get("strategy")
+        if _strategy is None:
+            logger.error(
+                "⚡ FORCE_TRADE: strategy still None after 30s wait — cannot start trading loop (reason=%s)",
+                reason,
+            )
+            return False
+        # Force all readiness flags so downstream checks pass.
+        for _gate in ("broker_connected", "strategy_ready", "risk_ready", "authority_ready",
+                      "capital_ready", "execution_ready", "balance_hydrated", "bootstrap_ready"):
+            try:
+                _rt_mark_ready(_gate)
+            except Exception:
+                pass
+        # Force the bootstrap FSM to RUNNING_SUPERVISED so the trading loop is not blocked.
+        _try_finalize_running_supervised_handoff(
+            reason=f"FORCE_TRADE bypass ({reason})",
+            completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED",
+            set_bootstrap_events=True,
+        )
+        # Signal TRADING_ENGINE_READY so run_trading_loop() does not wait.
+        try:
+            try:
+                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter
+            except ImportError:
+                from nija_core_loop import TRADING_ENGINE_READY as _ter  # type: ignore[import]
+            if not _ter.is_set():
+                logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY to unblock trading loop")
+                _ter.set()
+        except Exception as _ter_err:
+            logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY: %s", _ter_err)
+        try:
+            try:
+                from bot.nija_core_loop import start_trading_engine as _start_trading_engine
+            except ImportError:
+                from nija_core_loop import start_trading_engine as _start_trading_engine  # type: ignore[import]
+            logger.warning("⚡ FORCE_TRADE: starting trading engine immediately (reason=%s)", reason)
+            _trading_thread = _start_trading_engine(_strategy)
+            if _trading_thread is None or not _trading_thread.is_alive():
+                logger.error("⚡ FORCE_TRADE: trading loop thread did not start (reason=%s)", reason)
+                return False
+            _bootstrap_complete_flag.set()
+            _bootstrap_completed_event.set()
+            return True
+        except Exception as _ft_start_err:
+            logger.error("⚡ FORCE_TRADE: failed to start trading loop: %s", _ft_start_err)
+            return False
+    # ── Normal path ───────────────────────────────────────────────────────────
+
     # Hard requirement: do NOT start the trading loop until BOTH conditions hold:
     #   1. the cached strategy object is present in initialized state
     #   2. strategy_ready is set in the readiness truth table
@@ -604,9 +676,27 @@ def _compute_system_ready(state_snapshot: dict) -> tuple[bool, bool, bool, bool,
 def _require_startup_ready_or_raise(*, context: str, state_snapshot: dict) -> tuple[bool, bool, bool, bool, bool, bool]:
     """Fail closed unless the startup readiness contract is fully satisfied.
 
-    FORCE_TRADE does not bypass this startup contract; startup must satisfy the
-    full readiness handshake before trading proceeds.
+    When FORCE_TRADE=true all readiness gates are bypassed and every flag is
+    force-marked ready so the trading loop can start immediately.
     """
+    # ── FORCE_TRADE bypass ────────────────────────────────────────────────────
+    _force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE: bypassing startup readiness barrier — marking all gates ready (%s)",
+            context,
+        )
+        for _gate in ("broker_connected", "strategy_ready", "risk_ready", "authority_ready",
+                      "capital_ready", "execution_ready", "balance_hydrated", "bootstrap_ready"):
+            try:
+                _rt_mark_ready(_gate)
+            except Exception:
+                pass
+        return True, True, True, True, True, True
+    # ── Normal path ───────────────────────────────────────────────────────────
     system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
         _compute_system_ready(state_snapshot)
     authority_ready = bool(_rt_snapshot().get("authority_ready", False))
@@ -1059,6 +1149,19 @@ def _probe_first_snap_accepted() -> bool:
 
 def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tuple[dict[str, bool], list[str], list[str], float]:
     """Evaluate startup readiness criteria under required/optional policy."""
+    # ── FORCE_TRADE: skip all policy checks — report everything as satisfied ──
+    _force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE: bypassing startup readiness policy evaluation — "
+            "reporting all criteria as satisfied (%s)",
+            context,
+        )
+        _criteria = {"broker_connected": True, "nonce_ready": True, "first_snap": True}
+        return _criteria, [], [], time.monotonic()
     _policy = _startup_readiness_policy()
     _deadline = time.monotonic() + max(0.0, timeout_s)
 
@@ -1103,6 +1206,44 @@ def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tup
 
 def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
     """Single observer API for main-thread startup wait with bounded timeout."""
+    # ── FORCE_TRADE: skip the FSM wait entirely ───────────────────────────────
+    _force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE: bypassing bootstrap observer wait — returning RUNNING_SUPERVISED immediately (%s)",
+            context,
+        )
+        # Force all readiness flags and FSM state so the rest of startup proceeds.
+        for _gate in ("broker_connected", "strategy_ready", "risk_ready", "authority_ready",
+                      "capital_ready", "execution_ready", "balance_hydrated", "bootstrap_ready"):
+            try:
+                _rt_mark_ready(_gate)
+            except Exception:
+                pass
+        try:
+            _try_finalize_running_supervised_handoff(
+                reason=f"FORCE_TRADE bootstrap observer bypass ({context})",
+                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED via observer bypass",
+                set_bootstrap_events=True,
+            )
+        except Exception as _obs_handoff_err:
+            logger.warning("⚡ FORCE_TRADE: observer bypass FSM handoff raised (non-fatal): %s", _obs_handoff_err)
+        # Signal TRADING_ENGINE_READY.
+        try:
+            try:
+                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_obs
+            except ImportError:
+                from nija_core_loop import TRADING_ENGINE_READY as _ter_obs  # type: ignore[import]
+            if not _ter_obs.is_set():
+                logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (from observer bypass)")
+                _ter_obs.set()
+        except Exception as _ter_obs_err:
+            logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY in observer bypass: %s", _ter_obs_err)
+        return True, "RUNNING_SUPERVISED"
+    # ── Normal path ───────────────────────────────────────────────────────────
     _timeout_raw = os.getenv("NIJA_BOOTSTRAP_OBSERVER_TIMEOUT_S", f"{_BOOTSTRAP_OBSERVER_TIMEOUT_S:.1f}")
     try:
         _timeout_s = max(1.0, float(_timeout_raw))
@@ -1412,6 +1553,20 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
         True when BootstrapFSM reaches RUNNING_SUPERVISED and execution flags are
         enabled. False when the supervised handoff does not complete in time.
     """
+    # ── FORCE_TRADE: skip the supervised handoff wait entirely ────────────────
+    _force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    if _force_trade_active:
+        logger.warning(
+            "⚡ FORCE_TRADE: bypassing _enable_execution_after_bootstrap_supervised wait (%s)",
+            context,
+        )
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        return True
+    # ── Normal path ───────────────────────────────────────────────────────────
     try:
         from bot.trading_state_machine import (
             TradingState as _TSMState,
@@ -6000,16 +6155,46 @@ def _force_trade_readiness_handoff(
     completion_log: str,
     set_bootstrap_events: bool = True,
 ) -> None:
-    """Log FORCE_TRADE bypass without mutating readiness or lifecycle state."""
+    """Bypass all readiness barriers and force the FSM to RUNNING_SUPERVISED when FORCE_TRADE=true."""
     if _force_trade_handoff_complete_event.is_set():
         logger.debug("FORCE_TRADE handoff already complete — skipping duplicate readiness handoff")
         return
     logger.warning(
-        "FORCE_TRADE active — readiness barrier remains enforced (context=%s)",
+        "⚡ FORCE_TRADE: bypassing readiness barrier and forcing FSM to RUNNING_SUPERVISED (context=%s)",
         context,
     )
+    # Mark every readiness gate so downstream checks pass immediately.
+    for _gate in ("broker_connected", "strategy_ready", "risk_ready", "authority_ready",
+                  "capital_ready", "execution_ready", "balance_hydrated", "bootstrap_ready"):
+        try:
+            _rt_mark_ready(_gate)
+        except Exception:
+            pass
+    # Advance the bootstrap FSM to RUNNING_SUPERVISED via the legal handoff helper.
+    try:
+        _try_finalize_running_supervised_handoff(
+            reason=transition_reason,
+            completion_log=completion_log,
+            set_bootstrap_events=set_bootstrap_events,
+        )
+    except Exception as _handoff_err:
+        logger.warning("⚡ FORCE_TRADE: FSM handoff attempt raised (non-fatal): %s", _handoff_err)
+    # Signal TRADING_ENGINE_READY so run_trading_loop() does not wait.
+    try:
+        try:
+            from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_ft
+        except ImportError:
+            from nija_core_loop import TRADING_ENGINE_READY as _ter_ft  # type: ignore[import]
+        if not _ter_ft.is_set():
+            logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (from _force_trade_readiness_handoff)")
+            _ter_ft.set()
+    except Exception as _ter_ft_err:
+        logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY: %s", _ter_ft_err)
+    if set_bootstrap_events:
+        _bootstrap_complete_flag.set()
+        _bootstrap_completed_event.set()
     _force_trade_handoff_complete_event.set()
-    return
+    logger.warning("⚡ FORCE_TRADE: readiness handoff complete — %s", completion_log)
 
 
 def _try_finalize_running_supervised_handoff(
@@ -8356,12 +8541,22 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             try:
                 _barrier_state = _rt_snapshot()
                 logger.info("Barrier state: %s", _barrier_state)
-                if not _rt_is_ready():
+                _ft_bypass_barrier = (
+                    os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                )
+                if not _rt_is_ready() and not _ft_bypass_barrier:
                     _required_missing = sorted(k for k, v in _barrier_state.items() if not v)
                     logger.error("❌ Barrier still blocking execution loop")
                     raise RuntimeError(
                         "Startup readiness barrier blocked at bootstrap completion: "
                         f"required_missing={_required_missing} state={_barrier_state}"
+                    )
+                elif not _rt_is_ready() and _ft_bypass_barrier:
+                    logger.warning(
+                        "⚡ FORCE_TRADE: readiness barrier not fully satisfied but bypassing "
+                        "at bootstrap completion — state=%s",
+                        _barrier_state,
                     )
             except Exception as _gate_signal_err:
                 logger.warning("⚠️ readiness table signal failed at bootstrap completion: %s", _gate_signal_err)
