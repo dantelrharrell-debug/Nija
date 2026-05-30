@@ -2479,6 +2479,15 @@ class _ExternalWatchdogRestartState:
     reason: str = ""
 
 
+class _ForceTradStartupTimeout(Exception):
+    """Raised at pre-loop checkpoints in _run_bot_startup_and_trading() when
+    FORCE_TRADE=true and the startup thread has been running longer than
+    _STARTUP_PRELOOP_TIMEOUT_S without entering any readiness wait loop.
+    Caught by the exception handler in _run_bot_startup_and_trading() which
+    skips all remaining readiness checks and jumps directly to the trading loop.
+    """
+
+
 _external_watchdog_restart = _ExternalWatchdogRestartState()
 _external_watchdog_restart_lock = threading.Lock()
 
@@ -6673,6 +6682,15 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # ── ENTRY POINT TRACE ────────────────────────────────────────────────────
     _log_startup_trace("_run_bot_startup_and_trading() entry")
 
+    # ── FORCE_TRADE: capture startup start time for pre-loop timeout checks ──
+    # This timestamp is used at every major checkpoint below to detect when the
+    # startup thread is stuck BEFORE entering any readiness wait loops.  The
+    # 5-second timeout inside the B1 barrier loop never fires if the thread
+    # stalls before reaching that loop, so we need an outer timeout that checks
+    # at each checkpoint and skips directly to the trading loop when exceeded.
+    _startup_start = time.monotonic()
+    _STARTUP_PRELOOP_TIMEOUT_S = 10.0  # seconds before skipping all readiness checks
+
     # ── DIAGNOSTIC: function entry ────────────────────────────────────────────
     import threading as _diag_threading
     _diag_ts = datetime.now(timezone.utc).isoformat()
@@ -7574,6 +7592,16 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 logger.debug("Init stage A4: before TradingStrategy()")
                 logger.info("🚀 Creating TradingStrategy instance")
                 logger.debug("B2 before TradingStrategy()")
+                # ── FORCE_TRADE: pre-loop startup timeout checkpoint ─────────────
+                if (_is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")) and \
+                        (time.monotonic() - _startup_start) > _STARTUP_PRELOOP_TIMEOUT_S:
+                    logger.warning(
+                        "⚡ FORCE_TRADE: startup timeout (%.1fs > %.1fs) reached BEFORE "
+                        "TradingStrategy() constructor — skipping to trading loop",
+                        time.monotonic() - _startup_start,
+                        _STARTUP_PRELOOP_TIMEOUT_S,
+                    )
+                    raise _ForceTradStartupTimeout("FORCE_TRADE pre-loop timeout before TradingStrategy()")
 
                 # ── Option C: bootstrap connects brokers BEFORE strategy is created ──
                 # Broker connectivity is the bootstrap layer's responsibility.
@@ -7581,11 +7609,23 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 # strategy-level wiring only (no blocking network I/O in __init__).
                 _boot_broker_results: dict = {}
                 _boot_connected_users: dict = {}
+                # ── FORCE_TRADE: pre-loop startup timeout checkpoint ─────────────
+                # Check BEFORE entering the broker connection try/except so that
+                # _ForceTradStartupTimeout is not swallowed by the inner handler.
+                if (_is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")) and \
+                        (time.monotonic() - _startup_start) > _STARTUP_PRELOOP_TIMEOUT_S:
+                    logger.warning(
+                        "⚡ FORCE_TRADE: startup timeout (%.1fs > %.1fs) reached BEFORE "
+                        "broker connection phase — skipping to trading loop",
+                        time.monotonic() - _startup_start,
+                        _STARTUP_PRELOOP_TIMEOUT_S,
+                    )
+                    raise _ForceTradStartupTimeout("FORCE_TRADE pre-loop timeout before broker connection")
                 try:
                     from bot.multi_account_broker_manager import multi_account_broker_manager as _boot_mabm
                     logger.info("🔌 [bootstrap] Connecting platform brokers...")
                     run_bootstrap()  # single initialization entry point (InitRegistry)
-                    # Pre-connection startup delay (bootstrap-owned)
+
                     _boot_raw_delay = os.environ.get("NIJA_STARTUP_DELAY_S", "")
                     _boot_startup_delay = float(_boot_raw_delay) if _boot_raw_delay else 2.0
                     if _boot_startup_delay > 0:
@@ -8432,6 +8472,22 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # skip straight to B2.  Only the bootstrap kernel thread (BotStartup)
             # should reach this point; the BootstrapStateMachine ownership guard
             # enforces this at the FSM level.
+            # ── FORCE_TRADE: pre-loop startup timeout checkpoint ─────────────────
+            # If FORCE_TRADE is active and the startup thread has been running for
+            # more than _STARTUP_PRELOOP_TIMEOUT_S, skip all remaining readiness
+            # checks and jump directly to the trading loop.  This fires BEFORE
+            # entering any wait loop so it catches stalls that the in-loop 5-second
+            # timeout cannot reach.
+            if (_is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")) and \
+                    (time.monotonic() - _startup_start) > _STARTUP_PRELOOP_TIMEOUT_S:
+                logger.warning(
+                    "⚡ FORCE_TRADE: startup timeout (%.1fs > %.1fs) reached BEFORE B1 preflight guard — "
+                    "skipping all remaining readiness checks and jumping to trading loop",
+                    time.monotonic() - _startup_start,
+                    _STARTUP_PRELOOP_TIMEOUT_S,
+                )
+                raise _ForceTradStartupTimeout("FORCE_TRADE pre-loop timeout at B1 preflight guard")
+
             logger.info("B1 preflight guard entered")
             with _b1_executed_lock:
                 _b1_already_ran = _b1_executed
@@ -8716,6 +8772,17 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             except Exception as _gate_nonce_err:
                 logger.warning("Startup readiness signal failed (nonce_ready): %s", _gate_nonce_err)
 
+            # ── FORCE_TRADE: pre-loop startup timeout checkpoint ─────────────────
+            if (_is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")) and \
+                    (time.monotonic() - _startup_start) > _STARTUP_PRELOOP_TIMEOUT_S:
+                logger.warning(
+                    "⚡ FORCE_TRADE: startup timeout (%.1fs > %.1fs) reached BEFORE "
+                    "_evaluate_startup_readiness_policy — skipping to trading loop",
+                    time.monotonic() - _startup_start,
+                    _STARTUP_PRELOOP_TIMEOUT_S,
+                )
+                raise _ForceTradStartupTimeout("FORCE_TRADE pre-loop timeout at readiness policy eval")
+
             logger.info("READINESS TABLE before THREADS_STARTING gate (diagnostic): %s", _rt_snapshot())
             _criteria, _required_missing, _optional_missing, _policy_deadline = _evaluate_startup_readiness_policy(
                 context="init_complete->threads_starting",
@@ -8889,6 +8956,17 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 "LIFECYCLE: entering strategy scheduler"
             )
             logger.critical("LIFECYCLE: entering market scanner")
+            # ── FORCE_TRADE: pre-loop startup timeout checkpoint ─────────────────
+            if (_is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")) and \
+                    (time.monotonic() - _startup_start) > _STARTUP_PRELOOP_TIMEOUT_S:
+                logger.warning(
+                    "⚡ FORCE_TRADE: startup timeout (%.1fs > %.1fs) reached BEFORE "
+                    "_enable_execution_after_bootstrap_supervised — skipping to trading loop",
+                    time.monotonic() - _startup_start,
+                    _STARTUP_PRELOOP_TIMEOUT_S,
+                )
+                raise _ForceTradStartupTimeout("FORCE_TRADE pre-loop timeout at enable_execution_after_bootstrap_supervised")
+
             _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
             if not _enable_execution_after_bootstrap_supervised(
                 context="threads live (pre-handoff)"
@@ -8961,6 +9039,17 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # Single-execution contract: if _b1_executed is already True the early
             # B1 PRE-FLIGHT GUARD already validated and passed these conditions.
             # Skip the polling loop and proceed directly to B2 so B1 runs exactly once.
+            # ── FORCE_TRADE: pre-loop startup timeout checkpoint ─────────────────
+            if (_is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE")) and \
+                    (time.monotonic() - _startup_start) > _STARTUP_PRELOOP_TIMEOUT_S:
+                logger.warning(
+                    "⚡ FORCE_TRADE: startup timeout (%.1fs > %.1fs) reached BEFORE "
+                    "B1 preflight barrier (HARD STARTUP BARRIER) — skipping to trading loop",
+                    time.monotonic() - _startup_start,
+                    _STARTUP_PRELOOP_TIMEOUT_S,
+                )
+                raise _ForceTradStartupTimeout("FORCE_TRADE pre-loop timeout at B1 preflight barrier")
+
             with _b1_executed_lock:
                 _barrier_b1_skip = _b1_executed
             if _barrier_b1_skip:
@@ -9197,6 +9286,131 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
 
             logger.info("Bootstrap completing - setting state and exiting startup thread")
             _rerun_supervisor_loop(_state_for_supervisor)
+
+        except _ForceTradStartupTimeout as _ft_timeout_exc:
+            # ── FORCE_TRADE: pre-loop timeout handler ─────────────────────────────
+            # The startup thread was stuck BEFORE entering a readiness wait loop.
+            # Force all gates, advance the FSM, launch trading threads, and enter
+            # the supervisor loop directly — bypassing all remaining startup checks.
+            logger.warning(
+                "⚡ FORCE_TRADE: pre-loop startup timeout caught (%s) — "
+                "forcing all readiness gates and jumping to trading loop",
+                _ft_timeout_exc,
+            )
+            try:
+                # Force all readiness gates.
+                for _ft_to_gate in ("broker_connected", "strategy_ready", "risk_ready",
+                                    "authority_ready", "capital_ready", "execution_ready",
+                                    "balance_hydrated", "bootstrap_ready"):
+                    try:
+                        _rt_mark_ready(_ft_to_gate)
+                    except Exception:
+                        pass
+                os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                # Force FSM to RUNNING_SUPERVISED.
+                try:
+                    _try_finalize_running_supervised_handoff(
+                        reason="FORCE_TRADE pre-loop timeout handler",
+                        completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (pre-loop timeout)",
+                        set_bootstrap_events=True,
+                    )
+                except Exception as _ft_to_fsm_err:
+                    logger.warning("⚡ FORCE_TRADE: FSM handoff raised in timeout handler (non-fatal): %s", _ft_to_fsm_err)
+                # Signal TRADING_ENGINE_READY.
+                try:
+                    try:
+                        from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_to
+                    except ImportError:
+                        from nija_core_loop import TRADING_ENGINE_READY as _ter_to  # type: ignore[import]
+                    if not _ter_to.is_set():
+                        _ter_to.set()
+                except Exception as _ter_to_err:
+                    logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY in timeout handler: %s", _ter_to_err)
+                # Ensure strategy is available — create one if needed.
+                # Access the 'strategy' local from the enclosing try block directly;
+                # fall back to the initialized state snapshot if it is not yet set.
+                _ft_to_strategy = None
+                try:
+                    _ft_to_strategy = strategy  # type: ignore[name-defined]  # noqa: F821
+                except NameError:
+                    pass
+                if _ft_to_strategy is None:
+                    try:
+                        _ft_to_strategy = _read_initialized_state_snapshot(
+                            context="FORCE_TRADE timeout handler"
+                        ).get("strategy")
+                    except Exception:
+                        pass
+                if _ft_to_strategy is None:
+                    logger.warning("⚡ FORCE_TRADE: strategy not available at timeout — creating immediately")
+                    try:
+                        _ft_to_strategy = TradingStrategy()
+                        _ft_to_lock = _initialized_state_lock.acquire(timeout=5.0)
+                        if _ft_to_lock:
+                            try:
+                                _publish_strategy_runtime_readiness(
+                                    _ft_to_strategy,
+                                    context="FORCE_TRADE timeout handler force-create",
+                                )
+                            finally:
+                                _initialized_state_lock.release()
+                        else:
+                            _initialized_state["strategy"] = _ft_to_strategy
+                            _rt_mark_ready("strategy_ready")
+                            _rt_mark_ready("risk_ready")
+                            _rt_mark_ready("execution_ready")
+                    except Exception as _ft_to_create_err:
+                        logger.error("⚡ FORCE_TRADE: strategy force-create failed in timeout handler: %s", _ft_to_create_err)
+                if _ft_to_strategy is not None:
+                    logger.warning("⚡ FORCE_TRADE: launching trading engine from pre-loop timeout handler")
+                    try:
+                        from bot.nija_core_loop import start_trading_engine as _ste_to
+                    except ImportError:
+                        from nija_core_loop import start_trading_engine as _ste_to  # type: ignore[import]
+                    _ft_to_thread = _ste_to(_ft_to_strategy)
+                    if _ft_to_thread is not None and _ft_to_thread.is_alive():
+                        _bootstrap_complete_flag.set()
+                        _bootstrap_completed_event.set()
+                        logger.warning("⚡ FORCE_TRADE: trading engine started from pre-loop timeout handler — entering supervisor loop")
+                        _ft_to_use_independent = (
+                            os.getenv("MULTI_BROKER_INDEPENDENT", "true").lower() in ["true", "1", "yes"]
+                            and getattr(_ft_to_strategy, "independent_trader", None) is not None
+                        )
+                        _ft_to_active_threads = {"force_trade_timeout": {
+                            "thread": _ft_to_thread,
+                            "stop_flag": threading.Event(),
+                            "broker_type": "force_trade",
+                            "mode": "timeout_bypass",
+                        }}
+                        try:
+                            _initialized_state_lock.acquire(timeout=5.0)
+                            try:
+                                _initialized_state.update({
+                                    "strategy": _ft_to_strategy,
+                                    "active_threads": _ft_to_active_threads,
+                                    "use_independent_trading": _ft_to_use_independent,
+                                    "health_manager": health_manager,
+                                })
+                            finally:
+                                _initialized_state_lock.release()
+                        except Exception as _ft_to_state_err:
+                            logger.warning("⚡ FORCE_TRADE: state persist failed in timeout handler: %s", _ft_to_state_err)
+                        _rerun_supervisor_loop({
+                            "strategy": _ft_to_strategy,
+                            "active_threads": _ft_to_active_threads,
+                            "use_independent_trading": _ft_to_use_independent,
+                            "health_manager": health_manager,
+                        })
+                        return
+                    else:
+                        logger.error("⚡ FORCE_TRADE: trading engine thread did not start in timeout handler — re-raising")
+                else:
+                    logger.error("⚡ FORCE_TRADE: strategy unavailable in timeout handler — re-raising")
+            except Exception as _ft_to_handler_err:
+                logger.error("⚡ FORCE_TRADE: timeout handler raised unexpectedly: %s", _ft_to_handler_err, exc_info=True)
+            # If we reach here the timeout handler itself failed — re-raise as RuntimeError
+            raise RuntimeError(f"FORCE_TRADE pre-loop timeout handler failed: {_ft_timeout_exc}") from _ft_timeout_exc
 
         except RuntimeError as e:
             if "Broker connection failed" in str(e):
