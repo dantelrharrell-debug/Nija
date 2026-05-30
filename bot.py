@@ -6841,40 +6841,121 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _ft_execution_ready,
                     )
 
-                    # Activation must occur in the bootstrap owner thread.
-                    try:
-                        from bot.trading_state_machine import get_state_machine as _get_tsm_startup
-
-                        if bool(_rt_snapshot().get("strategy_ready", False)):
-                            _tsm_startup = _get_tsm_startup()
-                            _startup_state = _tsm_startup.get_current_state()
-                            logger.info(
-                                "Startup-thread activation bypass disabled: state=%s; waiting for "
-                                "BootstrapFSM READY -> RUNNING handoff",
-                                getattr(_startup_state, "value", str(_startup_state)),
-                            )
-                        else:
-                            logger.info(
-                                "Startup-thread activation bypass disabled: strategy not fully ready yet"
-                            )
-                    except Exception as _startup_activation_err:
-                        logger.warning("Startup-thread activation status probe failed: %s", _startup_activation_err)
-
-                    # Do NOT release bootstrap events here — the startup thread must not
-                    # signal completion before the full system_ready barrier is satisfied
-                    # (strategy_ready + broker_ready + risk_ready + capital_ready +
-                    # execution_ready).  Bootstrap events are set by the normal boot path
-                    # once the FSM reaches RUNNING_SUPERVISED (see finalize_boot / B1→B2).
-                    logger.info(
-                        "Startup-thread capability verification complete — "
-                        "deferring bootstrap event release to RUNNING_SUPERVISED gate"
-                    )
-
+                    # ── FORCE_TRADE: bypass ALL startup gates immediately ─────────────
                     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
                         logger.warning(
-                            "FORCE_TRADE active — capability checks bypassed where applicable; "
-                            "startup readiness barrier remains enforced (post-capability)"
+                            "⚡ FORCE_TRADE: bypassing ALL startup gates at capability-verification "
+                            "point — starting trading engine immediately"
                         )
+                        # Mark every readiness gate so downstream checks pass.
+                        for _ft_cap_gate in (
+                            "broker_connected", "strategy_ready", "risk_ready",
+                            "authority_ready", "capital_ready", "execution_ready",
+                            "balance_hydrated", "bootstrap_ready",
+                        ):
+                            try:
+                                _rt_mark_ready(_ft_cap_gate)
+                            except Exception:
+                                pass
+                        # Force the bootstrap FSM to RUNNING_SUPERVISED.
+                        try:
+                            _try_finalize_running_supervised_handoff(
+                                reason="FORCE_TRADE capability-gate bypass",
+                                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (capability gate)",
+                                set_bootstrap_events=True,
+                            )
+                        except Exception as _ft_cap_fsm_err:
+                            logger.warning(
+                                "⚡ FORCE_TRADE: capability-gate FSM handoff raised (non-fatal): %s",
+                                _ft_cap_fsm_err,
+                            )
+                        # Signal TRADING_ENGINE_READY.
+                        try:
+                            try:
+                                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_cap
+                            except ImportError:
+                                from nija_core_loop import TRADING_ENGINE_READY as _ter_cap  # type: ignore[import]
+                            if not _ter_cap.is_set():
+                                logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (capability gate)")
+                                _ter_cap.set()
+                        except Exception as _ter_cap_err:
+                            logger.warning(
+                                "⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY (capability gate): %s",
+                                _ter_cap_err,
+                            )
+                        # Get strategy and start trading engine directly.
+                        _ft_cap_snapshot = _read_initialized_state_snapshot(context="FORCE_TRADE capability-gate bypass")
+                        _ft_cap_strategy = _ft_cap_snapshot.get("strategy")
+                        if _ft_cap_strategy is None:
+                            logger.warning(
+                                "⚡ FORCE_TRADE: strategy not yet in state at capability gate — waiting up to 30s"
+                            )
+                            _ft_cap_deadline = time.monotonic() + 30.0
+                            while _ft_cap_strategy is None and time.monotonic() < _ft_cap_deadline:
+                                time.sleep(0.5)
+                                _ft_cap_strategy = _read_initialized_state_snapshot(
+                                    context="FORCE_TRADE capability-gate wait"
+                                ).get("strategy")
+                        if _ft_cap_strategy is not None:
+                            try:
+                                try:
+                                    from bot.nija_core_loop import start_trading_engine as _ste_cap
+                                except ImportError:
+                                    from nija_core_loop import start_trading_engine as _ste_cap  # type: ignore[import]
+                                logger.warning(
+                                    "⚡ FORCE_TRADE: starting trading engine immediately (capability gate bypass)"
+                                )
+                                _ft_cap_thread = _ste_cap(_ft_cap_strategy)
+                                if _ft_cap_thread is not None and _ft_cap_thread.is_alive():
+                                    _bootstrap_complete_flag.set()
+                                    _bootstrap_completed_event.set()
+                                    logger.warning(
+                                        "⚡ FORCE_TRADE: trading engine started — capability gate bypass complete"
+                                    )
+                                else:
+                                    logger.error(
+                                        "⚡ FORCE_TRADE: trading engine thread did not start at capability gate"
+                                    )
+                            except Exception as _ft_cap_start_err:
+                                logger.error(
+                                    "⚡ FORCE_TRADE: failed to start trading engine at capability gate: %s",
+                                    _ft_cap_start_err,
+                                )
+                        else:
+                            logger.error(
+                                "⚡ FORCE_TRADE: strategy still None after 30s at capability gate — "
+                                "falling through to normal startup"
+                            )
+                    else:
+                        # Activation must occur in the bootstrap owner thread.
+                        try:
+                            from bot.trading_state_machine import get_state_machine as _get_tsm_startup
+
+                            if bool(_rt_snapshot().get("strategy_ready", False)):
+                                _tsm_startup = _get_tsm_startup()
+                                _startup_state = _tsm_startup.get_current_state()
+                                logger.info(
+                                    "Startup-thread activation bypass disabled: state=%s; waiting for "
+                                    "BootstrapFSM READY -> RUNNING handoff",
+                                    getattr(_startup_state, "value", str(_startup_state)),
+                                )
+                            else:
+                                logger.info(
+                                    "Startup-thread activation bypass disabled: strategy not fully ready yet"
+                                )
+                        except Exception as _startup_activation_err:
+                            logger.warning("Startup-thread activation status probe failed: %s", _startup_activation_err)
+
+                        # Do NOT release bootstrap events here — the startup thread must not
+                        # signal completion before the full system_ready barrier is satisfied
+                        # (strategy_ready + broker_ready + risk_ready + capital_ready +
+                        # execution_ready).  Bootstrap events are set by the normal boot path
+                        # once the FSM reaches RUNNING_SUPERVISED (see finalize_boot / B1→B2).
+                        logger.info(
+                            "Startup-thread capability verification complete — "
+                            "deferring bootstrap event release to RUNNING_SUPERVISED gate"
+                        )
+
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
