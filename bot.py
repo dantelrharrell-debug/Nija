@@ -9060,6 +9060,20 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             _verify_runtime_transition_states(context="threads live (pre-handoff)")
             logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
 
+            # ── FORCE_TRADE: exit startup thread immediately after LIVE_ACTIVE ──
+            # When FORCE_TRADE=true the startup thread is known to stall in the
+            # code that runs after activation.  Return immediately so the main
+            # thread's supervisor loop takes over.  Mark bootstrap complete first
+            # so the supervisor sees a successful handoff (not a crash).
+            if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
+                logger.warning(
+                    "⚡ FORCE_TRADE: LIVE_ACTIVE reached — exiting startup thread immediately "
+                    "so supervisor loop can take over"
+                )
+                _bootstrap_complete_flag.set()
+                _bootstrap_completed_event.set()
+                return
+
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
             # Delegates to _rerun_supervisor_loop so the supervisor logic lives
             # in exactly one place and retries (fast-path) use the same code.
