@@ -1174,6 +1174,47 @@ def _probe_first_snap_accepted() -> bool:
         return False
 
 
+def _is_activation_already_occurred() -> bool:
+    """Return True when the activation thread has already forced LIVE_ACTIVE.
+
+    Detects the race condition where the activation thread calls
+    ``force_activate_bypass()`` (incrementing ``StartupCoordinator.event_version``
+    to > 0 and setting ``runtime_authority_state = EXECUTING``) while the startup
+    thread is still running through readiness wait loops.
+
+    When this returns True the startup thread must skip all remaining readiness
+    checks and go directly to the trading loop — re-validating gates against the
+    post-activation coordinator state causes an indefinite wait.
+
+    Only active when ``FORCE_TRADE=true`` (or ``FORCE_TRADE_MODE=true``).
+    """
+    _force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    if not _force_trade_active:
+        return False
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator as _get_sc_probe
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator as _get_sc_probe  # type: ignore[import]
+        _sc = _get_sc_probe()
+        _version = _sc.get_event_version()
+        if _version <= 0:
+            return False
+        # Build a lightweight snapshot to check runtime_authority_state without
+        # triggering a full reconcile (trading_state and activation_intent are
+        # read from env so no external I/O is needed here).
+        _trading_state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip() or "LIVE_ACTIVE"
+        _snap = _sc.build_snapshot(trading_state=_trading_state, activation_intent=True)
+        from bot.startup_coordinator import RuntimeAuthorityState as _RAS
+        return _snap.runtime_authority_state == _RAS.EXECUTING.value
+    except Exception as _probe_err:
+        logger.debug("_is_activation_already_occurred probe failed (non-fatal): %s", _probe_err)
+        return False
+
+
 def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tuple[dict[str, bool], list[str], list[str], float]:
     """Evaluate startup readiness criteria under required/optional policy."""
     # ── FORCE_TRADE: skip all policy checks — report everything as satisfied ──
@@ -1192,7 +1233,54 @@ def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tup
     _policy = _startup_readiness_policy()
     _deadline = time.monotonic() + max(0.0, timeout_s)
 
+    # ── FORCE_TRADE: capture coordinator version before entering the wait loop ─
+    # If the activation thread has already forced LIVE_ACTIVE (version > 0 and
+    # runtime_authority_state = EXECUTING), skip the entire wait loop immediately.
+    # This prevents the startup thread from re-validating readiness gates that are
+    # now in a post-activation state, which would cause an indefinite wait.
+    _ft_entry_version: int = 0
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator as _get_sc_policy
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator as _get_sc_policy  # type: ignore[import]
+        _ft_entry_version = _get_sc_policy().get_event_version()
+    except Exception:
+        pass
+    if _is_activation_already_occurred():
+        logger.warning(
+            "⚡ FORCE_TRADE: activation already occurred before readiness wait loop "
+            "(version=%d state=EXECUTING) — skipping readiness policy evaluation (%s)",
+            _ft_entry_version,
+            context,
+        )
+        _criteria = {"broker_connected": True, "nonce_ready": True, "first_snap": True}
+        return _criteria, [], [], time.monotonic()
+
     while time.monotonic() < _deadline:
+        # ── FORCE_TRADE: check if activation occurred mid-loop ─────────────────
+        # If the activation thread incremented the coordinator version while we
+        # were waiting, break out immediately — do NOT re-validate gates.
+        try:
+            try:
+                from bot.startup_coordinator import get_startup_coordinator as _get_sc_loop
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator as _get_sc_loop  # type: ignore[import]
+            _ft_current_version = _get_sc_loop().get_event_version()
+        except Exception:
+            _ft_current_version = _ft_entry_version
+        if _ft_current_version != _ft_entry_version and _is_activation_already_occurred():
+            logger.warning(
+                "⚡ FORCE_TRADE: coordinator version changed mid-loop "
+                "(entry=%d current=%d state=EXECUTING) — activation detected, "
+                "breaking out of readiness wait loop (%s)",
+                _ft_entry_version,
+                _ft_current_version,
+                context,
+            )
+            _criteria = {"broker_connected": True, "nonce_ready": True, "first_snap": True}
+            return _criteria, [], [], time.monotonic()
+
         _table = _rt_snapshot()
         _criteria = {
             "broker_connected": bool(_table.get("broker_connected", False)),
@@ -1646,6 +1734,22 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
             _CapitalBootstrapState = None  # type: ignore[assignment]
             _get_capital_bootstrap_fsm_unlock = None  # type: ignore[assignment]
 
+    # ── FORCE_TRADE: check if activation already occurred before waiting ───────
+    # If the activation thread has already forced LIVE_ACTIVE (coordinator
+    # version > 0 and runtime_authority_state = EXECUTING), skip the
+    # RUNNING_SUPERVISED wait entirely — the startup thread must not re-validate
+    # readiness gates that are now in a post-activation state.
+    if _is_activation_already_occurred():
+        logger.warning(
+            "⚡ FORCE_TRADE: activation already occurred before "
+            "_enable_execution_after_bootstrap_supervised wait — "
+            "skipping RUNNING_SUPERVISED gate and enabling execution directly (%s)",
+            context,
+        )
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        return True
+
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
         # Give the thread-launch/supervisor handoff a short bounded window to
         # commit RUNNING_SUPERVISED before execution is enabled.
@@ -1659,7 +1763,40 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
             )
             _unlock_timeout_s = 15.0
 
+        # Capture coordinator version before entering the predicate wait so we
+        # can detect mid-wait activation and break out immediately.
+        _ee_entry_version: int = 0
+        try:
+            try:
+                from bot.startup_coordinator import get_startup_coordinator as _get_sc_ee
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator as _get_sc_ee  # type: ignore[import]
+            _ee_entry_version = _get_sc_ee().get_event_version()
+        except Exception:
+            pass
+
         def _bootstrap_unlock_ready() -> bool:
+            # ── FORCE_TRADE: break out if activation occurred mid-wait ─────────
+            # If the coordinator version changed and state is EXECUTING, the
+            # activation thread has already forced LIVE_ACTIVE — stop waiting.
+            try:
+                try:
+                    from bot.startup_coordinator import get_startup_coordinator as _get_sc_pred
+                except ImportError:
+                    from startup_coordinator import get_startup_coordinator as _get_sc_pred  # type: ignore[import]
+                _pred_version = _get_sc_pred().get_event_version()
+            except Exception:
+                _pred_version = _ee_entry_version
+            if _pred_version != _ee_entry_version and _is_activation_already_occurred():
+                logger.warning(
+                    "⚡ FORCE_TRADE: coordinator version changed in RUNNING_SUPERVISED wait "
+                    "(entry=%d current=%d state=EXECUTING) — activation detected, "
+                    "releasing predicate gate (%s)",
+                    _ee_entry_version,
+                    _pred_version,
+                    context,
+                )
+                return True
             try:
                 _bfsm = _get_bootstrap_fsm()
                 _state_obj = getattr(_bfsm, "state", None)
@@ -1679,6 +1816,16 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
             timeout_label="EXECUTION_ENABLE_WAITING_FOR_BOOTSTRAP_SUPERVISED",
             poll_interval_s=0.25,
         ):
+            # ── FORCE_TRADE: one final activation check before declaring failure ─
+            if _is_activation_already_occurred():
+                logger.warning(
+                    "⚡ FORCE_TRADE: activation detected after RUNNING_SUPERVISED wait timeout — "
+                    "enabling execution directly (%s)",
+                    context,
+                )
+                os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                return True
             _last_bootstrap_state = "unknown"
             try:
                 _last_bootstrap_state = getattr(_get_bootstrap_fsm().state, "value", "unknown")
@@ -1704,6 +1851,18 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
                 else getattr(_bfsm_unlock, "execution_authority", False)
             )
             if not (_bootstrap_state_name == "RUNNING_SUPERVISED" and _fsm_exec_authority):
+                # ── FORCE_TRADE: activation may have occurred — check before blocking ─
+                if _is_activation_already_occurred():
+                    logger.warning(
+                        "⚡ FORCE_TRADE: activation detected at RUNNING_SUPERVISED authority check — "
+                        "enabling execution directly (state=%s authority=%s context=%s)",
+                        _bootstrap_state_name,
+                        _fsm_exec_authority,
+                        context,
+                    )
+                    os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+                    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                    return True
                 logger.critical(
                     "EXECUTION ENABLE BLOCKED: BootstrapFSM is not the active execution authority "
                     "(state=%s authority=%s context=%s)",
@@ -8756,8 +8915,41 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 # FIX 2: Probe loop must not block startup
                 _bce_deadline = time.monotonic() + 15  # 15-second probe timeout
                 _bce_start = time.monotonic()
-                
+                # ── FORCE_TRADE: capture coordinator version before B1 loop ──────
+                # If the activation thread forces LIVE_ACTIVE mid-loop, break out
+                # immediately rather than re-validating gates in a post-activation state.
+                _bce_entry_version: int = 0
+                try:
+                    try:
+                        from bot.startup_coordinator import get_startup_coordinator as _get_sc_bce
+                    except ImportError:
+                        from startup_coordinator import get_startup_coordinator as _get_sc_bce  # type: ignore[import]
+                    _bce_entry_version = _get_sc_bce().get_event_version()
+                except Exception:
+                    pass
+
                 while True:
+                    # ── FORCE_TRADE: check if activation occurred mid-B1-loop ────
+                    # If the coordinator version changed and state is EXECUTING,
+                    # the activation thread has already forced LIVE_ACTIVE — break
+                    # out immediately and skip remaining B1 gate checks.
+                    try:
+                        try:
+                            from bot.startup_coordinator import get_startup_coordinator as _get_sc_bce_loop
+                        except ImportError:
+                            from startup_coordinator import get_startup_coordinator as _get_sc_bce_loop  # type: ignore[import]
+                        _bce_current_version = _get_sc_bce_loop().get_event_version()
+                    except Exception:
+                        _bce_current_version = _bce_entry_version
+                    if _bce_current_version != _bce_entry_version and _is_activation_already_occurred():
+                        logger.warning(
+                            "⚡ FORCE_TRADE: coordinator version changed in B1 preflight loop "
+                            "(entry=%d current=%d state=EXECUTING) — activation detected, "
+                            "breaking out of B1 barrier immediately",
+                            _bce_entry_version,
+                            _bce_current_version,
+                        )
+                        break
                     try:
                         _bce_first_snap = _get_tsm_bce().get_first_snap_accepted() if _get_tsm_bce is not None else False
                     except Exception as _bce_err:
