@@ -6945,6 +6945,93 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         "Startup-thread capability verification complete — "
                         "deferring bootstrap event release to RUNNING_SUPERVISED gate"
                     )
+
+                    if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
+                        logger.warning(
+                            "⚡ FORCE_TRADE: capability verification complete — "
+                            "bypassing RUNNING_SUPERVISED gate and starting trading engine immediately"
+                        )
+                        # Mark all readiness gates so every downstream check passes.
+                        for _ft_cap_gate in (
+                            "broker_connected", "strategy_ready", "risk_ready",
+                            "authority_ready", "capital_ready", "execution_ready",
+                            "balance_hydrated", "bootstrap_ready",
+                        ):
+                            try:
+                                _rt_mark_ready(_ft_cap_gate)
+                            except Exception:
+                                pass
+                        # Force execution env vars.
+                        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+                        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                        # Force the bootstrap FSM to RUNNING_SUPERVISED and set bootstrap events.
+                        try:
+                            _force_trade_readiness_handoff(
+                                context="capability-verification FORCE_TRADE bypass",
+                                transition_reason="FORCE_TRADE capability bypass (post-capability-verification)",
+                                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (capability bypass)",
+                                set_bootstrap_events=True,
+                            )
+                        except Exception as _ft_cap_handoff_err:
+                            logger.warning(
+                                "⚡ FORCE_TRADE: readiness handoff raised (non-fatal): %s",
+                                _ft_cap_handoff_err,
+                            )
+                        # Signal TRADING_ENGINE_READY so run_trading_loop() does not wait.
+                        try:
+                            try:
+                                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_cap
+                            except ImportError:
+                                from nija_core_loop import TRADING_ENGINE_READY as _ter_cap  # type: ignore[import]
+                            if not _ter_cap.is_set():
+                                logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (capability bypass)")
+                                _ter_cap.set()
+                        except Exception as _ter_cap_err:
+                            logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY: %s", _ter_cap_err)
+                        # Get strategy from initialized state (wait up to 60 s).
+                        _ft_cap_strategy = _ft_state_snapshot.get("strategy")
+                        if _ft_cap_strategy is None:
+                            logger.warning("⚡ FORCE_TRADE: strategy not in snapshot — waiting up to 60s")
+                            _ft_cap_deadline = time.monotonic() + 60.0
+                            while _ft_cap_strategy is None and time.monotonic() < _ft_cap_deadline:
+                                time.sleep(0.5)
+                                _ft_cap_strategy = _read_initialized_state_snapshot(
+                                    context="FORCE_TRADE capability bypass wait"
+                                ).get("strategy")
+                        if _ft_cap_strategy is None:
+                            logger.error(
+                                "⚡ FORCE_TRADE: strategy still None after 60s — "
+                                "falling through to normal startup"
+                            )
+                        else:
+                            logger.warning(
+                                "⚡ FORCE_TRADE: starting trading engine immediately (capability bypass)"
+                            )
+                            try:
+                                try:
+                                    from bot.nija_core_loop import start_trading_engine as _ste_cap
+                                except ImportError:
+                                    from nija_core_loop import start_trading_engine as _ste_cap  # type: ignore[import]
+                                _ft_cap_thread = _ste_cap(_ft_cap_strategy)
+                                if _ft_cap_thread is not None and _ft_cap_thread.is_alive():
+                                    _bootstrap_complete_flag.set()
+                                    _bootstrap_completed_event.set()
+                                    logger.warning(
+                                        "⚡ FORCE_TRADE: trading engine started — capability bypass complete"
+                                    )
+                                    return
+                                else:
+                                    logger.error(
+                                        "⚡ FORCE_TRADE: trading engine thread did not start — "
+                                        "falling through to normal startup"
+                                    )
+                            except Exception as _ste_cap_err:
+                                logger.error(
+                                    "⚡ FORCE_TRADE: start_trading_engine raised: %s — "
+                                    "falling through to normal startup",
+                                    _ste_cap_err,
+                                )
+
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
