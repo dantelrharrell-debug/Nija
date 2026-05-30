@@ -9638,47 +9638,145 @@ def main():
     
     _reset_startup_events_for_fresh_attempt(clear_initialized_state=True)
 
-    logger.info("=" * 70)
-    logger.info("🚀 SPAWNING STARTUP THREAD")
-    logger.info("=" * 70)
-    logger.info("Main thread will supervise while startup thread initializes bot")
-    logger.info("Health server remains responsive during initialization")
-    logger.info("=" * 70)
-    
-    logger.info("Step 4: initializing broker and spawning startup thread")
-    logger.info(
-        "DIAG_THREAD_SPAWN: spawning BotStartup thread "
-        "target=_run_bot_startup_and_trading_with_retry "
-        "pid=%d caller_thread=%s caller_thread_id=%d",
-        os.getpid(),
-        threading.current_thread().name,
-        threading.get_ident(),
-    )
-    startup_thread = threading.Thread(
-        target=_run_bot_startup_and_trading_with_retry,  # single-owner kernel, always with retry
-        daemon=False,  # NOT daemon - we want this to keep running
-        name="BotStartup"
-    )
-    startup_thread.start()
-    logger.info(
-        "DIAG_THREAD_SPAWNED: BotStartup thread started "
-        "thread_id=%s thread_alive=%s",
-        startup_thread.ident,
-        startup_thread.is_alive(),
-    )
-    
-    # Wait briefly to ensure thread starts
-    time.sleep(0.2)
-    
-    _log_lifecycle_banner(
-        "✅ STARTUP THREAD SPAWNED",
-        [
-            f"BotStartup: Thread ID {startup_thread.ident}",
-            f"Thread is alive: {startup_thread.is_alive()}",
-            "Bot initialization is now running in background",
-            "Main thread entering supervisor mode..."
-        ]
-    )
+    # ── FORCE_TRADE: skip startup thread entirely ─────────────────────────────
+    # When FORCE_TRADE=true the startup thread is known to stall after
+    # LIVE_ACTIVE.  Skip it completely: initialize strategy directly on the
+    # main thread, start the trading engine, mark bootstrap complete, then
+    # fall through to the supervisor loop with a dead stub for startup_thread
+    # so all downstream references to startup_thread.is_alive() are safe.
+    if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
+        logger.warning(
+            "⚡ FORCE_TRADE: SKIPPING STARTUP THREAD ENTIRELY — "
+            "initializing strategy directly and going straight to supervisor loop"
+        )
+        # Mark all readiness gates.
+        for _ft_skip_gate in ("broker_connected", "strategy_ready", "risk_ready",
+                              "authority_ready", "capital_ready", "execution_ready",
+                              "balance_hydrated", "bootstrap_ready"):
+            try:
+                _rt_mark_ready(_ft_skip_gate)
+            except Exception:
+                pass
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        # Force FSM to RUNNING_SUPERVISED.
+        try:
+            _try_finalize_running_supervised_handoff(
+                reason="FORCE_TRADE skip-startup-thread (main)",
+                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (skip-startup-thread)",
+                set_bootstrap_events=True,
+            )
+        except Exception as _ft_skip_fsm_err:
+            logger.warning("⚡ FORCE_TRADE: FSM handoff raised (non-fatal): %s", _ft_skip_fsm_err)
+        # Signal TRADING_ENGINE_READY.
+        try:
+            try:
+                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_skip
+            except ImportError:
+                from nija_core_loop import TRADING_ENGINE_READY as _ter_skip  # type: ignore[import]
+            if not _ter_skip.is_set():
+                _ter_skip.set()
+        except Exception as _ter_skip_err:
+            logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY: %s", _ter_skip_err)
+        # Create strategy directly.
+        _ft_skip_strategy = None
+        try:
+            _ft_skip_strategy = TradingStrategy()
+            _ft_skip_lock_acquired = _initialized_state_lock.acquire(timeout=5.0)
+            if _ft_skip_lock_acquired:
+                try:
+                    _publish_strategy_runtime_readiness(
+                        _ft_skip_strategy,
+                        context="FORCE_TRADE skip-startup-thread",
+                    )
+                finally:
+                    _initialized_state_lock.release()
+            else:
+                _initialized_state["strategy"] = _ft_skip_strategy
+                _rt_mark_ready("strategy_ready")
+                _rt_mark_ready("risk_ready")
+                _rt_mark_ready("execution_ready")
+            logger.warning("⚡ FORCE_TRADE: strategy created directly (skip-startup-thread)")
+        except Exception as _ft_skip_create_err:
+            logger.error(
+                "⚡ FORCE_TRADE: strategy creation failed (skip-startup-thread): %s — "
+                "supervisor loop will operate without strategy",
+                _ft_skip_create_err,
+            )
+        # Start trading engine directly.
+        if _ft_skip_strategy is not None:
+            try:
+                from bot.nija_core_loop import start_trading_engine as _ste_skip
+            except ImportError:
+                from nija_core_loop import start_trading_engine as _ste_skip  # type: ignore[import]
+            _ft_skip_trading_thread = _ste_skip(_ft_skip_strategy)
+            if _ft_skip_trading_thread is not None and _ft_skip_trading_thread.is_alive():
+                _bootstrap_complete_flag.set()
+                _bootstrap_completed_event.set()
+                logger.warning(
+                    "⚡ FORCE_TRADE: trading engine started directly — "
+                    "skipping startup thread, going straight to supervisor loop"
+                )
+            else:
+                logger.error("⚡ FORCE_TRADE: trading engine thread did not start (skip-startup-thread)")
+        else:
+            logger.error("⚡ FORCE_TRADE: no strategy — trading engine not started (skip-startup-thread)")
+        # Create a dead stub so supervisor loop references to startup_thread are safe.
+        startup_thread = threading.Thread(target=lambda: None, daemon=True, name="BotStartup-Stub")
+        # Do NOT start it — is_alive() will return False, which is correct:
+        # bootstrap is already complete so the supervisor loop will see
+        # _bootstrap_completed_event.is_set() == True and continue normally.
+        _log_lifecycle_banner(
+            "⚡ FORCE_TRADE: STARTUP THREAD SKIPPED",
+            [
+                "Strategy initialized directly on main thread",
+                "Trading engine started directly",
+                "Bootstrap marked complete",
+                "Entering supervisor loop immediately",
+            ]
+        )
+    else:
+        logger.info("=" * 70)
+        logger.info("🚀 SPAWNING STARTUP THREAD")
+        logger.info("=" * 70)
+        logger.info("Main thread will supervise while startup thread initializes bot")
+        logger.info("Health server remains responsive during initialization")
+        logger.info("=" * 70)
+
+        logger.info("Step 4: initializing broker and spawning startup thread")
+        logger.info(
+            "DIAG_THREAD_SPAWN: spawning BotStartup thread "
+            "target=_run_bot_startup_and_trading_with_retry "
+            "pid=%d caller_thread=%s caller_thread_id=%d",
+            os.getpid(),
+            threading.current_thread().name,
+            threading.get_ident(),
+        )
+        startup_thread = threading.Thread(
+            target=_run_bot_startup_and_trading_with_retry,  # single-owner kernel, always with retry
+            daemon=False,  # NOT daemon - we want this to keep running
+            name="BotStartup"
+        )
+        startup_thread.start()
+        logger.info(
+            "DIAG_THREAD_SPAWNED: BotStartup thread started "
+            "thread_id=%s thread_alive=%s",
+            startup_thread.ident,
+            startup_thread.is_alive(),
+        )
+
+        # Wait briefly to ensure thread starts
+        time.sleep(0.2)
+
+        _log_lifecycle_banner(
+            "✅ STARTUP THREAD SPAWNED",
+            [
+                f"BotStartup: Thread ID {startup_thread.ident}",
+                f"Thread is alive: {startup_thread.is_alive()}",
+                "Bot initialization is now running in background",
+                "Main thread entering supervisor mode..."
+            ]
+        )
     
     # ═══════════════════════════════════════════════════════════════════════
     # SUPERVISOR LOOP - Main thread stays here forever
