@@ -6700,7 +6700,49 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             "LIVE_CAPITAL_VERIFIED startup bypass disabled — continuing through strict bootstrap flow"
         )
 
+    # ── FORCE_TRADE: capture startup deadline at thread entry ─────────────────
+    # If FORCE_TRADE=true, set a 5-second deadline from thread entry.  Any
+    # blocking operation that runs BEFORE the readiness wait loops checks this
+    # deadline and skips the operation if it has already passed.  This prevents
+    # the startup thread from getting stuck in pre-loop code when FORCE_TRADE is
+    # active and the 5-second timeout inside the loops never triggers.
+    _ft_startup_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
+    _ft_startup_start = time.monotonic()
+    _ft_startup_deadline = _ft_startup_start + 5.0 if _ft_startup_active else float("inf")
+    if _ft_startup_active:
+        logger.warning(
+            "⚡ FORCE_TRADE: startup deadline set — pre-loop blocking operations will be "
+            "skipped after 5s (deadline=%.2f now=%.2f)",
+            _ft_startup_deadline,
+            _ft_startup_start,
+        )
+
+    def _ft_pre_loop_deadline_passed(operation: str) -> bool:
+        """Return True when the FORCE_TRADE startup deadline has passed.
+
+        When True the caller should skip the blocking operation and continue
+        so the startup thread can reach the readiness loops (which have their
+        own 5-second FORCE_TRADE timeout) without being stuck in pre-loop code.
+        """
+        if not _ft_startup_active:
+            return False
+        _now = time.monotonic()
+        if _now >= _ft_startup_deadline:
+            logger.warning(
+                "⚡ FORCE_TRADE: pre-loop deadline passed — skipping '%s' "
+                "(elapsed=%.2fs deadline=%.2fs)",
+                operation,
+                _now - _ft_startup_start,
+                _ft_startup_deadline - _ft_startup_start,
+            )
+            return True
+        return False
+
     # FORCE_TRADE/FORCE_TRADE_MODE: nuclear bypass — skip ALL startup FSM gates
+
     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
         logger.warning(
             "⚡ FORCE_TRADE: NUCLEAR BYPASS — skipping entire startup FSM in "
@@ -8050,23 +8092,29 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 # before any real broker is present — the root cause of the bug.
                 _bms_gate_start = time.monotonic()
                 _bms_gate_timeout = 30.0
-                while not _bms_mabm.has_registered_brokers():
-                    if time.monotonic() - _bms_gate_start >= _bms_gate_timeout:
-                        logger.warning(
-                            "[Bootstrap] Timeout waiting for broker registration (%.0fs) — proceeding",
-                            _bms_gate_timeout,
-                        )
-                        break
-                    time.sleep(0.1)
-                while not _bms_mabm.has_attempted_connections():
-                    if time.monotonic() - _bms_gate_start >= _bms_gate_timeout:
-                        logger.warning(
-                            "[Bootstrap] Timeout waiting for connection attempts (%.0fs) — proceeding",
-                            _bms_gate_timeout,
-                        )
-                        break
-                    time.sleep(0.1)
-                # ── END broker-registration gates ──────────────────────────────
+                # ── FORCE_TRADE: skip broker-registration gates if deadline passed ─
+                if _ft_pre_loop_deadline_passed("broker_registration_gate"):
+                    logger.warning(
+                        "⚡ FORCE_TRADE: skipping broker-registration wait gates (deadline passed)"
+                    )
+                else:
+                    while not _bms_mabm.has_registered_brokers():
+                        if time.monotonic() - _bms_gate_start >= _bms_gate_timeout:
+                            logger.warning(
+                                "[Bootstrap] Timeout waiting for broker registration (%.0fs) — proceeding",
+                                _bms_gate_timeout,
+                            )
+                            break
+                        time.sleep(0.1)
+                    while not _bms_mabm.has_attempted_connections():
+                        if time.monotonic() - _bms_gate_start >= _bms_gate_timeout:
+                            logger.warning(
+                                "[Bootstrap] Timeout waiting for connection attempts (%.0fs) — proceeding",
+                                _bms_gate_timeout,
+                            )
+                            break
+                        time.sleep(0.1)
+
                 # ── B: enforce ordering — capital brain requires brokers registered ─
                 # Non-blocking observable check: warn and continue with degraded
                 # readiness rather than hard-raising.  The phase may not have
@@ -8118,7 +8166,12 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _shutdown_event = _get_shutdown_event()
                     except ImportError:
                         _shutdown_event = None
-                if not skip_balance_polling_loop:
+                # ── FORCE_TRADE: skip capital hydration loop if deadline passed ──
+                if not skip_balance_polling_loop and _ft_pre_loop_deadline_passed("capital_hydration_loop"):
+                    logger.warning(
+                        "⚡ FORCE_TRADE: skipping capital hydration wait loop (deadline passed)"
+                    )
+                elif not skip_balance_polling_loop:
                     while not _bms_ca.is_hydrated and (
                         _shutdown_event is None or not _shutdown_event.is_set()
                     ):
@@ -8158,8 +8211,7 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                             _bms_mabm.finalize_bootstrap_ready()
                         except Exception as _bms_fbr_err:
                             logger.warning("[Bootstrap] finalize_bootstrap_ready error: %s", _bms_fbr_err)
-            # ── END BOOTSTRAP MASTER SEQUENCE ─────────────────────────────────
-            # ── B: Phase 2 → 3 (capital brain hydrated; strategy engine ready) ──
+
             logger.info("Lifecycle: entering strategy scheduler")
             _advance_phase(_Phase.STRATEGY_ENGINE, reason="CapitalAuthority hydrated; capital data available")
             if _startup_buffer:
@@ -8204,209 +8256,225 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             logger.debug("Bootstrap stage A5: before capital gate")
             logger.debug("Capital gate entry")
             logger.info("Lifecycle: entering market scanner")
-            _capital_gate_deadline = time.time() + 60
-            while True:
-                logger.debug("Capital gate loop iteration")
-                try:
-                    _total_capital = _get_startup_total_capital()
-                except Exception as _cap_gate_err:
-                    logger.warning(
-                        "⚠️ Startup capital invariant check failed: %s",
-                        _cap_gate_err,
-                    )
-                    _total_capital = 0.0
-
-                ca = _bms_ca
-                # Per-pass diagnostic — tells exactly which field is stuck
-                if ca is not None:
-                    logger.warning(
-                        "[CapGate] hydrated=%s state=%s total=%s ready=%s",
-                        ca.is_hydrated,
-                        ca.state,
-                        ca.total_capital,
-                        ca.is_ready(),
-                    )
-
-                # ── Blocker-2 self-heal: retry capital refresh if CA is not yet
-                # hydrated.  The initial BOOTSTRAP_START call may have returned
-                # "pending" when broker_map was still empty (brokers registered
-                # but no balance payload yet).  Without retrying here the CA
-                # never hydrates and the gate always times out after 60 s.
-                if ca is not None and not ca.is_hydrated and _bms_mabm is not None:
-                    try:
-                        _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
-                        logger.info("[CapGate] Retried BOOTSTRAP_START capital refresh")
-                    except Exception as _retry_err:
-                        logger.debug("[CapGate] BOOTSTRAP_START retry error (non-fatal): %s", _retry_err)
-
-                # Gate exit requires BOTH is_ready() (broker balances registered)
-                # AND is_hydrated (publish_snapshot/refresh committed data) so that
-                # maybe_auto_activate() — which checks is_hydrated via
-                # _capital_readiness_gate() — never fails immediately after this
-                # loop exits.  Exiting on is_ready() alone when is_hydrated=False
-                # is the root cause of the PREFLIGHT→SUPERVISOR stuck loop.
-                _ca_gate_ready = ca and ca.is_ready()
-                _ca_gate_hydrated = ca and ca.is_hydrated
-                _ca_gate_core_systems = ca is not None and hasattr(ca, 'is_hydrated')
-                
-                # FIX 3: Decouple system_ready from balance
-                # System is ready when CORE SYSTEMS initialized, not when balance > 0
-                if _ca_gate_core_systems and _ca_gate_hydrated:
-                    logger.info(
-                        "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
-                    )
-                    logger.info("🚀 SYSTEM READY — TRADING ENABLED")
-                    logger.info("💰 Startup total capital: $%.2f", _total_capital)
-                    try:
-                        _startup_execution_authority_status(
-                            context="capital_gate: capital_ready",
-                            force_refresh=True,
-                        )
-                    except Exception as _gate_signal_err:
-                        logger.warning(
-                            "Authority status probe failed during capital_ready signal: %s",
-                            _gate_signal_err,
-                        )
-                    try:
-                        _rt_mark_ready("capital_ready")
-                    except Exception as _gate_signal_err:
-                        raise RuntimeError(
-                            f"Startup readiness signal failed (capital_ready): {_gate_signal_err}"
-                        ) from _gate_signal_err
-
-                    # Capital gate owns only the CAPITAL_READY handoff.
-                    # INIT_COMPLETE/THREADS_STARTING/RUNNING_SUPERVISED are owned by
-                    # the canonical startup orchestration path below.
-                    logger.critical("LIFECYCLE: Capital ready - FSM state before transitions = %s", _bootstrap_state_value())
-                    _bfsm_transition(
-                        _BootstrapState.CAPITAL_READY,
-                        f"startup capital confirmed: ${_total_capital:.2f}",
-                    )
-                    logger.critical("LIFECYCLE: FSM state after CAPITAL_READY = %s", _bootstrap_state_value())
-                    break
-
-
-                if time.time() > _capital_gate_deadline:
-                    logger.warning(
-                        "⚠️ CAPITAL GATE TIMEOUT (%.0fs) — forcing system to proceed in degraded mode",
-                        time.time() - (_capital_gate_deadline - 60),
-                    )
-                    logger.warning(
-                        "✅ CAPITAL GATE FORCED (DEGRADED) — core systems initialized"
-                    )
-                    logger.warning("🚀 SYSTEM READY — proceeding with zero or partial balance")
-                    try:
-                        _startup_execution_authority_status(
-                            context="capital_gate: degraded capital_ready",
-                            force_refresh=True,
-                        )
-                    except Exception as _gate_signal_err:
-                        logger.warning(
-                            "Authority status probe failed during degraded capital_ready signal: %s",
-                            _gate_signal_err,
-                        )
-                    try:
-                        _rt_mark_ready("capital_ready")
-                    except Exception as _gate_signal_err:
-                        raise RuntimeError(
-                            f"Startup readiness signal failed (capital_ready): {_gate_signal_err}"
-                        ) from _gate_signal_err
-
-                    # Degraded capital gate owns only the CAPITAL_READY handoff.
-                    logger.critical("LIFECYCLE: Capital ready (degraded) - FSM state before transitions = %s", _bootstrap_state_value())
-                    _bfsm_transition(
-                        _BootstrapState.CAPITAL_READY,
-                        "capital gate timeout — proceeding in degraded mode",
-                    )
-                    logger.critical("LIFECYCLE: FSM state after CAPITAL_READY = %s", _bootstrap_state_value())
-                    break
-
-
-
-                capital_gate_checks += 1
-                _should_log_gate = (
-                    capital_gate_checks == 1
-                    or capital_gate_checks % CAPITAL_GATE_LOG_EVERY_N_CHECKS == 0
+            # ── FORCE_TRADE: skip capital gate loop if deadline passed ────────
+            if _ft_pre_loop_deadline_passed("capital_gate_loop"):
+                logger.warning(
+                    "⚡ FORCE_TRADE: skipping capital gate loop (deadline passed) — "
+                    "marking capital_ready and proceeding"
                 )
-                if _should_log_gate:
-                    logger.warning(
-                        "⏳ Trading loop blocked: waiting for total capital > $0 "
-                        "(current=$%.2f, check=#%d, next check in %ds)",
-                        _total_capital,
-                        capital_gate_checks,
-                        CAPITAL_GATE_INTERVAL_S,
+                try:
+                    _rt_mark_ready("capital_ready")
+                except Exception:
+                    pass
+                try:
+                    _bfsm_transition(
+                        _BootstrapState.CAPITAL_READY,
+                        "FORCE_TRADE capital gate deadline bypass",
                     )
-                    # ── Diagnostic: report the exact execution path that returned $0 ──
-                    _diag_mam = getattr(strategy, "multi_account_manager", None)
-                    _diag_bm = getattr(strategy, "broker_manager", None)
-                    logger.warning(
-                        "[CapGate-Diag] multi_account_manager=%s  broker_manager=%s",
-                        type(_diag_mam).__name__ if _diag_mam is not None else "None",
-                        type(_diag_bm).__name__ if _diag_bm is not None else "None",
-                    )
-                    if _diag_mam is not None:
-                        try:
-                            _diag_balances = _diag_mam.get_all_balances()
-                            logger.warning(
-                                "[CapGate-Diag] MAM.get_all_balances()=%s",
-                                _diag_balances,
-                            )
-                        except Exception as _diag_bal_err:
-                            logger.warning(
-                                "[CapGate-Diag] MAM.get_all_balances() raised: %s",
-                                _diag_bal_err,
-                            )
-                        _diag_has_reg = getattr(_diag_mam, "has_registered_brokers", None)
-                        _diag_has_conn = getattr(_diag_mam, "has_attempted_connections", None)
-                        logger.warning(
-                            "[CapGate-Diag] MAM.has_registered_brokers=%s  "
-                            "MAM.has_attempted_connections=%s",
-                            _diag_has_reg() if callable(_diag_has_reg) else _diag_has_reg,
-                            _diag_has_conn() if callable(_diag_has_conn) else _diag_has_conn,
-                        )
-                    if _diag_bm is not None:
-                        try:
-                            logger.warning(
-                                "[CapGate-Diag] BM.get_total_balance()=%.4f",
-                                float(_diag_bm.get_total_balance()),
-                            )
-                        except Exception as _diag_bm_err:
-                            logger.warning(
-                                "[CapGate-Diag] BM.get_total_balance() raised: %s",
-                                _diag_bm_err,
-                            )
-                    # ── Diagnostic: CapitalAuthority hydration state ──────────────
-                    if _bms_ca is not None:
-                        try:
-                            logger.warning(
-                                "[CapGate-Diag] CapitalAuthority.is_hydrated=%s  "
-                                "state=%s  total_capital=%.4f",
-                                _bms_ca.is_hydrated,
-                                getattr(_bms_ca, "state", "N/A"),
-                                float(getattr(_bms_ca, "total_capital", 0) or 0),
-                            )
-                        except Exception as _diag_ca_err:
-                            logger.warning(
-                                "[CapGate-Diag] CapitalAuthority probe raised: %s",
-                                _diag_ca_err,
-                            )
-                    # ── Diagnostic: trading state machine current state ───────────
+                except Exception:
+                    pass
+            else:
+                _capital_gate_deadline = time.time() + 60
+                while True:
+                    logger.debug("Capital gate loop iteration")
                     try:
-                        from bot.trading_state_machine import get_state_machine as _get_tsm_diag
-                        _tsm_diag = _get_tsm_diag()
+                        _total_capital = _get_startup_total_capital()
+                    except Exception as _cap_gate_err:
                         logger.warning(
-                            "[CapGate-Diag] TradingStateMachine.state=%s",
-                            _tsm_diag.get_current_state().value,
+                            "⚠️ Startup capital invariant check failed: %s",
+                            _cap_gate_err,
                         )
-                    except Exception as _diag_tsm_err:
+                        _total_capital = 0.0
+
+                    ca = _bms_ca
+                    # Per-pass diagnostic — tells exactly which field is stuck
+                    if ca is not None:
                         logger.warning(
-                            "[CapGate-Diag] TradingStateMachine probe raised: %s",
-                            _diag_tsm_err,
+                            "[CapGate] hydrated=%s state=%s total=%s ready=%s",
+                            ca.is_hydrated,
+                            ca.state,
+                            ca.total_capital,
+                            ca.is_ready(),
                         )
-                time.sleep(3)
-            logger.info("=" * 70)
-            # ── B: Phase 3 → 4 (strategy engine ready; execution layer may begin) ──
-            logger.info("Lifecycle: entering signal generation")
+
+                    # ── Blocker-2 self-heal: retry capital refresh if CA is not yet
+                    # hydrated.  The initial BOOTSTRAP_START call may have returned
+                    # "pending" when broker_map was still empty (brokers registered
+                    # but no balance payload yet).  Without retrying here the CA
+                    # never hydrates and the gate always times out after 60 s.
+                    if ca is not None and not ca.is_hydrated and _bms_mabm is not None:
+                        try:
+                            _bms_mabm.refresh_capital_authority(trigger="BOOTSTRAP_START")
+                            logger.info("[CapGate] Retried BOOTSTRAP_START capital refresh")
+                        except Exception as _retry_err:
+                            logger.debug("[CapGate] BOOTSTRAP_START retry error (non-fatal): %s", _retry_err)
+
+                    # Gate exit requires BOTH is_ready() (broker balances registered)
+                    # AND is_hydrated (publish_snapshot/refresh committed data) so that
+                    # maybe_auto_activate() — which checks is_hydrated via
+                    # _capital_readiness_gate() — never fails immediately after this
+                    # loop exits.  Exiting on is_ready() alone when is_hydrated=False
+                    # is the root cause of the PREFLIGHT→SUPERVISOR stuck loop.
+                    _ca_gate_ready = ca and ca.is_ready()
+                    _ca_gate_hydrated = ca and ca.is_hydrated
+                    _ca_gate_core_systems = ca is not None and hasattr(ca, 'is_hydrated')
+
+                    # FIX 3: Decouple system_ready from balance
+                    # System is ready when CORE SYSTEMS initialized, not when balance > 0
+                    if _ca_gate_core_systems and _ca_gate_hydrated:
+                        logger.info(
+                            "✅ CAPITAL GATE PASSED — CA hydrated with registered broker balances"
+                        )
+                        logger.info("🚀 SYSTEM READY — TRADING ENABLED")
+                        logger.info("💰 Startup total capital: $%.2f", _total_capital)
+                        try:
+                            _startup_execution_authority_status(
+                                context="capital_gate: capital_ready",
+                                force_refresh=True,
+                            )
+                        except Exception as _gate_signal_err:
+                            logger.warning(
+                                "Authority status probe failed during capital_ready signal: %s",
+                                _gate_signal_err,
+                            )
+                        try:
+                            _rt_mark_ready("capital_ready")
+                        except Exception as _gate_signal_err:
+                            raise RuntimeError(
+                                f"Startup readiness signal failed (capital_ready): {_gate_signal_err}"
+                            ) from _gate_signal_err
+
+                        # Capital gate owns only the CAPITAL_READY handoff.
+                        # INIT_COMPLETE/THREADS_STARTING/RUNNING_SUPERVISED are owned by
+                        # the canonical startup orchestration path below.
+                        logger.critical("LIFECYCLE: Capital ready - FSM state before transitions = %s", _bootstrap_state_value())
+                        _bfsm_transition(
+                            _BootstrapState.CAPITAL_READY,
+                            f"startup capital confirmed: ${_total_capital:.2f}",
+                        )
+                        logger.critical("LIFECYCLE: FSM state after CAPITAL_READY = %s", _bootstrap_state_value())
+                        break
+
+
+                    if time.time() > _capital_gate_deadline:
+                        logger.warning(
+                            "⚠️ CAPITAL GATE TIMEOUT (%.0fs) — forcing system to proceed in degraded mode",
+                            time.time() - (_capital_gate_deadline - 60),
+                        )
+                        logger.warning(
+                            "✅ CAPITAL GATE FORCED (DEGRADED) — core systems initialized"
+                        )
+                        logger.warning("🚀 SYSTEM READY — proceeding with zero or partial balance")
+                        try:
+                            _startup_execution_authority_status(
+                                context="capital_gate: degraded capital_ready",
+                                force_refresh=True,
+                            )
+                        except Exception as _gate_signal_err:
+                            logger.warning(
+                                "Authority status probe failed during degraded capital_ready signal: %s",
+                                _gate_signal_err,
+                            )
+                        try:
+                            _rt_mark_ready("capital_ready")
+                        except Exception as _gate_signal_err:
+                            raise RuntimeError(
+                                f"Startup readiness signal failed (capital_ready): {_gate_signal_err}"
+                            ) from _gate_signal_err
+
+                        # Degraded capital gate owns only the CAPITAL_READY handoff.
+                        logger.critical("LIFECYCLE: Capital ready (degraded) - FSM state before transitions = %s", _bootstrap_state_value())
+                        _bfsm_transition(
+                            _BootstrapState.CAPITAL_READY,
+                            "capital gate timeout — proceeding in degraded mode",
+                        )
+                        logger.critical("LIFECYCLE: FSM state after CAPITAL_READY = %s", _bootstrap_state_value())
+                        break
+
+
+
+                    capital_gate_checks += 1
+                    _should_log_gate = (
+                        capital_gate_checks == 1
+                        or capital_gate_checks % CAPITAL_GATE_LOG_EVERY_N_CHECKS == 0
+                    )
+                    if _should_log_gate:
+                        logger.warning(
+                            "⏳ Trading loop blocked: waiting for total capital > $0 "
+                            "(current=$%.2f, check=#%d, next check in %ds)",
+                            _total_capital,
+                            capital_gate_checks,
+                            CAPITAL_GATE_INTERVAL_S,
+                        )
+                        # ── Diagnostic: report the exact execution path that returned $0 ──
+                        _diag_mam = getattr(strategy, "multi_account_manager", None)
+                        _diag_bm = getattr(strategy, "broker_manager", None)
+                        logger.warning(
+                            "[CapGate-Diag] multi_account_manager=%s  broker_manager=%s",
+                            type(_diag_mam).__name__ if _diag_mam is not None else "None",
+                            type(_diag_bm).__name__ if _diag_bm is not None else "None",
+                        )
+                        if _diag_mam is not None:
+                            try:
+                                _diag_balances = _diag_mam.get_all_balances()
+                                logger.warning(
+                                    "[CapGate-Diag] MAM.get_all_balances()=%s",
+                                    _diag_balances,
+                                )
+                            except Exception as _diag_bal_err:
+                                logger.warning(
+                                    "[CapGate-Diag] MAM.get_all_balances() raised: %s",
+                                    _diag_bal_err,
+                                )
+                            _diag_has_reg = getattr(_diag_mam, "has_registered_brokers", None)
+                            _diag_has_conn = getattr(_diag_mam, "has_attempted_connections", None)
+                            logger.warning(
+                                "[CapGate-Diag] MAM.has_registered_brokers=%s  "
+                                "MAM.has_attempted_connections=%s",
+                                _diag_has_reg() if callable(_diag_has_reg) else _diag_has_reg,
+                                _diag_has_conn() if callable(_diag_has_conn) else _diag_has_conn,
+                            )
+                        if _diag_bm is not None:
+                            try:
+                                logger.warning(
+                                    "[CapGate-Diag] BM.get_total_balance()=%.4f",
+                                    float(_diag_bm.get_total_balance()),
+                                )
+                            except Exception as _diag_bm_err:
+                                logger.warning(
+                                    "[CapGate-Diag] BM.get_total_balance() raised: %s",
+                                    _diag_bm_err,
+                                )
+                        # ── Diagnostic: CapitalAuthority hydration state ──────────────
+                        if _bms_ca is not None:
+                            try:
+                                logger.warning(
+                                    "[CapGate-Diag] CapitalAuthority.is_hydrated=%s  "
+                                    "state=%s  total_capital=%.4f",
+                                    _bms_ca.is_hydrated,
+                                    getattr(_bms_ca, "state", "N/A"),
+                                    float(getattr(_bms_ca, "total_capital", 0) or 0),
+                                )
+                            except Exception as _diag_ca_err:
+                                logger.warning(
+                                    "[CapGate-Diag] CapitalAuthority probe raised: %s",
+                                    _diag_ca_err,
+                                )
+                        # ── Diagnostic: trading state machine current state ───────────
+                        try:
+                            from bot.trading_state_machine import get_state_machine as _get_tsm_diag
+                            _tsm_diag = _get_tsm_diag()
+                            logger.warning(
+                                "[CapGate-Diag] TradingStateMachine.state=%s",
+                                _tsm_diag.get_current_state().value,
+                            )
+                        except Exception as _diag_tsm_err:
+                            logger.warning(
+                                "[CapGate-Diag] TradingStateMachine probe raised: %s",
+                                _diag_tsm_err,
+                            )
+                    time.sleep(3)
+
             if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
                 logger.info(
                     "Execution enablement deferred until final bootstrap unlock "
@@ -8717,10 +8785,17 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 logger.warning("Startup readiness signal failed (nonce_ready): %s", _gate_nonce_err)
 
             logger.info("READINESS TABLE before THREADS_STARTING gate (diagnostic): %s", _rt_snapshot())
-            _criteria, _required_missing, _optional_missing, _policy_deadline = _evaluate_startup_readiness_policy(
-                context="init_complete->threads_starting",
-                timeout_s=_STARTUP_POLICY_EVAL_TIMEOUT_S,
-            )
+            # ── FORCE_TRADE: skip readiness policy evaluation if deadline passed ─
+            if _ft_pre_loop_deadline_passed("evaluate_startup_readiness_policy"):
+                logger.warning(
+                    "⚡ FORCE_TRADE: skipping _evaluate_startup_readiness_policy (deadline passed)"
+                )
+                _criteria, _required_missing, _optional_missing, _policy_deadline = {}, [], [], time.monotonic()
+            else:
+                _criteria, _required_missing, _optional_missing, _policy_deadline = _evaluate_startup_readiness_policy(
+                    context="init_complete->threads_starting",
+                    timeout_s=_STARTUP_POLICY_EVAL_TIMEOUT_S,
+                )
             if _required_missing:
                 logger.critical(
                     "STARTUP_POLICY_BLOCKED context=init_complete->threads_starting state=%s "
@@ -8754,8 +8829,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     f"optional startup criteria timed out before THREADS_STARTING: {_optional_missing}",
                 )
 
-            # Advance bootstrap FSM to THREADS_STARTING only after all readiness
-            # conditions are confirmed so that any failure above leaves the FSM at
             # INIT_COMPLETE (from which reset_for_retry can reach BOOT_FAILED_RETRY).
             if _BOOTSTRAP_FSM_AVAILABLE:
                 _bfsm_transition(
@@ -8885,14 +8958,25 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 ],
             )
 
-            logger.critical(
-                "LIFECYCLE: entering strategy scheduler"
-            )
+
+            logger.critical("LIFECYCLE: entering strategy scheduler")
             logger.critical("LIFECYCLE: entering market scanner")
             _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
-            if not _enable_execution_after_bootstrap_supervised(
-                context="threads live (pre-handoff)"
-            ):
+
+
+            if _ft_pre_loop_deadline_passed("enable_execution_after_bootstrap_supervised"):
+                logger.warning(
+                    "⚡ FORCE_TRADE: skipping _enable_execution_after_bootstrap_supervised (deadline passed) — "
+                    "enabling execution directly"
+                )
+                os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                _enable_exec_ok = True
+            else:
+                _enable_exec_ok = _enable_execution_after_bootstrap_supervised(
+                    context="threads live (pre-handoff)"
+                )
+            if not _enable_exec_ok:
                 raise RuntimeError(
                     "Startup blocked: final bootstrap unlock did not complete before enabling execution"
                 )
@@ -8963,10 +9047,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # Skip the polling loop and proceed directly to B2 so B1 runs exactly once.
             with _b1_executed_lock:
                 _barrier_b1_skip = _b1_executed
+            # ── FORCE_TRADE: skip B1 preflight barrier if deadline passed ─────
+            if not _barrier_b1_skip and _ft_pre_loop_deadline_passed("b1_preflight_barrier"):
+                logger.warning(
+                    "⚡ FORCE_TRADE: skipping B1 preflight barrier (deadline passed) — "
+                    "marking B1 executed and proceeding to B2"
+                )
+                with _b1_executed_lock:
+                    globals()["_b1_executed"] = True
+                _barrier_b1_skip = True
             if _barrier_b1_skip:
                 logger.info("B1 preflight guard skipped: already executed by bootstrap kernel; advancing to B2")
             else:
-                logger.info("B1 preflight barrier entered")
+
                 _bce_first_snap = False
                 _bce_brokers_ready = False
                 _bce_capital_fsm_ready = False
