@@ -6860,6 +6860,82 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     except Exception as _startup_activation_err:
                         logger.warning("Startup-thread activation status probe failed: %s", _startup_activation_err)
 
+                    # ── FORCE_TRADE: start trading engine immediately, skip all gates ──
+                    if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
+                        logger.warning(
+                            "⚡ FORCE_TRADE: capability verification complete — "
+                            "starting trading engine DIRECTLY (skipping RUNNING_SUPERVISED gate)"
+                        )
+                        _cap_strategy = _ft_state_snapshot.get("strategy")
+                        if _cap_strategy is None:
+                            logger.warning(
+                                "⚡ FORCE_TRADE: strategy not in snapshot — waiting up to 30s"
+                            )
+                            _cap_deadline = time.monotonic() + 30.0
+                            while _cap_strategy is None and time.monotonic() < _cap_deadline:
+                                time.sleep(0.5)
+                                _cap_strategy = _read_initialized_state_snapshot(
+                                    context="FORCE_TRADE capability-verification direct start"
+                                ).get("strategy")
+                        if _cap_strategy is not None:
+                            # Force FSM to RUNNING_SUPERVISED before starting engine.
+                            try:
+                                _try_finalize_running_supervised_handoff(
+                                    reason="FORCE_TRADE capability-verification direct start",
+                                    completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (capability-verification path)",
+                                    set_bootstrap_events=True,
+                                )
+                            except Exception as _cap_fsm_err:
+                                logger.warning(
+                                    "⚡ FORCE_TRADE: FSM handoff raised (non-fatal): %s", _cap_fsm_err
+                                )
+                            os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+                            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                            # Signal TRADING_ENGINE_READY so run_trading_loop() does not wait.
+                            try:
+                                try:
+                                    from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_cap
+                                except ImportError:
+                                    from nija_core_loop import TRADING_ENGINE_READY as _ter_cap  # type: ignore[import]
+                                if not _ter_cap.is_set():
+                                    logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (capability-verification path)")
+                                    _ter_cap.set()
+                            except Exception as _ter_cap_err:
+                                logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY: %s", _ter_cap_err)
+                            # Start the trading engine directly — do NOT defer to any gate.
+                            logger.warning(
+                                "⚡ FORCE_TRADE: calling start_trading_engine() directly from capability-verification path"
+                            )
+                            try:
+                                try:
+                                    from bot.nija_core_loop import start_trading_engine as _ste_cap
+                                except ImportError:
+                                    from nija_core_loop import start_trading_engine as _ste_cap  # type: ignore[import]
+                                _cap_thread = _ste_cap(_cap_strategy)
+                                if _cap_thread is not None and _cap_thread.is_alive():
+                                    _bootstrap_complete_flag.set()
+                                    _bootstrap_completed_event.set()
+                                    logger.warning(
+                                        "⚡ FORCE_TRADE: trading engine started successfully from "
+                                        "capability-verification path — bootstrap complete"
+                                    )
+                                    return
+                                else:
+                                    logger.error(
+                                        "⚡ FORCE_TRADE: trading engine thread did not start from "
+                                        "capability-verification path — falling through to normal startup"
+                                    )
+                            except Exception as _ste_cap_err:
+                                logger.error(
+                                    "⚡ FORCE_TRADE: failed to start trading engine from "
+                                    "capability-verification path: %s", _ste_cap_err
+                                )
+                        else:
+                            logger.error(
+                                "⚡ FORCE_TRADE: strategy still None after 30s — "
+                                "falling through to normal startup path"
+                            )
+
                     # Do NOT release bootstrap events here — the startup thread must not
                     # signal completion before the full system_ready barrier is satisfied
                     # (strategy_ready + broker_ready + risk_ready + capital_ready +
@@ -6869,12 +6945,6 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         "Startup-thread capability verification complete — "
                         "deferring bootstrap event release to RUNNING_SUPERVISED gate"
                     )
-
-                    if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
-                        logger.warning(
-                            "FORCE_TRADE active — capability checks bypassed where applicable; "
-                            "startup readiness barrier remains enforced (post-capability)"
-                        )
             except Exception as e:
                 logger.warning(f"⚠️  Could not verify trading capability: {e}")
 
