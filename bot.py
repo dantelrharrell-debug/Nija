@@ -493,20 +493,47 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         if _strategy is None:
             logger.warning(
                 "⚡ FORCE_TRADE: no strategy in initialized state yet — "
-                "waiting up to 30s before giving up (reason=%s)",
+                "waiting up to 10s before force-creating (reason=%s)",
                 reason,
             )
-            _ft_deadline = time.monotonic() + 30.0
+            _ft_deadline = time.monotonic() + 10.0
             while _strategy is None and time.monotonic() < _ft_deadline:
                 time.sleep(0.5)
                 _state_snapshot = dict(_initialized_state)
                 _strategy = _state_snapshot.get("strategy")
+        # ── FORCE_TRADE: create strategy immediately if still missing ─────────
         if _strategy is None:
-            logger.error(
-                "⚡ FORCE_TRADE: strategy still None after 30s wait — cannot start trading loop (reason=%s)",
+            logger.warning(
+                "⚡ FORCE_TRADE: strategy still None after 10s — "
+                "creating HF scalping strategy immediately (reason=%s)",
                 reason,
             )
-            return False
+            try:
+                _strategy = TradingStrategy()
+                _ft_sl_lock = _initialized_state_lock.acquire(timeout=5.0)
+                if _ft_sl_lock:
+                    try:
+                        _publish_strategy_runtime_readiness(
+                            _strategy,
+                            context=f"FORCE_TRADE _start_trading_loop force-create ({reason})",
+                        )
+                    finally:
+                        _initialized_state_lock.release()
+                else:
+                    _initialized_state["strategy"] = _strategy
+                    _rt_mark_ready("strategy_ready")
+                    _rt_mark_ready("risk_ready")
+                    _rt_mark_ready("execution_ready")
+                logger.warning(
+                    "⚡ FORCE_TRADE: strategy created and published (reason=%s)", reason
+                )
+            except Exception as _ft_sl_err:
+                logger.error(
+                    "⚡ FORCE_TRADE: strategy force-create failed: %s — cannot start trading loop (reason=%s)",
+                    _ft_sl_err,
+                    reason,
+                )
+                return False
         # Force all readiness flags so downstream checks pass.
         for _gate in ("broker_connected", "strategy_ready", "risk_ready", "authority_ready",
                       "capital_ready", "execution_ready", "balance_hydrated", "bootstrap_ready"):
@@ -1454,25 +1481,38 @@ def _ensure_strategy_fallback_published(*, context: str) -> bool:
                 _initialized_state_lock.release()
         return True
 
-    _authority = _startup_execution_authority_status(
-        context=f"{context}: fallback authority precheck",
-        force_refresh=True,
+    # ── FORCE_TRADE / HF_SCALP_MODE: bypass authority gate entirely ──────────
+    _ft_force = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("HF_SCALP_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
     )
-    _authority_details = _authority.get("authority_status", {})
-    _strict_required = bool(
-        _authority_details.get(
-            "effective_strict_required",
-            _authority_details.get("strict_required", False),
+    if not _ft_force:
+        _authority = _startup_execution_authority_status(
+            context=f"{context}: fallback authority precheck",
+            force_refresh=True,
         )
-    )
-    if _strict_required and not bool(_authority.get("ready", False)):
+        _authority_details = _authority.get("authority_status", {})
+        _strict_required = bool(
+            _authority_details.get(
+                "effective_strict_required",
+                _authority_details.get("strict_required", False),
+            )
+        )
+        if _strict_required and not bool(_authority.get("ready", False)):
+            logger.warning(
+                "Default strategy fallback blocked: startup execution authority not ready "
+                "(context=%s missing=%s)",
+                context,
+                _authority.get("missing", []),
+            )
+            return False
+    else:
         logger.warning(
-            "Default strategy fallback blocked: startup execution authority not ready "
-            "(context=%s missing=%s)",
+            "⚡ FORCE_TRADE/HF_SCALP_MODE: bypassing authority gate in "
+            "_ensure_strategy_fallback_published — creating strategy immediately (%s)",
             context,
-            _authority.get("missing", []),
         )
-        return False
 
     logger.warning("No strategy published yet — attempting default strategy fallback (%s)", context)
     logger.warning("Fallback uses TradingStrategy default constructor in degraded startup mode (%s)", context)
@@ -6451,23 +6491,50 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 _ter_nb.set()
         except Exception as _ter_nb_err:
             logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY: %s", _ter_nb_err)
-        # Wait briefly for strategy to be published (up to 60 s).
+        # Wait briefly for strategy to be published (up to 15 s).
         _ft_strategy = _read_initialized_state_snapshot(
             context="FORCE_TRADE nuclear bypass"
         ).get("strategy")
         if _ft_strategy is None:
-            logger.warning("⚡ FORCE_TRADE: strategy not yet in state — waiting up to 60s")
-            _ft_nb_deadline = time.monotonic() + 60.0
+            logger.warning("⚡ FORCE_TRADE: strategy not yet in state — waiting up to 15s")
+            _ft_nb_deadline = time.monotonic() + 15.0
             while _ft_strategy is None and time.monotonic() < _ft_nb_deadline:
                 time.sleep(0.5)
                 _ft_strategy = _read_initialized_state_snapshot(
                     context="FORCE_TRADE nuclear bypass wait"
                 ).get("strategy")
+        # ── FORCE_TRADE: if strategy still missing, create it immediately ────
         if _ft_strategy is None:
-            logger.error(
-                "⚡ FORCE_TRADE: strategy still None after 60s — falling through to normal startup"
+            logger.warning(
+                "⚡ FORCE_TRADE: strategy still None after 15s — "
+                "creating HF scalping strategy immediately (nuclear bypass)"
             )
-        else:
+            try:
+                _ft_strategy = TradingStrategy()
+                _ft_lock_acquired = _initialized_state_lock.acquire(timeout=5.0)
+                if _ft_lock_acquired:
+                    try:
+                        _publish_strategy_runtime_readiness(
+                            _ft_strategy,
+                            context="FORCE_TRADE nuclear bypass force-create",
+                        )
+                    finally:
+                        _initialized_state_lock.release()
+                else:
+                    # Lock unavailable — publish without lock as last resort
+                    _initialized_state["strategy"] = _ft_strategy
+                    _rt_mark_ready("strategy_ready")
+                    _rt_mark_ready("risk_ready")
+                    _rt_mark_ready("execution_ready")
+                logger.warning(
+                    "⚡ FORCE_TRADE: strategy created and published to initialized state (nuclear bypass)"
+                )
+            except Exception as _ft_create_err:
+                logger.error(
+                    "⚡ FORCE_TRADE: strategy force-create failed: %s — falling through to normal startup",
+                    _ft_create_err,
+                )
+        if _ft_strategy is not None:
             logger.warning("⚡ FORCE_TRADE: starting trading engine immediately (nuclear bypass)")
             try:
                 from bot.nija_core_loop import start_trading_engine as _ste_nb
@@ -9478,18 +9545,49 @@ def main():
                 _ter_main.set()
         except Exception as _ter_main_err:
             logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY in main: %s", _ter_main_err)
-        # Wait for strategy (up to 90 s) then start trading engine directly.
+        # Wait for strategy (up to 15 s) then create it immediately if still missing.
         _ft_main_strategy = _read_initialized_state_snapshot(
             context="FORCE_TRADE main bypass"
         ).get("strategy")
         if _ft_main_strategy is None:
-            logger.warning("⚡ FORCE_TRADE: strategy not yet available in main — waiting up to 90s")
-            _ft_main_deadline = time.monotonic() + 90.0
+            logger.warning("⚡ FORCE_TRADE: strategy not yet available in main — waiting up to 15s")
+            _ft_main_deadline = time.monotonic() + 15.0
             while _ft_main_strategy is None and time.monotonic() < _ft_main_deadline:
                 time.sleep(0.5)
                 _ft_main_strategy = _read_initialized_state_snapshot(
                     context="FORCE_TRADE main bypass wait"
                 ).get("strategy")
+        # ── FORCE_TRADE: if strategy still missing, create it immediately ────
+        if _ft_main_strategy is None:
+            logger.warning(
+                "⚡ FORCE_TRADE: strategy still None after 15s in main() — "
+                "creating HF scalping strategy immediately (main bypass)"
+            )
+            try:
+                _ft_main_strategy = TradingStrategy()
+                _ft_main_lock_acquired = _initialized_state_lock.acquire(timeout=5.0)
+                if _ft_main_lock_acquired:
+                    try:
+                        _publish_strategy_runtime_readiness(
+                            _ft_main_strategy,
+                            context="FORCE_TRADE main bypass force-create",
+                        )
+                    finally:
+                        _initialized_state_lock.release()
+                else:
+                    # Lock unavailable — publish without lock as last resort
+                    _initialized_state["strategy"] = _ft_main_strategy
+                    _rt_mark_ready("strategy_ready")
+                    _rt_mark_ready("risk_ready")
+                    _rt_mark_ready("execution_ready")
+                logger.warning(
+                    "⚡ FORCE_TRADE: strategy created and published to initialized state (main bypass)"
+                )
+            except Exception as _ft_main_create_err:
+                logger.error(
+                    "⚡ FORCE_TRADE: strategy force-create failed in main(): %s — continuing to observer wait",
+                    _ft_main_create_err,
+                )
         if _ft_main_strategy is not None:
             logger.warning("⚡ FORCE_TRADE: starting trading engine from main() nuclear bypass")
             try:
@@ -9505,7 +9603,7 @@ def main():
             else:
                 logger.error("⚡ FORCE_TRADE: trading engine thread did not start from main() — continuing to observer wait")
         else:
-            logger.error("⚡ FORCE_TRADE: strategy still None after 90s in main() — continuing to observer wait")
+            logger.error("⚡ FORCE_TRADE: strategy still None after force-create attempt in main() — continuing to observer wait")
 
     # READINESS DEBUG: snapshot flag state immediately before entering the
     # system_ready wait loop so the log shows which subsystem is blocked even
