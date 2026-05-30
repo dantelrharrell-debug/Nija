@@ -9220,7 +9220,12 @@ def main():
     # Single authoritative wait: main thread observes BootstrapFSM progression
     # with a bounded timeout and explicit failure state handling.
     logger.info("🧭 Before bootstrap observer wait")
+    # Tracks whether FORCE_TRADE nuclear bypass already started the trading
+    # engine so we can skip the observer wait / strategy wait / duplicate
+    # start_trading_engine() call below and go straight to the supervisor loop.
+    _ft_bypass_complete = False
     if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
+
         logger.warning(
             "⚡ FORCE_TRADE: NUCLEAR BYPASS — skipping bootstrap observer barrier in main(); "
             "forcing all readiness gates and starting trading engine immediately"
@@ -9309,151 +9314,166 @@ def main():
                 _bootstrap_complete_flag.set()
                 _bootstrap_completed_event.set()
                 logger.warning("⚡ FORCE_TRADE: trading engine started from main() — nuclear bypass complete")
-                # Fall through to the supervisor keep-alive loop below.
+                # Mark bypass complete so we skip the observer wait / strategy
+                # wait / duplicate start_trading_engine() call below and go
+                # directly to the supervisor keep-alive loop.
+                _ft_bypass_complete = True
             else:
                 logger.error("⚡ FORCE_TRADE: trading engine thread did not start from main() — continuing to observer wait")
         else:
             logger.error("⚡ FORCE_TRADE: strategy still None after force-create attempt in main() — continuing to observer wait")
 
-    # READINESS DEBUG: snapshot flag state immediately before entering the
-    # system_ready wait loop so the log shows which subsystem is blocked even
-    # on the very first poll.
-    try:
-        _pre_snap = _read_initialized_state_snapshot(context="pre-system-ready-wait debug")
-        _pre_ready_tuple = _compute_system_ready(_pre_snap)
-        # _pre_ready_tuple: (system_ready, broker, risk, strategy, capital, execution)
-        _dbg_broker   = _pre_ready_tuple[1]
-        _dbg_risk     = _pre_ready_tuple[2]
-        _dbg_strategy = _pre_ready_tuple[3]
-        _dbg_capital  = _pre_ready_tuple[4]
-        _dbg_exec     = _pre_ready_tuple[5]
-        logger.info(
-            "READINESS DEBUG | broker=%s risk=%s strategy=%s capital=%s execution=%s",
-            _dbg_broker,
-            _dbg_risk,
-            _dbg_strategy,
-            _dbg_capital,
-            _dbg_exec,
-        )
-    except Exception as _pre_snap_err:
-        logger.debug("READINESS DEBUG snapshot failed (non-fatal): %s", _pre_snap_err)
 
+    # Ensure strategy is always defined before the supervisor loop, even when
+    # the FORCE_TRADE bypass already started the trading engine above.
     strategy = None
-    _observer_ok, _observer_state = _wait_for_bootstrap_observer_ready(
-        context="main startup observer wait",
-    )
-    if not _observer_ok:
-        dump_startup_state("BOOTSTRAP_OBSERVER_FAILED")
-        raise RuntimeError(
-            f"Startup blocked: bootstrap observer timed out/failed (state={_observer_state})"
-        )
-    _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
-    strategy = _state_snapshot.get("strategy")
-    system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
-        _compute_system_ready(_state_snapshot)
-    logger.info(
-        "✅ BOOTSTRAP OBSERVER READY: state=%s broker_ready=%s risk_ready=%s strategy_ready=%s "
-        "capital_ready=%s execution_ready=%s",
-        _observer_state,
-        broker_ready,
-        risk_ready,
-        strategy_ready,
-        capital_ready,
-        execution_ready,
-    )
+    if not _ft_bypass_complete:
 
-    # ── HARD GUARD: never enter trading loop without a valid strategy ─────────
-    if strategy is None:
-        logger.warning(
-            "⏳ strategy not yet initialized; waiting until startup thread publishes strategy"
-        )
-        _last_strategy_wait_log = 0.0
-        _strategy_wait_started = time.monotonic()
-        _strategy_wait_deadline = _strategy_wait_started + _STRATEGY_PUBLICATION_TIMEOUT_S
-        _fallback_attempted = False
-        while strategy is None:
-            _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait")
-            strategy = _state_snapshot.get("strategy")
-            if strategy is not None:
-                logger.info("✅ strategy became available - continuing startup")
-                break
+        # READINESS DEBUG: snapshot flag state immediately before entering the
+        # system_ready wait loop so the log shows which subsystem is blocked even
+        # on the very first poll.
 
-            _now = time.monotonic()
-            if _now >= _strategy_wait_deadline:
-                # ── DEGRADED-MODE FALLBACK ────────────────────────────────────
-                # Strategy publication timed out — most commonly caused by Redis
-                # SSL connection failures blocking the distributed writer lock.
-                # When degraded mode is permitted (NIJA_ASSUME_SINGLE_INSTANCE
-                # or explicit unsafe/local fallback flags), attempt one final fallback
-                # strategy construction and proceed in local-only mode rather
-                # than crashing the process.
-                _degraded_allowed = (
-                    os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _TRUTHY_ENV_VALUES
-                    or os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _TRUTHY_ENV_VALUES
-                    or os.environ.get("NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in _TRUTHY_ENV_VALUES
-                )
-                if _degraded_allowed:
-                    logger.warning(
-                        "⚠️  Strategy publication timed out after %.1fs — "
-                        "proceeding in local-only mode (Redis unavailable). "
-                        "Distributed locking remains strictly enforced where required.",
-                        _STRATEGY_PUBLICATION_TIMEOUT_S,
-                    )
-                    # One final attempt to construct a fallback strategy before
-                    # entering the trading loop without a published strategy.
-                    if not _fallback_attempted:
-                        _ensure_strategy_fallback_published(
-                            context="supervisor degraded timeout fallback"
-                        )
-                        _state_snapshot = _read_initialized_state_snapshot(
-                            context="degraded_timeout_fallback"
-                        )
-                        strategy = _state_snapshot.get("strategy")
-                    if strategy is not None:
-                        logger.warning(
-                            "✅ Degraded fallback strategy constructed — entering trading loop "
-                            "in local-only mode (no distributed lock)"
-                        )
-                        break
-                    # Strategy construction also failed — log and break out so
-                    # the trading loop can handle a None strategy gracefully
-                    # rather than blocking the process indefinitely.
-                    logger.error(
-                        "❌ Degraded fallback strategy construction failed — "
-                        "entering trading loop with no strategy object. "
-                        "Bot will operate in safe/no-trade mode until strategy recovers."
-                    )
-                    break
-                raise RuntimeError(
-                    "Startup blocked: strategy publication timed out after bootstrap observer readiness"
-                )
-            if (
-                not _fallback_attempted
-                and (_now - _strategy_wait_started) >= _STRATEGY_FALLBACK_GRACE_PERIOD_S
-            ):
-                _fallback_attempted = True
-                _ensure_strategy_fallback_published(context="supervisor degraded strategy wait")
-                _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait_post_fallback")
+        try:
+            _pre_snap = _read_initialized_state_snapshot(context="pre-system-ready-wait debug")
+            _pre_ready_tuple = _compute_system_ready(_pre_snap)
+            # _pre_ready_tuple: (system_ready, broker, risk, strategy, capital, execution)
+            _dbg_broker   = _pre_ready_tuple[1]
+            _dbg_risk     = _pre_ready_tuple[2]
+            _dbg_strategy = _pre_ready_tuple[3]
+            _dbg_capital  = _pre_ready_tuple[4]
+            _dbg_exec     = _pre_ready_tuple[5]
+            logger.info(
+                "READINESS DEBUG | broker=%s risk=%s strategy=%s capital=%s execution=%s",
+                _dbg_broker,
+                _dbg_risk,
+                _dbg_strategy,
+                _dbg_capital,
+                _dbg_exec,
+            )
+        except Exception as _pre_snap_err:
+            logger.debug("READINESS DEBUG snapshot failed (non-fatal): %s", _pre_snap_err)
+
+        _observer_ok, _observer_state = _wait_for_bootstrap_observer_ready(
+            context="main startup observer wait",
+        )
+
+        if not _observer_ok:
+            dump_startup_state("BOOTSTRAP_OBSERVER_FAILED")
+            raise RuntimeError(
+                f"Startup blocked: bootstrap observer timed out/failed (state={_observer_state})"
+            )
+        _state_snapshot = _read_initialized_state_snapshot(context="supervisor system_ready probe")
+        strategy = _state_snapshot.get("strategy")
+        system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
+            _compute_system_ready(_state_snapshot)
+        logger.info(
+            "✅ BOOTSTRAP OBSERVER READY: state=%s broker_ready=%s risk_ready=%s strategy_ready=%s "
+            "capital_ready=%s execution_ready=%s",
+            _observer_state,
+            broker_ready,
+            risk_ready,
+            strategy_ready,
+            capital_ready,
+            execution_ready,
+        )
+
+        # ── HARD GUARD: never enter trading loop without a valid strategy ─────────
+        if strategy is None:
+            logger.warning(
+                "⏳ strategy not yet initialized; waiting until startup thread publishes strategy"
+            )
+            _last_strategy_wait_log = 0.0
+            _strategy_wait_started = time.monotonic()
+            _strategy_wait_deadline = _strategy_wait_started + _STRATEGY_PUBLICATION_TIMEOUT_S
+            _fallback_attempted = False
+            while strategy is None:
+                _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait")
                 strategy = _state_snapshot.get("strategy")
                 if strategy is not None:
-                    logger.info("✅ strategy fallback published - continuing startup")
+                    logger.info("✅ strategy became available - continuing startup")
                     break
 
-            if _now - _last_strategy_wait_log >= 60.0:
-                logger.warning(
-                    "⏳ still waiting for strategy publication (process stays alive; health server remains ready)"
-                )
-                _last_strategy_wait_log = _now
-            time.sleep(2.0)
+                _now = time.monotonic()
+                if _now >= _strategy_wait_deadline:
+                    # ── DEGRADED-MODE FALLBACK ────────────────────────────────────
+                    # Strategy publication timed out — most commonly caused by Redis
+                    # SSL connection failures blocking the distributed writer lock.
+                    # When degraded mode is permitted (NIJA_ASSUME_SINGLE_INSTANCE
+                    # or explicit unsafe/local fallback flags), attempt one final fallback
+                    # strategy construction and proceed in local-only mode rather
+                    # than crashing the process.
+                    _degraded_allowed = (
+                        os.environ.get("NIJA_ASSUME_SINGLE_INSTANCE", "").strip().lower() in _TRUTHY_ENV_VALUES
+                        or os.environ.get("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "").strip().lower() in _TRUTHY_ENV_VALUES
+                        or os.environ.get("NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in _TRUTHY_ENV_VALUES
+                    )
+                    if _degraded_allowed:
+                        logger.warning(
+                            "⚠️  Strategy publication timed out after %.1fs — "
+                            "proceeding in local-only mode (Redis unavailable). "
+                            "Distributed locking remains strictly enforced where required.",
+                            _STRATEGY_PUBLICATION_TIMEOUT_S,
+                        )
+                        # One final attempt to construct a fallback strategy before
+                        # entering the trading loop without a published strategy.
+                        if not _fallback_attempted:
+                            _ensure_strategy_fallback_published(
+                                context="supervisor degraded timeout fallback"
+                            )
+                            _state_snapshot = _read_initialized_state_snapshot(
+                                context="degraded_timeout_fallback"
+                            )
+                            strategy = _state_snapshot.get("strategy")
+                        if strategy is not None:
+                            logger.warning(
+                                "✅ Degraded fallback strategy constructed — entering trading loop "
+                                "in local-only mode (no distributed lock)"
+                            )
+                            break
+                        # Strategy construction also failed — log and break out so
+                        # the trading loop can handle a None strategy gracefully
+                        # rather than blocking the process indefinitely.
+                        logger.error(
+                            "❌ Degraded fallback strategy construction failed — "
+                            "entering trading loop with no strategy object. "
+                            "Bot will operate in safe/no-trade mode until strategy recovers."
+                        )
+                        break
+                    raise RuntimeError(
+                        "Startup blocked: strategy publication timed out after bootstrap observer readiness"
+                    )
+                if (
+                    not _fallback_attempted
+                    and (_now - _strategy_wait_started) >= _STRATEGY_FALLBACK_GRACE_PERIOD_S
+                ):
+                    _fallback_attempted = True
+                    _ensure_strategy_fallback_published(context="supervisor degraded strategy wait")
+                    _state_snapshot = _read_initialized_state_snapshot(context="degraded_strategy_wait_post_fallback")
+                    strategy = _state_snapshot.get("strategy")
+                    if strategy is not None:
+                        logger.info("✅ strategy fallback published - continuing startup")
+                        break
 
-    logger.info("🚀 Entering main trading loop")
-    logger.info("Step 6: entering main trading loop")
-    from bot.nija_core_loop import start_trading_engine
-    logger.info("STRATEGY_LOOP_ENTRY marker=main_supervisor_handoff")
-    _trading_thread = start_trading_engine(strategy)
-    if _trading_thread is None or not _trading_thread.is_alive():
-        raise RuntimeError("TradingLoop thread failed to start")
-    logger.info("✅ TradingLoop started via start_trading_engine()")
+                if _now - _last_strategy_wait_log >= 60.0:
+                    logger.warning(
+                        "⏳ still waiting for strategy publication (process stays alive; health server remains ready)"
+                    )
+                    _last_strategy_wait_log = _now
+                time.sleep(2.0)
+
+        logger.info("🚀 Entering main trading loop")
+        logger.info("Step 6: entering main trading loop")
+        from bot.nija_core_loop import start_trading_engine
+        logger.info("STRATEGY_LOOP_ENTRY marker=main_supervisor_handoff")
+        _trading_thread = start_trading_engine(strategy)
+        if _trading_thread is None or not _trading_thread.is_alive():
+            raise RuntimeError("TradingLoop thread failed to start")
+        logger.info("✅ TradingLoop started via start_trading_engine()")
+    else:
+        logger.warning(
+            "⚡ FORCE_TRADE: skipping readiness wait loop and start_trading_engine() — "
+            "trading engine already started via nuclear bypass"
+        )
 
     _trading_loop_alive = any(
         _t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()
@@ -9464,6 +9484,8 @@ def main():
         _trading_loop_alive,
         strategy is not None,
     )
+
+
 
     # ═══════════════════════════════════════════════════════════════════════
     # ✅ STARTUP COMPLETION - PRINT DISTINCTIVE MARKER
