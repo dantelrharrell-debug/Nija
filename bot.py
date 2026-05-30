@@ -1257,7 +1257,23 @@ def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tup
         _criteria = {"broker_connected": True, "nonce_ready": True, "first_snap": True}
         return _criteria, [], [], time.monotonic()
 
+    # ── FORCE_TRADE: aggressive 5-second timeout bypass ──────────────────────
+    # Capture loop entry time so we can break out after 5 s regardless of gate
+    # state.  This is a last-resort escape hatch that does not rely on any
+    # coordinator state check — pure time-based.
+    _ft_loop_start = time.monotonic()
+
     while time.monotonic() < _deadline:
+        # ── FORCE_TRADE: 5-second hard timeout — break unconditionally ────────
+        if _force_trade_active and (time.monotonic() - _ft_loop_start) > 5.0:
+            logger.warning(
+                "⚡ FORCE_TRADE: 5s timeout reached in readiness policy wait loop — "
+                "breaking out unconditionally (%s)",
+                context,
+            )
+            _criteria = {"broker_connected": True, "nonce_ready": True, "first_snap": True}
+            return _criteria, [], [], time.monotonic()
+
         # ── FORCE_TRADE: check if activation occurred mid-loop ─────────────────
         # If the activation thread incremented the coordinator version while we
         # were waiting, break out immediately — do NOT re-validate gates.
@@ -1374,8 +1390,23 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
     _last_logged_state: str = ""
     _last_state_log = time.monotonic()
     _state_log_interval = 10.0
+    # ── FORCE_TRADE: aggressive 5-second timeout bypass ──────────────────────
+    _obs_ft_loop_start = time.monotonic()
+    _obs_force_trade_active = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    )
 
     while time.monotonic() < _deadline:
+        # ── FORCE_TRADE: 5-second hard timeout — break unconditionally ────────
+        if _obs_force_trade_active and (time.monotonic() - _obs_ft_loop_start) > 5.0:
+            logger.warning(
+                "⚡ FORCE_TRADE: 5s timeout reached in bootstrap observer wait loop — "
+                "breaking out unconditionally and returning RUNNING_SUPERVISED (%s)",
+                context,
+            )
+            return True, "RUNNING_SUPERVISED"
+
         _state = _bootstrap_state_value()
         if _state == "RUNNING_SUPERVISED":
             logger.critical("LIFECYCLE: FSM state=%s", _state)
@@ -1775,7 +1806,18 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
         except Exception:
             pass
 
+        # ── FORCE_TRADE: capture predicate-wait entry time for 5s hard timeout ─
+        _ee_ft_loop_start = time.monotonic()
+
         def _bootstrap_unlock_ready() -> bool:
+            # ── FORCE_TRADE: 5-second hard timeout — release predicate gate ────
+            if _force_trade_active and (time.monotonic() - _ee_ft_loop_start) > 5.0:
+                logger.warning(
+                    "⚡ FORCE_TRADE: 5s timeout reached in RUNNING_SUPERVISED predicate wait — "
+                    "releasing gate unconditionally (%s)",
+                    context,
+                )
+                return True
             # ── FORCE_TRADE: break out if activation occurred mid-wait ─────────
             # If the coordinator version changed and state is EXECUTING, the
             # activation thread has already forced LIVE_ACTIVE — stop waiting.
@@ -8927,8 +8969,22 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     _bce_entry_version = _get_sc_bce().get_event_version()
                 except Exception:
                     pass
+                # ── FORCE_TRADE: capture B1 loop entry time for 5s hard timeout ─
+                _bce_ft_loop_start = time.monotonic()
+                _bce_force_trade = (
+                    os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                )
 
                 while True:
+                    # ── FORCE_TRADE: 5-second hard timeout — break unconditionally ─
+                    if _bce_force_trade and (time.monotonic() - _bce_ft_loop_start) > 5.0:
+                        logger.warning(
+                            "⚡ FORCE_TRADE: 5s timeout reached in B1 preflight barrier loop — "
+                            "breaking out unconditionally"
+                        )
+                        break
+
                     # ── FORCE_TRADE: check if activation occurred mid-B1-loop ────
                     # If the coordinator version changed and state is EXECUTING,
                     # the activation thread has already forced LIVE_ACTIVE — break
