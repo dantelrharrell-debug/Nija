@@ -1187,6 +1187,10 @@ def _is_activation_already_occurred() -> bool:
     post-activation coordinator state causes an indefinite wait.
 
     Only active when ``FORCE_TRADE=true`` (or ``FORCE_TRADE_MODE=true``).
+
+    PRIMARY CHECK: If the TradingStateMachine is already LIVE_ACTIVE, return
+    True immediately — no coordinator version check required.  This is the
+    simplest and most reliable signal that activation has occurred.
     """
     _force_trade_active = (
         os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
@@ -1194,6 +1198,33 @@ def _is_activation_already_occurred() -> bool:
     )
     if not _force_trade_active:
         return False
+    # ── PRIMARY: direct TradingStateMachine state check ──────────────────────
+    # If the TSM is already LIVE_ACTIVE, activation has occurred regardless of
+    # coordinator version.  This is the simplest and most reliable signal.
+    try:
+        try:
+            from bot.trading_state_machine import get_state_machine as _get_tsm_act, TradingState as _TS_act
+        except ImportError:
+            from trading_state_machine import get_state_machine as _get_tsm_act, TradingState as _TS_act  # type: ignore[import]
+        if _get_tsm_act().get_current_state() == _TS_act.LIVE_ACTIVE:
+            logger.debug(
+                "_is_activation_already_occurred: TradingStateMachine is LIVE_ACTIVE — "
+                "returning True (FORCE_TRADE direct state check)"
+            )
+            return True
+    except Exception as _tsm_probe_err:
+        logger.debug("_is_activation_already_occurred TSM probe failed (non-fatal): %s", _tsm_probe_err)
+    # ── SECONDARY: env-var fast path ─────────────────────────────────────────
+    # NIJA_RUNTIME_TRADING_STATE is set to "LIVE_ACTIVE" by transition_to() the
+    # moment the FSM enters LIVE_ACTIVE, so this catches the case where the TSM
+    # import fails but the env var was already written.
+    if os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip() == "LIVE_ACTIVE":
+        logger.debug(
+            "_is_activation_already_occurred: NIJA_RUNTIME_TRADING_STATE=LIVE_ACTIVE — "
+            "returning True (FORCE_TRADE env-var check)"
+        )
+        return True
+    # ── TERTIARY: coordinator version + snapshot check ────────────────────────
     try:
         try:
             from bot.startup_coordinator import get_startup_coordinator as _get_sc_probe
@@ -1258,6 +1289,17 @@ def _evaluate_startup_readiness_policy(*, context: str, timeout_s: float) -> tup
         return _criteria, [], [], time.monotonic()
 
     while time.monotonic() < _deadline:
+        # ── FORCE_TRADE: direct LIVE_ACTIVE check at top of readiness loop ─────
+        # If the TradingStateMachine is already LIVE_ACTIVE, skip all remaining
+        # readiness gate checks immediately — no version change required.
+        if _is_activation_already_occurred():
+            logger.warning(
+                "⚡ FORCE_TRADE: TradingStateMachine is LIVE_ACTIVE — "
+                "breaking out of readiness wait loop immediately (%s)",
+                context,
+            )
+            _criteria = {"broker_connected": True, "nonce_ready": True, "first_snap": True}
+            return _criteria, [], [], time.monotonic()
         # ── FORCE_TRADE: check if activation occurred mid-loop ─────────────────
         # If the activation thread incremented the coordinator version while we
         # were waiting, break out immediately — do NOT re-validate gates.
@@ -1776,6 +1818,16 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
             pass
 
         def _bootstrap_unlock_ready() -> bool:
+            # ── FORCE_TRADE: direct LIVE_ACTIVE check — no version change needed ─
+            # If the TradingStateMachine is already LIVE_ACTIVE, release the gate
+            # immediately regardless of coordinator version.
+            if _is_activation_already_occurred():
+                logger.warning(
+                    "⚡ FORCE_TRADE: TradingStateMachine is LIVE_ACTIVE — "
+                    "releasing RUNNING_SUPERVISED predicate gate immediately (%s)",
+                    context,
+                )
+                return True
             # ── FORCE_TRADE: break out if activation occurred mid-wait ─────────
             # If the coordinator version changed and state is EXECUTING, the
             # activation thread has already forced LIVE_ACTIVE — stop waiting.
@@ -8929,6 +8981,15 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     pass
 
                 while True:
+                    # ── FORCE_TRADE: direct LIVE_ACTIVE check at top of B1 loop ──
+                    # If the TradingStateMachine is already LIVE_ACTIVE, skip all
+                    # remaining B1 gate checks immediately — no version change needed.
+                    if _is_activation_already_occurred():
+                        logger.warning(
+                            "⚡ FORCE_TRADE: TradingStateMachine is LIVE_ACTIVE — "
+                            "breaking out of B1 barrier immediately (direct state check)"
+                        )
+                        break
                     # ── FORCE_TRADE: check if activation occurred mid-B1-loop ────
                     # If the coordinator version changed and state is EXECUTING,
                     # the activation thread has already forced LIVE_ACTIVE — break
