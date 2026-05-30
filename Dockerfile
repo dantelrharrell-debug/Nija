@@ -58,8 +58,8 @@ USER nija
 
 # Security: Drop all capabilities and run as non-root
 # Health check endpoint - use liveness probe
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/healthz', timeout=5)" || exit 1
+HEALTHCHECK --interval=30s --timeout=30s --start-period=300s --retries=5 \
+    CMD python -c "import requests; requests.get('http://localhost:5000/healthz', timeout=10)" || exit 1
 
 # Default command: use repo start script to launch bot.py
 CMD ["bash", "start.sh"]

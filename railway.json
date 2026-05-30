@@ -18,7 +18,7 @@
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3,
     "healthCheckPath": "/healthz",
-    "healthCheckTimeout": 10
+    "healthCheckTimeout": 300
   },
   "variables": {
     "NIJA_REQUIRE_DISTRIBUTED_LOCK": "true",
