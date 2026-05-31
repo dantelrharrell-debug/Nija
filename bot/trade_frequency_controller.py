@@ -56,7 +56,7 @@ logger = logging.getLogger("nija.trade_frequency_controller")
 # Constants (can be overridden by env vars)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MIN_TRADES_PER_HOUR: float = 2.0
+_DEFAULT_MIN_TRADES_PER_HOUR: float = 2.0   # Minimum hourly target (aggressive growth: ~20/hr max)
 _DEFAULT_MIN_TRADES_PER_DAY: float = 20.0   # Lower bound of the 20-50 trades/day target band
 _DEFAULT_MAX_TRADES_PER_DAY: float = 50.0   # Upper bound — tighten confidence gate above this level
 _DEFAULT_LOOSEN_STEP: float = 0.08

@@ -202,7 +202,7 @@ TARGETS = {
         "action": "Activate TSL"
     },
     "tp2": {
-        "profit_pct": 1.0,   # +1.0%
+        "profit_pct": 1.2,   # +1.2% — raised from 1.0% for aggressive growth (better R:R)
         "close_size": 0.25,  # Close 25%
         "action": "Activate TTP"
     },

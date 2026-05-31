@@ -207,10 +207,10 @@ POSITION_SIZING = {
             'position_size': 0.08,  # 8% of account (maximum for strong trends)
         },
     },
-    'max_position_size': 0.08,  # Hard cap at 8% (OPTIMIZED: was 5%, increased for high-confidence trades)
+    'max_position_size': 0.08,  # Hard cap at 8% per trade (aggressive growth target)
     'min_position_size': 0.02,  # Minimum 2%
     'optimal_position_size': 0.03,  # 3% optimal for most trades
-    'max_concurrent_positions': 20,  # Up to 20 positions (5% each = 100% if all filled)
+    'max_concurrent_positions': 3,  # 3 simultaneous open positions — raised for aggressive growth
     'description': 'Conservative sizing enables 20-50 concurrent positions for diversification',
 }
 
@@ -399,7 +399,7 @@ RISK_LIMITS = {
     'max_drawdown': 0.12,  # 12% max drawdown (elite target: <12%)
     'max_exposure': 0.80,  # 80% max total exposure (allows 20-position diversification)
     'max_positions': 20,  # HARD CAP: 20 positions maximum (5% each = 100%)
-    'max_trades_per_day': 12,  # 12 trades per day (elite target: 3-12)
+    'max_trades_per_day': 20,  # 20 trades per day — raised from 12 for aggressive growth
     'min_win_rate': 0.55,  # Alert if win rate drops below 55% (elite floor: 58%)
     'min_profit_factor': 1.8,  # Alert if profit factor drops below 1.8 (elite floor: 2.0)
     'description': 'Elite risk management for top 0.1% performance',
@@ -500,7 +500,7 @@ RISK_CONFIG_SAVER = {
     'drawdown_stop_trading_at': 0.10,  # Stop trading at 10% drawdown
 
     # Position Management
-    'max_concurrent_positions': 2,  # Up to 2 positions
+    'max_concurrent_positions': 3,  # Up to 3 positions — raised from 2 for aggressive growth
     'max_position_concentration': 0.15,  # 15% max per position
     'min_trade_size_usd': 15.0,  # $15 minimum trade
     'max_trade_size_usd': 40.0,  # $40 maximum trade
@@ -974,7 +974,7 @@ TAKE_PROFIT_CONFIG = {
 
     # Tiered Take-Profit Levels
     'tp1': {
-        'pct': 0.008,  # +0.8% profit
+        'pct': 0.012,  # +1.2% profit — raised from 0.8% for aggressive growth (better R:R)
         'exit_size': 0.33,  # Exit 33% of original position at TP1
         'action': 'move_stop_to_breakeven'  # Move stop to breakeven after TP1
     },
@@ -1115,8 +1115,8 @@ EXECUTION_CONFIG = {
     'max_scans_per_hour': 12,  # Limit API calls
 
     # Trade Limits
-    'max_trades_per_day': 30,  # 30 trades per day (more active)
-    'max_trades_per_hour': 10,  # 10 per hour (faster trading)
+    'max_trades_per_day': 50,  # 50 trades per day — raised from 30 for aggressive growth
+    'max_trades_per_hour': 20,  # 20 per hour — raised from 10 for aggressive growth
     'min_time_between_trades': 30,  # 30 seconds between trades (was 2 min)
 
     # Position Limits
@@ -1196,9 +1196,9 @@ DAILY_TARGET = {
     'avg_loss_pct': 0.006,  # 0.6% average loss per trade (elite target: 0.4-0.7%)
     'expectancy_pct': 0.0048,  # 0.48% expectancy per trade (elite target: 0.45-0.65%)
     'risk_reward_ratio': 2.0,  # 1:2 R:R (elite target: 1:1.8 - 1:2.5)
-    'max_trades_per_day': 12,  # Maximum trades per day (elite target: 3-12)
-    'min_trades_per_day': 5,  # Minimum trades to hit target
-    'optimal_trades_per_day': 7,  # Optimal trade frequency
+    'max_trades_per_day': 20,  # Maximum trades per day — raised from 12 for aggressive growth
+    'min_trades_per_day': 10,  # Minimum trades to hit target — raised from 5
+    'optimal_trades_per_day': 15,  # Optimal trade frequency — raised from 7
     'auto_adjust': True,  # Auto-adjust based on account balance
     'description': 'Elite performance aligned: 60% WR, 1.2% avg win, 0.6% avg loss, 1:2 R:R',
 }
