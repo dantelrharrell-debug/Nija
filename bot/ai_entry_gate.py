@@ -196,10 +196,10 @@ _SLIPPAGE_ESTIMATE      = float(os.getenv("NIJA_AI_GATE_SLIPPAGE_ESTIMATE_PCT", 
 _REGIME_ALLOWED_ENTRIES: Dict[str, set] = {
     "strong_trend":         {"swing", "breakout"},
     "weak_trend":           {"swing", "scalp"},
-    "ranging":              {"mean_reversion", "scalp"},
+    "ranging":              {"mean_reversion", "scalp", "ranging", "swing"},  # expanded for aggressive growth
     "consolidation":        {"scalp"},
     "expansion":            {"breakout", "swing"},
-    "mean_reversion":       {"mean_reversion"},
+    "mean_reversion":       {"mean_reversion", "scalp", "ranging", "swing"},  # expanded for aggressive growth
     "volatility_explosion": set(),   # BLOCK ALL new entries
     # Legacy
     "trending":             {"swing", "breakout"},

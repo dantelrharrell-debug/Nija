@@ -91,14 +91,14 @@ _DEFAULT_MIN_ORDER_USD = 1.0   # Micro-capital compatible fallback (was $5)
 # Platform was stuck waiting while users traded on lower-confidence signals.
 # THRESHOLD REDUCTION (May 2026): Lowered confidence/ADX/volume gates to the
 # Phase 1 live profile so runtime normalization no longer clamps to stale values.
-MIN_CONFIDENCE = 0.18  # Confidence floor aligned with ENTRY_GATE_CONFIDENCE_THRESHOLD
+MIN_CONFIDENCE = 0.15  # Confidence floor — lowered from 0.18 → 0.15 for aggressive growth
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Short-term fallback thresholds (idle > 10 minutes)
 FALLBACK_IDLE_MINUTES_THRESHOLD = 10.0
-FALLBACK_CONFIDENCE_THRESHOLD = 0.18
-FALLBACK_MIN_ADX = 5.0
-FALLBACK_MIN_VOLUME_THRESHOLD = 0.006
+FALLBACK_CONFIDENCE_THRESHOLD = 0.15  # Lowered from 0.18 → 0.15 for aggressive growth
+FALLBACK_MIN_ADX = 3.0  # Lowered from 5.0 → 3.0 for aggressive growth
+FALLBACK_MIN_VOLUME_THRESHOLD = 0.0045  # Lowered from 0.006 → 0.0045 for aggressive growth
 
 # Confidence anchor floor (legacy score scale)
 MIN_RISK_SCORE_FOR_ANCHOR = 3
@@ -106,28 +106,25 @@ MIN_RISK_SCORE_FOR_ANCHOR = 3
 # Diagnostics window
 VOLUME_RATIO_WINDOW = 5
 # Entry gate thresholds (weighted scoring)
-ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.18
-ENTRY_GATE_ADX_THRESHOLD = 5.0
-ENTRY_GATE_VOLUME_THRESHOLD = 0.006
-# Gate score reduced from 3 → 2 (May 2026): require 2/5 conditions instead of 3/5
-# so borderline signals aren't blocked when most but not all conditions align.
+ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.15  # Lowered from 0.18 → 0.15 for aggressive growth
+ENTRY_GATE_ADX_THRESHOLD = 3.0  # Lowered from 5.0 → 3.0 for aggressive growth
+ENTRY_GATE_VOLUME_THRESHOLD = 0.0045  # Lowered from 0.006 → 0.0045 for aggressive growth
+# Gate score: require 2/5 conditions — softer gate allows more entries.
 ENTRY_GATE_MIN_SCORE = 2
-# Safety floor = 1 (dynamic thresholding): score=0 hard-blocks; score=1 allows a
-# reduced-size entry (40–70% of normal size) instead of a hard block.  This converts
-# the binary gate into a continuous confidence dial so near-miss signals trade at
-# proportionally smaller notional rather than being completely suppressed.
-ENTRY_GATE_SAFETY_FLOOR = int(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "1"))
+# Safety floor = 2 (aggressive growth): allow entries when at least 2/5 conditions
+# are met, converting near-miss signals to reduced-size entries rather than hard blocks.
+ENTRY_GATE_SAFETY_FLOOR = int(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "2"))
 # Keep a hard safety floor but allow drought/fallback to reduce gate score
 # from 2/5 → 1/5 when configured so valid entries are not starved.
 ENTRY_GATE_SAFETY_FLOOR = max(
     1,
     min(
         ENTRY_GATE_MIN_SCORE,
-        int(float(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "1"))),
+        int(float(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "2"))),
     ),
 )
-ENTRY_GATE_FALLBACK_CONFIDENCE = 0.18
-ENTRY_GATE_FALLBACK_ADX = 5.0
+ENTRY_GATE_FALLBACK_CONFIDENCE = 0.15  # Lowered from 0.18 → 0.15 for aggressive growth
+ENTRY_GATE_FALLBACK_ADX = 3.0  # Lowered from 5.0 → 3.0 for aggressive growth
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
 
 # Unified eligibility tuning knobs (strategic gates)
@@ -658,7 +655,7 @@ class NIJAApexStrategyV71:
         # Initialize components with optimized parameters
         self.risk_manager = RiskManager(
             min_position_pct=self.config.get('min_position_pct', 0.02),
-            max_position_pct=self.config.get('max_position_pct', 0.10),  # OPTIMIZED: 10% max for more positions (was 20%)
+            max_position_pct=self.config.get('max_position_pct', 0.08),  # GROWTH: 8% max per trade (was 10%)
             soft_position_limit_pct=0.25,   # Warn at 25% — aligned with MAX_POSITION_SIZE = 0.30
             hard_position_limit_pct=0.30,   # Block above 30% — MAX_POSITION_SIZE hard limit
         )
@@ -736,8 +733,8 @@ class NIJAApexStrategyV71:
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = max(self.config.get('min_adx', 5), 5)
-        self.volume_threshold = max(self.config.get('volume_threshold', 0.006), 0.006)
+        self.min_adx = max(self.config.get('min_adx', 3), 3)  # Lowered from 5 → 3 for aggressive growth
+        self.volume_threshold = max(self.config.get('volume_threshold', 0.0045), 0.0045)  # Lowered from 0.006 → 0.0045 for aggressive growth
         self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 1)  # TUNED: Lowered from 2 → 1 (Apr 2026) so a single confirmed condition (e.g. VWAP or MACD) is enough to attempt an entry; the AI scoring layers downstream still gate quality
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
@@ -976,7 +973,7 @@ class NIJAApexStrategyV71:
         # all signals since legacy_score=3 → confidence=0.60 < 0.70.
         self.kraken_min_rsi = float(os.getenv('KRAKEN_MIN_RSI', '28'))
         self.kraken_max_rsi = float(os.getenv('KRAKEN_MAX_RSI', '72'))
-        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.18'))
+        self.kraken_min_confidence = float(os.getenv('KRAKEN_MIN_CONFIDENCE', '0.15'))  # Lowered from 0.18 → 0.15 for aggressive growth
         self.kraken_confidence_soft_margin = float(
             os.getenv('KRAKEN_CONFIDENCE_SOFT_MARGIN', str(KRAKEN_CONFIDENCE_SOFT_MARGIN))
         )
