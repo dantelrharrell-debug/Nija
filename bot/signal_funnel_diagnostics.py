@@ -12,9 +12,20 @@ Per-pair funnel counters (logged every REPORT_INTERVAL cycles):
   volume_pass        - passed volume threshold
   ai_gate_pass       - passed AIEntryGate (gate score ≥ threshold)
   execution_pass     - actually submitted to broker
+  legacy_gate_rejected  - rejected by legacy 5-point entry gate (before AIEntryGate)
+  ai_gate_hard_rejected - hard-blocked by AIEntryGate (e.g. VOLATILITY_EXPLOSION)
+  ai_gate_soft_rejected - soft-failed AIEntryGate (score below threshold, proceeding)
 
 Rejection events are emitted as structured ``REJECTED_SIGNAL:`` log lines:
   REJECTED_SIGNAL: pair=ETHUSD confidence=0.21 threshold=0.25 adx=9 volume=1.8%
+
+Detailed per-gate rejection lines (WARNING level) are emitted via log_gate_result():
+  [FUNNEL] pair=BTC-USD confidence=0.45 → GATE1_AI_SCORE: PASS (45.0 ≥ 9.0)
+  [FUNNEL] pair=BTC-USD vol_ratio=0.42 → GATE2_VOLUME: FAIL (0.42 < 0.60 min)
+  [FUNNEL] pair=BTC-USD atr_pct=0.28% → GATE3_VOLATILITY: FAIL (0.28% < 0.40% min)
+  [FUNNEL] pair=BTC-USD total_cost=0.14% → GATE4_SPREAD: PASS (0.14% ≤ 0.25% ceiling)
+  [FUNNEL] pair=BTC-USD regime=RANGING entry=swing → GATE5_REGIME: FAIL (swing not in {mean_reversion, scalp})
+  [FUNNEL] pair=BTC-USD RESULT: FAIL score=2.0/7 threshold=1.6 failed_gates=gate2_volume,gate3_volatility,gate5_regime
 
 Shadow-paper tracking records every signal that passed all gates, computes
 the hypothetical PnL based on subsequent price movement, and compares it
@@ -29,7 +40,10 @@ Usage
     funnel = get_signal_funnel()
     funnel.record_signal_seen(symbol)
     funnel.record_confidence_pass(symbol)
+    funnel.log_funnel_entry(symbol, side="long", confidence=0.45, adx=22.1,
+                            volume_ratio=0.42, regime="ranging", score=45.0)
     funnel.record_rejected(symbol, confidence=0.21, threshold=0.25, adx=9.0, volume=0.018, reason="low_confidence")
+    funnel.log_gate_result(symbol, side="long", gate_result=gate_result_obj)
     funnel.record_ai_gate_pass(symbol)
     funnel.record_execution_pass(symbol)
     funnel.maybe_report_and_reset()
@@ -74,9 +88,24 @@ class FunnelStats:
     volume_pass: int = 0
     ai_gate_pass: int = 0
     execution_pass: int = 0
+    # Rejection counters — populated by log_gate_result() and record_rejected()
+    legacy_gate_rejected: int = 0    # blocked by legacy 5-point gate (before AIEntryGate)
+    ai_gate_hard_rejected: int = 0   # hard-blocked (VOLATILITY_EXPLOSION)
+    ai_gate_soft_rejected: int = 0   # soft-failed AIEntryGate (score below threshold)
+    # Per-gate failure tallies from AIEntryGate (populated by log_gate_result)
+    gate1_fail: int = 0   # AI score gate
+    gate2_fail: int = 0   # Volume gate
+    gate3_fail: int = 0   # Volatility gate
+    gate4_fail: int = 0   # Spread gate
+    gate5_fail: int = 0   # Regime gate
 
     def as_log_line(self) -> str:
         """Return a formatted one-line summary suitable for log emission."""
+        total_rejected = (
+            self.legacy_gate_rejected
+            + self.ai_gate_hard_rejected
+            + self.ai_gate_soft_rejected
+        )
         return (
             f"SIGNAL_FUNNEL: PAIR={self.pair} "
             f"signals_seen={self.signals_seen} "
@@ -84,7 +113,17 @@ class FunnelStats:
             f"adx_pass={self.adx_pass} "
             f"volume_pass={self.volume_pass} "
             f"ai_gate_pass={self.ai_gate_pass} "
-            f"execution_pass={self.execution_pass}"
+            f"execution_pass={self.execution_pass} "
+            f"rejected={total_rejected} "
+            f"(legacy={self.legacy_gate_rejected} "
+            f"hard={self.ai_gate_hard_rejected} "
+            f"soft={self.ai_gate_soft_rejected}) "
+            f"gate_fails=["
+            f"G1:{self.gate1_fail} "
+            f"G2:{self.gate2_fail} "
+            f"G3:{self.gate3_fail} "
+            f"G4:{self.gate4_fail} "
+            f"G5:{self.gate5_fail}]"
         )
 
 
@@ -199,6 +238,198 @@ class SignalFunnelDiagnostics:
         with self._lock:
             self._get_or_create(pair).execution_pass += 1
 
+    def record_legacy_gate_rejected(self, pair: str) -> None:
+        """Increment legacy_gate_rejected counter (blocked before AIEntryGate)."""
+        with self._lock:
+            self._get_or_create(pair).legacy_gate_rejected += 1
+
+    def record_ai_gate_hard_rejected(self, pair: str) -> None:
+        """Increment ai_gate_hard_rejected counter (VOLATILITY_EXPLOSION hard block)."""
+        with self._lock:
+            self._get_or_create(pair).ai_gate_hard_rejected += 1
+
+    def record_ai_gate_soft_rejected(self, pair: str) -> None:
+        """Increment ai_gate_soft_rejected counter (score below threshold, proceeding)."""
+        with self._lock:
+            self._get_or_create(pair).ai_gate_soft_rejected += 1
+
+    # ------------------------------------------------------------------
+    # Detailed gate-level logging
+    # ------------------------------------------------------------------
+
+    def log_funnel_entry(
+        self,
+        pair: str,
+        side: str,
+        *,
+        confidence: float = 0.0,
+        adx: float = 0.0,
+        volume_ratio: float = 0.0,
+        regime: str = "unknown",
+        score: float = 0.0,
+        entry_type: str = "swing",
+    ) -> None:
+        """
+        Emit a WARNING-level log line when a candidate enters the 5-gate funnel.
+
+        Example output::
+
+            [FUNNEL] ENTER pair=BTC-USD side=LONG score=45.0 confidence=0.45
+                     adx=22.1 vol_ratio=42.0% regime=RANGING entry_type=swing
+        """
+        logger.warning(
+            "[FUNNEL] ENTER pair=%s side=%s score=%.1f confidence=%.3f "
+            "adx=%.1f vol_ratio=%.1f%% regime=%s entry_type=%s",
+            pair,
+            side.upper(),
+            score,
+            confidence,
+            adx,
+            volume_ratio * 100.0,
+            regime.upper(),
+            entry_type,
+        )
+
+    def log_gate_result(
+        self,
+        pair: str,
+        side: str,
+        gate_result: Any,
+        *,
+        rejection_type: str = "soft",
+    ) -> None:
+        """
+        Emit detailed WARNING-level log lines for each gate in a GateResult.
+
+        Logs one line per gate showing PASS/FAIL with actual vs threshold values,
+        then a summary RESULT line.  Also increments the per-pair gate failure
+        counters in FunnelStats.
+
+        Args:
+            pair: Trading pair symbol (e.g. "BTC-USD").
+            side: "long" or "short".
+            gate_result: A ``GateResult`` object from ``AIEntryGate.check()``.
+                         Accessed via duck-typing so no hard import is needed.
+            rejection_type: "hard" (VOLATILITY_EXPLOSION), "soft" (score below
+                            threshold but proceeding), or "pass" (gate passed).
+        """
+        try:
+            gates: Dict[str, Any] = getattr(gate_result, "gates", {}) or {}
+            total_score: float = float(getattr(gate_result, "gate_score", 0.0))
+            gate_max: int = int(getattr(gate_result, "gate_max", 7))
+            effective_threshold: float = float(getattr(gate_result, "effective_threshold", 0.0))
+            passed: bool = bool(getattr(gate_result, "passed", False))
+            regime_name: str = str(getattr(gate_result, "regime_name", "unknown"))
+            entry_type: str = str(getattr(gate_result, "entry_type", "swing"))
+            first_failure: str = str(getattr(gate_result, "first_failure", ""))
+
+            # Collect failed gate names for the summary line
+            failed_gates = []
+
+            # ── Gate 1: AI Score ──────────────────────────────────────────
+            g1 = gates.get("gate1_score")
+            if g1 is not None:
+                g1_passed = bool(getattr(g1, "passed", False))
+                g1_val = float(getattr(g1, "value", 0.0))
+                g1_thr = float(getattr(g1, "threshold", 0.0))
+                g1_sym = "≥" if g1_passed else "<"
+                g1_label = "PASS" if g1_passed else "FAIL"
+                logger.warning(
+                    "[FUNNEL] pair=%s side=%s score=%.1f → GATE1_AI_SCORE: %s "
+                    "(%.1f %s %.1f threshold)",
+                    pair, side.upper(), g1_val, g1_label, g1_val, g1_sym, g1_thr,
+                )
+                if not g1_passed:
+                    failed_gates.append("gate1_score")
+                    with self._lock:
+                        self._get_or_create(pair).gate1_fail += 1
+
+            # ── Gate 2: Volume ────────────────────────────────────────────
+            g2 = gates.get("gate2_volume")
+            if g2 is not None:
+                g2_passed = bool(getattr(g2, "passed", False))
+                g2_val = float(getattr(g2, "value", 0.0))
+                g2_thr = float(getattr(g2, "threshold", 0.0))
+                g2_sym = "≥" if g2_passed else "<"
+                g2_label = "PASS" if g2_passed else "FAIL"
+                logger.warning(
+                    "[FUNNEL] pair=%s side=%s vol_ratio=%.1f%% → GATE2_VOLUME: %s "
+                    "(%.1f%% %s %.1f%% min)",
+                    pair, side.upper(), g2_val * 100.0, g2_label,
+                    g2_val * 100.0, g2_sym, g2_thr * 100.0,
+                )
+                if not g2_passed:
+                    failed_gates.append("gate2_volume")
+                    with self._lock:
+                        self._get_or_create(pair).gate2_fail += 1
+
+            # ── Gate 3: Volatility ────────────────────────────────────────
+            g3 = gates.get("gate3_volatility")
+            if g3 is not None:
+                g3_passed = bool(getattr(g3, "passed", False))
+                g3_val = float(getattr(g3, "value", 0.0))
+                g3_thr = float(getattr(g3, "threshold", 0.0))
+                g3_detail = str(getattr(g3, "detail", ""))
+                g3_label = "PASS" if g3_passed else "FAIL"
+                logger.warning(
+                    "[FUNNEL] pair=%s side=%s atr_pct=%.2f%% → GATE3_VOLATILITY: %s (%s)",
+                    pair, side.upper(), g3_val, g3_label, g3_detail or f"atr={g3_val:.2f}% thr={g3_thr:.2f}%",
+                )
+                if not g3_passed:
+                    failed_gates.append("gate3_volatility")
+                    with self._lock:
+                        self._get_or_create(pair).gate3_fail += 1
+
+            # ── Gate 4: Spread ────────────────────────────────────────────
+            g4 = gates.get("gate4_spread")
+            if g4 is not None:
+                g4_passed = bool(getattr(g4, "passed", False))
+                g4_val = float(getattr(g4, "value", 0.0))
+                g4_thr = float(getattr(g4, "threshold", 0.0))
+                g4_sym = "≤" if g4_passed else ">"
+                g4_label = "PASS" if g4_passed else "FAIL"
+                logger.warning(
+                    "[FUNNEL] pair=%s side=%s total_cost=%.3f%% → GATE4_SPREAD: %s "
+                    "(%.3f%% %s %.2f%% ceiling)",
+                    pair, side.upper(), g4_val * 100.0, g4_label,
+                    g4_val * 100.0, g4_sym, g4_thr * 100.0,
+                )
+                if not g4_passed:
+                    failed_gates.append("gate4_spread")
+                    with self._lock:
+                        self._get_or_create(pair).gate4_fail += 1
+
+            # ── Gate 5: Regime ────────────────────────────────────────────
+            g5 = gates.get("gate5_regime")
+            if g5 is not None:
+                g5_passed = bool(getattr(g5, "passed", False))
+                g5_detail = str(getattr(g5, "detail", ""))
+                g5_label = "PASS" if g5_passed else "FAIL"
+                logger.warning(
+                    "[FUNNEL] pair=%s side=%s regime=%s entry_type=%s → GATE5_REGIME: %s (%s)",
+                    pair, side.upper(), regime_name.upper(), entry_type,
+                    g5_label, g5_detail or "see regime compatibility matrix",
+                )
+                if not g5_passed:
+                    failed_gates.append("gate5_regime")
+                    with self._lock:
+                        self._get_or_create(pair).gate5_fail += 1
+
+            # ── Summary result line ───────────────────────────────────────
+            result_label = "PASS" if passed else "FAIL"
+            failed_str = ",".join(failed_gates) if failed_gates else "none"
+            logger.warning(
+                "[FUNNEL] pair=%s side=%s RESULT: %s score=%.1f/%d threshold=%.1f "
+                "regime=%s entry_type=%s failed_gates=%s rejection_type=%s",
+                pair, side.upper(), result_label,
+                total_score, gate_max, effective_threshold,
+                regime_name.upper(), entry_type,
+                failed_str, rejection_type,
+            )
+
+        except Exception as _log_err:
+            logger.debug("[FUNNEL] log_gate_result error for %s: %s", pair, _log_err)
+
     # ------------------------------------------------------------------
     # Rejection logger
     # ------------------------------------------------------------------
@@ -234,6 +465,16 @@ class SignalFunnelDiagnostics:
             for k, v in extra.items():
                 parts.append(f"{k}={v}")
         logger.warning("REJECTED_SIGNAL: %s", " ".join(parts))
+        # Increment the appropriate rejection counter based on reason keyword
+        _reason_lower = reason.lower()
+        with self._lock:
+            _stat = self._get_or_create(pair)
+            if "volatility_explosion" in _reason_lower:
+                _stat.ai_gate_hard_rejected += 1
+            elif "entry_gate_score" in _reason_lower and "of_5" in _reason_lower:
+                _stat.legacy_gate_rejected += 1
+            elif "ai_gate_soft_fail" in _reason_lower or "soft_fail" in _reason_lower:
+                _stat.ai_gate_soft_rejected += 1
 
     # ------------------------------------------------------------------
     # Shadow-paper tracking
@@ -533,11 +774,50 @@ class SignalFunnelDiagnostics:
             logger.info("SIGNAL_FUNNEL: no pairs scanned in this window")
             return
 
-        logger.info("=" * 60)
+        # Aggregate cycle-level totals across all pairs
+        _total_seen = sum(s.signals_seen for s in stats_snapshot)
+        _total_ai_pass = sum(s.ai_gate_pass for s in stats_snapshot)
+        _total_exec = sum(s.execution_pass for s in stats_snapshot)
+        _total_legacy_rej = sum(s.legacy_gate_rejected for s in stats_snapshot)
+        _total_hard_rej = sum(s.ai_gate_hard_rejected for s in stats_snapshot)
+        _total_soft_rej = sum(s.ai_gate_soft_rejected for s in stats_snapshot)
+        _total_rejected = _total_legacy_rej + _total_hard_rej + _total_soft_rej
+        _total_g1_fail = sum(s.gate1_fail for s in stats_snapshot)
+        _total_g2_fail = sum(s.gate2_fail for s in stats_snapshot)
+        _total_g3_fail = sum(s.gate3_fail for s in stats_snapshot)
+        _total_g4_fail = sum(s.gate4_fail for s in stats_snapshot)
+        _total_g5_fail = sum(s.gate5_fail for s in stats_snapshot)
+
+        logger.warning("=" * 70)
+        logger.warning(
+            "[FUNNEL] CYCLE SUMMARY (last %.0fs): pairs=%d signals=%d "
+            "ai_gate_pass=%d executed=%d rejected=%d "
+            "(legacy=%d hard=%d soft=%d)",
+            REPORT_INTERVAL_SECS,
+            len(stats_snapshot),
+            _total_seen,
+            _total_ai_pass,
+            _total_exec,
+            _total_rejected,
+            _total_legacy_rej,
+            _total_hard_rej,
+            _total_soft_rej,
+        )
+        if _total_rejected > 0:
+            logger.warning(
+                "[FUNNEL] GATE FAILURE TOTALS: G1_AI_SCORE=%d G2_VOLUME=%d "
+                "G3_VOLATILITY=%d G4_SPREAD=%d G5_REGIME=%d",
+                _total_g1_fail,
+                _total_g2_fail,
+                _total_g3_fail,
+                _total_g4_fail,
+                _total_g5_fail,
+            )
+        logger.warning("=" * 70)
+
         logger.info("SIGNAL_FUNNEL_REPORT (last %.0fs):", REPORT_INTERVAL_SECS)
         for stat in sorted(stats_snapshot, key=lambda s: s.signals_seen, reverse=True):
             logger.info(stat.as_log_line())
-        logger.info("=" * 60)
 
         # Also emit shadow-paper summary
         shadow = self.get_shadow_summary()
@@ -567,6 +847,14 @@ class SignalFunnelDiagnostics:
                 volume_pass=s.volume_pass,
                 ai_gate_pass=s.ai_gate_pass,
                 execution_pass=s.execution_pass,
+                legacy_gate_rejected=s.legacy_gate_rejected,
+                ai_gate_hard_rejected=s.ai_gate_hard_rejected,
+                ai_gate_soft_rejected=s.ai_gate_soft_rejected,
+                gate1_fail=s.gate1_fail,
+                gate2_fail=s.gate2_fail,
+                gate3_fail=s.gate3_fail,
+                gate4_fail=s.gate4_fail,
+                gate5_fail=s.gate5_fail,
             )
 
     def get_all_stats(self) -> List[FunnelStats]:
@@ -581,6 +869,14 @@ class SignalFunnelDiagnostics:
                     volume_pass=s.volume_pass,
                     ai_gate_pass=s.ai_gate_pass,
                     execution_pass=s.execution_pass,
+                    legacy_gate_rejected=s.legacy_gate_rejected,
+                    ai_gate_hard_rejected=s.ai_gate_hard_rejected,
+                    ai_gate_soft_rejected=s.ai_gate_soft_rejected,
+                    gate1_fail=s.gate1_fail,
+                    gate2_fail=s.gate2_fail,
+                    gate3_fail=s.gate3_fail,
+                    gate4_fail=s.gate4_fail,
+                    gate5_fail=s.gate5_fail,
                 )
                 for s in self._stats.values()
             ]
