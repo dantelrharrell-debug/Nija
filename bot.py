@@ -6023,9 +6023,11 @@ def _rerun_supervisor_loop(state: dict) -> None:
     """
     from bot.health_check import get_health_manager
 
-    strategy = state["strategy"]
-    _active_threads = state["active_threads"]
-    use_independent_trading = state["use_independent_trading"]
+    strategy = state.get("strategy", None)
+    if strategy is None:
+        logger.warning("_rerun_supervisor_loop: no 'strategy' key in state dict, using None")
+    _active_threads = state.get("active_threads", {})
+    use_independent_trading = state.get("use_independent_trading", False)
     health_manager = get_health_manager()
 
     if _is_live_trading_active_now():
