@@ -9060,19 +9060,28 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             _verify_runtime_transition_states(context="threads live (pre-handoff)")
             logger.critical("LIFECYCLE: FSM state=%s", _bootstrap_state_value())
 
-            # ── FORCE_TRADE: exit startup thread immediately after LIVE_ACTIVE ──
-            # When FORCE_TRADE=true the startup thread is known to stall in the
-            # code that runs after activation.  Return immediately so the main
-            # thread's supervisor loop takes over.  Mark bootstrap complete first
-            # so the supervisor sees a successful handoff (not a crash).
+            # ── FORCE_TRADE: run supervisor loop directly on startup thread ──────
+            # The previous fix (return here and let the main thread's supervisor
+            # loop take over) did not work because the main thread's supervisor
+            # loop never started while the startup thread was still running.
+            # Instead, call _rerun_supervisor_loop directly on this thread so
+            # trading begins immediately after LIVE_ACTIVE is reached.
             if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
                 logger.warning(
-                    "⚡ FORCE_TRADE: LIVE_ACTIVE reached — exiting startup thread immediately "
-                    "so supervisor loop can take over"
+                    "⚡ FORCE_TRADE: LIVE_ACTIVE reached — running supervisor loop directly "
+                    "on startup thread (no handoff needed)"
                 )
                 _bootstrap_complete_flag.set()
                 _bootstrap_completed_event.set()
+                _state_for_supervisor_ft = {
+                    "strategy": strategy,
+                    "active_threads": _active_threads,
+                    "use_independent_trading": use_independent_trading,
+                    "health_manager": health_manager,
+                }
+                _rerun_supervisor_loop(_state_for_supervisor_ft)
                 return
+
 
             # STEP 3 — ALWAYS run trading loop via the shared supervisor.
             # Delegates to _rerun_supervisor_loop so the supervisor logic lives
