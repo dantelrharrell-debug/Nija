@@ -9540,6 +9540,14 @@ def main():
         sys.exit(1)
     _emit_boot_trace("BOOT 4", "preflight passed; launching startup pipeline")
 
+    # ── FORCE_TRADE: direct early bypass — no helper functions ───────────────
+    # Simple direct check immediately after BOOT 4 so nothing in the startup
+    # pipeline can block or prevent this from triggering.
+    if os.environ.get("FORCE_TRADE") in ("true", "True", "TRUE", "1") or \
+            os.environ.get("FORCE_TRADE_MODE") in ("true", "True", "TRUE", "1"):
+        logger.warning("⚡ FORCE_TRADE: EARLY BYPASS TRIGGERED — skipping entire startup pipeline")
+        _rerun_supervisor_loop({})
+        return
     # ── FORCE_TRADE: EARLY BYPASS — right after preflight, before ANY startup code ──
     # This is the authoritative FORCE_TRADE check.  It fires immediately after
     # preflight passes so the normal startup pipeline is never entered.
