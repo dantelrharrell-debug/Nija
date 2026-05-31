@@ -9531,6 +9531,99 @@ def main():
         sys.exit(1)
     _emit_boot_trace("BOOT 4", "preflight passed; launching startup pipeline")
 
+    # ── FORCE_TRADE: EARLY BYPASS — right after preflight, before ANY startup code ──
+    # This is the authoritative FORCE_TRADE check.  It fires immediately after
+    # preflight passes so the normal startup pipeline is never entered.
+    if _is_truthy_env("FORCE_TRADE") or _is_truthy_env("FORCE_TRADE_MODE"):
+        logger.warning(
+            "⚡ FORCE_TRADE: EARLY BYPASS — preflight passed, skipping ALL startup code "
+            "and going straight to supervisor loop"
+        )
+        # Mark every readiness gate so downstream checks pass immediately.
+        for _ft_early_gate in ("broker_connected", "strategy_ready", "risk_ready",
+                               "authority_ready", "capital_ready", "execution_ready",
+                               "balance_hydrated", "bootstrap_ready"):
+            try:
+                _rt_mark_ready(_ft_early_gate)
+            except Exception:
+                pass
+        os.environ["NIJA_EXECUTION_ACTIVE"] = "1"
+        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+        # Force FSM to RUNNING_SUPERVISED.
+        try:
+            _try_finalize_running_supervised_handoff(
+                reason="FORCE_TRADE early bypass (main post-preflight)",
+                completion_log="⚡ FORCE_TRADE: FSM forced to RUNNING_SUPERVISED (early bypass)",
+                set_bootstrap_events=True,
+            )
+        except Exception as _ft_early_fsm_err:
+            logger.warning("⚡ FORCE_TRADE: early bypass FSM handoff raised (non-fatal): %s", _ft_early_fsm_err)
+        # Signal TRADING_ENGINE_READY.
+        try:
+            try:
+                from bot.nija_core_loop import TRADING_ENGINE_READY as _ter_early
+            except ImportError:
+                from nija_core_loop import TRADING_ENGINE_READY as _ter_early  # type: ignore[import]
+            if not _ter_early.is_set():
+                logger.warning("⚡ FORCE_TRADE: setting TRADING_ENGINE_READY (early bypass)")
+                _ter_early.set()
+        except Exception as _ter_early_err:
+            logger.warning("⚡ FORCE_TRADE: could not set TRADING_ENGINE_READY (early bypass): %s", _ter_early_err)
+        # Create strategy directly.
+        _ft_early_strategy = None
+        try:
+            _ft_early_strategy = TradingStrategy()
+            _ft_early_lock_acquired = _initialized_state_lock.acquire(timeout=5.0)
+            if _ft_early_lock_acquired:
+                try:
+                    _publish_strategy_runtime_readiness(
+                        _ft_early_strategy,
+                        context="FORCE_TRADE early bypass",
+                    )
+                finally:
+                    _initialized_state_lock.release()
+            else:
+                _initialized_state["strategy"] = _ft_early_strategy
+                _rt_mark_ready("strategy_ready")
+                _rt_mark_ready("risk_ready")
+                _rt_mark_ready("execution_ready")
+            logger.warning("⚡ FORCE_TRADE: strategy created directly (early bypass)")
+        except Exception as _ft_early_create_err:
+            logger.error(
+                "⚡ FORCE_TRADE: strategy creation failed (early bypass): %s — "
+                "supervisor loop will operate without strategy",
+                _ft_early_create_err,
+            )
+        # Start trading engine and enter supervisor loop directly.
+        if _ft_early_strategy is not None:
+            try:
+                from bot.nija_core_loop import start_trading_engine as _ste_early
+            except ImportError:
+                from nija_core_loop import start_trading_engine as _ste_early  # type: ignore[import]
+            _ft_early_trading_thread = _ste_early(_ft_early_strategy)
+            if _ft_early_trading_thread is not None and _ft_early_trading_thread.is_alive():
+                _bootstrap_complete_flag.set()
+                _bootstrap_completed_event.set()
+                logger.warning(
+                    "⚡ FORCE_TRADE: trading engine started (early bypass) — "
+                    "calling _rerun_supervisor_loop directly"
+                )
+            else:
+                logger.error("⚡ FORCE_TRADE: trading engine thread did not start (early bypass)")
+        else:
+            logger.error("⚡ FORCE_TRADE: no strategy — trading engine not started (early bypass)")
+        # Call _rerun_supervisor_loop directly with the initialized state.
+        _ft_early_state = {
+            "strategy": _ft_early_strategy,
+            "active_threads": [],
+            "use_independent_trading": False,
+            "health_manager": None,
+        }
+        logger.warning("⚡ FORCE_TRADE: entering _rerun_supervisor_loop (early bypass)")
+        _rerun_supervisor_loop(_ft_early_state)
+        return
+    # ── END FORCE_TRADE EARLY BYPASS ─────────────────────────────────────────
+
     # Now setup logging (after health server is running)
     # Log process startup
     _log_lifecycle_banner(
