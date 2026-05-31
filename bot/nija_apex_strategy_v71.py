@@ -3410,6 +3410,19 @@ class NIJAApexStrategyV71:
                                     volume=_volume_ratio,
                                     reason=f"entry_gate_score_{_gate_score}_of_5",
                                 )
+                                get_signal_funnel().record_legacy_gate_rejected(symbol)
+                                logger.warning(
+                                    "[FUNNEL] LEGACY_GATE REJECT pair=%s side=LONG "
+                                    "score=%d/5 floor=%d confidence=%.3f adx=%.1f "
+                                    "vol_ratio=%.1f%% regime=%s",
+                                    symbol,
+                                    _gate_score,
+                                    ENTRY_GATE_SAFETY_FLOOR,
+                                    _confidence,
+                                    adx,
+                                    _volume_ratio * 100.0,
+                                    str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN"),
+                                )
                                 get_signal_funnel().record_execution_stage(
                                     pair=symbol,
                                     side='long',
@@ -3477,6 +3490,24 @@ class NIJAApexStrategyV71:
                                     ).volume_gate_multiplier
                                 except Exception:
                                     pass
+                            # ── [FUNNEL] Log candidate entering the 5-gate system ──
+                            if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                try:
+                                    _regime_str_funnel_l = str(
+                                        getattr(self.current_regime, "value", self.current_regime) or "unknown"
+                                    )
+                                    get_signal_funnel().log_funnel_entry(
+                                        symbol,
+                                        side="long",
+                                        confidence=_confidence,
+                                        adx=adx,
+                                        volume_ratio=_volume_ratio,
+                                        regime=_regime_str_funnel_l,
+                                        score=float(score),
+                                        entry_type=_entry_type_l,
+                                    )
+                                except Exception:
+                                    pass
                             _gate_result_l = self.ai_entry_gate.check(
                                 df=df,
                                 indicators=indicators,
@@ -3529,6 +3560,13 @@ class NIJAApexStrategyV71:
                                                 volume=_volume_ratio,
                                                 reason="volatility_explosion_long",
                                             )
+                                            get_signal_funnel().log_gate_result(
+                                                symbol,
+                                                side="long",
+                                                gate_result=_gate_result_l,
+                                                rejection_type="hard",
+                                            )
+                                            get_signal_funnel().record_ai_gate_hard_rejected(symbol)
                                             get_signal_funnel().record_execution_stage(
                                                 pair=symbol,
                                                 side='long',
@@ -3576,6 +3614,13 @@ class NIJAApexStrategyV71:
                                             volume=_volume_ratio,
                                             reason=f"ai_gate_soft_fail_long_score_{_gate_result_l.gate_score:.1f}",
                                         )
+                                        get_signal_funnel().log_gate_result(
+                                            symbol,
+                                            side="long",
+                                            gate_result=_gate_result_l,
+                                            rejection_type="soft",
+                                        )
+                                        get_signal_funnel().record_ai_gate_soft_rejected(symbol)
                                     except Exception:
                                         pass
                                 if (
@@ -3661,6 +3706,12 @@ class NIJAApexStrategyV71:
                                 if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                                     try:
                                         get_signal_funnel().record_ai_gate_pass(symbol)
+                                        get_signal_funnel().log_gate_result(
+                                            symbol,
+                                            side="long",
+                                            gate_result=_gate_result_l,
+                                            rejection_type="pass",
+                                        )
                                         get_signal_funnel().record_execution_stage(
                                             pair=symbol,
                                             side='long',
@@ -4325,6 +4376,19 @@ class NIJAApexStrategyV71:
                                     volume=_volume_ratio,
                                     reason=f"entry_gate_score_{_gate_score}_of_5_short",
                                 )
+                                get_signal_funnel().record_legacy_gate_rejected(symbol)
+                                logger.warning(
+                                    "[FUNNEL] LEGACY_GATE REJECT pair=%s side=SHORT "
+                                    "score=%d/5 floor=%d confidence=%.3f adx=%.1f "
+                                    "vol_ratio=%.1f%% regime=%s",
+                                    symbol,
+                                    _gate_score,
+                                    ENTRY_GATE_SAFETY_FLOOR,
+                                    _confidence,
+                                    adx,
+                                    _volume_ratio * 100.0,
+                                    str(getattr(self.current_regime, "value", self.current_regime) or "UNKNOWN"),
+                                )
                                 get_signal_funnel().record_execution_stage(
                                     pair=symbol,
                                     side='short',
@@ -4384,6 +4448,24 @@ class NIJAApexStrategyV71:
                                     ).volume_gate_multiplier
                                 except Exception:
                                     pass
+                            # ── [FUNNEL] Log candidate entering the 5-gate system (SHORT) ──
+                            if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                try:
+                                    _regime_str_funnel_s = str(
+                                        getattr(self.current_regime, "value", self.current_regime) or "unknown"
+                                    )
+                                    get_signal_funnel().log_funnel_entry(
+                                        symbol,
+                                        side="short",
+                                        confidence=_confidence,
+                                        adx=adx,
+                                        volume_ratio=_volume_ratio,
+                                        regime=_regime_str_funnel_s,
+                                        score=float(score),
+                                        entry_type=_entry_type_s,
+                                    )
+                                except Exception:
+                                    pass
                             _gate_result_s = self.ai_entry_gate.check(
                                 df=df,
                                 indicators=indicators,
@@ -4436,6 +4518,13 @@ class NIJAApexStrategyV71:
                                                 volume=_volume_ratio,
                                                 reason="volatility_explosion_short",
                                             )
+                                            get_signal_funnel().log_gate_result(
+                                                symbol,
+                                                side="short",
+                                                gate_result=_gate_result_s,
+                                                rejection_type="hard",
+                                            )
+                                            get_signal_funnel().record_ai_gate_hard_rejected(symbol)
                                             get_signal_funnel().record_execution_stage(
                                                 pair=symbol,
                                                 side='short',
@@ -4483,6 +4572,13 @@ class NIJAApexStrategyV71:
                                             volume=_volume_ratio,
                                             reason=f"ai_gate_soft_fail_short_score_{_gate_result_s.gate_score:.1f}",
                                         )
+                                        get_signal_funnel().log_gate_result(
+                                            symbol,
+                                            side="short",
+                                            gate_result=_gate_result_s,
+                                            rejection_type="soft",
+                                        )
+                                        get_signal_funnel().record_ai_gate_soft_rejected(symbol)
                                     except Exception:
                                         pass
                                 if (
@@ -4568,6 +4664,12 @@ class NIJAApexStrategyV71:
                                 if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                                     try:
                                         get_signal_funnel().record_ai_gate_pass(symbol)
+                                        get_signal_funnel().log_gate_result(
+                                            symbol,
+                                            side="short",
+                                            gate_result=_gate_result_s,
+                                            rejection_type="pass",
+                                        )
                                         get_signal_funnel().record_execution_stage(
                                             pair=symbol,
                                             side='short',
@@ -4590,6 +4692,7 @@ class NIJAApexStrategyV71:
                                         pass
                         except Exception as _gate_s_err:
                             logger.debug("AI Entry Gate error (short): %s", _gate_s_err)
+
 
                     # Resolve exit params for this short entry
                     if self.exit_config is not None:
