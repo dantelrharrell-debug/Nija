@@ -165,6 +165,12 @@ ADOPTION_FAILURE_BACKOFF_S = 30.0
 # Error message truncation length for health status tracking
 MAX_ERROR_MESSAGE_LENGTH = 100  # Maximum length for error messages stored in health status
 KRAKEN_BROKER_TYPE_NAME = "kraken"
+TRADING_ACTIVITY_STALE_WINDOW_S = int(
+    os.environ.get("NIJA_TRADING_ACTIVITY_STALE_WINDOW_S", "300")
+)
+TRADING_ACTIVITY_WARNING_COOLDOWN_S = int(
+    os.environ.get("NIJA_TRADING_ACTIVITY_WARNING_COOLDOWN_S", "300")
+)
 
 
 class IndependentBrokerTrader:
@@ -241,6 +247,7 @@ class IndependentBrokerTrader:
         # Structure: set of broker names currently running threads
         self.active_trading_threads: Set[str] = set()
         self.active_threads_lock = threading.Lock()
+        self._last_trading_alignment_warning_at: float = 0.0
 
         # broker_name → BrokerType: stored so the supervisor can restart a
         # thread started by the connection monitor with the correct broker type.
@@ -1343,6 +1350,7 @@ class IndependentBrokerTrader:
                         'is_trading': True,
                         'total_cycles': self.user_broker_health.get(user_id, {}).get(broker_name, {}).get('total_cycles', 0) + 1
                     }
+                    self._log_trading_activity_mismatch_if_needed()
                     logger.info(f"   ✅ {broker_name} (USER) cycle completed successfully")
 
                 except Exception as trading_err:
@@ -1427,6 +1435,76 @@ class IndependentBrokerTrader:
                 stop_flag.wait(60)
 
         logger.info(f"🛑 {broker_name} (USER) trading loop stopped (total cycles: {cycle_count})")
+
+    @staticmethod
+    def _is_recent_trading_health(health: Optional[Dict], *, now: Optional[datetime] = None) -> bool:
+        """Return True when a broker health payload shows recent active trading."""
+        if not health or not health.get('is_trading'):
+            return False
+        last_check = health.get('last_check')
+        if not isinstance(last_check, datetime):
+            return False
+        _now = now or datetime.now()
+        return (_now - last_check).total_seconds() <= TRADING_ACTIVITY_STALE_WINDOW_S
+
+    def _get_trading_activity_alignment(self) -> Dict:
+        """Summarise recent platform-vs-user trading activity."""
+        now = datetime.now()
+        active_platform_brokers = sorted(
+            broker_name
+            for broker_name, health in self.broker_health.items()
+            if self._is_recent_trading_health(health, now=now)
+        )
+
+        active_user_details: List[Dict[str, object]] = []
+        active_user_brokers = 0
+        for user_id, broker_health in self.user_broker_health.items():
+            recent_brokers = sorted(
+                broker_name
+                for broker_name, health in broker_health.items()
+                if self._is_recent_trading_health(health, now=now)
+            )
+            if recent_brokers:
+                active_user_brokers += len(recent_brokers)
+                active_user_details.append({
+                    'user_id': user_id,
+                    'brokers': recent_brokers,
+                })
+
+        return {
+            'active_platform_brokers': active_platform_brokers,
+            'active_platform_broker_count': len(active_platform_brokers),
+            'active_user_accounts': active_user_details,
+            'active_user_account_count': len(active_user_details),
+            'active_user_broker_count': active_user_brokers,
+            'users_active_while_platform_idle': bool(active_user_details) and not active_platform_brokers,
+            'stale_window_seconds': TRADING_ACTIVITY_STALE_WINDOW_S,
+        }
+
+    def _log_trading_activity_mismatch_if_needed(self) -> None:
+        """Warn when user accounts are trading recently but the platform is idle."""
+        alignment = self._get_trading_activity_alignment()
+        if not alignment['users_active_while_platform_idle']:
+            return
+
+        now_ts = time.time()
+        if (
+            now_ts - self._last_trading_alignment_warning_at
+            < TRADING_ACTIVITY_WARNING_COOLDOWN_S
+        ):
+            return
+        self._last_trading_alignment_warning_at = now_ts
+
+        active_users = ", ".join(
+            f"{item['user_id']} ({', '.join(item['brokers'])})"
+            for item in alignment['active_user_accounts']
+        )
+        logger.warning(
+            "⚠️ Trading activity mismatch: %d user account(s) actively trading while no platform broker is active within %ss",
+            alignment['active_user_account_count'],
+            alignment['stale_window_seconds'],
+        )
+        logger.warning("   Active user trading: %s", active_users)
 
     def start_independent_trading(self):
         """
@@ -2069,7 +2147,8 @@ class IndependentBrokerTrader:
             'connected_brokers': sum(1 for b in broker_source.values() if b.connected),
             'funded_brokers': len(self.funded_brokers),
             'trading_threads': len(self.broker_threads),
-            'broker_details': {}
+            'broker_details': {},
+            'activity_alignment': self._get_trading_activity_alignment(),
         }
 
         with self.health_lock:
@@ -2113,6 +2192,15 @@ class IndependentBrokerTrader:
         logger.info(f"Connected: {summary['connected_brokers']}")
         logger.info(f"Funded: {summary['funded_brokers']}")
         logger.info(f"Active Trading Threads: {summary['trading_threads']}")
+        alignment = summary['activity_alignment']
+        logger.info(
+            "Recent Trading Activity: platform=%d broker(s), users=%d account(s) / %d broker(s)",
+            alignment['active_platform_broker_count'],
+            alignment['active_user_account_count'],
+            alignment['active_user_broker_count'],
+        )
+        if alignment['users_active_while_platform_idle']:
+            logger.warning("⚠️ Users are actively trading while the platform is idle")
         logger.info("")
 
         for broker_name, details in summary['broker_details'].items():
