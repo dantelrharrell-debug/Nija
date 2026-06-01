@@ -1721,66 +1721,75 @@ class TradingStateMachine:
         the authority heartbeat monitor — it only skips the distributed-authority
         and live-gate pre-flight checks that are the source of the deadlock.
         """
+        _already_live_active = False
         with self._lock:
             current = self._current_state
             if current == TradingState.LIVE_ACTIVE:
+                _already_live_active = True
                 self._activation_committed = True
                 self._execution_authority = True
                 self._core_loop_owns_execution = False
                 self._can_dispatch_trades = True
                 self._pending_confirmation_since = None
                 self._last_pending_log_time = None
-                return True
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                os.environ["NIJA_RUNTIME_TRADING_STATE"] = TradingState.LIVE_ACTIVE.value
+            else:
+                allowed = self.VALID_TRANSITIONS.get(current, [])
+                if TradingState.LIVE_ACTIVE not in allowed:
+                    # Arm to LIVE_PENDING_CONFIRMATION first if needed.
+                    if TradingState.LIVE_PENDING_CONFIRMATION in self.VALID_TRANSITIONS.get(current, []):
+                        transition_record = {
+                            "from": current.value,
+                            "to": TradingState.LIVE_PENDING_CONFIRMATION.value,
+                            "reason": f"{reason} [arm step]",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                        self._state_history.append(transition_record)
+                        self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                        if self._pending_confirmation_since is None:
+                            self._pending_confirmation_since = time.monotonic()
+                        current = TradingState.LIVE_PENDING_CONFIRMATION
+                        os.environ["NIJA_RUNTIME_TRADING_STATE"] = current.value
+                    else:
+                        logger.critical(
+                            "[_force_live_active_transition] cannot reach LIVE_ACTIVE from %s",
+                            current.value,
+                        )
+                        return False
 
-            allowed = self.VALID_TRANSITIONS.get(current, [])
-            if TradingState.LIVE_ACTIVE not in allowed:
-                # Arm to LIVE_PENDING_CONFIRMATION first if needed.
-                if TradingState.LIVE_PENDING_CONFIRMATION in self.VALID_TRANSITIONS.get(current, []):
-                    transition_record = {
-                        "from": current.value,
-                        "to": TradingState.LIVE_PENDING_CONFIRMATION.value,
-                        "reason": f"{reason} [arm step]",
-                        "timestamp": datetime.utcnow().isoformat(),
-                    }
-                    self._state_history.append(transition_record)
-                    self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
-                    if self._pending_confirmation_since is None:
-                        self._pending_confirmation_since = time.monotonic()
-                    current = TradingState.LIVE_PENDING_CONFIRMATION
-                    os.environ["NIJA_RUNTIME_TRADING_STATE"] = current.value
-                else:
-                    logger.critical(
-                        "[_force_live_active_transition] cannot reach LIVE_ACTIVE from %s",
-                        current.value,
-                    )
-                    return False
-
-            transition_record = {
-                "from": current.value,
-                "to": TradingState.LIVE_ACTIVE.value,
-                "reason": reason,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-            self._state_history.append(transition_record)
-            old_state = current
-            self._current_state = TradingState.LIVE_ACTIVE
-            self._activation_committed = True
-            self._execution_authority = True
-            self._core_loop_owns_execution = False
-            self._can_dispatch_trades = True
-            self._pending_confirmation_since = None
-            self._last_pending_log_time = None
-            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
-            os.environ["NIJA_RUNTIME_TRADING_STATE"] = TradingState.LIVE_ACTIVE.value
+                transition_record = {
+                    "from": current.value,
+                    "to": TradingState.LIVE_ACTIVE.value,
+                    "reason": reason,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                self._state_history.append(transition_record)
+                old_state = current
+                self._current_state = TradingState.LIVE_ACTIVE
+                self._activation_committed = True
+                self._execution_authority = True
+                self._core_loop_owns_execution = False
+                self._can_dispatch_trades = True
+                self._pending_confirmation_since = None
+                self._last_pending_log_time = None
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                os.environ["NIJA_RUNTIME_TRADING_STATE"] = TradingState.LIVE_ACTIVE.value
 
         # Post-transition I/O outside the lock.
-        self._persist_state()
-        logger.critical(
-            "🔄 [FORCED] State transition: %s -> LIVE_ACTIVE (Reason: %s)",
-            old_state.value,
-            reason,
-        )
-        self._trigger_callbacks(TradingState.LIVE_ACTIVE)
+        if not _already_live_active:
+            self._persist_state()
+            logger.critical(
+                "🔄 [FORCED] State transition: %s -> LIVE_ACTIVE (Reason: %s)",
+                old_state.value,
+                reason,
+            )
+            self._trigger_callbacks(TradingState.LIVE_ACTIVE)
+        else:
+            logger.info(
+                "🔁 [FORCED] LIVE_ACTIVE already set — re-synced runtime trading state/env authority (Reason: %s)",
+                reason,
+            )
         try:
             try:
                 from bot.authority_heartbeat import start_authority_heartbeat

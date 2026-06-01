@@ -244,6 +244,42 @@ class TestMaybeAutoActivateDelegation(unittest.TestCase):
                 self.assertIn("runtime_lifecycle_phase", snap)
                 self.assertIn("execution_permitted", snap)
 
+    def test_force_live_active_resyncs_env_and_coordinator_when_already_live(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            with patch.dict(
+                os.environ,
+                {
+                    "LIVE_CAPITAL_VERIFIED": "true",
+                    "DRY_RUN_MODE": "false",
+                    "AUTO_ACTIVATE": "false",
+                    "FORCE_LIVE_TRANSITION": "false",
+                    "HEARTBEAT_TRADE": "false",
+                },
+                clear=False,
+            ), patch(
+                "bot.trading_state_machine._startup_ownership_gate",
+                return_value=(True, ""),
+            ):
+                sm = TradingStateMachine(state_file=state_path)
+                self.assertTrue(sm._force_live_active_transition("first"))
+                self.assertEqual(sm.get_current_state(), TradingState.LIVE_ACTIVE)
+
+                os.environ.pop("NIJA_RUNTIME_TRADING_STATE", None)
+                os.environ.pop("NIJA_RUNTIME_EXECUTION_AUTHORITY", None)
+                get_startup_coordinator().reset_for_testing()
+
+                self.assertTrue(sm._force_live_active_transition("resync"))
+                self.assertEqual(
+                    os.environ.get("NIJA_RUNTIME_TRADING_STATE"),
+                    TradingState.LIVE_ACTIVE.value,
+                )
+                self.assertEqual(os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY"), "1")
+                self.assertGreater(
+                    get_startup_coordinator()._runtime.last_committed_snapshot_version,
+                    0,
+                )
+
 
 class TestRuntimeAuthorityRevocation(unittest.TestCase):
     def test_can_dispatch_revoked_when_writer_nonce_gate_fails(self) -> None:
