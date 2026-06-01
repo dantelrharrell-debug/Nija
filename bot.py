@@ -3786,23 +3786,30 @@ def _log_startup_trace(context: str) -> None:
     path is actually being used when the bot starts.  Uses both print() and
     logger so the trace appears in both stdout and the rotating log file.
     """
-    import traceback as _tb
-    _stack_lines = _tb.format_stack()
-    _stack_str = "".join(_stack_lines).strip()
     _ts = datetime.now(timezone.utc).isoformat()
     _thread = threading.current_thread()
     _all_threads = [
         f"{t.name}(id={t.ident},daemon={t.daemon},alive={t.is_alive()})"
         for t in threading.enumerate()
     ]
+    _include_stack = str(
+        os.environ.get("NIJA_DIAG_STARTUP_INCLUDE_STACK", "")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    _stack_suffix = ""
+    if _include_stack:
+        import traceback as _tb
+
+        _stack_lines = _tb.format_stack()
+        _stack_str = "".join(_stack_lines).strip()
+        _stack_suffix = f" stack=\n{_stack_str}"
     _msg = (
         f"DIAG_STARTUP_TRACE context={context!r} "
         f"ts={_ts} "
         f"pid={os.getpid()} "
         f"thread={_thread.name} "
         f"thread_id={_thread.ident} "
-        f"all_threads=[{', '.join(_all_threads)}] "
-        f"stack=\n{_stack_str}"
+        f"all_threads=[{', '.join(_all_threads)}]"
+        f"{_stack_suffix}"
     )
     print(_msg, flush=True)
     try:

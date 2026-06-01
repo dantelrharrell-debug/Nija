@@ -389,7 +389,7 @@ class AuthorityHeartbeatMonitor:
         )
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                logger.warning(
+                logger.info(
                     "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor already running "
                     "thread=%s is_alive=%s",
                     self._thread.name,
