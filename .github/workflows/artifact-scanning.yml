@@ -13,6 +13,9 @@ jobs:
   docker-image-scan:
     name: Docker Image Security Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     strategy:
       matrix:
         dockerfile: [Dockerfile, Dockerfile.api, Dockerfile.dashboard, Dockerfile.gateway]

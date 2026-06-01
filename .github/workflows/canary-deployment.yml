@@ -102,7 +102,8 @@ jobs:
 
     - name: Sign container image
       run: |
-        cosign sign --yes ${{ steps.meta.outputs.tags }}@${{ steps.build.outputs.digest }}
+        IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+        cosign sign --yes "${IMAGE_TAG}@${{ steps.build.outputs.digest }}"
       env:
         COSIGN_EXPERIMENTAL: 1
 
