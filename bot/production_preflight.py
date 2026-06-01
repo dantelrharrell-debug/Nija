@@ -559,12 +559,30 @@ def _step4_single_instance() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _step5_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: ignore[name-defined]
-    """Remove Redis keys that have no TTL (permanent/stale) from the lock namespace."""
+    """Remove stale lock keys without deleting persistent authority/nonce lineage."""
     _step(5, "Stale lock clearance")
 
-    lock_key      = os.getenv("NIJA_WRITER_LOCK_KEY",  "nija:writer_lock")
-    nonce_key     = os.getenv("NIJA_REDIS_NONCE_KEY",  "nija:kraken:nonce")
-    lock_patterns = [lock_key, nonce_key]
+    lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "nija:writer_lock")
+    lock_patterns = [lock_key]
+
+    # Persistent authority/nonce continuity keys must never be deleted by stale
+    # lock cleanup. They are intentionally no-TTL lineage sources used by the
+    # distributed writer lease and nonce authority gates.
+    protected_exact = {
+        os.getenv("NIJA_LEASE_GENERATION_KEY", "nija:lease:generation").strip() or "nija:lease:generation",
+    }
+    protected_prefixes = (
+        "nija:kraken:nonce:",
+        "nija:kraken:writer:version_counter:",
+        "nija:kraken:writer:lease_version:",
+        "nija:kraken:writer:owner:",
+        "nija:kraken:writer:fingerprint:",
+    )
+
+    def _is_protected_key(key: str) -> bool:
+        if key in protected_exact:
+            return True
+        return any(key.startswith(prefix) for prefix in protected_prefixes)
 
     cleared = 0
     # CRITICAL FIX: Aggressively clear lock keys to prevent contention
@@ -595,21 +613,29 @@ def _step5_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: igno
                 else:
                     log.warning("Could not inspect key '%s' after 3 attempts: %s", key, exc)
 
-    # Additionally scan for any nija:* keys with no expiry using bounded scan
-    stale_pattern = "nija:*"
+    # Additionally scan lock/fence namespaces for no-TTL leftovers only.
+    stale_patterns = ("nija:writer_lock*", "nija:writer_fence*")
     scanned = 0
     try:
         from bot.redis_runtime import safe_scan
-        for k in safe_scan(redis_client, match=stale_pattern, max_iters=20):
-            scanned += 1
-            try:
-                t = redis_client.pttl(k)
-                if t == -1:
-                    redis_client.delete(k)
-                    log.warning("🗑️  Cleared stale no-TTL key discovered via scan: %s", k)
-                    cleared += 1
-            except Exception as scan_exc:
-                log.debug("Could not clear scanned key '%s': %s", k, scan_exc)
+        seen: set[str] = set()
+        for stale_pattern in stale_patterns:
+            for k in safe_scan(redis_client, match=stale_pattern, max_iters=20):
+                if k in seen:
+                    continue
+                seen.add(k)
+                scanned += 1
+                if _is_protected_key(k):
+                    log.info("Protected persistent key discovered during stale scan; skipping: %s", k)
+                    continue
+                try:
+                    t = redis_client.pttl(k)
+                    if t == -1:
+                        redis_client.delete(k)
+                        log.warning("🗑️  Cleared stale no-TTL key discovered via scan: %s", k)
+                        cleared += 1
+                except Exception as scan_exc:
+                    log.debug("Could not clear scanned key '%s': %s", k, scan_exc)
     except Exception as exc:
         log.warning("Bounded scan for stale keys failed: %s", exc)
 

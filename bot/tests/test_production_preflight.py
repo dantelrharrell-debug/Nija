@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+from bot.production_preflight import _step5_clear_stale_locks
+
+
+class _FakeRedis:
+    def __init__(self, ttls: dict[str, int]) -> None:
+        self._ttls = dict(ttls)
+        self.deleted: list[str] = []
+
+    def pttl(self, key: str) -> int:
+        return self._ttls.get(key, -2)
+
+    def delete(self, key: str) -> int:
+        if key in self._ttls:
+            del self._ttls[key]
+            self.deleted.append(key)
+            return 1
+        return 0
+
+
+class ProductionPreflightStep5Tests(unittest.TestCase):
+    def test_preserves_persistent_authority_and_nonce_lineage_keys(self) -> None:
+        redis_client = _FakeRedis(
+            {
+                "nija:writer_lock:test": 55_000,
+                "nija:lease:generation": -1,
+                "nija:kraken:writer:version_counter:test": -1,
+                "nija:kraken:nonce:test": -1,
+            }
+        )
+
+        with patch(
+            "bot.redis_runtime.safe_scan",
+            return_value=iter(
+                [
+                    "nija:lease:generation",
+                    "nija:kraken:writer:version_counter:test",
+                    "nija:kraken:nonce:test",
+                ]
+            ),
+        ):
+            _step5_clear_stale_locks(redis_client)
+
+        self.assertEqual(redis_client.deleted, [])
+
+    def test_clears_stale_writer_fence_key(self) -> None:
+        redis_client = _FakeRedis(
+            {
+                "nija:writer_lock:test": 55_000,
+                "nija:writer_fence:test": -1,
+            }
+        )
+
+        with patch("bot.redis_runtime.safe_scan", return_value=iter(["nija:writer_fence:test"])):
+            _step5_clear_stale_locks(redis_client)
+
+        self.assertIn("nija:writer_fence:test", redis_client.deleted)
+
+
+if __name__ == "__main__":
+    unittest.main()
