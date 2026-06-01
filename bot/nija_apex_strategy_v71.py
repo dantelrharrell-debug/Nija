@@ -3324,11 +3324,6 @@ class NIJAApexStrategyV71:
                             )
                         except Exception:
                             pass
-                    if _PIPELINE_FUNNEL_AVAILABLE and _get_pipeline_funnel is not None:
-                        try:
-                            _get_pipeline_funnel().record_signal_approved(symbol)
-                        except Exception:
-                            pass
                     _drought_l = (
                         self._freq_ctrl.get_drought_relaxation()
                         if self._freq_ctrl is not None else None
@@ -4200,6 +4195,12 @@ class NIJAApexStrategyV71:
                         decision='TRADE',
                         reason=reason,
                     )
+                    # ── Pipeline funnel: signal cleared all strategy gates ──
+                    if _PIPELINE_FUNNEL_AVAILABLE and _get_pipeline_funnel is not None:
+                        try:
+                            _get_pipeline_funnel().record_signal_approved(symbol)
+                        except Exception:
+                            pass
                     # ── Funnel: record execution (LONG) ────────────────────
                     if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                         try:
@@ -4292,11 +4293,6 @@ class NIJAApexStrategyV71:
                                 reason=reason,
                                 extra={"trend": trend},
                             )
-                        except Exception:
-                            pass
-                    if _PIPELINE_FUNNEL_AVAILABLE and _get_pipeline_funnel is not None:
-                        try:
-                            _get_pipeline_funnel().record_signal_approved(symbol)
                         except Exception:
                             pass
                     _drought_s = (
@@ -5157,6 +5153,12 @@ class NIJAApexStrategyV71:
                         decision='TRADE',
                         reason=reason,
                     )
+                    # ── Pipeline funnel: signal cleared all strategy gates ──
+                    if _PIPELINE_FUNNEL_AVAILABLE and _get_pipeline_funnel is not None:
+                        try:
+                            _get_pipeline_funnel().record_signal_approved(symbol)
+                        except Exception:
+                            pass
                     # ── Funnel: record execution (SHORT) ───────────────────
                     if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                         try:
