@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from bot.production_preflight import _step5_clear_stale_locks
@@ -33,16 +34,16 @@ class ProductionPreflightStep5Tests(unittest.TestCase):
             }
         )
 
-        with patch(
-            "bot.redis_runtime.safe_scan",
-            return_value=iter(
+        fake_scan = SimpleNamespace(
+            safe_scan=lambda *_args, **_kwargs: iter(
                 [
                     "nija:lease:generation",
                     "nija:kraken:writer:version_counter:test",
                     "nija:kraken:nonce:test",
                 ]
-            ),
-        ):
+            )
+        )
+        with patch.dict("sys.modules", {"bot.redis_runtime": fake_scan}):
             _step5_clear_stale_locks(redis_client)
 
         self.assertEqual(redis_client.deleted, [])
@@ -55,7 +56,10 @@ class ProductionPreflightStep5Tests(unittest.TestCase):
             }
         )
 
-        with patch("bot.redis_runtime.safe_scan", return_value=iter(["nija:writer_fence:test"])):
+        fake_scan = SimpleNamespace(
+            safe_scan=lambda *_args, **_kwargs: iter(["nija:writer_fence:test"])
+        )
+        with patch.dict("sys.modules", {"bot.redis_runtime": fake_scan}):
             _step5_clear_stale_locks(redis_client)
 
         self.assertIn("nija:writer_fence:test", redis_client.deleted)
