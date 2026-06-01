@@ -6,13 +6,13 @@ Enables a high-frequency micro scalping mode that dramatically increases trade
 throughput by:
 
   • Reducing the inter-cycle scan interval to 60 s
-  • Setting MIN_CONFIDENCE to 0.18 for faster entry triggers (Phase 1)
-  • Setting volume filters (volume_threshold 0.006 = 0.6 %, volume_min_threshold 0.002)
-  • Relaxing ADX minimum to 5 and trend confirmation count to 2 (Phase 1)
-  • Setting tight profit targets 1.0 % for rapid realisation (Phase 1)
-  • Setting tight stop-losses 0.35 % (Phase 1)
+  • Setting MIN_CONFIDENCE to 0.15 for faster entry triggers (growth config)
+  • Setting volume filters (volume_threshold 0.0045 = 0.45 %, volume_min_threshold 0.002)
+  • Relaxing ADX minimum to 3 and trend confirmation count to 2 (growth config)
+  • Setting tight profit targets 1.2 % for rapid realisation (growth config)
+  • Setting tight stop-losses 0.35 % (growth config)
   • Capping position hold time at 3 minutes so capital re-deploys quickly
-  • Enforcing a per-hour trade rate cap (default 12) to avoid overtrading (Phase 1)
+  • Enforcing a per-hour trade rate cap (default 20) to avoid overtrading (growth config)
 
 Activation
 ----------
@@ -94,9 +94,9 @@ def _env_int_alias(preferred: str, legacy: str, default: int) -> int:
 def _env_volume_threshold() -> float:
     """Read HF_MIN_VOLUME_PCT (percentage) or HF_SCALP_VOLUME_THRESHOLD (fraction).
 
-    ``HF_MIN_VOLUME_PCT=0.6`` means 0.6 %; the stored fraction is 0.006.
+    ``HF_MIN_VOLUME_PCT=0.45`` means 0.45 %; the stored fraction is 0.0045.
     The legacy ``HF_SCALP_VOLUME_THRESHOLD`` is already in fractional form.
-    Phase 1 default: 0.006 (0.6 %).
+    Growth config default: 0.0045 (0.45 %).
     """
     pct = os.environ.get("HF_MIN_VOLUME_PCT")
     if pct is not None:
@@ -104,7 +104,7 @@ def _env_volume_threshold() -> float:
             return float(pct) / 100.0
         except (ValueError, TypeError):
             pass
-    return _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.006)
+    return _env_float("HF_SCALP_VOLUME_THRESHOLD", 0.0045)
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
@@ -138,14 +138,14 @@ class HFScalpConfig:
     priority; legacy ``HF_SCALP_*`` names are honoured as fallback for
     backward compatibility.
 
-    Phase 1 live-tuning defaults (lower thresholds = more trade frequency):
+    Growth config defaults (lower thresholds = more trade frequency):
 
-        MIN_CONFIDENCE    0.18   (HF_MIN_CONFIDENCE or HF_SCALP_MIN_CONFIDENCE)
-        min_adx           5      (HF_MIN_ADX or HF_SCALP_MIN_ADX)
-        volume_threshold  0.006  (HF_MIN_VOLUME_PCT=0.6 or HF_SCALP_VOLUME_THRESHOLD)
-        TAKE_PROFIT       1.0 %  (HF_TAKE_PROFIT_PCT or HF_SCALP_PROFIT_TARGET_PCT)
+        MIN_CONFIDENCE    0.15   (HF_MIN_CONFIDENCE or HF_SCALP_MIN_CONFIDENCE)
+        min_adx           3      (HF_MIN_ADX or HF_SCALP_MIN_ADX)
+        volume_threshold  0.0045 (HF_MIN_VOLUME_PCT=0.45 or HF_SCALP_VOLUME_THRESHOLD)
+        TAKE_PROFIT       1.2 %  (HF_TAKE_PROFIT_PCT or HF_SCALP_PROFIT_TARGET_PCT)
         STOP_LOSS         0.35 % (HF_STOP_LOSS_PCT or HF_SCALP_STOP_LOSS_PCT)
-        MAX_TRADES/HR     12     (HF_MAX_TRADES_PER_HOUR or HF_SCALP_MAX_TRADES_PER_HOUR)
+        MAX_TRADES/HR     20     (HF_MAX_TRADES_PER_HOUR or HF_SCALP_MAX_TRADES_PER_HOUR)
         SCAN_INTERVAL     60 s
     """
 
@@ -172,22 +172,22 @@ class HFScalpConfig:
     # ── Entry quality gate — GUARANTEE trades start ───────────────────────────
     min_confidence: float = field(
         default_factory=lambda: _env_float_alias(
-            "HF_MIN_CONFIDENCE", "HF_SCALP_MIN_CONFIDENCE", 0.18
+            "HF_MIN_CONFIDENCE", "HF_SCALP_MIN_CONFIDENCE", 0.15
         )
     )
-    # env: HF_MIN_CONFIDENCE (Phase 1 preferred) or HF_SCALP_MIN_CONFIDENCE (legacy)
+    # env: HF_MIN_CONFIDENCE (preferred) or HF_SCALP_MIN_CONFIDENCE (legacy)
 
     kraken_min_confidence: float = field(
-        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.18)
+        default_factory=lambda: _env_float("HF_SCALP_KRAKEN_MIN_CONFIDENCE", 0.15)
     )
     # env: HF_SCALP_KRAKEN_MIN_CONFIDENCE
 
     min_adx: int = field(
         default_factory=lambda: _env_int_alias(
-            "HF_MIN_ADX", "HF_SCALP_MIN_ADX", 5
+            "HF_MIN_ADX", "HF_SCALP_MIN_ADX", 3
         )
     )
-    # env: HF_MIN_ADX (Phase 1 preferred) or HF_SCALP_MIN_ADX (legacy)
+    # env: HF_MIN_ADX (preferred) or HF_SCALP_MIN_ADX (legacy)
 
     volume_threshold: float = field(
         default_factory=_env_volume_threshold
@@ -213,10 +213,10 @@ class HFScalpConfig:
     # ── Profit / stop management ───────────────────────────────────────────────
     profit_target_pct: float = field(
         default_factory=lambda: _env_float_alias(
-            "HF_TAKE_PROFIT_PCT", "HF_SCALP_PROFIT_TARGET_PCT", 1.0
+            "HF_TAKE_PROFIT_PCT", "HF_SCALP_PROFIT_TARGET_PCT", 1.2
         )
     )
-    # env: HF_TAKE_PROFIT_PCT (Phase 1 preferred) or HF_SCALP_PROFIT_TARGET_PCT (legacy)
+    # env: HF_TAKE_PROFIT_PCT (preferred) or HF_SCALP_PROFIT_TARGET_PCT (legacy)
 
     stop_loss_pct: float = field(
         default_factory=_env_stop_loss_pct
@@ -226,10 +226,10 @@ class HFScalpConfig:
     # ── Rate limiting ─────────────────────────────────────────────────────────
     max_trades_per_hour: int = field(
         default_factory=lambda: _env_int_alias(
-            "HF_MAX_TRADES_PER_HOUR", "HF_SCALP_MAX_TRADES_PER_HOUR", 12
+            "HF_MAX_TRADES_PER_HOUR", "HF_SCALP_MAX_TRADES_PER_HOUR", 20
         )
     )
-    # env: HF_MAX_TRADES_PER_HOUR (Phase 1 preferred) or HF_SCALP_MAX_TRADES_PER_HOUR (legacy)
+    # env: HF_MAX_TRADES_PER_HOUR (preferred) or HF_SCALP_MAX_TRADES_PER_HOUR (legacy)
 
     trade_cooldown_seconds: float = field(
         default_factory=lambda: _env_float("HF_SCALP_COOLDOWN_SECONDS", 30.0)
@@ -290,30 +290,31 @@ class HFScalpingMode:
         if not (live_mode and enforce_floor):
             return
 
-        # Phase 1 live-tuning baselines — lower thresholds for more trade
-        # frequency while keeping capital-protection systems intact.
+        # Growth config baselines — lower thresholds for more trade frequency
+        # while keeping capital-protection systems intact.
         floors = {
             "cycle_interval_seconds": 60,
-            "kraken_min_confidence": 0.18,
+            "kraken_min_confidence": 0.15,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
-            "profit_target_pct": 1.0,
+            "profit_target_pct": 1.2,
             "max_trades_per_hour": 20,
             "trade_cooldown_seconds": 30.0,
         }
 
         # Optional hard profile lock for operator-requested settings.
-        # Enabled by default to prevent drift from ad-hoc env overrides.
-        lock_profile = _env_bool("HF_SCALP_LOCK_PROFILE", True)
+        # Disabled by default — env vars and growth config take precedence.
+        # Set HF_SCALP_LOCK_PROFILE=true only to pin thresholds explicitly.
+        lock_profile = _env_bool("HF_SCALP_LOCK_PROFILE", False)
         if lock_profile:
-            self.config.min_confidence = 0.18
-            self.config.kraken_min_confidence = 0.18
-            self.config.min_adx = 5
-            self.config.volume_threshold = 0.006
-            self.config.profit_target_pct = 1.0
+            self.config.min_confidence = 0.15
+            self.config.kraken_min_confidence = 0.15
+            self.config.min_adx = 3
+            self.config.volume_threshold = 0.0045
+            self.config.profit_target_pct = 1.2
             self.config.stop_loss_pct = 0.0035
-            # Phase 1 band: 10–20 trades/hr
+            # Growth config band: 10–20 trades/hr
             if self.config.max_trades_per_hour < 10:
                 self.config.max_trades_per_hour = 10
             elif self.config.max_trades_per_hour > 20:
@@ -322,15 +323,10 @@ class HFScalpingMode:
                 "HF profile lock active — "
                 f"conf={self.config.min_confidence:.2f} "
                 f"adx={self.config.min_adx} "
-                f"vol={self.config.volume_threshold * 100:.1f}% "
+                f"vol={self.config.volume_threshold * 100:.2f}% "
                 f"tp={self.config.profit_target_pct:.1f}% "
                 f"sl={self.config.stop_loss_pct * 100:.2f}%"
             )
-
-        self.config.min_adx = max(self.config.min_adx, 5)
-        self.config.min_confidence = max(self.config.min_confidence, 0.18)
-        self.config.volume_threshold = max(self.config.volume_threshold, 0.006)
-        self.config.stop_loss_pct = max(self.config.stop_loss_pct, 0.0035)
 
         # Lower cap for trade frequency, lower bound for all other fields.
         clamped = []
