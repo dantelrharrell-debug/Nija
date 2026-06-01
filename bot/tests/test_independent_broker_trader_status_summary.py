@@ -1,16 +1,24 @@
 import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+import threading
 
 from bot.independent_broker_trader import IndependentBrokerTrader
 
 
 class TestIndependentBrokerTraderStatusSummary(unittest.TestCase):
     def setUp(self) -> None:
-        self.trader = IndependentBrokerTrader(
-            broker_manager=SimpleNamespace(brokers={"kraken": SimpleNamespace(connected=True)}),
-            trading_strategy=SimpleNamespace(),
+        self.trader = IndependentBrokerTrader.__new__(IndependentBrokerTrader)
+        self.trader.broker_manager = SimpleNamespace(
+            brokers={"kraken": SimpleNamespace(connected=True)}
         )
+        self.trader.multi_account_manager = None
+        self.trader.funded_brokers = set()
+        self.trader.broker_threads = {}
+        self.trader.broker_health = {}
+        self.trader.user_broker_health = {}
+        self.trader.failure_manager = None
+        self.trader.health_lock = threading.Lock()
 
     def test_summary_flags_active_users_when_platform_idle(self) -> None:
         now = datetime.now()
