@@ -1372,6 +1372,8 @@ class NIJAApexStrategyV71:
         """
         checks = {}
         failures = []
+        advisory_flags = []
+        reduced_size_advisory = False
         
         # Get current values
         current_price = df['close'].iloc[-1]
@@ -1425,9 +1427,10 @@ class NIJAApexStrategyV71:
                 "⚡ VOLATILITY KILL SWITCH: ATR %.2f%% > %.2f%% — skipping %s %s",
                 atr_pct, extreme_volatility_pct, side.upper(), symbol,
             )
-            failures.append(
-                f'Extreme volatility: ATR {atr_pct:.2f}% > {extreme_volatility_pct:.2f}% kill-switch threshold'
+            advisory_flags.append(
+                f'Extreme volatility advisory: ATR {atr_pct:.2f}% > {extreme_volatility_pct:.2f}% kill-switch threshold'
             )
+            reduced_size_advisory = True
 
         checks['volatility'] = {
             'atr_pct': atr_pct,
@@ -1437,7 +1440,10 @@ class NIJAApexStrategyV71:
             'allow_with_reduced_size': allow_with_reduced_size,
         }
         if not atr_valid and not borderline_volatility:
-            failures.append(f'Volatility too low: ATR {atr_pct:.2f}% < {borderline_min_atr_pct:.2f}% (even borderline minimum)')
+            advisory_flags.append(
+                f'Low-volatility advisory: ATR {atr_pct:.2f}% < {borderline_min_atr_pct:.2f}% (reduced size)'
+            )
+            reduced_size_advisory = True
         
         # 3. Spread Check (if bid/ask prices provided)
         if bid_price is not None and ask_price is not None and bid_price > 0 and ask_price > 0:
@@ -1458,7 +1464,10 @@ class NIJAApexStrategyV71:
                 'ask': ask_price
             }
             if not spread_valid and not spread_borderline:
-                failures.append(f'Spread too wide: {spread_pct:.3f}% > {max_spread_pct}% maximum')
+                advisory_flags.append(
+                    f'Spread advisory: {spread_pct:.3f}% > {max_spread_pct}% maximum (reduced size)'
+                )
+                reduced_size_advisory = True
         else:
             checks['spread'] = {'valid': True, 'note': 'Bid/ask prices not provided, skipping spread check'}
         
@@ -1486,14 +1495,20 @@ class NIJAApexStrategyV71:
                 'valid': kraken_atr_valid
             }
             if not kraken_atr_valid:
-                failures.append(f'Kraken safety: ATR {atr_pct:.2f}% below {kraken_min_atr}% minimum')
+                advisory_flags.append(
+                    f'Kraken ATR advisory: ATR {atr_pct:.2f}% below {kraken_min_atr}% minimum'
+                )
+                reduced_size_advisory = True
         
         # Determine eligibility
         eligible = len(failures) == 0
         # Collect borderline_volatility flag from the volatility check
         _borderline_vol = checks.get('volatility', {}).get('borderline', False)
         _borderline_spread = checks.get('spread', {}).get('borderline', False)
-        allow_with_reduced_size = (_borderline_vol or _borderline_spread) and eligible
+        allow_with_reduced_size = (
+            (_borderline_vol or _borderline_spread or reduced_size_advisory)
+            and eligible
+        )
 
         if eligible:
             reason = f"✅ Trade eligible: RSI={rsi:.1f}, ATR={atr_pct:.2f}%"
@@ -1506,6 +1521,8 @@ class NIJAApexStrategyV71:
                 if _borderline_spread:
                     _conditions.append("spread")
                 reason += f" (borderline {' + '.join(_conditions)} — reduced size recommended)"
+            if advisory_flags:
+                reason += f" | advisories: {'; '.join(advisory_flags)}"
         else:
             reason = f"❌ Trade not eligible: {'; '.join(failures)}"
 
@@ -3426,15 +3443,12 @@ class NIJAApexStrategyV71:
                                 )
                             except Exception:
                                 pass
-                        self._record_rejection(
-                            "entry_gate",
-                            f"long_gate_score_{_gate_score}_of_5",
+                        _legacy_gate_size_mult_l = max(0.25, _legacy_gate_size_mult_l)
+                        logger.info(
+                            "ADVISORY (entry gate below safety floor, proceeding) → %s | size ×%.2f",
+                            reject_reason,
+                            _legacy_gate_size_mult_l,
                         )
-                        return {
-                            'action': 'hold',
-                            'reason': reject_reason,
-                            'filter_stage': 'entry_gate',
-                        }
                     elif _gate_score < _min_gate_score_l:
                         # Partial-credit path: score is above safety floor but below the
                         # preferred minimum.  Allow the trade at reduced position size
@@ -3946,36 +3960,48 @@ class NIJAApexStrategyV71:
                         }
 
                     if float(position_size) == 0:
-                        reason = f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
-                        volume_ratio = self._get_volume_ratio(df)
-                        self._log_final_decision(
-                            score=risk_score,
-                            confidence=entry_confidence,
-                            adx=adx,
-                            volume=volume_ratio,
-                            raw_size=raw_size,
-                            final_size=position_size,
-                            min_notional=min_required_balance,
-                            decision='SKIP',
-                            reason=reason,
+                        _sizing_reason = (
+                            str(size_breakdown.get('reason', '')).lower()
+                            if isinstance(size_breakdown, dict)
+                            else ''
                         )
-                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
-                            try:
-                                get_signal_funnel().record_execution_stage(
-                                    pair=symbol,
-                                    side='long',
-                                    stage='position_sizing',
-                                    outcome='rejected',
-                                    reason=reason,
-                                    terminal=True,
-                                    extra={"position_size": float(position_size)},
-                                )
-                            except Exception:
-                                pass
-                        return {
-                            'action': 'hold',
-                            'reason': reason
-                        }
+                        if _sizing_reason == 'adx too low':
+                            position_size = max(float(min_required_balance), float(executable_floor))
+                            logger.info(
+                                "ADVISORY (ADX gate, proceeding) → forcing minimum executable LONG size: $%.2f",
+                                position_size,
+                            )
+                        else:
+                            reason = f'Position size = 0 (reason={size_breakdown.get("reason", "unknown")})'
+                            volume_ratio = self._get_volume_ratio(df)
+                            self._log_final_decision(
+                                score=risk_score,
+                                confidence=entry_confidence,
+                                adx=adx,
+                                volume=volume_ratio,
+                                raw_size=raw_size,
+                                final_size=position_size,
+                                min_notional=min_required_balance,
+                                decision='SKIP',
+                                reason=reason,
+                            )
+                            if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                try:
+                                    get_signal_funnel().record_execution_stage(
+                                        pair=symbol,
+                                        side='long',
+                                        stage='position_sizing',
+                                        outcome='rejected',
+                                        reason=reason,
+                                        terminal=True,
+                                        extra={"position_size": float(position_size)},
+                                    )
+                                except Exception:
+                                    pass
+                            return {
+                                'action': 'hold',
+                                'reason': reason
+                            }
 
                     # Validate trade quality (position size minimum — physical limit)
                     validation = self._validate_trade_quality(position_size, risk_score,
@@ -4393,15 +4419,12 @@ class NIJAApexStrategyV71:
                                 )
                             except Exception:
                                 pass
-                        self._record_rejection(
-                            "entry_gate",
-                            f"short_gate_score_{_gate_score}_of_5",
+                        _legacy_gate_size_mult_s = max(0.25, _legacy_gate_size_mult_s)
+                        logger.info(
+                            "ADVISORY (entry gate below safety floor, proceeding) → %s | size ×%.2f",
+                            reject_reason,
+                            _legacy_gate_size_mult_s,
                         )
-                        return {
-                            'action': 'hold',
-                            'reason': reject_reason,
-                            'filter_stage': 'entry_gate',
-                        }
                     elif _gate_score < _min_gate_score_s:
                         # Partial-credit path for SHORT: allow at reduced size
                         _shortfall_s = _min_gate_score_s - _gate_score
@@ -4902,36 +4925,48 @@ class NIJAApexStrategyV71:
                         }
 
                     if float(position_size) == 0:
-                        reason = f'Position size = 0 (ADX={adx:.1f} < {self.min_adx})'
-                        volume_ratio = self._get_volume_ratio(df)
-                        self._log_final_decision(
-                            score=risk_score,
-                            confidence=entry_confidence,
-                            adx=adx,
-                            volume=volume_ratio,
-                            raw_size=raw_size,
-                            final_size=position_size,
-                            min_notional=min_required_balance,
-                            decision='SKIP',
-                            reason=reason,
+                        _sizing_reason = (
+                            str(size_breakdown.get('reason', '')).lower()
+                            if isinstance(size_breakdown, dict)
+                            else ''
                         )
-                        if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
-                            try:
-                                get_signal_funnel().record_execution_stage(
-                                    pair=symbol,
-                                    side='short',
-                                    stage='position_sizing',
-                                    outcome='rejected',
-                                    reason=reason,
-                                    terminal=True,
-                                    extra={"position_size": float(position_size)},
-                                )
-                            except Exception:
-                                pass
-                        return {
-                            'action': 'hold',
-                            'reason': reason
-                        }
+                        if _sizing_reason == 'adx too low':
+                            position_size = max(float(min_required_balance), float(executable_floor))
+                            logger.info(
+                                "ADVISORY (ADX gate, proceeding) → forcing minimum executable SHORT size: $%.2f",
+                                position_size,
+                            )
+                        else:
+                            reason = f'Position size = 0 (reason={size_breakdown.get("reason", "unknown")})'
+                            volume_ratio = self._get_volume_ratio(df)
+                            self._log_final_decision(
+                                score=risk_score,
+                                confidence=entry_confidence,
+                                adx=adx,
+                                volume=volume_ratio,
+                                raw_size=raw_size,
+                                final_size=position_size,
+                                min_notional=min_required_balance,
+                                decision='SKIP',
+                                reason=reason,
+                            )
+                            if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
+                                try:
+                                    get_signal_funnel().record_execution_stage(
+                                        pair=symbol,
+                                        side='short',
+                                        stage='position_sizing',
+                                        outcome='rejected',
+                                        reason=reason,
+                                        terminal=True,
+                                        extra={"position_size": float(position_size)},
+                                    )
+                                except Exception:
+                                    pass
+                            return {
+                                'action': 'hold',
+                                'reason': reason
+                            }
 
                     # Validate trade quality (position size minimum — physical limit)
                     validation = self._validate_trade_quality(position_size, risk_score,
