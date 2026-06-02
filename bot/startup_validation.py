@@ -958,17 +958,26 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
     if env_result.critical_failure:
         combined.mark_critical_failure(env_result.failure_reason)
 
-    # 8. Combined check: escalate to critical failure when live trading with unknown git metadata.
-    # Running untraceable code in live mode is prohibited for auditability.
+    # 8. Combined check: warn when live trading with unknown git metadata.
+    # Git metadata is for auditability only and must not block live trading on
+    # cloud deployments (e.g. Railway) where the git directory is unavailable
+    # at runtime.  Downgraded from critical_failure to an audit risk warning so
+    # that missing GIT_BRANCH / GIT_COMMIT env vars never silently loop-block
+    # startup.  Operators can suppress the warning with ALLOW_UNTRACEABLE_CODE=true.
     live_verified = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() in ("true", "1", "yes")
     dry_run = os.getenv("DRY_RUN_MODE", "false").lower() in ("true", "1", "yes")
     git_unknown = _is_git_metadata_unknown(git_branch) or _is_git_metadata_unknown(git_commit)
     allow_untraceable = os.getenv("ALLOW_UNTRACEABLE_CODE", "false").lower() in ("true", "1", "yes")
     if live_verified and not dry_run and git_unknown and not allow_untraceable:
-        combined.mark_critical_failure(
-            "Live trading with unknown git metadata is prohibited. "
-            "Set GIT_BRANCH and GIT_COMMIT (or run inject_git_metadata.sh), "
-            "or use DRY_RUN_MODE=true for safe testing."
+        combined.add_risk(
+            StartupRisk.GIT_METADATA_UNKNOWN,
+            "Live trading with unknown git metadata — code version is unverifiable. "
+            "Set GIT_BRANCH and GIT_COMMIT (or RAILWAY_GIT_BRANCH/RAILWAY_GIT_COMMIT_SHA) "
+            "for full auditability, or set ALLOW_UNTRACEABLE_CODE=true to suppress.",
+        )
+        combined.add_warning(
+            "⚠️  AUDIT WARNING: Live trading with unknown git metadata. "
+            "Set GIT_BRANCH and GIT_COMMIT env vars to enable full auditability."
         )
     
     return combined

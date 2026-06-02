@@ -6419,6 +6419,11 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 logger.error("=" * 70)
                 health_manager.mark_configuration_error(_validation_failure_reason)
                 _log_exit_point("Startup validation failed", exit_code=1)
+                # Flush before raising so the buffered error logs are visible on stdout
+                # (without this the validation error is silently swallowed by the buffer
+                # and the operator never sees why startup keeps retrying).
+                if _startup_buffer:
+                    _startup_buffer.flush_phase("ENV_VALIDATION_ERROR")
                 raise RuntimeError(f"Critical startup validation failure (will retry): {_validation_failure_reason}")
 
             # Validation passed — advance bootstrap FSM.
