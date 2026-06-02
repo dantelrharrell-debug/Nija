@@ -93,6 +93,12 @@ _DISABLE_REGIME_GATE: bool = (
     os.getenv("NIJA_DISABLE_REGIME_GATE", "false").lower() in ("1", "true", "yes")
 )
 
+# NIJA_HARD_BLOCK_VOLATILITY_EXPLOSION=true keeps crisis hard-block behavior.
+# Default is permissive so score-based gating can continue to operate.
+_HARD_BLOCK_VOLATILITY_EXPLOSION: bool = (
+    os.getenv("NIJA_HARD_BLOCK_VOLATILITY_EXPLOSION", "false").lower() in ("1", "true", "yes")
+)
+
 
 # ---------------------------------------------------------------------------
 # Per-gate result
@@ -456,9 +462,9 @@ class AIEntryGate:
         with self._lock:
             self._total_checked += 1
 
-        # ── Hard block: VOLATILITY_EXPLOSION ─────────────────────────
-        # Capital preservation always wins — no scoring bypass.
-        if regime_key == "volatility_explosion":
+        # ── Optional hard block: VOLATILITY_EXPLOSION ─────────────────
+        # Default now allows score-based evaluation unless explicitly forced.
+        if regime_key == "volatility_explosion" and _HARD_BLOCK_VOLATILITY_EXPLOSION:
             reason = "❌ VOLATILITY_EXPLOSION: all new entries hard-blocked (capital protection)"
             logger.debug("AIEntryGate: %s", reason)
             if _REJECTION_HIST_AVAILABLE and _get_rej_hist is not None:
@@ -480,6 +486,10 @@ class AIEntryGate:
                 gate_score=0,
                 gate_max=_GATE_MAX_SCORE,
                 effective_threshold=_GATE_MAX_SCORE,
+            )
+        if regime_key == "volatility_explosion":
+            logger.warning(
+                "⚠️ AIEntryGate advisory: VOLATILITY_EXPLOSION detected; continuing score-based evaluation"
             )
 
         # ── Evaluate all 5 gates, collect scores ─────────────────────
