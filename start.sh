@@ -1532,6 +1532,7 @@ fi
 # Log monitoring guidance — watch for execution errors and trade rejections
 echo ""
 echo "📋 LOG MONITORING (informational): Logs stream to stdout and nija.log"
+echo "   These are runtime alert examples, not startup trade attempts."
 echo "   Example failure patterns to watch for if they appear during runtime:"
 echo "      ❌ ORDER REJECTED / EXECUTION ERROR — trade could not be placed"
 echo "      ⚠️  API ERROR / RATE LIMITED       — connectivity or throttling issues"

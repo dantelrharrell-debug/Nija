@@ -1043,6 +1043,7 @@ def display_validation_results(result: StartupValidationResult):
     
     # Log monitoring reminder
     logger.info("📋 LOG MONITORING (informational): Watch for these patterns only if they appear in nija.log / stdout:")
+    logger.info("   These are runtime alert examples, not startup trade attempts.")
     logger.info("   ❌ ORDER REJECTED / EXECUTION ERROR — trade could not be placed")
     logger.info("   ⚠️  API ERROR / RATE LIMITED       — connectivity or throttling issues")
     logger.info("   ⚠️  INSUFFICIENT FUNDS             — balance too low for trade")
