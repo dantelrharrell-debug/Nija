@@ -486,6 +486,7 @@ def acquire_writer_lock_with_handoff(
         os.environ["NIJA_WRITER_FENCING_TOKEN"] = token
         os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(new_generation)
         os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+        os.environ["NIJA_LOCK_ACQUIRED"] = "true"
         os.environ["NIJA_WRITER_LOCK_TTL_S"] = str(_ttl_s)
 
         logger.info(
@@ -901,6 +902,7 @@ class GracefulShutdownHandler:
         # the lock is released).
         os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
         os.environ.pop("NIJA_WRITER_LEASE_ACQUIRED", None)
+        os.environ.pop("NIJA_LOCK_ACQUIRED", None)
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
 
         elapsed = time.monotonic() - start_ts
@@ -1129,6 +1131,7 @@ class GracefulHandoffCoordinator:
         # Clear authority environment flags.
         os.environ.pop("NIJA_WRITER_FENCING_TOKEN", None)
         os.environ.pop("NIJA_WRITER_LEASE_ACQUIRED", None)
+        os.environ.pop("NIJA_LOCK_ACQUIRED", None)
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
 
 

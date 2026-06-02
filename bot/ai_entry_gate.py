@@ -189,7 +189,7 @@ _ATR_CRISIS_MAX = 12.00
 # Total execution cost (spread + est. slippage) must be below this ceiling.
 _SPREAD_CEILINGS: Dict[str, float] = {
     "coinbase": float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_COINBASE", "0.25")),
-    "kraken":   float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_KRAKEN", "0.18")),
+    "kraken":   float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_KRAKEN", "0.22")),
     "binance":  float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_BINANCE", "0.12")),
     "okx":      float(os.getenv("NIJA_AI_GATE_SPREAD_CEILING_OKX", "0.15")),
 }
