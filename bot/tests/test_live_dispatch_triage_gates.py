@@ -94,6 +94,39 @@ class TestLiveDispatchTriageGateInference(unittest.TestCase):
         )
         self.assertEqual(blocker, "LIVE:strategy:exploration_shadow_mode")
 
+    def test_resolve_first_blocking_gate_labels_risk_stage_before_execution(self):
+        blocker = MetricCollector._resolve_first_blocking_gate(
+            lifecycle_phase="LIVE",
+            runtime_state_payload={
+                "available": True,
+                "trading_state": "LIVE_ACTIVE",
+                "activation_committed": True,
+            },
+            readiness_proof_payload={
+                "available": True,
+                "first_blocking_gate": "none",
+            },
+            decision_payload={
+                "available": True,
+                "allowed": True,
+                "decision": {},
+            },
+            validator_trace_payload={"available": False},
+            pipeline_payload={
+                "available": True,
+                "stage_counts": {
+                    "signals_generated": 8,
+                    "signals_approved": 5,
+                    "risk_passed": 0,
+                    "execution_attempted": 0,
+                    "orders_routed": 0,
+                },
+            },
+            inferred_signal_gate=None,
+            inferred_execution_gate="execution_throttles",
+        )
+        self.assertEqual(blocker, "LIVE:risk:execution_throttles")
+
     def test_resolve_first_blocking_gate_prefers_readiness_failure(self):
         blocker = MetricCollector._resolve_first_blocking_gate(
             lifecycle_phase="WARM",

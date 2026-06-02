@@ -534,7 +534,7 @@ class MetricCollector:
                 first_blocker = f"{lifecycle_phase}:strategy:{blocker}"
             elif risk_passed <= 0:
                 blocker = inferred_execution_gate or "blocked_before_risk_passed"
-                first_blocker = f"{lifecycle_phase}:execution:{blocker}"
+                first_blocker = f"{lifecycle_phase}:risk:{blocker}"
             elif attempted <= 0:
                 first_blocker = f"{lifecycle_phase}:execution:dispatch_not_attempted"
             elif routed <= 0:
