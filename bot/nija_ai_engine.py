@@ -112,10 +112,10 @@ except ImportError:
 # allowed with reduced position size.  TIER_WEAK catches dead-zone cycles
 # where even C-grade fails — the bot always has something to trade.
 TIER_ELITE: float = float(os.getenv("NIJA_SCORE_FLOOR_ELITE", "75.0"))   # 1.5× position size
-TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "20.0"))   # 1.0× position size (was 28)
-TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "15.0"))   # 0.85× position size (was 22)
-TIER_FLOOR: float = float(os.getenv("NIJA_SCORE_FLOOR_FLOOR", "8.0"))    # 0.75× position size (was 13)
-TIER_WEAK:  float = float(os.getenv("NIJA_SCORE_FLOOR_WEAK",  "4.0"))    # 0.50× size — dead-zone B/C entry
+TIER_GOOD:  float = float(os.getenv("NIJA_SCORE_FLOOR_GOOD",  "15.0"))   # 1.0× position size (was 20)
+TIER_FAIR:  float = float(os.getenv("NIJA_SCORE_FLOOR_FAIR",  "10.0"))   # 0.85× position size (was 15)
+TIER_FLOOR: float = float(os.getenv("NIJA_SCORE_FLOOR_FLOOR", "5.0"))    # 0.75× position size (was 8)
+TIER_WEAK:  float = float(os.getenv("NIJA_SCORE_FLOOR_WEAK",  "3.0"))    # 0.50× size — dead-zone B/C entry (was 4)
 
 # Composite score blend weights (must sum to 1.0)
 # All three components are normalised to the same 0-100 scale before blending
@@ -139,9 +139,9 @@ _W_OPTIMIZER = 0.28   # raised from 0.24 — RSI-div / BB-zone bonus now matters
 _W_GATE      = 0.12   # gate quality (positive contribution, not penalty)
 
 # Hard absolute floor — never execute below this regardless of ranking.
-# Lowered from 25.0 → 10.0 → 6.0 → 4.0 (confirmation-trade mode, Apr 2026) to maximise entries.
+# Lowered from 25.0 → 10.0 → 6.0 → 4.0 → 3.0 to unblock 0-trade condition.
 # Override at runtime with NIJA_MIN_SCORE_ABSOLUTE.
-MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "4.0"))
+MIN_SCORE_ABSOLUTE: float = float(os.getenv("NIJA_MIN_SCORE_ABSOLUTE", "3.0"))
 
 # Default gate_max to fall back to when gate_result.gate_max is falsy.
 # Must match _GATE_MAX_SCORE defined in ai_entry_gate (sum of _GATE_WEIGHTS = 9).

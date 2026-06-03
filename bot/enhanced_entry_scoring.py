@@ -48,8 +48,8 @@ logger = logging.getLogger("nija.scoring")
 _PARTIAL_CREDIT = 0.3
 
 # Minimum score threshold — signals below this are rejected by legacy callers.
-# Lowered from 40 → 25 → 18 to increase trade frequency and reduce over-filtering.
-MIN_SCORE_THRESHOLD = 18
+# Lowered from 40 → 25 → 18 → 10 to unblock 0-trade condition.
+MIN_SCORE_THRESHOLD = 10
 
 # Baseline confidence boost applied when the bot has been idle for a zero-signal streak.
 CONFIDENCE_BOOST = 0.20

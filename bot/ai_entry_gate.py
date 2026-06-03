@@ -153,24 +153,25 @@ class GateResult:
 # Further relaxed ranging/mean_reversion/volatile/weak_trend (Apr 2026) to
 # allow more entries during sideways and moderate-volatility market conditions.
 # Slightly reduced again (Option A, Apr 2026) to increase signal sensitivity.
+# Reduced further (Jun 2026) to unblock 0-trade condition — all gates rejecting.
 _SCORE_THRESHOLDS: Dict[str, float] = {
-    "strong_trend":         9.0,    # trend gives edge → relax (was 38 → 32 → 25 → 22 → 14 → 12 → 9)
-    "weak_trend":           9.0,    # default (was 40 → 34 → 27 → 22 → 14 → 12 → 9)
-    "ranging":              10.0,   # direction hard to call → require better setup (was 45 → 38 → 30 → 24 → 15 → 13 → 10)
-    "consolidation":        8.0,    # scalp mode → need high frequency (was 35 → 30 → 24 → 20 → 12 → 10 → 8)
-    "expansion":            9.0,    # breakout → normal bar (was 40 → 34 → 27 → 22 → 14 → 12 → 9)
-    "mean_reversion":       10.0,   # counter-trend → extra conviction (was 45 → 38 → 30 → 24 → 15 → 13 → 10)
+    "strong_trend":         5.0,    # trend gives edge → relax (was 9)
+    "weak_trend":           5.0,    # default (was 9)
+    "ranging":              6.0,    # direction hard to call → require better setup (was 10)
+    "consolidation":        4.0,    # scalp mode → need high frequency (was 8)
+    "expansion":            5.0,    # breakout → normal bar (was 9)
+    "mean_reversion":       6.0,    # counter-trend → extra conviction (was 10)
     "volatility_explosion": 65.0,   # crisis → near-perfect setups only (unchanged — crisis protection preserved)
     # Legacy 3-regime fallbacks
-    "trending":             9.0,    # was 38 → 32 → 25 → 22 → 14 → 12 → 9
-    "volatile":             15.0,   # was 55 → 47 → 38 → 32 → 22 → 20 → 15
+    "trending":             5.0,    # was 9
+    "volatile":             8.0,    # was 15
 }
-_DEFAULT_SCORE_THRESHOLD = 9.0    # was 40.0 → 34.0 → 27.0 → 22.0 → 14.0 → 12.0 → 9.0
+_DEFAULT_SCORE_THRESHOLD = 5.0    # was 9.0 — lowered to unblock 0-trade condition
 
 # ── Gate 2: Volume multiplier ────────────────────────────────────────────────
 # Current volume must be >= this × 20-bar average.
-_VOL_MULTIPLIER_DEFAULT  = 0.60   # 60% of average (standard)
-_VOL_MULTIPLIER_SCALP    = 0.60   # lowered from 0.80 → 0.60 (Apr 2026): scalp allowed on same floor as swing so quiet markets aren't blocked
+_VOL_MULTIPLIER_DEFAULT  = 0.35   # Lowered from 0.60 → 0.35 to unblock 0-trade condition
+_VOL_MULTIPLIER_SCALP    = 0.35   # Lowered from 0.60 → 0.35 to unblock 0-trade condition
 
 # ── Gate 3: ATR % range per entry type ──────────────────────────────────────
 # (min_atr_pct, max_atr_pct)

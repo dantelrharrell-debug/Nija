@@ -67,9 +67,9 @@ SL_FLOOR_PCT = 0.004      # 0.4 % minimum stop distance
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 7,   # ADX must be > 7 — below 10 allows real market movement
+    'adx_threshold': 3,   # Lowered from 7 → 3 to unblock 0-trade condition
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
-    'volume_threshold': 0.01,  # Volume must be > 1% of recent average (lowered from 2% to allow more entries)
+    'volume_threshold': 0.005,  # Lowered from 0.01 → 0.005 to unblock 0-trade condition
     'volume_lookback': 20,  # Period for average volume calculation
     'trend_required': True,  # Only trade when clear trend (UP or DOWN)
 }
@@ -109,11 +109,11 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 7,   # Minimum ADX for trend strength — below 10 captures real movement
+    'min_adx': 3,   # Lowered from 7 → 3 to unblock 0-trade condition
     'strong_adx': 30,  # ADX above this is strong trend
 
     # Volume Requirements
-    'min_volume_multiplier': 1.3,  # Min volume vs 20-period average - OPTIMIZED (was 1.2, now 1.3)
+    'min_volume_multiplier': 0.5,  # Lowered from 1.3 → 0.5 to unblock 0-trade condition
     'strong_volume_multiplier': 2.0,  # Strong volume confirmation
 
     # ATR (Average True Range) - Volatility
@@ -303,7 +303,7 @@ SMART_FILTERS = {
     },
     'low_volume': {
         'enabled': True,
-        'threshold': 0.15,  # Block if volume < 15% of average - relaxed for profitability
+        'threshold': 0.05,  # Lowered from 0.15 → 0.05 to unblock 0-trade condition
     },
     'new_candle_timing': {
         'enabled': True,
@@ -312,7 +312,7 @@ SMART_FILTERS = {
     'chop_detection': {
         'enabled': True,
         'method': 'adx',  # Use ADX for chop detection
-        'adx_threshold': 6,  # ADX < 6 indicates chop — 1 lower than min_adx (7) to avoid edge cases
+        'adx_threshold': 2,  # Lowered from 6 → 2 to unblock 0-trade condition
     },
 }
 

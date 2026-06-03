@@ -56,19 +56,19 @@ logger = logging.getLogger("nija.trade_frequency_controller")
 # Constants (can be overridden by env vars)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MIN_TRADES_PER_HOUR: float = 2.0   # Minimum hourly target (aggressive growth: ~20/hr max)
-_DEFAULT_MIN_TRADES_PER_DAY: float = 20.0   # Lower bound of the 20-50 trades/day target band
+_DEFAULT_MIN_TRADES_PER_HOUR: float = 1.0   # Lowered from 2.0 → 1.0 to unblock 0-trade condition
+_DEFAULT_MIN_TRADES_PER_DAY: float = 10.0   # Lowered from 20.0 → 10.0 to unblock 0-trade condition
 _DEFAULT_MAX_TRADES_PER_DAY: float = 50.0   # Upper bound — tighten confidence gate above this level
-_DEFAULT_LOOSEN_STEP: float = 0.08
+_DEFAULT_LOOSEN_STEP: float = 0.12          # Raised from 0.08 → 0.12 for faster loosening
 _DEFAULT_TIGHTEN_STEP: float = 0.015
-_DEFAULT_MAX_DELTA: float = 0.25
+_DEFAULT_MAX_DELTA: float = 0.35            # Raised from 0.25 → 0.35 for wider loosening range
 
 # Drought safeguard defaults
-_DEFAULT_DROUGHT_WINDOW_SECS: float = 1800.0   # 30 minutes (was 2 hours)
-_DEFAULT_DROUGHT_ADX_REDUCTION: float = 5.0    # subtract 5 ADX points (was 3)
-_DEFAULT_DROUGHT_VOL_MULTIPLIER: float = 0.4   # cut volume threshold to 40% (was 50%)
-_DEFAULT_DROUGHT_SCORE_REDUCTION: float = 1.0  # shave 1.0 from entry score (was 0.5)
-_DEFAULT_DROUGHT_GATE_PCT: float = 0.25        # lower AI-gate threshold by 25% (was 10%)
+_DEFAULT_DROUGHT_WINDOW_SECS: float = 900.0    # Lowered from 1800 → 900s (15 min) to trigger faster
+_DEFAULT_DROUGHT_ADX_REDUCTION: float = 6.0    # Raised from 5.0 → 6.0 for stronger drought relaxation
+_DEFAULT_DROUGHT_VOL_MULTIPLIER: float = 0.3   # Lowered from 0.4 → 0.3 for stronger drought relaxation
+_DEFAULT_DROUGHT_SCORE_REDUCTION: float = 1.5  # Raised from 1.0 → 1.5 for stronger drought relaxation
+_DEFAULT_DROUGHT_GATE_PCT: float = 0.35        # Raised from 0.25 → 0.35 for stronger drought relaxation
 
 # Rolling window sizes
 _HOUR_WINDOW_SECS: float = 3600.0

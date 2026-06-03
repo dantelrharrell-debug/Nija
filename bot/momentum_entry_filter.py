@@ -52,21 +52,21 @@ def _ef(name: str, default: float) -> float:
         return default
 
 
-_RSI_BULL_THRESHOLD: float    = _ef("MOMENTUM_RSI_BULL", 52.0)
-_RSI_BEAR_THRESHOLD: float    = _ef("MOMENTUM_RSI_BEAR", 48.0)
+_RSI_BULL_THRESHOLD: float    = _ef("MOMENTUM_RSI_BULL", 50.0)   # Lowered from 52 → 50 to unblock 0-trade condition
+_RSI_BEAR_THRESHOLD: float    = _ef("MOMENTUM_RSI_BEAR", 50.0)   # Raised from 48 → 50 to unblock 0-trade condition
 _VOL_WINDOW: int              = int(_ef("MOMENTUM_VOLUME_WINDOW", 10))
 _STRUCT_WINDOW: int           = int(_ef("MOMENTUM_STRUCT_WINDOW", 10))
 _BREAKOUT_WINDOW: int         = int(_ef("BREAKOUT_WINDOW", 20))
-_BREAKOUT_VOL_SURGE: float    = _ef("BREAKOUT_VOL_SURGE", 1.4)
+_BREAKOUT_VOL_SURGE: float    = _ef("BREAKOUT_VOL_SURGE", 1.1)   # Lowered from 1.4 → 1.1 to unblock 0-trade condition
 
 # Dead-zone / Weak-Signal relaxed RSI thresholds (Apr 2026).
 # Used by check_momentum_long_relaxed / check_momentum_short_relaxed when the
 # bot is in a dead zone (zero-signal streak ≥ 2 cycles).  Requires less
 # momentum confirmation so B/C grade setups can still trigger a trade.
 # Also reduces the volume-surge requirement to 1× avg (any positive volume).
-_RSI_BULL_DEAD_ZONE: float    = _ef("MOMENTUM_RSI_BULL_DEAD_ZONE", 52.0)
-_RSI_BEAR_DEAD_ZONE: float    = _ef("MOMENTUM_RSI_BEAR_DEAD_ZONE", 48.0)
-_DEAD_ZONE_VOL_SURGE: float   = _ef("MOMENTUM_DEAD_ZONE_VOL_SURGE", 0.9)  # 90% of avg is OK
+_RSI_BULL_DEAD_ZONE: float    = _ef("MOMENTUM_RSI_BULL_DEAD_ZONE", 50.0)  # Lowered from 52 → 50 to unblock 0-trade condition
+_RSI_BEAR_DEAD_ZONE: float    = _ef("MOMENTUM_RSI_BEAR_DEAD_ZONE", 50.0)  # Raised from 48 → 50 to unblock 0-trade condition
+_DEAD_ZONE_VOL_SURGE: float   = _ef("MOMENTUM_DEAD_ZONE_VOL_SURGE", 0.7)  # Lowered from 0.9 → 0.7 to unblock 0-trade condition
 
 # Balance-based threshold tightening — mirrors trade_frequency_controller constants.
 TARGET_BALANCE: float = 100.0       # tighten AI entry threshold once balance hits this
