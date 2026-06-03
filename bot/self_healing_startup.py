@@ -1294,8 +1294,16 @@ class SelfHealingStartup:
                     "watchdog will retry"
                 )
 
+            # Drive the bootstrap FSM from CAPITAL_READY/INIT_COMPLETE through
+            # THREADS_STARTING to RUNNING_SUPERVISED so the trading loop can start.
+            # advance_to_capital_ready() (called by _on_capital_bootstrap_ready) only
+            # advances to INIT_COMPLETE; the remaining transitions must be driven here
+            # after LIVE_ACTIVE is confirmed and all prerequisites are satisfied.
+            self._advance_bootstrap_fsm_to_running()
+
         if startup_result.ok:
             mode = "FALLBACK" if startup_result.on_fallback else "PRIMARY"
+
             logger.info(
                 "✅  SelfHealingStartup: boot sequence complete — broker=%s (%s mode)",
                 startup_result.broker_name, mode,
@@ -1314,6 +1322,90 @@ class SelfHealingStartup:
 
     # ── Private helpers ────────────────────────────────────────────────────
 
+    def _advance_bootstrap_fsm_to_running(self) -> None:
+        """Drive the bootstrap FSM from INIT_COMPLETE to RUNNING_SUPERVISED.
+
+        Called once after LIVE_ACTIVE is confirmed.  The capital-ready callback
+        (_on_capital_bootstrap_ready in MABM) advances the system
+        BootstrapStateMachine to INIT_COMPLETE via advance_to_capital_ready().
+        This method drives the remaining two transitions:
+
+            INIT_COMPLETE → THREADS_STARTING → RUNNING_SUPERVISED
+
+        so that the trading loop is unblocked and execution authority is granted.
+        Errors are caught and logged — a failed FSM advance is non-fatal because
+        per-order runtime gates enforce safety independently.
+        """
+        try:
+            try:
+                from bot.bootstrap_state_machine import get_bootstrap_fsm, BootstrapState
+            except ImportError:
+                from bootstrap_state_machine import get_bootstrap_fsm, BootstrapState  # type: ignore[no-redef]
+
+            fsm = get_bootstrap_fsm()
+            current = fsm.state
+
+            # Already running — nothing to do.
+            if current == BootstrapState.RUNNING_SUPERVISED:
+                logger.info(
+                    "✅ [SelfHealingStartup] bootstrap FSM already RUNNING_SUPERVISED — no-op"
+                )
+                return
+
+            # Temporarily claim ownership so this thread can legally drive the
+            # non-terminal transitions (the bootstrap kernel thread may have
+            # released ownership after advance_to_capital_ready completed).
+            fsm.claim_bootstrap_ownership()
+
+            # INIT_COMPLETE → THREADS_STARTING
+            if current == BootstrapState.INIT_COMPLETE:
+                ok = fsm.transition(
+                    BootstrapState.THREADS_STARTING,
+                    reason="capital_ready_and_live_active",
+                )
+                if not ok:
+                    logger.error(
+                        "❌ [SelfHealingStartup] bootstrap FSM: INIT_COMPLETE → THREADS_STARTING "
+                        "transition rejected (state=%s)",
+                        fsm.state.value,
+                    )
+                    return
+                logger.info(
+                    "✅ [SelfHealingStartup] bootstrap FSM: INIT_COMPLETE → THREADS_STARTING"
+                )
+                current = fsm.state
+
+            # THREADS_STARTING → RUNNING_SUPERVISED (via finalize_boot)
+            if current == BootstrapState.THREADS_STARTING:
+                ok = fsm.finalize_boot(reason="capital_ready_and_live_active")
+                if ok:
+                    logger.critical(
+                        "✅ [SelfHealingStartup] bootstrap FSM: THREADS_STARTING → "
+                        "RUNNING_SUPERVISED — trading loop unblocked"
+                    )
+                else:
+                    logger.error(
+                        "❌ [SelfHealingStartup] bootstrap FSM: finalize_boot failed "
+                        "(state=%s)",
+                        fsm.state.value,
+                    )
+            else:
+                logger.warning(
+                    "⚠️ [SelfHealingStartup] bootstrap FSM: unexpected state=%s after "
+                    "INIT_COMPLETE transition — expected THREADS_STARTING; "
+                    "RUNNING_SUPERVISED not reached",
+                    fsm.state.value,
+                )
+
+        except Exception as exc:
+            logger.warning(
+                "[SelfHealingStartup] _advance_bootstrap_fsm_to_running failed (%s: %s) "
+                "— trading loop may be blocked",
+                type(exc).__name__,
+                exc,
+            )
+
+
     def _is_live_active(self) -> bool:
         """Return True if the trading state machine is currently LIVE_ACTIVE."""
         if not _STATE_MACHINE_AVAILABLE:
@@ -1324,6 +1416,7 @@ class SelfHealingStartup:
         except Exception as exc:
             logger.debug("SelfHealingStartup._is_live_active: state machine query failed (%s)", exc)
             return False
+
 
     def _is_ca_ready(self) -> bool:
         """Return True if CapitalAuthority passes the capital readiness gate.
