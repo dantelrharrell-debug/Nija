@@ -91,14 +91,14 @@ _DEFAULT_MIN_ORDER_USD = 1.0   # Micro-capital compatible fallback (was $5)
 # Platform was stuck waiting while users traded on lower-confidence signals.
 # THRESHOLD REDUCTION (May 2026): Lowered confidence/ADX/volume gates to the
 # Phase 1 live profile so runtime normalization no longer clamps to stale values.
-MIN_CONFIDENCE = 0.15  # Confidence floor — lowered from 0.18 → 0.15 for aggressive growth
+MIN_CONFIDENCE = 0.06  # Confidence floor — lowered from 0.15 → 0.06 to unblock 0-trade condition
 MAX_ENTRY_SCORE = 5.0  # Maximum entry signal score used for confidence normalization
 
 # Short-term fallback thresholds (idle > 10 minutes)
 FALLBACK_IDLE_MINUTES_THRESHOLD = 10.0
-FALLBACK_CONFIDENCE_THRESHOLD = 0.15  # Lowered from 0.18 → 0.15 for aggressive growth
-FALLBACK_MIN_ADX = 3.0  # Lowered from 5.0 → 3.0 for aggressive growth
-FALLBACK_MIN_VOLUME_THRESHOLD = 0.0045  # Lowered from 0.006 → 0.0045 for aggressive growth
+FALLBACK_CONFIDENCE_THRESHOLD = 0.06  # Lowered from 0.15 → 0.06 to unblock 0-trade condition
+FALLBACK_MIN_ADX = 1.5  # Lowered from 3.0 → 1.5 to unblock 0-trade condition
+FALLBACK_MIN_VOLUME_THRESHOLD = 0.002  # Lowered from 0.0045 → 0.002 to unblock 0-trade condition
 
 # Confidence anchor floor (legacy score scale)
 MIN_RISK_SCORE_FOR_ANCHOR = 3
@@ -106,9 +106,9 @@ MIN_RISK_SCORE_FOR_ANCHOR = 3
 # Diagnostics window
 VOLUME_RATIO_WINDOW = 5
 # Entry gate thresholds (weighted scoring)
-ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.15  # Lowered from 0.18 → 0.15 for aggressive growth
-ENTRY_GATE_ADX_THRESHOLD = 3.0  # Lowered from 5.0 → 3.0 for aggressive growth
-ENTRY_GATE_VOLUME_THRESHOLD = 0.0045  # Lowered from 0.006 → 0.0045 for aggressive growth
+ENTRY_GATE_CONFIDENCE_THRESHOLD = 0.06  # Lowered from 0.15 → 0.06 to unblock 0-trade condition
+ENTRY_GATE_ADX_THRESHOLD = 1.5  # Lowered from 3.0 → 1.5 to unblock 0-trade condition
+ENTRY_GATE_VOLUME_THRESHOLD = 0.002  # Lowered from 0.0045 → 0.002 to unblock 0-trade condition
 # Gate score: require 2/5 conditions — softer gate allows more entries.
 ENTRY_GATE_MIN_SCORE = 2
 # Safety floor = 2 (aggressive growth): allow entries when at least 2/5 conditions
@@ -123,8 +123,8 @@ ENTRY_GATE_SAFETY_FLOOR = max(
         int(float(os.getenv("NIJA_ENTRY_GATE_SAFETY_FLOOR", "2"))),
     ),
 )
-ENTRY_GATE_FALLBACK_CONFIDENCE = 0.15  # Lowered from 0.18 → 0.15 for aggressive growth
-ENTRY_GATE_FALLBACK_ADX = 3.0  # Lowered from 5.0 → 3.0 for aggressive growth
+ENTRY_GATE_FALLBACK_CONFIDENCE = 0.06  # Lowered from 0.15 → 0.06 to unblock 0-trade condition
+ENTRY_GATE_FALLBACK_ADX = 1.5  # Lowered from 3.0 → 1.5 to unblock 0-trade condition
 ENTRY_GATE_FALLBACK_WINDOW_SECS = 600.0
 
 # Unified eligibility tuning knobs (strategic gates)
@@ -733,9 +733,9 @@ class NIJAApexStrategyV71:
         # Previous emergency relaxations prioritized quantity over quality (ADX=6, volume=0.1%)
         # New strategy: Moderate filters to capture trending markets with real volume
         # Target: 60-65% win rate with 5-10 quality trades per day
-        self.min_adx = max(self.config.get('min_adx', 3), 3)  # Lowered from 5 → 3 for aggressive growth
-        self.volume_threshold = max(self.config.get('volume_threshold', 0.0045), 0.0045)  # Lowered from 0.006 → 0.0045 for aggressive growth
-        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.002)  # OPTIMIZED: Filter very low volume (was 0.001, 2x stricter)
+        self.min_adx = max(self.config.get('min_adx', 1.5), 1.5)  # Lowered from 3 → 1.5 to unblock 0-trade condition
+        self.volume_threshold = max(self.config.get('volume_threshold', 0.002), 0.002)  # Lowered from 0.0045 → 0.002 to unblock 0-trade condition
+        self.volume_min_threshold = self.config.get('volume_min_threshold', 0.001)  # Lowered from 0.002 → 0.001 to unblock 0-trade condition
         self.min_trend_confirmation = self.config.get('min_trend_confirmation', 1)  # TUNED: Lowered from 2 → 1 (Apr 2026) so a single confirmed condition (e.g. VWAP or MACD) is enough to attempt an entry; the AI scoring layers downstream still gate quality
         self.candle_exclusion_seconds = self.config.get('candle_exclusion_seconds', 2)  # OPTIMIZED: Re-enabled to avoid false breakouts (was 0)
         self.news_buffer_minutes = self.config.get('news_buffer_minutes', 5)

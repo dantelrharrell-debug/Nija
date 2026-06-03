@@ -573,9 +573,9 @@ VETO_SUMMARY_INTERVAL: int = int(os.environ.get("NIJA_VETO_SUMMARY_INTERVAL", "5
 
 # Minimum score before the loop will even attempt an entry
 # (NijaAIEngine uses its own adaptive threshold; this is a hard circuit-breaker)
-# Lowered 25.0 → 20.0 → 14.0 → 11.0 → 8.0 → 5.0 → 3.0 (confirmation-trade mode, Apr 2026).
+# Lowered 25.0 → 20.0 → 14.0 → 11.0 → 8.0 → 5.0 → 3.0 → 2.0 to unblock 0-trade condition.
 # Override at runtime with NIJA_CORE_MIN_SCORE env var.
-MIN_SCORE_HARD_FLOOR = float(os.environ.get("NIJA_CORE_MIN_SCORE", "3.0"))
+MIN_SCORE_HARD_FLOOR = float(os.environ.get("NIJA_CORE_MIN_SCORE", "2.0"))
 
 # ── DEAD ZONE detection ──────────────────────────────────────────────────────
 # When zero_signal_streak reaches DEAD_ZONE_STREAK_THRESHOLD the bot is
