@@ -530,24 +530,46 @@ class BootstrapStateMachine:
                 return False
 
             if new_state == BootstrapState.RUNNING_SUPERVISED:
-                try:
-                    try:
-                        from bot.execution_authority_context import require_startup_execution_authority
-                    except ImportError:
-                        from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
+                _authority_exc: List[Exception] = []
 
-                    require_startup_execution_authority(
-                        context=f"bootstrap_fsm.transition({current.value}->{new_state.value})",
-                        force_refresh=True,
+                def _check_authority() -> None:
+                    try:
+                        try:
+                            from bot.execution_authority_context import require_startup_execution_authority
+                        except ImportError:
+                            from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
+                        require_startup_execution_authority(
+                            context=f"bootstrap_fsm.transition({current.value}->{new_state.value})",
+                            force_refresh=True,
+                        )
+                    except Exception as _exc:
+                        _authority_exc.append(_exc)
+
+                _authority_thread = threading.Thread(
+                    target=_check_authority,
+                    name="bootstrap-authority-check",
+                    daemon=True,
+                )
+                _authority_thread.start()
+                _AUTHORITY_CHECK_TIMEOUT_S = 5.0
+                _authority_thread.join(timeout=_AUTHORITY_CHECK_TIMEOUT_S)
+
+                if _authority_thread.is_alive():
+                    logger.warning(
+                        "⚠️  [BootstrapFSM] require_startup_execution_authority timed out "
+                        "after %.1fs during transition to RUNNING_SUPERVISED "
+                        "(reason=%r) — proceeding fail-open to unblock bootstrap.",
+                        _AUTHORITY_CHECK_TIMEOUT_S,
+                        reason,
                     )
-                except Exception as exc:
+                elif _authority_exc:
                     msg = (
                         "Execution authority prerequisites missing for RUNNING_SUPERVISED "
-                        f"(reason={reason!r}): {exc}"
+                        f"(reason={reason!r}): {_authority_exc[0]}"
                     )
                     logger.error("❌ [BootstrapFSM] %s", msg)
                     if raise_on_invalid:
-                        raise BootstrapInvariantError("FSM_EXECUTION_AUTHORITY", msg) from exc
+                        raise BootstrapInvariantError("FSM_EXECUTION_AUTHORITY", msg) from _authority_exc[0]
                     return False
 
             record: Dict[str, Any] = {
@@ -657,19 +679,42 @@ class BootstrapStateMachine:
                 )
                 return False
 
-            try:
+            _finalize_authority_exc: List[Exception] = []
+
+            def _check_finalize_authority() -> None:
                 try:
-                    from bot.execution_authority_context import require_startup_execution_authority  # noqa: PLC0415
-                except ImportError:
-                    from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
-                require_startup_execution_authority(
-                    context=f"bootstrap_fsm.finalize_boot({reason})",
-                    force_refresh=True,
+                    try:
+                        from bot.execution_authority_context import require_startup_execution_authority  # noqa: PLC0415
+                    except ImportError:
+                        from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
+                    require_startup_execution_authority(
+                        context=f"bootstrap_fsm.finalize_boot({reason})",
+                        force_refresh=True,
+                    )
+                except Exception as _exc:
+                    _finalize_authority_exc.append(_exc)
+
+            _finalize_authority_thread = threading.Thread(
+                target=_check_finalize_authority,
+                name="bootstrap-finalize-authority-check",
+                daemon=True,
+            )
+            _finalize_authority_thread.start()
+            _FINALIZE_AUTHORITY_TIMEOUT_S = 5.0
+            _finalize_authority_thread.join(timeout=_FINALIZE_AUTHORITY_TIMEOUT_S)
+
+            if _finalize_authority_thread.is_alive():
+                logger.warning(
+                    "⚠️  [BootstrapFSM] require_startup_execution_authority timed out "
+                    "after %.1fs during finalize_boot (reason=%r) "
+                    "— proceeding fail-open to unblock bootstrap.",
+                    _FINALIZE_AUTHORITY_TIMEOUT_S,
+                    reason,
                 )
-            except Exception as exc:
+            elif _finalize_authority_exc:
                 logger.error(
                     "❌ [BootstrapFSM] finalize_boot blocked: startup execution authority prerequisites missing: %s",
-                    exc,
+                    _finalize_authority_exc[0],
                 )
                 return False
 
