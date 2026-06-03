@@ -1056,6 +1056,43 @@ class NijaCoreLoop:
             len(symbols), snapshot.balance, snapshot.open_positions,
         )
 
+        # ── Per-cycle diagnostic header ───────────────────────────────────
+        _cycle_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        logger.info(
+            "━━━ CYCLE #%d | %s | balance=$%.2f | open_positions=%d | "
+            "symbols=%d | regime=%s | cycle_id=%s ━━━",
+            self._total_cycles + 1,
+            _cycle_ts,
+            snapshot.balance,
+            snapshot.open_positions,
+            len(symbols),
+            str(snapshot.current_regime or "unknown"),
+            snapshot.cycle_id or "n/a",
+        )
+
+        # ── Market data fetch status ──────────────────────────────────────
+        # Log broker identity and symbol universe size so operators can
+        # confirm data is flowing before per-pair evaluation begins.
+        _broker_name_diag = "unknown"
+        try:
+            if broker is not None:
+                _broker_name_diag = (
+                    self.apex._get_broker_name()
+                    if hasattr(self.apex, "_get_broker_name")
+                    else type(broker).__name__.replace("Broker", "").lower()
+                )
+        except Exception:
+            pass
+        logger.info(
+            "📡 [MARKET_DATA] broker=%s | symbols_queued=%d | "
+            "ca_hydrated=%s | ca_total_capital=$%.2f | valid_brokers=%d",
+            _broker_name_diag,
+            len(symbols),
+            snapshot.ca_is_hydrated,
+            snapshot.ca_total_capital,
+            snapshot.ca_valid_brokers,
+        )
+
         # ── Entry-to-Order Trace: opening event ──────────────────────────
         emit_cycle_trace(
             CycleOutcome.SCAN_STARTED,
@@ -1085,7 +1122,7 @@ class NijaCoreLoop:
                     "🔍 Scanning markets — %d symbols | slots=%d open=%d",
                     len(symbols), available_slots, effective_open,
                 )
-                entries, blocked, scored = self._phase3_scan_and_enter(
+                entries, blocked, scored, _gate_rejections = self._phase3_scan_and_enter(
                     broker=broker,
                     snapshot=snapshot,
                     symbols=symbols,
@@ -1118,6 +1155,27 @@ class NijaCoreLoop:
                             FORCED_ENTRY_STREAK_THRESHOLD,
                         )
 
+                # ── Gate rejection counters ───────────────────────────────
+                logger.info(
+                    "📊 [GATE_REJECTIONS] cycle=%d | "
+                    "confidence_gate_rejected=%d | adx_gate_rejected=%d | "
+                    "volume_gate_rejected=%d | momentum_filter_rejected=%d | "
+                    "ai_gate_rejected=%d | notional_gate_rejected=%d | "
+                    "capital_gate_rejected=%d | risk_gate_rejected=%d | "
+                    "market_filter_rejected=%d | data_insufficient=%d",
+                    self._total_cycles,
+                    _gate_rejections.get("confidence_gate_rejected", 0),
+                    _gate_rejections.get("adx_gate_rejected", 0),
+                    _gate_rejections.get("volume_gate_rejected", 0),
+                    _gate_rejections.get("momentum_filter_rejected", 0),
+                    _gate_rejections.get("ai_gate_rejected", 0),
+                    _gate_rejections.get("notional_gate_rejected", 0),
+                    _gate_rejections.get("capital_gate_rejected", 0),
+                    _gate_rejections.get("risk_gate_rejected", 0),
+                    _gate_rejections.get("market_filter_rejected", 0),
+                    _gate_rejections.get("data_insufficient", 0),
+                )
+
                 # ── Entry-to-Order Trace: terminal outcome ────────────────
                 if entries == 0:
                     emit_cycle_trace(
@@ -1129,6 +1187,7 @@ class NijaCoreLoop:
                 # counters incremented) per entry inside _phase3_scan_and_enter
 
             else:
+                _gate_rejections = {}
                 logger.info(
                     "🔒 Core loop: position cap reached (%d/%d) — skipping entries",
                     effective_open,
@@ -1143,6 +1202,7 @@ class NijaCoreLoop:
                 self._n_vetoed += 1
                 self._record_veto(_cap_reason)
         else:
+            _gate_rejections = {}
             logger.info("🔒 Core loop: entries blocked (user_mode)")
             # ── Entry-to-Order Trace: pre-scan veto ──────────────────────
             # user_mode can be True for two distinct reasons:
@@ -1168,6 +1228,21 @@ class NijaCoreLoop:
             result.next_interval = 150
 
         elapsed_ms = (time.time() - cycle_start) * 1000
+
+        # ── Cycle summary ─────────────────────────────────────────────────
+        logger.info(
+            "📋 [CYCLE_SUMMARY] cycle=%d | pairs_evaluated=%d | pairs_passed_all_gates=%d | "
+            "pairs_submitted=%d | cycle_duration_ms=%.0f | next_cycle_in=%ds | "
+            "zero_signal_streak=%d",
+            self._total_cycles,
+            result.symbols_scored,
+            result.entries_taken + result.entries_blocked,
+            result.entries_taken,
+            elapsed_ms,
+            result.next_interval,
+            self._zero_signal_streak,
+        )
+
         logger.info(
             "🔄 Core loop complete — scored=%d entered=%d blocked=%d exited=%d "
             "elapsed=%.0fms next=%ds",
@@ -1329,7 +1404,7 @@ class NijaCoreLoop:
         symbols: List[str],
         available_slots: int,
         zero_signal_streak: int = 0,
-    ) -> Tuple[int, int, int]:
+    ) -> Tuple[int, int, int, Dict[str, int]]:
         """
         Score all candidate symbols, rank them, execute top-N.
 
@@ -1343,7 +1418,8 @@ class NijaCoreLoop:
         (step 3, capped).  Candidates below the relaxed floor are filtered out;
         remaining top-N are force-entered to prevent indefinite idling.
 
-        Returns (entries_taken, entries_blocked, symbols_scored).
+        Returns (entries_taken, entries_blocked, symbols_scored, gate_rejections).
+        gate_rejections is a dict mapping gate name → rejection count for this cycle.
         """
         # Pre-import AIEngineSignal once; guarded so the fallback path works
         # even when NijaAIEngine is unavailable.
@@ -1393,6 +1469,22 @@ class NijaCoreLoop:
         scored = 0
         blocked = 0
 
+        # ── Per-cycle gate rejection counters ─────────────────────────────
+        # Incremented each time a symbol is rejected at a specific gate.
+        # Returned to run_scan_phase for the [GATE_REJECTIONS] log line.
+        _gate_rejections: Dict[str, int] = {
+            "confidence_gate_rejected": 0,
+            "adx_gate_rejected": 0,
+            "volume_gate_rejected": 0,
+            "momentum_filter_rejected": 0,
+            "ai_gate_rejected": 0,
+            "notional_gate_rejected": 0,
+            "capital_gate_rejected": 0,
+            "risk_gate_rejected": 0,
+            "market_filter_rejected": 0,
+            "data_insufficient": 0,
+        }
+
         # Always-on top-volume tracker (feeds volume fallback for any streak)
         _best_volume_symbol: Optional[str] = None
         _best_volume_side: str = "long"
@@ -1426,6 +1518,7 @@ class NijaCoreLoop:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "data_insufficient")
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
+                    _gate_rejections["data_insufficient"] += 1
                     continue
                 _funnel["market_data"] = ("PASS", "")
 
@@ -1454,6 +1547,7 @@ class NijaCoreLoop:
                         if _sdd is not None:
                             _sdd.record_skip(symbol, "market_filter")
                         _funnel["regime"] = ("FAIL", market_reason or "MARKET_FILTER_BLOCKED")
+                        _gate_rejections["market_filter_rejected"] += 1
                         continue
                     _funnel["regime"] = ("PASS", "")
                 except Exception:
@@ -1477,6 +1571,28 @@ class NijaCoreLoop:
                     _best_volume_side = side
                     _best_volume_entry_type = entry_type
 
+                # ── Extract per-pair diagnostic values ────────────────────
+                # Read ADX, volume%, and confidence (composite score) from
+                # indicators/df so they can be logged regardless of pass/fail.
+                _diag_adx: float = 0.0
+                _diag_vol_pct: float = 0.0
+                _diag_confidence: float = 0.0
+                _diag_momentum_pass: Optional[bool] = None
+                try:
+                    _adx_series = indicators.get("adx", None)
+                    if _adx_series is not None and hasattr(_adx_series, "iloc") and len(_adx_series) > 0:
+                        _diag_adx = float(_adx_series.iloc[-1])
+                except Exception:
+                    pass
+                try:
+                    if "volume" in df.columns and len(df) >= 21:
+                        _cur_vol = float(df["volume"].iloc[-1])
+                        _avg_vol = float(df["volume"].iloc[-21:-1].mean())
+                        if _avg_vol > 0:
+                            _diag_vol_pct = (_cur_vol / _avg_vol - 1.0) * 100.0
+                except Exception:
+                    pass
+
                 # ── Standard AI scoring ───────────────────────────────────
                 if ai is not None:
                     logger.info("🔎 Evaluating market — %s (%s)", symbol, side)
@@ -1490,14 +1606,67 @@ class NijaCoreLoop:
                         symbol=symbol,
                     )
                     if sig is not None:
+                        _diag_confidence = sig.composite_score
                         _funnel["signal"] = ("PASS", "")
                         logger.info(
                             "✅ Signal passed — %s score=%.1f threshold=%.1f",
                             symbol, sig.composite_score, sig.threshold_used,
                         )
+                        # ── Per-pair evaluation log (PASS) ────────────────
+                        logger.info(
+                            "🔬 [PAIR_EVAL] pair=%s | side=%s | confidence=%.2f | "
+                            "adx=%.1f | vol_pct=%.1f%% | momentum=%s | "
+                            "gate=PASS | entry_score=%.1f | threshold=%.1f",
+                            symbol, side, sig.composite_score,
+                            _diag_adx, _diag_vol_pct,
+                            "pass",
+                            sig.composite_score, sig.threshold_used,
+                        )
                         candidates.append(sig)
                     else:
                         _funnel["signal"] = ("FAIL", "RSI_BELOW_THRESHOLD")
+                        # Determine which sub-gate caused the rejection by
+                        # inspecting the score breakdown from a lightweight
+                        # re-evaluation of the composite components.
+                        _reject_gate = "confidence_gate"
+                        try:
+                            _breakdown = ai._compute_composite(
+                                df, indicators, side,
+                                snapshot.current_regime, broker_name, entry_type,
+                            )[1]
+                            _diag_confidence = float(_breakdown.get("composite_score", 0.0))
+                            _raw_enhanced = float(_breakdown.get("enhanced_score", 0.0))
+                            _score_breakdown = _breakdown.get("score_breakdown", {})
+                            _adx_sub = float(_score_breakdown.get("trend_strength", 0.0)) if _score_breakdown else 0.0
+                            _vol_sub = float(_score_breakdown.get("volume", 0.0)) if _score_breakdown else 0.0
+                            _rsi_sub = float(_score_breakdown.get("dual_rsi", 0.0)) if _score_breakdown else 0.0
+                            # Classify the primary rejection gate based on
+                            # which sub-score is most deficient relative to
+                            # its weight contribution.
+                            if _adx_sub < 3.0:
+                                _reject_gate = "adx_gate"
+                                _gate_rejections["adx_gate_rejected"] += 1
+                            elif _vol_sub < 3.0:
+                                _reject_gate = "volume_gate"
+                                _gate_rejections["volume_gate_rejected"] += 1
+                            elif _rsi_sub < 5.0:
+                                _reject_gate = "momentum_filter"
+                                _gate_rejections["momentum_filter_rejected"] += 1
+                            else:
+                                _reject_gate = "confidence_gate"
+                                _gate_rejections["confidence_gate_rejected"] += 1
+                        except Exception:
+                            _gate_rejections["confidence_gate_rejected"] += 1
+                        # ── Per-pair evaluation log (FAIL) ────────────────
+                        logger.info(
+                            "🔬 [PAIR_EVAL] pair=%s | side=%s | confidence=%.2f | "
+                            "adx=%.1f | vol_pct=%.1f%% | momentum=%s | "
+                            "gate=FAIL | rejected_by=%s | entry_score=%.2f",
+                            symbol, side, _diag_confidence,
+                            _diag_adx, _diag_vol_pct,
+                            "n/a",
+                            _reject_gate, _diag_confidence,
+                        )
                 elif _AISignal is not None:
                     # Fallback: use apex.analyze_market directly and wrap result
                     analysis = self.apex.analyze_market(df, symbol, snapshot.balance)
@@ -1513,9 +1682,29 @@ class NijaCoreLoop:
                             reason=analysis.get("reason", "apex signal"),
                             metadata={"apex_analysis": analysis},
                         )
+                        logger.info(
+                            "🔬 [PAIR_EVAL] pair=%s | side=%s | confidence=%.2f | "
+                            "adx=%.1f | vol_pct=%.1f%% | momentum=%s | "
+                            "gate=PASS | entry_score=%.1f | threshold=%.1f",
+                            symbol, side, 50.0,
+                            _diag_adx, _diag_vol_pct,
+                            "pass",
+                            50.0, 25.0,
+                        )
                         candidates.append(sig)
                     else:
-                        _funnel["signal"] = ("FAIL", analysis.get("reason", "NO_ENTRY_SIGNAL"))
+                        _apex_reject_reason = analysis.get("reason", "NO_ENTRY_SIGNAL")
+                        _funnel["signal"] = ("FAIL", _apex_reject_reason)
+                        _gate_rejections["confidence_gate_rejected"] += 1
+                        logger.info(
+                            "🔬 [PAIR_EVAL] pair=%s | side=%s | confidence=%.2f | "
+                            "adx=%.1f | vol_pct=%.1f%% | momentum=%s | "
+                            "gate=FAIL | rejected_by=confidence_gate | reason=%s",
+                            symbol, side, 0.0,
+                            _diag_adx, _diag_vol_pct,
+                            "n/a",
+                            _apex_reject_reason,
+                        )
 
                 # ── Momentum-Only Entry Mode (dead zone) ──────────────────
                 # When in a dead zone run the lightweight relaxed momentum
@@ -1530,6 +1719,9 @@ class NijaCoreLoop:
                             mom_ok, mom_score, mom_reason = _check_mom_short_relaxed(df, indicators)
                         else:
                             mom_ok = False
+                        _diag_momentum_pass = bool(mom_ok)
+                        if not mom_ok:
+                            _gate_rejections["momentum_filter_rejected"] += 1
                         if mom_ok:
                             momentum_candidates.append(_AISignal(
                                 symbol=symbol,
@@ -1631,7 +1823,7 @@ class NijaCoreLoop:
                 )
             if ai is not None:
                 ai.speed_ctrl.record_cycle(0)
-            return 0, blocked, scored
+            return 0, blocked, scored, _gate_rejections
 
         selected = (
             ai.rank_and_select(candidates, available_slots, snapshot.current_regime)
@@ -1769,6 +1961,16 @@ class NijaCoreLoop:
                             )
                             self._n_vetoed += 1
                             self._record_reject(_tpe_reason)
+                            # Classify TPE rejection into the appropriate gate counter
+                            _tpe_reason_lower = str(_tpe_reason).lower()
+                            if "notional" in _tpe_reason_lower or "min_notional" in _tpe_reason_lower:
+                                _gate_rejections["notional_gate_rejected"] += 1
+                            elif "capital" in _tpe_reason_lower or "balance" in _tpe_reason_lower:
+                                _gate_rejections["capital_gate_rejected"] += 1
+                            elif "risk" in _tpe_reason_lower or "drawdown" in _tpe_reason_lower:
+                                _gate_rejections["risk_gate_rejected"] += 1
+                            else:
+                                _gate_rejections["ai_gate_rejected"] += 1
                             continue
                         _funnel["ai_gate"] = ("PASS", "")
                     except Exception as _tpe_err:
@@ -1872,7 +2074,7 @@ class NijaCoreLoop:
                 rank_threshold=rank_threshold,
             )
 
-        return entries, blocked, scored
+        return entries, blocked, scored, _gate_rejections
 
     # ------------------------------------------------------------------
     # Helpers
