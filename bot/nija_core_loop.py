@@ -254,6 +254,22 @@ _current_cycle_id: str = ""
 _current_cycle_capital: Mapping[str, Any] = {}
 _current_cycle_snapshot: Optional["CycleSnapshot"] = None
 
+# ---------------------------------------------------------------------------
+# Start-signal gate — defined here (before any function that references it)
+# so the name is always in module scope when _supervisor_step_state_machine()
+# runs, regardless of call order.
+# Emitted exactly once by bot.py when BootstrapFSM reaches RUNNING_SUPERVISED.
+# ---------------------------------------------------------------------------
+TRADING_ENGINE_READY = threading.Event()
+# ── FORCE_TRADE: pre-set the start gate so run_trading_loop() never waits ────
+if os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled") \
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled"):
+    logger.warning(
+        "⚡ FORCE_TRADE: TRADING_ENGINE_READY pre-set at module load — "
+        "trading loop will not wait for bootstrap FSM"
+    )
+    TRADING_ENGINE_READY.set()
+
 
 def get_current_cycle_snapshot() -> Optional["CycleSnapshot"]:
     """Return the frozen CycleSnapshot for the currently-executing cycle.
@@ -514,7 +530,11 @@ def _supervisor_step_state_machine() -> None:
                 _balance,
             )
     except Exception as _sm_err:
-        logger.debug("supervisor state machine step failed: %s", _sm_err)
+        logger.error(
+            "supervisor state machine step failed — trading loop activation may be blocked: %s",
+            _sm_err,
+            exc_info=True,
+        )
 
 # ---------------------------------------------------------------------------
 # Entry-to-Order Trace — mandatory cycle observability
@@ -2151,17 +2171,11 @@ _trading_active = False
 # Set to True after _exec_test_probe() fires so the probe only runs once
 # per process lifetime, even if NIJA_EXEC_TEST_MODE stays "true" externally.
 _exec_test_fired = False
-# Single deterministic start-signal gate.
-# Emitted exactly once by bot.py when BootstrapFSM reaches RUNNING_SUPERVISED.
-TRADING_ENGINE_READY = threading.Event()
-# ── FORCE_TRADE: pre-set the start gate so run_trading_loop() never waits ────
-if os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled") \
-        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled"):
-    logger.warning(
-        "⚡ FORCE_TRADE: TRADING_ENGINE_READY pre-set at module load — "
-        "trading loop will not wait for bootstrap FSM"
-    )
-    TRADING_ENGINE_READY.set()
+# NOTE: TRADING_ENGINE_READY is defined earlier in this module (alongside
+# _current_cycle_id / _current_cycle_capital) so it is guaranteed to exist
+# before _supervisor_step_state_machine() is ever called.  Do not redefine it
+# here — the earlier definition (including FORCE_TRADE pre-set logic) is the
+# canonical one.
 
 
 # ---------------------------------------------------------------------------
