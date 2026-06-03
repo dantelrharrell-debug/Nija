@@ -1323,18 +1323,20 @@ class SelfHealingStartup:
     # ── Private helpers ────────────────────────────────────────────────────
 
     def _advance_bootstrap_fsm_to_running(self) -> None:
-        """Drive the bootstrap FSM from INIT_COMPLETE to RUNNING_SUPERVISED.
+        """Drive the bootstrap FSM from CAPITAL_READY to RUNNING_SUPERVISED.
 
-        Called once after LIVE_ACTIVE is confirmed.  The capital-ready callback
-        (_on_capital_bootstrap_ready in MABM) advances the system
-        BootstrapStateMachine to INIT_COMPLETE via advance_to_capital_ready().
-        This method drives the remaining two transitions:
+        Called once after LIVE_ACTIVE is confirmed.  Drives all remaining
+        transitions from wherever the FSM currently sits (CAPITAL_READY or
+        later) through to RUNNING_SUPERVISED:
 
-            INIT_COMPLETE → THREADS_STARTING → RUNNING_SUPERVISED
+            CAPITAL_READY → INIT_COMPLETE → THREADS_STARTING → RUNNING_SUPERVISED
 
-        so that the trading loop is unblocked and execution authority is granted.
-        Errors are caught and logged — a failed FSM advance is non-fatal because
-        per-order runtime gates enforce safety independently.
+        The capital-ready callback (_on_capital_bootstrap_ready in MABM) calls
+        advance_to_capital_ready() which only advances to CAPITAL_READY (and
+        sometimes INIT_COMPLETE).  This method is responsible for the full
+        remaining chain so the trading loop is unblocked and execution authority
+        is granted.  Errors are caught and logged — a failed FSM advance is
+        non-fatal because per-order runtime gates enforce safety independently.
         """
         try:
             try:
@@ -1356,6 +1358,27 @@ class SelfHealingStartup:
             # non-terminal transitions (the bootstrap kernel thread may have
             # released ownership after advance_to_capital_ready completed).
             fsm.claim_bootstrap_ownership()
+
+            # CAPITAL_READY → INIT_COMPLETE
+            # This is the transition that was missing: advance_to_capital_ready()
+            # leaves the FSM at CAPITAL_READY (or INIT_COMPLETE if it was already
+            # included in the happy-path list), but never drives it further.
+            if current == BootstrapState.CAPITAL_READY:
+                ok = fsm.transition(
+                    BootstrapState.INIT_COMPLETE,
+                    reason="capital_ready_and_live_active",
+                )
+                if not ok:
+                    logger.error(
+                        "❌ [SelfHealingStartup] bootstrap FSM: CAPITAL_READY → INIT_COMPLETE "
+                        "transition rejected (state=%s)",
+                        fsm.state.value,
+                    )
+                    return
+                logger.info(
+                    "✅ [SelfHealingStartup] bootstrap FSM: CAPITAL_READY → INIT_COMPLETE"
+                )
+                current = fsm.state
 
             # INIT_COMPLETE → THREADS_STARTING
             if current == BootstrapState.INIT_COMPLETE:
@@ -1391,8 +1414,8 @@ class SelfHealingStartup:
                     )
             else:
                 logger.warning(
-                    "⚠️ [SelfHealingStartup] bootstrap FSM: unexpected state=%s after "
-                    "INIT_COMPLETE transition — expected THREADS_STARTING; "
+                    "⚠️ [SelfHealingStartup] bootstrap FSM: unexpected state=%s — "
+                    "expected THREADS_STARTING after INIT_COMPLETE transition; "
                     "RUNNING_SUPERVISED not reached",
                     fsm.state.value,
                 )
