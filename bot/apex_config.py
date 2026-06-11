@@ -67,7 +67,7 @@ SL_FLOOR_PCT = 0.004      # 0.4 % minimum stop distance
 # ═══════════════════════════════════════════════════════════════════
 
 MARKET_FILTER = {
-    'adx_threshold': 3,   # Lowered from 7 → 3 to unblock 0-trade condition
+    'adx_threshold': 1.5,   # Lowered from 7 → 1.5 to unblock 0-trade condition
     'adx_strong_threshold': 40,  # ADX > 40 indicates very strong trend
     'volume_threshold': 0.005,  # Lowered from 0.01 → 0.005 to unblock 0-trade condition
     'volume_lookback': 20,  # Period for average volume calculation
@@ -109,7 +109,7 @@ INDICATORS = {
 
 MARKET_FILTERING = {
     # ADX (Average Directional Index) - Trend Strength
-    'min_adx': 3,   # Lowered from 7 → 3 to unblock 0-trade condition
+    'min_adx': 1.5,   # Lowered from 7 → 1.5 to unblock 0-trade condition
     'strong_adx': 30,  # ADX above this is strong trend
 
     # Volume Requirements

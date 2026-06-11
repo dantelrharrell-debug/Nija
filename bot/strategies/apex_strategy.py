@@ -39,7 +39,7 @@ class ApexTrendStrategy(BaseStrategy):
         super().__init__(config)
 
         # RSI window thresholds — widened upper bounds to catch more momentum entries
-        # while keeping min_confirmations=3 as quality gate
+        # Lowered min_confirmations to 2 to reduce missed opportunities while preserving signal quality
         self.rsi9_long_min = self.config.get("rsi9_long_min", 30)
         self.rsi9_long_max = self.config.get("rsi9_long_max", 62)   # was 55 — catches momentum runs
         self.rsi14_long_min = self.config.get("rsi14_long_min", 30)
@@ -51,7 +51,8 @@ class ApexTrendStrategy(BaseStrategy):
         self.rsi14_short_max = self.config.get("rsi14_short_max", 73)  # was 70
 
         # General thresholds
-        self.min_confirmations = self.config.get("min_confirmations", 3)
+        # Lower default to 2 to reduce missed opportunities (can be overridden via config)
+        self.min_confirmations = self.config.get("min_confirmations", 2)
         self.position_size_multiplier = self.config.get("position_size_multiplier", 1.2)
         self.take_profit_multiplier = self.config.get("take_profit_multiplier", 1.5)
         self.trailing_stop_distance = self.config.get("trailing_stop_distance", 1.5)
