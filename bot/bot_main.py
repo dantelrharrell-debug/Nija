@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""
+NIJA Trading Bot — Main Entry Point (APEX v7.2.0)
+==================================================
+
+Complete trading bot with self-healing bootstrap, multi-broker support,
+and deterministic execution authority.
+
+Entry point: python -m bot.bot_main
+or:         python bot/bot_main.py
+
+Architecture
+------------
+1. SelfHealingStartup   — resilient broker connection with fallback
+2. BootstrapFSM         — composite state machine (19 states)
+3. TradingStrategy      — APEX v7.2.0 with multi-account support
+4. NijaCoreLoop         — main trading cycle with cycle scheduler
+5. SupervisorLoop       — watchdog and restart logic
+
+Author: NIJA Trading Systems
+Version: 7.2.0
+Date: June 2026
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import signal
+import sys
+import threading
+import time
+from typing import Optional
+
+logger = logging.getLogger("nija.main")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Bootstrap timeout (seconds) — maximum time to wait for each startup phase
+BOOTSTRAP_TIMEOUT_S = float(os.environ.get("NIJA_BOOTSTRAP_TIMEOUT_S", "300"))
+
+# Supervisor poll interval (seconds) — how often to check trading loop health
+SUPERVISOR_POLL_INTERVAL_S = float(os.environ.get("NIJA_SUPERVISOR_POLL_S", "10"))
+
+# Maximum consecutive supervisor failures before hard restart request
+SUPERVISOR_MAX_FAILURES = int(os.environ.get("NIJA_SUPERVISOR_MAX_FAILURES", "3"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global state
+# ─────────────────────────────────────────────────────────────────────────────
+
+_shutdown_event = threading.Event()
+_startup_complete = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal handlers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _signal_handler(signum: int, frame) -> None:
+    """Handle SIGTERM/SIGINT gracefully."""
+    sig_name = signal.Signals(signum).name
+    logger.critical(f"🛑 Received signal {sig_name} — initiating graceful shutdown")
+    _shutdown_event.set()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bootstrap orchestration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _run_self_healing_startup() -> tuple[bool, Optional[object], str]:
+    """
+    Run the self-healing startup sequence.
+
+    Returns:
+        (success, broker, broker_name)
+    """
+    logger.info("🚀 Starting self-healing bootstrap sequence...")
+
+    try:
+        from bot.self_healing_startup import SelfHealingStartup, StartupConfig
+
+        config = StartupConfig()
+        startup = SelfHealingStartup(config)
+        result = startup.run()
+
+        if result.ok:
+            logger.info(f"✅ Bootstrap complete: broker={result.broker_name} mode={'FALLBACK' if result.on_fallback else 'PRIMARY'}")
+            return True, result.broker, result.broker_name
+        else:
+            logger.critical(f"❌ Bootstrap failed: {result.reason}")
+            return False, None, ""
+
+    except Exception as e:
+        logger.critical(f"❌ Bootstrap exception: {type(e).__name__}: {e}", exc_info=True)
+        return False, None, ""
+
+
+def _advance_bootstrap_fsm_to_running_supervised() -> bool:
+    """Advance bootstrap FSM from CAPITAL_READY to RUNNING_SUPERVISED."""
+    logger.info("🚀 Advancing bootstrap FSM to RUNNING_SUPERVISED...")
+
+    try:
+        from bot.bootstrap_state_machine import get_bootstrap_fsm, BootstrapState
+
+        fsm = get_bootstrap_fsm()
+        current = fsm.state
+
+        # Already running
+        if current == BootstrapState.RUNNING_SUPERVISED:
+            logger.info("✅ FSM already RUNNING_SUPERVISED")
+            return True
+
+        # Claim ownership
+        fsm.claim_bootstrap_ownership()
+
+        # Drive through remaining states
+        states_to_reach = [
+            BootstrapState.INIT_COMPLETE,
+            BootstrapState.THREADS_STARTING,
+            BootstrapState.RUNNING_SUPERVISED,
+        ]
+
+        for target in states_to_reach:
+            if fsm.state == target:
+                continue  # Already there
+            if fsm.state == BootstrapState.RUNNING_SUPERVISED:
+                break  # Done
+
+            ok = fsm.transition(target, reason="bot_main_fsm_advancement")
+            if not ok:
+                logger.error(f"❌ FSM transition to {target.value} failed")
+                return False
+            logger.info(f"✅ FSM → {target.value}")
+
+        return fsm.state == BootstrapState.RUNNING_SUPERVISED
+
+    except Exception as e:
+        logger.error(f"❌ FSM advancement failed: {e}", exc_info=True)
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main() -> int:
+    """Main entry point for the NIJA trading bot."""
+    global _startup_complete
+
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+    logger.info("=" * 80)
+    logger.info("🚀 NIJA TRADING BOT — APEX v7.2.0")
+    logger.info("=" * 80)
+
+    # Register signal handlers
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    # Step 1: Self-healing bootstrap
+    logger.info("\n[STEP 1] Self-Healing Bootstrap")
+    ok, broker, broker_name = _run_self_healing_startup()
+    if not ok:
+        logger.critical("❌ Bootstrap failed — exiting")
+        return 1
+
+    logger.info(f"✅ Connected to {broker_name}")
+
+    # Step 2: Advance FSM to RUNNING_SUPERVISED
+    logger.info("\n[STEP 2] Advancing Bootstrap FSM")
+    ok = _advance_bootstrap_fsm_to_running_supervised()
+    if not ok:
+        logger.critical("❌ FSM advancement failed — exiting")
+        return 1
+
+    logger.info("✅ FSM is RUNNING_SUPERVISED")
+    _startup_complete = True
+
+    # Step 3: Start trading loop
+    logger.info("\n[STEP 3] Starting Trading Loop")
+    try:
+        from bot.nija_core_loop import start_trading_engine
+
+        logger.info("🎯 Entering trading loop...")
+        start_trading_engine(broker)
+
+    except KeyboardInterrupt:
+        logger.info("⏸️  Keyboard interrupt received")
+        return 0
+
+    except Exception as e:
+        logger.critical(f"❌ Trading loop exception: {type(e).__name__}: {e}", exc_info=True)
+        return 1
+
+    finally:
+        _shutdown_event.set()
+
+    logger.info("✅ Bot shutdown complete")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
