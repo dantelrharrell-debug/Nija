@@ -99,6 +99,11 @@ _HARD_BLOCK_VOLATILITY_EXPLOSION: bool = (
     os.getenv("NIJA_HARD_BLOCK_VOLATILITY_EXPLOSION", "false").lower() in ("1", "true", "yes")
 )
 
+# NIJA_AI_ENTRY_GATE_DIAGNOSTICS=true enables detailed per-gate rejection logging.
+_GATE_DIAGNOSTICS_ENABLED: bool = (
+    os.getenv("NIJA_AI_ENTRY_GATE_DIAGNOSTICS", "false").lower() in ("1", "true", "yes")
+)
+
 
 # ---------------------------------------------------------------------------
 # Per-gate result
@@ -681,6 +686,12 @@ class AIEntryGate:
             logger.info(
                 f"TRADE REJECTED → reason={reason} score={total_score} conf={enhanced_score}"
             )
+            if _GATE_DIAGNOSTICS_ENABLED:
+                per_gate = ", ".join(
+                    f"{k}:{'pass' if g.passed else 'fail'}({g.value}/{g.threshold})"
+                    for k, g in gates.items()
+                )
+                logger.info("AI ENTRY DIAGNOSTICS → %s", per_gate)
         logger.debug("AIEntryGate: %s", reason)
         if _gate_feedback_enabled:
             try:
