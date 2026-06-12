@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import threading
 import time
 from contextlib import nullcontext
@@ -24,6 +25,39 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija.trading_strategy")
+
+# Balance calls must never stall startup/trade eligibility indefinitely.
+BALANCE_FETCH_TIMEOUT = 12
+CACHED_BALANCE_MAX_AGE_SECONDS = 90
+
+
+def call_with_timeout(fn: Any, *args: Any, timeout_seconds: float = BALANCE_FETCH_TIMEOUT, **kwargs: Any) -> tuple[Any, Optional[BaseException]]:
+    """Run ``fn`` in a daemon thread and return ``(result, error)``.
+
+    The implementation intentionally avoids ``ThreadPoolExecutor`` context
+    managers because they wait for timed-out worker threads during shutdown.
+    Balance probes against exchanges such as Kraken can hang during bootstrap; a
+    daemon thread plus a queue lets callers continue immediately after the
+    timeout while still capturing normal return values and exceptions.
+    """
+
+    result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+    def _runner() -> None:
+        try:
+            result_queue.put(("result", fn(*args, **kwargs)))
+        except BaseException as exc:  # propagate to caller as the error slot
+            result_queue.put(("error", exc))
+
+    worker = threading.Thread(target=_runner, name="nija-call-with-timeout", daemon=True)
+    worker.start()
+    try:
+        kind, payload = result_queue.get(timeout=max(0.0, float(timeout_seconds)))
+    except queue.Empty:
+        return None, TimeoutError(f"call_with_timeout timed out after {timeout_seconds}s")
+    if kind == "error":
+        return None, payload
+    return payload, None
 
 try:
     from bot.log_rate_limiter import get_log_rate_limiter
