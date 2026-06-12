@@ -222,6 +222,26 @@ _REDIS_LEASE_FORCE_TAKEOVER_REFRESH_DELTA_MS = max(
 _REDIS_NONCE_RESET_BUFFER_MS = max(
     0, int(os.environ.get("NIJA_REDIS_NONCE_RESET_BUFFER_MS", "5000"))
 )
+
+
+def _startup_nonce_resync_future_ms() -> int:
+    """Return how far ahead startup nonce recovery should advance Redis counters.
+
+    Kraken remembers the highest nonce accepted per API key.  When a previous
+    runtime poisoned Kraken with a far-future nonce, resetting Redis to
+    ``now_ms + NIJA_REDIS_NONCE_RESET_BUFFER_MS`` can still leave every startup
+    probe below Kraken's server-side high-water mark.  Startup/user reconnect
+    resyncs therefore advance (never lower) the Redis counter by a larger,
+    configurable safety window.
+    """
+    default_ms = "3600000" if _env_true("NIJA_DEEP_NONCE_RESET", "0") else "900000"
+    try:
+        raw = int(os.environ.get("NIJA_STARTUP_NONCE_RESYNC_FUTURE_MS", default_ms) or default_ms)
+    except (TypeError, ValueError):
+        raw = int(default_ms)
+    return max(_REDIS_NONCE_RESET_BUFFER_MS, raw, 0)
+
+
 _PROCESS_STARTUP_HASH = uuid.uuid4().hex[:16]
 try:
     _REDIS_LEASE_STARTUP_BACKOFF_MIN_S = max(
@@ -448,6 +468,13 @@ class _PerKeyRedisBackend:
         return next
     """
     _KEY_PREFIX = "nija:kraken:nonce:"
+    _ADVANCE_FLOOR_LUA = """
+        local cur = tonumber(redis.call('GET', KEYS[1])) or 0
+        local floor = tonumber(ARGV[1]) or 0
+        local next = math.max(cur, floor)
+        redis.call('SET', KEYS[1], tostring(next))
+        return {cur, next}
+    """
     _LEASE_OWNER_PREFIX = "nija:kraken:writer:owner:"
     _LEASE_VERSION_PREFIX = "nija:kraken:writer:lease_version:"
     _LEASE_VERSION_COUNTER_PREFIX = "nija:kraken:writer:version_counter:"
@@ -643,6 +670,9 @@ class _PerKeyRedisBackend:
     ) -> None:
         self._client = redis_client
         self._script = redis_client.register_script(self._LUA)  # type: ignore[attr-defined]
+        self._advance_floor_script = redis_client.register_script(  # type: ignore[attr-defined]
+            self._ADVANCE_FLOOR_LUA
+        )
         self._lease_script = redis_client.register_script(self._LEASE_LUA)  # type: ignore[attr-defined]
         self._lease_release_script = redis_client.register_script(self._LEASE_RELEASE_LUA)  # type: ignore[attr-defined]
         self._lease_force_script = redis_client.register_script(self._LEASE_FORCE_LUA)  # type: ignore[attr-defined]
@@ -921,6 +951,35 @@ class _PerKeyRedisBackend:
             floor,
             _REDIS_NONCE_RESET_BUFFER_MS,
         )
+
+    def advance_to_floor(self, key_id: str, *, floor_ms: int) -> tuple[int, int]:
+        """Atomically advance the Redis nonce key to at least *floor_ms*.
+
+        Unlike ``reset()``, this never lowers an existing Redis high-water mark.
+        That matters during stale Kraken-nonce recovery: lowering Redis can make
+        the next signed request older than Kraken's server-side nonce record,
+        while advancing preserves monotonicity and gives the next probe a safe
+        fresh floor.
+        """
+        floor = int(floor_ms)
+        redis_key = self._KEY_PREFIX + key_id
+        script = getattr(self, "_advance_floor_script", None)
+        if callable(script):
+            result = script(keys=[redis_key], args=[floor])
+            before, after = int(result[0]), int(result[1])
+        else:
+            before = self.get_last(key_id)
+            after = max(before, floor)
+            self._client.set(redis_key, str(after))  # type: ignore[attr-defined]
+        _logger.warning(
+            "DistributedNonceManager: Redis nonce key advanced for key_id=%s "
+            "(before=%d after=%d floor=%d)",
+            key_id,
+            before,
+            after,
+            floor,
+        )
+        return before, after
 
     def _ensure_writer_lease(self, key_id: str) -> int:
         """
@@ -1462,24 +1521,23 @@ class DistributedNonceManager:
                 )
 
     def probe_server_sync(self, api_key_id: str) -> None:
-        """Reset the nonce for *api_key_id* to a server-time floor before a probe.
+        """Advance *api_key_id* to a safe startup probe floor.
 
         The startup probe handshake calls ``_probe_mgr.probe_and_resync()`` which
         invokes ``server_sync_resync()`` on the file-backed ``KrakenNonceManager``.
         However the actual probe API call uses ``get_nonce(api_key_id)`` which in
-        Redis mode reads from a *separate* Redis counter — one that
-        ``server_sync_resync`` never touches.  If the Redis counter was advanced
-        by prior nuclear resets or repeated failed probe attempts it will remain
-        stale-high and Kraken will keep rejecting the probe nonces even after a
-        ``NIJA_FORCE_NONCE_RESYNC=1`` restart.
+        Redis mode reads from a separate Redis counter.  Resetting that counter
+        down to near wall-clock time is unsafe when Kraken's server-side nonce
+        high-water mark was poisoned by a previous far-future nonce.
 
-        Calling this method immediately before ``probe_and_resync()`` closes the
-        gap:
+        Calling this method immediately before platform and per-user Kraken
+        connection attempts closes the gap:
 
-        * **Redis mode** — re-anchors the per-key Redis nonce entry to
-          ``now_ms + NIJA_REDIS_NONCE_RESET_BUFFER_MS`` so the next
-          ``get_nonce()`` call preserves monotonicity while escaping poisoned
-          high-water marks.
+        * **Redis mode** — atomically advances (never lowers) the per-key Redis
+          nonce entry to ``now_ms + NIJA_STARTUP_NONCE_RESYNC_FUTURE_MS``
+          (default 15 minutes, or 60 minutes when ``NIJA_DEEP_NONCE_RESET=1``),
+          so daivon/tania/user probes do not remain below Kraken's stale nonce
+          high-water mark.
 
         * **File mode** — the per-key ``KrakenNonceManager`` and the
           ``DistributedNonceManager`` file path are the same object, so
@@ -1489,15 +1547,21 @@ class DistributedNonceManager:
         api_key_id = _require_api_key_id(api_key_id)
         if self._redis is not None:
             try:
-                self._redis.reset(api_key_id)
+                future_ms = _startup_nonce_resync_future_ms()
+                floor_ms = int(time.time() * 1000) + future_ms
+                before, after = self._redis.advance_to_floor(api_key_id, floor_ms=floor_ms)
                 _logger.info(
-                    "DistributedNonceManager.probe_server_sync: Redis nonce reset "
-                    "for key=%s — probe will use a fresh monotonic floor",
+                    "DistributedNonceManager.probe_server_sync: Redis nonce advanced "
+                    "for key=%s before=%d after=%d floor=%d future_ms=%d",
                     api_key_id,
+                    before,
+                    after,
+                    floor_ms,
+                    future_ms,
                 )
             except Exception as exc:
                 _logger.warning(
-                    "DistributedNonceManager.probe_server_sync: Redis reset failed "
+                    "DistributedNonceManager.probe_server_sync: Redis advance failed "
                     "for key=%s (%s) — probe may use a stale Redis nonce",
                     api_key_id,
                     exc,
