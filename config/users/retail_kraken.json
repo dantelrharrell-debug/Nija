@@ -4,23 +4,27 @@
     "name": "Daivon Frazier",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": false,
+    "enabled": true,
     "copy_from_platform": true,
     "independent_trading": true,
-    "active_trading": false,
-    "disabled_symbols": ["XRP-USD"],
-    "description": "Retail user - Kraken crypto account (DISABLED: nonce errors — re-enable after fix)"
+    "active_trading": true,
+    "disabled_symbols": [
+      "XRP-USD"
+    ],
+    "description": "Retail user - Kraken crypto account"
   },
   {
     "user_id": "tania_gilbert",
     "name": "Tania Gilbert",
     "account_type": "retail",
     "broker_type": "kraken",
-    "enabled": false,
+    "enabled": true,
     "copy_from_platform": true,
     "independent_trading": true,
-    "active_trading": false,
-    "disabled_symbols": ["XRP-USD"],
-    "description": "Retail user - Kraken crypto account (DISABLED: nonce errors — re-enable after fix)"
+    "active_trading": true,
+    "disabled_symbols": [
+      "XRP-USD"
+    ],
+    "description": "Retail user - Kraken crypto account"
   }
 ]
