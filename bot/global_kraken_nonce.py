@@ -1254,59 +1254,54 @@ class KrakenNonceManager:
         _deep_reset = os.environ.get("NIJA_DEEP_NONCE_RESET", "").strip() == "1"
         self._deep_reset_active: bool = _deep_reset
 
-        # Preserve persisted nonce state on startup.
-        # Hard invariant: every rebuilt manager must continue from the global
-        # high-water mark (persisted file / Redis), never from server-time only.
-
-        # NIJA_FORCE_NONCE_RESYNC=1 / deep-reset: wipe the adaptive-offset EMA
-        # AND the per-key state file so the next startup reads a server-time
-        # floor instead of a stale nuclear-reset high-water mark.
+        # Always wipe the per-key state file (and lock/tmp) on every startup so
+        # _load_last_nonce() uses now_ms + STARTUP_JUMP_MS rather than a stale
+        # persisted nonce left over from a previous session.  This prevents the
+        # "EAPI:Invalid nonce" error caused by a stuck nonce high-water mark.
         #
-        # Previously only the EMA files were wiped here.  That left the per-key
-        # state file intact, so _load_last_nonce() still returned the old large
-        # nonce value and server_sync_resync() continued to compute a floor
-        # anchored to that stale value — making NIJA_FORCE_NONCE_RESYNC=1
-        # ineffective for user Kraken accounts with accumulated nuclear resets.
-        if os.environ.get("NIJA_FORCE_NONCE_RESYNC", "").strip() == "1" or _deep_reset:
-            _logger.warning(
-                "KrakenNonceManager: %s — wiping adaptive-offset EMA and per-key state file",
-                "NIJA_DEEP_NONCE_RESET=1" if _deep_reset else "NIJA_FORCE_NONCE_RESYNC=1",
-            )
-            # Wipe the per-key state file (and lock/tmp) so _load_last_nonce()
-            # starts from now_ms + STARTUP_JUMP_MS rather than a stale persisted
-            # nonce left over from nuclear resets or a prior failed probe loop.
-            # This mirrors what force_resync() does when called manually.
-            for _path in (
-                self._state_file,
-                self._state_file + ".lock",
-                self._state_file + ".tmp",
-            ):
-                try:
-                    os.remove(_path)
-                    _logger.debug("KrakenNonceManager: removed state file %s", _path)
-                except FileNotFoundError:
-                    pass
-                except Exception as exc:
-                    _logger.debug("KrakenNonceManager: could not remove %s (%s)", _path, exc)
-            for _path in (_AO_STATE_FILE, _AO_STATE_FILE + ".tmp"):
-                try:
-                    os.remove(_path)
-                    _logger.debug("KrakenNonceManager: removed %s", _path)
-                except FileNotFoundError:
-                    pass
-                except Exception as exc:
-                    _logger.debug("KrakenNonceManager: could not remove %s (%s)", _path, exc)
-            # Reset the AdaptiveNonceOffsetEngine singleton so it starts fresh
-            # with the conservative timing floor (not a stale small EMA).
-            _engine = AdaptiveNonceOffsetEngine._instance
-            if _engine is not None:
-                _engine.reset_state()
-            # Also reset the Redis backend nonce key if Redis is active.
-            if self._redis_backend is not None:
-                try:
-                    self._redis_backend.reset()
-                except Exception as _re:
-                    _logger.debug("KrakenNonceManager: Redis reset error (%s)", _re)
+        # Previously this wipe was gated behind NIJA_FORCE_NONCE_RESYNC=1 /
+        # NIJA_DEEP_NONCE_RESET=1, which meant a stale persisted nonce would
+        # block all trading on every normal restart.  The unconditional wipe
+        # ensures the nonce is always reset to current time + startup jump.
+        _logger.warning(
+            "KrakenNonceManager: startup — wiping per-key state file and adaptive-offset EMA%s",
+            " (deep-reset mode)" if _deep_reset else "",
+        )
+        # Wipe the per-key state file (and lock/tmp) so _load_last_nonce()
+        # starts from now_ms + STARTUP_JUMP_MS rather than a stale persisted
+        # nonce left over from nuclear resets or a prior failed probe loop.
+        # This mirrors what force_resync() does when called manually.
+        for _path in (
+            self._state_file,
+            self._state_file + ".lock",
+            self._state_file + ".tmp",
+        ):
+            try:
+                os.remove(_path)
+                _logger.debug("KrakenNonceManager: removed state file %s", _path)
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                _logger.debug("KrakenNonceManager: could not remove %s (%s)", _path, exc)
+        for _path in (_AO_STATE_FILE, _AO_STATE_FILE + ".tmp"):
+            try:
+                os.remove(_path)
+                _logger.debug("KrakenNonceManager: removed %s", _path)
+            except FileNotFoundError:
+                pass
+            except Exception as exc:
+                _logger.debug("KrakenNonceManager: could not remove %s (%s)", _path, exc)
+        # Reset the AdaptiveNonceOffsetEngine singleton so it starts fresh
+        # with the conservative timing floor (not a stale small EMA).
+        _engine = AdaptiveNonceOffsetEngine._instance
+        if _engine is not None:
+            _engine.reset_state()
+        # Also reset the Redis backend nonce key if Redis is active.
+        if self._redis_backend is not None:
+            try:
+                self._redis_backend.reset()
+            except Exception as _re:
+                _logger.debug("KrakenNonceManager: Redis reset error (%s)", _re)
 
         # NTP check first — clock drift is the #1 cause of Kraken nonce errors.
         # Kraken is extremely sensitive: even a few seconds off triggers
