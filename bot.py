@@ -504,6 +504,18 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
             _last_wait_log = _elapsed
 
     _state_snapshot = _read_initialized_state_snapshot(context="strict supervised trading-loop start")
+    # ── FORCE FLAG BYPASS ─────────────────────────────────────────────────────
+    # When NIJA_SKIP_STARTUP_PHASE_GATE=true, NIJA_FORCE_ACTIVATION=true, or
+    # FORCE_TRADE=true, skip the strict readiness gate so the trading loop can
+    # start even when some readiness flags have not been set.
+    _readiness_force_bypass = (
+        os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+    )
     try:
         system_ready, broker_ready, risk_ready, strategy_ready, capital_ready, execution_ready = \
             _require_startup_ready_or_raise(
@@ -511,12 +523,21 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
                 state_snapshot=_state_snapshot,
             )
     except RuntimeError as _startup_guard_err:
-        logger.warning(
-            "START_TRADING_LOOP_BLOCKED: %s (%s)",
-            _startup_guard_err,
-            reason,
-        )
-        return False
+        if _readiness_force_bypass:
+            logger.warning(
+                "⚡ START_TRADING_LOOP: readiness gate not satisfied but force flag active — "
+                "proceeding anyway (%s): %s "
+                "(NIJA_SKIP_STARTUP_PHASE_GATE / NIJA_FORCE_ACTIVATION / FORCE_TRADE)",
+                reason,
+                _startup_guard_err,
+            )
+        else:
+            logger.warning(
+                "START_TRADING_LOOP_BLOCKED: %s (%s)",
+                _startup_guard_err,
+                reason,
+            )
+            return False
 
     if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
         try:
@@ -524,13 +545,33 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
         except Exception:
             _bootstrap_state = ""
         if _bootstrap_state != "RUNNING_SUPERVISED":
-            logger.warning(
-                "START_TRADING_LOOP_BLOCKED: BootstrapFSM must already be RUNNING_SUPERVISED "
-                "before the cached trading loop may start (%s, state=%s)",
-                reason,
-                _bootstrap_state or "unknown",
+            # ── FORCE FLAG BYPASS ─────────────────────────────────────────────
+            # When force flags are set, allow the trading loop to start even if
+            # the BootstrapFSM has not yet reached RUNNING_SUPERVISED.
+            _fsm_force_bypass = (
+                os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.environ.get("FORCE_TRADE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
             )
-            return False
+            if _fsm_force_bypass:
+                logger.warning(
+                    "⚡ START_TRADING_LOOP: BootstrapFSM state=%s (not RUNNING_SUPERVISED) but "
+                    "force flag active — proceeding anyway (%s) "
+                    "(NIJA_SKIP_STARTUP_PHASE_GATE / NIJA_FORCE_ACTIVATION / FORCE_TRADE)",
+                    _bootstrap_state or "unknown",
+                    reason,
+                )
+            else:
+                logger.warning(
+                    "START_TRADING_LOOP_BLOCKED: BootstrapFSM must already be RUNNING_SUPERVISED "
+                    "before the cached trading loop may start (%s, state=%s)",
+                    reason,
+                    _bootstrap_state or "unknown",
+                )
+                return False
 
     logger.info(
         "STRICT STARTUP READY: proceeding with supervised trading-loop start (%s, wait=%.1fs)",
@@ -539,11 +580,29 @@ def _start_trading_loop_from_initialized_state(*, reason: str) -> bool:
     )
 
     if not _is_balance_hydrated_ready():
-        logger.warning(
-            "START_TRADING_LOOP_BLOCKED: balance hydration not complete (%s)",
-            reason,
+        # ── FORCE FLAG BYPASS ─────────────────────────────────────────────────
+        # When NIJA_SKIP_STARTUP_PHASE_GATE=true, NIJA_FORCE_ACTIVATION=true,
+        # or FORCE_TRADE=true, proceed even if balance hydration has not completed.
+        _hydration_force_bypass = (
+            os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("FORCE_TRADE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
         )
-        return False
+        if _hydration_force_bypass:
+            logger.warning(
+                "⚡ START_TRADING_LOOP: balance hydration not complete but force flag active — "
+                "proceeding anyway (%s) (NIJA_SKIP_STARTUP_PHASE_GATE / NIJA_FORCE_ACTIVATION / FORCE_TRADE)",
+                reason,
+            )
+        else:
+            logger.warning(
+                "START_TRADING_LOOP_BLOCKED: balance hydration not complete (%s)",
+                reason,
+            )
+            return False
 
     try:
         try:
@@ -7892,11 +7951,37 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                     with _b1_executed_lock:
                         # Mark executed even on failure so the barrier below does not re-run
                         globals()["_b1_executed"] = True
-                    try:
-                        from bot.exceptions import CapitalIntegrityError as _CIE_b1
-                    except ImportError:
-                        from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
-                    raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
+                    # ── FORCE FLAG BYPASS ─────────────────────────────────────────────
+                    # When NIJA_SKIP_STARTUP_PHASE_GATE=true, NIJA_FORCE_ACTIVATION=true,
+                    # or FORCE_TRADE=true the operator has explicitly acknowledged that
+                    # the normal preflight conditions may not be satisfied and wants the
+                    # bot to proceed anyway.  Log a prominent warning and continue rather
+                    # than raising so the trading loop can start immediately.
+                    _b1_force_bypass = (
+                        os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _b1_force_bypass:
+                        logger.warning(
+                            "⚡ B1 PREFLIGHT BYPASSED — force flag active "
+                            "(NIJA_SKIP_STARTUP_PHASE_GATE / NIJA_FORCE_ACTIVATION / FORCE_TRADE). "
+                            "brokers_ready=%s capital_hydrated=%s aggregation_normalized=%s nonce_ready=%s — "
+                            "proceeding to B2 without waiting for all conditions.",
+                            _b1_brokers_ready,
+                            _b1_capital_hydrated,
+                            _b1_aggregation_normalized,
+                            _b1_nonce_ready,
+                        )
+                    else:
+                        try:
+                            from bot.exceptions import CapitalIntegrityError as _CIE_b1
+                        except ImportError:
+                            from exceptions import CapitalIntegrityError as _CIE_b1  # type: ignore[import]
+                        raise _CIE_b1("B1 PRE-FLIGHT INCOMPLETE")
 
                 logger.info("B1 preflight result: PASS")
                 logger.info("✅ B1 passed - transitioning to B2")
@@ -8289,10 +8374,30 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
             # Single-execution contract: if _b1_executed is already True the early
             # B1 PRE-FLIGHT GUARD already validated and passed these conditions.
             # Skip the polling loop and proceed directly to B2 so B1 runs exactly once.
+            # Force-flag bypass: when NIJA_SKIP_STARTUP_PHASE_GATE, NIJA_FORCE_ACTIVATION,
+            # or FORCE_TRADE is set, skip the barrier entirely and proceed to B2.
+            _barrier_force_bypass = (
+                os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.environ.get("FORCE_TRADE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+            )
             with _b1_executed_lock:
-                _barrier_b1_skip = _b1_executed
+                _barrier_b1_skip = _b1_executed or _barrier_force_bypass
             if _barrier_b1_skip:
-                logger.info("B1 preflight guard skipped: already executed by bootstrap kernel; advancing to B2")
+                if _barrier_force_bypass and not _b1_executed:
+                    logger.warning(
+                        "⚡ HARD STARTUP BARRIER bypassed — force flag active "
+                        "(NIJA_SKIP_STARTUP_PHASE_GATE / NIJA_FORCE_ACTIVATION / FORCE_TRADE). "
+                        "Proceeding directly to B2 without waiting for preflight conditions."
+                    )
+                    # Mark B1 executed so any future code path skips directly to B2.
+                    with _b1_executed_lock:
+                        globals()["_b1_executed"] = True
+                else:
+                    logger.info("B1 preflight guard skipped: already executed by bootstrap kernel; advancing to B2")
             else:
 
                 _bce_first_snap = False

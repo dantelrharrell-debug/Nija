@@ -2428,14 +2428,33 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 "is_hydrated=True, broker snapshot received. Proceeding to trading loop."
             )
         except _CapIntegrityErr as _hb_err:
-            logger.critical(
-                "🚨 [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR: %s — "
-                "trading loop aborted. Bot will not trade until capital is hydrated.",
-                _hb_err,
+            # ── FORCE FLAG BYPASS ─────────────────────────────────────────────
+            # When NIJA_SKIP_STARTUP_PHASE_GATE=true, NIJA_FORCE_ACTIVATION=true,
+            # or FORCE_TRADE=true, proceed past the hydration barrier even if the
+            # capital pipeline has not yet delivered a snapshot.
+            _hb_force_bypass = (
+                os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.environ.get("FORCE_TRADE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
             )
-            with _loop_guard:
-                _loop_running = False
-            return
+            if _hb_force_bypass:
+                logger.warning(
+                    "⚡ [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR bypassed — force flag active. "
+                    "error=%s (NIJA_SKIP_STARTUP_PHASE_GATE / NIJA_FORCE_ACTIVATION / FORCE_TRADE)",
+                    _hb_err,
+                )
+            else:
+                logger.critical(
+                    "🚨 [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR: %s — "
+                    "trading loop aborted. Bot will not trade until capital is hydrated.",
+                    _hb_err,
+                )
+                with _loop_guard:
+                    _loop_running = False
+                return
         except (ImportError, Exception) as _hb_exc:
             logger.warning(
                 "⚠️ [HYDRATION_BARRIER] Could not enforce hydration barrier (%s) — "
@@ -2479,13 +2498,35 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _csm.blocked_reason,
                     )
                 elif _csm_state_now == _CsmState.BLOCKED:
-                    logger.critical(
-                        "❌ CSM BLOCKED — TRADING LOOP ABORTED. reason=%s",
-                        _csm.blocked_reason,
+                    # ── FORCE FLAG BYPASS ─────────────────────────────────────
+                    # When NIJA_SKIP_STARTUP_PHASE_GATE=true, NIJA_FORCE_ACTIVATION=true,
+                    # or FORCE_TRADE=true the operator has explicitly acknowledged that
+                    # the CSM gate may not be satisfied (e.g. capital pipeline has not
+                    # yet delivered a snapshot) and wants the trading loop to start
+                    # immediately.  Treat BLOCKED as DEGRADED in this case so the loop
+                    # proceeds rather than aborting.
+                    _csm_force_bypass = (
+                        os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
                     )
-                    with _loop_guard:
-                        _loop_running = False
-                    raise _CsmIntegrityErr("CSM BLOCKED: " + _csm.blocked_reason)
+                    if _csm_force_bypass:
+                        logger.warning(
+                            "⚡ CSM BLOCKED but force flag active — bypassing CSM gate and proceeding. "
+                            "reason=%s (NIJA_SKIP_STARTUP_PHASE_GATE / NIJA_FORCE_ACTIVATION / FORCE_TRADE)",
+                            _csm.blocked_reason,
+                        )
+                    else:
+                        logger.critical(
+                            "❌ CSM BLOCKED — TRADING LOOP ABORTED. reason=%s",
+                            _csm.blocked_reason,
+                        )
+                        with _loop_guard:
+                            _loop_running = False
+                        raise _CsmIntegrityErr("CSM BLOCKED: " + _csm.blocked_reason)
                 else:
                     # INITIALIZING after timeout — treat as DEGRADED, let loop proceed.
                     logger.critical(
