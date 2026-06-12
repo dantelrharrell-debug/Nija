@@ -274,6 +274,48 @@ def _format_startup_phase_tag() -> str:
     return "phase=unknown"
 
 
+def _reset_stale_bootstrap_fsm_for_fresh_attempt(*, init_done: bool) -> None:
+    """Reset stale advanced BootstrapFSM state before a true fresh startup.
+
+    Background capital/hydration helpers can advance BootstrapFSM to
+    CAPITAL_READY before ``TradingStrategy`` and worker threads are cached.  If a
+    fresh startup attempt then begins with no initialized strategy/threads, that
+    advanced FSM state is stale for this attempt and can make strict bootstrap
+    diagnostics report an already-ready phase while the runtime is still missing
+    its trading objects.  Normalize only those advanced states; early states like
+    LOCK_ACQUIRED/HEALTH_BOUND are intentionally preserved.
+    """
+    if init_done:
+        return
+    try:
+        if not _BOOTSTRAP_FSM_AVAILABLE or _get_bootstrap_fsm is None:
+            return
+        _bfsm = _get_bootstrap_fsm()
+        _state = getattr(_bfsm, "state", None)
+        _stale_states = {
+            _BootstrapState.CAPITAL_READY,
+            _BootstrapState.INIT_COMPLETE,
+            _BootstrapState.DEGRADED_READY,
+            _BootstrapState.THREADS_STARTING,
+            _BootstrapState.RUNNING_SUPERVISED,
+        }
+        if _state in _stale_states and hasattr(_bfsm, "reset_for_retry"):
+            logger.warning(
+                "Fresh startup detected stale BootstrapFSM state=%s without cached "
+                "strategy/threads; resetting to BOOT_FAILED_RETRY before strict bootstrap",
+                getattr(_state, "value", str(_state)),
+            )
+            _bfsm.reset_for_retry(
+                "fresh startup without initialized strategy/threads found stale "
+                f"state={getattr(_state, 'value', str(_state))}"
+            )
+    except Exception as _stale_reset_err:
+        logger.warning(
+            "Fresh startup stale BootstrapFSM reset skipped (non-fatal): %s",
+            _stale_reset_err,
+        )
+
+
 def _reset_startup_events_for_fresh_attempt(*, clear_initialized_state: bool = False) -> None:
     """Reset readiness table and completion events before a fresh bootstrap attempt.
 
@@ -6034,6 +6076,12 @@ def _run_bot_startup_and_trading_with_retry():
         logger.info("Bootstrap start")
         while True:
             _next_attempt = attempt + 1
+            _pre_state_snap = _read_initialized_state_snapshot(context="fresh-attempt preflight")
+            _pre_init_done = (
+                _pre_state_snap.get("strategy") is not None
+                and "active_threads" in _pre_state_snap
+            )
+            _reset_stale_bootstrap_fsm_for_fresh_attempt(init_done=_pre_init_done)
             logger.info(
                 "🔁 [Startup] Bootstrap attempt #%d (%s, %s)",
                 _next_attempt,

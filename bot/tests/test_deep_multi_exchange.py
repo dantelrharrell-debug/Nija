@@ -83,6 +83,9 @@ class MockBroker(BaseBroker):
     def get_positions(self) -> list:
         return []
 
+    def get_available_markets(self):
+        return ["BTC-USD", "ETH-USD"]
+
     def place_market_order(
         self,
         symbol: str,
