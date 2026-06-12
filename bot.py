@@ -1612,60 +1612,147 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
     # supervised handoff does not immediately re-block on the same guard.
     os.environ["MINIMUM_TRADING_BALANCE"] = _post_unlock_minimum_trading_balance
 
+    # ── FORCE FLAG BYPASS ────────────────────────────────────────────────────
+    # When FORCE_TRADE=true or NIJA_FORCE_ACTIVATION=true and the trading state
+    # machine is already LIVE_ACTIVE, skip the distributed-authority convergence
+    # wait entirely.  The convergence loop requires Redis/heartbeat prerequisites
+    # (authority_ready, nonce_ready, dispatch_health_ready) that may not be
+    # satisfied in single-instance or degraded-Redis deployments.  With force
+    # flags set the operator has explicitly acknowledged these prerequisites and
+    # the bot must not deadlock waiting for them.
+    _exec_unlock_force_bypass = (
+        os.environ.get("FORCE_TRADE", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+    )
     try:
-        _commit_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_COMMIT_TIMEOUT_S", "20.0")
-        try:
-            _commit_timeout_s = max(1.0, float(_commit_timeout_raw))
-        except ValueError:
-            _commit_timeout_s = 20.0
-        _deadline = time.monotonic() + _commit_timeout_s
+        _pre_loop_state = _tsm_unlock.get_current_state()
+        _pre_loop_live = _pre_loop_state == _TSMState.LIVE_ACTIVE
+    except Exception:
+        _pre_loop_live = False
 
-        while True:
-            _current_state = _tsm_unlock.get_current_state()
-            _tsm_live = _current_state == _TSMState.LIVE_ACTIVE
-            _auth_snapshot = {}
-            if hasattr(_tsm_unlock, "get_execution_authority_snapshot"):
-                try:
-                    _auth_snapshot = _tsm_unlock.get_execution_authority_snapshot() or {}
-                except Exception:
-                    _auth_snapshot = {}
-            _converged = bool(_auth_snapshot.get("converged", False))
-            _progress_state = str(_auth_snapshot.get("progress_state", "unknown"))
-
-            if _converged or (
-                _tsm_live
-                and bool(_tsm_unlock.has_execution_authority())
-                and bool(_tsm_unlock.can_dispatch_trades())
-            ):
-                break
-
-            if hasattr(_tsm_unlock, "commit_activation"):
-                try:
-                    _tsm_unlock.commit_activation()
-                except Exception as _commit_err:
-                    logger.warning(
-                        "Execution unlock commit_activation attempt failed (%s): %s",
-                        context,
-                        _commit_err,
-                    )
-
-            if _progress_state == "FAIL_SAFE" or time.monotonic() >= _deadline:
-                logger.critical(
-                    "EXECUTION ENABLE BLOCKED: TradingStateMachine activation not committed "
-                    "(state=%s progress=%s context=%s timeout=%.2fs)",
-                    _current_state.value,
-                    _progress_state,
-                    context,
-                    _commit_timeout_s,
-                )
-                return False
-            time.sleep(0.25)
-    except Exception as _force_transition_err:
+    if _exec_unlock_force_bypass and _pre_loop_live:
         logger.warning(
-            "Force LIVE_ACTIVE transition failed after bootstrap unlock (%s): %s",
+            "⚡ [PhaseGate] EXECUTION UNLOCK BYPASSED — force flag active and state is "
+            "LIVE_ACTIVE; skipping distributed-authority convergence wait "
+            "(FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE). "
+            "context=%s bootstrap_state=%s",
             context,
-            _force_transition_err,
+            _bootstrap_state_name,
         )
+        # Ensure the startup coordinator reflects the force-activation so that
+        # downstream lifecycle checks (lifecycle_phase == LIVE) pass correctly.
+        try:
+            try:
+                from bot.startup_coordinator import get_startup_coordinator as _get_sc_force
+            except ImportError:
+                from startup_coordinator import get_startup_coordinator as _get_sc_force  # type: ignore[import]
+            _get_sc_force().force_activate_bypass(
+                f"execution_unlock_force_bypass:{context}"
+            )
+        except Exception as _sc_force_err:
+            logger.debug(
+                "Startup coordinator force-bypass skipped in execution unlock (%s): %s",
+                context,
+                _sc_force_err,
+            )
+        # Mark authority_ready in the readiness table so downstream gates that
+        # read it (e.g. _rt_is_ready()) do not block the core trading loop.
+        try:
+            _rt_mark_ready("authority_ready")
+            logger.info(
+                "[PhaseGate] authority_ready marked True via force-bypass "
+                "(FORCE_TRADE/NIJA_FORCE_ACTIVATION active) context=%s",
+                context,
+            )
+        except Exception as _rt_force_err:
+            logger.debug(
+                "Readiness table authority_ready mark skipped in force-bypass (%s): %s",
+                context,
+                _rt_force_err,
+            )
+    else:
+        try:
+            _commit_timeout_raw = os.getenv("NIJA_EXECUTION_UNLOCK_COMMIT_TIMEOUT_S", "20.0")
+            try:
+                _commit_timeout_s = max(1.0, float(_commit_timeout_raw))
+            except ValueError:
+                _commit_timeout_s = 20.0
+            _deadline = time.monotonic() + _commit_timeout_s
+
+            while True:
+                _current_state = _tsm_unlock.get_current_state()
+                _tsm_live = _current_state == _TSMState.LIVE_ACTIVE
+                _auth_snapshot = {}
+                if hasattr(_tsm_unlock, "get_execution_authority_snapshot"):
+                    try:
+                        _auth_snapshot = _tsm_unlock.get_execution_authority_snapshot() or {}
+                    except Exception:
+                        _auth_snapshot = {}
+                _converged = bool(_auth_snapshot.get("converged", False))
+                _progress_state = str(_auth_snapshot.get("progress_state", "unknown"))
+
+                logger.debug(
+                    "[PhaseGate] execution-unlock loop: state=%s converged=%s "
+                    "progress=%s elapsed=%.1fs context=%s",
+                    _current_state.value,
+                    _converged,
+                    _progress_state,
+                    max(0.0, _commit_timeout_s - (_deadline - time.monotonic())),
+                    context,
+                )
+
+                if _converged or (
+                    _tsm_live
+                    and bool(_tsm_unlock.has_execution_authority())
+                    and bool(_tsm_unlock.can_dispatch_trades())
+                ):
+                    break
+
+                # Secondary force-bypass: if force flags are set and state
+                # transitions to LIVE_ACTIVE mid-loop, exit immediately rather
+                # than waiting for full distributed-authority convergence.
+                if _exec_unlock_force_bypass and _tsm_live:
+                    logger.warning(
+                        "⚡ [PhaseGate] EXECUTION UNLOCK mid-loop bypass — "
+                        "force flag active and LIVE_ACTIVE reached during convergence wait. "
+                        "context=%s progress=%s",
+                        context,
+                        _progress_state,
+                    )
+                    break
+
+                if hasattr(_tsm_unlock, "commit_activation"):
+                    try:
+                        _tsm_unlock.commit_activation()
+                    except Exception as _commit_err:
+                        logger.warning(
+                            "Execution unlock commit_activation attempt failed (%s): %s",
+                            context,
+                            _commit_err,
+                        )
+
+                if _progress_state == "FAIL_SAFE" or time.monotonic() >= _deadline:
+                    logger.critical(
+                        "EXECUTION ENABLE BLOCKED: TradingStateMachine activation not committed "
+                        "(state=%s progress=%s context=%s timeout=%.2fs)",
+                        _current_state.value,
+                        _progress_state,
+                        context,
+                        _commit_timeout_s,
+                    )
+                    return False
+                time.sleep(0.25)
+        except Exception as _force_transition_err:
+            logger.warning(
+                "Force LIVE_ACTIVE transition failed after bootstrap unlock (%s): %s",
+                context,
+                _force_transition_err,
+            )
+
 
     try:
         if hasattr(_tsm_unlock, "release_core_loop_ownership"):
@@ -1682,14 +1769,38 @@ def _enable_execution_after_bootstrap_supervised(*, context: str) -> bool:
     return True
 
 
+
 def _verify_runtime_transition_states(*, context: str) -> None:
-    """Fail closed unless runtime transitions reached RUNNING/RUNNING_SUPERVISED/LIVE_ACTIVE."""
+    """Fail closed unless runtime transitions reached RUNNING/RUNNING_SUPERVISED/LIVE_ACTIVE.
+
+    When FORCE_TRADE=true or NIJA_FORCE_ACTIVATION=true, bootstrap and capital
+    FSM state checks are downgraded to warnings so a degraded-Redis or
+    single-instance deployment can still enter the core trading loop.  The
+    trading-state check (LIVE_ACTIVE) is always enforced regardless of force flags.
+    """
+    _force_verify_bypass = (
+        os.environ.get("FORCE_TRADE", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+        in ("1", "true", "yes", "on", "enabled")
+    )
+
     _bootstrap_state = _bootstrap_state_value()
     if _bootstrap_state != "RUNNING_SUPERVISED":
-        raise RuntimeError(
-            f"Transition verification failed ({context}): bootstrap_state={_bootstrap_state} "
-            "expected=RUNNING_SUPERVISED"
-        )
+        if _force_verify_bypass:
+            logger.warning(
+                "⚡ [PhaseGate] _verify_runtime_transition_states: bootstrap_state=%s "
+                "(expected RUNNING_SUPERVISED) — force flag active, continuing. context=%s",
+                _bootstrap_state,
+                context,
+            )
+        else:
+            raise RuntimeError(
+                f"Transition verification failed ({context}): bootstrap_state={_bootstrap_state} "
+                "expected=RUNNING_SUPERVISED"
+            )
 
     _capital_state = "UNAVAILABLE"
     try:
@@ -1701,13 +1812,29 @@ def _verify_runtime_transition_states(*, context: str) -> None:
         _capital_state_obj = _get_capital_bootstrap_fsm_verify().state
         _capital_state = getattr(_capital_state_obj, "value", str(_capital_state_obj))
     except Exception as exc:
-        raise RuntimeError(
-            f"Transition verification failed ({context}): capital FSM state probe error: {exc}"
-        ) from exc
+        if _force_verify_bypass:
+            logger.warning(
+                "⚡ [PhaseGate] _verify_runtime_transition_states: capital FSM probe error "
+                "(force flag active, continuing): %s context=%s",
+                exc,
+                context,
+            )
+        else:
+            raise RuntimeError(
+                f"Transition verification failed ({context}): capital FSM state probe error: {exc}"
+            ) from exc
     if _capital_state != "RUNNING":
-        raise RuntimeError(
-            f"Transition verification failed ({context}): capital_state={_capital_state} expected=RUNNING"
-        )
+        if _force_verify_bypass:
+            logger.warning(
+                "⚡ [PhaseGate] _verify_runtime_transition_states: capital_state=%s "
+                "(expected RUNNING) — force flag active, continuing. context=%s",
+                _capital_state,
+                context,
+            )
+        else:
+            raise RuntimeError(
+                f"Transition verification failed ({context}): capital_state={_capital_state} expected=RUNNING"
+            )
 
     try:
         from bot.trading_state_machine import TradingState as _TSVerify, get_state_machine as _get_tsm_verify
@@ -1730,6 +1857,7 @@ def _verify_runtime_transition_states(*, context: str) -> None:
         _capital_state,
         _tsm_state_name,
     )
+
 
 
 def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> tuple[dict, bool]:
