@@ -440,8 +440,12 @@ def acquire_writer_lock_with_handoff(
             client.set(lock_key, lock_value, nx=True, px=_ttl_ms)
         )
 
-        if not acquired and forced:
-            # Force-acquire: delete the stale lock and retry once.
+        if not acquired and (forced or waited_for_release):
+            # Force-acquire: delete the stale lock and retry once.  Even when an
+            # explicit release signal was observed, SET NX can still race with a
+            # stale key; after the handoff wait has completed we must not sit in
+            # another old-instance delay.
+            forced = True
             logger.warning(
                 "GracefulHandoff: force-deleting stale lock (key=%s)", lock_key
             )
