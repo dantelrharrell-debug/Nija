@@ -25,6 +25,9 @@ class MockBroker(BaseBroker):
     def get_positions(self):
         return []
 
+    def get_available_markets(self):
+        return ["BTC-USD", "ETH-USD"]
+
     def place_market_order(self, symbol, side, quantity, size_type='quote',
                           ignore_balance=False, ignore_min_trade=False, force_liquidate=False):
         return {
@@ -111,20 +114,20 @@ def test_minimum_trade_size():
 
     cb = MockBroker(BrokerType.COINBASE)
 
-    # Test 3a: Trade below minimum should be blocked
+    # Test 3a: Trade below exchange minimum notional should be blocked
     result = cb.execute_order('BTC-USD', 'buy', 3.0, 'quote')
 
-    assert result['status'] == 'skipped', "Should skip trade below minimum"
-    assert result['error'] == 'TRADE_SIZE_TOO_SMALL', "Should have TRADE_SIZE_TOO_SMALL error"
-    print(f"✅ Test 3a PASSED: Trade below $5 minimum correctly blocked")
+    assert result['status'] == 'unfilled', "Should block trade below exchange minimum notional"
+    assert result['error'] == 'BELOW_MIN_NOTIONAL', "Should have BELOW_MIN_NOTIONAL error"
+    print(f"✅ Test 3a PASSED: Trade below exchange minimum correctly blocked")
     print(f"   Result: {result}")
 
-    # Test 3b: Trade at minimum should execute (with warning)
-    print(f"\n   Testing trade at minimum ($5)...")
-    result = cb.execute_order('BTC-USD', 'buy', 5.0, 'quote')
+    # Test 3b: Trade at exchange minimum should execute (with warning)
+    print(f"\n   Testing trade at exchange minimum ($3.50)...")
+    result = cb.execute_order('BTC-USD', 'buy', 3.5, 'quote')
 
-    assert result['status'] == 'filled', "Should execute trade at minimum"
-    print(f"✅ Test 3b PASSED: Trade at $5 minimum correctly executed")
+    assert result['status'] == 'filled', "Should execute trade at exchange minimum"
+    print(f"✅ Test 3b PASSED: Trade at $3.50 exchange minimum correctly executed")
     print(f"   Result: {result}")
 
     # Test 3c: Trade above warning threshold should execute without warning
@@ -134,11 +137,12 @@ def test_minimum_trade_size():
     print(f"✅ Test 3c PASSED: Trade above $10 warning threshold correctly executed")
     print(f"   Result: {result}")
 
-    # Test 3d: ignore_min_trade should override minimum
+    # Test 3d: ignore_min_trade may bypass bot policy minimum, but never exchange notional
     result = cb.execute_order('BTC-USD', 'buy', 2.0, 'quote', ignore_min_trade=True)
 
-    assert result['status'] == 'filled', "Should execute with ignore_min_trade"
-    print(f"✅ Test 3d PASSED: ignore_min_trade correctly overrides minimum")
+    assert result['status'] == 'unfilled', "Should still block below exchange minimum notional"
+    assert result['error'] == 'BELOW_MIN_NOTIONAL', "Exchange minimum notional is not bypassable"
+    print(f"✅ Test 3d PASSED: ignore_min_trade does not bypass exchange minimum")
     print(f"   Result: {result}")
 
     print()
@@ -154,7 +158,7 @@ def test_broker_specific_minimums():
     cb = MockBroker(BrokerType.COINBASE)
     print(f"   Coinbase min_trade_size: ${cb.min_trade_size:.2f}")
     print(f"   Coinbase warn_trade_size: ${cb.warn_trade_size:.2f}")
-    assert cb.min_trade_size == 5.00, "Coinbase minimum should be $5"
+    assert cb.min_trade_size == 1.00, "Coinbase bot policy minimum should be $1"
     assert cb.warn_trade_size == 10.00, "Coinbase warning should be $10"
     print(f"✅ Test 4a PASSED: Coinbase has correct minimums")
 
@@ -162,7 +166,7 @@ def test_broker_specific_minimums():
     kr = MockBroker(BrokerType.KRAKEN)
     print(f"   Kraken min_trade_size: ${kr.min_trade_size:.2f}")
     print(f"   Kraken warn_trade_size: ${kr.warn_trade_size:.2f}")
-    assert kr.min_trade_size == 5.00, "Kraken minimum should be $5"
+    assert kr.min_trade_size == 1.00, "Kraken bot policy minimum should be $1"
     assert kr.warn_trade_size == 10.00, "Kraken warning should be $10"
     print(f"✅ Test 4b PASSED: Kraken has correct minimums")
 
