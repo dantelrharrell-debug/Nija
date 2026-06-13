@@ -89,6 +89,62 @@ except ImportError:
 _CORE_LOOP_LOG_LIMITER = get_log_rate_limiter()
 
 
+def _extract_cached_balance_for_log(broker: Any) -> float:
+    """Return a broker balance for diagnostics without making exchange API calls."""
+    for attr in ("_last_known_balance", "last_known_balance", "cached_balance", "last_balance"):
+        if hasattr(broker, attr):
+            value = getattr(broker, attr, None)
+            try:
+                return float(value or 0.0)
+            except (TypeError, ValueError):
+                pass
+
+    cache = getattr(broker, "balance_cache", None)
+    if isinstance(cache, Mapping):
+        for key in ("total_balance", "balance", "usd_balance", "equity", "total_usd", "available_usd"):
+            if key in cache:
+                try:
+                    return float(cache.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+        for value in cache.values():
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, Mapping):
+                for key in ("total_balance", "balance", "usd_balance", "equity", "total_usd", "available_usd"):
+                    if key in value:
+                        try:
+                            return float(value.get(key) or 0.0)
+                        except (TypeError, ValueError):
+                            return 0.0
+    return 0.0
+
+
+def _cached_broker_balances_for_log(broker_manager: Any) -> Dict[str, Dict[str, Any]]:
+    """Build a non-blocking broker-balance diagnostic snapshot.
+
+    The live trading loop must never call exchange APIs merely to print a
+    diagnostic line.  Coinbase 500s (or any other venue outage) should not sit in
+    front of the scanner/execution path, so this helper only inspects in-memory
+    broker attributes populated by bootstrap/capital hydration.
+    """
+    balances: Dict[str, Dict[str, Any]] = {}
+    brokers = getattr(broker_manager, "brokers", {}) or {}
+    if not isinstance(brokers, Mapping):
+        return balances
+    for broker_type, broker in brokers.items():
+        name = str(getattr(broker_type, "value", broker_type)).strip().lower()
+        if broker is None:
+            balances[name] = {"balance": 0.0, "connected": False, "source": "missing"}
+            continue
+        balances[name] = {
+            "balance": _extract_cached_balance_for_log(broker),
+            "connected": bool(getattr(broker, "connected", False)),
+            "source": "cached",
+        }
+    return balances
+
+
 def _rate_limited_critical(category: str, key: str, window_seconds: float, message: str, *args: Any) -> None:
     allowed, suppressed = _CORE_LOOP_LOG_LIMITER.allow_with_count(
         category=category,
@@ -695,13 +751,20 @@ except ImportError:
 _PMC_AVAILABLE = False
 _get_pmc = None  # type: ignore
 try:
-    from profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+    from profit_mode_controller import (  # type: ignore
+        MarketConditionSnapshot as _MarketConditionSnapshot,
+        get_profit_mode_controller as _get_pmc,
+    )
     _PMC_AVAILABLE = True
 except ImportError:
     try:
-        from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+        from bot.profit_mode_controller import (  # type: ignore
+            MarketConditionSnapshot as _MarketConditionSnapshot,
+            get_profit_mode_controller as _get_pmc,
+        )
         _PMC_AVAILABLE = True
     except ImportError:
+        _MarketConditionSnapshot = None  # type: ignore[assignment]
         pass
 
 # ---------------------------------------------------------------------------
@@ -1461,7 +1524,8 @@ class NijaCoreLoop:
         _volume_fallback_enabled = False
         if _PMC_AVAILABLE and _get_pmc is not None:
             try:
-                _pmc_params = _get_pmc().params
+                _pmc_inst = _get_pmc()
+                _pmc_params = getattr(_pmc_inst, "market_adjusted_params", _pmc_inst.params)
                 _pmc_level = _pmc_params.level
                 _effective_hard_floor = _pmc_params.min_score_hard_floor
                 _effective_streak_threshold = _pmc_params.forced_entry_streak_threshold
@@ -1511,6 +1575,16 @@ class NijaCoreLoop:
         _best_volume_entry_type: str = "swing"
         _best_volume: float = -1.0
 
+        # Per-cycle market-health telemetry feeds ProfitModeController so the
+        # next cycle automatically tightens during data/API degradation, stays
+        # selective during volatility spikes, and loosens only when data is
+        # healthy but the market is producing no entries.
+        _data_attempts = 0
+        _data_successes = 0
+        _scoring_errors = 0
+        _abs_return_sum = 0.0
+        _abs_return_count = 0
+
         # Initialise the per-cycle score distribution debugger snapshot.
         _sdd = _get_sdd() if (_SDD_AVAILABLE and _get_sdd is not None) else None
         if _sdd is not None:
@@ -1533,6 +1607,7 @@ class NijaCoreLoop:
                 break
 
             try:
+                _data_attempts += 1
                 df = self._fetch_df(broker, symbol)
                 if df is None or len(df) < 100:
                     if _sdd is not None:
@@ -1540,6 +1615,15 @@ class NijaCoreLoop:
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     _gate_rejections["data_insufficient"] += 1
                     continue
+                _data_successes += 1
+                try:
+                    if "close" in df.columns:
+                        _returns = df["close"].pct_change().dropna().tail(20).abs() * 100.0
+                        if len(_returns) > 0:
+                            _abs_return_sum += float(_returns.mean())
+                            _abs_return_count += 1
+                except Exception:
+                    pass
                 _funnel["market_data"] = ("PASS", "")
 
                 # Always track top-volume symbol (feeds volume fallback)
@@ -1764,10 +1848,41 @@ class NijaCoreLoop:
                 scored += 1
 
             except Exception as sym_err:
+                _scoring_errors += 1
                 logger.debug("Phase3 scoring error for %s: %s", symbol, sym_err)
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
                 _funnel["signal"] = ("FAIL", f"SCORING_EXCEPTION:{sym_err}")
+
+        if _PMC_AVAILABLE and _get_pmc is not None and _MarketConditionSnapshot is not None:
+            try:
+                _data_success_rate = (
+                    float(_data_successes) / float(_data_attempts)
+                    if _data_attempts > 0
+                    else 1.0
+                )
+                _candidate_rate = (
+                    float(len(candidates) + len(momentum_candidates)) / float(max(1, scored))
+                    if scored > 0
+                    else 0.0
+                )
+                _avg_abs_return_pct = (
+                    _abs_return_sum / float(_abs_return_count)
+                    if _abs_return_count > 0
+                    else 0.0
+                )
+                _api_error_rate = float(_scoring_errors) / float(max(1, _data_attempts))
+                _get_pmc().update_market_conditions(
+                    _MarketConditionSnapshot(
+                        data_success_rate=_data_success_rate,
+                        candidate_rate=_candidate_rate,
+                        avg_abs_return_pct=_avg_abs_return_pct,
+                        zero_signal_streak=zero_signal_streak,
+                        api_error_rate=_api_error_rate,
+                    )
+                )
+            except Exception as _market_adj_err:
+                logger.debug("Market-adaptive parameter update failed: %s", _market_adj_err)
 
         # ── Merge momentum candidates when AI candidates are scarce ──────
         # If we're in dead-zone mode and have fewer AI candidates than slots,
@@ -2629,7 +2744,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _rate_limited_critical("core_loop_tick", "scheduler", 30.0, "🟢 LIVE LOOP TICK")
                 if cycle == 0 or ((cycle + 1) % _tick_log_every == 0):
                     logger.info("🟢 LIVE LOOP TICK | cycle=%s", cycle + 1)
-                print("🚀 MAIN LOOP TICK")
+                if _env_truthy("NIJA_STDOUT_LOOP_TICK", "false"):
+                    print("🚀 MAIN LOOP TICK")
+                logger.info("[ScannerLoop] heartbeat cycle=%s phase=pre_activation_gate", cycle + 1)
 
                 _live_now = False
                 _sm_loop = None
@@ -2960,8 +3077,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                     logger.critical("=== CAPITAL PIPELINE DEBUG START ===")
                     logger.critical(
-                        "BROKER BALANCES: %s",
-                        _diag_bm.get_all_balances() if _diag_bm is not None else "broker_manager unavailable",
+                        "BROKER BALANCES (cached/non-blocking): %s",
+                        _cached_broker_balances_for_log(_diag_bm) if _diag_bm is not None else "broker_manager unavailable",
                     )
                     logger.critical(
                         "AGGREGATED STATE: %s",
@@ -3140,18 +3257,34 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             bool(_dispatch_gate),
                             getattr(_state_gate, "value", str(_state_gate)),
                         )
+                        _activation_retry_sleep_s = min(
+                            float(cycle_secs),
+                            max(1.0, float(os.getenv("NIJA_ACTIVATION_RETRY_SLEEP_S", "10") or 10.0)),
+                        )
                         if _skip_signature != _last_cycle_skip_signature:
                             logger.warning(
                                 "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
-                                "runtime_authority=%s reason=%s",
+                                "runtime_authority=%s reason=%s retry_in=%.0fs",
                                 _committed_gate,
                                 _dispatch_gate,
                                 getattr(_state_gate, "value", str(_state_gate)),
                                 _runtime_authority or "unknown",
                                 _dispatch_reason or "not_reported",
+                                _activation_retry_sleep_s,
                             )
                             _last_cycle_skip_signature = _skip_signature
-                        time.sleep(cycle_secs)
+                        else:
+                            _rate_limited_critical(
+                                "core_loop_activation_skip",
+                                "dispatch_gate",
+                                60.0,
+                                "⏸️ STRATEGY CYCLE STILL WAITING | state=%s dispatch=%s reason=%s retry_in=%.0fs",
+                                getattr(_state_gate, "value", str(_state_gate)),
+                                _dispatch_gate,
+                                _dispatch_reason or "not_reported",
+                                _activation_retry_sleep_s,
+                            )
+                        time.sleep(_activation_retry_sleep_s)
                         continue
                     _last_cycle_skip_signature = None
 
