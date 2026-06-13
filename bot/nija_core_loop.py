@@ -1547,6 +1547,13 @@ class NijaCoreLoop:
             )
 
         ai = self._get_ai_engine()
+        if ai is not None and _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                _set_floor = getattr(ai, "set_score_floor", None)
+                if callable(_set_floor):
+                    _set_floor(float(_pmc_params.min_score_absolute))
+            except Exception as _exc:
+                logger.debug("Phase3: AI score-floor sync failed — continuing with engine default: %s", _exc)
 
         candidates = []        # List[AIEngineSignal | _AISignal]  — AI-scored
         momentum_candidates = []  # collected from relaxed momentum scan

@@ -108,6 +108,22 @@ class ProfitModeParams:
     # 0.55 → top 45% pass | 0.40 → top 60% pass | 0.25 → top 75% pass
     pass_percentile: float
 
+    # AIEntryGate volume threshold override.  None keeps the gate default; lower
+    # values admit thinner-but-still-live markets during healthy no-signal
+    # periods, higher values keep degraded/high-volatility scans selective.
+    volume_gate_multiplier: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class MarketConditionSnapshot:
+    """Recent market-health inputs used for autonomous parameter adjustment."""
+
+    data_success_rate: float = 1.0
+    candidate_rate: float = 0.0
+    avg_abs_return_pct: float = 0.0
+    zero_signal_streak: int = 0
+    api_error_rate: float = 0.0
+
 
 @dataclass(frozen=True)
 class MarketConditionSnapshot:
@@ -353,6 +369,7 @@ class ProfitModeController:
                 min_score_hard_floor=max(base.min_score_hard_floor, 18.0),
                 enable_volume_fallback=False,
                 pass_percentile=max(base.pass_percentile, 0.55),
+                volume_gate_multiplier=0.50,
             )
         if regime == "high_volatility":
             return replace(
@@ -366,6 +383,26 @@ class ProfitModeController:
                 min_score_hard_floor=max(base.min_score_hard_floor, 16.0),
                 enable_volume_fallback=False,
                 pass_percentile=max(base.pass_percentile, 0.45),
+                volume_gate_multiplier=0.45,
+            )
+        if regime == "quiet_no_signal":
+            # Healthy data + repeated no-candidate cycles means the scanner is
+            # over-filtering the current market.  Move into a small-size
+            # exploration profile quickly, while still preserving stricter
+            # degraded-data/high-volatility behavior above.
+            floor = max(3.0, min(base.min_score_hard_floor * 0.50, 5.0))
+            return replace(
+                base,
+                min_score_absolute=max(3.0, min(base.min_score_absolute * 0.50, 6.0)),
+                interval_fast=min(base.interval_fast, 45),
+                interval_normal=min(base.interval_normal, 60),
+                interval_slow=min(base.interval_slow, 90),
+                forced_entry_streak_threshold=min(base.forced_entry_streak_threshold, 1),
+                hard_bypass_streak_threshold=min(base.hard_bypass_streak_threshold, 4),
+                min_score_hard_floor=floor,
+                enable_volume_fallback=True,
+                pass_percentile=min(base.pass_percentile, 0.25),
+                volume_gate_multiplier=0.30,
             )
         if regime == "quiet_no_signal":
             floor = max(6.0, base.min_score_hard_floor * 0.75)
@@ -387,6 +424,7 @@ class ProfitModeController:
                 interval_fast=min(base.interval_fast, 60),
                 interval_normal=min(base.interval_normal, 90),
                 interval_slow=min(base.interval_slow, 120),
+                volume_gate_multiplier=0.30,
             )
         return base
 

@@ -450,7 +450,9 @@ class NijaAIEngine:
         # Can also be updated at runtime via set_score_floor().
         if _PMC_AVAILABLE and _get_pmc is not None:
             try:
-                self._score_floor: float = _get_pmc().params.min_score_absolute
+                _pmc_inst = _get_pmc()
+                _pmc_params = getattr(_pmc_inst, "market_adjusted_params", _pmc_inst.params)
+                self._score_floor: float = _pmc_params.min_score_absolute
             except Exception as _exc:
                 logger.debug("NijaAIEngine: profit mode score floor read failed — using default: %s", _exc)
                 self._score_floor = MIN_SCORE_ABSOLUTE
@@ -528,11 +530,13 @@ class NijaAIEngine:
         """
         clamped = max(TIER_WEAK, min(float(value), 95.0))
         with self._lock:
+            old = self._score_floor
             self._score_floor = clamped
-        logger.info(
-            "🤖 NijaAIEngine score floor updated → _score_floor=%.1f",
-            clamped,
-        )
+        if abs(old - clamped) >= 0.05:
+            logger.info(
+                "🤖 NijaAIEngine score floor updated → _score_floor=%.1f",
+                clamped,
+            )
 
     def evaluate_symbol(
         self,
@@ -748,6 +752,14 @@ class NijaAIEngine:
         # unavailable or raises, so signals aren't artificially boosted.
         gate_quality = 0.0
         gate_results: Dict[str, bool] = {}
+        volume_gate_multiplier = None
+        if _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                _pmc_inst = _get_pmc()
+                _pmc_params = getattr(_pmc_inst, "market_adjusted_params", _pmc_inst.params)
+                volume_gate_multiplier = getattr(_pmc_params, "volume_gate_multiplier", None)
+            except Exception as exc:
+                logger.debug("NijaAIEngine: profit-mode volume gate read failed: %s", exc)
         gate = self._get_gate()
         if gate is not None:
             try:
@@ -759,6 +771,7 @@ class NijaAIEngine:
                     regime=regime,
                     broker=broker,
                     entry_type=entry_type,
+                    volume_gate_multiplier=volume_gate_multiplier,
                 )
                 breakdown["gate_passed"] = gate_result.passed
                 breakdown["gate_reason"] = gate_result.reason
