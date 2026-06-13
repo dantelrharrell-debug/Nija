@@ -52,8 +52,8 @@ try:
     from position_sizer import MIN_POSITION_USD, calculate_position_size as _calc_position_size
     _CALC_POSITION_SIZE_AVAILABLE = True
 except ImportError:
-    MIN_POSITION_USD = 2.0  # Default to $2 minimum (lowered from $5 on Jan 21, 2026)
-    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $2.00")
+    MIN_POSITION_USD = 10.0  # Default to $10 minimum for micro-cap / HF scalp mode (Apr 2026)
+    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $10.00")
 
 # Import small account constants from fee_aware_config
 try:
@@ -62,12 +62,13 @@ try:
         SMALL_ACCOUNT_MAX_POSITION_PCT
     )
 except ImportError:
-    SMALL_ACCOUNT_THRESHOLD = 100.0  # Fallback
+    SMALL_ACCOUNT_THRESHOLD = 200.0  # Fallback — raised to cover $174 balance (Apr 2026)
     SMALL_ACCOUNT_MAX_POSITION_PCT = 0.30  # Fallback — aligned with MAX_POSITION_SIZE hard limit
     logger.warning("Could not import small account constants from fee_aware_config, using defaults")
 
 # Broker-specific minimum position sizes (Jan 24, 2026)
-KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
+# Env-overridable via KRAKEN_MIN_NOTIONAL_USD for micro-cap / HF scalp mode.
+KRAKEN_MIN_POSITION_USD = float(os.getenv('KRAKEN_MIN_NOTIONAL_USD', '10.0'))  # Kraken $10 minimum (env-overridable)
 
 # Minimum order sizes per broker (USD).  Keeps all four check-sites in sync
 # and prevents sub-minimum orders from being scored, sized, or submitted.
