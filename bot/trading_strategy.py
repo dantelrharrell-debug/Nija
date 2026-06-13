@@ -261,12 +261,17 @@ _HEARTBEAT_SYMBOL_CANDIDATES: List[str] = [
     "XRP-USD",
 ]
 
+# Global minimum trade size — single source of truth imported by position_sizer.py.
+# Lowered to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
+GLOBAL_MIN_TRADE: float = float(os.environ.get("MIN_TRADE_USD", os.environ.get("MIN_NOTIONAL_USD", "10.0")))
+
 # Backward-compatibility constants retained for legacy test/import paths.
+# Lowered to $50 to allow trading with ~$174 balance in HF scalp mode (Apr 2026).
 ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase"]
 BROKER_MIN_BALANCE: Dict[str, float] = {
-    "default": 10.0,
-    "kraken": 10.0,
-    "coinbase": 10.0,
+    "default": 50.0,
+    "kraken": 50.0,
+    "coinbase": 50.0,
 }
 
 _HEARTBEAT_STAGE_ORDER: Dict[str, int] = {
