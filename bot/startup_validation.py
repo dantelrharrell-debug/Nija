@@ -12,12 +12,15 @@ This module provides validation for:
 import os
 import re
 import logging
+import threading
 import math
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija")
+_VALIDATION_REPORT_LOCK = threading.Lock()
+_VALIDATION_REPORT_EMITTED = False
 # Execution unlock timeout guardrails:
 # - minimum 1s avoids zero/negative no-wait unlock paths
 # - maximum 300s avoids long silent startup stalls due to bad configuration
@@ -986,10 +989,25 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
 def display_validation_results(result: StartupValidationResult):
     """
     Display validation results with visual formatting.
-    
+
     Args:
         result: StartupValidationResult to display
     """
+    global _VALIDATION_REPORT_EMITTED
+    with _VALIDATION_REPORT_LOCK:
+        duplicate_report = _VALIDATION_REPORT_EMITTED and not result.critical_failure
+        if not _VALIDATION_REPORT_EMITTED:
+            _VALIDATION_REPORT_EMITTED = True
+
+    if duplicate_report:
+        logger.info(
+            "🔍 STARTUP VALIDATION REPORT already emitted for this process; "
+            "suppressing duplicate retry report (warnings=%d risks=%d)",
+            len(result.warnings),
+            len(result.risks),
+        )
+        return
+
     logger.info("=" * 80)
     logger.info("🔍 STARTUP VALIDATION REPORT")
     logger.info("=" * 80)

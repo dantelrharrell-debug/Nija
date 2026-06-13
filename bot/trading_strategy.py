@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import threading
 import time
 from contextlib import nullcontext
@@ -24,6 +25,39 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija.trading_strategy")
+
+# Balance calls must never stall startup/trade eligibility indefinitely.
+BALANCE_FETCH_TIMEOUT = 12
+CACHED_BALANCE_MAX_AGE_SECONDS = 90
+
+
+def call_with_timeout(fn: Any, *args: Any, timeout_seconds: float = BALANCE_FETCH_TIMEOUT, **kwargs: Any) -> tuple[Any, Optional[BaseException]]:
+    """Run ``fn`` in a daemon thread and return ``(result, error)``.
+
+    The implementation intentionally avoids ``ThreadPoolExecutor`` context
+    managers because they wait for timed-out worker threads during shutdown.
+    Balance probes against exchanges such as Kraken can hang during bootstrap; a
+    daemon thread plus a queue lets callers continue immediately after the
+    timeout while still capturing normal return values and exceptions.
+    """
+
+    result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+    def _runner() -> None:
+        try:
+            result_queue.put(("result", fn(*args, **kwargs)))
+        except BaseException as exc:  # propagate to caller as the error slot
+            result_queue.put(("error", exc))
+
+    worker = threading.Thread(target=_runner, name="nija-call-with-timeout", daemon=True)
+    worker.start()
+    try:
+        kind, payload = result_queue.get(timeout=max(0.0, float(timeout_seconds)))
+    except queue.Empty:
+        return None, TimeoutError(f"call_with_timeout timed out after {timeout_seconds}s")
+    if kind == "error":
+        return None, payload
+    return payload, None
 
 try:
     from bot.log_rate_limiter import get_log_rate_limiter
@@ -542,6 +576,153 @@ class TradingStrategy:
                 "Symbol refresh fallback: keeping existing universe (%d symbols)",
                 len(self.symbols),
             )
+
+    @staticmethod
+    def _broker_key_from_obj(broker: Any) -> str:
+        """Return a normalized broker key for priority/min-balance lookups."""
+        broker_type = getattr(broker, "broker_type", None)
+        if broker_type is not None:
+            value = getattr(broker_type, "value", None)
+            if value:
+                return str(value).strip().lower()
+            return str(broker_type).split(".")[-1].strip().lower()
+        name = getattr(broker, "NAME", "") or broker.__class__.__name__
+        name_l = str(name).strip().lower()
+        for candidate in ENTRY_BROKER_PRIORITY:
+            if candidate in name_l:
+                return candidate
+        return name_l
+
+    @staticmethod
+    def _balance_from_payload(payload: Any) -> float:
+        """Extract a USD scalar from common broker balance payload shapes."""
+        if isinstance(payload, (int, float)):
+            return float(payload)
+        if isinstance(payload, dict):
+            for key in (
+                "total_balance",
+                "balance",
+                "usd_balance",
+                "equity",
+                "total_usd",
+                "available_usd",
+                "available",
+            ):
+                if key in payload:
+                    try:
+                        return float(payload.get(key) or 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
+        return 0.0
+
+    def _broker_entry_balance(self, broker: Any, broker_key: Optional[str] = None) -> float:
+        """Return best-known entry balance without requiring a fresh exchange call."""
+        key = broker_key or self._broker_key_from_obj(broker)
+
+        # Prefer the broker's hydrated payload; this is set by capital/bootstrap
+        # refreshes and avoids blocking entry routing on a new synchronous API call.
+        cached = getattr(broker, "_last_known_balance", None)
+        if cached is not None:
+            try:
+                return float(cached or 0.0)
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            from bot.balance_service import BalanceService
+        except ImportError:
+            try:
+                from balance_service import BalanceService  # type: ignore[import]
+            except ImportError:
+                BalanceService = None  # type: ignore[assignment]
+        if BalanceService is not None:
+            try:
+                service_balance = float(BalanceService.get(key) or 0.0)
+                if service_balance > 0.0:
+                    return service_balance
+            except Exception:
+                pass
+
+        # Last resort for legacy test doubles and non-orchestrated startup paths.
+        getter = getattr(broker, "get_account_balance", None)
+        if callable(getter):
+            try:
+                return self._balance_from_payload(getter())
+            except Exception as exc:
+                logger.debug("Broker balance fallback failed for %s: %s", key, exc)
+        return 0.0
+
+    def _is_broker_eligible_for_entry(self, broker: Any) -> tuple[bool, str]:
+        """Return whether *broker* can accept new entry orders right now.
+
+        The entry router intentionally excludes disconnected, EXIT_ONLY, and
+        underfunded venues so the strategy loop does not stall on a broker that
+        can only close positions or cannot meet minimum order sizing.
+        """
+        if broker is None:
+            return False, "broker missing"
+
+        broker_key = self._broker_key_from_obj(broker)
+        if not getattr(broker, "connected", False):
+            return False, f"{broker_key} not connected"
+
+        if getattr(broker, "exit_only_mode", False):
+            return False, f"{broker_key} is in EXIT-ONLY mode"
+
+        # A missing position tracker is a capital-protection risk for real
+        # broker adapters because exits/P&L cannot be reconciled safely.  Some
+        # external adapters may not expose the attribute; only block when the
+        # adapter declares it but it is unset.
+        if hasattr(broker, "position_tracker") and getattr(broker, "position_tracker") is None:
+            return False, f"{broker_key} position tracker unavailable"
+
+        minimum = float(BROKER_MIN_BALANCE.get(broker_key, BROKER_MIN_BALANCE["default"]))
+        balance = self._broker_entry_balance(broker, broker_key)
+        if balance < minimum:
+            return False, f"{broker_key} balance ${balance:.2f} below minimum ${minimum:.2f}"
+
+        return True, f"{broker_key} eligible (balance=${balance:.2f})"
+
+    def _select_entry_broker(self, brokers: Dict[Any, Any]) -> tuple[Optional[Any], Optional[str], Dict[str, str]]:
+        """Select the highest-priority broker eligible for new entries.
+
+        Returns ``(broker, broker_name, status_by_broker)``.  ``status_by_broker``
+        records the reason every inspected broker was accepted or rejected for
+        operator diagnostics.
+        """
+        if not brokers:
+            return None, None, {}
+
+        by_key: Dict[str, Any] = {}
+        for raw_key, broker in brokers.items():
+            if broker is None:
+                continue
+            name = self._broker_key_from_obj(broker)
+            if not name and raw_key is not None:
+                raw_value = getattr(raw_key, "value", raw_key)
+                name = str(raw_value).strip().lower()
+            if name:
+                by_key[name] = broker
+
+        status: Dict[str, str] = {}
+        inspected = set()
+        for name in ENTRY_BROKER_PRIORITY:
+            broker = by_key.get(name)
+            if broker is None:
+                status[name] = "not configured"
+                continue
+            inspected.add(name)
+            eligible, reason = self._is_broker_eligible_for_entry(broker)
+            status[name] = reason
+            if eligible:
+                return broker, name, status
+
+        # Optional venues are diagnostics-only for new entries unless explicitly
+        # promoted into ENTRY_BROKER_PRIORITY.
+        for name in sorted(set(by_key) - inspected):
+            status[name] = "not in entry priority"
+
+        return None, None, status
 
     def _maybe_refresh_symbols(self, *, force: bool = False) -> None:
         """Refresh the symbol universe periodically to capture newly listed markets."""
@@ -1086,35 +1267,226 @@ class TradingStrategy:
             logger.error("❌ Failed to persist heartbeat marker %s: %s", marker_path, _marker_err)
 
     def _get_active_broker(self) -> Optional[Any]:
-        """Return the best available connected broker for the heartbeat trade."""
-        # 1. Use the cached primary broker if connected
-        if self.broker is not None and getattr(self.broker, "connected", False):
-            return self.broker
+        """Return the best broker that is eligible for new entry/heartbeat orders."""
+        # 1. Reuse the cached broker only when it can still accept entries.
+        if self.broker is not None:
+            eligible, reason = self._is_broker_eligible_for_entry(self.broker)
+            if eligible:
+                return self.broker
+            logger.info(
+                "Cached broker is not entry-eligible; selecting fallback: %s",
+                reason,
+            )
 
-        # 2. Try multi_account_manager platform brokers
+        candidates: Dict[Any, Any] = {}
+
+        # 2. Include all platform brokers from MultiAccountBrokerManager.
         if self.multi_account_manager is not None:
             try:
                 _platform_brokers = getattr(
                     self.multi_account_manager, "platform_brokers", {}
                 )
-                for _bt, _b in (_platform_brokers or {}).items():
-                    if _b is not None and getattr(_b, "connected", False):
-                        self.broker = _b  # cache for future calls
-                        return _b
+                candidates.update(_platform_brokers or {})
             except Exception as _err:
                 logger.debug("MABM broker lookup failed: %s", _err)
 
-        # 3. Try broker_manager
+        # 3. Include BrokerManager brokers and active/primary aliases.
         if self.broker_manager is not None:
             try:
+                candidates.update(getattr(self.broker_manager, "brokers", {}) or {})
                 _primary = self.broker_manager.get_primary_broker()
-                if _primary is not None and getattr(_primary, "connected", False):
-                    self.broker = _primary
-                    return _primary
+                if _primary is not None:
+                    candidates.setdefault(getattr(_primary, "broker_type", "primary"), _primary)
             except Exception as _err:
                 logger.debug("BrokerManager lookup failed: %s", _err)
 
+        selected, name, status = self._select_entry_broker(candidates)
+        if selected is not None:
+            self.broker = selected
+            if self.broker_manager is not None:
+                try:
+                    self.broker_manager.active_broker = selected
+                except Exception:
+                    pass
+            logger.info("✅ Selected entry broker: %s", name)
+            return selected
+
+        if status:
+            logger.warning("No entry-eligible broker available: %s", status)
         return None
+
+    @staticmethod
+    def _position_symbol(position: Any) -> str:
+        if isinstance(position, dict):
+            return str(position.get("symbol") or position.get("pair") or "")
+        return str(getattr(position, "symbol", "") or getattr(position, "pair", ""))
+
+    @staticmethod
+    def _position_quantity(position: Any) -> float:
+        if isinstance(position, dict):
+            for key in ("quantity", "qty", "volume", "size", "amount"):
+                if key in position:
+                    try:
+                        return float(position.get(key) or 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
+        for key in ("quantity", "qty", "volume", "size", "amount"):
+            if hasattr(position, key):
+                try:
+                    return float(getattr(position, key) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+        return 0.0
+
+    @staticmethod
+    def _position_entry_price(position: Any) -> float:
+        if isinstance(position, dict):
+            for key in ("entry_price", "avg_entry_price", "average_price", "price", "current_price"):
+                if key in position:
+                    try:
+                        return float(position.get(key) or 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
+        for key in ("entry_price", "avg_entry_price", "average_price", "price", "current_price"):
+            if hasattr(position, key):
+                try:
+                    return float(getattr(position, key) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+        return 0.0
+
+    @staticmethod
+    def _position_size_usd(position: Any, entry_price: float, quantity: float) -> float:
+        if isinstance(position, dict):
+            for key in ("size_usd", "usd_value", "market_value", "notional", "value"):
+                if key in position:
+                    try:
+                        return float(position.get(key) or 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
+        for key in ("size_usd", "usd_value", "market_value", "notional", "value"):
+            if hasattr(position, key):
+                try:
+                    return float(getattr(position, key) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+        return max(0.0, entry_price * quantity)
+
+    def adopt_existing_positions(
+        self,
+        broker: Any,
+        broker_name: str = "",
+        account_id: str = "",
+    ) -> Dict[str, Any]:
+        """Adopt already-open broker positions so exit logic manages them.
+
+        This is used on startup/restart and for user-account loops.  It treats
+        open orders as a transitional state: adoption succeeds with zero
+        positions while reporting the pending order count, then the next cycle
+        adopts positions as soon as those orders fill.
+        """
+        result: Dict[str, Any] = {
+            "success": False,
+            "broker_name": broker_name,
+            "account_id": account_id,
+            "positions_found": 0,
+            "positions_adopted": 0,
+            "open_orders_count": 0,
+            "adopted_symbols": [],
+        }
+        if broker is None:
+            result["error"] = "broker missing"
+            return result
+
+        try:
+            open_orders_getter = getattr(broker, "get_open_orders", None)
+            if callable(open_orders_getter):
+                open_orders = open_orders_getter() or []
+                result["open_orders_count"] = len(open_orders) if isinstance(open_orders, list) else 0
+                if result["open_orders_count"]:
+                    logger.info(
+                        "Position adoption: %s has %d open order(s); they will be adopted after fill",
+                        account_id or broker_name or self._broker_key_from_obj(broker),
+                        result["open_orders_count"],
+                    )
+
+            positions_getter = getattr(broker, "get_positions", None)
+            positions = positions_getter() if callable(positions_getter) else []
+            positions = positions or []
+            if isinstance(positions, dict):
+                iterable_positions = list(positions.values())
+            else:
+                iterable_positions = list(positions)
+            result["positions_found"] = len(iterable_positions)
+
+            tracker = getattr(broker, "position_tracker", None)
+            adopted = 0
+            adopted_symbols: List[str] = []
+            for position in iterable_positions:
+                symbol = self._position_symbol(position)
+                quantity = self._position_quantity(position)
+                entry_price = self._position_entry_price(position)
+                size_usd = self._position_size_usd(position, entry_price, quantity)
+                if not symbol or quantity <= 0.0:
+                    logger.debug(
+                        "Position adoption skipped malformed position account=%s broker=%s position=%r",
+                        account_id,
+                        broker_name,
+                        position,
+                    )
+                    continue
+
+                if tracker is not None and callable(getattr(tracker, "track_entry", None)):
+                    tracker.track_entry(
+                        symbol=symbol,
+                        entry_price=entry_price,
+                        quantity=quantity,
+                        size_usd=size_usd,
+                        strategy="POSITION_ADOPTION",
+                        position_source="broker_existing",
+                    )
+                adopted += 1
+                adopted_symbols.append(symbol)
+
+            result["positions_adopted"] = adopted
+            result["adopted_symbols"] = adopted_symbols
+            result["success"] = True
+            return result
+        except Exception as exc:
+            logger.error(
+                "Position adoption failed account=%s broker=%s: %s",
+                account_id,
+                broker_name,
+                exc,
+                exc_info=True,
+            )
+            result["error"] = str(exc)
+            return result
+
+    def verify_position_adoption_status(
+        self,
+        broker: Any,
+        broker_name: str = "",
+        account_id: str = "",
+    ) -> bool:
+        """Return True when broker positions can be read after adoption."""
+        if broker is None:
+            return False
+        positions_getter = getattr(broker, "get_positions", None)
+        if not callable(positions_getter):
+            return False
+        try:
+            positions_getter()
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Position adoption verification failed account=%s broker=%s: %s",
+                account_id,
+                broker_name,
+                exc,
+            )
+            return False
+
 
     # -----------------------------------------------------------------------
     # Public API

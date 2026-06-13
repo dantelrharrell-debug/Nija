@@ -1464,10 +1464,9 @@ class NIJAApexStrategyV71:
                 'ask': ask_price
             }
             if not spread_valid and not spread_borderline:
-                advisory_flags.append(
-                    f'Spread advisory: {spread_pct:.3f}% > {max_spread_pct}% maximum (reduced size)'
+                failures.append(
+                    f'Spread too wide: {spread_pct:.3f}% > {spread_soft_limit:.3f}% soft limit'
                 )
-                reduced_size_advisory = True
         else:
             checks['spread'] = {'valid': True, 'note': 'Bid/ask prices not provided, skipping spread check'}
         
