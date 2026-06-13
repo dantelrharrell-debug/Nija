@@ -38,6 +38,11 @@ class _FakeRedisBackend:
             raise RuntimeError("redis get_last failed")
         return self.last_value
 
+    def advance_to_floor(self, _key_id: str, *, floor_ms: int) -> tuple[int, int]:
+        before = self.last_value
+        self.last_value = max(self.last_value, int(floor_ms))
+        return before, self.last_value
+
 
 class TestDistributedNonceManagerAuthority(unittest.TestCase):
     def setUp(self) -> None:
@@ -129,6 +134,48 @@ class TestPerKeyRedisBackendReset(unittest.TestCase):
         expected_floor = int(1000.0 * 1000) + _REDIS_NONCE_RESET_BUFFER_MS
         fake_client.set.assert_called_once_with("nija:kraken:nonce:kid", str(expected_floor))
         fake_client.delete.assert_not_called()
+
+    def test_advance_to_floor_never_lowers_existing_redis_nonce(self) -> None:
+        backend = _PerKeyRedisBackend.__new__(_PerKeyRedisBackend)
+        backend._client = Mock()
+        backend._KEY_PREFIX = "nija:kraken:nonce:"
+        backend.get_last = Mock(return_value=9_000_000)
+        backend._advance_floor_script = None
+
+        before, after = backend.advance_to_floor("kid", floor_ms=1_500_000)
+
+        self.assertEqual(before, 9_000_000)
+        self.assertEqual(after, 9_000_000)
+        backend._client.set.assert_called_once_with("nija:kraken:nonce:kid", "9000000")
+
+
+class TestDistributedNonceProbeServerSync(unittest.TestCase):
+    def setUp(self) -> None:
+        patcher = patch("bot.distributed_nonce_manager.assert_startup_write_authority", return_value=None)
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+    def test_probe_server_sync_advances_redis_to_startup_future_floor(self) -> None:
+        mgr = DistributedNonceManager(redis_client=None)
+        mgr._redis = _FakeRedisBackend(last_value=100)
+
+        with patch("bot.distributed_nonce_manager.time.time", return_value=1000.0), patch.dict(
+            os.environ, {"NIJA_STARTUP_NONCE_RESYNC_FUTURE_MS": "123456"}, clear=False
+        ):
+            mgr.probe_server_sync("kid")
+
+        self.assertEqual(mgr.get_last_nonce("kid"), 1_123_456)
+
+    def test_probe_server_sync_never_lowers_stale_high_redis_nonce(self) -> None:
+        mgr = DistributedNonceManager(redis_client=None)
+        mgr._redis = _FakeRedisBackend(last_value=9_000_000)
+
+        with patch("bot.distributed_nonce_manager.time.time", return_value=1000.0), patch.dict(
+            os.environ, {"NIJA_STARTUP_NONCE_RESYNC_FUTURE_MS": "123456"}, clear=False
+        ):
+            mgr.probe_server_sync("kid")
+
+        self.assertEqual(mgr.get_last_nonce("kid"), 9_000_000)
 
 
 class TestDistributedNonceDebugHooks(unittest.TestCase):

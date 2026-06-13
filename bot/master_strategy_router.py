@@ -355,18 +355,30 @@ class MasterStrategyRouter:
     @staticmethod
     def _load_apex():
         """Load the APEX dual-RSI strategy (optional tie-breaker)."""
+        # Only load leaf APEX strategy implementations here.  Do NOT fall back
+        # to TradingStrategy: TradingStrategy owns IndependentBrokerTrader, which
+        # asks for this singleton during construction.  Instantiating it while
+        # _ROUTER_LOCK is held creates a recursive bootstrap deadlock that stops
+        # the platform before any trade cycle can start.
         for mod_name, cls_name in [
-            ("bot.nija_apex_strategy_v71", "NijaApexStrategyV71"),
-            ("nija_apex_strategy_v71", "NijaApexStrategyV71"),
-            ("bot.trading_strategy", "TradingStrategy"),
+            ("bot.nija_apex_strategy_v71", "NIJAApexStrategyV71"),
+            ("nija_apex_strategy_v71", "NIJAApexStrategyV71"),
+            ("bot.nija_apex_strategy_v72_upgrade", "NIJAApexStrategyV72"),
+            ("nija_apex_strategy_v72_upgrade", "NIJAApexStrategyV72"),
         ]:
             try:
                 mod = __import__(mod_name, fromlist=[cls_name])
                 cls = getattr(mod, cls_name, None)
                 if cls is not None:
                     return cls()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "MasterStrategyRouter: APEX load skipped (%s.%s): %s",
+                    mod_name,
+                    cls_name,
+                    exc,
+                )
+                continue
         return None
 
 

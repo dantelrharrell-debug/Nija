@@ -39,6 +39,9 @@ class MockBroker(BaseBroker):
     def get_positions(self):
         return []
 
+    def get_available_markets(self):
+        return ["BTC-USD", "ETH-USD"]
+
     def place_market_order(self, symbol, side, quantity, size_type='quote',
                           ignore_balance=False, ignore_min_trade=False, force_liquidate=False):
         return {
