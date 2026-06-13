@@ -4,7 +4,6 @@
   "role": "user",
   "enabled": true,
   "copy_from_platform": false,
-  "copy_from_platform": true,
   "independent_trading": true,
   "active_trading": true,
   "risk_multiplier": 1.0,
