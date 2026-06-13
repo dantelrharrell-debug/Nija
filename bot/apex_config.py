@@ -502,7 +502,7 @@ RISK_CONFIG_SAVER = {
     # Position Management
     'max_concurrent_positions': 3,  # Up to 3 positions — raised from 2 for aggressive growth
     'max_position_concentration': 0.15,  # 15% max per position
-    'min_trade_size_usd': 15.0,  # $15 minimum trade
+    'min_trade_size_usd': 10.0,  # $10 minimum trade — lowered from $15 for HF scalp mode (Apr 2026)
     'max_trade_size_usd': 40.0,  # $40 maximum trade
 
     # Circuit Breakers

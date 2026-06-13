@@ -310,11 +310,13 @@ MIN_EDGE_THRESHOLD: float = float(os.getenv("MIN_EDGE_THRESHOLD", "0.0035"))  # 
 
 # ─── FIX 1: Minimum account balance gate ────────────────────────────────────
 # Accounts below this USD balance are skipped entirely — no fake executions.
-MINIMUM_TRADING_BALANCE: float = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0"))
+# Lowered to $50 to allow trading with ~$174 balance (micro-cap / HF scalp mode).
+MINIMUM_TRADING_BALANCE: float = float(os.getenv("MINIMUM_TRADING_BALANCE", "50.0"))
 
 # ─── FIX 2: Minimum notional order size ─────────────────────────────────────
 # Hard floor for every order regardless of broker-specific minimums.
-MIN_TRADE_USD: float = float(os.getenv("MIN_TRADE_USD", os.getenv("MIN_NOTIONAL_USD", "3.50")))
+# Lowered to $10 for micro-cap / HF scalp mode with $174 balance.
+MIN_TRADE_USD: float = float(os.getenv("MIN_TRADE_USD", os.getenv("MIN_NOTIONAL_USD", "10.0")))
 MIN_NOTIONAL_USD: float = MIN_TRADE_USD
 # Exchange-level hard floor; acts as an absolute minimum before broker-specific
 # or exchange-specific constraints apply.
@@ -334,7 +336,7 @@ BALANCE_BUFFER_PCT: float = float(os.getenv("BALANCE_BUFFER_PCT", "0.10"))
 
 # One-shot probe controls for end-to-end execution validation.
 FORCE_FIRST_TRADE: bool = os.getenv("FORCE_FIRST_TRADE", "false").lower() in ("1", "true", "yes", "enabled")
-FORCE_TRADE_NOTIONAL: float = float(os.getenv("FORCE_TRADE_NOTIONAL", "3.50"))
+FORCE_TRADE_NOTIONAL: float = float(os.getenv("FORCE_TRADE_NOTIONAL", "10.0"))
 FORCE_TRADE_ON_FIRST_VALID_SIGNAL: bool = os.getenv(
     "FORCE_TRADE_ON_FIRST_VALID_SIGNAL", "false"
 ).lower() in ("1", "true", "yes", "enabled")
@@ -342,6 +344,12 @@ FORCE_TRADE_ON_FIRST_VALID_SIGNAL: bool = os.getenv(
 # ─── FIX 4: Live mode enforcement ───────────────────────────────────────────
 LIVE_CAPITAL_VERIFIED: bool = os.getenv("LIVE_CAPITAL_VERIFIED", "false").lower() == "true"
 DRY_RUN_MODE: bool = os.getenv("DRY_RUN_MODE", "false").lower() == "true"
+
+# ── Small account / small order flags (Apr 2026) ────────────────────────────
+# Allow trading with small account balances (~$174) and small order sizes (~$10).
+# Both default to True to enable HF scalp mode with limited capital.
+ALLOW_SMALL_ORDERS: bool = os.getenv("ALLOW_SMALL_ORDERS", "true").lower() in ("1", "true", "yes", "on")
+ALLOW_SMALL_ACCOUNT_TRADING: bool = os.getenv("ALLOW_SMALL_ACCOUNT_TRADING", "true").lower() in ("1", "true", "yes", "on")
 
 # ─── FIX 5: Force trade mode — bypasses all signal filters to confirm pipeline
 # Supports both FORCE_TRADE and FORCE_TRADE_MODE for compatibility.
@@ -2191,7 +2199,7 @@ class ExecutionEngine:
             # Keep in sync with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
             _HARD_MIN_BY_BROKER = {
                 'coinbase': max(EXCHANGE_HARD_FLOOR_USD, MIN_TRADE_USD),
-                'kraken':   max(10.5, MIN_TRADE_USD),
+                'kraken':   max(float(os.getenv('KRAKEN_MIN_NOTIONAL_USD', str(MIN_TRADE_USD))), MIN_TRADE_USD),
                 'binance':  10.0,   # Binance MIN_NOTIONAL filter (USDT pairs)
                 'okx':      10.0,   # OKX operational floor
                 'alpaca':    1.0,   # Alpaca — commission-free, no practical minimum

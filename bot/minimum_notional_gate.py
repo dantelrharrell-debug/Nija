@@ -23,7 +23,7 @@ logger = logging.getLogger("nija.min_notional_gate")
 class NotionalGateConfig:
     """Configuration for minimum notional gate"""
     enabled: bool = True
-    min_entry_notional_usd: float = 3.5
+    min_entry_notional_usd: float = 10.0  # Lowered from 3.5 → 10.0 for micro-cap / HF scalp mode (Apr 2026)
     allow_stop_loss_bypass: bool = True  # Allow stop losses to bypass the gate
     
     # Broker-specific minimum notional values.
@@ -50,11 +50,11 @@ class NotionalGateConfig:
         self.min_entry_notional_usd = env_floor
 
         if self.broker_specific_limits is None:
-            # Kraken hard floor: configurable via KRAKEN_MIN_NOTIONAL_USD (default $1,
-            # lowered from $5 for micro-capital mode — actual exchange minimum is ~$1).
-            _kraken_hard_floor = float(os.getenv("KRAKEN_MIN_NOTIONAL_USD", "1.0"))
+            # Kraken hard floor: configurable via KRAKEN_MIN_NOTIONAL_USD (default $10,
+            # for micro-cap / HF scalp mode with $174 balance — Apr 2026).
+            _kraken_hard_floor = float(os.getenv("KRAKEN_MIN_NOTIONAL_USD", "10.0"))
             self.broker_specific_limits = {
-                'coinbase': max(1.0, env_floor),
+                'coinbase': max(10.0, env_floor),
                 'kraken': max(_kraken_hard_floor, env_floor),
                 'binance': 10.0,    # $10 minimum
                 'okx': 10.0,        # $10 minimum
