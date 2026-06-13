@@ -1529,20 +1529,33 @@ class TradingStrategy:
             self.nija_core_loop.apex = self.apex
             logger.info("🔗 NijaCoreLoop apex reference re-synchronized")
 
-    def run_cycle(self) -> int:
-        """Execute one trading cycle and return the recommended next interval in seconds."""
+    def run_cycle(self, broker: Optional[Any] = None, user_mode: bool = False) -> int:
+        """Execute one trading cycle and return the recommended next interval in seconds.
+
+        ``IndependentBrokerTrader`` runs the same strategy object for platform and
+        user venues, so callers must be able to pin the cycle to the broker whose
+        thread is ticking.  When ``broker`` is supplied, do not re-select a cached
+        platform broker; use the supplied broker and pass ``user_mode`` through to
+        the core loop so independent Kraken users can generate entries while
+        copy-mode users remain position-management only.
+        """
         next_interval_s = 150
         if self.apex is not None:
             try:
                 self._ensure_nija_wiring()
-                self._maybe_refresh_symbols()
 
-                # Delegate to the APEX strategy
-                _broker = self._get_active_broker()
+                # Delegate to the caller-selected venue when provided.  This is
+                # required for per-broker platform loops and independent user
+                # loops; otherwise _get_active_broker() may choose the platform
+                # broker and every user cycle silently scans/executes the wrong
+                # account.
+                _broker = broker if broker is not None else self._get_active_broker()
                 if _broker is not None and self.broker != _broker:
                     self.broker = _broker
                     if hasattr(self.apex, "update_broker_client"):
                         self.apex.update_broker_client(_broker)
+
+                self._maybe_refresh_symbols()
 
                 _account_balance = float(getattr(self.apex, "_last_account_balance", 0.0) or 0.0)
                 if _account_balance <= 0.0 and _broker is not None:
@@ -1587,7 +1600,7 @@ class TradingStrategy:
                         balance=_account_balance,
                         symbols=_symbols_to_scan,
                         open_positions_count=_open_positions_count,
-                        user_mode=False,
+                        user_mode=bool(user_mode),
                     )
                     logger.info(
                         "run_cycle(core_loop): scored=%d entered=%d blocked=%d exited=%d next=%ss",
