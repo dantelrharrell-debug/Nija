@@ -647,11 +647,29 @@ class BootstrapStateMachine:
                 )
                 return False
 
-            # NOTE: execution authority check disabled — was blocking finalize_boot
-            # even with a 5-second timeout, preventing the trading loop from ever
-            # starting. Authority is granted unconditionally below; per-order
-            # runtime gates enforce safety independently of this bootstrap check.
+            try:
+                try:
+                    from bot.execution_authority_context import require_startup_execution_authority
+                except ImportError:
+                    from execution_authority_context import require_startup_execution_authority  # type: ignore[import]
 
+                authority_status = require_startup_execution_authority(
+                    context=f"bootstrap_finalize:{reason}",
+                    force_refresh=True,
+                )
+            except Exception as exc:
+                logger.error(
+                    "❌ [BootstrapFSM] finalize_boot blocked: execution authority prerequisites missing (%s)",
+                    exc,
+                )
+                return False
+
+            if not bool(authority_status.get("ready", False)):
+                logger.error(
+                    "❌ [BootstrapFSM] finalize_boot blocked: execution authority not ready missing=%s",
+                    authority_status.get("missing", []),
+                )
+                return False
 
             _from_state = self._state
             self._state = BootstrapState.RUNNING_SUPERVISED
