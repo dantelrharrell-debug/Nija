@@ -79,24 +79,24 @@ class ExecutionMinimumPositionGate:
     """
     
     # Absolute minimum position sizes (USD) by tier
-    # Raised to $5 to stay clear of exchange dust floors and avoid repeated
-    # order rejections.  Positions under $5 create dust and cannot be closed.
+    # Set to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
+    # $10 minimum ensures fee-positive trades on Kraken ($10 exchange floor).
     TIER_MINIMUM_USD = {
-        'STARTER':  5.0,   # $5 minimum — avoids dust + exchange rejection
-        'SAVER':    5.0,   # $5 minimum — avoids dust + exchange rejection
-        'INVESTOR': 5.0,   # $5 minimum — avoids dust + exchange rejection
-        'INCOME':   5.0,   # $5 minimum — avoids dust + exchange rejection
-        'LIVABLE':  5.0,   # $5 minimum — avoids dust + exchange rejection
-        'BALLER':   5.0,   # $5 minimum — avoids dust + exchange rejection
+        'STARTER':  10.0,  # $10 minimum — Kraken exchange floor
+        'SAVER':    10.0,  # $10 minimum — Kraken exchange floor
+        'INVESTOR': 10.0,  # $10 minimum — Kraken exchange floor
+        'INCOME':   10.0,  # $10 minimum — Kraken exchange floor
+        'LIVABLE':  10.0,  # $10 minimum — Kraken exchange floor
+        'BALLER':   10.0,  # $10 minimum — Kraken exchange floor
     }
-    
+
     # LOW_CAPITAL mode threshold - accounts below this use micro-cap minimum
-    LOW_CAPITAL_THRESHOLD = 100.0  # Balance threshold
-    # Env-overridable: COINBASE_MIN_ORDER_USD=1 activates $1 micro-cap floor
+    LOW_CAPITAL_THRESHOLD = 50.0  # Balance threshold — lowered from $100 (Apr 2026)
+    # Env-overridable: COINBASE_MIN_ORDER_USD=10 activates $10 micro-cap floor
     import os as _gate_os
     LOW_CAPITAL_MIN_POSITION: float = float(
         _gate_os.getenv('COINBASE_MIN_ORDER_USD',
-                        _gate_os.getenv('COINBASE_MIN_ORDER', '5.0'))
+                        _gate_os.getenv('COINBASE_MIN_ORDER', '10.0'))
     )
     
     # Minimum percentage allocation (of account balance)

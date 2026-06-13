@@ -34,14 +34,13 @@ except ImportError:
     try:
         from trading_strategy import GLOBAL_MIN_TRADE as _GLOBAL_MIN_TRADE
     except ImportError:
-        _GLOBAL_MIN_TRADE = 5.0  # fallback
+        _GLOBAL_MIN_TRADE = 10.0  # fallback — $10 for micro-cap / HF scalp mode (Apr 2026)
 
-# KRAKEN: The exchange hard-rejects orders under $10 regardless of GLOBAL_MIN_TRADE.
-# KRAKEN_MIN_TRADE_USD is intentionally a separate constant from GLOBAL_MIN_TRADE because
-# it represents an immutable exchange-level constraint, not a configurable policy floor.
+# KRAKEN: Exchange minimum lowered to $10 for micro-cap / HF scalp mode.
+# KRAKEN_MIN_TRADE_USD is env-overridable via KRAKEN_MIN_NOTIONAL_USD.
 # The fee buffer (+$0.50) covers ~0.4–0.6% taker fees so the net filled value stays ≥$10.
-# If GLOBAL_MIN_TRADE is ever raised above 10.50 the higher value takes precedence.
-_KRAKEN_EXCHANGE_FLOOR = 10.50   # Kraken hard minimum: $10 + ~$0.50 fee buffer
+# Lowered from $10.50 → $10.0 to allow trading with $174 balance (Apr 2026).
+_KRAKEN_EXCHANGE_FLOOR = float(_os.getenv('KRAKEN_MIN_NOTIONAL_USD', '10.0'))  # env-overridable Kraken minimum
 KRAKEN_MIN_TRADE_USD = max(_KRAKEN_EXCHANGE_FLOOR, _GLOBAL_MIN_TRADE)  # never below exchange floor
 
 # COINBASE / default: env-overridable for micro-cap mode.
@@ -51,6 +50,7 @@ COINBASE_MIN_TRADE_USD: float = float(
 )
 
 # Default minimum for other exchanges
+# Lowered to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
 MIN_POSITION_USD = _GLOBAL_MIN_TRADE  # Minimum USD value for any position (avoids dust + rejections)
 
 # Fee buffer applied when capping a user position to their available balance.
