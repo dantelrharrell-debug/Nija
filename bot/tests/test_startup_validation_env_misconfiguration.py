@@ -6,6 +6,7 @@ from bot.startup_validation import (
     StartupRisk,
     StartupValidationResult,
     display_validation_results,
+    validate_account_hierarchy,
     validate_operational_environment_config,
 )
 
@@ -78,6 +79,46 @@ class TestStartupValidationEnvMisconfiguration(unittest.TestCase):
             result = validate_operational_environment_config()
             self.assertFalse(result.critical_failure)
             self.assertFalse(any(risk == StartupRisk.ENVIRONMENT_MISCONFIGURATION for risk, _ in result.risks))
+
+
+    def test_enabled_kraken_user_missing_secret_is_reported(self):
+        with patch.dict(
+            os.environ,
+            {
+                "KRAKEN_PLATFORM_API_KEY": "platform_key_12345",
+                "KRAKEN_PLATFORM_API_SECRET": "p" * 40,
+                "KRAKEN_USER_DAIVON_API_KEY": "daivon_key_12345",
+            },
+            clear=True,
+        ):
+            result = validate_account_hierarchy()
+
+        self.assertTrue(
+            any("enabled user daivon_frazier" in warning and "KRAKEN_USER_DAIVON_API_SECRET" in warning
+                for warning in result.warnings),
+            result.warnings,
+        )
+
+    def test_enabled_kraken_users_with_key_secret_pairs_are_counted_viable(self):
+        with patch.dict(
+            os.environ,
+            {
+                "KRAKEN_PLATFORM_API_KEY": "platform_key_12345",
+                "KRAKEN_PLATFORM_API_SECRET": "p" * 40,
+                "KRAKEN_USER_DAIVON_API_KEY": "daivon_key_12345",
+                "KRAKEN_USER_DAIVON_API_SECRET": "d" * 40,
+                "KRAKEN_USER_TANIA_API_KEY": "tania_key_12345",
+                "KRAKEN_USER_TANIA_API_SECRET": "t" * 40,
+            },
+            clear=True,
+        ):
+            result = validate_account_hierarchy()
+
+        self.assertFalse(result.warnings, result.warnings)
+        self.assertTrue(
+            any("2 enabled Kraken user account(s) have viable credentials" in info for info in result.info),
+            result.info,
+        )
 
     def test_display_validation_results_labels_log_monitoring_as_informational(self):
         with self.assertLogs("nija", level="INFO") as captured:

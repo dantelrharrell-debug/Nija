@@ -179,7 +179,12 @@ if __name__ == "bot.multi_account_broker_manager":
 elif __name__ == "multi_account_broker_manager":
     sys.modules.setdefault("bot.multi_account_broker_manager", sys.modules[__name__])
 
-ACCOUNT_USABLE_BALANCE_MIN = float(os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_MIN", "5"))
+ACCOUNT_USABLE_BALANCE_MIN = float(
+    os.getenv(
+        "NIJA_ACCOUNT_USABLE_BALANCE_MIN",
+        os.getenv("MIN_CASH_TO_BUY", os.getenv("MIN_TRADE_USD", "1.00")),
+    )
+)
 ACCOUNT_USABLE_BALANCE_RECOMMENDED = float(
     os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_RECOMMENDED", "100")
 )
