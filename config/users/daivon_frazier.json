@@ -3,6 +3,7 @@
   "broker": "kraken",
   "role": "user",
   "enabled": true,
+  "copy_from_platform": false,
   "copy_from_platform": true,
   "independent_trading": true,
   "active_trading": true,
@@ -11,5 +12,7 @@
     "XRP-USD"
   ],
   "mode": "normal",
+  "_reactivated_reason": "Kraken startup nonce resync now advances Redis per-key counters before user connection",
+  "_operational_model": "Independent per-account strategy evaluation; no copy trading or signal distribution"
   "_reactivated_reason": "Kraken startup nonce resync now advances Redis per-key counters before user connection"
 }
