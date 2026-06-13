@@ -751,13 +751,20 @@ except ImportError:
 _PMC_AVAILABLE = False
 _get_pmc = None  # type: ignore
 try:
-    from profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+    from profit_mode_controller import (  # type: ignore
+        MarketConditionSnapshot as _MarketConditionSnapshot,
+        get_profit_mode_controller as _get_pmc,
+    )
     _PMC_AVAILABLE = True
 except ImportError:
     try:
-        from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+        from bot.profit_mode_controller import (  # type: ignore
+            MarketConditionSnapshot as _MarketConditionSnapshot,
+            get_profit_mode_controller as _get_pmc,
+        )
         _PMC_AVAILABLE = True
     except ImportError:
+        _MarketConditionSnapshot = None  # type: ignore[assignment]
         pass
 
 # ---------------------------------------------------------------------------
@@ -1517,7 +1524,8 @@ class NijaCoreLoop:
         _volume_fallback_enabled = False
         if _PMC_AVAILABLE and _get_pmc is not None:
             try:
-                _pmc_params = _get_pmc().params
+                _pmc_inst = _get_pmc()
+                _pmc_params = getattr(_pmc_inst, "market_adjusted_params", _pmc_inst.params)
                 _pmc_level = _pmc_params.level
                 _effective_hard_floor = _pmc_params.min_score_hard_floor
                 _effective_streak_threshold = _pmc_params.forced_entry_streak_threshold
@@ -1567,6 +1575,16 @@ class NijaCoreLoop:
         _best_volume_entry_type: str = "swing"
         _best_volume: float = -1.0
 
+        # Per-cycle market-health telemetry feeds ProfitModeController so the
+        # next cycle automatically tightens during data/API degradation, stays
+        # selective during volatility spikes, and loosens only when data is
+        # healthy but the market is producing no entries.
+        _data_attempts = 0
+        _data_successes = 0
+        _scoring_errors = 0
+        _abs_return_sum = 0.0
+        _abs_return_count = 0
+
         # Initialise the per-cycle score distribution debugger snapshot.
         _sdd = _get_sdd() if (_SDD_AVAILABLE and _get_sdd is not None) else None
         if _sdd is not None:
@@ -1589,6 +1607,7 @@ class NijaCoreLoop:
                 break
 
             try:
+                _data_attempts += 1
                 df = self._fetch_df(broker, symbol)
                 if df is None or len(df) < 100:
                     if _sdd is not None:
@@ -1596,6 +1615,15 @@ class NijaCoreLoop:
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     _gate_rejections["data_insufficient"] += 1
                     continue
+                _data_successes += 1
+                try:
+                    if "close" in df.columns:
+                        _returns = df["close"].pct_change().dropna().tail(20).abs() * 100.0
+                        if len(_returns) > 0:
+                            _abs_return_sum += float(_returns.mean())
+                            _abs_return_count += 1
+                except Exception:
+                    pass
                 _funnel["market_data"] = ("PASS", "")
 
                 # Always track top-volume symbol (feeds volume fallback)
@@ -1820,10 +1848,41 @@ class NijaCoreLoop:
                 scored += 1
 
             except Exception as sym_err:
+                _scoring_errors += 1
                 logger.debug("Phase3 scoring error for %s: %s", symbol, sym_err)
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
                 _funnel["signal"] = ("FAIL", f"SCORING_EXCEPTION:{sym_err}")
+
+        if _PMC_AVAILABLE and _get_pmc is not None and _MarketConditionSnapshot is not None:
+            try:
+                _data_success_rate = (
+                    float(_data_successes) / float(_data_attempts)
+                    if _data_attempts > 0
+                    else 1.0
+                )
+                _candidate_rate = (
+                    float(len(candidates) + len(momentum_candidates)) / float(max(1, scored))
+                    if scored > 0
+                    else 0.0
+                )
+                _avg_abs_return_pct = (
+                    _abs_return_sum / float(_abs_return_count)
+                    if _abs_return_count > 0
+                    else 0.0
+                )
+                _api_error_rate = float(_scoring_errors) / float(max(1, _data_attempts))
+                _get_pmc().update_market_conditions(
+                    _MarketConditionSnapshot(
+                        data_success_rate=_data_success_rate,
+                        candidate_rate=_candidate_rate,
+                        avg_abs_return_pct=_avg_abs_return_pct,
+                        zero_signal_streak=zero_signal_streak,
+                        api_error_rate=_api_error_rate,
+                    )
+                )
+            except Exception as _market_adj_err:
+                logger.debug("Market-adaptive parameter update failed: %s", _market_adj_err)
 
         # ── Merge momentum candidates when AI candidates are scarce ──────
         # If we're in dead-zone mode and have fewer AI candidates than slots,
