@@ -438,7 +438,9 @@ def validate_generation_for_heartbeat() -> tuple[bool, str]:
     _truthy = {"1", "true", "yes", "on", "enabled"}
     lease_acquired = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip() in _truthy
     is_fallback = os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", "").strip().lower() in _truthy
-    if not lease_acquired and not is_fallback:
+    if is_fallback:
+        return True, ""
+    if not lease_acquired:
         return True, ""
 
     ok, local, redis_gen, detail = validate_generation()

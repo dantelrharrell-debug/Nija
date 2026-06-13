@@ -179,7 +179,12 @@ if __name__ == "bot.multi_account_broker_manager":
 elif __name__ == "multi_account_broker_manager":
     sys.modules.setdefault("bot.multi_account_broker_manager", sys.modules[__name__])
 
-ACCOUNT_USABLE_BALANCE_MIN = float(os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_MIN", "5"))
+ACCOUNT_USABLE_BALANCE_MIN = float(
+    os.getenv(
+        "NIJA_ACCOUNT_USABLE_BALANCE_MIN",
+        os.getenv("MIN_CASH_TO_BUY", os.getenv("MIN_TRADE_USD", "1.00")),
+    )
+)
 ACCOUNT_USABLE_BALANCE_RECOMMENDED = float(
     os.getenv("NIJA_ACCOUNT_USABLE_BALANCE_RECOMMENDED", "100")
 )
@@ -1890,7 +1895,8 @@ class MultiAccountBrokerManager:
                 trigger,
             )
             return {"ready": 0.0, "total_capital": 0.0, "valid_brokers": 0.0, "pending": 1.0}
-        if not self.has_attempted_connections() and not self._is_bootstrap_trigger(trigger):
+        bootstrap_trigger = self._is_bootstrap_trigger(trigger)
+        if not self.has_attempted_connections() and not bootstrap_trigger:
             logger.debug(
                 "⏳ [CapitalAuthorityRefresh] trigger=%s skipped — broker registration not finalized",
                 trigger,
@@ -2083,12 +2089,13 @@ class MultiAccountBrokerManager:
                         )
 
         # ── Guard 0: broker registration hard gate ────────────────────────────
-        # CRITICAL: never evaluate capital before ALL brokers are registered.
-        # Without this gate a refresh triggered immediately at startup (by the
-        # watchdog or CapitalAllocationBrain.__init__) runs against a broker map
-        # that is still being populated, producing spurious $0-capital snapshots
-        # that can freeze allocation or trigger halt logic.
-        if not self._broker_registration_complete.is_set():
+        # CRITICAL: never evaluate capital before ALL brokers are registered for
+        # normal refreshes.  Bootstrap triggers are the deliberate exception: a
+        # platform_connect refresh with an already-registered, payload-ready broker
+        # is the deadlock breaker that can hydrate capital and then finalize the
+        # broker-registration barrier.  Blocking bootstrap triggers here leaves
+        # capital at $0 and prevents the trading loop from ever arming.
+        if not self._broker_registration_complete.is_set() and not bootstrap_trigger:
             logger.info(
                 "⏳ [CapitalAuthorityRefresh] trigger=%s skipped — broker registration not complete",
                 trigger,
@@ -2117,7 +2124,6 @@ class MultiAccountBrokerManager:
             return {"ready": 1.0 if _ready else 0.0, "total_capital": 0.0, "valid_brokers": float(_last_vb), "dedup": 1.0}
 
         try:
-            bootstrap_trigger = self._is_bootstrap_trigger(trigger)
             if bootstrap_trigger and self._capital_bootstrap_barrier_started_at is None:
                 self._capital_bootstrap_barrier_started_at = time.monotonic()
             broker_map: Dict[str, BaseBroker] = {}
