@@ -1197,6 +1197,37 @@ class NijaCoreLoop:
         # Update available slots after exits
         effective_open = max(0, snapshot.open_positions - exits)
 
+        # ── Always Trade Mode bridge ──────────────────────────────────────
+        # The ATM module existed but was not wired into the live core loop, so
+        # an account with no confirmed entries could keep printing healthy loop
+        # ticks while never arming the one-cycle force path.  Evaluate it after
+        # safety/exit processing and before candidate generation.
+        try:
+            from bot.always_trade_mode import get_always_trade_mode
+        except ImportError:
+            try:
+                from always_trade_mode import get_always_trade_mode  # type: ignore
+            except ImportError:
+                get_always_trade_mode = None  # type: ignore
+        if get_always_trade_mode is not None:
+            try:
+                _atm_decision = get_always_trade_mode().run_pre_cycle_check(
+                    user_mode=user_mode,
+                    open_positions=effective_open,
+                    balance=snapshot.balance,
+                    last_trade_ts=getattr(self.apex, "last_trade_ts", None),
+                )
+                if getattr(_atm_decision, "force_entry", False):
+                    global FORCE_NEXT_CYCLE
+                    with _FORCE_LOCK:
+                        FORCE_NEXT_CYCLE = True
+                    logger.warning(
+                        "⚡ ALWAYS TRADE MODE armed core-loop force entry — %s",
+                        getattr(_atm_decision, "reason", "idle fallback"),
+                    )
+            except Exception as _atm_err:
+                logger.debug("Always Trade Mode pre-cycle check skipped: %s", _atm_err)
+
         # ── Phase 3: Scan & ranked entry ──────────────────────────────────
         if not user_mode:
             available_slots = max(0, self.max_positions - effective_open)
@@ -1911,10 +1942,22 @@ class NijaCoreLoop:
                     zero_signal_streak, slots_needed,
                 )
 
+        # ── One-cycle forced entry (FORCE_NEXT_CYCLE flag) ───────────────
+        # Read before the no-candidates return path.  Previously this flag was
+        # consumed after the empty-candidate early return, so FORCE_TRADE/ATM
+        # could be armed yet never produce a tradable candidate.
+        global FORCE_NEXT_CYCLE
+        with _FORCE_LOCK:
+            _force_this_cycle = FORCE_NEXT_CYCLE
+            if _force_this_cycle:
+                FORCE_NEXT_CYCLE = False  # reset atomically — one-shot only
+        if _force_this_cycle:
+            _volume_fallback_enabled = True
+
         # ── Volume fallback: inject top-volume candidate when still empty ─
         # Active whenever _volume_fallback_enabled (always true in dead zone;
-        # also true for profit-mode Level 3).
-        if not candidates and _volume_fallback_enabled and _best_volume_symbol and _AISignal is not None:
+        # also true for profit-mode Level 3) or one-cycle force is armed.
+        if not candidates and (_volume_fallback_enabled or _force_this_cycle) and _best_volume_symbol and _AISignal is not None:
             logger.warning(
                 "💰 VOLUME FALLBACK — no candidates after momentum scan; "
                 "injecting highest-volume symbol: %s (avg_vol=%.0f)",
@@ -1924,13 +1967,14 @@ class NijaCoreLoop:
                 symbol=_best_volume_symbol,
                 side=_best_volume_side,
                 composite_score=_effective_hard_floor,
-                position_multiplier=0.50,               # conservative micro-trade size
+                position_multiplier=0.25 if _force_this_cycle else 0.50,  # conservative micro-trade size
                 entry_type=_best_volume_entry_type,
                 threshold_used=_effective_hard_floor,
                 reason="volume_fallback_guaranteed_activity",
                 metadata={
                     "profit_mode_level": _pmc_level,
                     "volume_fallback": True,
+                    "force_next_cycle": bool(_force_this_cycle),
                     "avg_volume": _best_volume,
                     "bypass_low_quality": True,
                     "dead_zone": _dead_zone,
@@ -2021,14 +2065,8 @@ class NijaCoreLoop:
 
         # ── One-cycle forced entry (FORCE_NEXT_CYCLE flag) ───────────────
         # When FORCE_NEXT_CYCLE is True the top-scored candidate is selected
-        # unconditionally, all quality filters are bypassed, and the flag is
-        # immediately reset so exactly one cycle is forced.
-        # _FORCE_LOCK ensures the read-and-reset is atomic under concurrent callers.
-        global FORCE_NEXT_CYCLE
-        with _FORCE_LOCK:
-            _force_this_cycle = FORCE_NEXT_CYCLE
-            if _force_this_cycle:
-                FORCE_NEXT_CYCLE = False  # reset atomically — one-shot only
+        # unconditionally, all quality filters are bypassed, and the flag has
+        # already been atomically reset before the no-candidate return path.
         if _force_this_cycle and candidates:
             top_candidate = max(candidates, key=lambda s: s.composite_score)
             top_candidate.metadata["bypass_quality_filter"] = True
