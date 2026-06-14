@@ -85,6 +85,10 @@ def test_force_next_cycle_injects_volume_fallback_before_empty_return(monkeypatc
             return {"action": "hold", "position_size": 10.0, "reason": "no natural setup"}
 
         def execute_action(self, analysis, symbol):
+            required = {"position_size", "entry_price", "stop_loss", "take_profit"}
+            missing = required - set(analysis)
+            if missing:
+                raise AssertionError(f"fallback execution payload missing: {sorted(missing)}")
             self.last_execution = (analysis, symbol)
             return True
 
@@ -121,6 +125,10 @@ def test_force_next_cycle_injects_volume_fallback_before_empty_return(monkeypatc
     analysis, symbol = apex.last_execution
     assert symbol == "BTC-USD"
     assert analysis["action"] == "enter_long"
+    assert analysis["position_size"] > 0
+    assert analysis["entry_price"] == 100.0
+    assert analysis["stop_loss"] < analysis["entry_price"]
+    assert analysis["take_profit"][0] > analysis["entry_price"]
     assert "fallback_entry" in analysis["reason"]
 
 

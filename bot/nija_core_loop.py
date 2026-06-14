@@ -2181,6 +2181,21 @@ class NijaCoreLoop:
                     analysis["action"] = action
                     analysis["reason"] = analysis.get("reason", "") + " [fallback_entry]"
 
+                if fallback_active and action in ("enter_long", "enter_short"):
+                    missing = {"position_size", "entry_price", "stop_loss", "take_profit"} - set(analysis.keys())
+                    if missing:
+                        fallback_payload = self._build_forced_fallback_entry_analysis(
+                            df=df,
+                            sig=sig,
+                            snapshot=snapshot,
+                            action=action,
+                            existing_reason=analysis.get("reason", ""),
+                        )
+                        analysis.update(fallback_payload)
+                        # The fallback payload is already sized conservatively;
+                        # avoid multiplying it below broker minimum notional.
+                        sig.position_multiplier = 1.0
+
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
                     _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
@@ -2259,6 +2274,77 @@ class NijaCoreLoop:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _build_forced_fallback_entry_analysis(
+        self,
+        *,
+        df: pd.DataFrame,
+        sig: Any,
+        snapshot: CycleSnapshot,
+        action: str,
+        existing_reason: str = "",
+    ) -> Dict[str, Any]:
+        """Build a complete minimal entry payload for forced fallback orders.
+
+        ``apex.analyze_market`` can return ``hold`` before sizing when strict
+        pre-entry market-condition filters reject ADX/volume/price-action.  The
+        core loop may still intentionally force a small Always-Trade/volume
+        fallback entry.  In that path we must provide the fields required by
+        ``execute_action`` instead of only flipping ``action`` from hold to enter.
+        """
+        price = 0.0
+        try:
+            price = float(df["close"].iloc[-1])
+        except Exception:
+            price = 0.0
+        if price <= 0:
+            raise ValueError("cannot build fallback entry without positive close price")
+
+        broker_name = "coinbase"
+        try:
+            if hasattr(self.apex, "_get_broker_name"):
+                broker_name = str(self.apex._get_broker_name() or broker_name).lower()
+        except Exception:
+            pass
+
+        min_notional = 3.50
+        try:
+            from bot.minimum_notional_gate import get_minimum_notional_gate
+            min_notional = float(
+                get_minimum_notional_gate().config.get_min_notional_for_broker(
+                    broker_name, balance=float(snapshot.balance or 0.0)
+                )
+            )
+        except Exception:
+            min_notional = 10.50 if "kraken" in broker_name else 3.50
+
+        balance = max(float(snapshot.balance or 0.0), 0.0)
+        if balance <= 0:
+            raise ValueError("cannot build fallback entry without positive balance")
+        size_cap = max(min(balance * 0.05, balance), 0.0)
+        position_size = min(max(min_notional, size_cap), balance)
+
+        if action == "enter_short":
+            stop_loss = price * 1.012
+            take_profit = [price * 0.994, price * 0.990, price * 0.984]
+        else:
+            stop_loss = price * 0.988
+            take_profit = [price * 1.006, price * 1.010, price * 1.016]
+
+        reason = existing_reason or getattr(sig, "reason", "forced_fallback_entry")
+        if "fallback_entry" not in reason:
+            reason = f"{reason} [fallback_entry]"
+
+        return {
+            "action": action,
+            "entry_price": price,
+            "position_size": position_size,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "reason": reason,
+            "fallback_entry": True,
+            "forced_fallback": True,
+        }
 
     def _fetch_df(self, broker: Any, symbol: str) -> Optional[pd.DataFrame]:
         """
