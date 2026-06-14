@@ -125,6 +125,17 @@ class MarketConditionSnapshot:
     api_error_rate: float = 0.0
 
 
+@dataclass(frozen=True)
+class MarketConditionSnapshot:
+    """Recent market-health inputs used for autonomous parameter adjustment."""
+
+    data_success_rate: float = 1.0
+    candidate_rate: float = 0.0
+    avg_abs_return_pct: float = 0.0
+    zero_signal_streak: int = 0
+    api_error_rate: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # Level definitions
 # ---------------------------------------------------------------------------
@@ -392,6 +403,20 @@ class ProfitModeController:
                 enable_volume_fallback=True,
                 pass_percentile=min(base.pass_percentile, 0.25),
                 volume_gate_multiplier=0.30,
+            )
+        if regime == "quiet_no_signal":
+            floor = max(6.0, base.min_score_hard_floor * 0.75)
+            return replace(
+                base,
+                min_score_absolute=max(6.0, base.min_score_absolute * 0.85),
+                interval_fast=min(base.interval_fast, 60),
+                interval_normal=min(base.interval_normal, 90),
+                interval_slow=min(base.interval_slow, 90),
+                forced_entry_streak_threshold=min(base.forced_entry_streak_threshold, 2),
+                hard_bypass_streak_threshold=min(base.hard_bypass_streak_threshold, 8),
+                min_score_hard_floor=floor,
+                enable_volume_fallback=True,
+                pass_percentile=min(base.pass_percentile, 0.30),
             )
         if regime == "opportunity_rich":
             return replace(
