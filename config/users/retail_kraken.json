@@ -5,7 +5,6 @@
     "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,
-    "copy_from_platform": false,
     "copy_from_platform": true,
     "independent_trading": true,
     "active_trading": true,
@@ -13,7 +12,6 @@
       "XRP-USD"
     ],
     "description": "Retail user - Kraken crypto account (independent strategy evaluation)"
-    "description": "Retail user - Kraken crypto account"
   },
   {
     "user_id": "tania_gilbert",
@@ -21,7 +19,6 @@
     "account_type": "retail",
     "broker_type": "kraken",
     "enabled": true,
-    "copy_from_platform": false,
     "copy_from_platform": true,
     "independent_trading": true,
     "active_trading": true,
@@ -29,6 +26,5 @@
       "XRP-USD"
     ],
     "description": "Retail user - Kraken crypto account (independent strategy evaluation)"
-    "description": "Retail user - Kraken crypto account"
   }
 ]
