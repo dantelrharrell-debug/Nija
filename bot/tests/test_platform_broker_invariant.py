@@ -8,6 +8,7 @@ Tests that platform brokers are:
 """
 
 import sys
+import os
 sys.path.insert(0, '.')
 
 from bot.multi_account_broker_manager import (
@@ -30,6 +31,7 @@ class MockBroker(BaseBroker):
     def __init__(self, broker_type=BrokerType.COINBASE):
         super().__init__(broker_type)
         self.connected = False
+        self._last_known_balance = 100.0
 
     def connect(self):
         self.connected = True
@@ -38,8 +40,17 @@ class MockBroker(BaseBroker):
     def get_account_balance(self):
         return 100.0
 
+    def has_balance_payload_for_capital(self):
+        return True
+
+    def is_ready_for_capital(self):
+        return True
+
     def get_positions(self):
         return []
+
+    def get_available_markets(self):
+        return ["BTC-USD", "ETH-USD"]
 
     def place_market_order(self, symbol, side, quantity, size_type='quote',
                           ignore_balance=False, ignore_min_trade=False, force_liquidate=False):
@@ -226,6 +237,7 @@ def test_bootstrap_refresh_includes_connected_platform_broker_before_ready_state
     print("TEST 6: Bootstrap Refresh Includes Connected Broker")
     print("=" * 70)
 
+    os.environ["NIJA_LOCK_ACQUIRED"] = "true"
     manager = _fresh_canonical()
 
     # Simulate a broker that has connected but has not yet been marked
