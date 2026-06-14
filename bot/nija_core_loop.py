@@ -531,7 +531,7 @@ def _supervisor_step_state_machine() -> None:
 
         _runtime_mode = resolve_runtime_mode_safe(logger)
         _live_verified = _is_live_mode(_runtime_mode)
-        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "50.0") or 50.0)  # $50 minimum for HF scalp mode (Apr 2026)
         _cycle_capital = _current_cycle_capital if _current_cycle_capital else {}
         _balance = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
         _sufficient_balance = _balance >= _min_balance and _balance > 0.0
@@ -3146,7 +3146,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _first_snap = bool(_sm_loop.get_first_snap_accepted())
                         _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
                         _live_verified_now = _is_live_mode(_runtime_mode_cycle)
-                        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+                        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "50.0") or 50.0)  # $50 minimum for HF scalp mode (Apr 2026)
                         _balance_ok = float(_cycle_balance or 0.0) >= _min_balance
 
                         if (not _committed) or (not _can_dispatch):
