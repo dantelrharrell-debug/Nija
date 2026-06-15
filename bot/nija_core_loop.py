@@ -411,6 +411,31 @@ def _capture_cycle_capital_state() -> _types.MappingProxyType:
         # "_capital_last_valid_brokers" only advances when refresh_capital_authority()
         # confirms viable broker balance payloads.
         _last_vb = int(getattr(_mabm_inst, "_capital_last_valid_brokers", 0) or 0) if _mabm_inst is not None else 0
+        # FIX: When _capital_last_valid_brokers is still 0 (coordinator has not
+        # yet confirmed viable broker payloads) but CapitalAuthority is already
+        # hydrated with real capital, fall back to CA's registered_broker_count.
+        # This prevents a startup deadlock where the activation invariant sees
+        # valid_brokers=0 and snapshot_source="placeholder" even though both
+        # brokers are connected and CA holds a real balance snapshot.
+        if _last_vb == 0 and result.get("ca_is_hydrated") and result.get("ca_total_capital", 0.0) > 0.0:
+            try:
+                if _CA_LOOP_AVAILABLE and _get_ca is not None:
+                    _ca_for_vb = _get_ca()
+                    _ca_broker_count = int(getattr(_ca_for_vb, "registered_broker_count", 0) or 0)
+                    if _ca_broker_count > 0:
+                        _last_vb = _ca_broker_count
+                        logger.info(
+                            "_capture_cycle_capital_state: _capital_last_valid_brokers=0 but "
+                            "CA is hydrated (real=$%.2f, brokers=%d) — using CA registered_broker_count "
+                            "as valid_brokers fallback",
+                            result["ca_total_capital"],
+                            _ca_broker_count,
+                        )
+            except Exception as _ca_vb_err:
+                logger.debug(
+                    "_capture_cycle_capital_state: CA registered_broker_count fallback failed: %s",
+                    _ca_vb_err,
+                )
         result["ca_valid_brokers"] = max(result["ca_valid_brokers"], _last_vb)
         result["snapshot_source"] = "live_exchange" if _last_vb > 0 else "placeholder"
     except Exception as _me:
@@ -552,6 +577,38 @@ def _supervisor_step_state_machine() -> None:
             _balance,
             _min_balance,
         )
+
+        # FIX: Proactively set _first_snap_accepted when the cycle capital
+        # snapshot shows a valid live-exchange source with real capital and
+        # valid brokers.  commit_activation() checks this flag as part of the
+        # activation invariant, but it is only set *inside* commit_activation()
+        # after all gates pass — creating a chicken-and-egg deadlock where the
+        # flag is never set because the gate that requires it never passes.
+        # Setting it here (before commit_activation is called) breaks the cycle.
+        _snap_source_sv = str(_cycle_capital.get("snapshot_source", "") or "")
+        _valid_brokers_sv = int(_cycle_capital.get("ca_valid_brokers", 0) or 0)
+        _ca_hydrated_sv = bool(_cycle_capital.get("ca_is_hydrated", False))
+        _ca_capital_sv = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
+        if (
+            not sm.get_first_snap_accepted()
+            and _ca_hydrated_sv
+            and _ca_capital_sv > 0.0
+            and _valid_brokers_sv > 0
+            and _snap_source_sv in {"live_exchange", "capital_authority"}
+        ):
+            try:
+                sm.set_first_snap_accepted(True)
+                logger.critical(
+                    "[SUPERVISOR] _first_snap_accepted set to True — "
+                    "CA hydrated real=$%.2f valid_brokers=%d source=%s",
+                    _ca_capital_sv,
+                    _valid_brokers_sv,
+                    _snap_source_sv,
+                )
+            except Exception as _snap_accept_err:
+                logger.warning(
+                    "[SUPERVISOR] set_first_snap_accepted failed: %s", _snap_accept_err
+                )
 
         # Missing trigger fix: the supervisor attempts activation every cycle
         # while in OFF/LIVE_PENDING_CONFIRMATION, using the same frozen
