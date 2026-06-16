@@ -2973,6 +2973,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             _loop_running = False
                         return
                 else:
+                    # Graceful fallback: same force-flag recovery as the strategy loop
+                    # gate above.  A hard assert here crashes the trading thread
+                    # silently; instead, check for FORCE_TRADE / NIJA_FORCE_ACTIVATION /
+                    # NIJA_SKIP_STARTUP_PHASE_GATE and grant authority when set.
+                    _force_flags_sched = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _force_flags_sched and hasattr(_bfsm_sched, "_execution_authority"):
+                        logger.warning(
+                            "execution_authority not set and no fencing token — "
+                            "FORCE flag detected, granting execution_authority to unblock cycle scheduler"
+                        )
+                        print("[NIJA] FORCE flag: granting execution_authority for cycle scheduler")
+                        _bfsm_sched._execution_authority = True
+                    else:
+                        logger.critical(
+                            "execution_authority not set, no fencing token, and no FORCE flag — "
+                            "cycle scheduler cannot start; set FORCE_TRADE=true to override"
+                        )
+                        print("[NIJA] ERROR: execution_authority missing — cycle scheduler blocked")
                     logger.critical(
                         "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
                         "attribute — cycle scheduler cannot start safely."
