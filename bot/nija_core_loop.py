@@ -2594,6 +2594,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     cycle_secs : Seconds to sleep between cycles (default 150 = 2.5 min)
     """
     logger.critical("🧵 TRADING LOOP THREAD ALIVE")
+    print("🧵 TRADING LOOP THREAD ALIVE — run_trading_loop() entered", flush=True)
     _contract_status = assert_runtime_contract_release_ready(context="run_trading_loop")
     logger.info("Runtime contract status: %s", _contract_status.as_dict())
 
@@ -2601,6 +2602,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
+    print("🔥 ENTERED RUN_TRADING_LOOP FUNCTION", flush=True)
 
     _runtime_mode = resolve_runtime_mode_safe(logger)
     _live_verified = _is_live_mode(_runtime_mode)
@@ -2657,31 +2659,44 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _ft[:8],
                 )
                 _bfsm_ea._execution_authority = True
-            else:
-                # Graceful fallback: if no fencing token is available, check for
-                # FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE
-                # flags before hard-crashing the thread.  When any force flag is set
-                # the deployment explicitly opts out of the bootstrap gate, so we
-                # grant execution_authority directly and continue.
-                _force_flags = (
-                    os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
-                    or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
-                    or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+            elif hasattr(_bfsm_ea, "_execution_authority"):
+                # No fencing token (Redis not configured or distributed lock not acquired).
+                # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: grant execution authority
+                # directly so the trading loop is not permanently blocked in deployments
+                # that do not use Redis-based distributed locking.
+                _force_bypass_ea = (
+                    os.environ.get("FORCE_TRADE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
                 )
-                if _force_flags and hasattr(_bfsm_ea, "_execution_authority"):
+                if _force_bypass_ea:
                     logger.warning(
-                        "execution_authority not set and no fencing token — "
-                        "FORCE flag detected, granting execution_authority to unblock strategy loop"
+                        "⚡ execution_authority not set and no fencing token present — "
+                        "force flag active, granting execution authority directly to unblock "
+                        "trading loop (FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE)"
                     )
-                    print("[NIJA] FORCE flag: granting execution_authority for strategy loop")
                     _bfsm_ea._execution_authority = True
                 else:
                     logger.critical(
-                        "execution_authority not set, no fencing token, and no FORCE flag — "
-                        "strategy loop cannot start; set FORCE_TRADE=true to override"
+                        "🚫 execution_authority not set and no fencing token present — "
+                        "trading loop cannot start. Set FORCE_TRADE=true to bypass, or "
+                        "configure Redis for distributed locking."
                     )
-                    print("[NIJA] ERROR: execution_authority missing — strategy loop blocked")
-    logger.critical("LIFECYCLE: entering strategy loop")
+                    with _loop_guard:
+                        _loop_running = False
+                    return
+            else:
+                logger.critical(
+                    "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
+                    "attribute — trading loop cannot start safely."
+                )
+                with _loop_guard:
+                    _loop_running = False
+                return
+
 
     # Supervisor-mode hard gate: only block execution when supervisor mode is
     # enabled AND live trading is not active.
@@ -2889,6 +2904,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             logger.critical("💥 _trading_active failed to set — logic error, aborting")
             raise RuntimeError("_trading_active must be True before entering trading loop")
         logger.critical("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED")
+        print("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED — all barriers cleared", flush=True)
         # ── End Trading Loop Entry Anchor ──────────────────────────────────────
 
         cycle = 0
@@ -2907,6 +2923,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _tick_log_every = max(1, int(float(os.getenv("NIJA_CORE_LOOP_TICK_LOG_EVERY", "10") or 10)))
 
         logger.critical("🚀 ENTERING ACTIVE TRADE LOOP")
+        print("🚀 ENTERING ACTIVE TRADE LOOP — cycle scheduler starting", flush=True)
         try:
             from bot.bootstrap_state_machine import get_bootstrap_fsm
         except ImportError:
@@ -2926,6 +2943,35 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _ft_sched[:8],
                     )
                     _bfsm_sched._execution_authority = True
+                elif hasattr(_bfsm_sched, "_execution_authority"):
+                    # No fencing token (Redis not configured or distributed lock not acquired).
+                    # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: grant execution authority
+                    # directly so the cycle scheduler is not permanently blocked in deployments
+                    # that do not use Redis-based distributed locking.
+                    _force_bypass_sched = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _force_bypass_sched:
+                        logger.warning(
+                            "⚡ execution_authority not set and no fencing token present — "
+                            "force flag active, granting execution authority directly to unblock "
+                            "cycle scheduler (FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE)"
+                        )
+                        _bfsm_sched._execution_authority = True
+                    else:
+                        logger.critical(
+                            "🚫 execution_authority not set and no fencing token present — "
+                            "cycle scheduler cannot start. Set FORCE_TRADE=true to bypass, or "
+                            "configure Redis for distributed locking."
+                        )
+                        with _loop_guard:
+                            _loop_running = False
+                        return
                 else:
                     # Graceful fallback: same force-flag recovery as the strategy loop
                     # gate above.  A hard assert here crashes the trading thread
@@ -2949,6 +2995,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             "cycle scheduler cannot start; set FORCE_TRADE=true to override"
                         )
                         print("[NIJA] ERROR: execution_authority missing — cycle scheduler blocked")
+                    logger.critical(
+                        "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
+                        "attribute — cycle scheduler cannot start safely."
+                    )
+                    with _loop_guard:
+                        _loop_running = False
+                    return
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
@@ -2975,6 +3028,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _rate_limited_critical("core_loop_tick", "scheduler", 30.0, "🟢 LIVE LOOP TICK")
                 if cycle == 0 or ((cycle + 1) % _tick_log_every == 0):
                     logger.info("🟢 LIVE LOOP TICK | cycle=%s", cycle + 1)
+                # Always print cycle iteration to stdout so Railway logs show the loop is alive.
+                print(f"🔄 TRADING LOOP CYCLE ITERATION | cycle={cycle + 1}", flush=True)
                 if _env_truthy("NIJA_STDOUT_LOOP_TICK", "false"):
                     print("🚀 MAIN LOOP TICK")
                 logger.info("[ScannerLoop] heartbeat cycle=%s phase=pre_activation_gate", cycle + 1)
