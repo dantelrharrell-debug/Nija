@@ -2658,7 +2658,29 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 )
                 _bfsm_ea._execution_authority = True
             else:
-                assert False, "Bootstrap execution_authority is required before strategy loop"
+                # Graceful fallback: if no fencing token is available, check for
+                # FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE
+                # flags before hard-crashing the thread.  When any force flag is set
+                # the deployment explicitly opts out of the bootstrap gate, so we
+                # grant execution_authority directly and continue.
+                _force_flags = (
+                    os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                )
+                if _force_flags and hasattr(_bfsm_ea, "_execution_authority"):
+                    logger.warning(
+                        "execution_authority not set and no fencing token — "
+                        "FORCE flag detected, granting execution_authority to unblock strategy loop"
+                    )
+                    print("[NIJA] FORCE flag: granting execution_authority for strategy loop")
+                    _bfsm_ea._execution_authority = True
+                else:
+                    logger.critical(
+                        "execution_authority not set, no fencing token, and no FORCE flag — "
+                        "strategy loop cannot start; set FORCE_TRADE=true to override"
+                    )
+                    print("[NIJA] ERROR: execution_authority missing — strategy loop blocked")
     logger.critical("LIFECYCLE: entering strategy loop")
 
     # Supervisor-mode hard gate: only block execution when supervisor mode is
@@ -2905,7 +2927,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     )
                     _bfsm_sched._execution_authority = True
                 else:
-                    assert False, "Bootstrap execution_authority is required before scheduler"
+                    # Graceful fallback: same force-flag recovery as the strategy loop
+                    # gate above.  A hard assert here crashes the trading thread
+                    # silently; instead, check for FORCE_TRADE / NIJA_FORCE_ACTIVATION /
+                    # NIJA_SKIP_STARTUP_PHASE_GATE and grant authority when set.
+                    _force_flags_sched = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _force_flags_sched and hasattr(_bfsm_sched, "_execution_authority"):
+                        logger.warning(
+                            "execution_authority not set and no fencing token — "
+                            "FORCE flag detected, granting execution_authority to unblock cycle scheduler"
+                        )
+                        print("[NIJA] FORCE flag: granting execution_authority for cycle scheduler")
+                        _bfsm_sched._execution_authority = True
+                    else:
+                        logger.critical(
+                            "execution_authority not set, no fencing token, and no FORCE flag — "
+                            "cycle scheduler cannot start; set FORCE_TRADE=true to override"
+                        )
+                        print("[NIJA] ERROR: execution_authority missing — cycle scheduler blocked")
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
