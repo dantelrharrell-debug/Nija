@@ -128,6 +128,17 @@ class MarketConditionSnapshot:
     market_filter_pass_rate: float = 1.0
 
 
+@dataclass(frozen=True)
+class MarketConditionSnapshot:
+    """Recent market-health inputs used for autonomous parameter adjustment."""
+
+    data_success_rate: float = 1.0
+    candidate_rate: float = 0.0
+    avg_abs_return_pct: float = 0.0
+    zero_signal_streak: int = 0
+    api_error_rate: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # Level definitions
 # ---------------------------------------------------------------------------
@@ -318,6 +329,7 @@ class ProfitModeController:
                 "📈 Market-adaptive mode %s → %s | data=%.0f%% candidates=%.0f%% "
                 "avg_abs_return=%.3f%% avg_adx=%.1f avg_vol=%.1f%% "
                 "market_pass=%.0f%% zero_streak=%d api_err=%.0f%%",
+                "📈 Market-adaptive mode %s → %s | data=%.0f%% candidates=%.0f%% avg_abs_return=%.3f%% zero_streak=%d api_err=%.0f%%",
                 previous,
                 regime,
                 clipped.data_success_rate * 100.0,
@@ -357,6 +369,9 @@ class ProfitModeController:
             and snapshot.data_success_rate >= 0.70
             and snapshot.avg_adx >= 6.0
         ):
+        if snapshot.zero_signal_streak >= 3 and snapshot.data_success_rate >= 0.70:
+            return "quiet_no_signal"
+        if snapshot.candidate_rate >= 0.08 and snapshot.data_success_rate >= 0.70:
             return "opportunity_rich"
         return "normal"
 
@@ -368,6 +383,7 @@ class ProfitModeController:
     ) -> ProfitModeParams:
         if regime == "degraded_market_data":
             params = replace(
+            return replace(
                 base,
                 min_score_absolute=max(base.min_score_absolute, 15.5),
                 interval_fast=max(base.interval_fast, 120),
@@ -383,6 +399,8 @@ class ProfitModeController:
             return ProfitModeController._apply_continuous_market_scaling(params, snapshot)
         if regime == "high_volatility":
             params = replace(
+        if regime == "high_volatility":
+            return replace(
                 base,
                 min_score_absolute=max(base.min_score_absolute, 14.0),
                 interval_fast=min(base.interval_fast, 75),
@@ -403,6 +421,7 @@ class ProfitModeController:
             # degraded-data/high-volatility behavior above.
             floor = max(3.0, min(base.min_score_hard_floor * 0.50, 5.0))
             params = replace(
+            return replace(
                 base,
                 min_score_absolute=max(3.0, min(base.min_score_absolute * 0.50, 6.0)),
                 interval_fast=min(base.interval_fast, 45),
@@ -418,6 +437,22 @@ class ProfitModeController:
             return ProfitModeController._apply_continuous_market_scaling(params, snapshot)
         if regime == "opportunity_rich":
             params = replace(
+        if regime == "quiet_no_signal":
+            floor = max(6.0, base.min_score_hard_floor * 0.75)
+            return replace(
+                base,
+                min_score_absolute=max(6.0, base.min_score_absolute * 0.85),
+                interval_fast=min(base.interval_fast, 60),
+                interval_normal=min(base.interval_normal, 90),
+                interval_slow=min(base.interval_slow, 90),
+                forced_entry_streak_threshold=min(base.forced_entry_streak_threshold, 2),
+                hard_bypass_streak_threshold=min(base.hard_bypass_streak_threshold, 8),
+                min_score_hard_floor=floor,
+                enable_volume_fallback=True,
+                pass_percentile=min(base.pass_percentile, 0.30),
+            )
+        if regime == "opportunity_rich":
+            return replace(
                 base,
                 interval_fast=min(base.interval_fast, 60),
                 interval_normal=min(base.interval_normal, 90),
@@ -476,6 +511,7 @@ class ProfitModeController:
             )
 
         return params
+        return base
 
     # ------------------------------------------------------------------
     # PnL-aware mode switching
