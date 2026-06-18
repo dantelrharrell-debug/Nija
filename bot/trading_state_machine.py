@@ -2371,8 +2371,10 @@ class TradingStateMachine:
 
         # Final consolidated gate diagnostic — single source of truth for activation state.
         _live_verified_bool = bool(_live_activation_intent)
+        _snapshot_source = str(_snap.get("snapshot_source", ""))
         _snapshot_ready = self._first_snap_accepted or (
-            _snap.get("ca_valid_brokers", 0) > 0 and _snap.get("snapshot_source", "") == "live_exchange"
+            _snap.get("ca_valid_brokers", 0) > 0
+            and _snapshot_source in {"live_exchange", "capital_authority"}
         )
         commit_activation(
             kill=kill_state,
@@ -3206,8 +3208,8 @@ def _strategy_readiness_gate() -> tuple[bool, str]:
     Returns:
         (ok, reason) where ``ok`` is True when strategy modules are ready.
     """
-    if not _env_truthy("NIJA_REQUIRE_STRATEGY_READY", "true"):
-        return True, ""
+    if not _env_truthy("NIJA_REQUIRE_STRATEGY_READY", "false"):
+        return True, "strategy readiness advisory disabled"
     try:
         try:
             from bot.master_strategy_router import get_master_strategy_router
@@ -3280,8 +3282,15 @@ def _venue_thresholds_gate(cycle_capital: Optional[Dict[str, Any]], ca: Any) -> 
             total_capital = 0.0
 
     if total_capital < minimum_balance:
-        return False, (
-            "VENUE_THRESHOLDS=false: aggregate capital below MINIMUM_TRADING_BALANCE "
+        logger.warning(
+            "VENUE_THRESHOLDS advisory: aggregate capital below MINIMUM_TRADING_BALANCE "
+            "(total=%.2f min=%.2f). Activation continues; execution sizing and "
+            "broker-entry eligibility enforce per-order minimums.",
+            total_capital,
+            minimum_balance,
+        )
+        return True, (
+            "advisory: aggregate capital below MINIMUM_TRADING_BALANCE "
             f"(total={total_capital:.2f} min={minimum_balance:.2f})"
         )
 
@@ -3362,12 +3371,13 @@ def activation_invariant(
     """
     ca_hydrated = (ca is None) or bool(ca.is_hydrated)
     ca_not_stale = (ca is None) or (not ca.is_stale())
+    valid_brokers = int(cycle_capital.get("ca_valid_brokers", 0))
     brokers_ready = (
-        mabm is None
+        valid_brokers > 0
+        or mabm is None
         or not hasattr(mabm, "all_brokers_fully_ready")
         or bool(mabm.all_brokers_fully_ready())
     )
-    valid_brokers = int(cycle_capital.get("ca_valid_brokers", 0))
     snap_source = str(cycle_capital.get("snapshot_source", ""))
     # FIX 2: Enforce sequential pipeline — Broker balances → ActiveCapital
     # aggregation → Tier classification → ExecutionEngine gating → Strategy loop.
@@ -3378,8 +3388,9 @@ def activation_invariant(
     # Accept either a previously latched first-snapshot signal or a valid
     # current-cycle live snapshot. This avoids a startup deadlock where
     # activation can never progress because the latch has not yet been set.
+    live_snapshot_source = snap_source in {"live_exchange", "capital_authority"}
     snapshot_ready = sm._first_snap_accepted or (
-        valid_brokers > 0 and snap_source == "live_exchange"
+        valid_brokers > 0 and live_snapshot_source
     )
     return all((
         snapshot_ready,
@@ -3387,7 +3398,7 @@ def activation_invariant(
         ca_not_stale,
         brokers_ready,
         valid_brokers > 0,
-        snap_source == "live_exchange",
+        live_snapshot_source,
         aggregation_normalized,
     ))
 

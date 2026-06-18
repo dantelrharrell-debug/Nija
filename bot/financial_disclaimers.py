@@ -13,8 +13,12 @@ CRITICAL FOR APP STORE APPROVAL:
 """
 
 import logging
+import threading
 
 logger = logging.getLogger("nija.disclaimers")
+_STARTUP_DISCLOSURE_LOCK = threading.Lock()
+_STARTUP_DISCLOSURE_EMITTED = False
+_COMPLIANCE_NOTICE_EMITTED = False
 
 
 # Main risk disclaimer - shown on startup
@@ -104,13 +108,23 @@ NIJA SUPPORTS MULTIPLE TRADING MODES:
 def display_startup_disclaimers():
     """
     Display all required disclaimers on startup.
-    
-    This function should be called BEFORE any trading begins.
-    Ensures users are fully informed of risks.
+
+    Emit each disclosure line as its own log record so other startup loggers
+    cannot interleave inside a multi-line compliance block.  The disclosure is
+    process-idempotent because bootstrap retries can re-enter this function in
+    the same process.
     """
-    disclaimer_block = [RISK_DISCLAIMER.strip()]
-    logger.info("\n".join(disclaimer_block))
-    
+    global _STARTUP_DISCLOSURE_EMITTED
+    with _STARTUP_DISCLOSURE_LOCK:
+        if _STARTUP_DISCLOSURE_EMITTED:
+            logger.info("📜 FINANCIAL COMPLIANCE NOTICE already emitted; skipping duplicate startup disclosure")
+            return
+        _STARTUP_DISCLOSURE_EMITTED = True
+
+    for line in PRIMARY_DISCLOSURE_SECTIONS:
+        if line:
+            logger.info(line)
+
 
 def display_risk_warning():
     """Display short risk warning (for periodic reminders)"""
@@ -140,9 +154,13 @@ This confirms you understand and accept these risks.
 
 
 def log_compliance_notice():
-    """Log compliance information for audit trail"""
-    compliance_block = [
-        "📜 FINANCIAL COMPLIANCE NOTICE",
-        "Risk disclosure sections A/B/C were logged at startup for audit purposes.",
-    ]
-    logger.info("\n".join(compliance_block))
+    """Log compliance notice for audit trail."""
+    global _COMPLIANCE_NOTICE_EMITTED
+    with _STARTUP_DISCLOSURE_LOCK:
+        if _COMPLIANCE_NOTICE_EMITTED:
+            logger.info("📜 FINANCIAL COMPLIANCE NOTICE already logged for this process")
+            return
+        _COMPLIANCE_NOTICE_EMITTED = True
+
+    logger.info("📜 FINANCIAL COMPLIANCE NOTICE")
+    logger.info("Risk disclosure sections A/B/C were logged at startup for audit purposes.")
