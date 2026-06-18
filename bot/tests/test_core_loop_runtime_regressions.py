@@ -144,3 +144,57 @@ def test_always_trade_mode_cold_start_has_no_trade_history(monkeypatch, tmp_path
 
     assert decision.force_entry is True
     assert decision.idle_seconds >= 120.0
+
+
+def test_fetch_df_accepts_ccxt_style_ohlcv_adapter() -> None:
+    import pandas as pd
+    from bot.nija_core_loop import NijaCoreLoop
+
+    rows = [
+        [i, 100.0, 101.0, 99.0, 100.0 + (i * 0.01), 1000.0]
+        for i in range(120)
+    ]
+
+    class Broker:
+        connected = True
+
+        def fetch_ohlcv(self, symbol, timeframe="1m", limit=200):
+            assert symbol == "BTC/USD"
+            assert timeframe == "1m"
+            assert limit == 200
+            return rows
+
+    apex = SimpleNamespace(broker_client=Broker())
+    loop = NijaCoreLoop(apex, max_positions=1)
+
+    df = loop._fetch_df(apex.broker_client, "BTC/USD")
+
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 120
+    assert {"open", "high", "low", "close", "volume"}.issubset(df.columns)
+    assert float(df["close"].iloc[-1]) > 100.0
+
+
+def test_fetch_df_accepts_dict_candle_payload() -> None:
+    import pandas as pd
+    from bot.nija_core_loop import NijaCoreLoop
+
+    candles = [
+        {"open": "100", "high": "101", "low": "99", "close": str(100 + i), "volume": "500"}
+        for i in range(20)
+    ]
+
+    class Broker:
+        connected = True
+
+        def get_market_data(self, symbol, limit=200):
+            return {"candles": candles}
+
+    apex = SimpleNamespace(broker_client=Broker())
+    loop = NijaCoreLoop(apex, max_positions=1)
+
+    df = loop._fetch_df(None, "ETH-USD")
+
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 20
+    assert float(df["close"].iloc[-1]) == 119.0
