@@ -2991,7 +2991,7 @@ def _acquire_distributed_process_lock() -> None:
         )
         os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
         _allow_local_lock_fallback = False
-    if _live_mode and _require_lock and _allow_local_lock_fallback and not _unsafe_bypass:
+    if _live_mode and _require_lock and _allow_local_lock_fallback and not _unsafe_bypass and not _force_local_lock_fallback:
         print(
             "🚫 LIVE mode with distributed lock required forbids local writer-lock fallback.",
             flush=True,
@@ -3001,9 +3001,18 @@ def _acquire_distributed_process_lock() -> None:
             flush=True,
         )
         os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
-        os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
         _allow_local_lock_fallback = False
-        _force_local_lock_fallback = False
+    elif _live_mode and _require_lock and _allow_local_lock_fallback and not _unsafe_bypass and _force_local_lock_fallback:
+        print(
+            "⚠️  LIVE mode with NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true: "
+            "local writer-lock fallback is enabled as an emergency override.",
+            flush=True,
+        )
+        print(
+            "   This allows the bot to start and trade despite stale distributed locks. "
+            "Use only for confirmed single-instance deployments.",
+            flush=True,
+        )
     elif _allow_local_lock_fallback and _multi_instance_possible and _force_local_lock_fallback:
         print(
             "🚨 UNSAFE MODE: forcing local writer-lock fallback while multi-instance risk is detected.",
@@ -3374,7 +3383,7 @@ def _acquire_distributed_process_lock() -> None:
                         print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
                 if _allow_local_lock_fallback and (not _multi_instance_possible or _force_local_lock_fallback):
-                    if _live_mode and _require_lock and not _unsafe_bypass:
+                    if _live_mode and _require_lock and not _unsafe_bypass and not _force_local_lock_fallback:
                         raise RuntimeError(
                             "Redis unreachable in LIVE mode with distributed lock required; "
                             "local writer-lock fallback is blocked"
@@ -3390,13 +3399,23 @@ def _acquire_distributed_process_lock() -> None:
                         "Re-enable distributed lock after Redis recovery.",
                         flush=True,
                     )
+                    # Grant local writer authority so the bot can start and trade despite Redis being unreachable.
+                    _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                    os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                    os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"
+                    _running_in_degraded_mode = True
                     if _force_local_lock_fallback:
                         os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
+                        os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
                         print(
                             "🚨 UNSAFE EMERGENCY OVERRIDE: forcing live activation gates to fail-open "
                             "under local writer-lock fallback.",
                             flush=True,
                         )
+                    _start_authority_heartbeat_after_writer_lineage("bypass_local_writer_lock_fallback")
                     return
                 # Check if all URLs point to Railway internal networking
                 _internal_hosts = [
@@ -3482,6 +3501,29 @@ def _acquire_distributed_process_lock() -> None:
                     print(
                         "   Clear NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK to restore fail-closed distributed lock enforcement."
                     )
+                    # Grant local writer authority so the bot can start and trade despite Redis being unreachable.
+                    _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                    os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                    os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"
+                    _running_in_degraded_mode = True
+                    _start_authority_heartbeat_after_writer_lineage("bypass_unsafe_distributed_lock_redis_unreachable")
+                elif _force_local_lock_fallback:
+                    print(
+                        "   NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true: granting local writer authority."
+                    )
+                    # Grant local writer authority so the bot can start and trade despite Redis being unreachable.
+                    _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                    os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                    os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
+                    os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
+                    _running_in_degraded_mode = True
+                    _start_authority_heartbeat_after_writer_lineage("bypass_force_local_writer_lock_fallback_redis_unreachable")
                 elif _live_mode:
                     print("   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 to enforce fail-closed behaviour.")
                 else:
@@ -3789,7 +3831,7 @@ def _acquire_distributed_process_lock() -> None:
             print(f"   Redis URL source: {_redis_url_source or 'unset'}")
             
             # FIX 2: Decision tree for safe fallback
-            if _live_mode and _require_lock and not _unsafe_bypass:
+            if _live_mode and _require_lock and not _unsafe_bypass and not _force_local_lock_fallback:
                 # LIVE + LOCK_REQUIRED + NO BYPASS: Fail-closed (safest, prevents split-brain)
                 print("❌ FAILED TO ACQUIRE WRITER LOCK (entering fail-closed standby)")
                 logger.critical(
@@ -3801,14 +3843,43 @@ def _acquire_distributed_process_lock() -> None:
                     "(lock required in live mode)"
                 )
                 return
-            elif _live_mode and _require_lock and _unsafe_bypass:
-                # LIVE + LOCK_REQUIRED + UNSAFE_BYPASS: Trade locally (risky, only for single-instance)
-                print("⚠️  UNSAFE: Proceeding with UNSAFE lock bypass enabled (single-instance only)")
+            elif _unsafe_bypass:
+                # UNSAFE_BYPASS active: proceed without distributed lock (single-instance only).
+                # Note: when _unsafe_bypass=True in live mode, _require_lock was already set to
+                # False above, so we check _unsafe_bypass directly here.
+                print("⚠️  UNSAFE: Proceeding with NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK enabled (single-instance only)")
                 logger.warning(
-                    "Distributed writer lock timeout but UNSAFE bypass enabled; proceeding with local trading. "
-                    "DO NOT RUN MULTIPLE INSTANCES."
+                    "Distributed writer lock timeout but NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true; "
+                    "proceeding without distributed lock. DO NOT RUN MULTIPLE INSTANCES."
                 )
-                # Continue only with explicit unsafe bypass; degraded-mode overrides are disabled.
+                # Grant local writer authority so the bot can start and trade despite the stale lock.
+                _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"
+                _running_in_degraded_mode = True
+                _start_authority_heartbeat_after_writer_lineage("bypass_unsafe_distributed_lock")
+            elif _force_local_lock_fallback:
+                # FORCE_LOCAL_FALLBACK active: proceed without distributed lock despite timeout.
+                # This allows the bot to start and trade when a stale lock is held by a previous
+                # deployment and NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true is set on the service.
+                print("⚠️  FORCE LOCAL FALLBACK: Proceeding with NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK enabled")
+                logger.warning(
+                    "Distributed writer lock timeout but NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true; "
+                    "proceeding without distributed lock. Use only for confirmed single-instance deployments."
+                )
+                # Grant local writer authority so the bot can start and trade despite the stale lock.
+                _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
+                os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
+                _running_in_degraded_mode = True
+                _start_authority_heartbeat_after_writer_lineage("bypass_force_local_writer_lock_fallback")
             else:
                 # NON-LIVE or NOT_REQUIRED: continue without distributed lock.
                 print("⚠️  Non-live/non-required mode: continuing without distributed lock")
