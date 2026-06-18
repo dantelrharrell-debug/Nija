@@ -3524,6 +3524,7 @@ class NIJAApexStrategyV71:
                                 entry_type=_entry_type_l,
                                 gate_score_reduction=_gate_reduction_l,
                                 volume_gate_multiplier=_gate_vol_mult_l,
+                                symbol=symbol,
                             )
                             if not _gate_result_l.passed:
                                 _gate_score = _gate_result_l.gates.get("gate1_score")
@@ -4492,6 +4493,7 @@ class NIJAApexStrategyV71:
                                 entry_type=_entry_type_s,
                                 gate_score_reduction=_gate_reduction_s,
                                 volume_gate_multiplier=_gate_vol_mult_s,
+                                symbol=symbol,
                             )
                             if not _gate_result_s.passed:
                                 _gate_score_short = _gate_result_s.gates.get("gate1_score")
