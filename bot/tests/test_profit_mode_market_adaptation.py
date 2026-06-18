@@ -29,6 +29,9 @@ def test_quiet_healthy_market_lowers_floor_and_enables_volume_fallback(monkeypat
             data_success_rate=0.95,
             candidate_rate=0.0,
             avg_abs_return_pct=0.15,
+            avg_adx=4.0,
+            avg_volume_pct=5.0,
+            market_filter_pass_rate=0.95,
             zero_signal_streak=4,
         )
     )
@@ -61,6 +64,51 @@ def test_high_volatility_keeps_bot_selective(monkeypatch):
     assert params.volume_gate_multiplier >= 0.45
 
 
+def test_healthy_zero_signal_market_continuously_relaxes_with_adx_and_volume(monkeypatch):
+    controller = _controller(monkeypatch, "1")
+    controller.update_market_conditions(
+        MarketConditionSnapshot(
+            data_success_rate=0.98,
+            candidate_rate=0.0,
+            avg_abs_return_pct=0.30,
+            zero_signal_streak=2,
+            avg_adx=8.0,
+            avg_volume_pct=20.0,
+            market_filter_pass_rate=0.90,
+        )
+    )
+
+    params = controller.market_adjusted_params
+
+    assert params.enable_volume_fallback is True
+    assert params.min_score_absolute < controller.params.min_score_absolute
+    assert params.min_score_hard_floor < controller.params.min_score_hard_floor
+    assert params.hard_bypass_streak_threshold <= 8
+    assert params.volume_gate_multiplier <= 0.35
+
+
+def test_active_candidate_market_tightens_selectivity(monkeypatch):
+    controller = _controller(monkeypatch, "1")
+    controller.update_market_conditions(
+        MarketConditionSnapshot(
+            data_success_rate=0.98,
+            candidate_rate=0.20,
+            avg_abs_return_pct=0.60,
+            zero_signal_streak=0,
+            avg_adx=18.0,
+            avg_volume_pct=60.0,
+            market_filter_pass_rate=0.95,
+        )
+    )
+
+    params = controller.market_adjusted_params
+
+    assert params.min_score_absolute >= 8.0
+    assert params.min_score_hard_floor >= 6.0
+    assert params.pass_percentile >= 0.35
+    assert params.volume_gate_multiplier >= 0.35
+
+
 def test_ai_engine_uses_market_adjusted_floor_and_volume_gate(monkeypatch):
     import pandas as pd
     from types import SimpleNamespace
@@ -72,6 +120,9 @@ def test_ai_engine_uses_market_adjusted_floor_and_volume_gate(monkeypatch):
             data_success_rate=0.95,
             candidate_rate=0.0,
             avg_abs_return_pct=0.15,
+            avg_adx=4.0,
+            avg_volume_pct=5.0,
+            market_filter_pass_rate=0.95,
             zero_signal_streak=5,
         )
     )

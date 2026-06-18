@@ -70,6 +70,21 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
+try:
+    from bot.adaptive_entry_thresholds import (
+        ADX_FLOOR,
+        get_adaptive_entry_thresholds,
+    )
+except Exception:  # pragma: no cover - optional runtime dependency
+    try:
+        from adaptive_entry_thresholds import (  # type: ignore
+            ADX_FLOOR,
+            get_adaptive_entry_thresholds,
+        )
+    except Exception:  # pragma: no cover
+        ADX_FLOOR = 1.5  # type: ignore[assignment]
+        get_adaptive_entry_thresholds = None  # type: ignore[assignment]
+
 logger = logging.getLogger("nija.ai_entry_gate")
 
 # ── Rejection histogram (optional — degrades gracefully when unavailable) ────
@@ -499,13 +514,49 @@ class AIEntryGate:
             )
 
         # ── Evaluate all 5 gates, collect scores ─────────────────────
-        g1 = self._gate_score(enhanced_score, regime_key, gate_score_reduction)
+        adaptive_thresholds = None
+        if get_adaptive_entry_thresholds is not None:
+            try:
+                adaptive_thresholds = get_adaptive_entry_thresholds(
+                    df=df,
+                    indicators=indicators,
+                    regime=regime_key,
+                    zero_signal_streak=int(gate_score_reduction * 20),
+                )
+            except Exception as exc:
+                logger.debug("Adaptive entry thresholds unavailable: %s", exc)
+
+        g1 = self._gate_score(
+            enhanced_score,
+            regime_key,
+            gate_score_reduction,
+            adaptive_confidence_threshold=(
+                adaptive_thresholds.confidence if adaptive_thresholds is not None else None
+            ),
+        )
         gates["gate1_score"] = g1
 
-        g2 = self._gate_volume(df, entry_type, volume_gate_multiplier)
+        adaptive_volume = (
+            adaptive_thresholds.relative_volume
+            if adaptive_thresholds is not None
+            else None
+        )
+        if volume_gate_multiplier is not None and adaptive_volume is not None:
+            adaptive_volume = max(float(volume_gate_multiplier), float(adaptive_volume))
+        elif adaptive_volume is None:
+            adaptive_volume = volume_gate_multiplier
+        g2 = self._gate_volume(df, entry_type, adaptive_volume)
         gates["gate2_volume"] = g2
 
-        g3 = self._gate_volatility(df, indicators, regime_key, entry_type)
+        g3 = self._gate_volatility(
+            df,
+            indicators,
+            regime_key,
+            entry_type,
+            adaptive_adx_threshold=(
+                adaptive_thresholds.adx if adaptive_thresholds is not None else None
+            ),
+        )
         gates["gate3_volatility"] = g3
 
         g4 = self._gate_spread(df, broker_key)
@@ -745,11 +796,15 @@ class AIEntryGate:
         enhanced_score: float,
         regime_key: str,
         gate_score_reduction: float = 0.0,
+        adaptive_confidence_threshold: Optional[float] = None,
     ) -> GateCheck:
         """Gate 1: AI predictive score vs regime-adjusted threshold."""
         threshold = _SCORE_THRESHOLDS.get(regime_key, _DEFAULT_SCORE_THRESHOLD)
+        if adaptive_confidence_threshold is not None:
+            threshold = float(adaptive_confidence_threshold) * 100.0
         # Apply drought relaxation — lower threshold by the given fraction
         threshold = threshold * (1.0 - gate_score_reduction)
+        threshold = max(12.0, min(22.0, threshold))
         passed = enhanced_score >= threshold
         return GateCheck(
             passed=passed,
@@ -814,8 +869,9 @@ class AIEntryGate:
         indicators: Dict[str, Any],
         regime_key: str,
         entry_type: str,
+        adaptive_adx_threshold: Optional[float] = None,
     ) -> GateCheck:
-        """Gate 3: ATR% must be within [min, max] for the entry type."""
+        """Gate 3: ATR% and adaptive ADX must be acceptable for the entry type."""
         try:
             atr_series = indicators.get("atr")
             if atr_series is None:
@@ -834,14 +890,30 @@ class AIEntryGate:
         if regime_key == "volatility_explosion":
             max_atr = min(max_atr, _ATR_CRISIS_MAX)
 
+        adx = None
+        adx_threshold = adaptive_adx_threshold
+        try:
+            adx_series = indicators.get("adx")
+            if adx_series is not None:
+                adx = float(adx_series.iloc[-1]) if hasattr(adx_series, "iloc") else float(adx_series)
+                adx_threshold = adx_threshold if adx_threshold is not None else ADX_FLOOR
+        except Exception:
+            adx = None
+
         passed = min_atr <= atr_pct <= max_atr
+        if adx is not None and adx_threshold is not None:
+            passed = passed and adx >= adx_threshold
         reason = ""
         if atr_pct < min_atr:
             reason = f"ATR {atr_pct:.2f}% < {min_atr:.2f}% min (market too quiet)"
         elif atr_pct > max_atr:
             reason = f"ATR {atr_pct:.2f}% > {max_atr:.2f}% max (market too wild)"
+        elif adx is not None and adx_threshold is not None and adx < adx_threshold:
+            reason = f"ADX {adx:.2f} < adaptive {adx_threshold:.2f} minimum"
         else:
             reason = f"ATR {atr_pct:.2f}% in [{min_atr:.2f}%, {max_atr:.2f}%]"
+            if adx is not None and adx_threshold is not None:
+                reason = f"{reason}; ADX {adx:.2f} ≥ adaptive {adx_threshold:.2f}"
 
         return GateCheck(
             passed=passed,

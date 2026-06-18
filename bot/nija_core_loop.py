@@ -1679,6 +1679,12 @@ class NijaCoreLoop:
         _scoring_errors = 0
         _abs_return_sum = 0.0
         _abs_return_count = 0
+        _adx_sum = 0.0
+        _adx_count = 0
+        _volume_pct_sum = 0.0
+        _volume_pct_count = 0
+        _market_filter_checks = 0
+        _market_filter_passes = 0
 
         # Initialise the per-cycle score distribution debugger snapshot.
         _sdd = _get_sdd() if (_SDD_AVAILABLE and _get_sdd is not None) else None
@@ -1741,6 +1747,7 @@ class NijaCoreLoop:
                 # Determine trend from apex market filter
                 try:
                     allow, trend, market_reason = self.apex.check_market_filter(df, indicators)
+                    _market_filter_checks += 1
                     if not allow:
                         blocked += 1
                         if _sdd is not None:
@@ -1748,10 +1755,13 @@ class NijaCoreLoop:
                         _funnel["regime"] = ("FAIL", market_reason or "MARKET_FILTER_BLOCKED")
                         _gate_rejections["market_filter_rejected"] += 1
                         continue
+                    _market_filter_passes += 1
                     _funnel["regime"] = ("PASS", "")
                 except Exception:
                     trend = "uptrend"
                     _funnel["regime"] = ("PASS", "MARKET_FILTER_FALLBACK")
+                    _market_filter_checks += 1
+                    _market_filter_passes += 1
 
                 side = "long" if trend == "uptrend" else "short"
                 entry_type = (
@@ -1781,6 +1791,8 @@ class NijaCoreLoop:
                     _adx_series = indicators.get("adx", None)
                     if _adx_series is not None and hasattr(_adx_series, "iloc") and len(_adx_series) > 0:
                         _diag_adx = float(_adx_series.iloc[-1])
+                        _adx_sum += _diag_adx
+                        _adx_count += 1
                 except Exception:
                     pass
                 try:
@@ -1789,6 +1801,8 @@ class NijaCoreLoop:
                         _avg_vol = float(df["volume"].iloc[-21:-1].mean())
                         if _avg_vol > 0:
                             _diag_vol_pct = (_cur_vol / _avg_vol - 1.0) * 100.0
+                            _volume_pct_sum += _diag_vol_pct
+                            _volume_pct_count += 1
                 except Exception:
                     pass
 
@@ -1966,6 +1980,17 @@ class NijaCoreLoop:
                     if _abs_return_count > 0
                     else 0.0
                 )
+                _avg_adx = _adx_sum / float(_adx_count) if _adx_count > 0 else 0.0
+                _avg_volume_pct = (
+                    _volume_pct_sum / float(_volume_pct_count)
+                    if _volume_pct_count > 0
+                    else 0.0
+                )
+                _market_filter_pass_rate = (
+                    float(_market_filter_passes) / float(_market_filter_checks)
+                    if _market_filter_checks > 0
+                    else 1.0
+                )
                 _api_error_rate = float(_scoring_errors) / float(max(1, _data_attempts))
                 _get_pmc().update_market_conditions(
                     _MarketConditionSnapshot(
@@ -1974,6 +1999,21 @@ class NijaCoreLoop:
                         avg_abs_return_pct=_avg_abs_return_pct,
                         zero_signal_streak=zero_signal_streak,
                         api_error_rate=_api_error_rate,
+                        avg_adx=_avg_adx,
+                        avg_volume_pct=_avg_volume_pct,
+                        market_filter_pass_rate=_market_filter_pass_rate,
+                    )
+                )
+                _pmc_params = getattr(_get_pmc(), "market_adjusted_params", _pmc_params)
+                _pmc_level = _pmc_params.level
+                _effective_hard_floor = _pmc_params.min_score_hard_floor
+                _effective_streak_threshold = _pmc_params.forced_entry_streak_threshold
+                _effective_bypass_threshold = _pmc_params.hard_bypass_streak_threshold
+                _volume_fallback_enabled = _pmc_params.enable_volume_fallback
+                if ai is not None:
+                    _set_floor = getattr(ai, "set_score_floor", None)
+                    if callable(_set_floor):
+                        _set_floor(float(_pmc_params.min_score_absolute))
                     )
                 )
             except Exception as _market_adj_err:
