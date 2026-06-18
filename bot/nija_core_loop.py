@@ -2014,8 +2014,6 @@ class NijaCoreLoop:
                     _set_floor = getattr(ai, "set_score_floor", None)
                     if callable(_set_floor):
                         _set_floor(float(_pmc_params.min_score_absolute))
-                    )
-                )
             except Exception as _market_adj_err:
                 logger.debug("Market-adaptive parameter update failed: %s", _market_adj_err)
 
