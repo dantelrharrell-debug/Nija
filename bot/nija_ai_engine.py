@@ -338,10 +338,10 @@ class AdaptiveThresholdController:
 
     _TARGET_FLOOR:  float = 0.55   # raise threshold below this win rate
     _TARGET_CEIL:   float = 0.65   # lower threshold above this win rate
-    _WINDOW:        int   = 20     # rolling outcome window
+    _WINDOW:        int   = 150    # rolling outcome window (100–250 trade re-optimization)
     _STEP:          float = 0.5    # composite-score pts nudged per recompute
     _MAX_ADJ:       float = 5.0    # reduced from 8.0 → 5.0 (Apr 2026): max effective floor drops from 12→9 so WRSS-dampened scores still pass
-    _MIN_SAMPLES:   int   = 5      # outcomes needed before any adjustment
+    _MIN_SAMPLES:   int   = 100    # completed trades needed before performance re-optimization
 
     # Gate-domain adjustment — operates in the same units as
     # BASE_ENTRY_SCORE_THRESHOLD (0-9 scale) so ±3.0 stays meaningful.
@@ -963,3 +963,12 @@ def record_trade_outcome(won: bool) -> None:
         record_trade_outcome(pnl_usd > 0)
     """
     get_nija_ai_engine().threshold_ctrl.record_outcome(won)
+    try:
+        from bot.adaptive_entry_thresholds import record_adaptive_trade_outcome
+    except Exception:
+        try:
+            from adaptive_entry_thresholds import record_adaptive_trade_outcome  # type: ignore
+        except Exception:
+            record_adaptive_trade_outcome = None  # type: ignore[assignment]
+    if record_adaptive_trade_outcome is not None:
+        record_adaptive_trade_outcome(1.0 if won else -1.0)
