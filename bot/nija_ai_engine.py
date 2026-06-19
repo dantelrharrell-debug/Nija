@@ -972,3 +972,12 @@ def record_trade_outcome(won: bool) -> None:
             record_adaptive_trade_outcome = None  # type: ignore[assignment]
     if record_adaptive_trade_outcome is not None:
         record_adaptive_trade_outcome(1.0 if won else -1.0)
+    try:
+        from bot.competitive_profitability_policy import record_competitive_trade_outcome
+    except Exception:
+        try:
+            from competitive_profitability_policy import record_competitive_trade_outcome  # type: ignore
+        except Exception:
+            record_competitive_trade_outcome = None  # type: ignore[assignment]
+    if record_competitive_trade_outcome is not None:
+        record_competitive_trade_outcome(1.0 if won else -1.0)

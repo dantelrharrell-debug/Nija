@@ -2420,6 +2420,39 @@ class NijaCoreLoop:
         balance = max(float(snapshot.balance or 0.0), 0.0)
         if balance <= 0:
             raise ValueError("cannot build fallback entry without positive balance")
+        risk_fraction = 0.05
+        stop_loss_pct = 1.20
+        take_profit_pct = (0.60, 1.00, 1.60)
+        trailing_stop_pct = 0.75
+        try:
+            from bot.competitive_profitability_policy import get_competitive_profitability_policy
+
+            competitive_profile = get_competitive_profitability_policy().profile_entry(
+                df=df,
+                side="short" if action == "enter_short" else "long",
+            )
+            if not competitive_profile.liquidity_ok:
+                raise ValueError(
+                    "competitive profitability policy blocked illiquid fallback entry: "
+                    f"{competitive_profile.liquidity_reason}"
+                )
+            risk_fraction = competitive_profile.risk_fraction
+            stop_loss_pct = competitive_profile.stop_loss_pct
+            take_profit_pct = competitive_profile.take_profit_pct
+            trailing_stop_pct = competitive_profile.trailing_stop_pct
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        size_cap = max(min(balance * risk_fraction, balance), 0.0)
+        position_size = min(max(min_notional, size_cap), balance)
+
+        if action == "enter_short":
+            stop_loss = price * (1.0 + stop_loss_pct / 100.0)
+            take_profit = [price * (1.0 - pct / 100.0) for pct in take_profit_pct]
+        else:
+            stop_loss = price * (1.0 - stop_loss_pct / 100.0)
+            take_profit = [price * (1.0 + pct / 100.0) for pct in take_profit_pct]
         size_cap = max(min(balance * 0.05, balance), 0.0)
         position_size = min(max(min_notional, size_cap), balance)
 
@@ -2440,6 +2473,11 @@ class NijaCoreLoop:
             "position_size": position_size,
             "stop_loss": stop_loss,
             "take_profit": take_profit,
+            "trailing_stop_pct": trailing_stop_pct,
+            "reason": reason,
+            "fallback_entry": True,
+            "forced_fallback": True,
+            "competitive_profitability_policy": True,
             "reason": reason,
             "fallback_entry": True,
             "forced_fallback": True,
