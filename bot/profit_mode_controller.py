@@ -128,6 +128,17 @@ class MarketConditionSnapshot:
     market_filter_pass_rate: float = 1.0
 
 
+@dataclass(frozen=True)
+class MarketConditionSnapshot:
+    """Recent market-health inputs used for autonomous parameter adjustment."""
+
+    data_success_rate: float = 1.0
+    candidate_rate: float = 0.0
+    avg_abs_return_pct: float = 0.0
+    zero_signal_streak: int = 0
+    api_error_rate: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # Level definitions
 # ---------------------------------------------------------------------------
@@ -318,6 +329,7 @@ class ProfitModeController:
                 "📈 Market-adaptive mode %s → %s | data=%.0f%% candidates=%.0f%% "
                 "avg_abs_return=%.3f%% avg_adx=%.1f avg_vol=%.1f%% "
                 "market_pass=%.0f%% zero_streak=%d api_err=%.0f%%",
+                "📈 Market-adaptive mode %s → %s | data=%.0f%% candidates=%.0f%% avg_abs_return=%.3f%% zero_streak=%d api_err=%.0f%%",
                 previous,
                 regime,
                 clipped.data_success_rate * 100.0,
