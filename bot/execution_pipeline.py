@@ -355,6 +355,38 @@ class PipelineRequest:
         if not self.sizing_mode:
             self.sizing_mode = "notional_usd"
 
+        # Runtime order submitters historically pass exchange-style uppercase
+        # values (for example order_type="MARKET") and side aliases such as
+        # long/short.  The canonical request contract is intentionally strict
+        # and validates lowercase enums.  Normalize here so live orders are not
+        # rejected at the local contract gate before they ever reach broker
+        # dispatch.
+        self.side = self._normalise_side(self.side)
+        self.order_type = self._normalise_enum(self.order_type) or "market"
+        self.intent_type = self._normalise_enum(self.intent_type) or "entry"
+        self.sizing_mode = self._normalise_enum(self.sizing_mode) or "notional_usd"
+        self.asset_class = self._normalise_enum(self.asset_class)
+        self.quantity_mode = self._normalise_enum(self.quantity_mode) or "usd"
+        self.account_type = self._normalise_enum(self.account_type)
+        self.margin_mode = self._normalise_enum(self.margin_mode)
+        self.time_in_force = self._normalise_enum(self.time_in_force)
+
+    @staticmethod
+    def _normalise_enum(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        return text or None
+
+    @classmethod
+    def _normalise_side(cls, value: Any) -> str:
+        side = cls._normalise_enum(value) or "buy"
+        if side == "long":
+            return "buy"
+        if side == "short":
+            return "sell"
+        return side
+
 
 # Ensure normalize_pipeline_request accepts the local PipelineRequest class above,
 # since it may have been imported from pipeline_request_contract which uses isinstance

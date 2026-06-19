@@ -6,7 +6,6 @@
     "broker_type": "kraken",
     "enabled": true,
     "copy_from_platform": false,
-    "copy_from_platform": true,
     "independent_trading": true,
     "active_trading": true,
     "disabled_symbols": [
