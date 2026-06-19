@@ -411,6 +411,31 @@ def _capture_cycle_capital_state() -> _types.MappingProxyType:
         # "_capital_last_valid_brokers" only advances when refresh_capital_authority()
         # confirms viable broker balance payloads.
         _last_vb = int(getattr(_mabm_inst, "_capital_last_valid_brokers", 0) or 0) if _mabm_inst is not None else 0
+        # FIX: When _capital_last_valid_brokers is still 0 (coordinator has not
+        # yet confirmed viable broker payloads) but CapitalAuthority is already
+        # hydrated with real capital, fall back to CA's registered_broker_count.
+        # This prevents a startup deadlock where the activation invariant sees
+        # valid_brokers=0 and snapshot_source="placeholder" even though both
+        # brokers are connected and CA holds a real balance snapshot.
+        if _last_vb == 0 and result.get("ca_is_hydrated") and result.get("ca_total_capital", 0.0) > 0.0:
+            try:
+                if _CA_LOOP_AVAILABLE and _get_ca is not None:
+                    _ca_for_vb = _get_ca()
+                    _ca_broker_count = int(getattr(_ca_for_vb, "registered_broker_count", 0) or 0)
+                    if _ca_broker_count > 0:
+                        _last_vb = _ca_broker_count
+                        logger.info(
+                            "_capture_cycle_capital_state: _capital_last_valid_brokers=0 but "
+                            "CA is hydrated (real=$%.2f, brokers=%d) — using CA registered_broker_count "
+                            "as valid_brokers fallback",
+                            result["ca_total_capital"],
+                            _ca_broker_count,
+                        )
+            except Exception as _ca_vb_err:
+                logger.debug(
+                    "_capture_cycle_capital_state: CA registered_broker_count fallback failed: %s",
+                    _ca_vb_err,
+                )
         result["ca_valid_brokers"] = max(result["ca_valid_brokers"], _last_vb)
         result["snapshot_source"] = "live_exchange" if _last_vb > 0 else "placeholder"
     except Exception as _me:
@@ -531,7 +556,7 @@ def _supervisor_step_state_machine() -> None:
 
         _runtime_mode = resolve_runtime_mode_safe(logger)
         _live_verified = _is_live_mode(_runtime_mode)
-        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "50.0") or 50.0)  # $50 minimum for HF scalp mode (Apr 2026)
         _cycle_capital = _current_cycle_capital if _current_cycle_capital else {}
         _balance = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
         _sufficient_balance = _balance >= _min_balance and _balance > 0.0
@@ -552,6 +577,38 @@ def _supervisor_step_state_machine() -> None:
             _balance,
             _min_balance,
         )
+
+        # FIX: Proactively set _first_snap_accepted when the cycle capital
+        # snapshot shows a valid live-exchange source with real capital and
+        # valid brokers.  commit_activation() checks this flag as part of the
+        # activation invariant, but it is only set *inside* commit_activation()
+        # after all gates pass — creating a chicken-and-egg deadlock where the
+        # flag is never set because the gate that requires it never passes.
+        # Setting it here (before commit_activation is called) breaks the cycle.
+        _snap_source_sv = str(_cycle_capital.get("snapshot_source", "") or "")
+        _valid_brokers_sv = int(_cycle_capital.get("ca_valid_brokers", 0) or 0)
+        _ca_hydrated_sv = bool(_cycle_capital.get("ca_is_hydrated", False))
+        _ca_capital_sv = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
+        if (
+            not sm.get_first_snap_accepted()
+            and _ca_hydrated_sv
+            and _ca_capital_sv > 0.0
+            and _valid_brokers_sv > 0
+            and _snap_source_sv in {"live_exchange", "capital_authority"}
+        ):
+            try:
+                sm.set_first_snap_accepted(True)
+                logger.critical(
+                    "[SUPERVISOR] _first_snap_accepted set to True — "
+                    "CA hydrated real=$%.2f valid_brokers=%d source=%s",
+                    _ca_capital_sv,
+                    _valid_brokers_sv,
+                    _snap_source_sv,
+                )
+            except Exception as _snap_accept_err:
+                logger.warning(
+                    "[SUPERVISOR] set_first_snap_accepted failed: %s", _snap_accept_err
+                )
 
         # Missing trigger fix: the supervisor attempts activation every cycle
         # while in OFF/LIVE_PENDING_CONFIRMATION, using the same frozen
@@ -2396,6 +2453,15 @@ class NijaCoreLoop:
         else:
             stop_loss = price * (1.0 - stop_loss_pct / 100.0)
             take_profit = [price * (1.0 + pct / 100.0) for pct in take_profit_pct]
+        size_cap = max(min(balance * 0.05, balance), 0.0)
+        position_size = min(max(min_notional, size_cap), balance)
+
+        if action == "enter_short":
+            stop_loss = price * 1.012
+            take_profit = [price * 0.994, price * 0.990, price * 0.984]
+        else:
+            stop_loss = price * 0.988
+            take_profit = [price * 1.006, price * 1.010, price * 1.016]
 
         reason = existing_reason or getattr(sig, "reason", "forced_fallback_entry")
         if "fallback_entry" not in reason:
@@ -2412,6 +2478,9 @@ class NijaCoreLoop:
             "fallback_entry": True,
             "forced_fallback": True,
             "competitive_profitability_policy": True,
+            "reason": reason,
+            "fallback_entry": True,
+            "forced_fallback": True,
         }
 
     def _fetch_df(self, broker: Any, symbol: str) -> Optional[pd.DataFrame]:
@@ -2682,6 +2751,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     cycle_secs : Seconds to sleep between cycles (default 150 = 2.5 min)
     """
     logger.critical("🧵 TRADING LOOP THREAD ALIVE")
+    print("🧵 TRADING LOOP THREAD ALIVE — run_trading_loop() entered", flush=True)
     _contract_status = assert_runtime_contract_release_ready(context="run_trading_loop")
     logger.info("Runtime contract status: %s", _contract_status.as_dict())
 
@@ -2689,6 +2759,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
+    print("🔥 ENTERED RUN_TRADING_LOOP FUNCTION", flush=True)
 
     _runtime_mode = resolve_runtime_mode_safe(logger)
     _live_verified = _is_live_mode(_runtime_mode)
@@ -2745,9 +2816,44 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _ft[:8],
                 )
                 _bfsm_ea._execution_authority = True
+            elif hasattr(_bfsm_ea, "_execution_authority"):
+                # No fencing token (Redis not configured or distributed lock not acquired).
+                # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: grant execution authority
+                # directly so the trading loop is not permanently blocked in deployments
+                # that do not use Redis-based distributed locking.
+                _force_bypass_ea = (
+                    os.environ.get("FORCE_TRADE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                )
+                if _force_bypass_ea:
+                    logger.warning(
+                        "⚡ execution_authority not set and no fencing token present — "
+                        "force flag active, granting execution authority directly to unblock "
+                        "trading loop (FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE)"
+                    )
+                    _bfsm_ea._execution_authority = True
+                else:
+                    logger.critical(
+                        "🚫 execution_authority not set and no fencing token present — "
+                        "trading loop cannot start. Set FORCE_TRADE=true to bypass, or "
+                        "configure Redis for distributed locking."
+                    )
+                    with _loop_guard:
+                        _loop_running = False
+                    return
             else:
-                assert False, "Bootstrap execution_authority is required before strategy loop"
-    logger.critical("LIFECYCLE: entering strategy loop")
+                logger.critical(
+                    "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
+                    "attribute — trading loop cannot start safely."
+                )
+                with _loop_guard:
+                    _loop_running = False
+                return
+
 
     # Supervisor-mode hard gate: only block execution when supervisor mode is
     # enabled AND live trading is not active.
@@ -2955,6 +3061,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             logger.critical("💥 _trading_active failed to set — logic error, aborting")
             raise RuntimeError("_trading_active must be True before entering trading loop")
         logger.critical("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED")
+        print("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED — all barriers cleared", flush=True)
         # ── End Trading Loop Entry Anchor ──────────────────────────────────────
 
         cycle = 0
@@ -2973,6 +3080,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _tick_log_every = max(1, int(float(os.getenv("NIJA_CORE_LOOP_TICK_LOG_EVERY", "10") or 10)))
 
         logger.critical("🚀 ENTERING ACTIVE TRADE LOOP")
+        print("🚀 ENTERING ACTIVE TRADE LOOP — cycle scheduler starting", flush=True)
         try:
             from bot.bootstrap_state_machine import get_bootstrap_fsm
         except ImportError:
@@ -2992,8 +3100,65 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _ft_sched[:8],
                     )
                     _bfsm_sched._execution_authority = True
+                elif hasattr(_bfsm_sched, "_execution_authority"):
+                    # No fencing token (Redis not configured or distributed lock not acquired).
+                    # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: grant execution authority
+                    # directly so the cycle scheduler is not permanently blocked in deployments
+                    # that do not use Redis-based distributed locking.
+                    _force_bypass_sched = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _force_bypass_sched:
+                        logger.warning(
+                            "⚡ execution_authority not set and no fencing token present — "
+                            "force flag active, granting execution authority directly to unblock "
+                            "cycle scheduler (FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE)"
+                        )
+                        _bfsm_sched._execution_authority = True
+                    else:
+                        logger.critical(
+                            "🚫 execution_authority not set and no fencing token present — "
+                            "cycle scheduler cannot start. Set FORCE_TRADE=true to bypass, or "
+                            "configure Redis for distributed locking."
+                        )
+                        with _loop_guard:
+                            _loop_running = False
+                        return
                 else:
-                    assert False, "Bootstrap execution_authority is required before scheduler"
+                    # Graceful fallback: same force-flag recovery as the strategy loop
+                    # gate above.  A hard assert here crashes the trading thread
+                    # silently; instead, check for FORCE_TRADE / NIJA_FORCE_ACTIVATION /
+                    # NIJA_SKIP_STARTUP_PHASE_GATE and grant authority when set.
+                    _force_flags_sched = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _force_flags_sched and hasattr(_bfsm_sched, "_execution_authority"):
+                        logger.warning(
+                            "execution_authority not set and no fencing token — "
+                            "FORCE flag detected, granting execution_authority to unblock cycle scheduler"
+                        )
+                        print("[NIJA] FORCE flag: granting execution_authority for cycle scheduler")
+                        _bfsm_sched._execution_authority = True
+                    else:
+                        logger.critical(
+                            "execution_authority not set, no fencing token, and no FORCE flag — "
+                            "cycle scheduler cannot start; set FORCE_TRADE=true to override"
+                        )
+                        print("[NIJA] ERROR: execution_authority missing — cycle scheduler blocked")
+                    logger.critical(
+                        "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
+                        "attribute — cycle scheduler cannot start safely."
+                    )
+                    with _loop_guard:
+                        _loop_running = False
+                    return
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
@@ -3020,6 +3185,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _rate_limited_critical("core_loop_tick", "scheduler", 30.0, "🟢 LIVE LOOP TICK")
                 if cycle == 0 or ((cycle + 1) % _tick_log_every == 0):
                     logger.info("🟢 LIVE LOOP TICK | cycle=%s", cycle + 1)
+                # Always print cycle iteration to stdout so Railway logs show the loop is alive.
+                print(f"🔄 TRADING LOOP CYCLE ITERATION | cycle={cycle + 1}", flush=True)
                 if _env_truthy("NIJA_STDOUT_LOOP_TICK", "false"):
                     print("🚀 MAIN LOOP TICK")
                 logger.info("[ScannerLoop] heartbeat cycle=%s phase=pre_activation_gate", cycle + 1)
@@ -3291,7 +3458,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _first_snap = bool(_sm_loop.get_first_snap_accepted())
                         _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
                         _live_verified_now = _is_live_mode(_runtime_mode_cycle)
-                        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+                        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "50.0") or 50.0)  # $50 minimum for HF scalp mode (Apr 2026)
                         _balance_ok = float(_cycle_balance or 0.0) >= _min_balance
 
                         if (not _committed) or (not _can_dispatch):

@@ -25,9 +25,9 @@ Date: January 20, 2026
 # ============================================================================
 
 ACCOUNT_SIZE = {
-    'min_balance': 1.00,  # Minimum $1 to start (capital gate)
-    'max_balance': 100.00,  # Optimized for up to $100
-    'recommended_starting': 50.00,  # $50 sweet spot
+    'min_balance': 50.00,  # Minimum $50 to start — allows trading with ~$174 balance (Apr 2026)
+    'max_balance': 500.00,  # Optimized for up to $500
+    'recommended_starting': 100.00,  # $100 sweet spot
     'emergency_stop_balance': 15.00,  # Stop trading below $15
 }
 
@@ -85,8 +85,8 @@ POSITION_SIZING = {
     },
 
     # Never exceed these limits
-    'absolute_max_position_usd': 10.00,  # Never more than $10 per trade
-    'absolute_min_position_usd': 5.00,   # Never less than $5 (fee efficiency)
+    'absolute_max_position_usd': 50.00,  # Never more than $50 per trade (raised for $174 balance)
+    'absolute_min_position_usd': 10.00,  # Never less than $10 (fee efficiency, Apr 2026)
 }
 
 # ============================================================================
