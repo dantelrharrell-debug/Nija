@@ -184,6 +184,7 @@ try:
         assert_distributed_writer_authority,
         assert_execution_dispatch_permitted,
         runtime_authority_snapshot,
+        ExecutionBlocked,
     )
 except ImportError:
     try:
@@ -194,6 +195,7 @@ except ImportError:
             assert_distributed_writer_authority,
             assert_execution_dispatch_permitted,
             runtime_authority_snapshot,
+            ExecutionBlocked,
         )
     except ImportError:
         @contextmanager
@@ -219,6 +221,9 @@ except ImportError:
             class _Snap:
                 ready = False
             return _Snap()
+
+        class ExecutionBlocked(RuntimeError):  # type: ignore[no-redef]
+            pass
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -306,7 +311,7 @@ class PipelineRequest:
     request_id: Optional[str] = None
     intent_id: Optional[str] = None
     notional_usd: Optional[float] = None
-    sizing_mode: str = "usd"
+    sizing_mode: str = "notional_usd"
     intent_type: str = "entry"       # "entry" / "reduce" / "exit"
     subaccount_id: Optional[str] = None
     buying_power_usd: Optional[float] = None
@@ -338,6 +343,17 @@ class PipelineRequest:
     extended_hours: Optional[bool] = None
     strategy_metadata: Dict[str, Any] = field(default_factory=dict)
     validated: bool = False
+
+    def __post_init__(self) -> None:
+        # Keep the legacy local request class compatible with the canonical
+        # pipeline_request_contract validator.  Many call sites still construct
+        # PipelineRequest(size_usd=...) directly; without mirroring that value into
+        # notional_usd the contract rejects the order before authority/dispatch
+        # gates can run, which blocks all market-order submission.
+        if self.notional_usd is None and self.size_usd is not None:
+            self.notional_usd = float(self.size_usd)
+        if not self.sizing_mode:
+            self.sizing_mode = "notional_usd"
 
 
 # Ensure normalize_pipeline_request accepts the local PipelineRequest class above,
@@ -1212,6 +1228,27 @@ class ExecutionPipeline:
                     error=f"ExecutionAuthority reject: SEAK check failed ({exc})",
                     latency_ms=(time.monotonic() - t_start) * 1000,
                 )
+
+        try:
+            authority_snapshot = runtime_authority_snapshot()
+            if not bool(getattr(authority_snapshot, "ready", False)):
+                return PipelineResult(
+                    success=False,
+                    symbol=effective_request.symbol,
+                    side=effective_request.side,
+                    size_usd=effective_request.size_usd,
+                    error="Runtime authority convergence lost",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
+        except Exception as exc:
+            return PipelineResult(
+                success=False,
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                size_usd=effective_request.size_usd,
+                error=f"Runtime authority convergence lost: {exc}",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
 
         try:
             with execution_authority_scope():
