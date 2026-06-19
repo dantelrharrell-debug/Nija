@@ -892,9 +892,10 @@ except ImportError:
 #   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
 #   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '1'))  # Capital gate: $1.00 minimum (unlocked for all account sizes)
+# Lowered to $50 to allow trading with ~$174 balance in HF scalp mode (Apr 2026).
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '50'))  # Capital gate: $50 minimum for HF scalp mode
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
-MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', os.getenv('MIN_TRADE_USD', '1.00')))  # Minimum cash required to place a buy order
+MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', os.getenv('MIN_TRADE_USD', '10.00')))  # Minimum cash required to place a buy order — $10 for HF scalp mode
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Broker-specific minimum balance requirements
@@ -910,8 +911,9 @@ COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', STANDARD_
 
 # ── Exchange-scoped capital rules (Steps 2, 5, 6) ──────────────────────────
 # Coinbase uses its own floors, independent of Kraken conservatism.
-COINBASE_MIN_CAPITAL: float = float(os.getenv('COINBASE_MIN_CAPITAL', '1.0'))
-COINBASE_MIN_ORDER: float = float(os.getenv('COINBASE_MIN_ORDER_USD', os.getenv('COINBASE_MIN_ORDER', '1.0')))
+# Lowered to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
+COINBASE_MIN_CAPITAL: float = float(os.getenv('COINBASE_MIN_CAPITAL', '10.0'))
+COINBASE_MIN_ORDER: float = float(os.getenv('COINBASE_MIN_ORDER_USD', os.getenv('COINBASE_MIN_ORDER', '10.0')))
 COINBASE_MICRO_CAP_MODE: bool = os.getenv('COINBASE_MICRO_CAP_MODE', 'true').strip().lower() in ('1', 'true', 'yes')
 COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR: bool = os.getenv('COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR', 'false').strip().lower() in ('1', 'true', 'yes')
 KRAKEN_EXECUTION_DISABLED: bool = os.getenv('KRAKEN_EXECUTION_DISABLED', 'false').strip().lower() in ('1', 'true', 'yes')
@@ -921,6 +923,12 @@ NIJA_FORCE_KRAKEN_ONLY_TEST: bool = os.getenv('NIJA_FORCE_KRAKEN_ONLY_TEST', '0'
 # Optional companion flag for tiny-balance validation runs: bypass Kraken BUY capital gates.
 # Default OFF so production capital protections remain intact.
 NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES: bool = os.getenv('NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+
+# ── Small account / small order flags (Apr 2026) ────────────────────────────
+# Allow trading with small account balances (~$174) and small order sizes (~$10).
+# Both default to True to enable HF scalp mode with limited capital.
+ALLOW_SMALL_ORDERS: bool = os.getenv('ALLOW_SMALL_ORDERS', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+ALLOW_SMALL_ACCOUNT_TRADING: bool = os.getenv('ALLOW_SMALL_ACCOUNT_TRADING', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
 
 # When micro-cap mode is active, Coinbase minimum balance matches COINBASE_MIN_CAPITAL ($1)
 if COINBASE_MICRO_CAP_MODE:
@@ -4743,11 +4751,12 @@ class CoinbaseBroker(BaseBroker):
                             os.getenv('MIN_TRADE_USD')
                             or os.getenv('MIN_NOTIONAL_OVERRIDE')
                             or os.getenv('MIN_NOTIONAL_USD')
-                            or '5.0'
+                            or '10.0'
                         ),
                     )
                 except (TypeError, ValueError):
-                    min_trade_floor = 5.0
+                    min_trade_floor = 10.0
+
                 try:
                     allocation_pct = float(os.getenv('MAX_TRADE_PERCENT', '0.10')) * 100.0
                 except (TypeError, ValueError):
@@ -10942,15 +10951,12 @@ class KrakenBroker(BaseBroker):
                                 os.getenv('MIN_TRADE_USD')
                                 or os.getenv('MIN_NOTIONAL_OVERRIDE')
                                 or os.getenv('MIN_NOTIONAL_USD')
-                                or '5.0'
+                                or '10.0'
                             ),
                         )
                     except (TypeError, ValueError):
-                        min_trade_floor = 5.0
-                    try:
-                        allocation_pct = float(os.getenv('MAX_TRADE_PERCENT', '0.10')) * 100.0
-                    except (TypeError, ValueError):
-                        allocation_pct = 10.0
+                        min_trade_floor = 10.0
+
 
                     logging.info(f"💰 Pre-flight balance check for {symbol}:")
                     logging.info(f"   Available: ${trading_balance:.2f}")
