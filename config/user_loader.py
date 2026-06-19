@@ -28,7 +28,7 @@ class UserConfig:
     Represents a single user or investor configuration.
     """
 
-    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = "", copy_from_platform: bool = True, disabled_symbols: Optional[List[str]] = None, independent_trading: bool = False, active_trading: bool = True):
+    def __init__(self, user_id: str, name: str, account_type: str, broker_type: str, enabled: bool = True, description: str = "", copy_from_platform: bool = False, disabled_symbols: Optional[List[str]] = None, independent_trading: bool = True, active_trading: bool = True):
         """
         Initialize user/investor configuration.
 
@@ -39,9 +39,9 @@ class UserConfig:
             broker_type: Brokerage type (e.g., 'kraken', 'alpaca', 'coinbase')
             enabled: Whether this account is active
             description: Optional description
-            copy_from_platform: Whether to copy trades from master (default: True)
+            copy_from_platform: Whether to copy trades from platform (default: False)
             disabled_symbols: List of symbols to disable for this user (default: None)
-            independent_trading: Whether user should run independent trading thread (default: False)
+            independent_trading: Whether user should run independent trading thread (default: True)
             active_trading: Allow new trade entries for this user (default: True). Set False during
                             recovery to stop new entries while existing positions are closed out.
         """
@@ -70,9 +70,9 @@ class UserConfig:
             broker_type=data['broker_type'],
             enabled=data.get('enabled', True),
             description=data.get('description', ''),
-            copy_from_platform=data.get('copy_from_platform', data.get('copy_from_master', True)),
+            copy_from_platform=data.get('copy_from_platform', data.get('copy_from_master', False)),
             disabled_symbols=data.get('disabled_symbols', []),
-            independent_trading=data.get('independent_trading', False),
+            independent_trading=data.get('independent_trading', True),
             active_trading=data.get('active_trading', True)
         )
 

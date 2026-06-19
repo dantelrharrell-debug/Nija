@@ -172,25 +172,32 @@ def get_institutional_logger(name: str) -> InstitutionalLogger:
     return InstitutionalLogger(name)
 
 
+def _emit_multiline_block(block: str) -> None:
+    """Emit a banner one line at a time to avoid interleaved multi-line logs."""
+    for line in block.strip("\n").splitlines():
+        _COMPLIANCE_LOGGER.info(line)
+
+
 def print_validation_banner():
-    """Log the validation banner"""
+    """Log the validation banner."""
     if _should_emit_disclosure():
-        _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
+        _emit_multiline_block(VALIDATION_DISCLAIMER)
 
 
 def print_all_disclaimers():
-    """Log all disclaimers"""
+    """Log all disclaimers."""
     if _should_emit_disclosure():
-        _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
-        _COMPLIANCE_LOGGER.info(PERFORMANCE_DISCLAIMER)
-        _COMPLIANCE_LOGGER.info(RISK_DISCLAIMER)
+        _emit_multiline_block(VALIDATION_DISCLAIMER)
+        _emit_multiline_block(PERFORMANCE_DISCLAIMER)
+        _emit_multiline_block(RISK_DISCLAIMER)
 
 
-# Auto-display banner when module is imported in main execution
-if __name__ != "__main__":
-    # Only show in non-test context
+# Import-time banner emission caused startup log interleaving when modules were
+# imported while another multi-line disclosure was being written.  Keep explicit
+# print_validation_banner()/print_all_disclaimers() calls as the only default
+# emission path; operators can opt back into legacy import-time behavior.
+if __name__ != "__main__" and os.getenv("NIJA_AUTO_DISPLAY_INSTITUTIONAL_BANNER", "false").lower() in {"1", "true", "yes", "on", "enabled"}:
     import sys
     if not any('test' in arg.lower() for arg in sys.argv):
-        # Display banner once at module import for institutional compliance
         if _should_emit_disclosure():
-            _COMPLIANCE_LOGGER.info(VALIDATION_DISCLAIMER)
+            _emit_multiline_block(VALIDATION_DISCLAIMER)

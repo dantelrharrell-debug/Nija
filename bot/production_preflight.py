@@ -108,6 +108,14 @@ def _resolve_writer_lock_key() -> str:
     return os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{_resolve_writer_lock_scope()}"
 
 
+def _resolve_writer_lock_meta_key() -> str:
+    return os.getenv("NIJA_WRITER_LOCK_META_KEY", "").strip() or f"nija:writer_lock_meta:{_resolve_writer_lock_scope()}"
+
+
+def _resolve_writer_fence_key() -> str:
+    return os.getenv("NIJA_WRITER_FENCING_KEY", "").strip() or f"nija:writer_fence:{_resolve_writer_lock_scope()}"
+
+
 def _parse_lock_token(raw_value: str) -> int:
     if not raw_value:
         return 0
@@ -570,6 +578,8 @@ def _step5_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: igno
     # distributed writer lease and nonce authority gates.
     protected_exact = {
         os.getenv("NIJA_LEASE_GENERATION_KEY", "nija:lease:generation").strip() or "nija:lease:generation",
+        _resolve_writer_lock_meta_key(),
+        _resolve_writer_fence_key(),
     }
     protected_prefixes = (
         "nija:kraken:nonce:",
@@ -614,6 +624,9 @@ def _step5_clear_stale_locks(redis_client: "redis.Redis") -> None:  # type: igno
                     log.warning("Could not inspect key '%s' after 3 attempts: %s", key, exc)
 
     # Additionally scan lock/fence namespaces for no-TTL leftovers only.
+    # The active lock's companion meta/fence keys are protected above even
+    # though they may intentionally have no TTL.  Deleting them while the lock
+    # is active removes writer lineage and can demote the process to observer.
     stale_patterns = ("nija:writer_lock*", "nija:writer_fence*")
     scanned = 0
     try:
