@@ -488,14 +488,39 @@ def assert_distributed_writer_authority() -> None:
 
     SAFETY CONTRACT
     ---------------
-    This function ALWAYS enforces strict distributed fencing.  There are no
-    degraded-mode bypasses, no single-instance opt-outs, and no fail-open
-    paths.  If Redis is unreachable or the fencing token is missing or
-    mismatched, a RuntimeError is raised unconditionally.
+    This function enforces strict distributed fencing by default.  Three
+    operator-controlled bypass flags can override this behaviour when stale
+    locks from a previous Railway deployment are blocking startup:
+
+    - ``NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true``  — skip the check entirely
+      and proceed as the writer.  Use only when you are certain no other live
+      instance is running.
+    - ``NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true`` — fall back to local
+      writer authority when the distributed lock cannot be verified (missing
+      token, Redis unreachable, or fencing mismatch).
+    - ``NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true`` — attempt to delete the
+      stale Redis lock key before falling back, allowing this instance to
+      re-acquire it on the next heartbeat cycle.
+
+    All bypass paths emit a WARNING-level log so the operator is aware that
+    strict single-writer enforcement is not active.
     """
     global _FENCE_LAST_CHECK_TS, _FENCE_LAST_OK, _FENCE_LAST_ERR
 
     import hashlib
+
+    # ── Operator bypass: skip the entire distributed check ────────────────────
+    if _env_truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"):
+        logger.warning(
+            "STARTUP_OBSERVER_STANDBY: NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true — "
+            "skipping distributed writer authority check. "
+            "Proceeding as local writer. Ensure no other live instance is running."
+        )
+        with _FENCE_VERIFY_LOCK:
+            _FENCE_LAST_CHECK_TS = time.monotonic()
+            _FENCE_LAST_OK = True
+            _FENCE_LAST_ERR = ""
+        return
 
     redis_url = get_redis_url()
     scope = os.getenv("NIJA_WRITER_LOCK_SCOPE", "").strip()
@@ -509,13 +534,28 @@ def assert_distributed_writer_authority() -> None:
 
     lock_key = os.getenv("NIJA_WRITER_LOCK_KEY", "").strip() or f"nija:writer_lock:{scope}"
 
-    # Fencing token is mandatory — no recovery fallback permitted.
+    # Fencing token is mandatory unless the local-fallback bypass is active.
     token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
     if not token:
+        if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
+            logger.warning(
+                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+                "NIJA_WRITER_FENCING_TOKEN is not set but "
+                "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+                "using local writer fallback. Trading will proceed without "
+                "distributed lock verification."
+            )
+            with _FENCE_VERIFY_LOCK:
+                _FENCE_LAST_CHECK_TS = time.monotonic()
+                _FENCE_LAST_OK = True
+                _FENCE_LAST_ERR = ""
+            return
         _err = (
-            "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
+            "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+            "NIJA_WRITER_FENCING_TOKEN is not set. "
             "Distributed writer authority requires a valid fencing token. "
-            "Ensure the bot acquired a Redis writer lease at startup."
+            "Ensure the bot acquired a Redis writer lease at startup. "
+            "Set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to use local fallback."
         )
         with _FENCE_VERIFY_LOCK:
             _FENCE_LAST_CHECK_TS = time.monotonic()
@@ -523,12 +563,27 @@ def assert_distributed_writer_authority() -> None:
             _FENCE_LAST_ERR = _err
         raise RuntimeError(_err)
 
-    # Redis URL is mandatory — no local fallback permitted.
+    # Redis URL is mandatory unless the local-fallback bypass is active.
     if not redis_url:
+        if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
+            logger.warning(
+                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+                "Redis URL is not configured but "
+                "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+                "using local writer fallback. Trading will proceed without "
+                "distributed lock verification."
+            )
+            with _FENCE_VERIFY_LOCK:
+                _FENCE_LAST_CHECK_TS = time.monotonic()
+                _FENCE_LAST_OK = True
+                _FENCE_LAST_ERR = ""
+            return
         _err = (
-            "LIVE TRADING BLOCKED: Redis URL is not configured. "
+            "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+            "Redis URL is not configured. "
             "Distributed writer authority requires Redis connectivity. "
-            "Set NIJA_REDIS_URL to a valid rediss:// endpoint."
+            "Set NIJA_REDIS_URL to a valid rediss:// endpoint or set "
+            "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to use local fallback."
         )
         with _FENCE_VERIFY_LOCK:
             _FENCE_LAST_CHECK_TS = time.monotonic()
@@ -549,7 +604,20 @@ def assert_distributed_writer_authority() -> None:
         if verify_ttl_s > 0 and (now - _FENCE_LAST_CHECK_TS) <= verify_ttl_s:
             if _FENCE_LAST_OK:
                 return
-            raise RuntimeError(_FENCE_LAST_ERR or "distributed writer fence verification cached failure")
+            cached_err = _FENCE_LAST_ERR or "distributed writer fence verification cached failure"
+            # Honour bypass flags even for cached failures so a flag change
+            # takes effect without waiting for the TTL to expire.
+            if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
+                logger.warning(
+                    "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+                    "cached authority failure but NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+                    "using local writer fallback (cached_err=%s)",
+                    cached_err,
+                )
+                _FENCE_LAST_OK = True
+                _FENCE_LAST_ERR = ""
+                return
+            raise RuntimeError(cached_err)
 
     try:
         client = _connect_redis_for_authority(redis_url, timeout_s=2)
@@ -609,9 +677,63 @@ def assert_distributed_writer_authority() -> None:
         err = ""
         if not ok:
             err = (
-                "distributed writer fencing mismatch: "
-                f"expected_token={token} current_token={current_token or '<missing>'}"
+                "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+                "another instance owns writer authority — "
+                f"expected_token={token} current_token={current_token or '<missing>'} "
+                f"lock_key={lock_key}"
             )
+
+            # ── Auto-clear stale lock ─────────────────────────────────────────
+            # When NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true, attempt to delete
+            # the stale lock so this instance can re-acquire it on the next
+            # heartbeat cycle.  Only safe when the operator is certain the
+            # previous holder is no longer running (e.g. after a Railway redeploy).
+            if _env_truthy("NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK"):
+                try:
+                    deleted = client.delete(lock_key)
+                    if deleted:
+                        logger.warning(
+                            "STARTUP_OBSERVER_STANDBY: NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true — "
+                            "deleted stale writer lock (lock_key=%s previous_token=%s). "
+                            "This instance will re-acquire the lock on the next heartbeat cycle.",
+                            lock_key,
+                            current_token or "<missing>",
+                        )
+                        # Treat as ok so this cycle can proceed; the heartbeat
+                        # will write a fresh lock entry with the current token.
+                        ok = True
+                        err = ""
+                    else:
+                        logger.warning(
+                            "STARTUP_OBSERVER_STANDBY: NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true — "
+                            "lock key already absent (lock_key=%s); proceeding.",
+                            lock_key,
+                        )
+                        ok = True
+                        err = ""
+                except Exception as _del_exc:
+                    logger.warning(
+                        "STARTUP_OBSERVER_STANDBY: NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK=true — "
+                        "failed to delete stale lock (lock_key=%s): %s",
+                        lock_key,
+                        _del_exc,
+                    )
+
+            # ── Local-fallback bypass ─────────────────────────────────────────
+            if not ok and _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
+                logger.warning(
+                    "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+                    "another instance owns writer authority but "
+                    "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+                    "using local writer fallback. "
+                    "Trading will proceed without distributed lock verification. "
+                    "(lock_key=%s expected_token=%s current_token=%s)",
+                    lock_key,
+                    token,
+                    current_token or "<missing>",
+                )
+                ok = True
+                err = ""
 
         with _FENCE_VERIFY_LOCK:
             _FENCE_LAST_CHECK_TS = time.monotonic()
@@ -624,7 +746,20 @@ def assert_distributed_writer_authority() -> None:
     except RuntimeError:
         raise
     except Exception as exc:
-        _err = f"LIVE TRADING BLOCKED: Redis execution authority unavailable — {exc}"
+        _err = (
+            "STARTUP_OBSERVER_STANDBY: STRICT_SINGLE_WRITER_REQUIRED: "
+            f"Redis execution authority unavailable — {exc}"
+        )
+        if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
+            logger.warning(
+                "%s — NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true, using local writer fallback.",
+                _err,
+            )
+            with _FENCE_VERIFY_LOCK:
+                _FENCE_LAST_CHECK_TS = time.monotonic()
+                _FENCE_LAST_OK = True
+                _FENCE_LAST_ERR = ""
+            return
         with _FENCE_VERIFY_LOCK:
             _FENCE_LAST_CHECK_TS = time.monotonic()
             _FENCE_LAST_OK = False
