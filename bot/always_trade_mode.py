@@ -55,7 +55,7 @@ import logging
 import os
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -94,7 +94,10 @@ class AlwaysTradeDecision:
 @dataclass
 class _State:
     """Persisted state written to NIJA_ATM_STATE_FILE."""
-    last_trade_ts: float = field(default_factory=time.time)
+    # 0.0 means no confirmed trade has ever been recorded.  Treat that as an
+    # already-idle account so cold starts do not wait another full timeout
+    # before the first controlled micro-entry fallback can engage.
+    last_trade_ts: float = 0.0
     forced_streak: int = 0
     last_forced_ts: float = 0.0
     total_forced_entries: int = 0
@@ -231,7 +234,7 @@ class AlwaysTradeMode:
             if last_trade_ts and last_trade_ts > 0:
                 ref_ts = max(ref_ts, last_trade_ts)
 
-            idle_s = now - ref_ts
+            idle_s = (now - ref_ts) if ref_ts and ref_ts > 0 else (ATM_IDLE_TIMEOUT_S + 1.0)
             streak = self._state.forced_streak
 
             # Guard: entries are already blocked externally
