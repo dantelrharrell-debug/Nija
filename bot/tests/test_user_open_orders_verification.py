@@ -46,6 +46,9 @@ class MockBrokerWithOrders(BaseBroker):
         """Return filled positions"""
         return self.positions
 
+    def get_available_markets(self):
+        return ["BTC-USD", "ETH-USD"]
+
     def get_open_orders(self):
         """Return open (unfilled) orders"""
         return self.open_orders

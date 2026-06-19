@@ -777,23 +777,25 @@ class StartupCoordinator:
         if _inputs == self._runtime._last_reconcile_inputs:
             return self._runtime.runtime_authority_state, self._runtime.runtime_authority_reason
         self._runtime._last_reconcile_inputs = _inputs
-        # ── NIJA_FORCE_ACTIVATION bypass ──────────────────────────────────────
-        # When the trading-state machine has force-activated (via
-        # NIJA_FORCE_ACTIVATION=1) it bypasses all distributed-authority gates.
-        # Honour that bypass here so that subsequent reconcile calls see
-        # EXECUTING (and thus lifecycle_phase=LIVE) rather than falling back to
-        # BOOT/WARM due to absent Redis/heartbeat prerequisites.
+        # ── Committed LIVE dispatch preservation ───────────────────────────────
+        # Once TradingStateMachine has reached LIVE_ACTIVE and the coordinator has
+        # a positive dispatch commit version, lifecycle_phase must remain LIVE.
+        # Per-order execution_authority_context.can_execute() still validates the
+        # writer lease, lease generation, nonce, heartbeat, broker health, and
+        # circuit breaker on every dispatch; downgrading the coarse lifecycle phase
+        # here creates a deadlock where valid signals can never reach those gates.
         # Kill-switch and emergency-stop always take precedence.
         if (
-            force_activation
-            and trading_state == "LIVE_ACTIVE"
+            trading_state == "LIVE_ACTIVE"
             and self._runtime.last_committed_snapshot_version > 0
             and not kill_switch_active
         ):
-            logger.critical("[RECONCILE] FORCE EXECUTING BYPASS ACTIVE")
+            reason = "force_activation_bypass" if force_activation else "committed_live_dispatch"
+            if force_activation:
+                logger.critical("[RECONCILE] FORCE EXECUTING BYPASS ACTIVE")
             self._runtime.runtime_authority_state = RuntimeAuthorityState.EXECUTING
-            self._runtime.runtime_authority_reason = "force_activation_bypass"
-            return RuntimeAuthorityState.EXECUTING, "force_activation_bypass"
+            self._runtime.runtime_authority_reason = reason
+            return RuntimeAuthorityState.EXECUTING, reason
         # ── Full reconcile ────────────────────────────────────────────────────
         pending_readiness = sorted(
             key for key, value in self._runtime.readiness_table.items() if not value
