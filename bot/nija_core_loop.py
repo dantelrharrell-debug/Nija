@@ -2332,7 +2332,24 @@ class NijaCoreLoop:
                         original, analysis["position_size"],
                     )
 
+                logger.info(
+                    "🚀 [CoreLoop] SUBMITTING ORDER | symbol=%s side=%s action=%s "
+                    "position_size=$%.2f entry_price=%.6f score=%.1f mult=×%.2f",
+                    sig.symbol,
+                    sig.side,
+                    action,
+                    float(analysis.get("position_size", 0.0) or 0.0),
+                    float(analysis.get("entry_price", 0.0) or 0.0),
+                    sig.composite_score,
+                    sig.position_multiplier,
+                )
                 success = self.apex.execute_action(analysis, sig.symbol)
+                logger.info(
+                    "📬 [CoreLoop] ORDER RESULT | symbol=%s side=%s success=%s",
+                    sig.symbol,
+                    sig.side,
+                    success,
+                )
                 if success:
                     entries += 1
                     logger.info(

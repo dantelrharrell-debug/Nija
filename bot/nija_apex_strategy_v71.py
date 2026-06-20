@@ -5336,6 +5336,14 @@ class NIJAApexStrategyV71:
         """
         action = action_data.get('action')
 
+        logger.info(
+            "🎯 [execute_action] CALLED | symbol=%s action=%s position_size=$%.2f entry_price=%.6f",
+            symbol,
+            action,
+            float(action_data.get('position_size', 0.0) or 0.0),
+            float(action_data.get('entry_price', 0.0) or 0.0),
+        )
+
         try:
             # EMERGENCY: Check if entries are blocked via STOP_ALL_ENTRIES.conf
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
@@ -5370,6 +5378,13 @@ class NIJAApexStrategyV71:
                 return levels
 
             if action == 'enter_long':
+                logger.info(
+                    "📤 [execute_action] Calling execute_entry | symbol=%s side=long "
+                    "position_size=$%.2f entry_price=%.6f",
+                    symbol,
+                    float(action_data.get('position_size', 0.0) or 0.0),
+                    float(action_data.get('entry_price', 0.0) or 0.0),
+                )
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
                     side='long',
@@ -5377,6 +5392,11 @@ class NIJAApexStrategyV71:
                     entry_price=action_data['entry_price'],
                     stop_loss=action_data['stop_loss'],
                     take_profit_levels=_take_profit_levels()
+                )
+                logger.info(
+                    "📥 [execute_action] execute_entry returned | symbol=%s side=long position=%s",
+                    symbol,
+                    "FILLED" if position else "NONE/BLOCKED",
                 )
                 if position:
                     logger.info(f"Long entry executed: {symbol} @ {action_data['entry_price']:.2f}")
@@ -5417,6 +5437,13 @@ class NIJAApexStrategyV71:
                     logger.warning(f"⚠️  Exchange capability check unavailable - allowing SHORT (risky!)")
 
                 # Execute SHORT entry
+                logger.info(
+                    "📤 [execute_action] Calling execute_entry | symbol=%s side=short "
+                    "position_size=$%.2f entry_price=%.6f",
+                    symbol,
+                    float(action_data.get('position_size', 0.0) or 0.0),
+                    float(action_data.get('entry_price', 0.0) or 0.0),
+                )
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
                     side='short',
@@ -5424,6 +5451,11 @@ class NIJAApexStrategyV71:
                     entry_price=action_data['entry_price'],
                     stop_loss=action_data['stop_loss'],
                     take_profit_levels=_take_profit_levels()
+                )
+                logger.info(
+                    "📥 [execute_action] execute_entry returned | symbol=%s side=short position=%s",
+                    symbol,
+                    "FILLED" if position else "NONE/BLOCKED",
                 )
                 if position:
                     logger.info(f"✅ Short entry executed: {symbol} @ {action_data['entry_price']:.2f} (broker: {broker_name})")
