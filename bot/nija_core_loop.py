@@ -89,6 +89,62 @@ except ImportError:
 _CORE_LOOP_LOG_LIMITER = get_log_rate_limiter()
 
 
+def _extract_cached_balance_for_log(broker: Any) -> float:
+    """Return a broker balance for diagnostics without making exchange API calls."""
+    for attr in ("_last_known_balance", "last_known_balance", "cached_balance", "last_balance"):
+        if hasattr(broker, attr):
+            value = getattr(broker, attr, None)
+            try:
+                return float(value or 0.0)
+            except (TypeError, ValueError):
+                pass
+
+    cache = getattr(broker, "balance_cache", None)
+    if isinstance(cache, Mapping):
+        for key in ("total_balance", "balance", "usd_balance", "equity", "total_usd", "available_usd"):
+            if key in cache:
+                try:
+                    return float(cache.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+        for value in cache.values():
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, Mapping):
+                for key in ("total_balance", "balance", "usd_balance", "equity", "total_usd", "available_usd"):
+                    if key in value:
+                        try:
+                            return float(value.get(key) or 0.0)
+                        except (TypeError, ValueError):
+                            return 0.0
+    return 0.0
+
+
+def _cached_broker_balances_for_log(broker_manager: Any) -> Dict[str, Dict[str, Any]]:
+    """Build a non-blocking broker-balance diagnostic snapshot.
+
+    The live trading loop must never call exchange APIs merely to print a
+    diagnostic line.  Coinbase 500s (or any other venue outage) should not sit in
+    front of the scanner/execution path, so this helper only inspects in-memory
+    broker attributes populated by bootstrap/capital hydration.
+    """
+    balances: Dict[str, Dict[str, Any]] = {}
+    brokers = getattr(broker_manager, "brokers", {}) or {}
+    if not isinstance(brokers, Mapping):
+        return balances
+    for broker_type, broker in brokers.items():
+        name = str(getattr(broker_type, "value", broker_type)).strip().lower()
+        if broker is None:
+            balances[name] = {"balance": 0.0, "connected": False, "source": "missing"}
+            continue
+        balances[name] = {
+            "balance": _extract_cached_balance_for_log(broker),
+            "connected": bool(getattr(broker, "connected", False)),
+            "source": "cached",
+        }
+    return balances
+
+
 def _rate_limited_critical(category: str, key: str, window_seconds: float, message: str, *args: Any) -> None:
     allowed, suppressed = _CORE_LOOP_LOG_LIMITER.allow_with_count(
         category=category,
@@ -695,13 +751,20 @@ except ImportError:
 _PMC_AVAILABLE = False
 _get_pmc = None  # type: ignore
 try:
-    from profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+    from profit_mode_controller import (  # type: ignore
+        MarketConditionSnapshot as _MarketConditionSnapshot,
+        get_profit_mode_controller as _get_pmc,
+    )
     _PMC_AVAILABLE = True
 except ImportError:
     try:
-        from bot.profit_mode_controller import get_profit_mode_controller as _get_pmc  # type: ignore
+        from bot.profit_mode_controller import (  # type: ignore
+            MarketConditionSnapshot as _MarketConditionSnapshot,
+            get_profit_mode_controller as _get_pmc,
+        )
         _PMC_AVAILABLE = True
     except ImportError:
+        _MarketConditionSnapshot = None  # type: ignore[assignment]
         pass
 
 # ---------------------------------------------------------------------------
@@ -1134,6 +1197,37 @@ class NijaCoreLoop:
         # Update available slots after exits
         effective_open = max(0, snapshot.open_positions - exits)
 
+        # ── Always Trade Mode bridge ──────────────────────────────────────
+        # The ATM module existed but was not wired into the live core loop, so
+        # an account with no confirmed entries could keep printing healthy loop
+        # ticks while never arming the one-cycle force path.  Evaluate it after
+        # safety/exit processing and before candidate generation.
+        try:
+            from bot.always_trade_mode import get_always_trade_mode
+        except ImportError:
+            try:
+                from always_trade_mode import get_always_trade_mode  # type: ignore
+            except ImportError:
+                get_always_trade_mode = None  # type: ignore
+        if get_always_trade_mode is not None:
+            try:
+                _atm_decision = get_always_trade_mode().run_pre_cycle_check(
+                    user_mode=user_mode,
+                    open_positions=effective_open,
+                    balance=snapshot.balance,
+                    last_trade_ts=getattr(self.apex, "last_trade_ts", None),
+                )
+                if getattr(_atm_decision, "force_entry", False):
+                    global FORCE_NEXT_CYCLE
+                    with _FORCE_LOCK:
+                        FORCE_NEXT_CYCLE = True
+                    logger.warning(
+                        "⚡ ALWAYS TRADE MODE armed core-loop force entry — %s",
+                        getattr(_atm_decision, "reason", "idle fallback"),
+                    )
+            except Exception as _atm_err:
+                logger.debug("Always Trade Mode pre-cycle check skipped: %s", _atm_err)
+
         # ── Phase 3: Scan & ranked entry ──────────────────────────────────
         if not user_mode:
             available_slots = max(0, self.max_positions - effective_open)
@@ -1461,7 +1555,8 @@ class NijaCoreLoop:
         _volume_fallback_enabled = False
         if _PMC_AVAILABLE and _get_pmc is not None:
             try:
-                _pmc_params = _get_pmc().params
+                _pmc_inst = _get_pmc()
+                _pmc_params = getattr(_pmc_inst, "market_adjusted_params", _pmc_inst.params)
                 _pmc_level = _pmc_params.level
                 _effective_hard_floor = _pmc_params.min_score_hard_floor
                 _effective_streak_threshold = _pmc_params.forced_entry_streak_threshold
@@ -1483,6 +1578,13 @@ class NijaCoreLoop:
             )
 
         ai = self._get_ai_engine()
+        if ai is not None and _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                _set_floor = getattr(ai, "set_score_floor", None)
+                if callable(_set_floor):
+                    _set_floor(float(_pmc_params.min_score_absolute))
+            except Exception as _exc:
+                logger.debug("Phase3: AI score-floor sync failed — continuing with engine default: %s", _exc)
 
         candidates = []        # List[AIEngineSignal | _AISignal]  — AI-scored
         momentum_candidates = []  # collected from relaxed momentum scan
@@ -1511,6 +1613,22 @@ class NijaCoreLoop:
         _best_volume_entry_type: str = "swing"
         _best_volume: float = -1.0
 
+        # Per-cycle market-health telemetry feeds ProfitModeController so the
+        # next cycle automatically tightens during data/API degradation, stays
+        # selective during volatility spikes, and loosens only when data is
+        # healthy but the market is producing no entries.
+        _data_attempts = 0
+        _data_successes = 0
+        _scoring_errors = 0
+        _abs_return_sum = 0.0
+        _abs_return_count = 0
+        _adx_sum = 0.0
+        _adx_count = 0
+        _volume_pct_sum = 0.0
+        _volume_pct_count = 0
+        _market_filter_checks = 0
+        _market_filter_passes = 0
+
         # Initialise the per-cycle score distribution debugger snapshot.
         _sdd = _get_sdd() if (_SDD_AVAILABLE and _get_sdd is not None) else None
         if _sdd is not None:
@@ -1533,6 +1651,7 @@ class NijaCoreLoop:
                 break
 
             try:
+                _data_attempts += 1
                 df = self._fetch_df(broker, symbol)
                 if df is None or len(df) < 100:
                     if _sdd is not None:
@@ -1540,6 +1659,15 @@ class NijaCoreLoop:
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     _gate_rejections["data_insufficient"] += 1
                     continue
+                _data_successes += 1
+                try:
+                    if "close" in df.columns:
+                        _returns = df["close"].pct_change().dropna().tail(20).abs() * 100.0
+                        if len(_returns) > 0:
+                            _abs_return_sum += float(_returns.mean())
+                            _abs_return_count += 1
+                except Exception:
+                    pass
                 _funnel["market_data"] = ("PASS", "")
 
                 # Always track top-volume symbol (feeds volume fallback)
@@ -1562,6 +1690,7 @@ class NijaCoreLoop:
                 # Determine trend from apex market filter
                 try:
                     allow, trend, market_reason = self.apex.check_market_filter(df, indicators)
+                    _market_filter_checks += 1
                     if not allow:
                         blocked += 1
                         if _sdd is not None:
@@ -1569,10 +1698,13 @@ class NijaCoreLoop:
                         _funnel["regime"] = ("FAIL", market_reason or "MARKET_FILTER_BLOCKED")
                         _gate_rejections["market_filter_rejected"] += 1
                         continue
+                    _market_filter_passes += 1
                     _funnel["regime"] = ("PASS", "")
                 except Exception:
                     trend = "uptrend"
                     _funnel["regime"] = ("PASS", "MARKET_FILTER_FALLBACK")
+                    _market_filter_checks += 1
+                    _market_filter_passes += 1
 
                 side = "long" if trend == "uptrend" else "short"
                 entry_type = (
@@ -1602,6 +1734,8 @@ class NijaCoreLoop:
                     _adx_series = indicators.get("adx", None)
                     if _adx_series is not None and hasattr(_adx_series, "iloc") and len(_adx_series) > 0:
                         _diag_adx = float(_adx_series.iloc[-1])
+                        _adx_sum += _diag_adx
+                        _adx_count += 1
                 except Exception:
                     pass
                 try:
@@ -1610,6 +1744,8 @@ class NijaCoreLoop:
                         _avg_vol = float(df["volume"].iloc[-21:-1].mean())
                         if _avg_vol > 0:
                             _diag_vol_pct = (_cur_vol / _avg_vol - 1.0) * 100.0
+                            _volume_pct_sum += _diag_vol_pct
+                            _volume_pct_count += 1
                 except Exception:
                     pass
 
@@ -1764,10 +1900,65 @@ class NijaCoreLoop:
                 scored += 1
 
             except Exception as sym_err:
+                _scoring_errors += 1
                 logger.debug("Phase3 scoring error for %s: %s", symbol, sym_err)
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
                 _funnel["signal"] = ("FAIL", f"SCORING_EXCEPTION:{sym_err}")
+
+        if _PMC_AVAILABLE and _get_pmc is not None and _MarketConditionSnapshot is not None:
+            try:
+                _data_success_rate = (
+                    float(_data_successes) / float(_data_attempts)
+                    if _data_attempts > 0
+                    else 1.0
+                )
+                _candidate_rate = (
+                    float(len(candidates) + len(momentum_candidates)) / float(max(1, scored))
+                    if scored > 0
+                    else 0.0
+                )
+                _avg_abs_return_pct = (
+                    _abs_return_sum / float(_abs_return_count)
+                    if _abs_return_count > 0
+                    else 0.0
+                )
+                _avg_adx = _adx_sum / float(_adx_count) if _adx_count > 0 else 0.0
+                _avg_volume_pct = (
+                    _volume_pct_sum / float(_volume_pct_count)
+                    if _volume_pct_count > 0
+                    else 0.0
+                )
+                _market_filter_pass_rate = (
+                    float(_market_filter_passes) / float(_market_filter_checks)
+                    if _market_filter_checks > 0
+                    else 1.0
+                )
+                _api_error_rate = float(_scoring_errors) / float(max(1, _data_attempts))
+                _get_pmc().update_market_conditions(
+                    _MarketConditionSnapshot(
+                        data_success_rate=_data_success_rate,
+                        candidate_rate=_candidate_rate,
+                        avg_abs_return_pct=_avg_abs_return_pct,
+                        zero_signal_streak=zero_signal_streak,
+                        api_error_rate=_api_error_rate,
+                        avg_adx=_avg_adx,
+                        avg_volume_pct=_avg_volume_pct,
+                        market_filter_pass_rate=_market_filter_pass_rate,
+                    )
+                )
+                _pmc_params = getattr(_get_pmc(), "market_adjusted_params", _pmc_params)
+                _pmc_level = _pmc_params.level
+                _effective_hard_floor = _pmc_params.min_score_hard_floor
+                _effective_streak_threshold = _pmc_params.forced_entry_streak_threshold
+                _effective_bypass_threshold = _pmc_params.hard_bypass_streak_threshold
+                _volume_fallback_enabled = _pmc_params.enable_volume_fallback
+                if ai is not None:
+                    _set_floor = getattr(ai, "set_score_floor", None)
+                    if callable(_set_floor):
+                        _set_floor(float(_pmc_params.min_score_absolute))
+            except Exception as _market_adj_err:
+                logger.debug("Market-adaptive parameter update failed: %s", _market_adj_err)
 
         # ── Merge momentum candidates when AI candidates are scarce ──────
         # If we're in dead-zone mode and have fewer AI candidates than slots,
@@ -1789,10 +1980,22 @@ class NijaCoreLoop:
                     zero_signal_streak, slots_needed,
                 )
 
+        # ── One-cycle forced entry (FORCE_NEXT_CYCLE flag) ───────────────
+        # Read before the no-candidates return path.  Previously this flag was
+        # consumed after the empty-candidate early return, so FORCE_TRADE/ATM
+        # could be armed yet never produce a tradable candidate.
+        global FORCE_NEXT_CYCLE
+        with _FORCE_LOCK:
+            _force_this_cycle = FORCE_NEXT_CYCLE
+            if _force_this_cycle:
+                FORCE_NEXT_CYCLE = False  # reset atomically — one-shot only
+        if _force_this_cycle:
+            _volume_fallback_enabled = True
+
         # ── Volume fallback: inject top-volume candidate when still empty ─
         # Active whenever _volume_fallback_enabled (always true in dead zone;
-        # also true for profit-mode Level 3).
-        if not candidates and _volume_fallback_enabled and _best_volume_symbol and _AISignal is not None:
+        # also true for profit-mode Level 3) or one-cycle force is armed.
+        if not candidates and (_volume_fallback_enabled or _force_this_cycle) and _best_volume_symbol and _AISignal is not None:
             logger.warning(
                 "💰 VOLUME FALLBACK — no candidates after momentum scan; "
                 "injecting highest-volume symbol: %s (avg_vol=%.0f)",
@@ -1802,13 +2005,14 @@ class NijaCoreLoop:
                 symbol=_best_volume_symbol,
                 side=_best_volume_side,
                 composite_score=_effective_hard_floor,
-                position_multiplier=0.50,               # conservative micro-trade size
+                position_multiplier=0.25 if _force_this_cycle else 0.50,  # conservative micro-trade size
                 entry_type=_best_volume_entry_type,
                 threshold_used=_effective_hard_floor,
                 reason="volume_fallback_guaranteed_activity",
                 metadata={
                     "profit_mode_level": _pmc_level,
                     "volume_fallback": True,
+                    "force_next_cycle": bool(_force_this_cycle),
                     "avg_volume": _best_volume,
                     "bypass_low_quality": True,
                     "dead_zone": _dead_zone,
@@ -1899,14 +2103,8 @@ class NijaCoreLoop:
 
         # ── One-cycle forced entry (FORCE_NEXT_CYCLE flag) ───────────────
         # When FORCE_NEXT_CYCLE is True the top-scored candidate is selected
-        # unconditionally, all quality filters are bypassed, and the flag is
-        # immediately reset so exactly one cycle is forced.
-        # _FORCE_LOCK ensures the read-and-reset is atomic under concurrent callers.
-        global FORCE_NEXT_CYCLE
-        with _FORCE_LOCK:
-            _force_this_cycle = FORCE_NEXT_CYCLE
-            if _force_this_cycle:
-                FORCE_NEXT_CYCLE = False  # reset atomically — one-shot only
+        # unconditionally, all quality filters are bypassed, and the flag has
+        # already been atomically reset before the no-candidate return path.
         if _force_this_cycle and candidates:
             top_candidate = max(candidates, key=lambda s: s.composite_score)
             top_candidate.metadata["bypass_quality_filter"] = True
@@ -1973,7 +2171,11 @@ class NijaCoreLoop:
                         if _perm.final_decision != "EXECUTE":
                             blocked += 1
                             # ── Entry-to-Order Trace: per-signal veto (TPE) ──
-                            _tpe_reason = getattr(_perm, "reason", "trade_permission_engine")
+                            _tpe_reason = (
+                                getattr(_perm, "block_reason", None)
+                                or getattr(_perm, "reason", None)
+                                or "trade_permission_engine"
+                            )
                             _funnel["ai_gate"] = ("FAIL", _tpe_reason)
                             emit_cycle_trace(
                                 CycleOutcome.ENTRY_VETOED,
@@ -2020,6 +2222,21 @@ class NijaCoreLoop:
                         continue
                     analysis["action"] = action
                     analysis["reason"] = analysis.get("reason", "") + " [fallback_entry]"
+
+                if fallback_active and action in ("enter_long", "enter_short"):
+                    missing = {"position_size", "entry_price", "stop_loss", "take_profit"} - set(analysis.keys())
+                    if missing:
+                        fallback_payload = self._build_forced_fallback_entry_analysis(
+                            df=df,
+                            sig=sig,
+                            snapshot=snapshot,
+                            action=action,
+                            existing_reason=analysis.get("reason", ""),
+                        )
+                        analysis.update(fallback_payload)
+                        # The fallback payload is already sized conservatively;
+                        # avoid multiplying it below broker minimum notional.
+                        sig.position_multiplier = 1.0
 
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
@@ -2100,6 +2317,111 @@ class NijaCoreLoop:
     # Helpers
     # ------------------------------------------------------------------
 
+    def _build_forced_fallback_entry_analysis(
+        self,
+        *,
+        df: pd.DataFrame,
+        sig: Any,
+        snapshot: CycleSnapshot,
+        action: str,
+        existing_reason: str = "",
+    ) -> Dict[str, Any]:
+        """Build a complete minimal entry payload for forced fallback orders.
+
+        ``apex.analyze_market`` can return ``hold`` before sizing when strict
+        pre-entry market-condition filters reject ADX/volume/price-action.  The
+        core loop may still intentionally force a small Always-Trade/volume
+        fallback entry.  In that path we must provide the fields required by
+        ``execute_action`` instead of only flipping ``action`` from hold to enter.
+        """
+        price = 0.0
+        try:
+            price = float(df["close"].iloc[-1])
+        except Exception:
+            price = 0.0
+        if price <= 0:
+            raise ValueError("cannot build fallback entry without positive close price")
+
+        broker_name = "coinbase"
+        try:
+            if hasattr(self.apex, "_get_broker_name"):
+                broker_name = str(self.apex._get_broker_name() or broker_name).lower()
+        except Exception:
+            pass
+
+        min_notional = 3.50
+        try:
+            from bot.minimum_notional_gate import get_minimum_notional_gate
+            min_notional = float(
+                get_minimum_notional_gate().config.get_min_notional_for_broker(
+                    broker_name, balance=float(snapshot.balance or 0.0)
+                )
+            )
+        except Exception:
+            min_notional = 10.50 if "kraken" in broker_name else 3.50
+
+        balance = max(float(snapshot.balance or 0.0), 0.0)
+        if balance <= 0:
+            raise ValueError("cannot build fallback entry without positive balance")
+        risk_fraction = 0.05
+        stop_loss_pct = 1.20
+        # Keep fallback geometry compatible with ExecutionEngine's hard target
+        # geometry gate (MIN_TP_PCT defaults to 0.8%, MAX_SL_PCT to 3.0%).
+        # The previous 0.60% TP1 generated a complete-looking payload that was
+        # still rejected before order submission.
+        take_profit_pct = (0.85, 1.20, 1.80)
+        trailing_stop_pct = 0.75
+        try:
+            from bot.competitive_profitability_policy import get_competitive_profitability_policy
+
+            competitive_profile = get_competitive_profitability_policy().profile_entry(
+                df=df,
+                side="short" if action == "enter_short" else "long",
+            )
+            if not competitive_profile.liquidity_ok:
+                raise ValueError(
+                    "competitive profitability policy blocked illiquid fallback entry: "
+                    f"{competitive_profile.liquidity_reason}"
+                )
+            risk_fraction = competitive_profile.risk_fraction
+            stop_loss_pct = min(float(competitive_profile.stop_loss_pct), 3.0)
+            raw_tp = tuple(float(pct) for pct in competitive_profile.take_profit_pct)
+            tp1 = max(raw_tp[0] if len(raw_tp) > 0 else 0.0, 0.85)
+            tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
+            tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
+            take_profit_pct = (tp1, tp2, tp3)
+            trailing_stop_pct = competitive_profile.trailing_stop_pct
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        size_cap = max(min(balance * risk_fraction, balance), 0.0)
+        position_size = min(max(min_notional, size_cap), balance)
+
+        if action == "enter_short":
+            stop_loss = price * (1.0 + stop_loss_pct / 100.0)
+            take_profit = [price * (1.0 - pct / 100.0) for pct in take_profit_pct]
+        else:
+            stop_loss = price * (1.0 - stop_loss_pct / 100.0)
+            take_profit = [price * (1.0 + pct / 100.0) for pct in take_profit_pct]
+
+        reason = existing_reason or getattr(sig, "reason", "forced_fallback_entry")
+        if "fallback_entry" not in reason:
+            reason = f"{reason} [fallback_entry]"
+
+        return {
+            "action": action,
+            "entry_price": price,
+            "position_size": position_size,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "trailing_stop_pct": trailing_stop_pct,
+            "reason": reason,
+            "fallback_entry": True,
+            "forced_fallback": True,
+            "competitive_profitability_policy": True,
+        }
+
     def _fetch_df(self, broker: Any, symbol: str) -> Optional[pd.DataFrame]:
         """
         Fetch OHLCV DataFrame from the broker.
@@ -2115,20 +2437,97 @@ class NijaCoreLoop:
                 broker = getattr(self.apex, "broker_client", None)
             if broker is None:
                 return None
-            # Standard broker interface: get_candles(symbol, limit=200)
-            if hasattr(broker, "get_candles"):
-                result = broker.get_candles(symbol, limit=200)
-                if isinstance(result, tuple):
-                    df, err = result
-                    if err or df is None or len(df) < 10:
-                        return None
+            call_plan = (
+                ("get_candles", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("fetch_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("get_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("get_historical_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("get_market_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+            )
+            for method_name, primary_call, fallback_call in call_plan:
+                method = getattr(broker, method_name, None)
+                if not callable(method):
+                    continue
+                result = self._call_market_data_method(method, primary_call, fallback_call)
+                df = self._coerce_market_data_frame(result)
+                if df is not None and len(df) >= 10:
                     return df
-                if isinstance(result, pd.DataFrame) and len(result) >= 10:
-                    return result
             return None
         except Exception as exc:
             logger.debug("_fetch_df error for %s: %s", symbol, exc)
             return None
+
+    @staticmethod
+    def _call_market_data_method(
+        method: Any,
+        primary_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+        fallback_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+    ) -> Any:
+        """Call a broker market-data method while tolerating signature drift."""
+        try:
+            args, kwargs = primary_call
+            return method(*args, **kwargs)
+        except TypeError:
+            args, kwargs = fallback_call
+            return method(*args, **kwargs)
+
+    @classmethod
+    def _coerce_market_data_frame(cls, result: Any) -> Optional[pd.DataFrame]:
+        """Normalize broker candle payload variants into an OHLCV DataFrame."""
+        if result is None:
+            return None
+        if isinstance(result, tuple):
+            if len(result) >= 2 and result[1]:
+                return None
+            result = result[0] if result else None
+        if isinstance(result, pd.DataFrame):
+            return cls._normalize_ohlcv_columns(result.copy())
+        if isinstance(result, Mapping):
+            for key in ("candles", "data", "ohlcv", "result", "rows"):
+                if key in result:
+                    return cls._coerce_market_data_frame(result.get(key))
+            return cls._normalize_ohlcv_columns(pd.DataFrame([result]))
+        if isinstance(result, (list, tuple)):
+            if not result:
+                return None
+            frame = pd.DataFrame(result)
+            if not frame.empty and all(isinstance(col, int) for col in frame.columns):
+                # CCXT-style rows: [timestamp, open, high, low, close, volume, ...]
+                if len(frame.columns) >= 6:
+                    frame = frame.iloc[:, :6]
+                    frame.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+                # Compact rows occasionally omit timestamp: [open, high, low, close, volume]
+                elif len(frame.columns) == 5:
+                    frame.columns = ["open", "high", "low", "close", "volume"]
+            return cls._normalize_ohlcv_columns(frame)
+        return None
+
+    @staticmethod
+    def _normalize_ohlcv_columns(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """Return a numeric OHLCV frame when the payload has usable candles."""
+        if frame is None or frame.empty:
+            return None
+        rename_map = {
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+            "price": "close",
+            "last": "close",
+        }
+        normalized = frame.rename(
+            columns={col: rename_map.get(str(col).lower(), col) for col in frame.columns}
+        )
+        required = {"open", "high", "low", "close", "volume"}
+        if not required.issubset(set(normalized.columns)):
+            return None
+        for col in required:
+            normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
+        normalized = normalized.dropna(subset=list(required))
+        if normalized.empty:
+            return None
+        return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -2629,7 +3028,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _rate_limited_critical("core_loop_tick", "scheduler", 30.0, "🟢 LIVE LOOP TICK")
                 if cycle == 0 or ((cycle + 1) % _tick_log_every == 0):
                     logger.info("🟢 LIVE LOOP TICK | cycle=%s", cycle + 1)
-                print("🚀 MAIN LOOP TICK")
+                if _env_truthy("NIJA_STDOUT_LOOP_TICK", "false"):
+                    print("🚀 MAIN LOOP TICK")
+                logger.info("[ScannerLoop] heartbeat cycle=%s phase=pre_activation_gate", cycle + 1)
 
                 _live_now = False
                 _sm_loop = None
@@ -2960,8 +3361,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                     logger.critical("=== CAPITAL PIPELINE DEBUG START ===")
                     logger.critical(
-                        "BROKER BALANCES: %s",
-                        _diag_bm.get_all_balances() if _diag_bm is not None else "broker_manager unavailable",
+                        "BROKER BALANCES (cached/non-blocking): %s",
+                        _cached_broker_balances_for_log(_diag_bm) if _diag_bm is not None else "broker_manager unavailable",
                     )
                     logger.critical(
                         "AGGREGATED STATE: %s",
@@ -3140,18 +3541,34 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             bool(_dispatch_gate),
                             getattr(_state_gate, "value", str(_state_gate)),
                         )
+                        _activation_retry_sleep_s = min(
+                            float(cycle_secs),
+                            max(1.0, float(os.getenv("NIJA_ACTIVATION_RETRY_SLEEP_S", "10") or 10.0)),
+                        )
                         if _skip_signature != _last_cycle_skip_signature:
                             logger.warning(
                                 "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
-                                "runtime_authority=%s reason=%s",
+                                "runtime_authority=%s reason=%s retry_in=%.0fs",
                                 _committed_gate,
                                 _dispatch_gate,
                                 getattr(_state_gate, "value", str(_state_gate)),
                                 _runtime_authority or "unknown",
                                 _dispatch_reason or "not_reported",
+                                _activation_retry_sleep_s,
                             )
                             _last_cycle_skip_signature = _skip_signature
-                        time.sleep(cycle_secs)
+                        else:
+                            _rate_limited_critical(
+                                "core_loop_activation_skip",
+                                "dispatch_gate",
+                                60.0,
+                                "⏸️ STRATEGY CYCLE STILL WAITING | state=%s dispatch=%s reason=%s retry_in=%.0fs",
+                                getattr(_state_gate, "value", str(_state_gate)),
+                                _dispatch_gate,
+                                _dispatch_reason or "not_reported",
+                                _activation_retry_sleep_s,
+                            )
+                        time.sleep(_activation_retry_sleep_s)
                         continue
                     _last_cycle_skip_signature = None
 

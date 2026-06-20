@@ -8,7 +8,7 @@ from bot.broker_integration import (
     KrakenBrokerAdapter,
     OKXBrokerAdapter,
 )
-from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
+from bot.execution_pipeline import ExecutionPipeline, PipelineRequest, PipelineResult
 
 
 class _FakeSeak:
@@ -127,6 +127,74 @@ class TestExecutionPipelineAuthorityHalts(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("Runtime authority convergence lost", result.error)
+
+    def test_execute_normalizes_uppercase_market_order_before_contract_validation(self):
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._execution_observer = None
+        pipeline._allocation_clamp = None
+        pipeline._exchange_normalizer = None
+        pipeline._pre_trade_risk_engine = None
+        pipeline._ecel = None
+        pipeline._ecel_required = False
+        pipeline._ecel_fail_closed = False
+        pipeline._throttler = None
+        pipeline._router = None
+        pipeline._multi_router = None
+        pipeline._downstream_guard = None
+        pipeline._margin_position_ledger = None
+        pipeline._broker_capability_registry = None
+        pipeline._enforce_execution_gate = lambda request, t_start: None
+        pipeline._gate_capital_margin_authorization = lambda request, t_start: None
+        pipeline._emit_execution_rejection_telemetry = lambda **kwargs: None
+        seen = {}
+
+        def _dispatch(request, t_start):
+            seen["side"] = request.side
+            seen["order_type"] = request.order_type
+            return PipelineResult(
+                success=True,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                broker=request.preferred_broker or "kraken",
+                error="",
+                latency_ms=0.0,
+            )
+
+        pipeline._dispatch = _dispatch
+        request = PipelineRequest(
+            strategy="force_trade_probe",
+            symbol="BTC-USD",
+            side="LONG",
+            size_usd=25.0,
+            order_type="MARKET",
+            preferred_broker="kraken",
+        )
+
+        with patch.dict(
+            os.environ,
+            {"LIVE_CAPITAL_VERIFIED": "false", "NIJA_WRITER_FENCING_TOKEN": ""},
+            clear=False,
+        ), patch(
+            "bot.execution_pipeline.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.execution_pipeline.assert_execution_dispatch_permitted",
+            return_value=None,
+        ), patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=SimpleNamespace(ready=True),
+        ), patch(
+            "bot.execution_pipeline.get_seak",
+            return_value=_FakeSeak(halted=False),
+        ), patch(
+            "bot.execution_pipeline.append_execution_journal_event",
+            return_value=None,
+        ):
+            result = pipeline.execute(request)
+
+        self.assertTrue(result.success)
+        self.assertEqual(seen, {"side": "buy", "order_type": "market"})
 
 
 if __name__ == "__main__":

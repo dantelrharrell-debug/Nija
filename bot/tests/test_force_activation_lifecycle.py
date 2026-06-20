@@ -90,14 +90,8 @@ class TestForceActivateBypass(unittest.TestCase):
         self.assertEqual(snap.runtime_authority_state, RuntimeAuthorityState.EXECUTING.value)
         self.assertEqual(snap.lifecycle_phase, LifecyclePhase.LIVE.value)
 
-    def test_reconcile_not_early_exit_without_force_activation_env(self) -> None:
-        """Without NIJA_FORCE_ACTIVATION, force_activate_bypass alone is NOT
-        enough to preserve EXECUTING across a reconcile cycle when authority
-        prerequisites (prereqs_ready, authority_converged) are absent.
-
-        This test documents that the safety invariant holds: the env flag is
-        required to activate the bypass, even if the commit version is set.
-        """
+    def test_reconcile_preserves_committed_live_dispatch_without_force_activation_env(self) -> None:
+        """A committed LIVE_ACTIVE dispatch latch stays LIVE without NIJA_FORCE_ACTIVATION."""
         coord = self._coord()
         coord.force_activate_bypass("no_env_test")
         env = {k: v for k, v in os.environ.items() if k != "NIJA_FORCE_ACTIVATION"}
@@ -106,9 +100,9 @@ class TestForceActivateBypass(unittest.TestCase):
             # Invalidate edge-trigger cache to force a full reconcile.
             coord._runtime._last_reconcile_inputs = None
             snap = coord.build_snapshot(trading_state="LIVE_ACTIVE", activation_intent=True)
-        # Without the env var, reconcile falls through to the standard logic.
-        # authority_converged is False (no Redis/prerequisites), so executing=False.
-        self.assertNotEqual(snap.runtime_authority_state, RuntimeAuthorityState.EXECUTING.value)
+        self.assertEqual(snap.runtime_authority_state, RuntimeAuthorityState.EXECUTING.value)
+        self.assertEqual(snap.lifecycle_phase, LifecyclePhase.LIVE.value)
+        self.assertEqual(snap.runtime_authority_reason, "committed_live_dispatch")
 
     def test_kill_switch_overrides_force_activation_bypass(self) -> None:
         coord = self._coord()
@@ -188,6 +182,119 @@ class TestForceActivationEndToEnd(unittest.TestCase):
             decision.lifecycle_phase,
             LifecyclePhase.LIVE.value,
         )
+
+    def test_committed_live_dispatch_preserved_without_force_env(self) -> None:
+        """A committed LIVE_ACTIVE runtime must keep lifecycle_phase=LIVE without NIJA_FORCE_ACTIVATION."""
+        coord = get_startup_coordinator()
+        coord.force_activate_bypass("committed_live_dispatch_regression")
+
+        with patch.dict(
+            os.environ,
+            {
+                "NIJA_RUNTIME_TRADING_STATE": "LIVE_ACTIVE",
+                "NIJA_RUNTIME_EXECUTION_AUTHORITY": "1",
+                "LIVE_CAPITAL_VERIFIED": "true",
+                "NIJA_FORCE_ACTIVATION": "",
+            },
+            clear=False,
+        ):
+            snap = coord.build_snapshot(trading_state="LIVE_ACTIVE", activation_intent=True)
+
+        self.assertEqual(snap.lifecycle_phase, LifecyclePhase.LIVE.value)
+        self.assertEqual(snap.runtime_authority_state, RuntimeAuthorityState.EXECUTING.value)
+        self.assertEqual(snap.runtime_authority_reason, "committed_live_dispatch")
+
+    def test_can_execute_repairs_stale_live_dispatch_commit(self) -> None:
+        """Gate 0 repairs the coordinator latch when TSM is already LIVE_ACTIVE."""
+        from bot.execution_authority_context import RuntimeAuthoritySnapshot, can_execute, execution_authority_scope
+
+        class _KillSwitch:
+            def is_active(self) -> bool:
+                return False
+
+        stale = RuntimeAuthoritySnapshot(
+            ready=True,
+            authority_ready=True,
+            nonce_ready=True,
+            dispatch_health_ready=True,
+            dispatch_enabled=False,
+            kill_switch_active=False,
+            coordinator_state="ACTIVATION_CONVERGING",
+            runtime_state="READY",
+            reason="stale_commit",
+            lifecycle_phase=LifecyclePhase.WARM.value,
+        )
+        coord = get_startup_coordinator()
+
+        snapshots = {"calls": 0}
+
+        def _runtime_snapshot_side_effect():
+            snapshots["calls"] += 1
+            if snapshots["calls"] == 1:
+                return stale
+            return coord.build_snapshot(trading_state="LIVE_ACTIVE", activation_intent=True)
+
+        with patch.dict(
+            os.environ,
+            {
+                "NIJA_RUNTIME_TRADING_STATE": "LIVE_ACTIVE",
+                "NIJA_RUNTIME_EXECUTION_AUTHORITY": "1",
+                "LIVE_CAPITAL_VERIFIED": "true",
+                "DRY_RUN_MODE": "false",
+                "PAPER_MODE": "false",
+                "NIJA_WRITER_LEASE_GENERATION": "7",
+                "NIJA_EXECUTION_CIRCUIT_STATE": "CLOSED",
+            },
+            clear=False,
+        ), execution_authority_scope(), patch(
+            "bot.execution_authority_context.runtime_authority_snapshot",
+            side_effect=_runtime_snapshot_side_effect,
+        ), patch(
+            "bot.execution_authority_context.assert_distributed_writer_authority",
+            return_value=None,
+        ), patch(
+            "bot.execution_authority_context._read_current_lease_generation",
+            return_value=(7, ""),
+        ), patch(
+            "bot.execution_authority_context._runtime_nonce_authority_status",
+            return_value=(True, "ok"),
+        ), patch(
+            "bot.execution_authority_context.is_seak_halted",
+            return_value=False,
+        ), patch(
+            "bot.kill_switch.get_kill_switch",
+            return_value=_KillSwitch(),
+        ), patch(
+            "bot.trading_state_machine._heartbeat_marker_path",
+            return_value="/tmp/heartbeat_verified.flag",
+        ), patch(
+            "bot.trading_state_machine.heartbeat_marker_is_fresh",
+            return_value=True,
+            create=True,
+        ), patch(
+            "bot.trading_state_machine._required_heartbeat_stage",
+            return_value="ORDER_VERIFY",
+            create=True,
+        ), patch(
+            "bot.trading_state_machine.heartbeat_marker_stage_is_sufficient",
+            return_value=True,
+            create=True,
+        ), patch(
+            "bot.execution_authority_context._evaluate_stability_authority",
+            return_value=__import__("bot.execution_authority_context", fromlist=["StabilityAuthoritySnapshot"]).StabilityAuthoritySnapshot(
+                allowed=True,
+                halt_state="NORMAL",
+                throttle=1.0,
+                size_multiplier=1.0,
+                stress_score=0.0,
+                collapsed_risk_score=0.0,
+                reason="ok",
+            ),
+        ):
+            decision = can_execute()
+
+        self.assertNotEqual(decision.reason, "lifecycle_phase:WARM")
+        self.assertEqual(decision.lifecycle_phase, LifecyclePhase.LIVE.value)
 
 
 if __name__ == "__main__":

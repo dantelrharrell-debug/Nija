@@ -184,6 +184,7 @@ try:
         assert_distributed_writer_authority,
         assert_execution_dispatch_permitted,
         runtime_authority_snapshot,
+        ExecutionBlocked,
     )
 except ImportError:
     try:
@@ -194,6 +195,7 @@ except ImportError:
             assert_distributed_writer_authority,
             assert_execution_dispatch_permitted,
             runtime_authority_snapshot,
+            ExecutionBlocked,
         )
     except ImportError:
         @contextmanager
@@ -219,6 +221,9 @@ except ImportError:
             class _Snap:
                 ready = False
             return _Snap()
+
+        class ExecutionBlocked(RuntimeError):  # type: ignore[no-redef]
+            pass
 
 try:
     from bot.exchange_kill_switch import get_exchange_kill_switch_protector
@@ -306,7 +311,7 @@ class PipelineRequest:
     request_id: Optional[str] = None
     intent_id: Optional[str] = None
     notional_usd: Optional[float] = None
-    sizing_mode: str = "usd"
+    sizing_mode: str = "notional_usd"
     intent_type: str = "entry"       # "entry" / "reduce" / "exit"
     subaccount_id: Optional[str] = None
     buying_power_usd: Optional[float] = None
@@ -337,7 +342,51 @@ class PipelineRequest:
     time_in_force: Optional[str] = None
     extended_hours: Optional[bool] = None
     strategy_metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     validated: bool = False
+
+    def __post_init__(self) -> None:
+        # Keep the legacy local request class compatible with the canonical
+        # pipeline_request_contract validator.  Many call sites still construct
+        # PipelineRequest(size_usd=...) directly; without mirroring that value into
+        # notional_usd the contract rejects the order before authority/dispatch
+        # gates can run, which blocks all market-order submission.
+        if self.notional_usd is None and self.size_usd is not None:
+            self.notional_usd = float(self.size_usd)
+        if not self.sizing_mode:
+            self.sizing_mode = "notional_usd"
+
+        # Runtime order submitters historically pass exchange-style uppercase
+        # values (for example order_type="MARKET") and side aliases such as
+        # long/short.  The canonical request contract is intentionally strict
+        # and validates lowercase enums.  Normalize here so live orders are not
+        # rejected at the local contract gate before they ever reach broker
+        # dispatch.
+        self.side = self._normalise_side(self.side)
+        self.order_type = self._normalise_enum(self.order_type) or "market"
+        self.intent_type = self._normalise_enum(self.intent_type) or "entry"
+        self.sizing_mode = self._normalise_enum(self.sizing_mode) or "notional_usd"
+        self.asset_class = self._normalise_enum(self.asset_class)
+        self.quantity_mode = self._normalise_enum(self.quantity_mode) or "usd"
+        self.account_type = self._normalise_enum(self.account_type)
+        self.margin_mode = self._normalise_enum(self.margin_mode)
+        self.time_in_force = self._normalise_enum(self.time_in_force)
+
+    @staticmethod
+    def _normalise_enum(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        return text or None
+
+    @classmethod
+    def _normalise_side(cls, value: Any) -> str:
+        side = cls._normalise_enum(value) or "buy"
+        if side == "long":
+            return "buy"
+        if side == "short":
+            return "sell"
+        return side
 
 
 # Ensure normalize_pipeline_request accepts the local PipelineRequest class above,
@@ -1214,6 +1263,27 @@ class ExecutionPipeline:
                 )
 
         try:
+            authority_snapshot = runtime_authority_snapshot()
+            if not bool(getattr(authority_snapshot, "ready", False)):
+                return PipelineResult(
+                    success=False,
+                    symbol=effective_request.symbol,
+                    side=effective_request.side,
+                    size_usd=effective_request.size_usd,
+                    error="Runtime authority convergence lost",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
+        except Exception as exc:
+            return PipelineResult(
+                success=False,
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                size_usd=effective_request.size_usd,
+                error=f"Runtime authority convergence lost: {exc}",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
+        try:
             with execution_authority_scope():
                 # assert_execution_dispatch_permitted raises ExecutionBlocked on denial.
                 # It is patchable in tests via bot.execution_pipeline.assert_execution_dispatch_permitted.
@@ -1626,7 +1696,11 @@ class ExecutionPipeline:
                             "notional_usd": getattr(request, "notional_usd", None),
                             "units": getattr(request, "units", None),
                             "unit_type": getattr(request, "unit_type", None),
-                            "price_hint_usd": getattr(request, "price_hint_usd", None),
+                            "price_hint_usd": (
+                                getattr(request, "price_hint_usd", None)
+                                if getattr(request, "price_hint_usd", None) is not None
+                                else dict(getattr(request, "metadata", {}) or {}).get("price_hint_usd")
+                            ),
                             "stop_price": getattr(request, "stop_price", None),
                             "instrument_type": request.instrument_type or "",
                             "quantity_mode": request.quantity_mode,
@@ -1697,7 +1771,11 @@ class ExecutionPipeline:
                             "notional_usd": getattr(request, "notional_usd", None),
                             "units": getattr(request, "units", None),
                             "unit_type": getattr(request, "unit_type", None),
-                            "price_hint_usd": getattr(request, "price_hint_usd", None),
+                            "price_hint_usd": (
+                                getattr(request, "price_hint_usd", None)
+                                if getattr(request, "price_hint_usd", None) is not None
+                                else dict(getattr(request, "metadata", {}) or {}).get("price_hint_usd")
+                            ),
                             "leverage": getattr(request, "leverage", None),
                             "reduce_only": getattr(request, "reduce_only", None),
                             "margin_mode": getattr(request, "margin_mode", None),
