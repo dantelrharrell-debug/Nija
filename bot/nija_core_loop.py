@@ -3927,6 +3927,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
                         "cycle=%d next_interval=%s",
                         cycle, _strategy_next_interval,
+                    )
                     logger.info(
                         "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
                         "cycle=%d next_interval=%s",
