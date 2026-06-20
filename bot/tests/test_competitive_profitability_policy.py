@@ -58,6 +58,7 @@ def test_forced_fallback_uses_competitive_policy_for_exits_and_trailing_stop() -
     assert analysis["trailing_stop_pct"] > 0
     assert analysis["stop_loss"] < analysis["entry_price"]
     assert analysis["take_profit"][0] > analysis["entry_price"]
+    assert (analysis["take_profit"][0] - analysis["entry_price"]) / analysis["entry_price"] >= 0.008
 
 
 def test_forced_fallback_rejects_illiquid_competitive_profile() -> None:

@@ -2422,6 +2422,11 @@ class NijaCoreLoop:
             raise ValueError("cannot build fallback entry without positive balance")
         risk_fraction = 0.05
         stop_loss_pct = 1.20
+        # Keep fallback geometry compatible with ExecutionEngine's hard target
+        # geometry gate (MIN_TP_PCT defaults to 0.8%, MAX_SL_PCT to 3.0%).
+        # The previous 0.60% TP1 generated a complete-looking payload that was
+        # still rejected before order submission.
+        take_profit_pct = (0.85, 1.20, 1.80)
         take_profit_pct = (0.60, 1.00, 1.60)
         trailing_stop_pct = 0.75
         try:
@@ -2437,6 +2442,12 @@ class NijaCoreLoop:
                     f"{competitive_profile.liquidity_reason}"
                 )
             risk_fraction = competitive_profile.risk_fraction
+            stop_loss_pct = min(float(competitive_profile.stop_loss_pct), 3.0)
+            raw_tp = tuple(float(pct) for pct in competitive_profile.take_profit_pct)
+            tp1 = max(raw_tp[0] if len(raw_tp) > 0 else 0.0, 0.85)
+            tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
+            tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
+            take_profit_pct = (tp1, tp2, tp3)
             stop_loss_pct = competitive_profile.stop_loss_pct
             take_profit_pct = competitive_profile.take_profit_pct
             trailing_stop_pct = competitive_profile.trailing_stop_pct

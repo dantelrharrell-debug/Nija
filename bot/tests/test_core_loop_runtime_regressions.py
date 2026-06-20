@@ -129,6 +129,7 @@ def test_force_next_cycle_injects_volume_fallback_before_empty_return(monkeypatc
     assert analysis["entry_price"] == 100.0
     assert analysis["stop_loss"] < analysis["entry_price"]
     assert analysis["take_profit"][0] > analysis["entry_price"]
+    assert (analysis["take_profit"][0] - analysis["entry_price"]) / analysis["entry_price"] >= 0.008
     assert "fallback_entry" in analysis["reason"]
 
 
@@ -198,3 +199,43 @@ def test_fetch_df_accepts_dict_candle_payload() -> None:
     assert isinstance(df, pd.DataFrame)
     assert len(df) == 20
     assert float(df["close"].iloc[-1]) == 119.0
+
+
+def test_apex_execute_action_normalizes_list_take_profit_payload() -> None:
+    import sys
+
+    bot_dir = str(Path(__file__).resolve().parents[1])
+    if bot_dir not in sys.path:
+        sys.path.insert(0, bot_dir)
+
+    from bot.nija_apex_strategy_v71 import NIJAApexStrategyV71
+
+    captured = {}
+
+    class Engine:
+        def execute_entry(self, **kwargs):
+            captured.update(kwargs)
+            return {"id": "pos-1"}
+
+    apex = NIJAApexStrategyV71.__new__(NIJAApexStrategyV71)
+    apex.execution_engine = Engine()
+    apex.profit_harvest_layer = None
+
+    ok = apex.execute_action(
+        {
+            "action": "enter_long",
+            "position_size": 15.0,
+            "entry_price": 100.0,
+            "stop_loss": 98.5,
+            "take_profit": [100.85, 101.2, 101.8],
+            "forced_fallback": True,
+            "fallback_entry": True,
+        },
+        "BTC-USD",
+    )
+
+    assert ok is True
+    assert captured["take_profit_levels"]["tp1"] == 100.85
+    assert captured["take_profit_levels"]["tp2"] == 101.2
+    assert captured["take_profit_levels"]["tp3"] == 101.8
+    assert captured["take_profit_levels"]["forced_fallback"] is True

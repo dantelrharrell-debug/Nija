@@ -16,7 +16,7 @@ import pandas as pd
 import numpy as np
 import math
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List
 import logging
 import os
 
@@ -5346,6 +5346,29 @@ class NIJAApexStrategyV71:
                 logger.error(f"   Position cap may be exceeded. Fix required before new entries allowed.")
                 return False
 
+
+            def _take_profit_levels() -> Dict[str, Any]:
+                raw_tp = action_data.get('take_profit', {})
+                if isinstance(raw_tp, dict):
+                    levels = dict(raw_tp)
+                elif isinstance(raw_tp, (list, tuple)):
+                    levels = {
+                        'tp1': raw_tp[0] if len(raw_tp) > 0 else action_data.get('entry_price', 0.0),
+                        'tp2': raw_tp[1] if len(raw_tp) > 1 else (raw_tp[0] if raw_tp else action_data.get('entry_price', 0.0)),
+                        'tp3': raw_tp[2] if len(raw_tp) > 2 else (raw_tp[-1] if raw_tp else action_data.get('entry_price', 0.0)),
+                    }
+                else:
+                    levels = {
+                        'tp1': action_data.get('entry_price', 0.0),
+                        'tp2': action_data.get('entry_price', 0.0),
+                        'tp3': action_data.get('entry_price', 0.0),
+                    }
+                # Preserve force/fallback metadata for downstream execution gates.
+                for key in ('forced_fallback', 'fallback_entry', 'force_next_cycle'):
+                    if key in action_data:
+                        levels[key] = action_data.get(key)
+                return levels
+
             if action == 'enter_long':
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
@@ -5353,7 +5376,7 @@ class NIJAApexStrategyV71:
                     position_size=action_data['position_size'],
                     entry_price=action_data['entry_price'],
                     stop_loss=action_data['stop_loss'],
-                    take_profit_levels=action_data['take_profit']
+                    take_profit_levels=_take_profit_levels()
                 )
                 if position:
                     logger.info(f"Long entry executed: {symbol} @ {action_data['entry_price']:.2f}")
@@ -5400,7 +5423,7 @@ class NIJAApexStrategyV71:
                     position_size=action_data['position_size'],
                     entry_price=action_data['entry_price'],
                     stop_loss=action_data['stop_loss'],
-                    take_profit_levels=action_data['take_profit']
+                    take_profit_levels=_take_profit_levels()
                 )
                 if position:
                     logger.info(f"✅ Short entry executed: {symbol} @ {action_data['entry_price']:.2f} (broker: {broker_name})")
