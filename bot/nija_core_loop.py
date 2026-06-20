@@ -2752,6 +2752,124 @@ class NijaCoreLoop:
                 rank_threshold=rank_threshold,
             )
 
+        # ── FORCE_TRADE direct execute_action() fallback ─────────────────
+        # When FORCE_TRADE=true and the entire selection/execution pipeline
+        # produced zero entries (entries == 0), bypass ALL selection logic
+        # and call execute_action() directly with a minimal payload built
+        # from the best-volume symbol tracked during the scoring phase.
+        #
+        # This is the FINAL fallback — it fires on EVERY cycle when
+        # FORCE_TRADE=true and no order was submitted, regardless of what
+        # happened in the signal selection code above (silent drops, gate
+        # rejections, analyze_market returning 'hold', TPE blocks, etc.).
+        #
+        # Root cause addressed: after 2+ trading cycles with FORCE_TRADE=true,
+        # signals are generated and market conditions evaluated ("Trade allowed:
+        # True") but execute_action() is never called because the selection
+        # pipeline silently drops all signals before reaching the execution
+        # block.  The CRITICAL-level logs (CANDIDATES FOUND, SIGNALS SCORED,
+        # SIGNALS SELECTED, EXECUTING SIGNAL, ORDER RESULT) are absent,
+        # confirming the execution block is never reached.
+        _force_direct_bypass = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+        )
+        if _force_direct_bypass and entries == 0 and _best_volume_symbol:
+            logger.critical(
+                "⚡ [FORCE_TRADE_DIRECT] FINAL FALLBACK TRIGGERED — "
+                "entries=0 after full selection pipeline. "
+                "Calling execute_action() DIRECTLY for best-volume symbol=%s "
+                "(avg_vol=%.0f). Bypassing ALL selection logic. cycle_id=%s",
+                _best_volume_symbol,
+                _best_volume,
+                snapshot.cycle_id or "n/a",
+            )
+            try:
+                _ft_df = self._fetch_df(broker, _best_volume_symbol)
+                if _ft_df is not None and len(_ft_df) >= 10:
+                    _ft_price = float(_ft_df["close"].iloc[-1])
+                    _ft_bal = max(float(snapshot.balance or 0.0), 0.0)
+                    # Conservative micro-trade: 5% of balance, minimum $3.50
+                    _ft_size = max(min(_ft_bal * 0.05, _ft_bal), 3.50)
+                    _ft_action = (
+                        "enter_long" if _best_volume_side in ("long", "buy", "enter_long")
+                        else "enter_short"
+                    )
+                    if _ft_action == "enter_short":
+                        _ft_sl = _ft_price * 1.012
+                        _ft_tp = [_ft_price * 0.994, _ft_price * 0.990, _ft_price * 0.984]
+                    else:
+                        _ft_sl = _ft_price * 0.988
+                        _ft_tp = [_ft_price * 1.006, _ft_price * 1.010, _ft_price * 1.016]
+                    _ft_analysis = {
+                        "action": _ft_action,
+                        "entry_price": _ft_price,
+                        "position_size": _ft_size,
+                        "stop_loss": _ft_sl,
+                        "take_profit": _ft_tp,
+                        "trailing_stop_pct": 0.75,
+                        "reason": "FORCE_TRADE_direct_execute_fallback",
+                        "fallback_entry": True,
+                        "forced_fallback": True,
+                        "force_trade_direct": True,
+                    }
+                    logger.critical(
+                        "⚡ [FORCE_TRADE_DIRECT] Calling execute_action() | "
+                        "symbol=%s action=%s price=%.6f size=$%.2f sl=%.6f",
+                        _best_volume_symbol,
+                        _ft_action,
+                        _ft_price,
+                        _ft_size,
+                        _ft_sl,
+                    )
+                    _ft_success = self.apex.execute_action(_ft_analysis, _best_volume_symbol)
+                    logger.critical(
+                        "⚡ [FORCE_TRADE_DIRECT] ORDER RESULT | "
+                        "symbol=%s side=%s success=%s",
+                        _best_volume_symbol,
+                        _best_volume_side,
+                        _ft_success,
+                    )
+                    if _ft_success:
+                        entries += 1
+                        logger.critical(
+                            "✅ [FORCE_TRADE_DIRECT] Order submitted successfully — "
+                            "symbol=%s side=%s price=%.6f size=$%.2f",
+                            _best_volume_symbol,
+                            _best_volume_side,
+                            _ft_price,
+                            _ft_size,
+                        )
+                    else:
+                        logger.critical(
+                            "❌ [FORCE_TRADE_DIRECT] execute_action() returned False — "
+                            "symbol=%s. Check broker adapter can_execute() and FSM state.",
+                            _best_volume_symbol,
+                        )
+                else:
+                    logger.critical(
+                        "❌ [FORCE_TRADE_DIRECT] Could not fetch DataFrame for %s "
+                        "(df=%s len=%d) — direct fallback skipped.",
+                        _best_volume_symbol,
+                        "None" if _ft_df is None else "ok",
+                        0 if _ft_df is None else len(_ft_df),
+                    )
+            except Exception as _ft_err:
+                logger.critical(
+                    "❌ [FORCE_TRADE_DIRECT] execute_action() raised exception for %s: %s — "
+                    "direct fallback failed.",
+                    _best_volume_symbol,
+                    _ft_err,
+                )
+        elif _force_direct_bypass and entries == 0 and not _best_volume_symbol:
+            logger.critical(
+                "❌ [FORCE_TRADE_DIRECT] FORCE_TRADE active but no best-volume symbol "
+                "available (scored=%d) — direct fallback cannot run. "
+                "Check that symbols list is non-empty and broker data is flowing.",
+                scored,
+            )
+
         return entries, blocked, scored, _gate_rejections
 
     # ------------------------------------------------------------------
