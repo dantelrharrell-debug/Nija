@@ -1527,7 +1527,6 @@ class NijaCoreLoop:
                 regime=snapshot.current_regime,
             )
             can_trade = bool(result.can_trade)
-            print(f"⏱ Trade allowed: {can_trade}")
             if not result.can_trade:
                 return False, result.reason
             return True, "ok"
@@ -3895,43 +3894,15 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     "cycle=%d capital=$%.2f cycle_id=%s",
                     cycle, _cycle_cap, _current_cycle_id,
                 )
-                print(
-                    f"🚀 [CYCLE_INVOKE] strategy.run_cycle() CALLED | "
-                    f"cycle={cycle} capital=${_cycle_cap:.2f}",
-                    flush=True,
-                )
                 _cycle_start_ts = time.time()
                 _next_sleep_s = float(cycle_secs)
                 update_runtime_correlation(cycle_id=_current_cycle_id)
-                # ── Explicit run_cycle() invocation trace ─────────────────────
-                # These INFO logs confirm strategy.run_cycle() is being called
-                # every cycle and surface any skip/block reasons immediately.
-                _run_cycle_valid = strategy is not None and hasattr(strategy, "run_cycle")
-                logger.info(
-                    "🔁 [run_trading_loop] CALLING strategy.run_cycle() | "
-                    "cycle=%d capital=$%.2f strategy_valid=%s cycle_id=%s",
-                    cycle,
-                    float(_cycle_cap or 0.0),
-                    _run_cycle_valid,
-                    _current_cycle_id,
-                )
-                if not _run_cycle_valid:
-                    logger.critical(
-                        "🚫 [run_trading_loop] strategy.run_cycle() SKIPPED — "
-                        "strategy is None or missing run_cycle method | cycle=%d",
-                        cycle,
-                    )
                 try:
                     _strategy_next_interval = strategy.run_cycle()
                     logger.critical(
                         "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
                         "cycle=%d next_interval=%s",
                         cycle, _strategy_next_interval,
-                    logger.info(
-                        "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
-                        "cycle=%d next_interval=%s",
-                        cycle,
-                        _strategy_next_interval,
                     )
                     if isinstance(_strategy_next_interval, (int, float)):
                         _next_sleep_s = max(1.0, float(_strategy_next_interval))
