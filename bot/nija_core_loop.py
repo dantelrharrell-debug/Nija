@@ -1246,6 +1246,94 @@ class NijaCoreLoop:
         )
         _ca_hydrated = bool(_cap.get("ca_is_hydrated", False))
         _ca_total_capital = float(_cap.get("ca_total_capital", 0.0) or 0.0)
+
+        # ── Balance hydration waterfall ───────────────────────────────────
+        # Priority order (highest → lowest):
+        #   1. CA total capital (when hydrated AND non-zero)
+        #   2. Caller-supplied balance (when non-zero)
+        #   3. Broker cached balance (non-blocking attribute probe)
+        #   4. broker.get_balance() live fetch (only when all above are zero)
+        #   5. NIJA_FORCE_TRADE_BALANCE env var (operator override)
+        #
+        # The original logic used `_ca_total_capital if _ca_hydrated else balance`
+        # which caused $0.00 snapshots whenever CA was hydrated but reported
+        # zero capital — a common race condition at startup.
+        _caller_balance = float(balance) if balance else 0.0
+        _balance_source = "unknown"
+
+        if _ca_hydrated and _ca_total_capital > 0.0:
+            _canonical_balance = _ca_total_capital
+            _balance_source = "ca_total_capital"
+        elif _caller_balance > 0.0:
+            _canonical_balance = _caller_balance
+            _balance_source = "caller_supplied"
+        else:
+            # CA is not hydrated or reports zero AND caller supplied zero —
+            # attempt broker cached-attribute probe (non-blocking).
+            _broker_cached = _extract_cached_balance_for_log(broker) if broker is not None else 0.0
+            if _broker_cached > 0.0:
+                _canonical_balance = _broker_cached
+                _balance_source = "broker_cached_attr"
+            else:
+                # Last resort: live broker.get_balance() call.
+                _broker_live = 0.0
+                try:
+                    if broker is not None and hasattr(broker, "get_balance"):
+                        _raw_bal = broker.get_balance()
+                        if isinstance(_raw_bal, dict):
+                            for _k in ("total_balance", "balance", "usd_balance", "equity", "total_usd", "available_usd"):
+                                if _k in _raw_bal and float(_raw_bal[_k] or 0.0) > 0.0:
+                                    _broker_live = float(_raw_bal[_k])
+                                    break
+                        elif _raw_bal is not None:
+                            _broker_live = float(_raw_bal or 0.0)
+                except Exception as _bal_err:
+                    logger.warning("[NIJA] broker.get_balance() failed during balance hydration: %s", _bal_err)
+
+                if _broker_live > 0.0:
+                    _canonical_balance = _broker_live
+                    _balance_source = "broker_get_balance"
+                else:
+                    # Final fallback: NIJA_FORCE_TRADE_BALANCE env var.
+                    _env_balance_str = os.environ.get("NIJA_FORCE_TRADE_BALANCE", "").strip()
+                    _env_balance = 0.0
+                    try:
+                        _env_balance = float(_env_balance_str) if _env_balance_str else 0.0
+                    except (TypeError, ValueError):
+                        pass
+                    if _env_balance > 0.0:
+                        _canonical_balance = _env_balance
+                        _balance_source = "NIJA_FORCE_TRADE_BALANCE_env"
+                    else:
+                        # All sources exhausted — use zero and log loudly.
+                        _canonical_balance = 0.0
+                        _balance_source = "all_sources_zero"
+
+        # ── [NIJA-PRINT] BALANCE SNAPSHOT ────────────────────────────────
+        print(
+            f"[NIJA-PRINT] BALANCE SNAPSHOT | "
+            f"cycle_id={_cid} "
+            f"canonical_balance=${_canonical_balance:.2f} "
+            f"source={_balance_source} "
+            f"ca_hydrated={_ca_hydrated} "
+            f"ca_total_capital=${_ca_total_capital:.2f} "
+            f"caller_balance=${_caller_balance:.2f} "
+            f"NIJA_FORCE_TRADE_BALANCE={os.environ.get('NIJA_FORCE_TRADE_BALANCE', 'unset')}",
+            flush=True,
+        )
+        logger.critical(
+            "[NIJA] BALANCE SNAPSHOT | cycle_id=%s canonical=$%.2f source=%s "
+            "ca_hydrated=%s ca_total_capital=$%.2f caller_balance=$%.2f "
+            "NIJA_FORCE_TRADE_BALANCE=%s",
+            _cid,
+            _canonical_balance,
+            _balance_source,
+            _ca_hydrated,
+            _ca_total_capital,
+            _caller_balance,
+            os.environ.get("NIJA_FORCE_TRADE_BALANCE", "unset"),
+        )
+
         # Canonical balance source-of-truth:
         # - Once CA is hydrated AND reports a positive balance, use CA capital.
         # - If CA is hydrated but reports $0.00, fall back to caller-supplied
@@ -1715,6 +1803,7 @@ class NijaCoreLoop:
             f"symbols={len(symbols)} slots={available_slots} "
             f"streak={zero_signal_streak} "
             f"force_trade={_env_truthy('FORCE_TRADE')} "
+            f"balance=${float(getattr(snapshot, 'balance', 0.0) or 0.0):.2f} "
             f"balance=${float(snapshot.balance or 0.0):.2f} "
             f"regime={getattr(snapshot, 'current_regime', 'unknown')}",
             flush=True,
@@ -1728,6 +1817,7 @@ class NijaCoreLoop:
             available_slots,
             zero_signal_streak,
             _env_truthy("FORCE_TRADE"),
+            float(getattr(snapshot, "balance", 0.0) or 0.0),
             float(snapshot.balance or 0.0),
             str(getattr(snapshot, "current_regime", "unknown")),
         )
