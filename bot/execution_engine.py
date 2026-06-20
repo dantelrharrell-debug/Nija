@@ -1892,16 +1892,58 @@ class ExecutionEngine:
             logger.warning("⚠️ ActiveCapital not available — capital gate skipped (fail-open)")
             return True  # fail-open when capital layer is absent (legacy compatibility)
 
+        # ── FORCE_TRADE bypass: when operator override flags are active and
+        # ActiveCapital raises CapitalIntegrityError (authority not yet hydrated),
+        # fail-open so the order can proceed.  The broker adapter enforces the
+        # real account balance before any exchange interaction, so this bypass
+        # only skips the capital-pipeline gate — not the actual balance check.
+        # This is the second half of the "7000+ cycles, zero trades" fix:
+        # active_capital.py now returns a fallback value under FORCE_TRADE, but
+        # this catch ensures any residual CapitalIntegrityError is also bypassed.
+        _force_trade_bypass_cet = (
+            os.getenv("FORCE_TRADE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.getenv("FORCE_TRADE_MODE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+        )
+
         try:
             balance = get_active_capital().get_total_available_balance()
         except CapitalIntegrityError as exc:
+            if _force_trade_bypass_cet:
+                logger.warning(
+                    "⚡ [can_execute_trade] FORCE_TRADE bypass: CapitalIntegrityError suppressed — "
+                    "failing open so order can proceed. error=%s "
+                    "(FORCE_TRADE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK active)",
+                    exc,
+                )
+                return True
             logger.warning("🚫 CAPITAL INTEGRITY ERROR — trade blocked: %s", exc)
             return False
         except Exception as exc:
+            if _force_trade_bypass_cet:
+                logger.warning(
+                    "⚡ [can_execute_trade] FORCE_TRADE bypass: capital check exception suppressed — "
+                    "failing open so order can proceed. error=%s",
+                    exc,
+                )
+                return True
             logger.warning("🚫 CAPITAL CHECK FAILED — trade blocked: %s", exc)
             return False
 
         if balance <= 0:
+            if _force_trade_bypass_cet:
+                logger.warning(
+                    "⚡ [can_execute_trade] FORCE_TRADE bypass: balance=$%.2f ≤ 0 — "
+                    "failing open so order can proceed. "
+                    "Broker adapter will enforce real balance limits.",
+                    balance,
+                )
+                return True
             logger.warning(
                 "🚫 NO CAPITAL AVAILABLE — trade blocked "
                 "(balance=$%.2f, order_size=$%.2f)",
