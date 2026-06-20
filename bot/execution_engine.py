@@ -1956,6 +1956,12 @@ class ExecutionEngine:
                 except Exception:
                     pass
 
+            logger.info(
+                "📋 [ExecutionEngine.execute_entry] ENTRY GATE STARTED | symbol=%s side=%s "
+                "position_size=$%.2f entry_price=%.6f",
+                symbol, side, position_size, entry_price,
+            )
+
             # Bootstrap authority gate: execution is blocked until bootstrap
             # finalization grants runtime execution_authority.
             try:
@@ -1970,14 +1976,16 @@ class ExecutionEngine:
                     else bool(getattr(_bfsm, "execution_authority", False))
                 )
                 if not _has_auth:
-                    logger.warning(
-                        "⛔ EXECUTION AUTHORITY BLOCK: %s skipped — bootstrap execution_authority=false",
+                    logger.error(
+                        "🚫 EXECUTION AUTHORITY BLOCK: %s rejected — bootstrap execution_authority=false "
+                        "(BootstrapFSM state=%s). Set FORCE_TRADE=true to bypass or wait for bootstrap to complete.",
                         symbol,
+                        getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                     )
                     _trace("ecel", "rejected", "bootstrap_execution_authority_false", terminal=True)
                     return None
             except Exception as _auth_exc:
-                logger.debug("Bootstrap execution authority check skipped: %s", _auth_exc)
+                logger.warning("Bootstrap execution authority check skipped (non-fatal): %s", _auth_exc)
 
             _balance_available, _balance_total, _ = self._get_cached_balance_snapshot()
 
@@ -2067,8 +2075,9 @@ class ExecutionEngine:
             # Must run before Recovery Controller and LIVE_CAPITAL_VERIFIED checks
             # so that a zero-capital state is caught before any further validation.
             if not self.can_execute_trade(position_size):
-                logger.warning(
-                    "🚫 CAPITAL GATE BLOCKED ENTRY — Symbol: %s | Side: %s | Size: $%.2f",
+                logger.error(
+                    "🚫 CAPITAL GATE BLOCKED ENTRY — Symbol: %s | Side: %s | Size: $%.2f "
+                    "(can_execute_trade returned False — check balance/position limits)",
                     symbol,
                     side,
                     position_size,
@@ -2532,12 +2541,15 @@ class ExecutionEngine:
                 broker_name_str = format_broker_identity(self.broker_client)
 
                 # Allow ops to keep Coinbase connected for data while disabling execution.
-                _coinbase_exec_disabled = os.getenv("ENABLE_COINBASE_TRADING", "false").strip().lower() in (
+                # Default is "true" — Coinbase trading is ENABLED unless explicitly set to false.
+                _coinbase_exec_disabled = os.getenv("ENABLE_COINBASE_TRADING", "true").strip().lower() in (
                     "0", "false", "no", "off"
                 )
                 if broker_name_str.lower() == "coinbase" and _coinbase_exec_disabled:
-                    logger.warning(
-                        "⏭️ COINBASE_EXECUTION_DISABLED: skipping %s %s on Coinbase",
+                    logger.error(
+                        "🚫 COINBASE_EXECUTION_DISABLED: order dropped for %s %s — "
+                        "ENABLE_COINBASE_TRADING is set to a falsy value. "
+                        "Set ENABLE_COINBASE_TRADING=true to enable Coinbase order submission.",
                         order_side,
                         symbol,
                     )

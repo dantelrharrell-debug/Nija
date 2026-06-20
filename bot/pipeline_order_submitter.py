@@ -89,6 +89,11 @@ def submit_market_order_via_pipeline(
         try:
             assert_distributed_writer_authority()
         except Exception as exc:
+            logger.error(
+                "🚫 [PipelineOrderSubmitter] DistributedWriterFence reject — "
+                "symbol=%s side=%s error=%s",
+                symbol, side, exc,
+            )
             return {
                 "status": "error",
                 "error": f"DistributedWriterFence reject: {exc}",
