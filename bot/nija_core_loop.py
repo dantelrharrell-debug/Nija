@@ -2357,17 +2357,88 @@ class NijaCoreLoop:
                 if fallback_active and action in ("enter_long", "enter_short"):
                     missing = {"position_size", "entry_price", "stop_loss", "take_profit"} - set(analysis.keys())
                     if missing:
-                        fallback_payload = self._build_forced_fallback_entry_analysis(
-                            df=df,
-                            sig=sig,
-                            snapshot=snapshot,
-                            action=action,
-                            existing_reason=analysis.get("reason", ""),
+                        logger.info(
+                            "⚡ [CoreLoop] Building fallback entry payload for %s "
+                            "(missing fields: %s, force_trade=%s)",
+                            sig.symbol,
+                            missing,
+                            _force_trade_bypass,
                         )
-                        analysis.update(fallback_payload)
-                        # The fallback payload is already sized conservatively;
-                        # avoid multiplying it below broker minimum notional.
-                        sig.position_multiplier = 1.0
+                        try:
+                            fallback_payload = self._build_forced_fallback_entry_analysis(
+                                df=df,
+                                sig=sig,
+                                snapshot=snapshot,
+                                action=action,
+                                existing_reason=analysis.get("reason", ""),
+                            )
+                            analysis.update(fallback_payload)
+                            # The fallback payload is already sized conservatively;
+                            # avoid multiplying it below broker minimum notional.
+                            sig.position_multiplier = 1.0
+                        except Exception as _fallback_err:
+                            # _build_forced_fallback_entry_analysis raised (e.g.
+                            # competitive_profitability_policy liquidity block or
+                            # missing close price).  When FORCE_TRADE is active,
+                            # build a minimal hardcoded payload directly so that
+                            # execute_action() is still called rather than silently
+                            # skipping this signal.
+                            if _force_trade_bypass:
+                                logger.warning(
+                                    "⚡ [FORCE_TRADE] _build_forced_fallback_entry_analysis "
+                                    "raised for %s (%s) — constructing minimal emergency "
+                                    "payload to ensure execute_action() is called.",
+                                    sig.symbol,
+                                    _fallback_err,
+                                )
+                                try:
+                                    _price = float(df["close"].iloc[-1])
+                                    _bal = max(float(snapshot.balance or 0.0), 0.0)
+                                    _size = max(min(_bal * 0.05, _bal), 3.50)
+                                    if action == "enter_short":
+                                        _sl = _price * 1.012
+                                        _tp = [_price * 0.994, _price * 0.990, _price * 0.984]
+                                    else:
+                                        _sl = _price * 0.988
+                                        _tp = [_price * 1.006, _price * 1.010, _price * 1.016]
+                                    analysis.update({
+                                        "action": action,
+                                        "entry_price": _price,
+                                        "position_size": _size,
+                                        "stop_loss": _sl,
+                                        "take_profit": _tp,
+                                        "trailing_stop_pct": 0.75,
+                                        "reason": (
+                                            analysis.get("reason", "") +
+                                            " [emergency_fallback_payload]"
+                                        ),
+                                        "fallback_entry": True,
+                                        "forced_fallback": True,
+                                        "emergency_payload": True,
+                                    })
+                                    sig.position_multiplier = 1.0
+                                    logger.warning(
+                                        "⚡ [FORCE_TRADE] Emergency payload built for %s: "
+                                        "price=%.6f size=$%.2f sl=%.6f",
+                                        sig.symbol, _price, _size, _sl,
+                                    )
+                                except Exception as _emergency_err:
+                                    logger.error(
+                                        "❌ [FORCE_TRADE] Emergency payload construction "
+                                        "also failed for %s: %s — signal will be blocked.",
+                                        sig.symbol,
+                                        _emergency_err,
+                                    )
+                                    blocked += 1
+                                    _funnel["profitability"] = (
+                                        "FAIL",
+                                        f"EMERGENCY_PAYLOAD_FAILED:{_emergency_err}",
+                                    )
+                                    continue
+                            else:
+                                # Not in FORCE_TRADE mode — re-raise so the outer
+                                # except block handles it normally.
+                                raise
 
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
@@ -2527,6 +2598,18 @@ class NijaCoreLoop:
         take_profit_pct = (0.85, 1.20, 1.80)
         take_profit_pct = (0.60, 1.00, 1.60)
         trailing_stop_pct = 0.75
+        # Check whether any FORCE_TRADE flag is active — when set, the
+        # liquidity gate in competitive_profitability_policy must NOT raise
+        # ValueError because that exception propagates to the outer execution
+        # loop's except-block, increments `blocked`, and causes execute_action()
+        # to be silently skipped.  This was the root cause of the
+        # "6000+ cycles, zero trades" condition.
+        _force_trade_active = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+        )
         try:
             from bot.competitive_profitability_policy import get_competitive_profitability_policy
 
@@ -2535,20 +2618,37 @@ class NijaCoreLoop:
                 side="short" if action == "enter_short" else "long",
             )
             if not competitive_profile.liquidity_ok:
-                raise ValueError(
-                    "competitive profitability policy blocked illiquid fallback entry: "
-                    f"{competitive_profile.liquidity_reason}"
-                )
-            risk_fraction = competitive_profile.risk_fraction
-            stop_loss_pct = min(float(competitive_profile.stop_loss_pct), 3.0)
-            raw_tp = tuple(float(pct) for pct in competitive_profile.take_profit_pct)
-            tp1 = max(raw_tp[0] if len(raw_tp) > 0 else 0.0, 0.85)
-            tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
-            tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
-            take_profit_pct = (tp1, tp2, tp3)
-            stop_loss_pct = competitive_profile.stop_loss_pct
-            take_profit_pct = competitive_profile.take_profit_pct
-            trailing_stop_pct = competitive_profile.trailing_stop_pct
+                if _force_trade_active:
+                    # FORCE_TRADE active: log the liquidity warning but proceed
+                    # with the conservative default geometry instead of raising.
+                    # Raising here was the root cause of execute_action() never
+                    # being called — the ValueError was caught by the outer loop
+                    # and silently converted to a blocked entry.
+                    logger.warning(
+                        "⚡ [FORCE_TRADE] competitive_profitability_policy liquidity check "
+                        "FAILED for %s (%s) — bypassing block and using default geometry "
+                        "because FORCE_TRADE is active.",
+                        getattr(sig, "symbol", "UNKNOWN"),
+                        competitive_profile.liquidity_reason,
+                    )
+                    # Fall through to use the default risk_fraction / take_profit_pct
+                    # values set above; do NOT update them from the illiquid profile.
+                else:
+                    raise ValueError(
+                        "competitive profitability policy blocked illiquid fallback entry: "
+                        f"{competitive_profile.liquidity_reason}"
+                    )
+            else:
+                risk_fraction = competitive_profile.risk_fraction
+                stop_loss_pct = min(float(competitive_profile.stop_loss_pct), 3.0)
+                raw_tp = tuple(float(pct) for pct in competitive_profile.take_profit_pct)
+                tp1 = max(raw_tp[0] if len(raw_tp) > 0 else 0.0, 0.85)
+                tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
+                tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
+                take_profit_pct = (tp1, tp2, tp3)
+                stop_loss_pct = competitive_profile.stop_loss_pct
+                take_profit_pct = competitive_profile.take_profit_pct
+                trailing_stop_pct = competitive_profile.trailing_stop_pct
         except ValueError:
             raise
         except Exception:
