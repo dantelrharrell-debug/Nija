@@ -435,6 +435,7 @@ class AIEntryGate:
         gate_score_reduction: float = 0.0,
         volume_gate_multiplier: Optional[float] = None,
         reason: str = "",
+        symbol: str = "",
     ) -> GateResult:
         """
         Run all 5 gates and return a score-based pass/fail decision.
@@ -729,14 +730,39 @@ class AIEntryGate:
                 except Exception:
                     pass
 
+        # ── Extract per-field values for structured verdict log ───────────────
+        _log_confidence = enhanced_score / MAX_ENTRY_SCORE if MAX_ENTRY_SCORE > 0 else 0.0
+        _log_adx: Optional[float] = None
+        try:
+            _adx_series = indicators.get("adx")
+            if _adx_series is not None:
+                _log_adx = float(_adx_series.iloc[-1]) if hasattr(_adx_series, "iloc") else float(_adx_series)
+        except Exception:
+            pass
+        _log_rel_vol: Optional[float] = None
+        try:
+            _avg_v = df["volume"].iloc[-21:-1].mean() if len(df) >= 21 else df["volume"].mean()
+            _cur_v = float(df["volume"].iloc[-1])
+            _log_rel_vol = round(_cur_v / _avg_v, 3) if _avg_v > 0 else None
+        except Exception:
+            pass
+        _gate_failed_reason = reason if not passed else ""
+        _final_action = "EXECUTE" if passed else "REJECT"
         logger.info(
-            f"FINAL DECISION → score={total_score:.2f} threshold={effective_threshold:.2f}"
-            f" execute={passed}"
+            "SIGNAL_VERDICT | symbol=%s confidence=%.3f adx=%s relative_volume=%s"
+            " gate_passed=%s gate_failed_reason=%s final_action=%s"
+            " gate_score=%.2f threshold=%.2f",
+            symbol or "unknown",
+            _log_confidence,
+            ("%.2f" % _log_adx) if _log_adx is not None else "n/a",
+            ("%.3f" % _log_rel_vol) if _log_rel_vol is not None else "n/a",
+            passed,
+            _gate_failed_reason or "none",
+            _final_action,
+            total_score,
+            effective_threshold,
         )
         if not passed:
-            logger.info(
-                f"TRADE REJECTED → reason={reason} score={total_score} conf={enhanced_score}"
-            )
             if _GATE_DIAGNOSTICS_ENABLED:
                 per_gate = ", ".join(
                     f"{k}:{'pass' if g.passed else 'fail'}({g.value}/{g.threshold})"
