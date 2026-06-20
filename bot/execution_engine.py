@@ -736,7 +736,21 @@ class ExecutionEngine:
         strategy_name: str = "ExecutionEngine",
     ) -> Dict[str, Any]:
         """Canonical market-order submit through ExecutionPipeline/ECEL."""
+        logger.info(
+            "🔌 [ExecutionEngine._submit_market_order_via_pipeline] CALLED | "
+            "symbol=%s side=%s size_usd=%.2f price_hint=%.6f strategy=%s",
+            symbol,
+            side,
+            float(size_usd or 0.0),
+            float(price_hint_usd or 0.0),
+            strategy_name,
+        )
         if get_execution_pipeline is None or PipelineRequest is None:
+            logger.error(
+                "🚫 [ExecutionEngine._submit_market_order_via_pipeline] ExecutionPipeline unavailable "
+                "— order DROPPED | symbol=%s side=%s size_usd=%.2f",
+                symbol, side, float(size_usd or 0.0),
+            )
             return {
                 "status": "error",
                 "error": "ExecutionPipeline unavailable",
@@ -1975,22 +1989,33 @@ class ExecutionEngine:
                     if hasattr(_bfsm, "has_execution_authority")
                     else bool(getattr(_bfsm, "execution_authority", False))
                 )
+                logger.info(
+                    "🔑 [ExecutionEngine] Bootstrap authority gate | symbol=%s has_auth=%s "
+                    "fsm_state=%s",
+                    symbol,
+                    _has_auth,
+                    getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
+                )
                 if not _has_auth:
                     _force_trade_now_bootstrap = (
                         os.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
                         or os.getenv("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
+                        or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "false").lower() in ("true", "1", "yes", "on", "enabled")
                     )
                     if _force_trade_now_bootstrap:
                         logger.warning(
                             "⚠️  EXECUTION AUTHORITY BLOCK bypassed for %s — bootstrap execution_authority=false "
-                            "(BootstrapFSM state=%s) but FORCE_TRADE / FORCE_TRADE_MODE is set to a truthy value (true/1/yes) overriding this gate.",
+                            "(BootstrapFSM state=%s) but FORCE_TRADE / FORCE_TRADE_MODE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK "
+                            "is set to a truthy value overriding this gate.",
                             symbol,
                             getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                         )
                     else:
                         logger.error(
                             "🚫 EXECUTION AUTHORITY BLOCK: %s rejected — bootstrap execution_authority=false "
-                            "(BootstrapFSM state=%s). Set FORCE_TRADE or FORCE_TRADE_MODE to a truthy value (true/1/yes) to bypass or wait for bootstrap to complete.",
+                            "(BootstrapFSM state=%s). Set FORCE_TRADE, FORCE_TRADE_MODE, or "
+                            "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK to a truthy value to bypass, "
+                            "or wait for bootstrap to complete.",
                             symbol,
                             getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                         )
@@ -2184,18 +2209,44 @@ class ExecutionEngine:
                 hard_controls = get_hard_controls()
                 can_trade, error_msg = hard_controls.can_trade(self.user_id)
 
+                logger.info(
+                    "🔐 [ExecutionEngine] Hard controls gate | symbol=%s can_trade=%s reason=%s",
+                    symbol,
+                    can_trade,
+                    error_msg or "ok",
+                )
+
                 if not can_trade:
-                    logger.error("=" * 80)
-                    logger.error("🔴 TRADE EXECUTION BLOCKED")
-                    logger.error("=" * 80)
-                    logger.error(f"   Symbol: {symbol}")
-                    logger.error(f"   Side: {side}")
-                    logger.error(f"   Position Size: ${position_size:.2f}")
-                    logger.error(f"   User ID: {self.user_id}")
-                    logger.error(f"   Reason: {error_msg}")
-                    logger.error("=" * 80)
-                    _trace("ecel", "rejected", f"hard_controls:{error_msg}", terminal=True)
-                    return None
+                    # Allow bypass when NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK is set —
+                    # consistent with how the execution pipeline handles this flag for
+                    # single-instance Railway deployments without Redis fencing tokens.
+                    _hc_bypass = (
+                        os.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
+                        or os.getenv("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
+                        or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "false").lower() in ("true", "1", "yes", "on", "enabled")
+                    )
+                    if _hc_bypass:
+                        logger.warning(
+                            "⚠️  [ExecutionEngine] Hard controls block bypassed for %s — "
+                            "FORCE_TRADE / FORCE_TRADE_MODE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK "
+                            "is set. reason=%s",
+                            symbol,
+                            error_msg,
+                        )
+                    else:
+                        logger.error("=" * 80)
+                        logger.error("🔴 TRADE EXECUTION BLOCKED")
+                        logger.error("=" * 80)
+                        logger.error(f"   Symbol: {symbol}")
+                        logger.error(f"   Side: {side}")
+                        logger.error(f"   Position Size: ${position_size:.2f}")
+                        logger.error(f"   User ID: {self.user_id}")
+                        logger.error(f"   Reason: {error_msg}")
+                        logger.error(f"   Tip: Set LIVE_CAPITAL_VERIFIED=true, FORCE_TRADE=true, or")
+                        logger.error(f"        NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to enable trading.")
+                        logger.error("=" * 80)
+                        _trace("ecel", "rejected", f"hard_controls:{error_msg}", terminal=True)
+                        return None
 
             # FIX #3 (Jan 19, 2026): Check if broker supports this symbol before attempting trade
             if self.broker_client and hasattr(self.broker_client, 'supports_symbol'):
