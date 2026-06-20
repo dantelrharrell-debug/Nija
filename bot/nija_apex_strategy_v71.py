@@ -5358,6 +5358,16 @@ class NIJAApexStrategyV71:
         """
         action = action_data.get('action')
 
+        print(
+            f"[NIJA-PRINT] execute_action CALLED | "
+            f"symbol={symbol} action={action} "
+            f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+            f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+            f"sl={float(action_data.get('stop_loss', 0.0) or 0.0):.6f} "
+            f"force_trade={os.getenv('FORCE_TRADE', 'false')} "
+            f"fallback={bool(action_data.get('forced_fallback') or action_data.get('fallback_entry'))}",
+            flush=True,
+        )
         logger.critical(
             "🎯 [execute_action] CALLED | symbol=%s action=%s position_size=$%.2f "
             "entry_price=%.6f stop_loss=%.6f force_trade=%s fallback_entry=%s",
