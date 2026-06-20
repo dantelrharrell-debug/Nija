@@ -3904,6 +3904,12 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         "cycle=%d next_interval=%s",
                         cycle, _strategy_next_interval,
                     )
+                    logger.info(
+                        "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
+                        "cycle=%d next_interval=%s",
+                        cycle,
+                        _strategy_next_interval,
+                    )
                     if isinstance(_strategy_next_interval, (int, float)):
                         _next_sleep_s = max(1.0, float(_strategy_next_interval))
                 except Exception as _run_cycle_err:
