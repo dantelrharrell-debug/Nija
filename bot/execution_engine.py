@@ -736,6 +736,14 @@ class ExecutionEngine:
         strategy_name: str = "ExecutionEngine",
     ) -> Dict[str, Any]:
         """Canonical market-order submit through ExecutionPipeline/ECEL."""
+        print(
+            f"[NIJA-PRINT] _submit_market_order_via_pipeline CALLED | "
+            f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
+            f"price_hint={float(price_hint_usd or 0.0):.6f} "
+            f"pipeline_available={get_execution_pipeline is not None and PipelineRequest is not None} "
+            f"force_trade={os.getenv('FORCE_TRADE', 'false')}",
+            flush=True,
+        )
         logger.critical(
             "🔌 [BrokerAdapter] ORDER SUBMISSION STARTED | "
             "symbol=%s side=%s size_usd=%.2f price_hint=%.6f strategy=%s "
@@ -829,6 +837,13 @@ class ExecutionEngine:
         )
 
         if not res.success:
+            print(
+                f"[NIJA-PRINT] ORDER REJECTED by ExecutionPipeline | "
+                f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
+                f"error={res.error or 'unknown'} "
+                f"broker={getattr(res, 'broker', preferred_broker)}",
+                flush=True,
+            )
             logger.critical(
                 "❌ [BrokerAdapter] ORDER REJECTED by ExecutionPipeline | "
                 "symbol=%s side=%s size_usd=%.2f error=%s broker=%s",
@@ -843,6 +858,14 @@ class ExecutionEngine:
                 "side": side,
             }
 
+        print(
+            f"[NIJA-PRINT] ORDER ACCEPTED by ExecutionPipeline | "
+            f"symbol={symbol} side={side} "
+            f"filled_price={float(res.fill_price or 0.0):.6f} "
+            f"filled_size_usd={float(res.filled_size_usd or 0.0):.2f} "
+            f"broker={getattr(res, 'broker', preferred_broker)}",
+            flush=True,
+        )
         logger.critical(
             "✅ [BrokerAdapter] ORDER ACCEPTED by ExecutionPipeline | "
             "symbol=%s side=%s filled_price=%.6f filled_size_usd=%.2f broker=%s",

@@ -1674,6 +1674,16 @@ class NijaCoreLoop:
         gate_rejections is a dict mapping gate name → rejection count for this cycle.
         """
         # ── VERBOSE ENTRY LOG: confirm _phase3_scan_and_enter() was reached ──
+        print(
+            f"[NIJA-PRINT] _phase3_scan_and_enter START | "
+            f"cycle_id={getattr(snapshot, 'cycle_id', '?')} "
+            f"symbols={len(symbols)} slots={available_slots} "
+            f"streak={zero_signal_streak} "
+            f"force_trade={_env_truthy('FORCE_TRADE')} "
+            f"balance=${float(getattr(snapshot, 'available_capital', 0.0) or 0.0):.2f} "
+            f"regime={getattr(snapshot, 'current_regime', 'unknown')}",
+            flush=True,
+        )
         logger.critical(
             "🔬 [Phase3] START _phase3_scan_and_enter | cycle_id=%s symbol_count=%d "
             "available_slots=%d zero_signal_streak=%d force_trade=%s "
@@ -2702,7 +2712,19 @@ class NijaCoreLoop:
                     action,
                     list(analysis.keys()),
                 )
+                print(
+                    f"[NIJA-PRINT] BEFORE execute_action | "
+                    f"symbol={sig.symbol} action={action} "
+                    f"size=${float(analysis.get('position_size', 0.0) or 0.0):.2f} "
+                    f"price={float(analysis.get('entry_price', 0.0) or 0.0):.6f}",
+                    flush=True,
+                )
                 success = self.apex.execute_action(analysis, sig.symbol)
+                print(
+                    f"[NIJA-PRINT] AFTER execute_action | "
+                    f"symbol={sig.symbol} side={sig.side} success={success}",
+                    flush=True,
+                )
                 logger.critical(
                     "📬 [CoreLoop] ORDER RESULT | symbol=%s side=%s success=%s",
                     sig.symbol,
@@ -2741,6 +2763,11 @@ class NijaCoreLoop:
                         pass
 
             except Exception as exec_err:
+                print(
+                    f"[NIJA-PRINT] EXCEPTION in execute_action | "
+                    f"symbol={sig.symbol} error={exec_err!r}",
+                    flush=True,
+                )
                 logger.warning("Phase3 execute error for %s: %s", sig.symbol, exec_err)
                 blocked += 1
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
@@ -2858,7 +2885,19 @@ class NijaCoreLoop:
                         _ft_size,
                         _ft_sl,
                     )
+                    print(
+                        f"[NIJA-PRINT] FORCE_TRADE_DIRECT BEFORE execute_action | "
+                        f"symbol={_best_volume_symbol} action={_ft_action} "
+                        f"price={_ft_price:.6f} size=${_ft_size:.2f} sl={_ft_sl:.6f}",
+                        flush=True,
+                    )
                     _ft_success = self.apex.execute_action(_ft_analysis, _best_volume_symbol)
+                    print(
+                        f"[NIJA-PRINT] FORCE_TRADE_DIRECT AFTER execute_action | "
+                        f"symbol={_best_volume_symbol} side={_best_volume_side} "
+                        f"success={_ft_success}",
+                        flush=True,
+                    )
                     logger.critical(
                         "⚡ [FORCE_TRADE_DIRECT] ORDER RESULT | "
                         "symbol=%s side=%s success=%s",
@@ -2891,6 +2930,11 @@ class NijaCoreLoop:
                         0 if _ft_df is None else len(_ft_df),
                     )
             except Exception as _ft_err:
+                print(
+                    f"[NIJA-PRINT] FORCE_TRADE_DIRECT EXCEPTION | "
+                    f"symbol={_best_volume_symbol} error={_ft_err!r}",
+                    flush=True,
+                )
                 logger.critical(
                     "❌ [FORCE_TRADE_DIRECT] execute_action() raised exception for %s: %s — "
                     "direct fallback failed.",
