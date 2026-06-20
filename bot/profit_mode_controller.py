@@ -39,8 +39,14 @@ Three automatic mode-shifting systems layer on top of the base level:
    * Platform accounts → floor raised to Mode 2
    * User accounts     → ceiling capped at Mode 1 (safer scaling)
 
-Use ``get_effective_level(account_type)`` to retrieve the fully-composed mode
-for a given execution context.
+4. **Market-condition overlay** (fed by ``nija_core_loop`` each scan)
+   * API/data degradation → slow scans, disable fallback, raise quality floors
+   * Volatility spikes    → scan faster but stay selective
+   * Quiet healthy markets → loosen floors and enable volume fallback
+
+Use ``get_effective_level(account_type)`` for level-only decisions and
+``market_adjusted_params`` for scanner/order-entry thresholds that must adapt
+to current market health.
 
 Integration Points
 ------------------
@@ -62,7 +68,7 @@ import datetime
 import logging
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 logger = logging.getLogger("nija.profit_mode_ctrl")
@@ -101,6 +107,25 @@ class ProfitModeParams:
     # TradeRankingEngine percentile gate; lower value = more setups pass
     # 0.55 → top 45% pass | 0.40 → top 60% pass | 0.25 → top 75% pass
     pass_percentile: float
+
+    # AIEntryGate volume threshold override.  None keeps the gate default; lower
+    # values admit thinner-but-still-live markets during healthy no-signal
+    # periods, higher values keep degraded/high-volatility scans selective.
+    volume_gate_multiplier: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class MarketConditionSnapshot:
+    """Recent market-health inputs used for autonomous parameter adjustment."""
+
+    data_success_rate: float = 1.0
+    candidate_rate: float = 0.0
+    avg_abs_return_pct: float = 0.0
+    zero_signal_streak: int = 0
+    api_error_rate: float = 0.0
+    avg_adx: float = 0.0
+    avg_volume_pct: float = 0.0
+    market_filter_pass_rate: float = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +238,8 @@ class ProfitModeController:
         # PnL streak counters (positive = consecutive wins, negative = consecutive losses)
         self._loss_streak: int = 0
         self._win_streak: int = 0
+        self._market_snapshot: MarketConditionSnapshot = MarketConditionSnapshot()
+        self._last_market_regime: str = "normal"
 
         logger.info(
             "💰 ProfitModeController ready — Level %d (%s) | "
@@ -267,7 +294,188 @@ class ProfitModeController:
 
     def volume_fallback_enabled(self) -> bool:
         """True when Level 3 top-volume fallback is active."""
-        return self.params.enable_volume_fallback
+        return self.market_adjusted_params.enable_volume_fallback
+
+    def update_market_conditions(self, snapshot: MarketConditionSnapshot) -> None:
+        """Update the latest market-health snapshot used for autonomous tuning."""
+        clipped = MarketConditionSnapshot(
+            data_success_rate=max(0.0, min(1.0, float(snapshot.data_success_rate))),
+            candidate_rate=max(0.0, min(1.0, float(snapshot.candidate_rate))),
+            avg_abs_return_pct=max(0.0, float(snapshot.avg_abs_return_pct)),
+            zero_signal_streak=max(0, int(snapshot.zero_signal_streak)),
+            api_error_rate=max(0.0, min(1.0, float(snapshot.api_error_rate))),
+            avg_adx=max(0.0, float(snapshot.avg_adx)),
+            avg_volume_pct=float(snapshot.avg_volume_pct),
+            market_filter_pass_rate=max(0.0, min(1.0, float(snapshot.market_filter_pass_rate))),
+        )
+        regime = self._classify_market_snapshot(clipped)
+        with self._lock:
+            previous = self._last_market_regime
+            self._market_snapshot = clipped
+            self._last_market_regime = regime
+        if regime != previous:
+            logger.info(
+                "📈 Market-adaptive mode %s → %s | data=%.0f%% candidates=%.0f%% "
+                "avg_abs_return=%.3f%% avg_adx=%.1f avg_vol=%.1f%% "
+                "market_pass=%.0f%% zero_streak=%d api_err=%.0f%%",
+                previous,
+                regime,
+                clipped.data_success_rate * 100.0,
+                clipped.candidate_rate * 100.0,
+                clipped.avg_abs_return_pct,
+                clipped.avg_adx,
+                clipped.avg_volume_pct,
+                clipped.market_filter_pass_rate * 100.0,
+                clipped.zero_signal_streak,
+                clipped.api_error_rate * 100.0,
+            )
+
+    @property
+    def market_adjusted_params(self) -> ProfitModeParams:
+        """Return profit-mode params adjusted for the latest market snapshot."""
+        with self._lock:
+            base = _LEVELS[self._level]
+            snap = self._market_snapshot
+            regime = self._last_market_regime
+        return self._apply_market_adjustment(base, snap, regime)
+
+    @staticmethod
+    def _classify_market_snapshot(snapshot: MarketConditionSnapshot) -> str:
+        if snapshot.data_success_rate < 0.45 or snapshot.api_error_rate >= 0.25:
+            return "degraded_market_data"
+        if snapshot.avg_abs_return_pct >= 2.5:
+            return "high_volatility"
+        if (
+            snapshot.zero_signal_streak >= 2
+            and snapshot.data_success_rate >= 0.70
+            and snapshot.market_filter_pass_rate >= 0.50
+            and snapshot.avg_adx >= 2.0
+        ):
+            return "quiet_no_signal"
+        if (
+            snapshot.candidate_rate >= 0.08
+            and snapshot.data_success_rate >= 0.70
+            and snapshot.avg_adx >= 6.0
+        ):
+            return "opportunity_rich"
+        return "normal"
+
+    @staticmethod
+    def _apply_market_adjustment(
+        base: ProfitModeParams,
+        snapshot: MarketConditionSnapshot,
+        regime: str,
+    ) -> ProfitModeParams:
+        if regime == "degraded_market_data":
+            params = replace(
+                base,
+                min_score_absolute=max(base.min_score_absolute, 15.5),
+                interval_fast=max(base.interval_fast, 120),
+                interval_normal=max(base.interval_normal, 180),
+                interval_slow=max(base.interval_slow, 240),
+                forced_entry_streak_threshold=max(base.forced_entry_streak_threshold, 8),
+                hard_bypass_streak_threshold=max(base.hard_bypass_streak_threshold, 30),
+                min_score_hard_floor=max(base.min_score_hard_floor, 18.0),
+                enable_volume_fallback=False,
+                pass_percentile=max(base.pass_percentile, 0.55),
+                volume_gate_multiplier=0.50,
+            )
+            return ProfitModeController._apply_continuous_market_scaling(params, snapshot)
+        if regime == "high_volatility":
+            params = replace(
+                base,
+                min_score_absolute=max(base.min_score_absolute, 14.0),
+                interval_fast=min(base.interval_fast, 75),
+                interval_normal=min(base.interval_normal, 120),
+                interval_slow=min(base.interval_slow, 150),
+                forced_entry_streak_threshold=max(base.forced_entry_streak_threshold, 5),
+                hard_bypass_streak_threshold=max(base.hard_bypass_streak_threshold, 18),
+                min_score_hard_floor=max(base.min_score_hard_floor, 16.0),
+                enable_volume_fallback=False,
+                pass_percentile=max(base.pass_percentile, 0.45),
+                volume_gate_multiplier=0.45,
+            )
+            return ProfitModeController._apply_continuous_market_scaling(params, snapshot)
+        if regime == "quiet_no_signal":
+            # Healthy data + repeated no-candidate cycles means the scanner is
+            # over-filtering the current market.  Move into a small-size
+            # exploration profile quickly, while still preserving stricter
+            # degraded-data/high-volatility behavior above.
+            floor = max(3.0, min(base.min_score_hard_floor * 0.50, 5.0))
+            params = replace(
+                base,
+                min_score_absolute=max(3.0, min(base.min_score_absolute * 0.50, 6.0)),
+                interval_fast=min(base.interval_fast, 45),
+                interval_normal=min(base.interval_normal, 60),
+                interval_slow=min(base.interval_slow, 90),
+                forced_entry_streak_threshold=min(base.forced_entry_streak_threshold, 1),
+                hard_bypass_streak_threshold=min(base.hard_bypass_streak_threshold, 4),
+                min_score_hard_floor=floor,
+                enable_volume_fallback=True,
+                pass_percentile=min(base.pass_percentile, 0.25),
+                volume_gate_multiplier=0.30,
+            )
+            return ProfitModeController._apply_continuous_market_scaling(params, snapshot)
+        if regime == "opportunity_rich":
+            params = replace(
+                base,
+                interval_fast=min(base.interval_fast, 60),
+                interval_normal=min(base.interval_normal, 90),
+                interval_slow=min(base.interval_slow, 120),
+                volume_gate_multiplier=0.30,
+            )
+            return ProfitModeController._apply_continuous_market_scaling(params, snapshot)
+        return ProfitModeController._apply_continuous_market_scaling(base, snapshot)
+
+    @staticmethod
+    def _apply_continuous_market_scaling(
+        params: ProfitModeParams,
+        snapshot: MarketConditionSnapshot,
+    ) -> ProfitModeParams:
+        """Continuously nudge params from live ADX, volume, pass-rate, and streak."""
+        if snapshot.data_success_rate < 0.70 or snapshot.api_error_rate >= 0.15:
+            return params
+
+        # Activity score in [0, 1].  ADX measures directional structure, volume
+        # pct measures participation, and market-filter pass rate confirms the
+        # strategy sees tradable price action rather than random candles.
+        adx_score = max(0.0, min(1.0, snapshot.avg_adx / 20.0))
+        volume_score = max(0.0, min(1.0, (snapshot.avg_volume_pct + 25.0) / 125.0))
+        activity = (0.45 * adx_score) + (0.35 * volume_score) + (0.20 * snapshot.market_filter_pass_rate)
+
+        # Healthy market but no candidates: lower floors progressively so the
+        # bot can explore smaller B/C-grade entries instead of staying idle.
+        if snapshot.zero_signal_streak > 0 and activity >= 0.35:
+            loosen = min(0.45, 0.08 * snapshot.zero_signal_streak)
+            return replace(
+                params,
+                min_score_absolute=max(3.0, params.min_score_absolute * (1.0 - loosen)),
+                min_score_hard_floor=max(3.0, params.min_score_hard_floor * (1.0 - loosen)),
+                forced_entry_streak_threshold=max(1, min(params.forced_entry_streak_threshold, 3)),
+                hard_bypass_streak_threshold=max(3, min(params.hard_bypass_streak_threshold, 8)),
+                enable_volume_fallback=params.enable_volume_fallback or snapshot.zero_signal_streak >= 2,
+                pass_percentile=min(params.pass_percentile, 0.30),
+                volume_gate_multiplier=min(
+                    params.volume_gate_multiplier if params.volume_gate_multiplier is not None else 0.35,
+                    0.35,
+                ),
+            )
+
+        # Opportunity-rich and candidates are already flowing: keep entries
+        # profitable/selective instead of overtrading every scan.
+        if activity >= 0.70 and snapshot.candidate_rate >= 0.10:
+            return replace(
+                params,
+                min_score_absolute=max(params.min_score_absolute, 8.0),
+                min_score_hard_floor=max(params.min_score_hard_floor, 6.0),
+                pass_percentile=max(params.pass_percentile, 0.35),
+                volume_gate_multiplier=max(
+                    params.volume_gate_multiplier if params.volume_gate_multiplier is not None else 0.35,
+                    0.35,
+                ),
+            )
+
+        return params
 
     # ------------------------------------------------------------------
     # PnL-aware mode switching
