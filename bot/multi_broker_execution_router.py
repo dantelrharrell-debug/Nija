@@ -468,13 +468,20 @@ class MultiBrokerExecutionRouter:
         self._pending_request_symbol = request.symbol
         self._pending_request_side = request.side
 
-        # 2. Select broker
-        broker = self._select_broker(
-            ac,
-            request.preferred_broker,
-            request.side,
-            request.size_usd,
-        )
+        # 2. Select broker.  If the execution pipeline supplied the concrete
+        # live broker adapter for this platform/user account, honor that adapter
+        # directly instead of requiring the global BrokerManager registry to also
+        # contain the same account.  Without this, independent user brokers can
+        # be connected and still fail routing as "broker_not_registered" before
+        # their adapter ever receives the order.
+        broker = self._profile_for_direct_broker(ac, request)
+        if broker is None:
+            broker = self._select_broker(
+                ac,
+                request.preferred_broker,
+                request.side,
+                request.size_usd,
+            )
         if broker is None:
             elapsed_ms = (time.monotonic() - t0) * 1000
             error = f"NO_EXECUTION_VENUE_AVAILABLE for asset_class={ac.value}"
@@ -612,6 +619,66 @@ class MultiBrokerExecutionRouter:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+
+    def _profile_for_direct_broker(
+        self,
+        asset_class: AssetClass,
+        request: RouteRequest,
+    ) -> Optional[BrokerProfile]:
+        """Return a broker profile when request metadata carries a live adapter."""
+        meta = dict(getattr(request, "metadata", {}) or {})
+        if meta.get("broker_client") is None:
+            return None
+
+        preferred = str(request.preferred_broker or meta.get("broker_name") or "").strip().lower()
+        if not preferred:
+            broker_obj = meta.get("broker_client")
+            btype = getattr(broker_obj, "broker_type", None)
+            preferred = str(getattr(btype, "value", btype) or "").strip().lower()
+
+        with self._lock:
+            profile = self._brokers.get(preferred)
+            if profile is None:
+                for candidate in self._brokers.values():
+                    if candidate.available and asset_class in candidate.asset_classes:
+                        profile = candidate
+                        break
+
+        if profile is None:
+            return None
+        if not profile.available or asset_class not in profile.asset_classes:
+            logger.warning(
+                "Direct broker profile unavailable | preferred=%s asset_class=%s available=%s",
+                preferred,
+                asset_class.value,
+                getattr(profile, "available", None),
+            )
+            return None
+
+        with self._lock:
+            self._last_routing_decision = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "asset_class": asset_class.value,
+                "side": request.side,
+                "size_usd": float(request.size_usd or 0.0),
+                "selected_broker": profile.name,
+                "reason": "direct_broker_client",
+                "preferred_broker": request.preferred_broker,
+                "candidates": [{
+                    "broker": profile.name,
+                    "eligible": True,
+                    "reason": "direct_broker_client",
+                }],
+            }
+        logger.info(
+            "🎯 ROUTING DECISION → %s | reason=direct_broker_client | symbol=%s side=%s size=$%.2f",
+            profile.name,
+            request.symbol,
+            request.side,
+            float(request.size_usd or 0.0),
+        )
+        return profile
 
     def _get_scorer(self):
         """Return the BrokerPerformanceScorer singleton (lazy init)."""

@@ -116,3 +116,33 @@ def test_execution_pipeline_preserves_direct_broker_metadata_to_multi_router():
     assert router.request is not None
     assert router.request.metadata["broker_client"] is broker
     assert router.request.metadata["price_hint_usd"] == 100.0
+
+
+def test_route_uses_direct_broker_client_even_when_global_registry_empty():
+    from bot.multi_broker_execution_router import RouteRequest
+
+    class EmptyManager:
+        def get_all_brokers(self):
+            return {}
+
+        def is_execution_eligible(self, broker):
+            return False
+
+    router = MultiBrokerExecutionRouter()
+    router._broker_manager = EmptyManager()
+    broker = _Broker()
+
+    result = router.route(
+        RouteRequest(
+            strategy="force_trade_probe",
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=25.0,
+            preferred_broker="kraken",
+            metadata={"broker_client": broker, "price_hint_usd": 100.0},
+        )
+    )
+
+    assert result.success
+    assert result.broker == "kraken"
+    assert broker.calls == [("BTC-USD", "buy", 25.0, "quote")]
