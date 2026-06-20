@@ -45,6 +45,9 @@ def test_quiet_healthy_market_lowers_floor_and_enables_volume_fallback(monkeypat
     assert params.min_score_hard_floor <= 5.0
     assert params.interval_normal <= 60
     assert params.volume_gate_multiplier <= 0.30
+    assert params.forced_entry_streak_threshold <= 2
+    assert params.min_score_hard_floor < pmc._LEVELS[2].min_score_hard_floor
+    assert params.interval_normal <= 90
 
 
 def test_high_volatility_keeps_bot_selective(monkeypatch):

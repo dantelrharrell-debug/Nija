@@ -3385,6 +3385,30 @@ def activation_invariant(
     # MABM's viable broker count (all broker balances propagated to CA).
     # Defaults to True so unknown state never permanently blocks activation.
     aggregation_normalized = bool(cycle_capital.get("aggregation_normalized", True))
+
+    # FIX: When the cycle capital snapshot reports valid_brokers=0 or
+    # snapshot_source="placeholder" but CA is hydrated with real capital and
+    # has registered broker balances, use CA's registered_broker_count as the
+    # authoritative broker count and treat the source as "live_exchange".
+    # This closes the startup deadlock where _capital_last_valid_brokers has
+    # not yet been updated by refresh_capital_authority() even though CA
+    # already holds a valid snapshot published by the coordinator.
+    if valid_brokers == 0 and ca is not None and ca_hydrated:
+        try:
+            _ca_real = float(getattr(ca, "total_capital", 0.0) or 0.0)
+            _ca_reg_count = int(getattr(ca, "registered_broker_count", 0) or 0)
+            if _ca_real > 0.0 and _ca_reg_count > 0:
+                valid_brokers = _ca_reg_count
+                snap_source = "live_exchange"
+                logger.info(
+                    "[activation_invariant] valid_brokers=0 in cycle_capital but CA is hydrated "
+                    "(real=$%.2f, registered_brokers=%d) — using CA broker count as fallback",
+                    _ca_real,
+                    _ca_reg_count,
+                )
+        except Exception:
+            pass
+
     # Accept either a previously latched first-snapshot signal or a valid
     # current-cycle live snapshot. This avoids a startup deadlock where
     # activation can never progress because the latch has not yet been set.
