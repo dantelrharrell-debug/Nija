@@ -184,8 +184,19 @@ class AccountPerformanceTracker:
         """
         account_id = trade.account_id
         
-        # Add to trade history
-        self.trade_history_by_account[account_id].append(trade)
+        # Add to trade history exactly once per account/trade_id.  Replayed
+        # fills or repeated startup/test runs must not inflate expectancy and
+        # drawdown inputs, because duplicated trade records can distort account
+        # risk checks and make a healthy account look blocked.
+        existing_index = next(
+            (idx for idx, existing in enumerate(self.trade_history_by_account[account_id])
+             if existing.trade_id == trade.trade_id),
+            None,
+        )
+        if existing_index is None:
+            self.trade_history_by_account[account_id].append(trade)
+        else:
+            self.trade_history_by_account[account_id][existing_index] = trade
         
         # Trim history if too long
         if len(self.trade_history_by_account[account_id]) > self.max_trade_history_per_account:
@@ -497,9 +508,12 @@ class AccountPerformanceTracker:
                 
                 account_id = state['account_id']
                 
-                # Restore trade history
-                self.trade_history_by_account[account_id] = [
-                    TradeRecord(
+                # Restore trade history with trade_id idempotency.  Older
+                # state files may already contain duplicates from replayed
+                # fills; keep the latest record for each account/trade_id.
+                restored_by_trade_id = {}
+                for t in state.get('trade_history', []):
+                    restored_by_trade_id[t['trade_id']] = TradeRecord(
                         trade_id=t['trade_id'],
                         account_id=t['account_id'],
                         symbol=t['symbol'],
@@ -517,8 +531,7 @@ class AccountPerformanceTracker:
                         hold_time_seconds=t['hold_time_seconds'],
                         is_win=t['is_win'],
                     )
-                    for t in state.get('trade_history', [])
-                ]
+                self.trade_history_by_account[account_id] = list(restored_by_trade_id.values())
                 
                 # Restore balance history
                 self.balance_history_by_account[account_id] = [

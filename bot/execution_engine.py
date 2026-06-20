@@ -795,6 +795,11 @@ class ExecutionEngine:
                 price_hint_usd=price_hint_usd,
                 bid_price_usd=bid_price_usd,
                 ask_price_usd=ask_price_usd,
+                metadata={
+                    "broker_client": broker_client,
+                    "broker_name": preferred_broker,
+                    "price_hint_usd": price_hint_usd,
+                },
             )
         )
 
