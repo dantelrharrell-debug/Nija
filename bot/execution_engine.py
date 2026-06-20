@@ -736,19 +736,22 @@ class ExecutionEngine:
         strategy_name: str = "ExecutionEngine",
     ) -> Dict[str, Any]:
         """Canonical market-order submit through ExecutionPipeline/ECEL."""
-        logger.info(
-            "🔌 [ExecutionEngine._submit_market_order_via_pipeline] CALLED | "
-            "symbol=%s side=%s size_usd=%.2f price_hint=%.6f strategy=%s",
+        logger.critical(
+            "🔌 [BrokerAdapter] ORDER SUBMISSION STARTED | "
+            "symbol=%s side=%s size_usd=%.2f price_hint=%.6f strategy=%s "
+            "pipeline_available=%s force_trade=%s",
             symbol,
             side,
             float(size_usd or 0.0),
             float(price_hint_usd or 0.0),
             strategy_name,
+            get_execution_pipeline is not None and PipelineRequest is not None,
+            os.getenv("FORCE_TRADE", "false"),
         )
         if get_execution_pipeline is None or PipelineRequest is None:
-            logger.error(
-                "🚫 [ExecutionEngine._submit_market_order_via_pipeline] ExecutionPipeline unavailable "
-                "— order DROPPED | symbol=%s side=%s size_usd=%.2f",
+            logger.critical(
+                "🚫 [BrokerAdapter] ORDER DROPPED — ExecutionPipeline unavailable "
+                "| symbol=%s side=%s size_usd=%.2f",
                 symbol, side, float(size_usd or 0.0),
             )
             return {
@@ -826,6 +829,13 @@ class ExecutionEngine:
         )
 
         if not res.success:
+            logger.critical(
+                "❌ [BrokerAdapter] ORDER REJECTED by ExecutionPipeline | "
+                "symbol=%s side=%s size_usd=%.2f error=%s broker=%s",
+                symbol, side, float(size_usd or 0.0),
+                res.error or "unknown",
+                getattr(res, "broker", preferred_broker),
+            )
             return {
                 "status": "error",
                 "error": res.error or "ExecutionPipeline rejected order",
@@ -833,6 +843,14 @@ class ExecutionEngine:
                 "side": side,
             }
 
+        logger.critical(
+            "✅ [BrokerAdapter] ORDER ACCEPTED by ExecutionPipeline | "
+            "symbol=%s side=%s filled_price=%.6f filled_size_usd=%.2f broker=%s",
+            symbol, side,
+            float(res.fill_price or 0.0),
+            float(res.filled_size_usd or 0.0),
+            getattr(res, "broker", preferred_broker),
+        )
         return {
             "status": "filled",
             "order_id": "pipeline",
