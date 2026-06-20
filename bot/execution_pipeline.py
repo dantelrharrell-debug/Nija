@@ -532,6 +532,13 @@ class ExecutionPipeline:
 
     @staticmethod
     def _deny(request: PipelineRequest, t_start: float, reason: str) -> PipelineResult:
+        logger.error(
+            "🚫 [Pipeline.deny] ORDER DROPPED | symbol=%s side=%s size_usd=%.2f reason=%s",
+            getattr(request, "symbol", "?"),
+            getattr(request, "side", "?"),
+            float(getattr(request, "size_usd", 0.0) or 0.0),
+            reason,
+        )
         return PipelineResult(
             success=False,
             symbol=request.symbol,
@@ -931,6 +938,13 @@ class ExecutionPipeline:
                     extended_hours=working_request.extended_hours,
                 )
                 if not normalized.accepted:
+                    logger.error(
+                        "🚫 [Pipeline] ExchangeNormalizer reject | symbol=%s side=%s size_usd=%.2f reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        float(working_request.size_usd or 0.0),
+                        normalized.reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -973,6 +987,13 @@ class ExecutionPipeline:
                     runtime_overrides=runtime_capability_overrides,
                 )
                 if not allowed:
+                    logger.error(
+                        "🚫 [Pipeline] CapabilityMatrix reject | symbol=%s side=%s broker=%s reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        broker_for_caps,
+                        reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -1109,6 +1130,13 @@ class ExecutionPipeline:
                         block_reason_detail=str(risk_decision.reason),
                         first_failed_gate="risk.pre_trade",
                     )
+                    logger.error(
+                        "🚫 [Pipeline] PreTradeRiskEngine reject | symbol=%s side=%s size_usd=%.2f reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        float(working_request.size_usd or 0.0),
+                        risk_decision.reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -1154,6 +1182,13 @@ class ExecutionPipeline:
                 )
                 compiled = self._ecel.compile(compile_req)
                 if not compiled.accepted:
+                    logger.error(
+                        "🚫 [Pipeline] ECEL reject | symbol=%s side=%s size_usd=%.2f reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        float(working_request.size_usd or 0.0),
+                        compiled.reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -1356,6 +1391,15 @@ class ExecutionPipeline:
                         effective_request.size_usd,
                     )
                 else:
+                    logger.error(
+                        "🚫 [Pipeline] Runtime authority convergence lost | symbol=%s side=%s "
+                        "lifecycle_phase=%s coordinator_state=%s reason=%s",
+                        effective_request.symbol,
+                        effective_request.side,
+                        getattr(authority_snapshot, "lifecycle_phase", "unknown"),
+                        getattr(authority_snapshot, "coordinator_state", "unknown"),
+                        getattr(authority_snapshot, "reason", "unknown"),
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=effective_request.symbol,
