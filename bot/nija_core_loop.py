@@ -1403,7 +1403,7 @@ class NijaCoreLoop:
 
         # ── Per-cycle diagnostic header ───────────────────────────────────
         _cycle_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        logger.info(
+        logger.critical(
             "━━━ CYCLE #%d | %s | balance=$%.2f | open_positions=%d | "
             "symbols=%d | regime=%s | cycle_id=%s ━━━",
             self._total_cycles + 1,
@@ -1494,9 +1494,11 @@ class NijaCoreLoop:
         if not user_mode:
             available_slots = max(0, self.max_positions - effective_open)
             if available_slots > 0:
-                logger.info(
-                    "🔍 Scanning markets — %d symbols | slots=%d open=%d",
+                logger.critical(
+                    "🔍 [Phase3] SCAN_ENTRY — scanning markets | "
+                    "symbols=%d slots=%d open=%d user_mode=%s safety_blocked=%s",
                     len(symbols), available_slots, effective_open,
+                    user_mode, not can_enter,
                 )
                 entries, blocked, scored, _gate_rejections = self._phase3_scan_and_enter(
                     broker=broker,
@@ -1920,9 +1922,32 @@ class NijaCoreLoop:
             _sdd.start_cycle()
 
         # ── Score every symbol ────────────────────────────────────────────
+        logger.critical(
+            "🔁 [Phase3] SIGNAL_LOOP_START — beginning symbol scoring loop | "
+            "symbols_total=%d available_slots=%d ai_engine=%s",
+            len(symbols),
+            available_slots,
+            "available" if ai is not None else "UNAVAILABLE",
+        )
+        print(
+            f"[NIJA-PRINT] SIGNAL_LOOP_START | symbols={len(symbols)} "
+            f"slots={available_slots} ai={'yes' if ai is not None else 'NO'}",
+            flush=True,
+        )
         funnel_traces: Dict[str, Dict[str, Tuple[str, str]]] = {}
         for _symbol_idx, symbol in enumerate(symbols):
             _funnel = funnel_traces.setdefault(symbol, {})
+            # ── Per-symbol progress heartbeat (every 10 symbols) ─────────
+            if _symbol_idx % 10 == 0:
+                logger.critical(
+                    "🔁 [Phase3] SIGNAL_LOOP_PROGRESS — symbol %d/%d | "
+                    "symbol=%s candidates_so_far=%d scored_so_far=%d",
+                    _symbol_idx + 1,
+                    len(symbols),
+                    symbol,
+                    len(candidates),
+                    scored,
+                )
             # Cap: stop scoring once we have 10× the available slots — enough
             # diversity to find the top-N without scanning every symbol when the
             # market has 700+ pairs.
@@ -2038,7 +2063,15 @@ class NijaCoreLoop:
 
                 # ── Standard AI scoring ───────────────────────────────────
                 if ai is not None:
-                    logger.info("🔎 Evaluating market — %s (%s)", symbol, side)
+                    logger.critical(
+                        "🔎 [Phase3] EVALUATING_MARKET | symbol=%s side=%s "
+                        "regime=%s entry_type=%s idx=%d/%d",
+                        symbol, side,
+                        str(getattr(snapshot, "current_regime", "unknown")),
+                        entry_type,
+                        _symbol_idx + 1,
+                        len(symbols),
+                    )
                     sig = ai.evaluate_symbol(
                         df=df,
                         indicators=indicators,
@@ -2051,9 +2084,11 @@ class NijaCoreLoop:
                     if sig is not None:
                         _diag_confidence = sig.composite_score
                         _funnel["signal"] = ("PASS", "")
-                        logger.info(
-                            "✅ Signal passed — %s score=%.1f threshold=%.1f",
+                        logger.critical(
+                            "✅ [Phase3] SIGNAL_PASSED — %s score=%.1f threshold=%.1f "
+                            "side=%s entry_type=%s",
                             symbol, sig.composite_score, sig.threshold_used,
+                            side, entry_type,
                         )
                         # ── Per-pair evaluation log (PASS) ────────────────
                         logger.info(
@@ -2112,6 +2147,11 @@ class NijaCoreLoop:
                         )
                 elif _AISignal is not None:
                     # Fallback: use apex.analyze_market directly and wrap result
+                    logger.critical(
+                        "⚠️ [Phase3] AI_ENGINE_UNAVAILABLE — using apex.analyze_market "
+                        "fallback for symbol=%s (ai=None, _AISignal=available)",
+                        symbol,
+                    )
                     analysis = self.apex.analyze_market(df, symbol, snapshot.balance)
                     if analysis.get("action") in ("enter_long", "enter_short"):
                         _funnel["signal"] = ("PASS", "")
@@ -2192,6 +2232,25 @@ class NijaCoreLoop:
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
                 _funnel["signal"] = ("FAIL", f"SCORING_EXCEPTION:{sym_err}")
+
+        # ── Signal generation loop complete ───────────────────────────────
+        logger.critical(
+            "🔁 [Phase3] SIGNAL_LOOP_END — symbol scoring loop finished | "
+            "symbols_total=%d scored=%d candidates=%d momentum_candidates=%d "
+            "blocked=%d scoring_errors=%d",
+            len(symbols),
+            scored,
+            len(candidates),
+            len(momentum_candidates),
+            blocked,
+            _scoring_errors,
+        )
+        print(
+            f"[NIJA-PRINT] SIGNAL_LOOP_END | symbols={len(symbols)} scored={scored} "
+            f"candidates={len(candidates)} momentum={len(momentum_candidates)} "
+            f"blocked={blocked} errors={_scoring_errors}",
+            flush=True,
+        )
 
         if _PMC_AVAILABLE and _get_pmc is not None and _MarketConditionSnapshot is not None:
             try:
