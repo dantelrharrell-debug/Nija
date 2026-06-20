@@ -2189,7 +2189,12 @@ class TradingStateMachine:
 
         # Ensure explicit activation intent is reflected in FSM state even when
         # downstream commit gates are still converging.
-        if current == TradingState.OFF and _live_activation_intent:
+        # _force covers FORCE_TRADE / FORCE_TRADE_MODE / FORCE_LIVE_TRANSITION:
+        # when any of these operator override flags is set, treat it the same as
+        # live activation intent so the FSM arms to LIVE_PENDING_CONFIRMATION and
+        # the 5-minute auto-transition timeout can fire even without
+        # LIVE_CAPITAL_VERIFIED being explicitly set.
+        if current == TradingState.OFF and (_live_activation_intent or _force):
             try:
                 self.transition_to(
                     TradingState.LIVE_PENDING_CONFIRMATION,
@@ -2205,7 +2210,7 @@ class TradingStateMachine:
         if (
             not authority_ready
             and current == TradingState.OFF
-            and _live_activation_intent
+            and (_live_activation_intent or _force)
         ):
             try:
                 self.transition_to(

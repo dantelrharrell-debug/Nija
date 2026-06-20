@@ -618,8 +618,26 @@ def _supervisor_step_state_machine() -> None:
         # once the FSM is explicitly armed, downstream coordinator gates may
         # still need additional cycles to converge; skipping commit_activation()
         # in that state can stall lifecycle progression in WARM forever.
+        #
+        # FORCE_TRADE / NIJA_FORCE_ACTIVATION: operator override flags that
+        # must also trigger commit_activation() so the FSM can arm to
+        # LIVE_PENDING_CONFIRMATION and eventually reach LIVE_ACTIVE via the
+        # 5-minute auto-transition timeout even when LIVE_CAPITAL_VERIFIED is
+        # not explicitly set in the environment.
+        _force_activation_sv = (
+            os.environ.get("FORCE_TRADE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("FORCE_TRADE_MODE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+        )
         _state_for_commit = sm.get_current_state()
-        _attempt_commit = _live_verified or _state_for_commit == _TradingState.LIVE_PENDING_CONFIRMATION
+        _attempt_commit = (
+            _live_verified
+            or _force_activation_sv
+            or _state_for_commit == _TradingState.LIVE_PENDING_CONFIRMATION
+        )
         if _attempt_commit:
             _committed = False
             try:
@@ -632,14 +650,18 @@ def _supervisor_step_state_machine() -> None:
                 try:
                     sm.transition_to(
                         _TradingState.LIVE_PENDING_CONFIRMATION,
-                        "supervisor arming: LIVE_CAPITAL_VERIFIED + sufficient balance",
+                        "supervisor arming: LIVE_CAPITAL_VERIFIED + sufficient balance"
+                        if _live_verified
+                        else "supervisor arming: FORCE_TRADE override",
                     )
                     logger.critical("🟡 SUPERVISOR ARMING: OFF -> LIVE_PENDING_CONFIRMATION")
                 except Exception as _arm_err:
                     logger.warning("Supervisor arming fallback failed: %s", _arm_err)
         elif _balance > 0.0:
             logger.warning(
-                "⚠️ Supervisor activation blocked: LIVE_CAPITAL_VERIFIED is false while balance is %.2f",
+                "⚠️ Supervisor activation blocked: LIVE_CAPITAL_VERIFIED is false and "
+                "FORCE_TRADE/NIJA_FORCE_ACTIVATION not set, while balance is %.2f. "
+                "Set LIVE_CAPITAL_VERIFIED=true or FORCE_TRADE=true to enable activation.",
                 _balance,
             )
     except Exception as _sm_err:
@@ -1746,7 +1768,7 @@ class NijaCoreLoop:
 
                 # Determine trend from apex market filter
                 try:
-                    allow, trend, market_reason = self.apex.check_market_filter(df, indicators)
+                    allow, trend, market_reason, _market_str = self.apex.check_market_filter(df, indicators)
                     _market_filter_checks += 1
                     if not allow:
                         blocked += 1
@@ -3705,6 +3727,22 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         time.sleep(cycle_secs)
                         continue
 
+                    # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: when an operator override
+                    # flag is active, allow the strategy cycle to run even before the FSM
+                    # has fully converged to LIVE_ACTIVE.  The downstream broker adapter
+                    # still enforces can_execute() (which requires LIVE_ACTIVE), so no
+                    # orders are placed until activation completes — but market scanning
+                    # and signal generation proceed immediately.  This unblocks the pipeline
+                    # in deployments where Redis or capital-authority hydration is delayed.
+                    _force_cycle_bypass = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                    )
+
                     if (not _committed_gate) or (not _dispatch_gate) or (not _live_gate):
                         _skip_signature = (
                             bool(_committed_gate),
@@ -3715,31 +3753,47 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             float(cycle_secs),
                             max(1.0, float(os.getenv("NIJA_ACTIVATION_RETRY_SLEEP_S", "10") or 10.0)),
                         )
-                        if _skip_signature != _last_cycle_skip_signature:
-                            logger.warning(
-                                "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
-                                "runtime_authority=%s reason=%s retry_in=%.0fs",
-                                _committed_gate,
-                                _dispatch_gate,
-                                getattr(_state_gate, "value", str(_state_gate)),
-                                _runtime_authority or "unknown",
-                                _dispatch_reason or "not_reported",
-                                _activation_retry_sleep_s,
-                            )
-                            _last_cycle_skip_signature = _skip_signature
+                        if _force_cycle_bypass:
+                            # Operator override active — run the strategy cycle immediately
+                            # even though the FSM has not reached LIVE_ACTIVE yet.  Log once
+                            # per signature change so the operator can see the bypass is active.
+                            if _skip_signature != _last_cycle_skip_signature:
+                                logger.warning(
+                                    "⚡ FORCE_TRADE bypass: running strategy cycle despite activation gate "
+                                    "| committed=%s dispatch=%s state=%s — orders will be blocked by "
+                                    "broker can_execute() until FSM reaches LIVE_ACTIVE",
+                                    _committed_gate,
+                                    _dispatch_gate,
+                                    getattr(_state_gate, "value", str(_state_gate)),
+                                )
+                                _last_cycle_skip_signature = _skip_signature
+                            # Fall through to run_cycle() below.
                         else:
-                            _rate_limited_critical(
-                                "core_loop_activation_skip",
-                                "dispatch_gate",
-                                60.0,
-                                "⏸️ STRATEGY CYCLE STILL WAITING | state=%s dispatch=%s reason=%s retry_in=%.0fs",
-                                getattr(_state_gate, "value", str(_state_gate)),
-                                _dispatch_gate,
-                                _dispatch_reason or "not_reported",
-                                _activation_retry_sleep_s,
-                            )
-                        time.sleep(_activation_retry_sleep_s)
-                        continue
+                            if _skip_signature != _last_cycle_skip_signature:
+                                logger.warning(
+                                    "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
+                                    "runtime_authority=%s reason=%s retry_in=%.0fs",
+                                    _committed_gate,
+                                    _dispatch_gate,
+                                    getattr(_state_gate, "value", str(_state_gate)),
+                                    _runtime_authority or "unknown",
+                                    _dispatch_reason or "not_reported",
+                                    _activation_retry_sleep_s,
+                                )
+                                _last_cycle_skip_signature = _skip_signature
+                            else:
+                                _rate_limited_critical(
+                                    "core_loop_activation_skip",
+                                    "dispatch_gate",
+                                    60.0,
+                                    "⏸️ STRATEGY CYCLE STILL WAITING | state=%s dispatch=%s reason=%s retry_in=%.0fs",
+                                    getattr(_state_gate, "value", str(_state_gate)),
+                                    _dispatch_gate,
+                                    _dispatch_reason or "not_reported",
+                                    _activation_retry_sleep_s,
+                                )
+                            time.sleep(_activation_retry_sleep_s)
+                            continue
                     _last_cycle_skip_signature = None
 
                 _rate_limited_critical(
