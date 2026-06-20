@@ -2848,12 +2848,34 @@ class NIJAApexStrategyV71:
             current_time = datetime.now()
             candle_closed, candle_reason = self._check_candle_closed(df, current_time)
             if not candle_closed:
-                logger.info("   ⏳ %s: %s", symbol, candle_reason)
-                return {
-                    'action': 'hold',
-                    'reason': f'Waiting for candle close ({candle_reason})',
-                    'filter_stage': 'candle_close',
-                }
+                # ── FORCE_TRADE bypass: when operator override flags are active,
+                # skip the candle-close gate so analyze_market() can return a full
+                # entry payload.  Without this, the core loop's fallback_active path
+                # overrides the 'hold' action but receives an analysis dict with no
+                # entry_price / stop_loss / take_profit fields, forcing a fallback
+                # payload build on every cycle — adding latency and log noise.
+                _force_candle_bypass = (
+                    _os_apex.getenv("FORCE_TRADE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or _os_apex.getenv("FORCE_TRADE_MODE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or _os_apex.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                )
+                if _force_candle_bypass:
+                    logger.critical(
+                        "⚡ [analyze_market] FORCE_TRADE: candle-close gate bypassed for %s "
+                        "(%s) — proceeding to entry signal generation.",
+                        symbol, candle_reason,
+                    )
+                    # Fall through to indicator calculation and entry signal generation.
+                else:
+                    logger.info("   ⏳ %s: %s", symbol, candle_reason)
+                    return {
+                        'action': 'hold',
+                        'reason': f'Waiting for candle close ({candle_reason})',
+                        'filter_stage': 'candle_close',
+                    }
 
             # _last_daily_target_usd stays 0: edge-driven mode, no dollar target blocking.
 

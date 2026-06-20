@@ -2160,7 +2160,25 @@ class NijaCoreLoop:
             )
             candidates.append(fallback_sig)
 
-        logger.info("[Scanner] candidates_found=%d", len(candidates))
+        logger.critical(
+            "🎯 [Phase3] CANDIDATES FOUND: %d candidate(s) from %d scored symbols "
+            "(blocked=%d dead_zone=%s force_this_cycle=%s force_trade=%s)",
+            len(candidates),
+            scored,
+            blocked,
+            _dead_zone,
+            _force_this_cycle,
+            _env_truthy("FORCE_TRADE"),
+        )
+        if candidates:
+            logger.critical(
+                "🎯 [Phase3] SIGNALS SCORED: %d signal(s) — %s",
+                len(candidates),
+                ", ".join(
+                    f"{getattr(s, 'symbol', '?')}({getattr(s, 'side', '?')} score={getattr(s, 'composite_score', 0):.1f})"
+                    for s in candidates
+                ),
+            )
 
         # ── Record scan-cycle result in funnel tracker ────────────────────
         if _FUNNEL_TRACKER_AVAILABLE and _get_funnel_tracker is not None:
@@ -2174,10 +2192,51 @@ class NijaCoreLoop:
                 logger.debug("scanner_funnel_tracker.record failed: %s", _ftr_err)
 
         # ── Rank and select top-N ─────────────────────────────────────────
+        # ── FORCE_TRADE: inject volume fallback even when candidates is empty ──
+        # When FORCE_TRADE is active and no candidates survived scoring, inject
+        # the best-volume symbol directly so the no-candidates early return is
+        # bypassed and execute_action() is still called this cycle.
+        _force_trade_active_early = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+        )
+        if not candidates and _force_trade_active_early and _best_volume_symbol and _AISignal is not None:
+            logger.critical(
+                "⚡ [FORCE_TRADE] No candidates after full scan — injecting best-volume "
+                "symbol %s as forced candidate to ensure execute_action() is called "
+                "(scored=%d blocked=%d streak=%d)",
+                _best_volume_symbol, scored, blocked, zero_signal_streak,
+            )
+            _forced_sig = _AISignal(
+                symbol=_best_volume_symbol,
+                side=_best_volume_side,
+                composite_score=max(_effective_hard_floor, 1.0),
+                position_multiplier=0.25,
+                entry_type=_best_volume_entry_type,
+                threshold_used=max(_effective_hard_floor, 1.0),
+                reason="force_trade_no_candidates_fallback",
+                metadata={
+                    "force_trade_fallback": True,
+                    "bypass_low_quality": True,
+                    "bypass_quality_filter": True,
+                    "volume_fallback": True,
+                    "avg_volume": _best_volume,
+                    "dead_zone": _dead_zone,
+                    "zero_signal_streak": zero_signal_streak,
+                },
+            )
+            candidates.append(_forced_sig)
+
         if not candidates:
-            logger.info(
-                "🔍 Core loop Phase 3: scored=%d symbols, no candidates above floor=%.0f",
+            logger.critical(
+                "🔍 [Phase3] NO CANDIDATES: scored=%d symbols, no candidates above floor=%.0f "
+                "(force_trade=%s best_volume_symbol=%s ai_signal_available=%s)",
                 scored, _effective_hard_floor,
+                _force_trade_active_early,
+                _best_volume_symbol or "none",
+                _AISignal is not None,
             )
             if _sdd is not None:
                 _sdd.emit_histogram(
@@ -2204,6 +2263,26 @@ class NijaCoreLoop:
                 for s in selected
             ) or "none",
         )
+
+        # ── FORCE_TRADE rescue: rank_and_select returned empty despite candidates ──
+        # rank_and_select can return [] when all candidates score below the adaptive
+        # threshold.  When FORCE_TRADE is active, force the top-scored candidate in
+        # so execute_action() is always called rather than silently skipping the cycle.
+        if not selected and candidates and _force_trade_active_early:
+            top_candidate = max(candidates, key=lambda s: s.composite_score)
+            top_candidate.metadata["bypass_quality_filter"] = True
+            top_candidate.metadata["force_trade_rescue"] = True
+            top_candidate.metadata["bypass_low_quality"] = True
+            selected = [top_candidate]
+            logger.critical(
+                "⚡ [FORCE_TRADE] rank_and_select returned empty — rescuing top "
+                "candidate %s (score=%.1f) to ensure execute_action() is called "
+                "(candidates=%d streak=%d)",
+                top_candidate.symbol,
+                top_candidate.composite_score,
+                len(candidates),
+                zero_signal_streak,
+            )
 
         # ── Progressive relaxation: activate after too many zero-signal cycles ──
         # Each 3-cycle step reduces the effective floor by 15% / 25% / 40%.
@@ -2318,7 +2397,7 @@ class NijaCoreLoop:
             )
 
         # ── Execute selected entries ──────────────────────────────────────
-        logger.info(
+        logger.critical(
             "🚦 [Phase3] Entering execution loop — selected=%d fallback_active=%s "
             "force_trade=%s zero_signal_streak=%d",
             len(selected),
@@ -2327,24 +2406,28 @@ class NijaCoreLoop:
             zero_signal_streak,
         )
         if not selected:
-            logger.warning(
+            logger.critical(
                 "⚠️ [Phase3] selected is EMPTY — no signals to execute. "
-                "candidates=%d scored=%d blocked=%d",
+                "candidates=%d scored=%d blocked=%d force_trade=%s",
                 len(candidates),
                 scored,
                 blocked,
+                _force_trade_active_early,
             )
         entries = 0
         for sig in selected:
             if entries >= MAX_ENTRIES_PER_CYCLE:
                 break
-            logger.info(
-                "🎯 [Phase3] Processing signal %d/%d — symbol=%s side=%s score=%.1f",
+            logger.critical(
+                "⚡ [Phase3] EXECUTING SIGNAL %d/%d — symbol=%s side=%s score=%.1f "
+                "fallback_active=%s force_trade=%s",
                 entries + 1,
                 len(selected),
                 getattr(sig, "symbol", "UNKNOWN"),
                 getattr(sig, "side", "UNKNOWN"),
                 getattr(sig, "composite_score", 0.0),
+                fallback_active,
+                _force_trade_active_early,
             )
             try:
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
@@ -2352,7 +2435,6 @@ class NijaCoreLoop:
                 if df is None or len(df) < 100:
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     continue
-
                 # ── Trade Permission Engine ───────────────────────────────
                 # Single authoritative decision check: emits DECISION TRACE
                 # and returns EXECUTE or BLOCKED before the expensive
@@ -2559,8 +2641,25 @@ class NijaCoreLoop:
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
                     _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
+                    logger.critical(
+                        "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
+                        "action=%s reason=%s fallback_active=%s force_trade=%s — "
+                        "signal will NOT reach execute_action this cycle.",
+                        sig.symbol,
+                        action,
+                        analysis.get("reason", "NO_PROFITABLE_ACTION"),
+                        fallback_active,
+                        _force_trade_bypass,
+                    )
                     continue
                 _funnel["profitability"] = ("PASS", "")
+                logger.critical(
+                    "✅ [Phase3] SIGNAL PASSED all gates | symbol=%s action=%s "
+                    "fallback_active=%s — calling execute_action() now.",
+                    sig.symbol,
+                    action,
+                    fallback_active,
+                )
 
                 # Apply AI engine position multiplier to analysis size hint
                 if "position_size" in analysis and sig.position_multiplier != 1.0:
