@@ -1540,6 +1540,12 @@ class TradingStrategy:
         copy-mode users remain position-management only.
         """
         next_interval_s = 150
+        logger.critical(
+            "🔄 [RUN_CYCLE] TradingStrategy.run_cycle() ENTERED | "
+            "apex=%s nija_core_loop=%s",
+            type(self.apex).__name__ if self.apex is not None else "None",
+            type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else "None",
+        )
         if self.apex is not None:
             try:
                 self._ensure_nija_wiring()
@@ -1595,12 +1601,26 @@ class TradingStrategy:
                         logger.warning("run_cycle: symbol universe is empty — skipping scan")
                         return next_interval_s
 
+                    logger.critical(
+                        "🔄 [RUN_CYCLE] calling nija_core_loop.run_scan_phase() | "
+                        "symbols=%d balance=$%.2f open_positions=%d",
+                        len(_symbols_to_scan), _account_balance, _open_positions_count,
+                    )
                     _core_result = self.nija_core_loop.run_scan_phase(
                         broker=_broker,
                         balance=_account_balance,
                         symbols=_symbols_to_scan,
                         open_positions_count=_open_positions_count,
                         user_mode=bool(user_mode),
+                    )
+                    logger.critical(
+                        "✅ [RUN_CYCLE] run_scan_phase() RETURNED | "
+                        "scored=%d entered=%d blocked=%d exited=%d next=%ss",
+                        _core_result.symbols_scored,
+                        _core_result.entries_taken,
+                        _core_result.entries_blocked,
+                        _core_result.exits_taken,
+                        _core_result.next_interval,
                     )
                     logger.info(
                         "run_cycle(core_loop): scored=%d entered=%d blocked=%d exited=%d next=%ss",

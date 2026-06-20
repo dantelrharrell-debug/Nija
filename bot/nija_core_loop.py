@@ -2242,6 +2242,17 @@ class NijaCoreLoop:
                 # Single authoritative decision check: emits DECISION TRACE
                 # and returns EXECUTE or BLOCKED before the expensive
                 # apex.analyze_market() call.
+                _force_tpe_bypass = (
+                    _env_truthy("FORCE_TRADE")
+                    or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+                    or _env_truthy("NIJA_FORCE_ACTIVATION")
+                )
+                logger.info(
+                    "🔑 [TPE_GATE] symbol=%s side=%s score=%.1f balance=$%.2f "
+                    "force_bypass=%s tpe_available=%s",
+                    sig.symbol, sig.side, sig.composite_score,
+                    snapshot.balance, _force_tpe_bypass, _TPE_AVAILABLE,
+                )
                 if _TPE_AVAILABLE and _get_tpe is not None:
                     try:
                         _perm = _get_tpe().evaluate(
@@ -2269,35 +2280,55 @@ class NijaCoreLoop:
                             ),
                             metadata=sig.metadata,
                         )
+                        logger.info(
+                            "🔑 [TPE_RESULT] symbol=%s decision=%s reason=%s",
+                            sig.symbol,
+                            getattr(_perm, "final_decision", "UNKNOWN"),
+                            getattr(_perm, "block_reason", "") or "none",
+                        )
                         if _perm.final_decision != "EXECUTE":
-                            blocked += 1
-                            # ── Entry-to-Order Trace: per-signal veto (TPE) ──
                             _tpe_reason = (
                                 getattr(_perm, "block_reason", None)
                                 or getattr(_perm, "reason", None)
                                 or "trade_permission_engine"
                             )
-                            _funnel["ai_gate"] = ("FAIL", _tpe_reason)
-                            emit_cycle_trace(
-                                CycleOutcome.ENTRY_VETOED,
-                                reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
-                            )
-                            self._n_vetoed += 1
-                            self._record_reject(_tpe_reason)
-                            # Classify TPE rejection into the appropriate gate counter
-                            _tpe_reason_lower = str(_tpe_reason).lower()
-                            if "notional" in _tpe_reason_lower or "min_notional" in _tpe_reason_lower:
-                                _gate_rejections["notional_gate_rejected"] += 1
-                            elif "capital" in _tpe_reason_lower or "balance" in _tpe_reason_lower:
-                                _gate_rejections["capital_gate_rejected"] += 1
-                            elif "risk" in _tpe_reason_lower or "drawdown" in _tpe_reason_lower:
-                                _gate_rejections["risk_gate_rejected"] += 1
+                            # ── FORCE_TRADE fallback: if TPE still blocks despite
+                            # the bypass flags in the engine itself, override here
+                            # so the operator's explicit intent is honoured.
+                            if _force_tpe_bypass:
+                                logger.warning(
+                                    "⚡ [TPE_FORCE_OVERRIDE] FORCE_TRADE active — "
+                                    "overriding TPE BLOCKED decision for %s %s "
+                                    "(reason was: %s). Proceeding to execute_action.",
+                                    sig.symbol, sig.side, _tpe_reason,
+                                )
+                                _funnel["ai_gate"] = ("PASS", "force_trade_override")
+                                # Fall through to execute_action below.
                             else:
-                                _gate_rejections["ai_gate_rejected"] += 1
-                            continue
-                        _funnel["ai_gate"] = ("PASS", "")
+                                blocked += 1
+                                # ── Entry-to-Order Trace: per-signal veto (TPE) ──
+                                _funnel["ai_gate"] = ("FAIL", _tpe_reason)
+                                emit_cycle_trace(
+                                    CycleOutcome.ENTRY_VETOED,
+                                    reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
+                                )
+                                self._n_vetoed += 1
+                                self._record_reject(_tpe_reason)
+                                # Classify TPE rejection into the appropriate gate counter
+                                _tpe_reason_lower = str(_tpe_reason).lower()
+                                if "notional" in _tpe_reason_lower or "min_notional" in _tpe_reason_lower:
+                                    _gate_rejections["notional_gate_rejected"] += 1
+                                elif "capital" in _tpe_reason_lower or "balance" in _tpe_reason_lower:
+                                    _gate_rejections["capital_gate_rejected"] += 1
+                                elif "risk" in _tpe_reason_lower or "drawdown" in _tpe_reason_lower:
+                                    _gate_rejections["risk_gate_rejected"] += 1
+                                else:
+                                    _gate_rejections["ai_gate_rejected"] += 1
+                                continue
+                        else:
+                            _funnel["ai_gate"] = ("PASS", "")
                     except Exception as _tpe_err:
-                        logger.debug(
+                        logger.warning(
                             "TradePermissionEngine error for %s (non-fatal): %s",
                             sig.symbol, _tpe_err,
                         )
@@ -3859,6 +3890,16 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 )
                 logger.info("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
                 logger.info("🚀 RUNNING TRADE CYCLE")
+                logger.critical(
+                    "🚀 [CYCLE_INVOKE] strategy.run_cycle() CALLED | "
+                    "cycle=%d capital=$%.2f cycle_id=%s",
+                    cycle, _cycle_cap, _current_cycle_id,
+                )
+                print(
+                    f"🚀 [CYCLE_INVOKE] strategy.run_cycle() CALLED | "
+                    f"cycle={cycle} capital=${_cycle_cap:.2f}",
+                    flush=True,
+                )
                 _cycle_start_ts = time.time()
                 _next_sleep_s = float(cycle_secs)
                 update_runtime_correlation(cycle_id=_current_cycle_id)
@@ -3882,6 +3923,10 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     )
                 try:
                     _strategy_next_interval = strategy.run_cycle()
+                    logger.critical(
+                        "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
+                        "cycle=%d next_interval=%s",
+                        cycle, _strategy_next_interval,
                     logger.info(
                         "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
                         "cycle=%d next_interval=%s",
@@ -3890,6 +3935,14 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     )
                     if isinstance(_strategy_next_interval, (int, float)):
                         _next_sleep_s = max(1.0, float(_strategy_next_interval))
+                except Exception as _run_cycle_err:
+                    logger.critical(
+                        "❌ [CYCLE_INVOKE] strategy.run_cycle() RAISED EXCEPTION | "
+                        "cycle=%d error=%s",
+                        cycle, _run_cycle_err,
+                        exc_info=True,
+                    )
+                    raise
                 finally:
                     clear_runtime_correlation()
                 _cycle_elapsed = time.time() - _cycle_start_ts
