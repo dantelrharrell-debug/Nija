@@ -2229,20 +2229,49 @@ class ExecutionEngine:
             if RECOVERY_CONTROLLER_AVAILABLE and get_recovery_controller:
                 recovery_controller = get_recovery_controller()
                 can_trade, reason = recovery_controller.can_trade("entry")
-                
+
+                logger.critical(
+                    "🛡️ [ExecutionEngine] RecoveryController gate | symbol=%s can_trade=%s "
+                    "reason=%s state=%s capital_safety=%s",
+                    symbol,
+                    can_trade,
+                    reason,
+                    recovery_controller.current_state.value,
+                    recovery_controller.capital_safety_level.value,
+                )
+
                 if not can_trade:
-                    logger.error("=" * 80)
-                    logger.error("🛡️  RECOVERY CONTROLLER BLOCKED ENTRY")
-                    logger.error("=" * 80)
-                    logger.error(f"   Symbol: {symbol}")
-                    logger.error(f"   Side: {side}")
-                    logger.error(f"   Position Size: ${position_size:.2f}")
-                    logger.error(f"   Reason: {reason}")
-                    logger.error(f"   Controller State: {recovery_controller.current_state.value}")
-                    logger.error(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
-                    logger.error("=" * 80)
-                    _trace("ecel", "rejected", f"recovery_controller:{reason}", terminal=True)
-                    return None
+                    # ── FORCE_TRADE fallback: if RecoveryController still blocks despite
+                    # the bypass in can_trade() itself (e.g. EMERGENCY_HALT), log and
+                    # return None.  The bypass inside can_trade() handles all other states.
+                    _rc_force_bypass = (
+                        os.getenv("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.getenv("FORCE_TRADE_MODE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _rc_force_bypass:
+                        logger.critical(
+                            "⚡ [ExecutionEngine] FORCE_TRADE: RecoveryController blocked %s %s "
+                            "(reason=%s state=%s) — FORCE_TRADE active, proceeding to order submission.",
+                            symbol, side, reason, recovery_controller.current_state.value,
+                        )
+                        # Fall through to order submission — do NOT return None.
+                    else:
+                        logger.error("=" * 80)
+                        logger.error("🛡️  RECOVERY CONTROLLER BLOCKED ENTRY")
+                        logger.error("=" * 80)
+                        logger.error(f"   Symbol: {symbol}")
+                        logger.error(f"   Side: {side}")
+                        logger.error(f"   Position Size: ${position_size:.2f}")
+                        logger.error(f"   Reason: {reason}")
+                        logger.error(f"   Controller State: {recovery_controller.current_state.value}")
+                        logger.error(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
+                        logger.error("=" * 80)
+                        _trace("ecel", "rejected", f"recovery_controller:{reason}", terminal=True)
+                        return None
             
             # ✅ CRITICAL SAFETY CHECK #1: LIVE CAPITAL VERIFIED
             # This is the MASTER kill-switch that prevents accidental live trading

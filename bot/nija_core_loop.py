@@ -2559,8 +2559,25 @@ class NijaCoreLoop:
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
                     _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
+                    logger.critical(
+                        "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
+                        "action=%s reason=%s fallback_active=%s force_trade=%s — "
+                        "signal will NOT reach execute_action this cycle.",
+                        sig.symbol,
+                        action,
+                        analysis.get("reason", "NO_PROFITABLE_ACTION"),
+                        fallback_active,
+                        _force_trade_bypass,
+                    )
                     continue
                 _funnel["profitability"] = ("PASS", "")
+                logger.critical(
+                    "✅ [Phase3] SIGNAL PASSED all gates | symbol=%s action=%s "
+                    "fallback_active=%s — calling execute_action() now.",
+                    sig.symbol,
+                    action,
+                    fallback_active,
+                )
 
                 # Apply AI engine position multiplier to analysis size hint
                 if "position_size" in analysis and sig.position_multiplier != 1.0:
