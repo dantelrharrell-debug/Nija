@@ -1546,9 +1546,30 @@ class TradingStrategy:
             type(self.apex).__name__ if self.apex is not None else "None",
             type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else "None",
         )
+        print(
+            f"[NIJA-PRINT] run_cycle ENTERED | "
+            f"apex={type(self.apex).__name__ if self.apex is not None else 'None'} "
+            f"nija_core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'}",
+            flush=True,
+        )
         if self.apex is not None:
             try:
                 self._ensure_nija_wiring()
+                print(
+                    f"[NIJA-PRINT] after _ensure_nija_wiring | "
+                    f"nija_core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'} "
+                    f"apex_has_run_cycle={hasattr(self.apex, 'run_cycle')} "
+                    f"apex_has_analyze_market={hasattr(self.apex, 'analyze_market')}",
+                    flush=True,
+                )
+                if self.nija_core_loop is None:
+                    logger.critical(
+                        "⚠️ [RUN_CYCLE] nija_core_loop is None after _ensure_nija_wiring — "
+                        "will use legacy analyze_market+execute_action path. "
+                        "apex_has_run_cycle=%s apex_has_analyze_market=%s",
+                        hasattr(self.apex, "run_cycle"),
+                        hasattr(self.apex, "analyze_market"),
+                    )
 
                 # Delegate to the caller-selected venue when provided.  This is
                 # required for per-broker platform loops and independent user
@@ -1641,6 +1662,24 @@ class TradingStrategy:
                     self.apex.run_cycle()
                 elif hasattr(self.apex, "analyze_market"):
                     # Legacy fallback: fetch market data then call analyze_market(df, symbol, balance).
+                    # CRITICAL FIX: capture the result and call execute_action() so signals are
+                    # connected to order submission.  Previously the result was discarded, causing
+                    # signals to be generated ("Score: X.X", "Trade allowed: True") but no trades
+                    # to be placed because _phase3_scan_and_enter() was never reached.
+                    print(
+                        "[NIJA-PRINT] legacy fallback path active — "
+                        f"nija_core_loop={self.nija_core_loop!r} "
+                        f"symbols={len(self.symbols)} "
+                        f"apex={type(self.apex).__name__}",
+                        flush=True,
+                    )
+                    logger.critical(
+                        "⚡ [RUN_CYCLE] legacy analyze_market path — "
+                        "nija_core_loop unavailable, calling analyze_market+execute_action directly | "
+                        "symbols=%d balance=$%.2f",
+                        len(self.symbols[:20]),
+                        _account_balance,
+                    )
                     for symbol in self.symbols[:20]:  # cap at 20 per cycle
                         try:
                             if _broker is None or not callable(getattr(_broker, "get_candles", None)):
@@ -1654,7 +1693,55 @@ class TradingStrategy:
                                 _df = _candles
                             if _df is None:
                                 continue
-                            self.apex.analyze_market(_df, symbol, _account_balance)
+                            # ── FIX: capture result and call execute_action() ──────────
+                            # analyze_market() generates signals and evaluates market
+                            # conditions but does NOT submit orders on its own.
+                            # execute_action() must be called explicitly with the result.
+                            print(
+                                f"[NIJA-PRINT] legacy path calling analyze_market | symbol={symbol}",
+                                flush=True,
+                            )
+                            _analysis = self.apex.analyze_market(_df, symbol, _account_balance)
+                            _action = _analysis.get("action") if isinstance(_analysis, dict) else None
+                            print(
+                                f"[NIJA-PRINT] legacy path analyze_market returned | "
+                                f"symbol={symbol} action={_action}",
+                                flush=True,
+                            )
+                            logger.critical(
+                                "🔍 [legacy_path] analyze_market returned | symbol=%s action=%s",
+                                symbol,
+                                _action,
+                            )
+                            # Call execute_action() for any non-hold action so orders are submitted.
+                            if (
+                                isinstance(_analysis, dict)
+                                and _action is not None
+                                and _action != "hold"
+                                and hasattr(self.apex, "execute_action")
+                            ):
+                                print(
+                                    f"[NIJA-PRINT] legacy path calling execute_action | "
+                                    f"symbol={symbol} action={_action}",
+                                    flush=True,
+                                )
+                                logger.critical(
+                                    "⚡ [legacy_path] calling execute_action | symbol=%s action=%s",
+                                    symbol,
+                                    _action,
+                                )
+                                _exec_result = self.apex.execute_action(_analysis, symbol)
+                                print(
+                                    f"[NIJA-PRINT] legacy path execute_action returned | "
+                                    f"symbol={symbol} action={_action} result={_exec_result}",
+                                    flush=True,
+                                )
+                                logger.critical(
+                                    "✅ [legacy_path] execute_action returned | symbol=%s action=%s result=%s",
+                                    symbol,
+                                    _action,
+                                    _exec_result,
+                                )
                         except Exception as _sym_err:
                             logger.debug("Symbol %s cycle error: %s", symbol, _sym_err)
             except Exception as _cycle_err:
