@@ -5358,12 +5358,16 @@ class NIJAApexStrategyV71:
         """
         action = action_data.get('action')
 
-        logger.info(
-            "🎯 [execute_action] CALLED | symbol=%s action=%s position_size=$%.2f entry_price=%.6f",
+        logger.critical(
+            "🎯 [execute_action] CALLED | symbol=%s action=%s position_size=$%.2f "
+            "entry_price=%.6f stop_loss=%.6f force_trade=%s fallback_entry=%s",
             symbol,
             action,
             float(action_data.get('position_size', 0.0) or 0.0),
             float(action_data.get('entry_price', 0.0) or 0.0),
+            float(action_data.get('stop_loss', 0.0) or 0.0),
+            os.getenv("FORCE_TRADE", "false"),
+            bool(action_data.get('forced_fallback') or action_data.get('fallback_entry')),
         )
 
         try:
@@ -5400,7 +5404,7 @@ class NIJAApexStrategyV71:
                 return levels
 
             if action == 'enter_long':
-                logger.info(
+                logger.critical(
                     "📤 [execute_action] Calling execute_entry | symbol=%s side=long "
                     "position_size=$%.2f entry_price=%.6f",
                     symbol,
@@ -5415,7 +5419,7 @@ class NIJAApexStrategyV71:
                     stop_loss=action_data['stop_loss'],
                     take_profit_levels=_take_profit_levels()
                 )
-                logger.info(
+                logger.critical(
                     "📥 [execute_action] execute_entry returned | symbol=%s side=long position=%s",
                     symbol,
                     "FILLED" if position else "NONE/BLOCKED",
@@ -5459,7 +5463,7 @@ class NIJAApexStrategyV71:
                     logger.warning(f"⚠️  Exchange capability check unavailable - allowing SHORT (risky!)")
 
                 # Execute SHORT entry
-                logger.info(
+                logger.critical(
                     "📤 [execute_action] Calling execute_entry | symbol=%s side=short "
                     "position_size=$%.2f entry_price=%.6f",
                     symbol,
@@ -5474,7 +5478,7 @@ class NIJAApexStrategyV71:
                     stop_loss=action_data['stop_loss'],
                     take_profit_levels=_take_profit_levels()
                 )
-                logger.info(
+                logger.critical(
                     "📥 [execute_action] execute_entry returned | symbol=%s side=short position=%s",
                     symbol,
                     "FILLED" if position else "NONE/BLOCKED",

@@ -1673,6 +1673,19 @@ class NijaCoreLoop:
         Returns (entries_taken, entries_blocked, symbols_scored, gate_rejections).
         gate_rejections is a dict mapping gate name → rejection count for this cycle.
         """
+        # ── VERBOSE ENTRY LOG: confirm _phase3_scan_and_enter() was reached ──
+        logger.critical(
+            "🔬 [Phase3] START _phase3_scan_and_enter | cycle_id=%s symbol_count=%d "
+            "available_slots=%d zero_signal_streak=%d force_trade=%s "
+            "balance=$%.2f regime=%s",
+            getattr(snapshot, "cycle_id", "?"),
+            len(symbols),
+            available_slots,
+            zero_signal_streak,
+            _env_truthy("FORCE_TRADE"),
+            float(getattr(snapshot, "available_capital", 0.0) or 0.0),
+            str(getattr(snapshot, "current_regime", "unknown")),
+        )
         # Pre-import AIEngineSignal once; guarded so the fallback path works
         # even when NijaAIEngine is unavailable.
         try:
@@ -2750,6 +2763,28 @@ class NijaCoreLoop:
                 entries_taken=entries,
                 candidates_found=len(candidates),
                 rank_threshold=rank_threshold,
+            )
+
+        # ── VERBOSE EXIT LOG: confirm execution loop outcome ──────────────
+        _force_direct_would_trigger = entries == 0 and _env_truthy("FORCE_TRADE")
+        logger.critical(
+            "🏁 [Phase3] END _phase3_scan_and_enter | entries=%d blocked=%d "
+            "scored=%d candidates=%d selected=%d force_trade=%s "
+            "FORCE_TRADE_DIRECT_fallback_would_trigger=%s",
+            entries,
+            blocked,
+            scored,
+            len(candidates),
+            len(selected),
+            _env_truthy("FORCE_TRADE"),
+            _force_direct_would_trigger,
+        )
+        if _force_direct_would_trigger:
+            logger.critical(
+                "⚡ [Phase3] FORCE_TRADE active but entries=0 — "
+                "FORCE_TRADE_DIRECT fallback condition MET. "
+                "Check execute_action() logs above for why orders were not placed "
+                "(broker gate, capital gate, or execution engine rejection).",
             )
 
         # ── FORCE_TRADE direct execute_action() fallback ─────────────────
