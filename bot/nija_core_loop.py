@@ -1247,10 +1247,45 @@ class NijaCoreLoop:
         _ca_hydrated = bool(_cap.get("ca_is_hydrated", False))
         _ca_total_capital = float(_cap.get("ca_total_capital", 0.0) or 0.0)
         # Canonical balance source-of-truth:
-        # - Once CA is hydrated, always use cycle-captured CA capital
-        #   (including legitimate 0.0) so all gates/signals share one value.
-        # - Before hydration, fall back to caller-supplied balance.
-        _canonical_balance = _ca_total_capital if _ca_hydrated else float(balance)
+        # - Once CA is hydrated AND reports a positive balance, use CA capital.
+        # - If CA is hydrated but reports $0.00, fall back to caller-supplied
+        #   balance so a stale/un-published CA snapshot does not zero-out the
+        #   capital gate and block all orders.
+        # - Before hydration, always use caller-supplied balance.
+        # - If all sources are zero and FORCE_TRADE is active, try the broker
+        #   cache directly, then the NIJA_FORCE_TRADE_BALANCE env override.
+        _caller_balance = float(balance) if balance else 0.0
+        if _ca_hydrated and _ca_total_capital > 0.0:
+            _canonical_balance = _ca_total_capital
+        elif _caller_balance > 0.0:
+            _canonical_balance = _caller_balance
+        else:
+            # Last-resort: try broker cached balance then env override
+            _broker_cached = _extract_cached_balance_for_log(broker) if broker is not None else 0.0
+            _env_override = float(os.getenv("NIJA_FORCE_TRADE_BALANCE", "0") or 0)
+            _canonical_balance = _broker_cached or _env_override or 0.0
+            if _canonical_balance > 0.0:
+                print(
+                    f"[NIJA-PRINT] BALANCE HYDRATION FALLBACK | "
+                    f"ca_hydrated={_ca_hydrated} ca_total=${_ca_total_capital:.2f} "
+                    f"caller=${_caller_balance:.2f} broker_cached=${_broker_cached:.2f} "
+                    f"env_override=${_env_override:.2f} → using=${_canonical_balance:.2f}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[NIJA-PRINT] BALANCE ZERO WARNING | "
+                    f"ca_hydrated={_ca_hydrated} ca_total=${_ca_total_capital:.2f} "
+                    f"caller=${_caller_balance:.2f} broker_cached=${_broker_cached:.2f} "
+                    f"env_override=${_env_override:.2f} — all sources zero, capital gate will block",
+                    flush=True,
+                )
+        print(
+            f"[NIJA-PRINT] BALANCE SNAPSHOT | "
+            f"ca_hydrated={_ca_hydrated} ca_total=${_ca_total_capital:.2f} "
+            f"caller=${_caller_balance:.2f} canonical=${_canonical_balance:.2f}",
+            flush=True,
+        )
         snapshot = CycleSnapshot(
             balance=_canonical_balance,
             current_regime=getattr(self.apex, "current_regime", None),
@@ -1680,7 +1715,7 @@ class NijaCoreLoop:
             f"symbols={len(symbols)} slots={available_slots} "
             f"streak={zero_signal_streak} "
             f"force_trade={_env_truthy('FORCE_TRADE')} "
-            f"balance=${float(getattr(snapshot, 'available_capital', 0.0) or 0.0):.2f} "
+            f"balance=${float(snapshot.balance or 0.0):.2f} "
             f"regime={getattr(snapshot, 'current_regime', 'unknown')}",
             flush=True,
         )
@@ -1693,9 +1728,10 @@ class NijaCoreLoop:
             available_slots,
             zero_signal_streak,
             _env_truthy("FORCE_TRADE"),
-            float(getattr(snapshot, "available_capital", 0.0) or 0.0),
+            float(snapshot.balance or 0.0),
             str(getattr(snapshot, "current_regime", "unknown")),
         )
+
         # Pre-import AIEngineSignal once; guarded so the fallback path works
         # even when NijaAIEngine is unavailable.
         try:
