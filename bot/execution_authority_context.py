@@ -1204,6 +1204,48 @@ def _attempt_live_dispatch_commit_repair(reason: str) -> bool:
 
 def can_execute() -> ExecutionDecision:
     """Canonical execution authority decision for all order-dispatch paths."""
+    # ── FORCE_TRADE bypass: skip all authority gates ──────────────────────────
+    # When FORCE_TRADE=true or FORCE_TRADE_MODE=true, bypass the entire
+    # lifecycle/authority gate stack so orders can reach the exchange even when
+    # the startup coordinator has not yet committed to LIVE_ACTIVE.  This is the
+    # operator escape hatch for the "bot running but zero trades" deadlock caused
+    # by missing Redis fencing tokens or incomplete activation sequences.
+    _force_trade = (
+        _env_truthy("FORCE_TRADE") or _env_truthy("FORCE_TRADE_MODE")
+    )
+    if _force_trade:
+        logger.warning(
+            "[FORCE_TRADE] can_execute: bypassing all authority gates — "
+            "FORCE_TRADE/FORCE_TRADE_MODE=true. All lifecycle/lease/nonce/heartbeat "
+            "checks skipped. Orders will be submitted directly to exchange."
+        )
+        return ExecutionDecision(
+            allowed=True,
+            reason="force_trade_bypass",
+            circuit_state="CLOSED",
+            state_live_active=True,
+            lease_valid=True,
+            lease_generation_current=True,
+            nonce_ready=True,
+            heartbeat_fresh=True,
+            heartbeat_stage_sufficient=True,
+            broker_health_ok=True,
+            circuit_breaker_closed=True,
+            dispatch_enabled=True,
+            stability_allowed=True,
+            stability_halt_state="NORMAL",
+            stability_throttle=1.0,
+            stability_size_multiplier=1.0,
+            stability_stress_score=0.0,
+            stability_collapsed_risk_score=0.0,
+            stability_reason="force_trade_bypass",
+            first_failed_gate="",
+            reason_code="allowed",
+            reason_detail="force_trade_bypass",
+            lifecycle_phase="LIVE",
+        )
+
+
     runtime_snapshot = runtime_authority_snapshot()
 
     # ── Gate 0: lifecycle phase ───────────────────────────────────────────────
@@ -1259,6 +1301,7 @@ def can_execute() -> ExecutionDecision:
         )
 
     state_live_active = str(os.getenv("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() == "LIVE_ACTIVE"
+
 
     local_generation_raw = (
         os.getenv("NIJA_WRITER_LEASE_GENERATION")

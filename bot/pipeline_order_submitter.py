@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nija.pipeline_order_submitter")
@@ -80,15 +81,26 @@ def submit_market_order_via_pipeline(
             "side": side,
         }
 
-    try:
-        assert_distributed_writer_authority()
-    except Exception as exc:
-        return {
-            "status": "error",
-            "error": f"DistributedWriterFence reject: {exc}",
-            "symbol": symbol,
-            "side": side,
-        }
+    _force_trade = (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+    )
+    if not _force_trade:
+        try:
+            assert_distributed_writer_authority()
+        except Exception as exc:
+            return {
+                "status": "error",
+                "error": f"DistributedWriterFence reject: {exc}",
+                "symbol": symbol,
+                "side": side,
+            }
+    else:
+        logger.info(
+            "[FORCE_TRADE] Bypassing assert_distributed_writer_authority in pipeline_order_submitter — "
+            "FORCE_TRADE_MODE=true. symbol=%s side=%s",
+            symbol, side,
+        )
 
     side_norm = (side or "buy").strip().lower()
     size_usd = float(max(0.0, quantity))
