@@ -1976,14 +1976,22 @@ class ExecutionEngine:
                     else bool(getattr(_bfsm, "execution_authority", False))
                 )
                 if not _has_auth:
-                    logger.error(
-                        "🚫 EXECUTION AUTHORITY BLOCK: %s rejected — bootstrap execution_authority=false "
-                        "(BootstrapFSM state=%s). Set FORCE_TRADE=true to bypass or wait for bootstrap to complete.",
-                        symbol,
-                        getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
-                    )
-                    _trace("ecel", "rejected", "bootstrap_execution_authority_false", terminal=True)
-                    return None
+                    if FORCE_TRADE_MODE:
+                        logger.warning(
+                            "⚠️  EXECUTION AUTHORITY BLOCK bypassed for %s — bootstrap execution_authority=false "
+                            "(BootstrapFSM state=%s) but FORCE_TRADE=true overrides this gate.",
+                            symbol,
+                            getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
+                        )
+                    else:
+                        logger.error(
+                            "🚫 EXECUTION AUTHORITY BLOCK: %s rejected — bootstrap execution_authority=false "
+                            "(BootstrapFSM state=%s). Set FORCE_TRADE=true to bypass or wait for bootstrap to complete.",
+                            symbol,
+                            getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
+                        )
+                        _trace("ecel", "rejected", "bootstrap_execution_authority_false", terminal=True)
+                        return None
             except Exception as _auth_exc:
                 logger.warning("Bootstrap execution authority check skipped (non-fatal): %s", _auth_exc)
 
