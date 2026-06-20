@@ -342,6 +342,7 @@ class PipelineRequest:
     time_in_force: Optional[str] = None
     extended_hours: Optional[bool] = None
     strategy_metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     validated: bool = False
 
     def __post_init__(self) -> None:
@@ -1695,7 +1696,11 @@ class ExecutionPipeline:
                             "notional_usd": getattr(request, "notional_usd", None),
                             "units": getattr(request, "units", None),
                             "unit_type": getattr(request, "unit_type", None),
-                            "price_hint_usd": getattr(request, "price_hint_usd", None),
+                            "price_hint_usd": (
+                                getattr(request, "price_hint_usd", None)
+                                if getattr(request, "price_hint_usd", None) is not None
+                                else dict(getattr(request, "metadata", {}) or {}).get("price_hint_usd")
+                            ),
                             "stop_price": getattr(request, "stop_price", None),
                             "instrument_type": request.instrument_type or "",
                             "quantity_mode": request.quantity_mode,
@@ -1766,7 +1771,11 @@ class ExecutionPipeline:
                             "notional_usd": getattr(request, "notional_usd", None),
                             "units": getattr(request, "units", None),
                             "unit_type": getattr(request, "unit_type", None),
-                            "price_hint_usd": getattr(request, "price_hint_usd", None),
+                            "price_hint_usd": (
+                                getattr(request, "price_hint_usd", None)
+                                if getattr(request, "price_hint_usd", None) is not None
+                                else dict(getattr(request, "metadata", {}) or {}).get("price_hint_usd")
+                            ),
                             "leverage": getattr(request, "leverage", None),
                             "reduce_only": getattr(request, "reduce_only", None),
                             "margin_mode": getattr(request, "margin_mode", None),
