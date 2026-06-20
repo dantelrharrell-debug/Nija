@@ -265,7 +265,23 @@ class BrokerFailureManager:
     # ------------------------------------------------------------------
 
     def is_dead(self, broker_name: str) -> bool:
-        """Return ``True`` if *broker_name* has been marked dead."""
+        """Return ``True`` if *broker_name* has been marked dead.
+
+        When FORCE_TRADE or NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK is active,
+        always returns False so that operator override flags are honoured and
+        the broker criticality gate in TradePermissionEngine never blocks trades
+        due to accumulated error counts from previous cycles.
+        """
+        _force_bypass = (
+            os.environ.get("FORCE_TRADE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+        )
+        if _force_bypass:
+            return False
         with self._lock:
             state = self._states.get(broker_name)
             return state.is_dead if state else False
