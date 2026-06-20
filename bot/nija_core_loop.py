@@ -625,12 +625,9 @@ def _supervisor_step_state_machine() -> None:
         # 5-minute auto-transition timeout even when LIVE_CAPITAL_VERIFIED is
         # not explicitly set in the environment.
         _force_activation_sv = (
-            os.environ.get("FORCE_TRADE", "").strip().lower()
-            in ("1", "true", "yes", "on", "enabled")
-            or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
-            in ("1", "true", "yes", "on", "enabled")
-            or os.environ.get("FORCE_TRADE_MODE", "").strip().lower()
-            in ("1", "true", "yes", "on", "enabled")
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+            or _env_truthy("FORCE_TRADE_MODE")
         )
         _state_for_commit = sm.get_current_state()
         _attempt_commit = (
@@ -1768,7 +1765,9 @@ class NijaCoreLoop:
 
                 # Determine trend from apex market filter
                 try:
-                    allow, trend, market_reason, _market_str = self.apex.check_market_filter(df, indicators)
+                    allow, trend, market_reason, *_market_filter_extra = self.apex.check_market_filter(
+                        df, indicators
+                    )
                     _market_filter_checks += 1
                     if not allow:
                         blocked += 1
@@ -3735,12 +3734,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     # and signal generation proceed immediately.  This unblocks the pipeline
                     # in deployments where Redis or capital-authority hydration is delayed.
                     _force_cycle_bypass = (
-                        os.environ.get("FORCE_TRADE", "").strip().lower()
-                        in ("1", "true", "yes", "on", "enabled")
-                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
-                        in ("1", "true", "yes", "on", "enabled")
-                        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower()
-                        in ("1", "true", "yes", "on", "enabled")
+                        _env_truthy("FORCE_TRADE")
+                        or _env_truthy("NIJA_FORCE_ACTIVATION")
+                        or _env_truthy("FORCE_TRADE_MODE")
                     )
 
                     if (not _committed_gate) or (not _dispatch_gate) or (not _live_gate):
@@ -3794,7 +3790,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                                 )
                             time.sleep(_activation_retry_sleep_s)
                             continue
-                    _last_cycle_skip_signature = None
+                    else:
+                        _last_cycle_skip_signature = None
 
                 _rate_limited_critical(
                     "core_loop_capital_check",
