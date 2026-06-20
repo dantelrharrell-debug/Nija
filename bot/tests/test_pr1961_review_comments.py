@@ -12,7 +12,7 @@ def _core_loop_text() -> str:
 def test_market_filter_unpack_accepts_optional_extra_values() -> None:
     text = _core_loop_text()
     assert re.search(
-        r"allow,\s*trend,\s*market_reason,\s*\*_market_filter_extra\s*=\s*self\.apex\.check_market_filter\s*\(",
+        r"allow,\s*trend,\s*market_reason,\s*\*_market_filter_extra\s*=\s*self\.apex\.check_market_filter[^\S\n]*\(",
         text,
     )
 
@@ -26,4 +26,4 @@ def test_force_activation_checks_use_env_truthy_helper() -> None:
 
 def test_cycle_skip_signature_reset_is_guarded_by_open_gate_else_branch() -> None:
     text = _core_loop_text()
-    assert re.search(r"else:(?:\s*#.*)?\s*\n\s*_last_cycle_skip_signature\s*=\s*None", text)
+    assert re.search(r"else:(?:[^\S\n]*#.*)?[^\S\n]*\n\s*_last_cycle_skip_signature\s*=\s*None", text)
