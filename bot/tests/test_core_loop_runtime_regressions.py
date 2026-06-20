@@ -239,3 +239,49 @@ def test_apex_execute_action_normalizes_list_take_profit_payload() -> None:
     assert captured["take_profit_levels"]["tp2"] == 101.2
     assert captured["take_profit_levels"]["tp3"] == 101.8
     assert captured["take_profit_levels"]["forced_fallback"] is True
+
+
+def test_ai_engine_force_trade_emits_and_selects_below_floor_signal(monkeypatch) -> None:
+    import pandas as pd
+
+    from bot.nija_ai_engine import NijaAIEngine
+
+    rows = 30
+    df = pd.DataFrame(
+        {
+            "open": [100.0 + i * 0.01 for i in range(rows)],
+            "high": [101.0 + i * 0.01 for i in range(rows)],
+            "low": [99.0 + i * 0.01 for i in range(rows)],
+            "close": [100.5 + i * 0.01 for i in range(rows)],
+            "volume": [500.0 for _ in range(rows)],
+        }
+    )
+    engine = NijaAIEngine()
+    engine.set_score_floor(80.0)
+    monkeypatch.setenv("FORCE_TRADE", "true")
+    monkeypatch.setattr(
+        engine,
+        "_compute_composite",
+        lambda *_args, **_kwargs: (2.0, {"enhanced_score": 2.0, "gate_quality": 0.0}),
+    )
+
+    signal = engine.evaluate_symbol(
+        df=df,
+        indicators={},
+        side="long",
+        regime="quiet",
+        broker="kraken",
+        entry_type="forced_probe",
+        symbol="BTC/USD",
+    )
+
+    assert signal is not None
+    assert signal.metadata["force_trade_signal"] is True
+    assert signal.metadata["below_score_floor"] is True
+    assert signal.composite_score == 2.0
+    assert signal.position_multiplier <= 0.50
+
+    selected = engine.rank_and_select([signal], available_slots=1, regime="quiet")
+
+    assert selected == [signal]
+    assert selected[0].position_multiplier <= 0.50

@@ -517,6 +517,67 @@ class NijaAIEngine:
     # Public API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _force_trade_signal_enabled() -> bool:
+        """Return True when operators explicitly request forced/probe entries.
+
+        This is intentionally opt-in.  It does not bypass broker, capital,
+        liquidity, lifecycle, or exchange submission gates; it only prevents
+        the AI signal layer from returning an empty candidate list when the
+        live deployment has FORCE_TRADE-style controls enabled.
+        """
+        truthy = {"1", "true", "yes", "on", "y", "enabled"}
+        for key in (
+            "FORCE_TRADE",
+            "FORCE_TRADE_MODE",
+            "NIJA_FORCE_TRADE",
+            "NIJA_FORCE_NEXT_CYCLE",
+            "NIJA_ALWAYS_TRADE_MODE",
+        ):
+            if str(os.getenv(key, "")).strip().lower() in truthy:
+                return True
+        return False
+
+    def _build_exploratory_signal(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        composite: float,
+        effective_floor: float,
+        breakdown: Dict[str, Any],
+        regime: Any,
+        entry_type: str,
+    ) -> AIEngineSignal:
+        """Build a bounded FORCE_TRADE signal from the best below-floor score.
+
+        The signal is explicitly marked so downstream ranking can keep it even
+        though it is below the normal score floor, while execution-side safety
+        gates still make the final submit/no-submit decision.
+        """
+        metadata = dict(breakdown or {})
+        metadata.update(
+            {
+                "force_trade_signal": True,
+                "below_score_floor": True,
+                "score_floor": float(effective_floor),
+                "score_shortfall": max(0.0, float(effective_floor) - float(composite)),
+                "selection_override": "FORCE_TRADE exploratory signal",
+            }
+        )
+        reason = self._build_reason(side, composite, metadata, regime)
+        reason = f"{reason} [FORCE_TRADE exploratory below-floor candidate]"
+        return AIEngineSignal(
+            symbol=symbol,
+            side=side,
+            composite_score=float(max(0.0, min(100.0, composite))),
+            position_multiplier=min(0.50, self._position_multiplier(max(0.0, composite))),
+            entry_type=entry_type,
+            threshold_used=effective_floor,
+            reason=reason,
+            metadata=metadata,
+        )
+
     def set_score_floor(self, value: float) -> None:
         """
         Override the composite-score floor used by this engine instance.
@@ -576,6 +637,21 @@ class NijaAIEngine:
             effective_floor = self.threshold_ctrl.get_effective_floor(score_floor)
 
             if composite < effective_floor:
+                if self._force_trade_signal_enabled():
+                    logger.warning(
+                        "⚡ FORCE_TRADE AI signal override: %s %s score=%.1f < floor=%.1f — "
+                        "emitting bounded exploratory candidate for downstream safety gates",
+                        symbol, side.upper(), composite, effective_floor,
+                    )
+                    return self._build_exploratory_signal(
+                        symbol=symbol,
+                        side=side,
+                        composite=composite,
+                        effective_floor=effective_floor,
+                        breakdown=breakdown,
+                        regime=regime,
+                        entry_type=entry_type,
+                    )
                 logger.debug(
                     "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f (adj%+.1f) — skipped",
                     symbol, side.upper(), composite, effective_floor,
@@ -665,9 +741,15 @@ class NijaAIEngine:
         for sig in ranked:
             if slots_used >= max_take:
                 break
-            if sig.composite_score >= threshold:
+            force_signal = bool(getattr(sig, "metadata", {}).get("force_trade_signal"))
+            if sig.composite_score >= threshold or force_signal:
                 sig.threshold_used = threshold
-                sig.position_multiplier = self._position_multiplier(sig.composite_score)
+                if force_signal:
+                    # Keep forced exploratory probes small; hard execution gates
+                    # still decide whether an order may be submitted.
+                    sig.position_multiplier = min(0.50, self._position_multiplier(sig.composite_score))
+                else:
+                    sig.position_multiplier = self._position_multiplier(sig.composite_score)
                 selected.append(sig)
                 slots_used += 1
 
