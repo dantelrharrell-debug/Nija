@@ -2343,6 +2343,13 @@ class NijaCoreLoop:
                     sig.composite_score,
                     sig.position_multiplier,
                 )
+                logger.info(
+                    "⚡ [CoreLoop] execute_action CALLED | symbol=%s action=%s "
+                    "analysis_keys=%s",
+                    sig.symbol,
+                    action,
+                    list(analysis.keys()),
+                )
                 success = self.apex.execute_action(analysis, sig.symbol)
                 logger.info(
                     "📬 [CoreLoop] ORDER RESULT | symbol=%s side=%s success=%s",
@@ -3750,10 +3757,14 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     # orders are placed until activation completes — but market scanning
                     # and signal generation proceed immediately.  This unblocks the pipeline
                     # in deployments where Redis or capital-authority hydration is delayed.
+                    # NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK is also included here because
+                    # it signals that Redis is not available and the FSM should not be
+                    # blocked waiting for distributed lock infrastructure.
                     _force_cycle_bypass = (
                         _env_truthy("FORCE_TRADE")
                         or _env_truthy("NIJA_FORCE_ACTIVATION")
                         or _env_truthy("FORCE_TRADE_MODE")
+                        or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
                     )
 
                     if (not _committed_gate) or (not _dispatch_gate) or (not _live_gate):

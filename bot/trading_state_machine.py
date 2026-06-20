@@ -394,7 +394,16 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
     --------------------
     This gate never bypasses distributed authority checks. Redis fencing and
     lease validation are mandatory for LIVE_ACTIVE transitions.
+
+    Local-fallback bypass
+    ---------------------
+    When NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true the gate delegates to
+    assert_distributed_writer_authority() which already honours that flag and
+    returns without raising.  The hard fencing-token check is skipped so that
+    deployments without Redis can still reach LIVE_ACTIVE.
     """
+    _local_fallback = _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+
     writer_lease_manager = None
     try:
         try:
@@ -409,15 +418,28 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
         writer_lease_manager = None
 
     # Verify fencing token is present before attempting Redis check.
+    # When NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true, skip this hard block so
+    # that deployments without Redis can still activate.  The downstream
+    # assert_distributed_writer_authority() call already honours the flag.
     fencing_token = _resolve_writer_fencing_token(writer_lease_manager)
     if not fencing_token:
-        err = (
-            "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
-            "Redis distributed writer authority is required for LIVE_ACTIVE. "
-            "Ensure the bot acquired a Redis writer lease at startup."
-        )
-        logger.critical("[WRITER AUTHORITY HARD FAIL] %s", err)
-        return False, err
+        if _local_fallback:
+            logger.warning(
+                "[WRITER AUTHORITY] NIJA_WRITER_FENCING_TOKEN is not set but "
+                "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+                "skipping fencing-token hard block, using local writer fallback."
+            )
+            # Fall through to assert_distributed_writer_authority() which will
+            # also honour the fallback flag and return without raising.
+        else:
+            err = (
+                "LIVE TRADING BLOCKED: NIJA_WRITER_FENCING_TOKEN is not set. "
+                "Redis distributed writer authority is required for LIVE_ACTIVE. "
+                "Ensure the bot acquired a Redis writer lease at startup. "
+                "Set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to use local fallback."
+            )
+            logger.critical("[WRITER AUTHORITY HARD FAIL] %s", err)
+            return False, err
 
     retries = max(1, int(os.environ.get("NIJA_REDIS_LOCK_RETRIES", "3") or "3"))
     retry_delay_s = max(0.0, float(os.environ.get("NIJA_REDIS_LOCK_RETRY_DELAY_S", "0.20") or "0.20"))
@@ -436,6 +458,18 @@ def _distributed_writer_authority_gate() -> tuple[bool, str]:
             last_err = str(exc)
             if attempt < retries - 1 and retry_delay_s > 0:
                 time.sleep(retry_delay_s)
+
+    # When local fallback is active, treat a failed Redis check as a pass so
+    # the bot can still reach LIVE_ACTIVE without distributed lock infrastructure.
+    if _local_fallback:
+        logger.warning(
+            "[WRITER AUTHORITY] distributed authority verification failed after %d attempt(s) "
+            "but NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+            "using local writer fallback. last_error=%s",
+            retries,
+            last_err,
+        )
+        return True, ""
 
     # Hard fail — no fail-open for transient errors in strict mode.
     # Redis unavailability is a hard block on LIVE_ACTIVE activation.
@@ -1551,6 +1585,8 @@ class TradingStateMachine:
 
             # Enforce fencing token presence using the same fallback chain as
             # the authority gate (env var -> distributed nonce lease version).
+            # When NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true, skip this hard
+            # block so deployments without Redis can still reach LIVE_ACTIVE.
             _writer_lease_manager = None
             try:
                 try:
@@ -1563,12 +1599,20 @@ class TradingStateMachine:
 
             _fencing_token = _resolve_writer_fencing_token(_writer_lease_manager)
             if not _fencing_token:
-                error_msg = (
-                    "LIVE_ACTIVE blocked: NIJA_WRITER_FENCING_TOKEN is not set. "
-                    "A valid Redis fencing token (or active lease version) is required for LIVE_ACTIVE."
-                )
-                logger.critical("[FSM HARD FAIL] %s", error_msg)
-                raise StateTransitionError(error_msg)
+                if _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"):
+                    logger.warning(
+                        "[FSM] NIJA_WRITER_FENCING_TOKEN is not set but "
+                        "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+                        "skipping fencing-token hard block in transition_to(LIVE_ACTIVE)."
+                    )
+                else:
+                    error_msg = (
+                        "LIVE_ACTIVE blocked: NIJA_WRITER_FENCING_TOKEN is not set. "
+                        "A valid Redis fencing token (or active lease version) is required for LIVE_ACTIVE. "
+                        "Set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to use local fallback."
+                    )
+                    logger.critical("[FSM HARD FAIL] %s", error_msg)
+                    raise StateTransitionError(error_msg)
 
             # Check runtime revocation before activating.
             try:
