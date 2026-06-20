@@ -1976,17 +1976,21 @@ class ExecutionEngine:
                     else bool(getattr(_bfsm, "execution_authority", False))
                 )
                 if not _has_auth:
-                    if FORCE_TRADE_MODE:
+                    _force_trade_now_bootstrap = (
+                        os.getenv("FORCE_TRADE", "false").lower() in ("true", "1", "yes")
+                        or os.getenv("FORCE_TRADE_MODE", "false").lower() in ("true", "1", "yes")
+                    )
+                    if _force_trade_now_bootstrap:
                         logger.warning(
                             "⚠️  EXECUTION AUTHORITY BLOCK bypassed for %s — bootstrap execution_authority=false "
-                            "(BootstrapFSM state=%s) but FORCE_TRADE=true overrides this gate.",
+                            "(BootstrapFSM state=%s) but FORCE_TRADE / FORCE_TRADE_MODE is set to a truthy value (true/1/yes) overriding this gate.",
                             symbol,
                             getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                         )
                     else:
                         logger.error(
                             "🚫 EXECUTION AUTHORITY BLOCK: %s rejected — bootstrap execution_authority=false "
-                            "(BootstrapFSM state=%s). Set FORCE_TRADE=true to bypass or wait for bootstrap to complete.",
+                            "(BootstrapFSM state=%s). Set FORCE_TRADE or FORCE_TRADE_MODE to a truthy value (true/1/yes) to bypass or wait for bootstrap to complete.",
                             symbol,
                             getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                         )
