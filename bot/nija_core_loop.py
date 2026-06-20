@@ -1804,7 +1804,6 @@ class NijaCoreLoop:
             f"streak={zero_signal_streak} "
             f"force_trade={_env_truthy('FORCE_TRADE')} "
             f"balance=${float(getattr(snapshot, 'balance', 0.0) or 0.0):.2f} "
-            f"balance=${float(snapshot.balance or 0.0):.2f} "
             f"regime={getattr(snapshot, 'current_regime', 'unknown')}",
             flush=True,
         )
@@ -1818,7 +1817,6 @@ class NijaCoreLoop:
             zero_signal_streak,
             _env_truthy("FORCE_TRADE"),
             float(getattr(snapshot, "balance", 0.0) or 0.0),
-            float(snapshot.balance or 0.0),
             str(getattr(snapshot, "current_regime", "unknown")),
         )
 
