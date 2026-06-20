@@ -2194,6 +2194,16 @@ class NijaCoreLoop:
             if ai is not None
             else candidates[:available_slots]
         )
+        logger.critical(
+            "🎯 [Phase3] SIGNALS SELECTED: %d candidate(s) ranked from %d total — "
+            "symbols=%s",
+            len(selected),
+            len(candidates),
+            ", ".join(
+                f"{getattr(s, 'symbol', '?')}({getattr(s, 'side', '?')} score={getattr(s, 'composite_score', 0):.1f})"
+                for s in selected
+            ) or "none",
+        )
 
         # ── Progressive relaxation: activate after too many zero-signal cycles ──
         # Each 3-cycle step reduces the effective floor by 15% / 25% / 40%.
@@ -2562,7 +2572,7 @@ class NijaCoreLoop:
                         original, analysis["position_size"],
                     )
 
-                logger.info(
+                logger.critical(
                     "🚀 [CoreLoop] SUBMITTING ORDER | symbol=%s side=%s action=%s "
                     "position_size=$%.2f entry_price=%.6f score=%.1f mult=×%.2f",
                     sig.symbol,
@@ -2573,7 +2583,7 @@ class NijaCoreLoop:
                     sig.composite_score,
                     sig.position_multiplier,
                 )
-                logger.info(
+                logger.critical(
                     "⚡ [CoreLoop] execute_action CALLED | symbol=%s action=%s "
                     "analysis_keys=%s",
                     sig.symbol,
@@ -2581,7 +2591,7 @@ class NijaCoreLoop:
                     list(analysis.keys()),
                 )
                 success = self.apex.execute_action(analysis, sig.symbol)
-                logger.info(
+                logger.critical(
                     "📬 [CoreLoop] ORDER RESULT | symbol=%s side=%s success=%s",
                     sig.symbol,
                     sig.side,
