@@ -610,6 +610,37 @@ def _supervisor_step_state_machine() -> None:
                     "[SUPERVISOR] set_first_snap_accepted failed: %s", _snap_accept_err
                 )
 
+        # ── FORCE_TRADE: bypass _first_snap_accepted gate when snapshot_source
+        # is "placeholder" (Redis/capital pipeline unavailable).  Without this,
+        # NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true deployments never produce a
+        # "live_exchange" snapshot, so _first_snap_accepted stays False forever
+        # and commit_activation() is permanently blocked even with real capital.
+        _force_activation_sv = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+        )
+        if (
+            _force_activation_sv
+            and not sm.get_first_snap_accepted()
+            and _ca_capital_sv > 0.0
+        ):
+            try:
+                sm.set_first_snap_accepted(True)
+                logger.warning(
+                    "⚡ [SUPERVISOR] FORCE_TRADE: _first_snap_accepted forced True — "
+                    "snapshot_source=%s ca_capital=$%.2f (bypassing live_exchange requirement). "
+                    "This unblocks commit_activation() when Redis/capital pipeline is unavailable.",
+                    _snap_source_sv or "placeholder",
+                    _ca_capital_sv,
+                )
+            except Exception as _snap_force_err:
+                logger.warning(
+                    "[SUPERVISOR] FORCE_TRADE _first_snap_accepted force-set failed: %s",
+                    _snap_force_err,
+                )
+
         # Missing trigger fix: the supervisor attempts activation every cycle
         # while in OFF/LIVE_PENDING_CONFIRMATION, using the same frozen
         # cycle capital snapshot.
@@ -624,11 +655,6 @@ def _supervisor_step_state_machine() -> None:
         # LIVE_PENDING_CONFIRMATION and eventually reach LIVE_ACTIVE via the
         # 5-minute auto-transition timeout even when LIVE_CAPITAL_VERIFIED is
         # not explicitly set in the environment.
-        _force_activation_sv = (
-            _env_truthy("FORCE_TRADE")
-            or _env_truthy("NIJA_FORCE_ACTIVATION")
-            or _env_truthy("FORCE_TRADE_MODE")
-        )
         _state_for_commit = sm.get_current_state()
         _attempt_commit = (
             _live_verified
@@ -642,6 +668,43 @@ def _supervisor_step_state_machine() -> None:
                     _committed = bool(sm.commit_activation(cycle_capital=_cycle_capital))
             except Exception as _commit_err:
                 logger.warning("Supervisor commit_activation failed: %s", _commit_err)
+
+            # ── FORCE_TRADE hard-activation fallback ─────────────────────────
+            # When commit_activation() fails (e.g. startup coordinator gates not
+            # yet converged) but FORCE_TRADE is set, call _force_live_active_transition()
+            # directly to bypass all distributed-authority pre-flight checks.
+            # This is the final escape hatch for the "6000+ cycles, zero trades"
+            # condition where the FSM is permanently stuck in LIVE_PENDING_CONFIRMATION
+            # because Redis/capital-pipeline infrastructure is unavailable.
+            if not _committed and _force_activation_sv and _live_verified:
+                _state_after_commit = sm.get_current_state()
+                if _state_after_commit != _TradingState.LIVE_ACTIVE:
+                    logger.warning(
+                        "⚡ [SUPERVISOR] FORCE_TRADE hard-activation: commit_activation() failed "
+                        "(state=%s) — calling _force_live_active_transition() to bypass "
+                        "distributed-authority gates. LIVE_CAPITAL_VERIFIED=true + FORCE_TRADE=true.",
+                        _state_after_commit.value,
+                    )
+                    try:
+                        if hasattr(sm, "_force_live_active_transition"):
+                            _force_ok = sm._force_live_active_transition(
+                                "FORCE_TRADE+LIVE_CAPITAL_VERIFIED: supervisor hard-activation bypass"
+                            )
+                            if _force_ok:
+                                logger.critical(
+                                    "⚡ [SUPERVISOR] FORCE_TRADE hard-activation SUCCESS — "
+                                    "FSM is now LIVE_ACTIVE. Orders will be submitted this cycle."
+                                )
+                            else:
+                                logger.warning(
+                                    "⚡ [SUPERVISOR] FORCE_TRADE hard-activation returned False — "
+                                    "FSM transition may have failed; check state machine logs."
+                                )
+                    except Exception as _force_act_err:
+                        logger.warning(
+                            "[SUPERVISOR] FORCE_TRADE _force_live_active_transition failed: %s",
+                            _force_act_err,
+                        )
 
             if not _committed and _sufficient_balance and sm.get_current_state() == _TradingState.OFF:
                 try:
@@ -2210,26 +2273,69 @@ class NijaCoreLoop:
         # is never called because analyze_market() returns 'hold' and fallback_active
         # is False (zero_signal_streak resets to 0 when candidates are found).
         # This is the root cause of the "6000+ cycles, zero trades" condition.
+        #
+        # NOTE: After 6000+ cycles, fallback_active is ALWAYS True (progressive
+        # relaxation activates at streak ≥ 2), so the previous `not fallback_active`
+        # guard silently prevented this block from ever running.  The condition is
+        # now unconditional when FORCE_TRADE is set and candidates are selected —
+        # fallback_active is set to True regardless of its current value, and an
+        # explicit INFO log confirms execute_action() will be called for each signal.
         _force_trade_bypass = (
             _env_truthy("FORCE_TRADE")
             or _env_truthy("FORCE_TRADE_MODE")
             or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
             or _env_truthy("NIJA_FORCE_ACTIVATION")
         )
-        if _force_trade_bypass and selected and not fallback_active:
-            fallback_active = True
+        if _force_trade_bypass and selected:
+            if not fallback_active:
+                fallback_active = True
+                logger.warning(
+                    "⚡ FORCE_TRADE bypass: fallback_active forced True for %d selected candidate(s) "
+                    "— analyze_market() 'hold' responses will be overridden to force entry.",
+                    len(selected),
+                )
+            # Always log signal count and confirm execute_action() path when FORCE_TRADE is active.
             logger.warning(
-                "⚡ FORCE_TRADE bypass: fallback_active forced True for %d selected candidate(s) "
-                "— analyze_market() 'hold' responses will be overridden to force entry. "
-                "This ensures execute_action() is called when FORCE_TRADE/NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK is set.",
+                "⚡ [FORCE_TRADE] %d signal(s) selected — fallback_active=%s. "
+                "execute_action() WILL be called for each signal this cycle. "
+                "Signals: %s",
                 len(selected),
+                fallback_active,
+                ", ".join(
+                    f"{getattr(s, 'symbol', '?')}({getattr(s, 'side', '?')} score={getattr(s, 'composite_score', 0):.1f})"
+                    for s in selected
+                ),
             )
 
         # ── Execute selected entries ──────────────────────────────────────
+        logger.info(
+            "🚦 [Phase3] Entering execution loop — selected=%d fallback_active=%s "
+            "force_trade=%s zero_signal_streak=%d",
+            len(selected),
+            fallback_active,
+            _force_trade_bypass,
+            zero_signal_streak,
+        )
+        if not selected:
+            logger.warning(
+                "⚠️ [Phase3] selected is EMPTY — no signals to execute. "
+                "candidates=%d scored=%d blocked=%d",
+                len(candidates),
+                scored,
+                blocked,
+            )
         entries = 0
         for sig in selected:
             if entries >= MAX_ENTRIES_PER_CYCLE:
                 break
+            logger.info(
+                "🎯 [Phase3] Processing signal %d/%d — symbol=%s side=%s score=%.1f",
+                entries + 1,
+                len(selected),
+                getattr(sig, "symbol", "UNKNOWN"),
+                getattr(sig, "side", "UNKNOWN"),
+                getattr(sig, "composite_score", 0.0),
+            )
             try:
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
                 df = self._fetch_df(broker, sig.symbol)
@@ -3494,6 +3600,52 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 # Trigger live-state activation checks using this cycle's frozen
                 # capital snapshot before any strategy execution starts.
                 _supervisor_step_state_machine()
+
+                # ── FORCE_TRADE hard-activation safety net ────────────────────
+                # After _supervisor_step_state_machine() runs, check if the FSM
+                # is still not LIVE_ACTIVE despite FORCE_TRADE=true.  If so,
+                # call _force_live_active_transition() directly as a last resort.
+                # This catches the case where the supervisor's commit_activation()
+                # call failed (e.g. startup coordinator proof not yet passed) but
+                # FORCE_TRADE + LIVE_CAPITAL_VERIFIED are both set — the operator
+                # has explicitly authorized live trading and the FSM must comply.
+                _force_loop_bypass = (
+                    _env_truthy("FORCE_TRADE")
+                    or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+                )
+                _live_verified_loop_now = _is_live_mode(resolve_runtime_mode_safe(logger))
+                if (
+                    _force_loop_bypass
+                    and _live_verified_loop_now
+                    and _sm_loop is not None
+                    and _SM_AVAILABLE
+                ):
+                    try:
+                        _fsm_state_now = _sm_loop.get_current_state()
+                        if _fsm_state_now != _TradingState.LIVE_ACTIVE:
+                            logger.warning(
+                                "⚡ [FORCE_TRADE] FSM still %s after supervisor step — "
+                                "calling _force_live_active_transition() to unblock order submission. "
+                                "LIVE_CAPITAL_VERIFIED=true + FORCE_TRADE=true. cycle=%d",
+                                _fsm_state_now.value,
+                                cycle,
+                            )
+                            if hasattr(_sm_loop, "_force_live_active_transition"):
+                                _flt_ok = _sm_loop._force_live_active_transition(
+                                    f"run_trading_loop FORCE_TRADE safety-net cycle={cycle}"
+                                )
+                                if _flt_ok:
+                                    logger.critical(
+                                        "⚡ [FORCE_TRADE] _force_live_active_transition SUCCESS — "
+                                        "FSM is now LIVE_ACTIVE. Orders will be submitted. cycle=%d",
+                                        cycle,
+                                    )
+                    except Exception as _flt_err:
+                        logger.warning(
+                            "[FORCE_TRADE] loop-level _force_live_active_transition failed: %s",
+                            _flt_err,
+                        )
+                # ── End FORCE_TRADE hard-activation safety net ────────────────
 
                 # ── Explicit commit_activation gate ───────────────────────────
                 # When the bot is in LIVE_PENDING_CONFIRMATION and the authority
