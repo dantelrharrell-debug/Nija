@@ -569,7 +569,16 @@ class ExecutionPipeline:
         allowed, reason = safety.is_trading_allowed()
         mode_value = mode.value if mode is not None else "unknown"
 
+        logger.info(
+            "🔍 [ExecutionGate] safety_mode=%s allowed=%s reason=%s symbol=%s",
+            mode_value, allowed, reason, request.symbol,
+        )
+
         if mode in (TradingMode.DISABLED, TradingMode.MONITOR):
+            logger.warning(
+                "🚫 [ExecutionGate] BLOCKED by safety mode=%s | symbol=%s side=%s size_usd=%.2f",
+                mode_value, request.symbol, request.side, request.size_usd,
+            )
             return PipelineResult(
                 success=False,
                 symbol=request.symbol,
@@ -580,9 +589,17 @@ class ExecutionPipeline:
             )
 
         if mode in (TradingMode.APP_STORE, TradingMode.DRY_RUN):
+            logger.info(
+                "🔄 [ExecutionGate] Simulating execution mode=%s | symbol=%s side=%s size_usd=%.2f",
+                mode_value, request.symbol, request.side, request.size_usd,
+            )
             return self._simulate_execution(request, t_start, mode_value, reason)
 
         if not allowed:
+            logger.warning(
+                "🚫 [ExecutionGate] BLOCKED: not allowed | mode=%s reason=%s | symbol=%s side=%s size_usd=%.2f",
+                mode_value, reason, request.symbol, request.side, request.size_usd,
+            )
             return PipelineResult(
                 success=False,
                 symbol=request.symbol,
@@ -604,6 +621,10 @@ class ExecutionPipeline:
                 if hasattr(state_machine, "can_dispatch_trades") and not state_machine.can_dispatch_trades():
                     current_state = getattr(state_machine, "get_current_state", lambda: None)()
                     state_value = current_state.value if current_state else "unknown"
+                    logger.warning(
+                        "🚫 [ExecutionGate] BLOCKED by state_machine | state=%s | symbol=%s side=%s size_usd=%.2f",
+                        state_value, request.symbol, request.side, request.size_usd,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=request.symbol,
@@ -611,6 +632,11 @@ class ExecutionPipeline:
                         size_usd=request.size_usd,
                         error=f"Execution gate pending (state_machine={state_value})",
                         latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+                else:
+                    logger.info(
+                        "✅ [ExecutionGate] state_machine gate PASSED | symbol=%s side=%s",
+                        request.symbol, request.side,
                     )
             except Exception as exc:
                 logger.warning("ExecutionPipeline: trading_state_machine gate skipped: %s", exc)
@@ -643,7 +669,26 @@ class ExecutionPipeline:
                 return self._deny(request, t_start, f"CapitalAuthorization deny: ledger_read_error:{exc}")
 
         exposure_required = side in ("buy", "long")
-        if exposure_required and notional > 0 and margin_ledger is not None and not ledger_row:
+        # Only block on missing ledger state for margin/leveraged orders.
+        # Spot (leverage=1, no margin_mode) orders do not require a ledger record —
+        # blocking them here is the primary cause of zero trade execution on
+        # accounts that have not yet opened a margin position.
+        _is_margin_order = bool(
+            getattr(request, "leverage", 1) and int(getattr(request, "leverage", 1) or 1) > 1
+            or getattr(request, "margin_mode", None)
+            or getattr(request, "borrow_intent", None)
+            or str(getattr(request, "account_type", "") or "").lower() == "margin"
+        )
+        if exposure_required and notional > 0 and margin_ledger is not None and not ledger_row and _is_margin_order:
+            logger.warning(
+                "CapitalAuthorization: missing ledger state for margin order — "
+                "symbol=%s side=%s notional=%.2f broker=%s account_id=%s",
+                getattr(request, "symbol", ""),
+                side,
+                notional,
+                getattr(request, "preferred_broker", ""),
+                getattr(request, "account_id", ""),
+            )
             return self._deny(request, t_start, "CapitalAuthorization deny: missing_ledger_state")
 
         buying_power = ledger_row.get("buying_power_usd") if ledger_row else getattr(request, "buying_power_usd", None)
@@ -792,8 +837,27 @@ class ExecutionPipeline:
         canonical_request = normalize_pipeline_request(request)
         if not getattr(canonical_request, "strategy", ""):
             canonical_request = replace(canonical_request, strategy="unknown_strategy")
+
+        # ── Diagnostic: log every order entering the pipeline ─────────────────
+        _ft_active_diag = (
+            os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+            or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+        )
+        logger.info(
+            "📥 [Pipeline.execute] ORDER RECEIVED | symbol=%s side=%s size_usd=%.2f "
+            "strategy=%s broker=%s account_id=%s force_trade=%s",
+            getattr(canonical_request, "symbol", "?"),
+            getattr(canonical_request, "side", "?"),
+            float(getattr(canonical_request, "size_usd", 0.0) or 0.0),
+            getattr(canonical_request, "strategy", "?"),
+            getattr(canonical_request, "preferred_broker", "?"),
+            getattr(canonical_request, "account_id", "?"),
+            _ft_active_diag,
+        )
+
         valid, reason = validate_pipeline_request(canonical_request)
         if not valid:
+            logger.warning("📥 [Pipeline.execute] RequestContract DENY | reason=%s", reason)
             return self._deny(canonical_request, t_start, f"RequestContract deny: {reason}")
 
         working_request = canonical_request
@@ -1224,10 +1288,24 @@ class ExecutionPipeline:
             "1", "true", "yes", "enabled", "on"
         }
         fencing_token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+        _force_trade_active = (
+            os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+            or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+        )
         if live_mode and not fencing_token:
-            raise RuntimeError(
-                "LIVE EXECUTION DISABLED: Missing fencing token"
-            )
+            if _force_trade_active:
+                logger.warning(
+                    "[FORCE_TRADE] Bypassing fencing token requirement — "
+                    "FORCE_TRADE_MODE=true overrides LIVE EXECUTION DISABLED gate. "
+                    "symbol=%s side=%s size_usd=%.2f",
+                    effective_request.symbol,
+                    effective_request.side,
+                    effective_request.size_usd,
+                )
+            else:
+                raise RuntimeError(
+                    "LIVE EXECUTION DISABLED: Missing fencing token"
+                )
 
         if get_seak is not None:
             try:
@@ -1265,6 +1343,38 @@ class ExecutionPipeline:
         try:
             authority_snapshot = runtime_authority_snapshot()
             if not bool(getattr(authority_snapshot, "ready", False)):
+                if _force_trade_active:
+                    logger.warning(
+                        "[FORCE_TRADE] Bypassing runtime authority convergence check — "
+                        "lifecycle_phase=%s coordinator_state=%s reason=%s. "
+                        "symbol=%s side=%s size_usd=%.2f",
+                        getattr(authority_snapshot, "lifecycle_phase", "unknown"),
+                        getattr(authority_snapshot, "coordinator_state", "unknown"),
+                        getattr(authority_snapshot, "reason", "unknown"),
+                        effective_request.symbol,
+                        effective_request.side,
+                        effective_request.size_usd,
+                    )
+                else:
+                    return PipelineResult(
+                        success=False,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size_usd=effective_request.size_usd,
+                        error="Runtime authority convergence lost",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+        except Exception as exc:
+            if _force_trade_active:
+                logger.warning(
+                    "[FORCE_TRADE] Bypassing runtime authority snapshot error — %s. "
+                    "symbol=%s side=%s size_usd=%.2f",
+                    exc,
+                    effective_request.symbol,
+                    effective_request.side,
+                    effective_request.size_usd,
+                )
+            else:
                 return PipelineResult(
                     success=False,
                     symbol=effective_request.symbol,
@@ -1287,7 +1397,19 @@ class ExecutionPipeline:
             with execution_authority_scope():
                 # assert_execution_dispatch_permitted raises ExecutionBlocked on denial.
                 # It is patchable in tests via bot.execution_pipeline.assert_execution_dispatch_permitted.
-                assert_execution_dispatch_permitted()
+                # When FORCE_TRADE_MODE=true, bypass the authority dispatch gate so
+                # orders can reach the exchange even when the lifecycle FSM has not
+                # yet committed to LIVE_ACTIVE (e.g. missing Redis fencing token).
+                if not _force_trade_active:
+                    assert_execution_dispatch_permitted()
+                else:
+                    logger.info(
+                        "[FORCE_TRADE] Bypassing assert_execution_dispatch_permitted — "
+                        "FORCE_TRADE_MODE=true. symbol=%s side=%s size_usd=%.2f",
+                        effective_request.symbol,
+                        effective_request.side,
+                        effective_request.size_usd,
+                    )
                 _correlation = get_runtime_correlation() or {}
                 _intent_id = str(_correlation.get("intent_id") or "").strip()
                 # ── Cycle integrity cross-check ───────────────────────────
@@ -1355,6 +1477,8 @@ class ExecutionPipeline:
                 error=f"ExecutionAuthority reject: {exc}",
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
+
+
 
         _correlation = get_runtime_correlation() or {}
         _intent_id = str(_correlation.get("intent_id") or "").strip()

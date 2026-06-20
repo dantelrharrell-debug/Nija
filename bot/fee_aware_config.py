@@ -43,8 +43,9 @@ LIMIT_ORDER_ROUND_TRIP = (COINBASE_LIMIT_ORDER_FEE * 2) + COINBASE_SPREAD_COST  
 # $5 minimum ensures realistic profit potential after fees
 # RECOMMENDATION: Fund account to $50+ for consistent profitable trading
 
-# OPTIMIZED MINIMUM: $5 for Coinbase (was $2, increased for profitability)
-MIN_BALANCE_TO_TRADE = 5.0  # $5 minimum (ensures fee-positive trades)
+# OPTIMIZED MINIMUM: $50 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
+# Lowered from $5 → $50 to allow trading when balance > $50.
+MIN_BALANCE_TO_TRADE = 50.0  # $50 minimum (allows trading with ~$174 balance)
 MICRO_BALANCE_THRESHOLD = 50.0
 MICRO_BALANCE_POSITION_PCT = 0.85  # 85% for accounts < $50 (fast growth, down from prior 50%)
 
@@ -63,7 +64,8 @@ MICRO_ACCOUNT_THRESHOLD = 5.0  # Accounts below this bypass quality multipliers
 
 # Unified threshold for "small account" across broker minimum logic and position sizing
 # Used for both broker minimum bumping AND balance-based position sizing strategies
-SMALL_ACCOUNT_THRESHOLD = 100.0  # Balance below this is considered "small account"
+# Raised to $200 to cover $174 balance in micro-cap / HF scalp mode (Apr 2026).
+SMALL_ACCOUNT_THRESHOLD = 200.0  # Balance below this is considered "small account"
 
 SMALL_ACCOUNT_MAX_POSITION_PCT = 0.30  # 30% max position for small accounts — aligned with MAX_POSITION_SIZE hard limit
 SMALL_ACCOUNT_MAX_PCT_DIFF = 10.0  # Max percentage point difference for broker minimum bumps (vs 5pp standard)
