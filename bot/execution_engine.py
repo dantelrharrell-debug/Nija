@@ -2053,10 +2053,19 @@ class ExecutionEngine:
                 except Exception:
                     pass
 
-            logger.info(
+            print(
+                f"[NIJA-PRINT] execute_entry CALLED | "
+                f"symbol={symbol} side={side} "
+                f"size=${float(position_size or 0.0):.2f} "
+                f"entry_price={float(entry_price or 0.0):.6f} "
+                f"stop_loss={float(stop_loss or 0.0):.6f} "
+                f"tp1={float((take_profit_levels or {}).get('tp1', 0.0) or 0.0):.6f}",
+                flush=True,
+            )
+            logger.critical(
                 "📋 [ExecutionEngine.execute_entry] ENTRY GATE STARTED | symbol=%s side=%s "
-                "position_size=$%.2f entry_price=%.6f",
-                symbol, side, position_size, entry_price,
+                "position_size=$%.2f entry_price=%.6f stop_loss=%.6f",
+                symbol, side, position_size, entry_price, stop_loss,
             )
 
             # Bootstrap authority gate: execution is blocked until bootstrap
@@ -3235,6 +3244,14 @@ class ExecutionEngine:
                 self.positions[symbol] = position
                 logger.info(f"Position opened: {symbol} {side} @ {final_entry_price:.2f}")
                 logger.info(f"   Order ID: {order_id}, Status: {order_status}")
+                print(
+                    f"[NIJA-PRINT] execute_entry SUCCESS | "
+                    f"symbol={symbol} side={side} "
+                    f"size=${float(position_size or 0.0):.2f} "
+                    f"fill_price={float(final_entry_price or 0.0):.6f} "
+                    f"order_id={order_id} status={order_status}",
+                    flush=True,
+                )
                 _trace(
                     "fill",
                     "filled",
@@ -3246,6 +3263,13 @@ class ExecutionEngine:
                 return position
             else:
                 logger.warning("No broker client configured - simulation mode")
+                print(
+                    f"[NIJA-PRINT] execute_entry NO BROKER CLIENT | "
+                    f"symbol={symbol} side={side} "
+                    f"size=${float(position_size or 0.0):.2f} "
+                    f"returning=None",
+                    flush=True,
+                )
                 _trace("broker", "rejected", "no_broker_client_configured", terminal=True)
                 return None
 
@@ -3253,6 +3277,22 @@ class ExecutionEngine:
             # Handle order rejection - check if it's a geographic restriction
             error_msg = str(e)
             self._log_order_failure(symbol, position_size, exc=e)
+            print(
+                f"[NIJA-PRINT] execute_entry ORDER REJECTED | "
+                f"symbol={symbol} side={side} "
+                f"size=${float(position_size or 0.0):.2f} "
+                f"entry_price={float(entry_price or 0.0):.6f} "
+                f"stop_loss={float(stop_loss or 0.0):.6f} "
+                f"error={error_msg!r} "
+                f"returning=None",
+                flush=True,
+            )
+            logger.critical(
+                "❌ [ExecutionEngine.execute_entry] ORDER REJECTED | "
+                "symbol=%s side=%s size=$%.2f entry_price=%.6f stop_loss=%.6f error=%r",
+                symbol, side, float(position_size or 0.0),
+                float(entry_price or 0.0), float(stop_loss or 0.0), error_msg,
+            )
 
             # Check if this is a geographic restriction and add to blacklist
             self._handle_geographic_restriction_error(symbol, error_msg)
@@ -3272,7 +3312,26 @@ class ExecutionEngine:
             return None
 
         except Exception as e:
-            logger.error(f"Execution error: {e}")
+            import traceback as _traceback
+            _tb = _traceback.format_exc()
+            print(
+                f"[NIJA-PRINT] execute_entry EXCEPTION | "
+                f"symbol={symbol} side={side} "
+                f"size=${float(position_size or 0.0):.2f} "
+                f"entry_price={float(entry_price or 0.0):.6f} "
+                f"stop_loss={float(stop_loss or 0.0):.6f} "
+                f"error={e!r} "
+                f"returning=None",
+                flush=True,
+            )
+            logger.critical(
+                "❌ [ExecutionEngine.execute_entry] EXCEPTION | "
+                "symbol=%s side=%s size=$%.2f entry_price=%.6f stop_loss=%.6f "
+                "error=%r — order was NOT submitted to broker.\n%s",
+                symbol, side, float(position_size or 0.0),
+                float(entry_price or 0.0), float(stop_loss or 0.0),
+                e, _tb,
+            )
             if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                 try:
                     get_signal_funnel().record_execution_stage(
