@@ -169,6 +169,39 @@ if [ "${_STRICT_LEASE_RAW}" = "0" ] || [ "${_STRICT_LEASE_RAW}" = "false" ] || [
     _STRICT_LEASE=false
 fi
 
+_is_truthy_flag() {
+    local _raw
+    _raw=$(printf "%s" "${1:-}" | tr '[:upper:]' '[:lower:]')
+    [ "${_raw}" = "1" ] || [ "${_raw}" = "true" ] || [ "${_raw}" = "yes" ] || [ "${_raw}" = "on" ] || [ "${_raw}" = "enabled" ]
+}
+
+if [ "${_LIVE_MODE}" = "true" ]; then
+    if ! _is_truthy_flag "${NIJA_CONFIRM_BYPASS_RISKS:-0}"; then
+        for _flag in \
+            NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK \
+            NIJA_DISABLE_WRITER_LOCK \
+            FORCE_TRADE \
+            FORCE_TRADE_MODE \
+            NIJA_FORCE_ACTIVATION \
+            NIJA_SKIP_STARTUP_PHASE_GATE; do
+            if _is_truthy_flag "${!_flag:-0}"; then
+                if [ "${_flag#NIJA_}" != "${_flag}" ] && [ "${_flag#*LOCK}" != "${_flag}" ]; then
+                    export "${_flag}=0"
+                else
+                    export "${_flag}=false"
+                fi
+                echo "🛡️  Live mode safety: cleared ${_flag} (set NIJA_CONFIRM_BYPASS_RISKS=true only for emergency recovery)"
+            fi
+        done
+    fi
+
+    if ! _is_truthy_flag "${HF_FLIP_MODE:-0}" && ! _is_truthy_flag "${HF_SCALP_MODE:-0}"; then
+        export HF_SCALP_MODE=1
+        echo "⚡ Live mode default: enabling HF_SCALP_MODE=1"
+    fi
+    export HF_SCALPING_MODE="${HF_SCALP_MODE:-1}"
+fi
+
 _UNSAFE_BYPASS=false
 _UNSAFE_BYPASS_RAW=$(printf "%s" "${NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK:-0}" | tr '[:upper:]' '[:lower:]')
 if [ "${_UNSAFE_BYPASS_RAW}" = "1" ] || [ "${_UNSAFE_BYPASS_RAW}" = "true" ] || [ "${_UNSAFE_BYPASS_RAW}" = "yes" ] || [ "${_UNSAFE_BYPASS_RAW}" = "on" ]; then

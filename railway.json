@@ -21,6 +21,10 @@
     "healthCheckTimeout": 300
   },
   "variables": {
+    "HF_SCALP_MODE": "1",
+    "FORCE_TRADE": "false",
+    "FORCE_TRADE_MODE": "false",
+    "NIJA_CONFIRM_BYPASS_RISKS": "false",
     "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK": "false",
     "NIJA_DISABLE_WRITER_LOCK": "false",
     "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK": "false",

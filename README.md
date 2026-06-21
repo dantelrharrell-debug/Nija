@@ -220,9 +220,18 @@ Emergency operator override (unsafe):
 
 ```bash
 NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true
+NIJA_CONFIRM_BYPASS_RISKS=true
 ```
 
 This allows live startup without Redis lock acquisition. Use only when you can guarantee exactly one running container/process.
+
+Keep production test overrides disabled unless you are intentionally running a short recovery drill:
+
+```bash
+FORCE_TRADE=false
+FORCE_TRADE_MODE=false
+HF_SCALP_MODE=1
+```
 
 ---
 
