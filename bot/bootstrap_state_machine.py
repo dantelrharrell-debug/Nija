@@ -565,6 +565,9 @@ class BootstrapStateMachine:
             }:
                 self._boot_complete = False
                 self._execution_authority = False
+                # Retry/error states hand bootstrap control back to the next
+                # recovery attempt; stale owner IDs must not block re-entry.
+                self._owner_thread_id = None
 
         logger.info(
             "🔄 [BootstrapFSM] %s → %s  reason=%s",
@@ -601,8 +604,11 @@ class BootstrapStateMachine:
             }
             self._history.append(record)
             self._state = BootstrapState.BOOT_FAILED_RETRY
+            self._boot_complete = False
+            self._execution_authority = False
             self._balance_polling_disabled = False
             self._balance_polling_skip_logged = False
+            self._owner_thread_id = None
 
         logger.warning(
             "⚠️  [BootstrapFSM] reset_for_retry: %s → BOOT_FAILED_RETRY  reason=%s",

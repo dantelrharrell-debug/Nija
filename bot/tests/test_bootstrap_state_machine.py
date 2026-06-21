@@ -376,6 +376,67 @@ class TestResetForRetry(unittest.TestCase):
         reasons = [r["reason"] for r in hist]
         self.assertTrue(any("reset_for_retry" in r for r in reasons))
 
+    def test_reset_clears_runtime_authority_and_owner(self):
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+            BootstrapState.PLATFORM_READY,
+            BootstrapState.BALANCE_HYDRATED,
+            BootstrapState.CAPABILITY_VERIFIED,
+            BootstrapState.STARTUP_VALIDATED,
+            BootstrapState.CAPITAL_REFRESHING,
+            BootstrapState.CAPITAL_READY,
+            BootstrapState.INIT_COMPLETE,
+            BootstrapState.THREADS_STARTING,
+            BootstrapState.RUNNING_SUPERVISED,
+        )
+        self.assertTrue(fsm.boot_complete)
+        self.assertTrue(fsm.execution_authority)
+        self.assertIsNotNone(fsm._owner_thread_id)
+
+        fsm.reset_for_retry("runtime reset")
+
+        self.assertEqual(fsm.state, BootstrapState.BOOT_FAILED_RETRY)
+        self.assertFalse(fsm.boot_complete)
+        self.assertFalse(fsm.execution_authority)
+        self.assertIsNone(fsm._owner_thread_id)
+
+    def test_reset_retry_allows_next_attempt_from_new_thread(self):
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+        )
+        fsm.reset_for_retry("hand off to retry worker")
+
+        results = []
+
+        def _retry_attempt():
+            results.append(
+                fsm.transition(
+                    BootstrapState.PLATFORM_CONNECTING,
+                    "retry worker re-entry",
+                )
+            )
+
+        t = threading.Thread(target=_retry_attempt)
+        t.start()
+        t.join()
+
+        self.assertEqual(results, [True])
+        self.assertEqual(fsm.state, BootstrapState.PLATFORM_CONNECTING)
+
 
 # ---------------------------------------------------------------------------
 # Invariant assertions (unit-level; sub-machines are mocked)
@@ -836,6 +897,39 @@ class TestOwnershipEnforcement(unittest.TestCase):
 
         self.assertEqual(applied, [False])
         self.assertEqual(fsm.state, BootstrapState.BOOT_INIT)
+
+    def test_boot_failed_retry_transition_releases_owner_for_reentry(self):
+        """Retry entry must not keep a stale owner that blocks the next attempt."""
+        fsm = _fresh()
+        fsm.claim_bootstrap_ownership()
+        _fast_forward(
+            fsm,
+            BootstrapState.LOCK_ACQUIRED,
+            BootstrapState.HEALTH_BOUND,
+            BootstrapState.ENV_VERIFIED,
+            BootstrapState.MODE_GATED,
+            BootstrapState.PLATFORM_CONNECTING,
+        )
+
+        self.assertTrue(fsm.transition(BootstrapState.BOOT_FAILED_RETRY, "transient failure"))
+        self.assertIsNone(fsm._owner_thread_id)
+
+        applied: list[bool] = []
+
+        def _retry_attempt():
+            applied.append(
+                fsm.transition(
+                    BootstrapState.PLATFORM_CONNECTING,
+                    "retry re-entry from new thread",
+                )
+            )
+
+        t = threading.Thread(target=_retry_attempt)
+        t.start()
+        t.join()
+
+        self.assertEqual(applied, [True])
+        self.assertEqual(fsm.state, BootstrapState.PLATFORM_CONNECTING)
 
 
 class TestFinalizeBootDegradedMode(unittest.TestCase):
