@@ -49,6 +49,7 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
         engine._is_expectancy_bucket_blocked = MagicMock(return_value=False)
         engine._optimize_execution_with_intelligence = MagicMock(return_value=None)
         engine._apply_minimum_notional_gate = MagicMock(return_value=(10.0, None))
+        engine._compute_kelly_fraction = MagicMock(return_value=1.0)
         engine._submit_market_order_via_pipeline = MagicMock(return_value={"status": "filled"})
         engine._emit_execution_result = MagicMock()
         engine._confirm_order_fill = MagicMock(side_effect=lambda *_args: {"status": "filled"})
@@ -75,8 +76,8 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
                 side="long",
                 position_size=10.0,
                 entry_price=1.0,
-                stop_loss=0.9,
-                take_profit_levels={"tp1": 1.1, "tp2": 1.2, "tp3": 1.3},
+                stop_loss=0.99,
+                take_profit_levels={"tp1": 1.05, "tp2": 1.1, "tp3": 1.15},
             )
 
         self.assertIsNone(result)
@@ -91,6 +92,7 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
         engine._is_expectancy_bucket_blocked = MagicMock(return_value=False)
         engine._optimize_execution_with_intelligence = MagicMock(return_value=None)
         engine._apply_minimum_notional_gate = MagicMock(return_value=(10.0, None))
+        engine._compute_kelly_fraction = MagicMock(return_value=1.0)
         engine._submit_market_order_via_pipeline = MagicMock(
             return_value={"status": "filled", "order_id": "ord-123"}
         )
@@ -121,8 +123,8 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
                 side="long",
                 position_size=10.0,
                 entry_price=1.0,
-                stop_loss=0.9,
-                take_profit_levels={"tp1": 1.1, "tp2": 1.2, "tp3": 1.3},
+                stop_loss=0.99,
+                take_profit_levels={"tp1": 1.05, "tp2": 1.1, "tp3": 1.15},
             )
 
         self.assertIsNone(result)
