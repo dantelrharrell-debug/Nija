@@ -2932,6 +2932,29 @@ class NijaCoreLoop:
                     self._n_placed += 1
                 else:
                     blocked += 1
+                    logger.critical(
+                        "❌ [CoreLoop] ORDER REJECTED | symbol=%s side=%s action=%s "
+                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f score=%.1f "
+                        "fallback_active=%s — execute_action() returned False. "
+                        "See execute_action / ExecutionEngine logs above for the broker "
+                        "rejection reason (gate name, error message, or exception).",
+                        sig.symbol,
+                        sig.side,
+                        analysis.get("action", "unknown"),
+                        float(analysis.get("position_size", 0.0) or 0.0),
+                        float(analysis.get("entry_price", 0.0) or 0.0),
+                        float(analysis.get("stop_loss", 0.0) or 0.0),
+                        sig.composite_score,
+                        fallback_active,
+                    )
+                    print(
+                        f"[NIJA-PRINT] ORDER REJECTED | symbol={sig.symbol} side={sig.side} "
+                        f"action={analysis.get('action', 'unknown')} "
+                        f"size=${float(analysis.get('position_size', 0.0) or 0.0):.2f} "
+                        f"price={float(analysis.get('entry_price', 0.0) or 0.0):.6f} "
+                        f"sl={float(analysis.get('stop_loss', 0.0) or 0.0):.6f}",
+                        flush=True,
+                    )
                     # ── Entry-to-Order Trace: ORDER_REJECTED ─────────────
                     emit_cycle_trace(
                         CycleOutcome.ORDER_REJECTED,
@@ -3100,9 +3123,23 @@ class NijaCoreLoop:
                         )
                     else:
                         logger.critical(
-                            "❌ [FORCE_TRADE_DIRECT] execute_action() returned False — "
-                            "symbol=%s. Check broker adapter can_execute() and FSM state.",
+                            "❌ [FORCE_TRADE_DIRECT] execute_action() returned False | "
+                            "symbol=%s side=%s action=%s price=%.6f size=$%.2f sl=%.6f — "
+                            "See execute_action / ExecutionEngine logs above for the broker "
+                            "rejection reason (gate name, error message, or exception).",
                             _best_volume_symbol,
+                            _best_volume_side,
+                            _ft_action,
+                            _ft_price,
+                            _ft_size,
+                            _ft_sl,
+                        )
+                        print(
+                            f"[NIJA-PRINT] FORCE_TRADE_DIRECT ORDER REJECTED | "
+                            f"symbol={_best_volume_symbol} side={_best_volume_side} "
+                            f"action={_ft_action} price={_ft_price:.6f} "
+                            f"size=${_ft_size:.2f} sl={_ft_sl:.6f}",
+                            flush=True,
                         )
                 else:
                     logger.critical(

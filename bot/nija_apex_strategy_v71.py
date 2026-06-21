@@ -5449,9 +5449,25 @@ class NIJAApexStrategyV71:
                             logger.debug(f"Harvest layer register error (long): {_reg_err}")
                     return True
                 else:
-                    logger.warning(
-                        f"⚠️  EXECUTION BLOCKED: {symbol} long entry returned no position "
-                        f"(broker rejected or nonce pause) — skipping, next cycle will retry"
+                    logger.critical(
+                        "❌ [execute_action] LONG ENTRY FAILED | symbol=%s "
+                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f "
+                        "execute_entry returned None — broker rejected or gate blocked. "
+                        "Check ExecutionEngine logs above for the specific rejection reason "
+                        "(bootstrap_authority, capital_gate, recovery_controller, hard_controls, "
+                        "net_edge_gate, expectancy_gate, exchange_normalizer, or broker error).",
+                        symbol,
+                        float(action_data.get('position_size', 0.0) or 0.0),
+                        float(action_data.get('entry_price', 0.0) or 0.0),
+                        float(action_data.get('stop_loss', 0.0) or 0.0),
+                    )
+                    print(
+                        f"[NIJA-PRINT] LONG ENTRY FAILED | symbol={symbol} "
+                        f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+                        f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                        f"sl={float(action_data.get('stop_loss', 0.0) or 0.0):.6f} "
+                        f"execute_entry=None",
+                        flush=True,
                     )
                     return False
 
@@ -5508,9 +5524,26 @@ class NIJAApexStrategyV71:
                             logger.debug(f"Harvest layer register error (short): {_reg_err}")
                     return True
                 else:
-                    logger.warning(
-                        f"⚠️  EXECUTION BLOCKED: {symbol} short entry returned no position "
-                        f"(broker rejected or nonce pause) — skipping, next cycle will retry"
+                    logger.critical(
+                        "❌ [execute_action] SHORT ENTRY FAILED | symbol=%s broker=%s "
+                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f "
+                        "execute_entry returned None — broker rejected or gate blocked. "
+                        "Check ExecutionEngine logs above for the specific rejection reason "
+                        "(bootstrap_authority, capital_gate, recovery_controller, hard_controls, "
+                        "net_edge_gate, expectancy_gate, exchange_normalizer, or broker error).",
+                        symbol,
+                        broker_name,
+                        float(action_data.get('position_size', 0.0) or 0.0),
+                        float(action_data.get('entry_price', 0.0) or 0.0),
+                        float(action_data.get('stop_loss', 0.0) or 0.0),
+                    )
+                    print(
+                        f"[NIJA-PRINT] SHORT ENTRY FAILED | symbol={symbol} broker={broker_name} "
+                        f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+                        f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                        f"sl={float(action_data.get('stop_loss', 0.0) or 0.0):.6f} "
+                        f"execute_entry=None",
+                        flush=True,
                     )
                     return False
 
@@ -5670,7 +5703,25 @@ class NIJAApexStrategyV71:
             return False
 
         except Exception as e:
-            logger.error(f"Execution error: {e}")
+            logger.critical(
+                "❌ [execute_action] EXCEPTION | symbol=%s action=%s "
+                "position_size=$%.2f entry_price=%.6f stop_loss=%.6f "
+                "error=%r — order was NOT submitted to broker.",
+                symbol,
+                action_data.get('action', 'unknown'),
+                float(action_data.get('position_size', 0.0) or 0.0),
+                float(action_data.get('entry_price', 0.0) or 0.0),
+                float(action_data.get('stop_loss', 0.0) or 0.0),
+                e,
+            )
+            print(
+                f"[NIJA-PRINT] execute_action EXCEPTION | symbol={symbol} "
+                f"action={action_data.get('action', 'unknown')} "
+                f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+                f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                f"error={e!r}",
+                flush=True,
+            )
             return False
 
     # ============================================================

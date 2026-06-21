@@ -1736,12 +1736,34 @@ class TradingStrategy:
                                     f"symbol={symbol} action={_action} result={_exec_result}",
                                     flush=True,
                                 )
-                                logger.critical(
-                                    "✅ [legacy_path] execute_action returned | symbol=%s action=%s result=%s",
-                                    symbol,
-                                    _action,
-                                    _exec_result,
-                                )
+                                if _exec_result:
+                                    logger.critical(
+                                        "✅ [legacy_path] execute_action returned | symbol=%s action=%s result=%s",
+                                        symbol,
+                                        _action,
+                                        _exec_result,
+                                    )
+                                else:
+                                    logger.critical(
+                                        "❌ [legacy_path] execute_action FAILED | symbol=%s action=%s "
+                                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f result=%s — "
+                                        "See execute_action / ExecutionEngine logs above for the broker "
+                                        "rejection reason (gate name, error message, or exception).",
+                                        symbol,
+                                        _action,
+                                        float((_analysis or {}).get("position_size", 0.0) or 0.0),
+                                        float((_analysis or {}).get("entry_price", 0.0) or 0.0),
+                                        float((_analysis or {}).get("stop_loss", 0.0) or 0.0),
+                                        _exec_result,
+                                    )
+                                    print(
+                                        f"[NIJA-PRINT] legacy path ORDER REJECTED | "
+                                        f"symbol={symbol} action={_action} "
+                                        f"size=${float((_analysis or {}).get('position_size', 0.0) or 0.0):.2f} "
+                                        f"price={float((_analysis or {}).get('entry_price', 0.0) or 0.0):.6f} "
+                                        f"sl={float((_analysis or {}).get('stop_loss', 0.0) or 0.0):.6f}",
+                                        flush=True,
+                                    )
                         except Exception as _sym_err:
                             logger.debug("Symbol %s cycle error: %s", symbol, _sym_err)
             except Exception as _cycle_err:
