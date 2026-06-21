@@ -601,18 +601,46 @@ class ExecutionPipeline:
         )
 
         if mode in (TradingMode.DISABLED, TradingMode.MONITOR):
-            logger.warning(
-                "🚫 [ExecutionGate] BLOCKED by safety mode=%s | symbol=%s side=%s size_usd=%.2f",
-                mode_value, request.symbol, request.side, request.size_usd,
+            # FORCE_TRADE bypass: when the operator has explicitly set FORCE_TRADE or
+            # FORCE_TRADE_MODE, skip the safety-controller MONITOR/DISABLED block so
+            # the pipeline can reach the broker.  This mirrors the bypass that already
+            # exists in execution_authority_context.can_execute().
+            _ft_bypass_gate = (
+                os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
             )
-            return PipelineResult(
-                success=False,
-                symbol=request.symbol,
-                side=request.side,
-                size_usd=request.size_usd,
-                error=reason or f"Trading blocked (mode={mode_value})",
-                latency_ms=(time.monotonic() - t_start) * 1000,
-            )
+            if _ft_bypass_gate:
+                logger.warning(
+                    "⚡ [ExecutionGate] FORCE_TRADE bypass: safety mode=%s ignored for %s %s — "
+                    "FORCE_TRADE/FORCE_TRADE_MODE is set. Set LIVE_CAPITAL_VERIFIED=true to "
+                    "remove this bypass.",
+                    mode_value, request.symbol, request.side,
+                )
+                print(
+                    f"[NIJA-PRINT] ExecutionGate FORCE_TRADE_BYPASS | "
+                    f"symbol={request.symbol} side={request.side} "
+                    f"mode={mode_value} reason={reason!r}",
+                    flush=True,
+                )
+            else:
+                logger.warning(
+                    "🚫 [ExecutionGate] BLOCKED by safety mode=%s | symbol=%s side=%s size_usd=%.2f",
+                    mode_value, request.symbol, request.side, request.size_usd,
+                )
+                print(
+                    f"[NIJA-PRINT] ExecutionGate BLOCKED | "
+                    f"symbol={request.symbol} side={request.side} "
+                    f"mode={mode_value} reason={reason!r}",
+                    flush=True,
+                )
+                return PipelineResult(
+                    success=False,
+                    symbol=request.symbol,
+                    side=request.side,
+                    size_usd=request.size_usd,
+                    error=reason or f"Trading blocked (mode={mode_value})",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
 
         if mode in (TradingMode.APP_STORE, TradingMode.DRY_RUN):
             logger.info(
@@ -625,6 +653,12 @@ class ExecutionPipeline:
             logger.warning(
                 "🚫 [ExecutionGate] BLOCKED: not allowed | mode=%s reason=%s | symbol=%s side=%s size_usd=%.2f",
                 mode_value, reason, request.symbol, request.side, request.size_usd,
+            )
+            print(
+                f"[NIJA-PRINT] ExecutionGate BLOCKED_NOT_ALLOWED | "
+                f"symbol={request.symbol} side={request.side} "
+                f"mode={mode_value} reason={reason!r}",
+                flush=True,
             )
             return PipelineResult(
                 success=False,
@@ -650,6 +684,12 @@ class ExecutionPipeline:
                     logger.warning(
                         "🚫 [ExecutionGate] BLOCKED by state_machine | state=%s | symbol=%s side=%s size_usd=%.2f",
                         state_value, request.symbol, request.side, request.size_usd,
+                    )
+                    print(
+                        f"[NIJA-PRINT] ExecutionGate BLOCKED_STATE_MACHINE | "
+                        f"symbol={request.symbol} side={request.side} "
+                        f"state={state_value}",
+                        flush=True,
                     )
                     return PipelineResult(
                         success=False,
