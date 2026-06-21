@@ -1172,6 +1172,10 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
     _last_logged_state: str = ""
     _last_state_log = time.monotonic()
     _state_log_interval = 10.0
+    # Track how long the FSM has been stuck in BOOT_FAILED_RETRY so we can
+    # attempt a force-forward after a configurable timeout.
+    _boot_failed_retry_first_seen: float = 0.0
+    _BOOT_FAILED_RETRY_FORCE_TIMEOUT_S: float = 30.0  # force forward after 30s stuck
 
     while time.monotonic() < _deadline:
         _state = _bootstrap_state_value()
@@ -1179,13 +1183,46 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
             logger.critical("LIFECYCLE: FSM state=%s", _state)
             return True, _state
         if _state == "BOOT_FAILED_RETRY":
+            _now_mono = time.monotonic()
+            if _boot_failed_retry_first_seen == 0.0:
+                _boot_failed_retry_first_seen = _now_mono
+            _stuck_duration = _now_mono - _boot_failed_retry_first_seen
             logger.warning(
-                "BOOTSTRAP_OBSERVER_RETRYING context=%s state=%s deadline=%.2fs next=continue_waiting",
+                "BOOTSTRAP_OBSERVER_RETRYING context=%s state=%s stuck_for=%.1fs "
+                "deadline=%.2fs next=continue_waiting",
                 context,
                 _state,
+                _stuck_duration,
                 _timeout_s,
             )
-        elif _state in {"EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
+            # If the FSM has been stuck in BOOT_FAILED_RETRY for too long,
+            # attempt to force it forward to PLATFORM_CONNECTING so the
+            # startup thread can make progress.
+            if _stuck_duration >= _BOOT_FAILED_RETRY_FORCE_TIMEOUT_S:
+                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                    try:
+                        _stuck_fsm = _get_bootstrap_fsm()
+                        if hasattr(_stuck_fsm, "force_transition_from_retry"):
+                            logger.critical(
+                                "🔧 BOOTSTRAP_OBSERVER: FSM stuck in BOOT_FAILED_RETRY for %.1fs — "
+                                "forcing transition to PLATFORM_CONNECTING",
+                                _stuck_duration,
+                            )
+                            _stuck_fsm.force_transition_from_retry(
+                                f"observer force-forward after {_stuck_duration:.1f}s stuck"
+                            )
+                            # Reset the stuck timer so we don't force again immediately.
+                            _boot_failed_retry_first_seen = 0.0
+                    except Exception as _force_err:
+                        logger.warning(
+                            "BOOTSTRAP_OBSERVER: force_transition_from_retry failed: %s",
+                            _force_err,
+                        )
+        else:
+            # Reset stuck timer when we leave BOOT_FAILED_RETRY.
+            _boot_failed_retry_first_seen = 0.0
+
+        if _state in {"EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
             logger.error(
                 "BOOTSTRAP_OBSERVER_BLOCKED context=%s state=%s deadline=%.2fs next=abort_startup",
                 context,
@@ -6150,7 +6187,33 @@ def _run_bot_startup_and_trading_with_retry():
                         )
                         _set_startup_last_error(_retry_reentry_error)
                         logger.critical("🚨 [Startup] %s", _retry_reentry_error)
-                        raise RuntimeError(_retry_reentry_error)
+                        # Check if we have exceeded the max retry count and should
+                        # force the transition to unblock the FSM.
+                        _retry_count = getattr(_retry_fsm, "boot_failed_retry_count", 0)
+                        _max_retries = getattr(_retry_fsm, "_MAX_BOOT_FAILED_RETRIES", 3)
+                        if _retry_count >= _max_retries and hasattr(_retry_fsm, "force_transition_from_retry"):
+                            logger.critical(
+                                "🔧 [Startup] Max BOOT_FAILED_RETRY count (%d/%d) reached — "
+                                "forcing FSM forward via force_transition_from_retry()",
+                                _retry_count,
+                                _max_retries,
+                            )
+                            _force_ok = bool(_retry_fsm.force_transition_from_retry(
+                                f"max retries ({_retry_count}) exceeded on attempt #{_next_attempt}"
+                            ))
+                            if not _force_ok:
+                                logger.critical(
+                                    "🚨 [Startup] force_transition_from_retry also failed — "
+                                    "FSM may be in terminal state; continuing anyway"
+                                )
+                        else:
+                            logger.warning(
+                                "⚠️  [Startup] BOOT_FAILED_RETRY reentry blocked (attempt #%d, "
+                                "retry_count=%d/%d) — continuing startup attempt without FSM advance",
+                                _next_attempt,
+                                _retry_count,
+                                _max_retries,
+                            )
             logger.info(
                 "🔁 [Startup] Bootstrap attempt #%d (%s, %s)",
                 _next_attempt,
