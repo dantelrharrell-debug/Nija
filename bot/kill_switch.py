@@ -89,12 +89,22 @@ class KillSwitch:
                 with open(self._state_file, 'r') as f:
                     data = json.load(f)
                     self._activation_history = data.get('history', [])
-                    
-                    # Check if there's an active kill switch from previous session
+
+                    # SAFETY FIX: Do NOT auto-reactivate from stale JSON on restart.
+                    # The EMERGENCY_STOP file on disk is the authoritative signal and is
+                    # checked immediately after this method via _check_file_activation().
+                    # Persisting is_active=true across restarts caused the kill switch to
+                    # re-trigger EMERGENCY_STOP on every boot even after the underlying
+                    # condition was resolved, permanently blocking trade execution.
+                    # If the EMERGENCY_STOP file is absent, the kill switch starts inactive.
                     if data.get('is_active', False):
-                        logger.warning("⚠️  Kill switch was active in previous session")
-                        # Keep it active for safety
-                        self._is_active = True
+                        logger.warning(
+                            "⚠️  Kill switch was active in previous session — "
+                            "resetting to inactive on restart. "
+                            "The EMERGENCY_STOP file is the authoritative signal; "
+                            "if it exists the kill switch will be re-activated below."
+                        )
+                        self._is_active = False
         except Exception as e:
             logger.error(f"❌ Error loading kill switch state: {e}")
             
