@@ -352,11 +352,6 @@ def _reject_if_unauthorized_order_submit(
         return None
 
     reason = str(getattr(decision, "reason", "execution_authority_violation") or "execution_authority_violation")
-    telemetry_reason = (
-        "distributed_writer_fence"
-        if ("fencing" in reason.lower() or "writer authority" in reason.lower())
-        else "execution_authority_violation"
-    )
     emit_pretrade_execution_validator_trace(
         decision,
         symbol=symbol,
@@ -364,7 +359,11 @@ def _reject_if_unauthorized_order_submit(
         size=size,
         terminal_surface="broker_integration",
     )
-    _emit_rejection_telemetry(telemetry_reason)
+    # NOTE: Authority-gate denials are NOT recorded as exchange order rejections.
+    # Recording them caused a feedback loop: denials → high rejection rate →
+    # ExchangeKillSwitchProtector trigger → EMERGENCY_STOP → more denials.
+    # Exchange-level rejections (real broker API errors) are recorded separately
+    # by broker adapters after the order actually reaches the exchange.
     logger.critical(
         "🔒 Execution authority violation: order submission blocked "
         "| broker=%s symbol=%s side=%s size=%s reason=%s",
