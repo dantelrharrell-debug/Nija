@@ -48,5 +48,5 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
         env["HF_SCALP_MODE"] = "1"
         notes.append("enabled:HF_SCALP_MODE")
 
-    env.setdefault("HF_SCALPING_MODE", env.get("HF_SCALP_MODE", "1"))
+    env["HF_SCALPING_MODE"] = env.get("HF_SCALP_MODE", "1")
     return notes

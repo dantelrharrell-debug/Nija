@@ -40,10 +40,7 @@ print(
     f"__file__={__file__!r}",
     flush=True,
 )
-try:
-    from bot.startup_runtime_safety import normalize_runtime_startup_env
-except ImportError:
-    from startup_runtime_safety import normalize_runtime_startup_env  # type: ignore[import]
+from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 for _note in normalize_runtime_startup_env(os.environ):
     print(f"STARTUP_ENV_SAFETY: {_note}", flush=True)
