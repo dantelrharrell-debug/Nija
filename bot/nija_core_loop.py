@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import time
 import threading
 import types as _types
@@ -2737,7 +2738,48 @@ class NijaCoreLoop:
                         )
 
                 # Re-run full apex.analyze_market (handles SL/TP/sizing etc.)
-                analysis = self.apex.analyze_market(df, sig.symbol, snapshot.balance)
+                # Wrapped in a daemon thread with a timeout so a slow/hung
+                # indicator calculation cannot stall the entire trading loop.
+                _analysis_timeout = float(
+                    os.getenv("NIJA_ANALYZE_MARKET_TIMEOUT", "15") or "15"
+                )
+                _am_result_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+                def _run_analyze_market(
+                    _apex: Any = self.apex,
+                    _df: Any = df,
+                    _sym: str = sig.symbol,
+                    _bal: float = snapshot.balance,
+                ) -> None:
+                    try:
+                        _am_result_q.put(("result", _apex.analyze_market(_df, _sym, _bal)))
+                    except BaseException as _exc:  # noqa: BLE001
+                        _am_result_q.put(("error", _exc))
+
+                _am_worker = threading.Thread(
+                    target=_run_analyze_market,
+                    name="nija-analyze-market",
+                    daemon=True,
+                )
+                _am_worker.start()
+                try:
+                    _am_kind, _am_payload = _am_result_q.get(timeout=_analysis_timeout)
+                except queue.Empty:
+                    logger.warning(
+                        "⏱️ [Phase3] analyze_market timed out after %.1fs for %s — "
+                        "treating as hold (NIJA_ANALYZE_MARKET_TIMEOUT=%.0f)",
+                        _analysis_timeout, sig.symbol, _analysis_timeout,
+                    )
+                    _am_payload = {"action": "hold", "reason": "analyze_market_timeout"}
+                    _am_kind = "result"
+                if _am_kind == "error":
+                    logger.warning(
+                        "⚠️ [Phase3] analyze_market raised for %s: %s — treating as hold",
+                        sig.symbol, _am_payload,
+                    )
+                    analysis = {"action": "hold", "reason": f"analyze_market_error:{_am_payload}"}
+                else:
+                    analysis = _am_payload
                 action = analysis.get("action", "hold")
 
                 # When fallback is active, force the action to enter if the
@@ -3364,13 +3406,48 @@ class NijaCoreLoop:
         primary_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
         fallback_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
     ) -> Any:
-        """Call a broker market-data method while tolerating signature drift."""
+        """Call a broker market-data method while tolerating signature drift.
+
+        Wraps each attempt in a daemon thread with a configurable timeout so
+        that a hanging broker API call (e.g. Coinbase/Kraken rate-limit stall)
+        cannot block the entire trading loop indefinitely.  The timeout is
+        controlled by the ``NIJA_CANDLE_FETCH_TIMEOUT`` environment variable
+        (default 10 s).  On timeout the method returns ``None`` so
+        ``_fetch_df`` falls through to the next call variant or skips the
+        symbol gracefully.
+        """
+        _timeout = float(os.getenv("NIJA_CANDLE_FETCH_TIMEOUT", "10") or "10")
+
+        def _run_with_timeout(fn: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+            result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+            def _runner() -> None:
+                try:
+                    result_queue.put(("result", fn(*args, **kwargs)))
+                except BaseException as exc:  # noqa: BLE001
+                    result_queue.put(("error", exc))
+
+            worker = threading.Thread(target=_runner, name="nija-candle-fetch", daemon=True)
+            worker.start()
+            try:
+                kind, payload = result_queue.get(timeout=_timeout)
+            except queue.Empty:
+                logger.warning(
+                    "⏱️ [_call_market_data_method] candle fetch timed out after %.1fs — "
+                    "skipping symbol (NIJA_CANDLE_FETCH_TIMEOUT=%.0f)",
+                    _timeout, _timeout,
+                )
+                return None
+            if kind == "error":
+                raise payload  # type: ignore[misc]
+            return payload
+
         try:
             args, kwargs = primary_call
-            return method(*args, **kwargs)
+            return _run_with_timeout(method, args, kwargs)
         except TypeError:
             args, kwargs = fallback_call
-            return method(*args, **kwargs)
+            return _run_with_timeout(method, args, kwargs)
 
     @classmethod
     def _coerce_market_data_frame(cls, result: Any) -> Optional[pd.DataFrame]:
