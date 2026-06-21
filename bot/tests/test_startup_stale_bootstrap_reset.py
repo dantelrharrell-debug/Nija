@@ -19,3 +19,13 @@ def test_fresh_attempt_resets_stale_advanced_bootstrap_state_before_logging_phas
     reset_call = source.index("_reset_stale_bootstrap_fsm_for_fresh_attempt(init_done=_pre_init_done)")
     attempt_log = source.index('"🔁 [Startup] Bootstrap attempt #%d (%s, %s)"')
     assert reset_call < attempt_log
+
+
+def test_retry_loop_forces_boot_failed_retry_reentry_before_startup_dispatch():
+    source = _bot_source()
+    assert "BOOTSTRAP_RETRY_REENTRY_BLOCKED" in source
+    assert "bootstrap retry attempt #{_next_attempt}: re-enter platform connecting" in source
+
+    reentry_check = source.index("if getattr(_retry_fsm, \"state\", None) == _BootstrapState.BOOT_FAILED_RETRY:")
+    dispatch_call = source.index("_run_bot_startup_and_trading()")
+    assert reentry_check < dispatch_call
