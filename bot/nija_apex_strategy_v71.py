@@ -4155,6 +4155,38 @@ class NIJAApexStrategyV71:
                                 self.current_regime, tp_levels
                             )
 
+                        # ── Absolute TP floor (LONG): tp1 must be ≥ 1.0% above entry ──
+                        # Hard floor applied after ALL overrides (exit config, regime
+                        # adjustment) to guarantee tp1 always clears the execution
+                        # engine's target_geometry_gate (MIN_TP_PCT = 0.800%).
+                        # 1.0% provides a comfortable safety margin above the 0.8% gate.
+                        _MIN_TP_FLOOR = float(_os_apex.getenv("MIN_TP_FLOOR_PCT", "0.010"))
+                        _tp_floor_price = current_price * (1.0 + _MIN_TP_FLOOR)
+                        if isinstance(tp_levels, dict):
+                            if tp_levels.get('tp1', 0.0) < _tp_floor_price:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR LONG] %s tp1=%.6f (%.3f%%) < floor=%.6f (%.1f%%) — raising to floor",
+                                    symbol,
+                                    tp_levels.get('tp1', 0.0),
+                                    (tp_levels.get('tp1', current_price) - current_price) / current_price * 100,
+                                    _tp_floor_price,
+                                    _MIN_TP_FLOOR * 100,
+                                )
+                                tp_levels['tp1'] = _tp_floor_price
+                                tp_levels['tp2'] = max(tp_levels.get('tp2', 0.0), current_price * (1.0 + _MIN_TP_FLOOR * 1.5))
+                                tp_levels['tp3'] = max(tp_levels.get('tp3', 0.0), current_price * (1.0 + _MIN_TP_FLOOR * 2.0))
+                        elif isinstance(tp_levels, list) and len(tp_levels) > 0:
+                            if tp_levels[0] < _tp_floor_price:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR LONG] %s tp1=%.6f (%.3f%%) < floor=%.6f (%.1f%%) — raising to floor",
+                                    symbol,
+                                    tp_levels[0],
+                                    (tp_levels[0] - current_price) / current_price * 100,
+                                    _tp_floor_price,
+                                    _MIN_TP_FLOOR * 100,
+                                )
+                                tp_levels[0] = _tp_floor_price
+
                         # ═══════════════════════════════════════════════════════════════
                         # LAYER 2: TRADE MATH VERIFICATION
                         # ═══════════════════════════════════════════════════════════════
@@ -4162,7 +4194,7 @@ class NIJAApexStrategyV71:
                         # This is our last line of defense against poor-quality setups
 
                         # Extract first target for ratio calculation
-                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels.get('tp1', current_price) if isinstance(tp_levels, dict) else tp_levels
 
                         # Compute reward and risk amounts
                         risk_dollars = abs(current_price - stop_loss)
@@ -5126,13 +5158,45 @@ class NIJAApexStrategyV71:
                                 self.current_regime, tp_levels
                             )
 
+                        # ── Absolute TP floor (SHORT): tp1 must be ≥ 1.0% below entry ─
+                        # Hard floor applied after ALL overrides (exit config, regime
+                        # adjustment) to guarantee tp1 always clears the execution
+                        # engine's target_geometry_gate (MIN_TP_PCT = 0.800%).
+                        # 1.0% provides a comfortable safety margin above the 0.8% gate.
+                        _MIN_TP_FLOOR_S = float(_os_apex.getenv("MIN_TP_FLOOR_PCT", "0.010"))
+                        _tp_floor_price_s = current_price * (1.0 - _MIN_TP_FLOOR_S)
+                        if isinstance(tp_levels, dict):
+                            if tp_levels.get('tp1', current_price) > _tp_floor_price_s:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR SHORT] %s tp1=%.6f (%.3f%%) > floor=%.6f (%.1f%%) — lowering to floor",
+                                    symbol,
+                                    tp_levels.get('tp1', current_price),
+                                    (current_price - tp_levels.get('tp1', current_price)) / current_price * 100,
+                                    _tp_floor_price_s,
+                                    _MIN_TP_FLOOR_S * 100,
+                                )
+                                tp_levels['tp1'] = _tp_floor_price_s
+                                tp_levels['tp2'] = min(tp_levels.get('tp2', current_price), current_price * (1.0 - _MIN_TP_FLOOR_S * 1.5))
+                                tp_levels['tp3'] = min(tp_levels.get('tp3', current_price), current_price * (1.0 - _MIN_TP_FLOOR_S * 2.0))
+                        elif isinstance(tp_levels, list) and len(tp_levels) > 0:
+                            if tp_levels[0] > _tp_floor_price_s:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR SHORT] %s tp1=%.6f (%.3f%%) > floor=%.6f (%.1f%%) — lowering to floor",
+                                    symbol,
+                                    tp_levels[0],
+                                    (current_price - tp_levels[0]) / current_price * 100,
+                                    _tp_floor_price_s,
+                                    _MIN_TP_FLOOR_S * 100,
+                                )
+                                tp_levels[0] = _tp_floor_price_s
+
                         # ═══════════════════════════════════════════════════════════════
                         # LAYER 2: TRADE MATH VERIFICATION (SHORT)
                         # ═══════════════════════════════════════════════════════════════
                         # Verify trade has acceptable math before accepting signal
 
                         # Extract first target for ratio calculation
-                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels.get('tp1', current_price) if isinstance(tp_levels, dict) else tp_levels
 
                         # Compute reward and risk amounts
                         risk_dollars = abs(stop_loss - current_price)

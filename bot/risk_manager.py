@@ -1675,7 +1675,9 @@ class AdaptiveRiskManager:
         # 1. Profitability after fees (fee-based minimum)
         # 2. Volatility-appropriate exits (ATR and bandwidth scaling)
         # 3. Never go below fee coverage even in extreme low volatility
+        # 4. Never go below the base R-multiple target (prevents adaptive shrinkage)
         adaptive_target = max(
+            base_target,             # Never shrink below the R-multiple base target
             fee_based_target,        # Always maintain minimum fee coverage
             atr_based_target,        # ATR-scaled target
             volatility_adjusted_target  # Volatility-scaled target (can be below base in low vol)
