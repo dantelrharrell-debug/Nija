@@ -683,6 +683,44 @@ class ExecutionEngine:
         # and its state does not leak across unrelated trade attempts.
         self._execution_controller: Optional[Any] = None
 
+    def _log_execute_entry_rejection(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        position_size: float,
+        entry_price: float,
+        stop_loss: float,
+        stage: str,
+        reason: str,
+        detail: Any = "",
+    ) -> None:
+        """Emit an immediate, flushed rejection breadcrumb for execute_entry."""
+        _detail = "" if detail is None else str(detail)
+        print(
+            f"[NIJA-PRINT] execute_entry REJECTED | "
+            f"symbol={symbol} side={side} "
+            f"size=${float(position_size or 0.0):.2f} "
+            f"entry_price={float(entry_price or 0.0):.6f} "
+            f"stop_loss={float(stop_loss or 0.0):.6f} "
+            f"stage={stage!r} reason={reason!r} detail={_detail!r} "
+            f"returning=None",
+            flush=True,
+        )
+        logger.critical(
+            "❌ [ExecutionEngine.execute_entry] REJECTED | "
+            "symbol=%s side=%s size=$%.2f entry_price=%.6f stop_loss=%.6f "
+            "stage=%r reason=%r detail=%r",
+            symbol,
+            side,
+            float(position_size or 0.0),
+            float(entry_price or 0.0),
+            float(stop_loss or 0.0),
+            stage,
+            reason,
+            _detail,
+        )
+
     def _apply_minimum_notional_gate(
         self,
         *,
@@ -2133,6 +2171,16 @@ class ExecutionEngine:
                             getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
                         )
                         _trace("ecel", "rejected", "bootstrap_execution_authority_false", terminal=True)
+                        self._log_execute_entry_rejection(
+                            symbol=symbol,
+                            side=side,
+                            position_size=position_size,
+                            entry_price=entry_price,
+                            stop_loss=stop_loss,
+                            stage="bootstrap_authority",
+                            reason="bootstrap_execution_authority_false",
+                            detail=getattr(_bfsm, "state", getattr(_bfsm, "_state", "unknown")),
+                        )
                         return None
             except Exception as _auth_exc:
                 logger.warning("Bootstrap execution authority check skipped (non-fatal): %s", _auth_exc)
@@ -2153,6 +2201,16 @@ class ExecutionEngine:
                         _scalar_balance,
                     )
                     _trace("ecel", "rejected", f"balance_gate_zero_or_negative:{_scalar_balance:.2f}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="balance_gate",
+                        reason="balance_gate_zero_or_negative",
+                        detail=f"balance={_scalar_balance:.2f}",
+                    )
                     return None
 
             # ─── FIX 2: MINIMUM ORDER SIZE GATE ─────────────────────────────────────
@@ -2192,6 +2250,16 @@ class ExecutionEngine:
                                 _spendable_usd,
                             )
                             _trace("ecel", "rejected", f"below_min_notional_spendable:{_min_notional_floor:.2f}", terminal=True)
+                            self._log_execute_entry_rejection(
+                                symbol=symbol,
+                                side=side,
+                                position_size=position_size,
+                                entry_price=entry_price,
+                                stop_loss=stop_loss,
+                                stage="minimum_notional_gate",
+                                reason="below_min_notional_spendable",
+                                detail=f"min_notional={_min_notional_floor:.2f} spendable={float(_spendable_usd or 0.0):.2f}",
+                            )
                             return None
                         logger.info(
                             "📈 Auto-adjusting size from $%.2f to $%.2f (minimum notional)",
@@ -2209,6 +2277,16 @@ class ExecutionEngine:
                     MIN_NOTIONAL_USD,
                 )
                 _trace("ecel", "rejected", f"order_below_min_notional:{position_size:.2f}", terminal=True)
+                self._log_execute_entry_rejection(
+                    symbol=symbol,
+                    side=side,
+                    position_size=position_size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stage="minimum_notional_gate",
+                    reason="order_below_min_notional",
+                    detail=f"size={position_size:.2f} minimum={MIN_NOTIONAL_USD:.2f}",
+                )
                 return None
 
             # ─── FIX 4: LIVE MODE ASSERTION ──────────────────────────────────────────
@@ -2218,6 +2296,15 @@ class ExecutionEngine:
             if _dry_run_now:
                 logger.warning("⛔ FIX4 DRY_RUN_MODE=true — trade execution blocked for %s", symbol)
                 _trace("ecel", "rejected", "dry_run_mode_enabled", terminal=True)
+                self._log_execute_entry_rejection(
+                    symbol=symbol,
+                    side=side,
+                    position_size=position_size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stage="runtime_mode_gate",
+                    reason="dry_run_mode_enabled",
+                )
                 return None
 
             # ✅ LAYER -1: CAPITAL INTEGRITY GATE (FIX 4)
@@ -2233,6 +2320,15 @@ class ExecutionEngine:
                     position_size,
                 )
                 _trace("ecel", "rejected", "capital_gate_blocked_entry", terminal=True)
+                self._log_execute_entry_rejection(
+                    symbol=symbol,
+                    side=side,
+                    position_size=position_size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stage="capital_gate",
+                    reason="capital_gate_blocked_entry",
+                )
                 return None
 
             _regime = self._normalize_regime(take_profit_levels)
@@ -2266,6 +2362,16 @@ class ExecutionEngine:
                     f"{_remaining}s" if _remaining is not None else "manual/legacy",
                 )
                 _trace("ecel", "rejected", f"expectancy_kill_switch:{_expectancy_bucket}", terminal=True)
+                self._log_execute_entry_rejection(
+                    symbol=symbol,
+                    side=side,
+                    position_size=position_size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stage="expectancy_bucket_gate",
+                    reason="expectancy_kill_switch",
+                    detail=_expectancy_bucket,
+                )
                 return None
 
             # ── PROOF-OF-TRADE: forced order sizing + critical attempt log ────────
@@ -2342,6 +2448,16 @@ class ExecutionEngine:
                         logger.error(f"   Capital Safety: {recovery_controller.capital_safety_level.value}")
                         logger.error("=" * 80)
                         _trace("ecel", "rejected", f"recovery_controller:{reason}", terminal=True)
+                        self._log_execute_entry_rejection(
+                            symbol=symbol,
+                            side=side,
+                            position_size=position_size,
+                            entry_price=entry_price,
+                            stop_loss=stop_loss,
+                            stage="recovery_controller",
+                            reason="recovery_controller_blocked_entry",
+                            detail=reason,
+                        )
                         return None
             
             # ✅ CRITICAL SAFETY CHECK #1: LIVE CAPITAL VERIFIED
@@ -2388,6 +2504,16 @@ class ExecutionEngine:
                         logger.error(f"        NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to enable trading.")
                         logger.error("=" * 80)
                         _trace("ecel", "rejected", f"hard_controls:{error_msg}", terminal=True)
+                        self._log_execute_entry_rejection(
+                            symbol=symbol,
+                            side=side,
+                            position_size=position_size,
+                            entry_price=entry_price,
+                            stop_loss=stop_loss,
+                            stage="hard_controls",
+                            reason="hard_controls_blocked_entry",
+                            detail=error_msg,
+                        )
                         return None
 
             # FIX #3 (Jan 19, 2026): Check if broker supports this symbol before attempting trade
@@ -2398,6 +2524,16 @@ class ExecutionEngine:
                     logger.info(f"      Reason: {broker_name_str.title()} does not support this symbol")
                     logger.info(f"      💡 This symbol may be specific to another exchange (e.g., BUSD is Binance-only)")
                     _trace("ecel", "rejected", "symbol_not_supported_by_broker", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="symbol_support",
+                        reason="symbol_not_supported_by_broker",
+                        detail=broker_name_str,
+                    )
                     return None
 
             # Log entry attempt
@@ -2470,6 +2606,16 @@ class ExecutionEngine:
                         f"for {symbol} ({_hard_broker_key or 'broker'})"
                     )
                     _trace("ecel", "rejected", f"hard_min_notional:{position_size:.2f}<{_hard_min:.2f}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="hard_min_notional",
+                        reason="hard_min_notional",
+                        detail=f"size={position_size:.2f} minimum={_hard_min:.2f} broker={_hard_broker_key or 'broker'}",
+                    )
                     return None
 
             # ✅ Exchange constraints enforcer — adjust or reject before broker submission
@@ -2498,6 +2644,16 @@ class ExecutionEngine:
                                 position_size,
                             )
                             _trace("ecel", "rejected", f"exchange_constraints:{_constraint.reason}", terminal=True)
+                            self._log_execute_entry_rejection(
+                                symbol=symbol,
+                                side=side,
+                                position_size=position_size,
+                                entry_price=entry_price,
+                                stop_loss=stop_loss,
+                                stage="exchange_constraints",
+                                reason="exchange_constraints_reject",
+                                detail=_constraint.reason,
+                            )
                             return None
                 except Exception as _constraint_exc:
                     logger.debug("Exchange constraint validation skipped: %s", _constraint_exc)
@@ -2526,6 +2682,16 @@ class ExecutionEngine:
             if position_size is None:
                 logger.warning(f"❌ Entry rejected: {rejection_reason}")
                 _trace("ecel", "rejected", f"minimum_notional_gate:{rejection_reason}", terminal=True)
+                self._log_execute_entry_rejection(
+                    symbol=symbol,
+                    side=side,
+                    position_size=0.0,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stage="minimum_notional_gate",
+                    reason="minimum_notional_gate_rejected",
+                    detail=rejection_reason,
+                )
                 return None
 
             # ✅ NET EDGE GATE: Reject trades that cannot clear the minimum
@@ -2544,12 +2710,32 @@ class ExecutionEngine:
                         MARKET_QUALITY_THRESHOLD,
                     )
                     _trace("ecel", "rejected", f"market_quality_gate:{_market_quality:.3f}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="market_quality_gate",
+                        reason="market_quality_gate",
+                        detail=f"quality={_market_quality:.3f} threshold={MARKET_QUALITY_THRESHOLD:.3f}",
+                    )
                     return None
 
                 # Regime-specific suppression and threshold tuning.
                 if not FORCE_TRADE_MODE and _regime in {"low_vol", "low_volatility", "dead", "chop"}:
                     logger.info("⏭️ REGIME GATE: skipping %s due to low-opportunity regime (%s)", symbol, _regime)
                     _trace("ecel", "rejected", f"regime_gate:{_regime}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="regime_gate",
+                        reason="low_opportunity_regime",
+                        detail=_regime,
+                    )
                     return None
 
                 _regime_expectancy_floor = MIN_EXPECTANCY_THRESHOLD_PCT
@@ -2596,6 +2782,16 @@ class ExecutionEngine:
                         MIN_EDGE_MULTIPLIER,
                     )
                     _trace("ecel", "rejected", "fee_dominated_trade", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="fee_dominance_gate",
+                        reason="fee_dominated_trade",
+                        detail=f"expected_edge_pct={max(0.0, _reward_move) * 100.0:.4f} fee_rate_pct={_fee_rate * 100.0:.4f}",
+                    )
                     return None
 
                 _total_cost_rate = (_fee_rate * 2) + _slippage_rate + _spread_rate
@@ -2617,6 +2813,16 @@ class ExecutionEngine:
                                    f"(min required: {MIN_EDGE_THRESHOLD*100:.2f}%)")
                     logger.warning("=" * 70)
                     _trace("ecel", "rejected", f"net_edge_gate:{_net_edge_pct:.6f}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="net_edge_gate",
+                        reason="insufficient_net_edge",
+                        detail=f"net_edge_pct={_net_edge_pct * 100.0:.4f} threshold_pct={MIN_EDGE_THRESHOLD * 100.0:.2f}",
+                    )
                     return None
 
                 logger.info(f"✅ Net Edge Gate passed: {_net_edge_pct*100:.4f}% "
@@ -2634,6 +2840,16 @@ class ExecutionEngine:
                         MIN_TP_PCT * 100.0,
                     )
                     _trace("ecel", "rejected", "target_geometry_tp_too_small", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="target_geometry_gate",
+                        reason="target_geometry_tp_too_small",
+                        detail=f"tp_pct={_reward_move * 100.0:.3f} minimum_pct={MIN_TP_PCT * 100.0:.3f}",
+                    )
                     return None
                 if _risk_move > MAX_SL_PCT:
                     logger.warning(
@@ -2643,6 +2859,16 @@ class ExecutionEngine:
                         MAX_SL_PCT * 100.0,
                     )
                     _trace("ecel", "rejected", "target_geometry_sl_too_wide", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="target_geometry_gate",
+                        reason="target_geometry_sl_too_wide",
+                        detail=f"sl_pct={_risk_move * 100.0:.3f} maximum_pct={MAX_SL_PCT * 100.0:.3f}",
+                    )
                     return None
 
                 # ✅ POSITIVE EXPECTANCY GATE (E > 0)
@@ -2678,6 +2904,16 @@ class ExecutionEngine:
                     logger.warning(f"   Edge Score:            {_edge_score:.6f} (min {MIN_EDGE_SCORE_THRESHOLD:.6f})")
                     logger.warning("=" * 70)
                     _trace("ecel", "rejected", f"edge_score_gate:{_edge_score:.6f}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="edge_score_gate",
+                        reason="edge_score_below_threshold",
+                        detail=f"edge_score={_edge_score:.6f} minimum={MIN_EDGE_SCORE_THRESHOLD:.6f}",
+                    )
                     return None
 
                 if not FORCE_TRADE_MODE and _expectancy_pct <= _regime_expectancy_floor:
@@ -2694,6 +2930,16 @@ class ExecutionEngine:
                     logger.warning(f"   Required Floor:        {_regime_expectancy_floor*100:.4f}%")
                     logger.warning("=" * 70)
                     _trace("ecel", "rejected", f"expectancy_gate:{_expectancy_pct:.6f}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="expectancy_gate",
+                        reason="non_positive_expectancy",
+                        detail=f"expectancy_pct={_expectancy_pct * 100.0:.4f} floor_pct={_regime_expectancy_floor * 100.0:.4f}",
+                    )
                     return None
 
                 # Kelly-lite sizing clamp to avoid oversized allocations.
@@ -2706,6 +2952,16 @@ class ExecutionEngine:
                         _reward_risk,
                     )
                     _trace("ecel", "rejected", "kelly_gate_non_positive", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="kelly_gate",
+                        reason="kelly_gate_non_positive",
+                        detail=f"p_win_pct={_p_win * 100.0:.2f} reward_risk={_reward_risk:.3f}",
+                    )
                     return None
                 # In FORCE_TRADE_MODE, clamp kelly to 1.0 so sizing is unchanged
                 if _kelly_fraction <= 0:
@@ -2716,6 +2972,15 @@ class ExecutionEngine:
                 if position_size <= 0:
                     logger.warning("🚫 KELLY GATE: %s rejected (post-kelly size is zero)", symbol)
                     _trace("ecel", "rejected", "kelly_gate_zero_size", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="kelly_gate",
+                        reason="kelly_gate_zero_size",
+                    )
                     return None
 
                 logger.info(
@@ -2759,6 +3024,15 @@ class ExecutionEngine:
                         symbol,
                     )
                     _trace("ecel", "rejected", "coinbase_execution_disabled", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="broker_enablement",
+                        reason="coinbase_execution_disabled",
+                    )
                     return None
                 # ─── FIX 6: MANDATORY PRE-EXECUTION LOG ──────────────────────────
                 _pfunnel("risk_passed")
@@ -2968,6 +3242,16 @@ class ExecutionEngine:
                                     _eoc_exc,
                                 )
                                 _trace("ecel", "rejected", f"exchange_order_compiler:{_eoc_exc}", terminal=True)
+                                self._log_execute_entry_rejection(
+                                    symbol=symbol,
+                                    side=side,
+                                    position_size=position_size,
+                                    entry_price=entry_price,
+                                    stop_loss=stop_loss,
+                                    stage="exchange_order_compiler",
+                                    reason="order_compilation_failed",
+                                    detail=_eoc_exc,
+                                )
                                 return None
                             logger.warning(
                                 "[EOC] Warning: order compilation exception: %s — using fallback",
@@ -3003,6 +3287,16 @@ class ExecutionEngine:
                                 MIN_TRADE_USD,
                             )
                             _trace("ecel", "rejected", f"order_notional_below_min:{_order_size_usd:.2f}", terminal=True)
+                            self._log_execute_entry_rejection(
+                                symbol=symbol,
+                                side=side,
+                                position_size=_order_size_usd,
+                                entry_price=entry_price,
+                                stop_loss=stop_loss,
+                                stage="order_submission",
+                                reason="order_notional_below_min",
+                                detail=f"size={_order_size_usd:.2f} minimum={MIN_TRADE_USD:.2f}",
+                            )
                             return None
 
                     _entry_t0 = _time.monotonic()
@@ -3219,6 +3513,16 @@ class ExecutionEngine:
                     logger.error("   ⚠️  Order must have valid txid before recording position")
                     logger.error("=" * 70)
                     _trace("broker", "rejected", "missing_order_id", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="post_submit_validation",
+                        reason="missing_order_id",
+                        detail=result,
+                    )
                     return None
 
                 # ✅ REQUIREMENT: Confirm status=open or closed
@@ -3234,6 +3538,16 @@ class ExecutionEngine:
                     logger.error("   ⚠️  Order status must be confirmed before recording position")
                     logger.error(LOG_SEPARATOR)
                     _trace("broker", "rejected", f"invalid_order_status:{order_status}", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="post_submit_validation",
+                        reason="invalid_order_status",
+                        detail=order_status,
+                    )
                     return None
 
                 _trace("broker", "pass", "order_accepted", extra={"order_id": str(order_id), "status": order_status})
@@ -3258,6 +3572,16 @@ class ExecutionEngine:
                     logger.error("   ⚠️  Price must be greater than zero")
                     logger.error("=" * 70)
                     _trace("fill", "rejected", "invalid_fill_price", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="fill_validation",
+                        reason="invalid_fill_price",
+                        detail=actual_fill_price,
+                    )
                     return None
 
                 # Validate immediate P&L to reject bad fills
@@ -3271,6 +3595,16 @@ class ExecutionEngine:
                     # Position rejected - it was immediately closed by validation
                     self.rejected_trades_count += 1
                     _trace("fill", "rejected", "entry_price_validation_failed", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="fill_validation",
+                        reason="entry_price_validation_failed",
+                        detail=f"actual_fill_price={actual_fill_price}",
+                    )
                     return None
 
                 # Use actual fill price if available, otherwise use expected
