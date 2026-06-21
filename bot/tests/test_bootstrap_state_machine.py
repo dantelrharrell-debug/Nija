@@ -398,6 +398,8 @@ class TestResetForRetry(unittest.TestCase):
         )
         self.assertTrue(fsm.boot_complete)
         self.assertTrue(fsm.execution_authority)
+        self.assertIsNone(fsm._owner_thread_id)
+        fsm.claim_bootstrap_ownership()
         self.assertIsNotNone(fsm._owner_thread_id)
 
         fsm.reset_for_retry("runtime reset")
