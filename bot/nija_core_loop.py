@@ -2740,9 +2740,13 @@ class NijaCoreLoop:
                 # Re-run full apex.analyze_market (handles SL/TP/sizing etc.)
                 # Wrapped in a daemon thread with a timeout so a slow/hung
                 # indicator calculation cannot stall the entire trading loop.
-                _analysis_timeout = float(
-                    os.getenv("NIJA_ANALYZE_MARKET_TIMEOUT", "15") or "15"
-                )
+                try:
+                    _analysis_timeout = max(
+                        0.1,
+                        float(os.getenv("NIJA_ANALYZE_MARKET_TIMEOUT", "15") or "15"),
+                    )
+                except (ValueError, TypeError):
+                    _analysis_timeout = 15.0
                 _am_result_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
 
                 def _run_analyze_market(
@@ -2753,7 +2757,7 @@ class NijaCoreLoop:
                 ) -> None:
                     try:
                         _am_result_q.put(("result", _apex.analyze_market(_df, _sym, _bal)))
-                    except BaseException as _exc:  # noqa: BLE001
+                    except Exception as _exc:  # noqa: BLE001
                         _am_result_q.put(("error", _exc))
 
                 _am_worker = threading.Thread(
@@ -3416,7 +3420,10 @@ class NijaCoreLoop:
         ``_fetch_df`` falls through to the next call variant or skips the
         symbol gracefully.
         """
-        _timeout = float(os.getenv("NIJA_CANDLE_FETCH_TIMEOUT", "10") or "10")
+        try:
+            _timeout = max(0.1, float(os.getenv("NIJA_CANDLE_FETCH_TIMEOUT", "10") or "10"))
+        except (ValueError, TypeError):
+            _timeout = 10.0
 
         def _run_with_timeout(fn: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
             result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
@@ -3424,7 +3431,7 @@ class NijaCoreLoop:
             def _runner() -> None:
                 try:
                     result_queue.put(("result", fn(*args, **kwargs)))
-                except BaseException as exc:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     result_queue.put(("error", exc))
 
             worker = threading.Thread(target=_runner, name="nija-candle-fetch", daemon=True)
@@ -3432,10 +3439,11 @@ class NijaCoreLoop:
             try:
                 kind, payload = result_queue.get(timeout=_timeout)
             except queue.Empty:
+                _sym = args[0] if args else "?"
                 logger.warning(
                     "⏱️ [_call_market_data_method] candle fetch timed out after %.1fs — "
-                    "skipping symbol (NIJA_CANDLE_FETCH_TIMEOUT=%.0f)",
-                    _timeout, _timeout,
+                    "skipping symbol %s (fn=%s, NIJA_CANDLE_FETCH_TIMEOUT=%.0f)",
+                    _timeout, _sym, getattr(fn, "__name__", str(fn)), _timeout,
                 )
                 return None
             if kind == "error":
