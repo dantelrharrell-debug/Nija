@@ -1013,13 +1013,39 @@ class ExchangeKillSwitchProtector:
                 self._trigger_timestamp = data.get("trigger_timestamp")
                 self._trigger_history = data.get("history", [])
                 if self._triggered:
-                    logger.warning(
-                        "⚠️  ExchangeKillSwitchProtector: triggered state restored from disk "
-                        "(reason: %s) — call reset() after investigation",
-                        self._trigger_reason,
-                    )
+                    # SAFETY FIX: If the global kill switch is no longer active the
+                    # operator has resolved the emergency condition.  Auto-clear the
+                    # protector's triggered flag so accumulated rolling-window counts
+                    # from the previous run don't permanently block order evaluation.
+                    # The protector will start fresh and only re-trigger if a genuine
+                    # new exchange problem arises.
+                    ks_active = self._global_kill_switch_active()
+                    if ks_active is False:
+                        logger.warning(
+                            "⚠️  ExchangeKillSwitchProtector: persisted triggered=True but "
+                            "global kill switch is inactive — auto-resetting to allow recovery "
+                            "(previous reason: %s)",
+                            self._trigger_reason,
+                        )
+                        self._triggered = False
+                    else:
+                        logger.warning(
+                            "⚠️  ExchangeKillSwitchProtector: triggered state restored from disk "
+                            "(reason: %s) — call reset() after investigation",
+                            self._trigger_reason,
+                        )
         except Exception as exc:
             logger.error("❌ Could not load exchange kill-switch state: %s", exc)
+
+    def _global_kill_switch_active(self) -> Optional[bool]:
+        """Best-effort probe of the global kill switch state.  Returns None on error."""
+        try:
+            ks_factory = get_kill_switch
+            if ks_factory is None:
+                return None
+            return bool(ks_factory().is_active())
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Status / diagnostics

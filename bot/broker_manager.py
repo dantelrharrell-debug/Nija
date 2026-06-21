@@ -718,7 +718,9 @@ def _reject_if_unauthorized_order_submit(
         size=quantity,
         terminal_surface="broker_manager",
     )
-    _emit_rejection_telemetry("execution_authority_blocked")
+    # NOTE: Authority-gate denials are NOT recorded as exchange order rejections.
+    # Recording them caused a feedback loop: denials → high rejection rate →
+    # ExchangeKillSwitchProtector trigger → EMERGENCY_STOP → more denials.
     logger.critical(
         "🔒 %s | broker=%s symbol=%s side=%s qty=%s",
         msg,

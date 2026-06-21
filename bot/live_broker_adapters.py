@@ -150,7 +150,9 @@ def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) ->
         size=size,
         terminal_surface="live_broker_adapter",
     )
-    _emit_rejection_telemetry("execution_authority_blocked")
+    # NOTE: Authority-gate denials are NOT recorded as exchange order rejections.
+    # Recording them caused a feedback loop: denials → high rejection rate →
+    # ExchangeKillSwitchProtector trigger → EMERGENCY_STOP → more denials.
     msg = f"Execution blocked: {decision.reason}"
     logger.error(
         "[Authority] blocked broker=%s symbol=%s side=%s size=%s reason=%s",
