@@ -126,6 +126,16 @@ def _parse_lock_token(raw_value: str) -> int:
         return 0
 
 
+def _writer_lineage_ready_for_token_validation() -> bool:
+    """Return True when runtime writer lineage/heartbeat is fully established."""
+    lock_acquired = os.getenv("NIJA_LOCK_ACQUIRED", "").strip().lower() == "true"
+    lease_acquired = os.getenv("NIJA_WRITER_LEASE_ACQUIRED", "").strip() == "1"
+    token_present = bool(os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip())
+    generation_present = bool(os.getenv("NIJA_WRITER_LEASE_GENERATION", "").strip())
+    heartbeat_active = os.getenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip() in {"1", "true", "True"}
+    return lock_acquired and lease_acquired and token_present and generation_present and heartbeat_active
+
+
 def _step(n: int, title: str) -> None:
     log.info(SEPARATOR)
     log.info("STEP %d — %s", n, title)
@@ -404,15 +414,21 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     except Exception as exc:
         log.warning("Could not read writer lock key %s: %s", lock_key, exc)
 
-    if strict_lock_required and not expected_token:
+    lineage_ready = _writer_lineage_ready_for_token_validation()
+    if strict_lock_required and lineage_ready and not expected_token:
         _fail("Distributed writer fencing token missing in strict/live mode")
         sys.exit(1)
-    if expected_token and current_token != expected_token:
+    if lineage_ready and expected_token and current_token != expected_token:
         _fail(
             "Distributed writer lock token mismatch "
             f"(expected={expected_token}, current={current_token or '<missing>'})"
         )
         sys.exit(1)
+    if strict_lock_required and not lineage_ready:
+        log.info(
+            "Deferring writer lock token validation until authority lineage is complete "
+            "(lock acquired + fencing token + lease generation + heartbeat active)."
+        )
 
     platform_key = _resolve_platform_key()
     lease_version = 0
