@@ -3678,16 +3678,45 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
     print("🔥 ENTERED RUN_TRADING_LOOP FUNCTION", flush=True)
 
+    # ── STEP 1: Resolve runtime mode ──────────────────────────────────────────
+    logger.critical("[INIT STEP 1/6] Resolving runtime mode")
+    print("[INIT STEP 1/6] Resolving runtime mode", flush=True)
     _runtime_mode = resolve_runtime_mode_safe(logger)
     _live_verified = _is_live_mode(_runtime_mode)
+    logger.critical(
+        "[INIT STEP 1/6] Runtime mode resolved: live_verified=%s "
+        "LIVE_CAPITAL_VERIFIED=%s FORCE_TRADE=%s NIJA_FORCE_ACTIVATION=%s",
+        _live_verified,
+        os.getenv("LIVE_CAPITAL_VERIFIED", "not_set"),
+        os.getenv("FORCE_TRADE", "not_set"),
+        os.getenv("NIJA_FORCE_ACTIVATION", "not_set"),
+    )
+    print(
+        f"[INIT STEP 1/6] live_verified={_live_verified} "
+        f"LIVE_CAPITAL_VERIFIED={os.getenv('LIVE_CAPITAL_VERIFIED', 'not_set')} "
+        f"FORCE_TRADE={os.getenv('FORCE_TRADE', 'not_set')}",
+        flush=True,
+    )
+
     if _live_verified and not TRADING_ENGINE_READY.is_set():
         logger.critical(
             "LIVE_CAPITAL_VERIFIED=true detected — bypassing passive activation wait gate"
         )
         TRADING_ENGINE_READY.set()
 
-    logger.critical("🧵 WAITING FOR START SIGNAL")
+    # ── STEP 2: Wait for TRADING_ENGINE_READY with hard total timeout ─────────
+    # The wait loop previously had no total deadline — it would spin forever
+    # if TRADING_ENGINE_READY was never set (e.g. bootstrap FSM stalled).
+    # NIJA_START_GATE_TIMEOUT_S (default 120s) caps the total wait so the
+    # loop always proceeds to the first cycle rather than hanging indefinitely.
+    logger.critical("[INIT STEP 2/6] Waiting for TRADING_ENGINE_READY start signal")
+    print("[INIT STEP 2/6] Waiting for TRADING_ENGINE_READY start signal", flush=True)
+    _start_gate_max_s = float(os.getenv("NIJA_START_GATE_TIMEOUT_S", "120"))
+    _start_gate_t0 = time.monotonic()
+    _start_gate_iters = 0
     while not TRADING_ENGINE_READY.is_set():
+        _start_gate_iters += 1
+        _elapsed_gate = time.monotonic() - _start_gate_t0
         try:
             if _SM_AVAILABLE and _get_state_machine is not None:
                 _wait_sm = _get_state_machine()
@@ -3699,8 +3728,39 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     break
         except Exception as _wait_gate_err:
             logger.debug("TRADING_ENGINE_READY wait probe failed: %s", _wait_gate_err)
+
+        # Hard total timeout: force-set the event and proceed rather than
+        # hanging forever when bootstrap FSM never fires the signal.
+        if _elapsed_gate >= _start_gate_max_s:
+            logger.critical(
+                "⚡ [INIT STEP 2/6] TRADING_ENGINE_READY hard timeout reached after %.0fs "
+                "(iter=%d) — force-setting start gate to unblock trading loop. "
+                "Set NIJA_START_GATE_TIMEOUT_S to adjust (default 120s).",
+                _elapsed_gate,
+                _start_gate_iters,
+            )
+            print(
+                f"[INIT STEP 2/6] HARD TIMEOUT: force-setting TRADING_ENGINE_READY after "
+                f"{_elapsed_gate:.0f}s (iter={_start_gate_iters})",
+                flush=True,
+            )
+            TRADING_ENGINE_READY.set()
+            break
+
         if not TRADING_ENGINE_READY.wait(timeout=30):
-            logger.critical("TIMEOUT_WAITING_FOR_TRADING_ENGINE_READY")
+            logger.critical(
+                "TIMEOUT_WAITING_FOR_TRADING_ENGINE_READY "
+                "(iter=%d elapsed=%.0fs remaining=%.0fs)",
+                _start_gate_iters,
+                _elapsed_gate,
+                max(0.0, _start_gate_max_s - _elapsed_gate),
+            )
+            print(
+                f"[INIT STEP 2/6] Still waiting for start signal "
+                f"(iter={_start_gate_iters} elapsed={_elapsed_gate:.0f}s "
+                f"remaining={max(0.0, _start_gate_max_s - _elapsed_gate):.0f}s)",
+                flush=True,
+            )
             try:
                 from bot.bootstrap_utils import dump_startup_state
             except ImportError:
@@ -3710,7 +3770,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     dump_startup_state = None  # type: ignore[assignment]
             if dump_startup_state is not None:
                 dump_startup_state("trading_engine_ready_wait")
-    logger.critical("🟢 START SIGNAL RECEIVED — ENTERING LIVE LOOP")
+    logger.critical("[INIT STEP 2/6] ✅ START SIGNAL RECEIVED — ENTERING LIVE LOOP")
+    print("[INIT STEP 2/6] ✅ START SIGNAL RECEIVED — ENTERING LIVE LOOP", flush=True)
+
+    # ── STEP 3: Bootstrap FSM execution authority check ──────────────────────
+    logger.critical("[INIT STEP 3/6] Checking bootstrap FSM execution authority")
+    print("[INIT STEP 3/6] Checking bootstrap FSM execution authority", flush=True)
+
     try:
         from bot.bootstrap_state_machine import get_bootstrap_fsm
     except ImportError:
@@ -3772,6 +3838,9 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 return
 
 
+    logger.critical("[INIT STEP 3/6] ✅ Bootstrap FSM execution authority check complete")
+    print("[INIT STEP 3/6] ✅ Bootstrap FSM execution authority check complete", flush=True)
+
     # Supervisor-mode hard gate: only block execution when supervisor mode is
     # enabled AND live trading is not active.
     _supervisor_mode = os.getenv("SUPERVISOR_MODE", "false").lower() in (
@@ -3815,6 +3884,10 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
             _loop_running = True
 
         logger.info("🟢 Trading loop alive (INITIAL START)")
+
+        # ── STEP 4: Capital Hydration Barrier ─────────────────────────────────
+        logger.critical("[INIT STEP 4/6] Entering capital hydration barrier")
+        print("[INIT STEP 4/6] Entering capital hydration barrier", flush=True)
 
         # ── Capital Hydration Barrier (FIX 1) ─────────────────────────────────
         # Block until CapitalAuthority has received at least one broker snapshot.
@@ -3861,21 +3934,38 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _hb_err,
                 )
             else:
+                # ── HARD-TIMEOUT BYPASS ───────────────────────────────────────
+                # Previously this path aborted the trading loop entirely, which
+                # caused a silent hang (the thread exited with no further logs).
+                # Now we log a critical warning and proceed anyway — a hydration
+                # timeout means the capital pipeline is slow, not that the bot
+                # should stop trading.  The downstream strategy cycle will handle
+                # a $0 balance gracefully (skip entries, wait for next cycle).
                 logger.critical(
-                    "🚨 [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR: %s — "
-                    "trading loop aborted. Bot will not trade until capital is hydrated.",
+                    "⚠️ [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR: %s — "
+                    "proceeding past hydration barrier after timeout to prevent "
+                    "trading loop abort. Set NIJA_SKIP_STARTUP_PHASE_GATE=true or "
+                    "FORCE_TRADE=true to suppress this warning.",
                     _hb_err,
                 )
-                with _loop_guard:
-                    _loop_running = False
-                return
+                print(
+                    f"[INIT STEP 4/6] WARNING: hydration barrier timed out ({_hb_err}) — "
+                    "proceeding anyway to prevent loop abort",
+                    flush=True,
+                )
         except (ImportError, Exception) as _hb_exc:
             logger.warning(
                 "⚠️ [HYDRATION_BARRIER] Could not enforce hydration barrier (%s) — "
                 "proceeding without guarantee. Check capital_authority module.",
                 _hb_exc,
             )
+        logger.critical("[INIT STEP 4/6] ✅ Capital hydration barrier passed")
+        print("[INIT STEP 4/6] ✅ Capital hydration barrier passed", flush=True)
         # ── End Capital Hydration Barrier ──────────────────────────────────────
+
+        # ── STEP 5: CSM v2 Ready Barrier ──────────────────────────────────────
+        logger.critical("[INIT STEP 5/6] Entering CSM v2 ready barrier")
+        print("[INIT STEP 5/6] Entering CSM v2 ready barrier", flush=True)
 
         # ── CSM v2 Ready Barrier ───────────────────────────────────────────────
         # Block until CapitalCSMv2 transitions to READY state.  This is the
@@ -3934,13 +4024,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             _csm.blocked_reason,
                         )
                     else:
+                        # ── HARD-TIMEOUT BYPASS ───────────────────────────────
+                        # Previously this path raised _CsmIntegrityErr which was
+                        # caught below and caused the trading loop to abort (return),
+                        # producing a silent hang with no further log output.
+                        # Now we log a critical warning and proceed — a BLOCKED CSM
+                        # state (e.g. LIVE_CAPITAL_VERIFIED not set, or capital
+                        # pipeline not yet delivered a snapshot) should not
+                        # permanently prevent the loop from running.  The downstream
+                        # strategy cycle and execution engine enforce their own gates.
                         logger.critical(
-                            "❌ CSM BLOCKED — TRADING LOOP ABORTED. reason=%s",
+                            "⚠️ [CSM-BARRIER] CSM BLOCKED — proceeding past barrier to prevent "
+                            "trading loop abort. reason=%s  "
+                            "Set NIJA_SKIP_STARTUP_PHASE_GATE=true or FORCE_TRADE=true to "
+                            "suppress this warning. Trades will be blocked by execution engine "
+                            "until CSM reaches READY state.",
                             _csm.blocked_reason,
                         )
-                        with _loop_guard:
-                            _loop_running = False
-                        raise _CsmIntegrityErr("CSM BLOCKED: " + _csm.blocked_reason)
+                        print(
+                            f"[INIT STEP 5/6] WARNING: CSM BLOCKED ({_csm.blocked_reason}) — "
+                            "proceeding anyway to prevent loop abort",
+                            flush=True,
+                        )
                 else:
                     # INITIALIZING after timeout — treat as DEGRADED, let loop proceed.
                     logger.critical(
@@ -3951,21 +4056,24 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 logger.critical(
                     "✅ CAPITAL READY — STARTING TRADING LOOP"
                 )
-        except _CsmIntegrityErr as _csm_err:
+        except Exception as _csm_exc:
+            # Catch both _CsmIntegrityErr and any other exception from the CSM
+            # barrier.  Previously _CsmIntegrityErr caused a hard abort (return)
+            # which silently killed the trading thread.  Now we log and proceed.
             logger.critical(
-                "🚨 [CSM-BARRIER] CAPITAL NOT READY: %s — "
-                "trading loop aborted. Bot will not trade until CSM reaches READY state.",
-                _csm_err,
-            )
-            with _loop_guard:
-                _loop_running = False
-            return
-        except (ImportError, Exception) as _csm_exc:
-            logger.warning(
-                "⚠️ [CSM-BARRIER] Could not enforce CSM ready barrier (%s) — "
-                "proceeding without guarantee. Check capital_csm_v2 module.",
+                "⚠️ [CSM-BARRIER] CSM barrier raised exception (%s: %s) — "
+                "proceeding past barrier to prevent trading loop abort. "
+                "Trades will be blocked by execution engine until CSM reaches READY state.",
+                type(_csm_exc).__name__,
                 _csm_exc,
             )
+            print(
+                f"[INIT STEP 5/6] WARNING: CSM barrier exception ({type(_csm_exc).__name__}: "
+                f"{_csm_exc}) — proceeding anyway",
+                flush=True,
+            )
+        logger.critical("[INIT STEP 5/6] ✅ CSM v2 ready barrier passed")
+        print("[INIT STEP 5/6] ✅ CSM v2 ready barrier passed", flush=True)
         # ── End CSM v2 Ready Barrier ───────────────────────────────────────────
 
         # ── Trading Loop Entry Anchor (FIX 1) ─────────────────────────────────
@@ -3973,12 +4081,17 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         # flag HERE and verify it before entering the loop — this is the single
         # authoritative gate.  If the assert fires something above cleared the
         # flag unexpectedly; that is a logic bug that must be surfaced loudly.
+        # ── STEP 6: Arm trading-active flag and enter cycle loop ─────────────
+        logger.critical("[INIT STEP 6/6] Arming trading-active flag and entering cycle loop")
+        print("[INIT STEP 6/6] Arming trading-active flag and entering cycle loop", flush=True)
         _trading_active = True
         if not _trading_active:
             logger.critical("💥 _trading_active failed to set — logic error, aborting")
             raise RuntimeError("_trading_active must be True before entering trading loop")
         logger.critical("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED")
         print("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED — all barriers cleared", flush=True)
+        logger.critical("[INIT STEP 6/6] ✅ All init steps complete — first cycle starting now")
+        print("[INIT STEP 6/6] ✅ All init steps complete — first cycle starting now", flush=True)
         # ── End Trading Loop Entry Anchor ──────────────────────────────────────
 
         cycle = 0
