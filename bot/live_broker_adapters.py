@@ -103,18 +103,6 @@ def _safe_float(value, default: float = 0.0) -> float:
 
 
 def _authority_blocked(broker_name: str, symbol: str, side: str, size: float) -> Optional[Dict]:
-    def _emit_rejection_telemetry(reason: str) -> None:
-        if get_exchange_kill_switch_protector is None:
-            return
-        try:
-            _eks = get_exchange_kill_switch_protector()
-            _oid = (
-                f"exec-reject:{broker_name}:{symbol}:{side}:{int(time.time() * 1000)}:{reason[:24]}"
-            )
-            _eks.record_order_result(order_id=_oid, accepted=False)
-        except Exception:
-            pass
-
     decision = can_execute()
     if decision.allowed:
         emit_pretrade_execution_validator_trace(

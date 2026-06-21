@@ -1028,6 +1028,9 @@ class ExchangeKillSwitchProtector:
                             self._trigger_reason,
                         )
                         self._triggered = False
+                        self._trigger_reason = ""
+                        self._trigger_timestamp = None
+                        self._persist_state()
                     else:
                         logger.warning(
                             "⚠️  ExchangeKillSwitchProtector: triggered state restored from disk "
