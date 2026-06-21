@@ -3106,8 +3106,41 @@ class NijaCoreLoop:
                     _ft_bal = max(float(snapshot.balance or 0.0), 0.0)
                     # Conservative micro-trade: 5% of balance, minimum $3.50
                     _ft_size = max(min(_ft_bal * 0.05, _ft_bal), 3.50)
+                    # Determine action: default to long on spot-only brokers (e.g. Coinbase)
+                    # that do not support shorting, otherwise follow the best-volume side.
+                    _ft_broker_name = (
+                        self.apex._get_broker_name()
+                        if hasattr(self, "apex") and hasattr(self.apex, "_get_broker_name")
+                        else "coinbase"
+                    )
+                    _ft_broker_can_short = True
+                    try:
+                        from bot.exchange_capabilities import can_short as _can_short_ft
+                        _ft_broker_can_short = _can_short_ft(_ft_broker_name, _best_volume_symbol)
+                    except Exception:
+                        try:
+                            from exchange_capabilities import can_short as _can_short_ft  # type: ignore[import]
+                            _ft_broker_can_short = _can_short_ft(_ft_broker_name, _best_volume_symbol)
+                        except Exception:
+                            pass  # conservative: assume short is supported
+
+                    _ft_wants_short = _best_volume_side not in ("long", "buy", "enter_long")
+                    if _ft_wants_short and not _ft_broker_can_short:
+                        logger.warning(
+                            "⚡ [FORCE_TRADE_DIRECT] Broker %s does not support shorting for %s — "
+                            "overriding action from enter_short to enter_long.",
+                            _ft_broker_name,
+                            _best_volume_symbol,
+                        )
+                        print(
+                            f"[NIJA-PRINT] FORCE_TRADE_DIRECT SHORT→LONG OVERRIDE | "
+                            f"symbol={_best_volume_symbol} broker={_ft_broker_name} "
+                            f"reason=broker_does_not_support_shorting",
+                            flush=True,
+                        )
                     _ft_action = (
-                        "enter_long" if _best_volume_side in ("long", "buy", "enter_long")
+                        "enter_long"
+                        if (_best_volume_side in ("long", "buy", "enter_long") or not _ft_broker_can_short)
                         else "enter_short"
                     )
                     if _ft_action == "enter_short":

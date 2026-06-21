@@ -5552,6 +5552,14 @@ class NIJAApexStrategyV71:
                         logger.warning(f"   Exchange: {broker_name} (spot markets don't support shorting)")
                         logger.warning(f"   Symbol: {symbol}")
                         logger.warning(f"   ℹ️  Note: SHORT works on futures/perpetuals (e.g., BTC-PERP)")
+                        print(
+                            f"[NIJA-PRINT] execute_action BLOCKED SHORT | "
+                            f"symbol={symbol} broker={broker_name} "
+                            f"reason=broker_does_not_support_shorting "
+                            f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                            f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f}",
+                            flush=True,
+                        )
                         return False
                 else:
                     logger.warning(f"⚠️  Exchange capability check unavailable - allowing SHORT (risky!)")
