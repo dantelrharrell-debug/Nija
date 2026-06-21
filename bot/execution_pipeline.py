@@ -1830,6 +1830,27 @@ class ExecutionPipeline:
     def _emit_execution_rejection_telemetry(self, *, symbol: str, side: str, reason: str) -> None:
         if get_exchange_kill_switch_protector is None:
             return
+        reason_text = str(reason or "").strip().lower()
+        non_exchange_rejection_markers = (
+            "executionauthority reject",
+            "execution_authority_blocked",
+            "execution_authority_runtime",
+            "execution gate pending",
+            "blocked by state_machine",
+            "state_machine=emergency_stop",
+            "runtime authority convergence lost",
+            "seak halted",
+            "trading blocked",
+        )
+        if any(marker in reason_text for marker in non_exchange_rejection_markers):
+            logger.debug(
+                "ExecutionPipeline: skipping exchange rejection telemetry for non-exchange block "
+                "(symbol=%s side=%s reason=%s)",
+                symbol,
+                side,
+                reason,
+            )
+            return
         try:
             _eks = get_exchange_kill_switch_protector()
             _oid = f"exec-reject:pipeline:{symbol}:{side}:{int(time.time() * 1000)}"
