@@ -816,6 +816,21 @@ class ExecutionEngine:
             bid_price_usd = None
             ask_price_usd = None
 
+        _pipeline_t0 = _time.monotonic()
+        print(
+            f"[NIJA-PRINT] BROKER CALL START | "
+            f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
+            f"broker={preferred_broker} price_hint={float(price_hint_usd or 0.0):.6f} "
+            f"ack_timeout={os.getenv('NIJA_ACK_TIMEOUT_S', '30')}s",
+            flush=True,
+        )
+        logger.critical(
+            "🔌 [BrokerAdapter] BROKER CALL START | "
+            "symbol=%s side=%s size_usd=%.2f broker=%s price_hint=%.6f ack_timeout=%ss",
+            symbol, side, float(size_usd or 0.0), preferred_broker,
+            float(price_hint_usd or 0.0), os.getenv("NIJA_ACK_TIMEOUT_S", "30"),
+        )
+        sys.stdout.flush()
         res = get_execution_pipeline().execute(
             PipelineRequest(
                 strategy=strategy_name,
@@ -835,25 +850,29 @@ class ExecutionEngine:
                 },
             )
         )
+        _pipeline_elapsed_ms = (_time.monotonic() - _pipeline_t0) * 1000.0
 
         if not res.success:
+            _pipeline_error = res.error or "unknown"
             print(
                 f"[NIJA-PRINT] ORDER REJECTED by ExecutionPipeline | "
                 f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
-                f"error={res.error or 'unknown'} "
-                f"broker={getattr(res, 'broker', preferred_broker)}",
+                f"error={_pipeline_error!r} "
+                f"broker={getattr(res, 'broker', preferred_broker)} "
+                f"latency_ms={_pipeline_elapsed_ms:.0f}",
                 flush=True,
             )
             logger.critical(
                 "❌ [BrokerAdapter] ORDER REJECTED by ExecutionPipeline | "
-                "symbol=%s side=%s size_usd=%.2f error=%s broker=%s",
+                "symbol=%s side=%s size_usd=%.2f error=%r broker=%s latency_ms=%.0f",
                 symbol, side, float(size_usd or 0.0),
-                res.error or "unknown",
+                _pipeline_error,
                 getattr(res, "broker", preferred_broker),
+                _pipeline_elapsed_ms,
             )
             return {
                 "status": "error",
-                "error": res.error or "ExecutionPipeline rejected order",
+                "error": _pipeline_error,
                 "symbol": symbol,
                 "side": side,
             }
@@ -863,16 +882,18 @@ class ExecutionEngine:
             f"symbol={symbol} side={side} "
             f"filled_price={float(res.fill_price or 0.0):.6f} "
             f"filled_size_usd={float(res.filled_size_usd or 0.0):.2f} "
-            f"broker={getattr(res, 'broker', preferred_broker)}",
+            f"broker={getattr(res, 'broker', preferred_broker)} "
+            f"latency_ms={_pipeline_elapsed_ms:.0f}",
             flush=True,
         )
         logger.critical(
             "✅ [BrokerAdapter] ORDER ACCEPTED by ExecutionPipeline | "
-            "symbol=%s side=%s filled_price=%.6f filled_size_usd=%.2f broker=%s",
+            "symbol=%s side=%s filled_price=%.6f filled_size_usd=%.2f broker=%s latency_ms=%.0f",
             symbol, side,
             float(res.fill_price or 0.0),
             float(res.filled_size_usd or 0.0),
             getattr(res, "broker", preferred_broker),
+            _pipeline_elapsed_ms,
         )
         return {
             "status": "filled",
@@ -2784,6 +2805,13 @@ class ExecutionEngine:
                             f"{_limit_qty:.8f}",
                             position_size,
                         )
+                        print(
+                            f"[NIJA-PRINT] LIMIT ORDER ATTEMPT | "
+                            f"symbol={symbol} side={order_side} "
+                            f"qty={_limit_qty:.8f} notional=${position_size:.2f} "
+                            f"limit_price={_limit_price:.6f}",
+                            flush=True,
+                        )
                         _entry_t0 = _time.monotonic()
                         _entry_exc: Optional[Exception] = None
                         _pfunnel("execution_attempted")
@@ -2803,8 +2831,24 @@ class ExecutionEngine:
                                 f"   ⚠️ Limit order raised exception for {symbol}: {_limit_exc}, "
                                 f"falling back to market order"
                             )
+                            print(
+                                f"[NIJA-PRINT] LIMIT ORDER EXCEPTION | "
+                                f"symbol={symbol} side={order_side} "
+                                f"error={_limit_exc!r} falling_back=market",
+                                flush=True,
+                            )
                             _entry_exc = _limit_exc
                             result = None
+                        _limit_elapsed_ms = (_time.monotonic() - _entry_t0) * 1000.0
+                        _limit_result_error = (result or {}).get("error") or ""
+                        print(
+                            f"[NIJA-PRINT] LIMIT ORDER RESULT | "
+                            f"symbol={symbol} side={order_side} "
+                            f"status={self._normalized_order_status(result)!r} "
+                            f"error={_limit_result_error!r} "
+                            f"latency_ms={_limit_elapsed_ms:.0f}",
+                            flush=True,
+                        )
                         # Emit result for the limit attempt (before fallback)
                         self._emit_execution_result(symbol, order_side, result, _entry_t0, _entry_exc)
                         _ecel_limit_status = self._normalized_order_status(result)
@@ -2818,6 +2862,13 @@ class ExecutionEngine:
                                 f"   ⚠️ Limit order failed for {symbol}, "
                                 f"falling back to market order"
                             )
+                            print(
+                                f"[NIJA-PRINT] LIMIT FALLBACK TO MARKET | "
+                                f"symbol={symbol} side={order_side} "
+                                f"limit_status={_ecel_limit_status!r} "
+                                f"limit_error={_limit_result_error!r}",
+                                flush=True,
+                            )
                             _entry_t0 = _time.monotonic()
                             _fallback_exc: Optional[Exception] = None
                             try:
@@ -2828,6 +2879,13 @@ class ExecutionEngine:
                                     order_side,
                                     f"{_fallback_qty:.8f}",
                                     position_size,
+                                )
+                                print(
+                                    f"[NIJA-PRINT] FALLBACK MARKET ORDER ATTEMPT | "
+                                    f"symbol={symbol} side={order_side} "
+                                    f"qty={_fallback_qty:.8f} notional=${position_size:.2f} "
+                                    f"entry_price={float(entry_price or 0.0):.6f}",
+                                    flush=True,
                                 )
                                 result = self._submit_market_order_via_pipeline(
                                     broker_client=self.broker_client,
@@ -2840,6 +2898,16 @@ class ExecutionEngine:
                             except Exception as _fb_exc:
                                 _fallback_exc = _fb_exc
                                 result = None
+                            _fallback_elapsed_ms = (_time.monotonic() - _entry_t0) * 1000.0
+                            _fallback_result_error = (result or {}).get("error") or ""
+                            print(
+                                f"[NIJA-PRINT] FALLBACK MARKET ORDER RESULT | "
+                                f"symbol={symbol} side={order_side} "
+                                f"status={self._normalized_order_status(result)!r} "
+                                f"error={_fallback_result_error!r} "
+                                f"latency_ms={_fallback_elapsed_ms:.0f}",
+                                flush=True,
+                            )
                             self._emit_execution_result(symbol, order_side, result, _entry_t0, _fallback_exc)
                             _ecel_fb_status = self._normalized_order_status(result)
                             if result is None or _ecel_fb_status in {'error', 'unfilled', 'skipped', 'rejected'}:
@@ -2947,6 +3015,13 @@ class ExecutionEngine:
                         f"{_order_quantity:.8f}",
                         _order_size_usd,
                     )
+                    print(
+                        f"[NIJA-PRINT] ORDER ATTEMPT | "
+                        f"symbol={symbol} side={order_side} "
+                        f"qty={_order_quantity:.8f} notional=${_order_size_usd:.2f} "
+                        f"entry_price={float(entry_price or 0.0):.6f}",
+                        flush=True,
+                    )
                     # Use the state-machine controller so taxonomy-driven retry /
                     # halt logic is handled in one place instead of scattered
                     # if/elif policy branches.
@@ -2984,7 +3059,23 @@ class ExecutionEngine:
                             _market_exc = _mk_exc
                             result = None
                         self._emit_execution_result(symbol, order_side, result, _entry_t0, _market_exc)
+                    _market_elapsed_ms = (_time.monotonic() - _entry_t0) * 1000.0
                     _ecel_market_status = self._normalized_order_status(result)
+                    _market_result_error = (result or {}).get("error") or ""
+                    print(
+                        f"[NIJA-PRINT] ORDER RESULT | "
+                        f"symbol={symbol} side={order_side} "
+                        f"status={_ecel_market_status!r} "
+                        f"error={_market_result_error!r} "
+                        f"latency_ms={_market_elapsed_ms:.0f}",
+                        flush=True,
+                    )
+                    logger.critical(
+                        "📊 [ExecutionEngine] ORDER RESULT | "
+                        "symbol=%s side=%s status=%r error=%r latency_ms=%.0f",
+                        symbol, order_side, _ecel_market_status,
+                        _market_result_error, _market_elapsed_ms,
+                    )
                     if result is None or _ecel_market_status in {'error', 'unfilled', 'skipped', 'rejected'}:
                         _trace("ecel", "rejected", f"market_order_rejected:{_ecel_market_status}", terminal=True, extra={"order_type": "market"})
                     else:
@@ -3022,9 +3113,18 @@ class ExecutionEngine:
                         result.get('order_id') or result.get('id', 'N/A'),
                     )
                 else:
+                    _result_error_detail = (result or {}).get("error") or "no error detail"
                     logger.critical(
-                        "❌ ORDER FAILED: %s | side=%s | size=$%.2f | status=%s",
-                        symbol, side, position_size, _result_status_log,
+                        "❌ ORDER FAILED: %s | side=%s | size=$%.2f | status=%s | error=%r",
+                        symbol, side, position_size, _result_status_log, _result_error_detail,
+                    )
+                    print(
+                        f"[NIJA-PRINT] ORDER FAILED | "
+                        f"symbol={symbol} side={side} "
+                        f"size=${float(position_size or 0.0):.2f} "
+                        f"status={_result_status_log!r} "
+                        f"error={_result_error_detail!r}",
+                        flush=True,
                     )
                 logger.debug(f"   Order result status: {_result_status_log}")
 
@@ -3035,12 +3135,32 @@ class ExecutionEngine:
                 if result_status == 'nonce_skip':
                     logger.warning("⚠️  Nonce pause active — skipping cycle, will retry next scan")
                     logger.warning(f"   Symbol: {symbol}, Size: ${position_size:.2f}")
+                    print(
+                        f"[NIJA-PRINT] NONCE SKIP | symbol={symbol} size=${float(position_size or 0.0):.2f}",
+                        flush=True,
+                    )
                     _trace("broker", "rejected", "nonce_skip", terminal=True)
                     return None
 
                 if result_status == 'error':
                     details = self._extract_order_failure_details(broker_response=result)
                     self._log_order_failure(symbol, position_size, broker_response=result)
+                    _broker_error_msg = details.get('detail') or (result or {}).get('error') or 'broker_error'
+                    print(
+                        f"[NIJA-PRINT] BROKER REJECTED ORDER | "
+                        f"symbol={symbol} side={side} "
+                        f"size=${float(position_size or 0.0):.2f} "
+                        f"status=error "
+                        f"reason={_broker_error_msg!r} "
+                        f"hint={details.get('hint', '')!r}",
+                        flush=True,
+                    )
+                    logger.critical(
+                        "❌ [ExecutionEngine] BROKER REJECTED ORDER | "
+                        "symbol=%s side=%s size=$%.2f reason=%r hint=%r",
+                        symbol, side, float(position_size or 0.0),
+                        _broker_error_msg, details.get('hint', ''),
+                    )
 
                     # Check if this is a geographic restriction and add to blacklist
                     self._handle_geographic_restriction_error(symbol, details['detail'])
@@ -3050,12 +3170,40 @@ class ExecutionEngine:
 
                 # Check for 'unfilled' status which indicates order wasn't placed
                 if result_status == 'unfilled':
+                    _unfilled_error = (result or {}).get('error') or 'order_unfilled'
                     self._log_order_failure(symbol, position_size, broker_response=result)
+                    print(
+                        f"[NIJA-PRINT] BROKER UNFILLED ORDER | "
+                        f"symbol={symbol} side={side} "
+                        f"size=${float(position_size or 0.0):.2f} "
+                        f"status=unfilled "
+                        f"error={_unfilled_error!r}",
+                        flush=True,
+                    )
+                    logger.critical(
+                        "❌ [ExecutionEngine] BROKER UNFILLED ORDER | "
+                        "symbol=%s side=%s size=$%.2f error=%r",
+                        symbol, side, float(position_size or 0.0), _unfilled_error,
+                    )
                     _trace("broker", "rejected", "unfilled", terminal=True)
                     return None
 
                 if result_status == 'skipped':
+                    _skipped_error = (result or {}).get('error') or 'order_skipped'
                     self._log_order_failure(symbol, position_size, broker_response=result)
+                    print(
+                        f"[NIJA-PRINT] BROKER SKIPPED ORDER | "
+                        f"symbol={symbol} side={side} "
+                        f"size=${float(position_size or 0.0):.2f} "
+                        f"status=skipped "
+                        f"error={_skipped_error!r}",
+                        flush=True,
+                    )
+                    logger.critical(
+                        "❌ [ExecutionEngine] BROKER SKIPPED ORDER | "
+                        "symbol=%s side=%s size=$%.2f error=%r",
+                        symbol, side, float(position_size or 0.0), _skipped_error,
+                    )
                     _trace("broker", "rejected", "skipped", terminal=True)
                     return None
 
