@@ -665,18 +665,6 @@ def _reject_if_unauthorized_order_submit(
     quantity: float,
 ) -> Optional[Dict[str, Any]]:
     """Fail closed when direct broker order submit bypasses ExecutionPipeline."""
-    def _emit_rejection_telemetry(reason: str) -> None:
-        if get_exchange_kill_switch_protector is None:
-            return
-        try:
-            _eks = get_exchange_kill_switch_protector()
-            _oid = (
-                f"exec-reject:{broker_name}:{symbol}:{side}:{int(time.time() * 1000)}:{reason[:24]}"
-            )
-            _eks.record_order_result(order_id=_oid, accepted=False)
-        except Exception:
-            pass
-
     decision = can_execute()
     if decision.allowed:
         emit_pretrade_execution_validator_trace(
