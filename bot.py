@@ -6132,6 +6132,21 @@ def _run_bot_startup_and_trading_with_retry():
                 and "active_threads" in _pre_state_snap
             )
             _reset_stale_bootstrap_fsm_for_fresh_attempt(init_done=_pre_init_done)
+            if _BOOTSTRAP_FSM_AVAILABLE:
+                _retry_fsm = _get_bootstrap_fsm()
+                if hasattr(_retry_fsm, "claim_bootstrap_ownership"):
+                    _retry_fsm.claim_bootstrap_ownership()
+                if getattr(_retry_fsm, "state", None) == _BootstrapState.BOOT_FAILED_RETRY:
+                    _retry_reentry_ok = bool(
+                        _retry_fsm.transition(
+                            _BootstrapState.PLATFORM_CONNECTING,
+                            f"bootstrap retry attempt #{_next_attempt}: re-enter platform connecting",
+                        )
+                    )
+                    if not _retry_reentry_ok:
+                        raise RuntimeError(
+                            "BOOTSTRAP_RETRY_REENTRY_BLOCKED: BOOT_FAILED_RETRY -> PLATFORM_CONNECTING failed"
+                        )
             logger.info(
                 "🔁 [Startup] Bootstrap attempt #%d (%s, %s)",
                 _next_attempt,
@@ -7119,10 +7134,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _BootstrapState.MODE_GATED,
                         "trading state machine mode confirmed",
                     )
-                _bfsm_transition(
-                    _BootstrapState.PLATFORM_CONNECTING,
-                    "TradingStrategy broker connection starting",
-                )
+                    _cur = _boot_fsm.state
+                if _cur in {_BootstrapState.MODE_GATED, _BootstrapState.BOOT_FAILED_RETRY}:
+                    _bfsm_transition(
+                        _BootstrapState.PLATFORM_CONNECTING,
+                        "TradingStrategy broker connection starting",
+                    )
+                elif _cur == _BootstrapState.PLATFORM_CONNECTING:
+                    logger.debug("[BootstrapFSM] PLATFORM_CONNECTING already active before strategy init")
+                else:
+                    logger.info(
+                        "[BootstrapFSM] strategy-init PLATFORM_CONNECTING transition skipped (state=%s)",
+                        getattr(_cur, "value", str(_cur)),
+                    )
 
             logger.debug("Init stage A2: after Bootstrap FSM, before initialized_state_lock")
             # STEP 2 — initialize strategy ONCE.
