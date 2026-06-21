@@ -2823,7 +2823,7 @@ class NIJAApexStrategyV71:
             Dictionary with analysis results and recommended action
         """
         try:
-            print("📊 Evaluating market conditions...")
+            logger.debug("📊 Evaluating market conditions for %s", symbol)
             # Record that this pair's signal was evaluated (funnel stage 0)
             if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                 try:
