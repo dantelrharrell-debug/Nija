@@ -4078,7 +4078,9 @@ class NIJAApexStrategyV71:
                     # in favour of fixed-percentage scalp levels.
                     if getattr(self, '_hf_scalp_active', False):
                         _sl_pct = getattr(self, '_hf_stop_pct', 0.0035)
-                        _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
+                        # Default fallback of 1.0 ensures tp_pct=1.0/100=1.0%,
+                        # safely above the execution engine MIN_TP_PCT of 0.800%.
+                        _tp_pct = getattr(self, '_hf_tp_pct', 1.0) / 100.0
                         stop_loss  = current_price * (1.0 - _sl_pct)
                         tp_levels  = [current_price * (1.0 + _tp_pct)]
                         logger.info(
@@ -5051,7 +5053,9 @@ class NIJAApexStrategyV71:
                     # in favour of fixed-percentage scalp levels.
                     if getattr(self, '_hf_scalp_active', False):
                         _sl_pct = getattr(self, '_hf_stop_pct', 0.0035)
-                        _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
+                        # Default fallback of 1.0 ensures tp_pct=1.0/100=1.0%,
+                        # safely above the execution engine MIN_TP_PCT of 0.800%.
+                        _tp_pct = getattr(self, '_hf_tp_pct', 1.0) / 100.0
                         stop_loss  = current_price * (1.0 + _sl_pct)
                         tp_levels  = [current_price * (1.0 - _tp_pct)]
                         logger.info(
