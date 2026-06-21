@@ -1471,6 +1471,7 @@ class TradingStateMachine:
 
     def get_current_state(self) -> TradingState:
         """Get current trading state (thread-safe)"""
+        self._validate_state_consistency()
         with self._lock:
             return self._current_state
 
