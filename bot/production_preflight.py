@@ -128,11 +128,18 @@ def _parse_lock_token(raw_value: str) -> int:
 
 def _writer_lineage_ready_for_token_validation() -> bool:
     """Return True when runtime writer lineage/heartbeat is fully established."""
-    lock_acquired = os.getenv("NIJA_LOCK_ACQUIRED", "").strip().lower() == "true"
-    lease_acquired = os.getenv("NIJA_WRITER_LEASE_ACQUIRED", "").strip() == "1"
-    token_present = bool(os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip())
-    generation_present = bool(os.getenv("NIJA_WRITER_LEASE_GENERATION", "").strip())
-    heartbeat_active = os.getenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip() in {"1", "true", "True"}
+    def _positive_int_env(name: str) -> bool:
+        raw = os.getenv(name, "").strip()
+        try:
+            return int(raw) > 0
+        except (TypeError, ValueError):
+            return False
+
+    lock_acquired = _env_truthy("NIJA_LOCK_ACQUIRED", "false")
+    lease_acquired = _env_truthy("NIJA_WRITER_LEASE_ACQUIRED", "false")
+    token_present = _positive_int_env("NIJA_WRITER_FENCING_TOKEN")
+    generation_present = _positive_int_env("NIJA_WRITER_LEASE_GENERATION")
+    heartbeat_active = _env_truthy("NIJA_WRITER_HEARTBEAT_ACTIVE", "false")
     return lock_acquired and lease_acquired and token_present and generation_present and heartbeat_active
 
 
@@ -427,7 +434,7 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     if strict_lock_required and not lineage_ready:
         log.info(
             "Deferring writer lock token validation until authority lineage is complete "
-            "(lock acquired + fencing token + lease generation + heartbeat active)."
+            "(lock acquired + lease acquired + fencing token + lease generation + heartbeat active)."
         )
 
     platform_key = _resolve_platform_key()

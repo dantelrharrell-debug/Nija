@@ -124,7 +124,8 @@ def test_persistence_aof_write_failure_blocks_live(tmp_path, monkeypatch):
         preflight._step3_redis_health(redis_client)
 
 
-def test_writer_lock_token_mismatch_deferred_before_lineage_ready(tmp_path, monkeypatch):
+def test_writer_lock_token_mismatch_deferred_before_lineage_ready(tmp_path, monkeypatch, caplog):
+    caplog.set_level("INFO")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
     monkeypatch.setenv("NIJA_STRICT_REDIS_LEASE", "true")
@@ -147,6 +148,7 @@ def test_writer_lock_token_mismatch_deferred_before_lineage_ready(tmp_path, monk
     )
 
     preflight._step3_redis_health(redis_client)
+    assert "lease acquired" in caplog.text
 
 
 def test_writer_lock_token_mismatch_blocks_live_after_lineage_ready(tmp_path, monkeypatch):
@@ -210,3 +212,19 @@ def test_strict_lease_missing_attempts_acquire_before_fail(tmp_path, monkeypatch
 
     preflight._step3_redis_health(redis_client)
     assert int(kv.get(lease_key, 0)) == 7
+
+
+def test_writer_lineage_ready_requires_positive_numeric_token_and_generation(monkeypatch):
+    monkeypatch.setenv("NIJA_LOCK_ACQUIRED", "true")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "true")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "7")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "2")
+    assert preflight._writer_lineage_ready_for_token_validation() is True
+
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "not-a-number")
+    assert preflight._writer_lineage_ready_for_token_validation() is False
+
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "7")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "0")
+    assert preflight._writer_lineage_ready_for_token_validation() is False
