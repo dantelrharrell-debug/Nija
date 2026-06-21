@@ -366,8 +366,7 @@ class TestRuntimeAuthorityRevocation(unittest.TestCase):
                 return_value=(True, ""),
             ):
                 self.assertFalse(sm.can_dispatch_trades())
-
-            self.assertEqual(sm.get_current_state(), TradingState.EMERGENCY_STOP)
+                self.assertEqual(sm.get_current_state(), TradingState.EMERGENCY_STOP)
 
 
 class _StubCapitalAuthority:
