@@ -1178,7 +1178,14 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
         if _state == "RUNNING_SUPERVISED":
             logger.critical("LIFECYCLE: FSM state=%s", _state)
             return True, _state
-        if _state in {"BOOT_FAILED_RETRY", "EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
+        if _state == "BOOT_FAILED_RETRY":
+            logger.warning(
+                "BOOTSTRAP_OBSERVER_RETRYING context=%s state=%s deadline=%.2fs next=continue_waiting",
+                context,
+                _state,
+                _timeout_s,
+            )
+        elif _state in {"EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
             logger.error(
                 "BOOTSTRAP_OBSERVER_BLOCKED context=%s state=%s deadline=%.2fs next=abort_startup",
                 context,
