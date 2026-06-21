@@ -197,5 +197,53 @@ class TestExecutionPipelineAuthorityHalts(unittest.TestCase):
         self.assertEqual(seen, {"side": "buy", "order_type": "market"})
 
 
+class TestExecutionPipelineRejectionTelemetry(unittest.TestCase):
+    def test_skips_exchange_rejection_telemetry_for_authority_blocks(self):
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+
+        class _Protector:
+            def __init__(self):
+                self.calls = 0
+
+            def record_order_result(self, order_id: str, accepted: bool):
+                self.calls += 1
+
+        protector = _Protector()
+        with patch(
+            "bot.execution_pipeline.get_exchange_kill_switch_protector",
+            return_value=protector,
+        ):
+            pipeline._emit_execution_rejection_telemetry(
+                symbol="BTC-USD",
+                side="buy",
+                reason="Execution gate pending (state_machine=EMERGENCY_STOP)",
+            )
+
+        self.assertEqual(protector.calls, 0)
+
+    def test_records_exchange_rejection_telemetry_for_real_exchange_error(self):
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+
+        class _Protector:
+            def __init__(self):
+                self.calls = 0
+
+            def record_order_result(self, order_id: str, accepted: bool):
+                self.calls += 1
+
+        protector = _Protector()
+        with patch(
+            "bot.execution_pipeline.get_exchange_kill_switch_protector",
+            return_value=protector,
+        ):
+            pipeline._emit_execution_rejection_telemetry(
+                symbol="BTC-USD",
+                side="buy",
+                reason="EOrder:Insufficient funds",
+            )
+
+        self.assertEqual(protector.calls, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
