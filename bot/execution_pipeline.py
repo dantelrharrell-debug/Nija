@@ -600,6 +600,7 @@ class ExecutionPipeline:
             mode_value, allowed, reason, request.symbol,
         )
 
+        _ft_safety_bypass_active = False
         if mode in (TradingMode.DISABLED, TradingMode.MONITOR):
             # FORCE_TRADE bypass: when the operator has explicitly set FORCE_TRADE or
             # FORCE_TRADE_MODE, skip the safety-controller MONITOR/DISABLED block so
@@ -609,7 +610,8 @@ class ExecutionPipeline:
                 os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
                 or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
             )
-            if _ft_bypass_gate:
+            if _ft_bypass_gate and mode == TradingMode.MONITOR:
+                _ft_safety_bypass_active = True
                 logger.warning(
                     "⚡ [ExecutionGate] FORCE_TRADE bypass: safety mode=%s ignored for %s %s — "
                     "FORCE_TRADE/FORCE_TRADE_MODE is set. Set LIVE_CAPITAL_VERIFIED=true to "
@@ -649,7 +651,7 @@ class ExecutionPipeline:
             )
             return self._simulate_execution(request, t_start, mode_value, reason)
 
-        if not allowed:
+        if not allowed and not _ft_safety_bypass_active:
             logger.warning(
                 "🚫 [ExecutionGate] BLOCKED: not allowed | mode=%s reason=%s | symbol=%s side=%s size_usd=%.2f",
                 mode_value, reason, request.symbol, request.side, request.size_usd,

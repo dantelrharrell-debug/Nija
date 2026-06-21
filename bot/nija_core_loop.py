@@ -3113,7 +3113,7 @@ class NijaCoreLoop:
                         if hasattr(self, "apex") and hasattr(self.apex, "_get_broker_name")
                         else "coinbase"
                     )
-                    _ft_broker_can_short = True
+                    _ft_broker_can_short = False
                     try:
                         from bot.exchange_capabilities import can_short as _can_short_ft
                         _ft_broker_can_short = _can_short_ft(_ft_broker_name, _best_volume_symbol)
@@ -3122,7 +3122,7 @@ class NijaCoreLoop:
                             from exchange_capabilities import can_short as _can_short_ft  # type: ignore[import]
                             _ft_broker_can_short = _can_short_ft(_ft_broker_name, _best_volume_symbol)
                         except Exception:
-                            pass  # conservative: assume short is supported
+                            pass  # conservative: assume short is NOT supported
 
                     _ft_wants_short = _best_volume_side not in ("long", "buy", "enter_long")
                     if _ft_wants_short and not _ft_broker_can_short:
