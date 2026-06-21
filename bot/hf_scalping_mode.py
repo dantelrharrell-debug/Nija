@@ -276,29 +276,31 @@ class HFScalpingMode:
             logger.info("ℹ️  HF Scalping Mode INACTIVE (set HF_SCALP_MODE=1 to enable)")
 
     def _apply_live_safety_floor(self) -> None:
-        """Clamp overly aggressive HF settings in live mode.
+        """Clamp overly aggressive HF settings to protect against bad env vars.
 
-        This protects production deployments where environment variables may
-        still carry legacy aggressive values. Operators can disable this clamp
-        explicitly via ``HF_SCALP_ENFORCE_SAFETY_FLOOR=false``.
+        This protects all deployments where environment variables may carry
+        values that would cause trades to be rejected by the execution engine's
+        target_geometry_gate (minimum tp_pct=0.800%).  Operators can disable
+        this clamp explicitly via ``HF_SCALP_ENFORCE_SAFETY_FLOOR=false``.
         """
         if not self.config.enabled:
             return
 
-        live_mode = _env_bool("LIVE_CAPITAL_VERIFIED", False) and not _env_bool("DRY_RUN_MODE", False)
         enforce_floor = _env_bool("HF_SCALP_ENFORCE_SAFETY_FLOOR", True)
-        if not (live_mode and enforce_floor):
+        if not enforce_floor:
             return
 
         # Growth config baselines — lower thresholds for more trade frequency
         # while keeping capital-protection systems intact.
+        # profit_target_pct floor is 1.0 (= 1.0% after /100 in the strategy),
+        # which safely clears the execution engine's MIN_TP_PCT of 0.800%.
         floors = {
             "cycle_interval_seconds": 60,
             "kraken_min_confidence": 0.15,
             "volume_min_threshold": 0.002,
             "min_trend_confirmation": 2,
             "min_entry_score": 3.0,
-            "profit_target_pct": 1.2,
+            "profit_target_pct": 1.0,
             "max_trades_per_hour": 20,
             "trade_cooldown_seconds": 30.0,
         }
