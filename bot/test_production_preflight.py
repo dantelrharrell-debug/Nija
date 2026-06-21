@@ -124,7 +124,7 @@ def test_persistence_aof_write_failure_blocks_live(tmp_path, monkeypatch):
         preflight._step3_redis_health(redis_client)
 
 
-def test_writer_lock_token_mismatch_blocks_live(tmp_path, monkeypatch):
+def test_writer_lock_token_mismatch_deferred_before_lineage_ready(tmp_path, monkeypatch):
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
     monkeypatch.setenv("NIJA_STRICT_REDIS_LEASE", "true")
@@ -143,6 +143,35 @@ def test_writer_lock_token_mismatch_blocks_live(tmp_path, monkeypatch):
     redis_client = FakeRedis(
         persistence=_base_persistence(),
         info={"run_id": "r4", "loading": 0},
+        kv=kv,
+    )
+
+    preflight._step3_redis_health(redis_client)
+
+
+def test_writer_lock_token_mismatch_blocks_live_after_lineage_ready(tmp_path, monkeypatch):
+    monkeypatch.setenv("DRY_RUN_MODE", "false")
+    monkeypatch.setenv("PAPER_MODE", "false")
+    monkeypatch.setenv("NIJA_STRICT_REDIS_LEASE", "true")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "222")
+    monkeypatch.setenv("NIJA_LOCK_ACQUIRED", "true")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_ACQUIRED", "1")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "15")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("KRAKEN_PLATFORM_API_KEY", "test-key")
+    state_path = tmp_path / "redis_health_state.json"
+    monkeypatch.setenv("NIJA_REDIS_HEALTH_STATE_PATH", str(state_path))
+
+    key_id = make_api_key_id("test-key")
+    kv = {
+        preflight._resolve_writer_lock_key(): "999:holder",
+        f"nija:kraken:writer:lease_version:{key_id}": 2,
+        f"nija:kraken:nonce:{key_id}": 10,
+    }
+
+    redis_client = FakeRedis(
+        persistence=_base_persistence(),
+        info={"run_id": "r4b", "loading": 0},
         kv=kv,
     )
 
