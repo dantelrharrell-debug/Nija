@@ -2801,10 +2801,10 @@ class NijaCoreLoop:
                                     _size = max(min(_bal * 0.05, _bal), 3.50)
                                     if action == "enter_short":
                                         _sl = _price * 1.012
-                                        _tp = [_price * 0.994, _price * 0.990, _price * 0.984]
+                                        _tp = [_price * 0.990, _price * 0.985, _price * 0.980]
                                     else:
                                         _sl = _price * 0.988
-                                        _tp = [_price * 1.006, _price * 1.010, _price * 1.016]
+                                        _tp = [_price * 1.010, _price * 1.015, _price * 1.020]
                                     analysis.update({
                                         "action": action,
                                         "entry_price": _price,
@@ -3066,10 +3066,10 @@ class NijaCoreLoop:
                     )
                     if _ft_action == "enter_short":
                         _ft_sl = _ft_price * 1.012
-                        _ft_tp = [_ft_price * 0.994, _ft_price * 0.990, _ft_price * 0.984]
+                        _ft_tp = [_ft_price * 0.990, _ft_price * 0.985, _ft_price * 0.980]
                     else:
                         _ft_sl = _ft_price * 0.988
-                        _ft_tp = [_ft_price * 1.006, _ft_price * 1.010, _ft_price * 1.016]
+                        _ft_tp = [_ft_price * 1.010, _ft_price * 1.015, _ft_price * 1.020]
                     _ft_analysis = {
                         "action": _ft_action,
                         "entry_price": _ft_price,
@@ -3227,8 +3227,7 @@ class NijaCoreLoop:
         # geometry gate (MIN_TP_PCT defaults to 0.8%, MAX_SL_PCT to 3.0%).
         # The previous 0.60% TP1 generated a complete-looking payload that was
         # still rejected before order submission.
-        take_profit_pct = (0.85, 1.20, 1.80)
-        take_profit_pct = (0.60, 1.00, 1.60)
+        take_profit_pct = (1.00, 1.50, 2.00)
         trailing_stop_pct = 0.75
         # Check whether any FORCE_TRADE flag is active — when set, the
         # liquidity gate in competitive_profitability_policy must NOT raise
@@ -3299,10 +3298,10 @@ class NijaCoreLoop:
 
         if action == "enter_short":
             stop_loss = price * 1.012
-            take_profit = [price * 0.994, price * 0.990, price * 0.984]
+            take_profit = [price * 0.990, price * 0.985, price * 0.980]
         else:
             stop_loss = price * 0.988
-            take_profit = [price * 1.006, price * 1.010, price * 1.016]
+            take_profit = [price * 1.010, price * 1.015, price * 1.020]
 
         reason = existing_reason or getattr(sig, "reason", "forced_fallback_entry")
         if "fallback_entry" not in reason:
