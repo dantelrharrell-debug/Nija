@@ -27,5 +27,5 @@ def test_retry_loop_forces_boot_failed_retry_reentry_before_startup_dispatch():
     assert "bootstrap retry attempt #{_next_attempt}: re-enter platform connecting" in source
 
     reentry_check = source.index("if getattr(_retry_fsm, \"state\", None) == _BootstrapState.BOOT_FAILED_RETRY:")
-    dispatch_call = source.index("_run_bot_startup_and_trading()")
+    dispatch_call = source.index("DIAG_RETRY_WRAPPER_BEFORE: about to call _run_bot_startup_and_trading() ")
     assert reentry_check < dispatch_call

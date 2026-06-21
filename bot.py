@@ -6144,9 +6144,13 @@ def _run_bot_startup_and_trading_with_retry():
                         )
                     )
                     if not _retry_reentry_ok:
-                        raise RuntimeError(
-                            "BOOTSTRAP_RETRY_REENTRY_BLOCKED: BOOT_FAILED_RETRY -> PLATFORM_CONNECTING failed"
+                        _retry_reentry_error = (
+                            "BOOTSTRAP_RETRY_REENTRY_BLOCKED: "
+                            "BOOT_FAILED_RETRY -> PLATFORM_CONNECTING failed"
                         )
+                        _set_startup_last_error(_retry_reentry_error)
+                        logger.critical("🚨 [Startup] %s", _retry_reentry_error)
+                        raise RuntimeError(_retry_reentry_error)
             logger.info(
                 "🔁 [Startup] Bootstrap attempt #%d (%s, %s)",
                 _next_attempt,
