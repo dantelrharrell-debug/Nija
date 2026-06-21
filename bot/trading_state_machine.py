@@ -82,6 +82,18 @@ def _env_truthy(name: str, default: str = "false") -> bool:
     return os.environ.get(name, default).lower().strip() in ("true", "1", "yes", "enabled")
 
 
+def _kill_switch_is_active() -> Tuple[Optional[bool], str]:
+    """Best-effort kill-switch probe with import-safe fallback."""
+    try:
+        try:
+            from bot.kill_switch import get_kill_switch
+        except ImportError:
+            from kill_switch import get_kill_switch  # type: ignore[import]
+        return bool(get_kill_switch().is_active()), ""
+    except Exception as exc:
+        return None, str(exc)
+
+
 def _is_transient_redis_error(err_text: str) -> bool:
     """Best-effort detection for transient Redis/network failures."""
     _e = (err_text or "").lower()
@@ -1428,25 +1440,34 @@ class TradingStateMachine:
         Validate state consistency with kill switch.
 
         If state is EMERGENCY_STOP but kill switch is not active,
-        log a warning and suggest using safe_restore_trading.py
+        clear stale state to OFF so activation can recover.
         """
-        try:
-            from kill_switch import get_kill_switch
-            kill_switch = get_kill_switch()
+        with self._lock:
+            emergency_stopped = self._current_state == TradingState.EMERGENCY_STOP
+        if not emergency_stopped:
+            return
 
-            if self._current_state == TradingState.EMERGENCY_STOP and not kill_switch.is_active():
-                logger.warning("=" * 80)
-                logger.warning("⚠️  STATE INCONSISTENCY DETECTED")
-                logger.warning("=" * 80)
-                logger.warning("State machine is in EMERGENCY_STOP but kill switch is NOT active")
-                logger.warning("This typically happens after kill switch deactivation without state reset")
-                logger.warning("")
-                logger.warning("To restore trading safely:")
-                logger.warning("  python safe_restore_trading.py restore")
-                logger.warning("=" * 80)
-        except Exception as e:
-            # Don't fail initialization if kill switch check fails
-            logger.debug(f"Could not validate state consistency: {e}")
+        kill_switch_active, kill_switch_err = _kill_switch_is_active()
+        if kill_switch_active is None:
+            logger.debug(
+                "Could not validate kill-switch state for EMERGENCY_STOP consistency: %s",
+                kill_switch_err,
+            )
+            return
+        if kill_switch_active:
+            return
+
+        logger.critical(
+            "STATE INCONSISTENCY: EMERGENCY_STOP active while kill switch is inactive — "
+            "auto-clearing state to OFF"
+        )
+        try:
+            self.transition_to(
+                TradingState.OFF,
+                "Auto-clear stale EMERGENCY_STOP (kill switch inactive)",
+            )
+        except Exception as exc:
+            logger.error("Failed to auto-clear stale EMERGENCY_STOP: %s", exc)
 
     def get_current_state(self) -> TradingState:
         """Get current trading state (thread-safe)"""
@@ -2542,6 +2563,7 @@ class TradingStateMachine:
 
     def can_execute(self, require_executing: bool = True) -> bool:
         """Single source of truth for execution authority decisions."""
+        self._validate_state_consistency()
         authority_snapshot = self._evaluate_execution_authority_state()
         if authority_snapshot.safety_state != ExecutionSafetyState.AUTHORIZED:
             return False
