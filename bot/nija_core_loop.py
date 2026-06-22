@@ -318,14 +318,6 @@ _current_cycle_snapshot: Optional["CycleSnapshot"] = None
 # Emitted exactly once by bot.py when BootstrapFSM reaches RUNNING_SUPERVISED.
 # ---------------------------------------------------------------------------
 TRADING_ENGINE_READY = threading.Event()
-# ── FORCE_TRADE: pre-set the start gate so run_trading_loop() never waits ────
-if os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled") \
-        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled"):
-    logger.warning(
-        "⚡ FORCE_TRADE: TRADING_ENGINE_READY pre-set at module load — "
-        "trading loop will not wait for bootstrap FSM"
-    )
-    TRADING_ENGINE_READY.set()
 
 
 def get_current_cycle_snapshot() -> Optional["CycleSnapshot"]:
@@ -3592,8 +3584,9 @@ _exec_test_fired = False
 # NOTE: TRADING_ENGINE_READY is defined earlier in this module (alongside
 # _current_cycle_id / _current_cycle_capital) so it is guaranteed to exist
 # before _supervisor_step_state_machine() is ever called.  Do not redefine it
-# here — the earlier definition (including FORCE_TRADE pre-set logic) is the
-# canonical one.
+# here — the earlier definition is the canonical one.  The FORCE_TRADE check
+# that sets this event lives in run_trading_loop() so it is evaluated at
+# runtime, not at module import time.
 
 
 # ---------------------------------------------------------------------------
@@ -3742,6 +3735,20 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     if _live_verified and not TRADING_ENGINE_READY.is_set():
         logger.critical(
             "LIVE_CAPITAL_VERIFIED=true detected — bypassing passive activation wait gate"
+        )
+        TRADING_ENGINE_READY.set()
+
+    # ── FORCE_TRADE: set the start gate at runtime so the trading loop never
+    # waits for the bootstrap FSM when an operator override flag is active.
+    # Evaluated here (not at module load time) so the environment variable is
+    # read when the loop actually starts, not when the module is imported.
+    if not TRADING_ENGINE_READY.is_set() and (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    ):
+        logger.warning(
+            "⚡ FORCE_TRADE: TRADING_ENGINE_READY set at runtime (run_trading_loop entry) — "
+            "trading loop will not wait for bootstrap FSM"
         )
         TRADING_ENGINE_READY.set()
 
