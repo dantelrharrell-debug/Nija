@@ -22,8 +22,8 @@
   },
   "variables": {
     "HF_SCALP_MODE": "1",
-    "FORCE_TRADE": "false",
-    "FORCE_TRADE_MODE": "false",
+    "FORCE_TRADE": "true",
+    "FORCE_TRADE_MODE": "true",
     "NIJA_CONFIRM_BYPASS_RISKS": "false",
     "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK": "false",
     "NIJA_DISABLE_WRITER_LOCK": "false",
