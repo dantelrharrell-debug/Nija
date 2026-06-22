@@ -4291,10 +4291,16 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                     # Unified lifecycle arming path: OFF -> LIVE_PENDING_CONFIRMATION
                     # before attempting final activation to LIVE_ACTIVE.
+                    #
+                    # NOTE: `and not _live_now` was intentionally removed here.
+                    # is_live_trading_active() returns True when FORCE_TRADE=true even
+                    # when state is still OFF, which caused this arm to silently skip
+                    # and state to remain stuck at OFF.  Since we already guard with
+                    # `_current_state_loop == _TradingState.OFF`, the extra check is
+                    # redundant under correct behaviour and harmful under FORCE_TRADE.
                     if (
                         _live_verified_loop
                         and _current_state_loop == _TradingState.OFF
-                        and not _live_now
                     ):
                         try:
                             _sm_loop.transition_to(
