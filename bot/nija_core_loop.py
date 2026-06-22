@@ -3861,16 +3861,22 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         "trading loop cannot start. Set FORCE_TRADE=true to bypass, or "
                         "configure Redis for distributed locking."
                     )
-                    with _loop_guard:
-                        _loop_running = False
+                    if _loop_guard.acquire(timeout=5):
+                        try:
+                            _loop_running = False
+                        finally:
+                            _loop_guard.release()
                     return
             else:
                 logger.critical(
                     "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
                     "attribute — trading loop cannot start safely."
                 )
-                with _loop_guard:
-                    _loop_running = False
+                if _loop_guard.acquire(timeout=5):
+                    try:
+                        _loop_running = False
+                    finally:
+                        _loop_guard.release()
                 return
 
 
@@ -3882,6 +3888,11 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     _supervisor_mode = os.getenv("SUPERVISOR_MODE", "false").lower() in (
         "true", "1", "yes", "enabled"
     )
+    logger.critical(
+        "[PRE-STEP-4] Supervisor mode check: SUPERVISOR_MODE=%s",
+        os.getenv("SUPERVISOR_MODE", "false"),
+    )
+    print(f"[PRE-STEP-4] SUPERVISOR_MODE={os.getenv('SUPERVISOR_MODE', 'false')}", flush=True)
     if _supervisor_mode:
         _live_active_now = False
         try:
@@ -3890,10 +3901,25 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         except Exception as _sm_probe_err:
             logger.debug("Supervisor mode live-state probe failed: %s", _sm_probe_err)
 
+        logger.critical(
+            "[PRE-STEP-4] SUPERVISOR_MODE=true — live_active=%s; %s",
+            _live_active_now,
+            "proceeding" if _live_active_now else "BLOCKING startup (live trading not active)",
+        )
+        print(
+            f"[PRE-STEP-4] SUPERVISOR_MODE=true live_active={_live_active_now}",
+            flush=True,
+        )
         if not _live_active_now:
             logger.critical(
-                "SUPERVISOR_MODE enabled while live mode is inactive — "
-                "blocking run_trading_loop startup"
+                "🚫 [PRE-STEP-4] SUPERVISOR_MODE enabled while live mode is inactive — "
+                "blocking run_trading_loop startup. "
+                "Set SUPERVISOR_MODE=false or ensure live trading is active to proceed."
+            )
+            print(
+                "[PRE-STEP-4] BLOCKED: SUPERVISOR_MODE=true but live trading is not active — "
+                "trading loop will not start. Set SUPERVISOR_MODE=false to bypass.",
+                flush=True,
             )
             return
 
@@ -3902,6 +3928,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     # that a None strategy never permanently blocks future valid start attempts.
     # A None strategy here means the caller violated the contract (strategy must
     # exist before TradingCoreLoop starts) — refuse to proceed.
+    logger.critical("[PRE-STEP-4] Strategy existence check: strategy=%s", type(strategy).__name__)
+    print(f"[PRE-STEP-4] strategy type={type(strategy).__name__}", flush=True)
     if strategy is None:
         logger.critical(
             "🚫 run_trading_loop called with strategy=None — "
@@ -3911,13 +3939,59 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         return
 
     try:
-        logger.critical(f"LOOP START CHECK — _loop_running={_loop_running}")
-        with _loop_guard:
+        logger.critical(
+            "[PRE-STEP-4] LOOP START CHECK — _loop_running=%s; attempting _loop_guard acquire",
+            _loop_running,
+        )
+        print(
+            f"[PRE-STEP-4] _loop_running={_loop_running} — acquiring _loop_guard (timeout=10s)",
+            flush=True,
+        )
+        # Use acquire(timeout=...) instead of the bare `with` context manager so
+        # that a stale lock held by a crashed/stuck previous thread does not block
+        # the startup sequence indefinitely.  10 seconds is generous — the lock
+        # should never be held for more than a few microseconds in normal operation.
+        _loop_guard_timeout_s = float(os.getenv("NIJA_LOOP_GUARD_TIMEOUT_S", "10"))
+        _loop_guard_acquired = _loop_guard.acquire(timeout=_loop_guard_timeout_s)
+        if not _loop_guard_acquired:
+            logger.critical(
+                "⚠️ [PRE-STEP-4] _loop_guard.acquire() timed out after %.0fs — "
+                "another thread may be holding the lock. Proceeding without guard "
+                "to prevent indefinite startup hang. _loop_running=%s",
+                _loop_guard_timeout_s,
+                _loop_running,
+            )
+            print(
+                f"[PRE-STEP-4] WARNING: _loop_guard timed out after {_loop_guard_timeout_s:.0f}s "
+                f"— proceeding without guard. _loop_running={_loop_running}",
+                flush=True,
+            )
+            # If _loop_running is already True, another instance is running — bail out.
             if _loop_running:
-                logger.critical("🚧 LOOP BLOCKED PATH REACHED — duplicate start guard triggered")
-                logger.info("🟡 Core trading loop already active — skipping duplicate start")
+                logger.critical(
+                    "🚧 [PRE-STEP-4] _loop_running=True and lock timed out — "
+                    "duplicate start detected; exiting this invocation."
+                )
                 return
+            # Lock timed out but _loop_running is False — force-set it and proceed.
             _loop_running = True
+        else:
+            try:
+                if _loop_running:
+                    logger.critical(
+                        "🚧 [PRE-STEP-4] LOOP BLOCKED PATH REACHED — duplicate start guard triggered "
+                        "(_loop_running=True). Exiting this invocation."
+                    )
+                    print(
+                        "[PRE-STEP-4] BLOCKED: _loop_running=True — duplicate start guard triggered",
+                        flush=True,
+                    )
+                    return
+                _loop_running = True
+                logger.critical("[PRE-STEP-4] _loop_guard acquired and _loop_running set to True")
+                print("[PRE-STEP-4] _loop_guard acquired — _loop_running=True", flush=True)
+            finally:
+                _loop_guard.release()
 
         logger.info("🟢 Trading loop alive (INITIAL START)")
 
@@ -3934,6 +4008,18 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _hydration_timeout = float(
             os.getenv("NIJA_HYDRATION_BARRIER_TIMEOUT", "30")
         )
+        logger.critical(
+            "[INIT STEP 4/6] Capital hydration barrier: timeout=%.0fs "
+            "CAPITAL_HYDRATED_EVENT_set=%s",
+            _hydration_timeout,
+            bool(_CAPITAL_HYDRATED_EVENT is not None and _CAPITAL_HYDRATED_EVENT.is_set())
+            if _CA_LOOP_AVAILABLE else "CA_unavailable",
+        )
+        print(
+            f"[INIT STEP 4/6] hydration timeout={_hydration_timeout:.0f}s "
+            f"CA_available={_CA_LOOP_AVAILABLE}",
+            flush=True,
+        )
         try:
             try:
                 from bot.capital_authority import (
@@ -3945,6 +4031,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     wait_for_hydration as _wait_hydration,
                     CapitalIntegrityError as _CapIntegrityErr,
                 )
+            logger.critical("[INIT STEP 4/6] Calling wait_for_hydration(timeout_s=%.0fs)", _hydration_timeout)
+            print(f"[INIT STEP 4/6] wait_for_hydration() starting (timeout={_hydration_timeout:.0f}s)", flush=True)
             _wait_hydration(timeout_s=_hydration_timeout)
             logger.critical(
                 "✅ [HYDRATION_BARRIER] Capital hydration confirmed — "
@@ -4009,6 +4097,18 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         # criteria (LIVE_CAPITAL_VERIFIED, positive balance, confidence score,
         # fresh snapshot) are satisfied before the first strategy cycle runs.
         _csm_timeout = float(os.getenv("NIJA_CSM_READY_TIMEOUT", "30"))
+        logger.critical(
+            "[INIT STEP 5/6] CSM v2 ready barrier: timeout=%.0fs "
+            "LIVE_CAPITAL_VERIFIED=%s NIJA_CSM_READY_TIMEOUT=%s",
+            _csm_timeout,
+            os.getenv("LIVE_CAPITAL_VERIFIED", "not_set"),
+            os.getenv("NIJA_CSM_READY_TIMEOUT", "30_default"),
+        )
+        print(
+            f"[INIT STEP 5/6] CSM timeout={_csm_timeout:.0f}s "
+            f"LIVE_CAPITAL_VERIFIED={os.getenv('LIVE_CAPITAL_VERIFIED', 'not_set')}",
+            flush=True,
+        )
         try:
             try:
                 from bot.capital_csm_v2 import (
@@ -4021,9 +4121,27 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     CapitalIntegrityError as _CsmIntegrityErr,
                 )
             _csm = _get_csm_v2()
-            logger.critical("CSM PRE-WAIT STATE: %s", _csm.state)
+            logger.critical(
+                "[INIT STEP 5/6] CSM PRE-WAIT STATE: %s is_hydrated=%s blocked_reason=%r",
+                _csm.state,
+                _csm.is_hydrated,
+                getattr(_csm, "blocked_reason", ""),
+            )
+            print(
+                f"[INIT STEP 5/6] CSM pre-wait state={_csm.state} "
+                f"is_hydrated={_csm.is_hydrated}",
+                flush=True,
+            )
             _csm_ready = _csm.wait_for_ready(timeout=_csm_timeout)
-            logger.critical("CSM POST-WAIT STATE: %s", _csm.state)
+            logger.critical(
+                "[INIT STEP 5/6] CSM POST-WAIT STATE: %s ready=%s",
+                _csm.state,
+                _csm_ready,
+            )
+            print(
+                f"[INIT STEP 5/6] CSM post-wait state={_csm.state} ready={_csm_ready}",
+                flush=True,
+            )
             if not _csm_ready:
                 # DEGRADED = capital exists but confidence score below threshold.
                 # This is NOT a fatal condition — allow the loop to proceed so
@@ -4192,8 +4310,11 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             "cycle scheduler cannot start. Set FORCE_TRADE=true to bypass, or "
                             "configure Redis for distributed locking."
                         )
-                        with _loop_guard:
-                            _loop_running = False
+                        if _loop_guard.acquire(timeout=5):
+                            try:
+                                _loop_running = False
+                            finally:
+                                _loop_guard.release()
                         return
                 else:
                     # Graceful fallback: same force-flag recovery as the strategy loop
@@ -4222,8 +4343,11 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
                         "attribute — cycle scheduler cannot start safely."
                     )
-                    with _loop_guard:
-                        _loop_running = False
+                    if _loop_guard.acquire(timeout=5):
+                        try:
+                            _loop_running = False
+                        finally:
+                            _loop_guard.release()
                     return
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
