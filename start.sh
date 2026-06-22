@@ -180,8 +180,6 @@ if [ "${_LIVE_MODE}" = "true" ]; then
         for _flag in \
             NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK \
             NIJA_DISABLE_WRITER_LOCK \
-            FORCE_TRADE \
-            FORCE_TRADE_MODE \
             NIJA_FORCE_ACTIVATION \
             NIJA_SKIP_STARTUP_PHASE_GATE; do
             if _is_truthy_flag "${!_flag:-0}"; then
