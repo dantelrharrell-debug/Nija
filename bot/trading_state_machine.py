@@ -2131,6 +2131,42 @@ class TradingStateMachine:
                     "[COMMIT_ACTIVATION] eager heartbeat start failed: %s", _early_hb_err
                 )
 
+        # ── Early OFF → LIVE_PENDING_CONFIRMATION arming ─────────────────────
+        # Arm the FSM from OFF → LIVE_PENDING_CONFIRMATION BEFORE any gate
+        # evaluation.  This is the fix for the state=OFF deadlock:
+        #
+        # Root cause: _live_activation_gate() (below) can return False due to
+        # writer-heartbeat / Redis infrastructure not yet being ready.  When it
+        # does, commit_activation() returns False before reaching the
+        # OFF→LIVE_PENDING_CONFIRMATION arm at the bottom of this method.  That
+        # keeps state at OFF forever and the 5-minute LPC auto-transition timeout
+        # (which auto-activates when distributed gates are permanently blocked)
+        # never fires because it only applies to LIVE_PENDING_CONFIRMATION state.
+        #
+        # By arming OFF→LPC eagerly here, we ensure:
+        #   1. State reaches LPC regardless of gate failures.
+        #   2. The 5-minute timeout can fire and auto-transition to LIVE_ACTIVE.
+        #   3. The LPC→LIVE_ACTIVE transition still requires all safety gates.
+        #
+        # LPC state is safe: it does NOT execute trades.
+        with self._lock:
+            _early_arm_state = self._current_state
+        if _early_arm_state == TradingState.OFF and (_live_activation_intent or _force):
+            try:
+                self.transition_to(
+                    TradingState.LIVE_PENDING_CONFIRMATION,
+                    "commit_activation: early arming before gate evaluation",
+                )
+                logger.info(
+                    "[COMMIT_ACTIVATION] OFF→LIVE_PENDING_CONFIRMATION early arming succeeded — "
+                    "5-minute LPC timeout is now active"
+                )
+            except Exception as _early_arm_err:
+                logger.warning(
+                    "[COMMIT_ACTIVATION] early arming to LIVE_PENDING_CONFIRMATION failed: %s",
+                    _early_arm_err,
+                )
+
         _heartbeat_required_first = _heartbeat_verification_required()
         _heartbeat_ok, _heartbeat_err, _heartbeat_meta = _heartbeat_verification_status()
         _heartbeat_trade = _env_truthy("HEARTBEAT_TRADE")
