@@ -4427,8 +4427,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         if _runtime_mode_cycle is not None
                         else os.getenv("DRY_RUN_MODE", "false").lower().strip()
                     )
-                    _force_trade_val = os.getenv("FORCE_TRADE", "false").lower().strip()
-                    _force_trade_mode_val = os.getenv("FORCE_TRADE_MODE", "false").lower().strip()
+                    _force_trade_val = os.getenv("FORCE_TRADE", "").lower().strip() or "false"
+                    _force_trade_mode_val = os.getenv("FORCE_TRADE_MODE", "").lower().strip() or "false"
                     logger.critical(
                         "⚙️ MODE FLAGS | LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r DRY_RUN_MODE=%r "
                         "FORCE_TRADE=%r FORCE_TRADE_MODE=%r",
