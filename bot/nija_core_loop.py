@@ -3364,15 +3364,6 @@ class NijaCoreLoop:
         else:
             stop_loss = price * (1.0 - stop_loss_pct / 100.0)
             take_profit = [price * (1.0 + pct / 100.0) for pct in take_profit_pct]
-        size_cap = max(min(balance * 0.05, balance), 0.0)
-        position_size = min(max(min_notional, size_cap), balance)
-
-        if action == "enter_short":
-            stop_loss = price * 1.012
-            take_profit = [price * 0.990, price * 0.985, price * 0.980]
-        else:
-            stop_loss = price * 0.988
-            take_profit = [price * 1.010, price * 1.015, price * 1.020]
 
         reason = existing_reason or getattr(sig, "reason", "forced_fallback_entry")
         if "fallback_entry" not in reason:
@@ -3389,9 +3380,6 @@ class NijaCoreLoop:
             "fallback_entry": True,
             "forced_fallback": True,
             "competitive_profitability_policy": True,
-            "reason": reason,
-            "fallback_entry": True,
-            "forced_fallback": True,
         }
 
     def _fetch_df(self, broker: Any, symbol: str) -> Optional[pd.DataFrame]:
