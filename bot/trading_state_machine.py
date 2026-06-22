@@ -2145,8 +2145,8 @@ class TradingStateMachine:
         #
         # By arming OFF→LPC eagerly here, we ensure:
         #   1. State reaches LPC regardless of gate failures.
-        #   2. The 5-minute timeout can fire and auto-transition to LIVE_ACTIVE.
-        #   3. The LPC→LIVE_ACTIVE transition still requires all safety gates.
+        #   2. The 5-minute timeout can force-transition to LIVE_ACTIVE even if some distributed gates are blocked.
+        #   3. The timeout path only checks LIVE_CAPITAL_VERIFIED, DRY_RUN_MODE, and kill_switch (not the full gate stack).
         #
         # LPC state is safe: it does NOT execute trades.
         with self._lock:
