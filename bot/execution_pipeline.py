@@ -683,24 +683,49 @@ class ExecutionPipeline:
                 if hasattr(state_machine, "can_dispatch_trades") and not state_machine.can_dispatch_trades():
                     current_state = getattr(state_machine, "get_current_state", lambda: None)()
                     state_value = current_state.value if current_state else "unknown"
-                    logger.warning(
-                        "🚫 [ExecutionGate] BLOCKED by state_machine | state=%s | symbol=%s side=%s size_usd=%.2f",
-                        state_value, request.symbol, request.side, request.size_usd,
+
+                    # FORCE_TRADE bypass: when FORCE_TRADE=1 is set and the state machine
+                    # is already in LIVE_ACTIVE, bypass the convergence-FSM check.
+                    # The state IS correct for trading; the convergence FSM's additional
+                    # infrastructure prerequisites (bootstrap/capital FSMs, Redis nonce
+                    # lease, etc.) are blocking dispatch even though the operator has
+                    # explicitly authorised live trading via FORCE_TRADE.  This mirrors
+                    # the existing FORCE_TRADE bypass for the safety-mode MONITOR check.
+                    _ft_active = (
+                        os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                        or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
                     )
-                    print(
-                        f"[NIJA-PRINT] ExecutionGate BLOCKED_STATE_MACHINE | "
-                        f"symbol={request.symbol} side={request.side} "
-                        f"state={state_value}",
-                        flush=True,
-                    )
-                    return PipelineResult(
-                        success=False,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
-                        error=f"Execution gate pending (state_machine={state_value})",
-                        latency_ms=(time.monotonic() - t_start) * 1000,
-                    )
+                    if _ft_active and state_value == "LIVE_ACTIVE":
+                        logger.warning(
+                            "⚡ [ExecutionGate] FORCE_TRADE bypass: state_machine convergence check ignored "
+                            "for %s %s — state=%s FORCE_TRADE is set.",
+                            request.symbol, request.side, state_value,
+                        )
+                        print(
+                            f"[NIJA-PRINT] ExecutionGate FORCE_TRADE_STATE_MACHINE_BYPASS | "
+                            f"symbol={request.symbol} side={request.side} "
+                            f"state={state_value}",
+                            flush=True,
+                        )
+                    else:
+                        logger.warning(
+                            "🚫 [ExecutionGate] BLOCKED by state_machine | state=%s | symbol=%s side=%s size_usd=%.2f",
+                            state_value, request.symbol, request.side, request.size_usd,
+                        )
+                        print(
+                            f"[NIJA-PRINT] ExecutionGate BLOCKED_STATE_MACHINE | "
+                            f"symbol={request.symbol} side={request.side} "
+                            f"state={state_value}",
+                            flush=True,
+                        )
+                        return PipelineResult(
+                            success=False,
+                            symbol=request.symbol,
+                            side=request.side,
+                            size_usd=request.size_usd,
+                            error=f"Execution gate pending (state_machine={state_value})",
+                            latency_ms=(time.monotonic() - t_start) * 1000,
+                        )
                 else:
                     logger.info(
                         "✅ [ExecutionGate] state_machine gate PASSED | symbol=%s side=%s",
