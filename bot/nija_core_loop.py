@@ -1527,14 +1527,20 @@ class NijaCoreLoop:
                         )
 
                 # ── Gate rejection counters ───────────────────────────────
-                logger.info(
+                _data_insuff = _gate_rejections.get("data_insufficient", 0)
+                _indic_fail  = _gate_rejections.get("indicators_failed", 0)
+                logger.critical(
                     "📊 [GATE_REJECTIONS] cycle=%d | "
+                    "data_insufficient=%d | indicators_failed=%d | "
+                    "market_filter_rejected=%d | "
                     "confidence_gate_rejected=%d | adx_gate_rejected=%d | "
                     "volume_gate_rejected=%d | momentum_filter_rejected=%d | "
                     "ai_gate_rejected=%d | notional_gate_rejected=%d | "
-                    "capital_gate_rejected=%d | risk_gate_rejected=%d | "
-                    "market_filter_rejected=%d | data_insufficient=%d",
+                    "capital_gate_rejected=%d | risk_gate_rejected=%d",
                     self._total_cycles,
+                    _data_insuff,
+                    _indic_fail,
+                    _gate_rejections.get("market_filter_rejected", 0),
                     _gate_rejections.get("confidence_gate_rejected", 0),
                     _gate_rejections.get("adx_gate_rejected", 0),
                     _gate_rejections.get("volume_gate_rejected", 0),
@@ -1543,9 +1549,23 @@ class NijaCoreLoop:
                     _gate_rejections.get("notional_gate_rejected", 0),
                     _gate_rejections.get("capital_gate_rejected", 0),
                     _gate_rejections.get("risk_gate_rejected", 0),
-                    _gate_rejections.get("market_filter_rejected", 0),
-                    _gate_rejections.get("data_insufficient", 0),
                 )
+                print(
+                    f"[NIJA-PRINT] GATE_REJECTIONS | cycle={self._total_cycles} "
+                    f"data_insufficient={_data_insuff} indicators_failed={_indic_fail} "
+                    f"market_filter={_gate_rejections.get('market_filter_rejected', 0)} "
+                    f"confidence={_gate_rejections.get('confidence_gate_rejected', 0)} "
+                    f"adx={_gate_rejections.get('adx_gate_rejected', 0)} "
+                    f"volume={_gate_rejections.get('volume_gate_rejected', 0)}",
+                    flush=True,
+                )
+                if _data_insuff > 0 and scored == 0:
+                    logger.critical(
+                        "🚨 [DIAG] ALL %d symbols failed data fetch (data_insufficient=%d) — "
+                        "broker candle API may be returning None/empty/short DataFrames. "
+                        "Check broker connectivity, symbol format, and NIJA_CANDLE_FETCH_TIMEOUT.",
+                        len(symbols), _data_insuff,
+                    )
 
                 # ── Entry-to-Order Trace: terminal outcome ────────────────
                 if entries == 0:
@@ -1866,6 +1886,47 @@ class NijaCoreLoop:
             except Exception as _exc:
                 logger.debug("Phase3: AI score-floor sync failed — continuing with engine default: %s", _exc)
 
+        # ── Broker candle-method diagnostic (logged once per phase3 call) ─
+        # Identifies which candle-fetch method the broker exposes so data
+        # failures can be diagnosed without enabling debug logging.
+        _broker_for_diag = broker if broker is not None else getattr(self.apex, "broker_client", None)
+        if _broker_for_diag is not None:
+            _candle_methods_present = [
+                m for m in ("get_candles", "fetch_ohlcv", "get_ohlcv",
+                             "get_historical_data", "get_market_data")
+                if callable(getattr(_broker_for_diag, m, None))
+            ]
+            logger.critical(
+                "🔬 [Phase3] BROKER_DIAG | broker_type=%s candle_methods=%s "
+                "ai_engine=%s score_floor=%.1f dead_zone=%s streak=%d",
+                type(_broker_for_diag).__name__,
+                _candle_methods_present or "NONE_FOUND",
+                "available" if ai is not None else "UNAVAILABLE",
+                getattr(ai, "_score_floor", -1.0) if ai is not None else -1.0,
+                _dead_zone,
+                zero_signal_streak,
+            )
+            print(
+                f"[NIJA-PRINT] BROKER_DIAG | broker={type(_broker_for_diag).__name__} "
+                f"candle_methods={_candle_methods_present} ai={'yes' if ai is not None else 'NO'}",
+                flush=True,
+            )
+            if not _candle_methods_present:
+                logger.critical(
+                    "🚨 [DIAG] BROKER has NO candle-fetch methods! "
+                    "broker=%s — all %d symbols will fail data fetch. "
+                    "Expected one of: get_candles, fetch_ohlcv, get_ohlcv, "
+                    "get_historical_data, get_market_data",
+                    type(_broker_for_diag).__name__, len(symbols),
+                )
+        else:
+            logger.critical(
+                "🚨 [DIAG] BROKER IS NONE — no broker available for candle fetching. "
+                "All %d symbols will fail data fetch. "
+                "Check broker initialization and connection.",
+                len(symbols),
+            )
+
         candidates = []        # List[AIEngineSignal | _AISignal]  — AI-scored
         momentum_candidates = []  # collected from relaxed momentum scan
         scored = 0
@@ -1885,6 +1946,7 @@ class NijaCoreLoop:
             "risk_gate_rejected": 0,
             "market_filter_rejected": 0,
             "data_insufficient": 0,
+            "indicators_failed": 0,
         }
 
         # Always-on top-volume tracker (feeds volume fallback for any streak)
@@ -1932,14 +1994,26 @@ class NijaCoreLoop:
             _funnel = funnel_traces.setdefault(symbol, {})
             # ── Per-symbol progress heartbeat (every 10 symbols) ─────────
             if _symbol_idx % 10 == 0:
+                _prog_data_fail = _gate_rejections.get("data_insufficient", 0)
                 logger.critical(
                     "🔁 [Phase3] SIGNAL_LOOP_PROGRESS — symbol %d/%d | "
-                    "symbol=%s candidates_so_far=%d scored_so_far=%d",
+                    "symbol=%s candidates_so_far=%d scored_so_far=%d "
+                    "data_ok=%d data_fail=%d blocked_so_far=%d",
                     _symbol_idx + 1,
                     len(symbols),
                     symbol,
                     len(candidates),
                     scored,
+                    _data_successes,
+                    _prog_data_fail,
+                    blocked,
+                )
+                print(
+                    f"[NIJA-PRINT] SIGNAL_LOOP_PROGRESS | "
+                    f"idx={_symbol_idx + 1}/{len(symbols)} sym={symbol} "
+                    f"candidates={len(candidates)} scored={scored} "
+                    f"data_ok={_data_successes} data_fail={_prog_data_fail} blocked={blocked}",
+                    flush=True,
                 )
             # Cap: stop scoring once we have 10× the available slots — enough
             # diversity to find the top-N without scanning every symbol when the
@@ -1956,11 +2030,26 @@ class NijaCoreLoop:
             try:
                 _data_attempts += 1
                 df = self._fetch_df(broker, symbol)
-                if df is None or len(df) < 100:
+                _df_len = len(df) if df is not None else 0
+                # Minimum candle requirement: lowered from 100 → 50 so symbols
+                # with shorter history still get scored.  Indicators need at
+                # least 50 candles (EMA-50 is the longest-period indicator).
+                _MIN_CANDLES = 50
+                if df is None or _df_len < _MIN_CANDLES:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "data_insufficient")
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     _gate_rejections["data_insufficient"] += 1
+                    # Log the first 3 data failures at critical level so the
+                    # root cause is visible even when debug logging is off.
+                    if _gate_rejections["data_insufficient"] <= 3:
+                        logger.critical(
+                            "🚨 [DIAG] DATA_INSUFFICIENT symbol=%s df_len=%d "
+                            "(need>=%d) df_is_none=%s — broker returned no/short data. "
+                            "data_insufficient_count=%d/%d",
+                            symbol, _df_len, _MIN_CANDLES, df is None,
+                            _gate_rejections["data_insufficient"], _data_attempts,
+                        )
                     continue
                 _data_successes += 1
                 try:
@@ -1988,6 +2077,14 @@ class NijaCoreLoop:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "indicators_failed")
                     _funnel["signal"] = ("FAIL", "INDICATORS_FAILED")
+                    _gate_rejections["indicators_failed"] += 1
+                    if _gate_rejections["indicators_failed"] <= 3:
+                        logger.critical(
+                            "🚨 [DIAG] INDICATORS_FAILED symbol=%s df_len=%d — "
+                            "calculate_indicators returned empty dict. "
+                            "Check OHLCV column types and indicator calculation errors.",
+                            symbol, _df_len,
+                        )
                     continue
 
                 # Determine trend from apex market filter
@@ -2002,14 +2099,22 @@ class NijaCoreLoop:
                             _sdd.record_skip(symbol, "market_filter")
                         _funnel["regime"] = ("FAIL", market_reason or "MARKET_FILTER_BLOCKED")
                         _gate_rejections["market_filter_rejected"] += 1
+                        # Log first 3 market-filter blocks at critical level
+                        if blocked <= 3:
+                            logger.critical(
+                                "🚨 [DIAG] MARKET_FILTER_BLOCKED symbol=%s reason=%s "
+                                "blocked_count=%d",
+                                symbol, market_reason, blocked,
+                            )
                         continue
                     _market_filter_passes += 1
                     _funnel["regime"] = ("PASS", "")
-                except Exception:
+                except Exception as _mf_exc:
                     trend = "uptrend"
                     _funnel["regime"] = ("PASS", "MARKET_FILTER_FALLBACK")
                     _market_filter_checks += 1
                     _market_filter_passes += 1
+                    logger.debug("check_market_filter exception for %s: %s", symbol, _mf_exc)
 
                 side = "long" if trend == "uptrend" else "short"
                 entry_type = (
@@ -2227,23 +2332,56 @@ class NijaCoreLoop:
                 _funnel["signal"] = ("FAIL", f"SCORING_EXCEPTION:{sym_err}")
 
         # ── Signal generation loop complete ───────────────────────────────
+        _data_insuff_end = _gate_rejections.get("data_insufficient", 0)
+        _indic_fail_end  = _gate_rejections.get("indicators_failed", 0)
         logger.critical(
             "🔁 [Phase3] SIGNAL_LOOP_END — symbol scoring loop finished | "
             "symbols_total=%d scored=%d candidates=%d momentum_candidates=%d "
-            "blocked=%d scoring_errors=%d",
+            "blocked=%d scoring_errors=%d data_insufficient=%d indicators_failed=%d "
+            "data_attempts=%d data_successes=%d",
             len(symbols),
             scored,
             len(candidates),
             len(momentum_candidates),
             blocked,
             _scoring_errors,
+            _data_insuff_end,
+            _indic_fail_end,
+            _data_attempts,
+            _data_successes,
         )
         print(
             f"[NIJA-PRINT] SIGNAL_LOOP_END | symbols={len(symbols)} scored={scored} "
             f"candidates={len(candidates)} momentum={len(momentum_candidates)} "
-            f"blocked={blocked} errors={_scoring_errors}",
+            f"blocked={blocked} errors={_scoring_errors} "
+            f"data_insufficient={_data_insuff_end} indicators_failed={_indic_fail_end} "
+            f"data_attempts={_data_attempts} data_successes={_data_successes}",
             flush=True,
         )
+        # Diagnose the most common failure mode: all symbols failing data fetch
+        if scored == 0 and _data_attempts > 0:
+            if _data_insuff_end == _data_attempts:
+                logger.critical(
+                    "🚨 [DIAG] ZERO_SCORED: ALL %d data fetches returned insufficient data "
+                    "(None or <50 rows). Root cause: broker candle API returning empty/short "
+                    "DataFrames. Check broker method names, symbol format, and API connectivity. "
+                    "Broker methods tried: get_candles, fetch_ohlcv, get_ohlcv, "
+                    "get_historical_data, get_market_data",
+                    _data_attempts,
+                )
+            elif _indic_fail_end > 0:
+                logger.critical(
+                    "🚨 [DIAG] ZERO_SCORED: %d/%d symbols failed indicator calculation. "
+                    "Check that OHLCV columns (open/high/low/close/volume) are present and numeric.",
+                    _indic_fail_end, _data_attempts,
+                )
+            elif blocked == _data_successes:
+                logger.critical(
+                    "🚨 [DIAG] ZERO_SCORED: All %d symbols with valid data were blocked by "
+                    "market_filter. Market may be in a flat/choppy regime with no directional "
+                    "conditions met. Consider lowering min_adx or volume_threshold.",
+                    blocked,
+                )
 
         if _PMC_AVAILABLE and _get_pmc is not None and _MarketConditionSnapshot is not None:
             try:
@@ -3396,6 +3534,11 @@ class NijaCoreLoop:
             if broker is None:
                 broker = getattr(self.apex, "broker_client", None)
             if broker is None:
+                logger.warning(
+                    "⚠️ [_fetch_df] broker=None for symbol=%s — no broker_client on apex either. "
+                    "Cannot fetch candle data.",
+                    symbol,
+                )
                 return None
             call_plan = (
                 ("get_candles", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
@@ -3404,17 +3547,41 @@ class NijaCoreLoop:
                 ("get_historical_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
                 ("get_market_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
             )
+            _tried_methods = []
             for method_name, primary_call, fallback_call in call_plan:
                 method = getattr(broker, method_name, None)
                 if not callable(method):
                     continue
-                result = self._call_market_data_method(method, primary_call, fallback_call)
-                df = self._coerce_market_data_frame(result)
-                if df is not None and len(df) >= 10:
-                    return df
+                _tried_methods.append(method_name)
+                try:
+                    result = self._call_market_data_method(method, primary_call, fallback_call)
+                    df = self._coerce_market_data_frame(result)
+                    if df is not None and len(df) >= 10:
+                        return df
+                    # Log when a method exists but returns bad data (first symbol only)
+                    logger.debug(
+                        "_fetch_df: %s.%s returned df_len=%d for %s",
+                        type(broker).__name__, method_name,
+                        len(df) if df is not None else -1, symbol,
+                    )
+                except Exception as _method_exc:
+                    logger.debug(
+                        "_fetch_df: %s.%s raised %s for %s",
+                        type(broker).__name__, method_name, _method_exc, symbol,
+                    )
+            if not _tried_methods:
+                # No matching method found on broker — log once at warning level
+                _broker_methods = [m for m in dir(broker) if not m.startswith("_")]
+                logger.warning(
+                    "⚠️ [_fetch_df] broker=%s has none of the expected candle methods "
+                    "(get_candles/fetch_ohlcv/get_ohlcv/get_historical_data/get_market_data). "
+                    "Available methods: %s",
+                    type(broker).__name__,
+                    _broker_methods[:20],
+                )
             return None
         except Exception as exc:
-            logger.debug("_fetch_df error for %s: %s", symbol, exc)
+            logger.warning("⚠️ [_fetch_df] unexpected error for %s: %s", symbol, exc)
             return None
 
     @staticmethod
