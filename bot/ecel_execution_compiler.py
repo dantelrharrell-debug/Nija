@@ -558,14 +558,14 @@ class ECELExecutionCompiler:
             return self._reject("UNSUPPORTED_ORDER_TYPE", broker, symbol, side, None, order_type=order_type)
 
         if "-" not in symbol:
-            return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, symbol=symbol)
+            return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, raw_symbol=req.symbol)
 
         # Keep schema data fresh from public endpoints without blocking every call.
         self.schema.refresh_if_due(target_broker=broker)
 
         rule = self.schema.get_rule(broker, symbol)
         if rule is None:
-            return self._reject("NO_CONTRACT_RULE", broker, symbol, side, None, broker=broker, symbol=symbol)
+            return self._reject("NO_CONTRACT_RULE", broker, symbol, side, None, broker=broker)
 
         desired_notional = self._to_decimal(req.desired_notional_usd)
         if desired_notional <= 0:

@@ -322,6 +322,8 @@ class PipelineRequest:
     quantity_mode: str = "usd"
     shares: Optional[float] = None
     contracts: Optional[float] = None
+    units: Optional[float] = None
+    unit_type: Optional[str] = None
     preferred_broker: Optional[str] = None
     available_balance_usd: Optional[float] = None
     price_hint_usd: Optional[float] = None
