@@ -33,7 +33,7 @@ import threading
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, Callable, NamedTuple, Tuple
 from pathlib import Path
 
@@ -1419,7 +1419,7 @@ class TradingStateMachine:
             data = {
                 'current_state': self._current_state.value,
                 'history': self._state_history,
-                'last_updated': datetime.utcnow().isoformat()
+                'last_updated': datetime.now(timezone.utc).isoformat()
             }
 
             # Ensure directory exists
@@ -1681,7 +1681,7 @@ class TradingStateMachine:
                 'from': current.value,
                 'to': new_state.value,
                 'reason': reason,
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             self._state_history.append(transition_record)
 
@@ -1809,7 +1809,7 @@ class TradingStateMachine:
                             "from": current.value,
                             "to": TradingState.LIVE_PENDING_CONFIRMATION.value,
                             "reason": f"{reason} [arm step]",
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
                         }
                         self._state_history.append(transition_record)
                         self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
@@ -1828,7 +1828,7 @@ class TradingStateMachine:
                     "from": current.value,
                     "to": TradingState.LIVE_ACTIVE.value,
                     "reason": reason,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 self._state_history.append(transition_record)
                 old_state = current
