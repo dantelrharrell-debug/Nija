@@ -90,7 +90,7 @@ DEFAULT_MAX_DAILY_LOSS_PCT: float = 5.0          # halt if daily loss > 5% of eq
 DEFAULT_MAX_CONSECUTIVE_LOSSES: int = 5          # halt after 5 consecutive losses
 DEFAULT_EQUITY_MA_WINDOW: int = 20               # equity-curve MA window (trades)
 DEFAULT_MAX_OPEN_POSITIONS: int = 12             # max simultaneous open positions
-DEFAULT_MAX_TOTAL_RISK_PCT: float = 12.0          # max total open risk as % of equity
+DEFAULT_MAX_TOTAL_RISK_PCT: float = 25.0          # max total open risk as % of equity
 DEFAULT_VOLATILITY_MULTIPLIER_LIMIT: float = 2.5 # block if vol > X× 30-day average
 DEFAULT_HALT_COOLDOWN_SECONDS: int = 3600        # min seconds between auto-resume
 
