@@ -5270,6 +5270,50 @@ class MultiAccountBrokerManager:
             )
             return False
 
+    def _should_skip_user_connections(self) -> bool:
+        """Determine whether user account connections should be skipped.
+
+        Replaces the original all-or-nothing PLATFORM-FIRST RULE with a
+        partial-availability check: user connections are only blocked when
+        **every** registered platform broker has failed or is unavailable.
+        If at least one platform (e.g. Coinbase) is connected and ready,
+        user accounts are allowed to proceed even when a CRITICAL broker
+        (e.g. Kraken) has not yet connected.
+
+        This prevents a Kraken nonce/lock failure from cascading into a
+        complete user-account blackout when Coinbase is healthy.
+
+        Returns ``True`` when user connections should be skipped (no
+        platforms ready at all), ``False`` when at least one platform is
+        available and user connections should proceed.
+        """
+        if not self._platform_brokers and not self._platform_failed_types:
+            # No platform brokers registered at all — nothing to gate on.
+            return False
+
+        # Count platforms that are currently connected and ready.
+        available_platforms = 0
+        for bt in list(self._platform_brokers.keys()):
+            try:
+                if self.is_platform_connected(bt):
+                    available_platforms += 1
+            except Exception:
+                pass
+
+        if available_platforms > 0:
+            logger.info(
+                "✅ %d platform(s) ready — allowing user connections "
+                "(PLATFORM-FIRST RULE: partial availability accepted).",
+                available_platforms,
+            )
+            return False
+
+        logger.warning(
+            "⚠️ No platforms ready — skipping user connections "
+            "(waiting for at least one platform to connect)."
+        )
+        return True
+
     def connect_users_from_config(self) -> Dict[str, List[str]]:
         """
         Connect all users from configuration files.
@@ -5281,22 +5325,19 @@ class MultiAccountBrokerManager:
             dict: Summary of connected users by brokerage
                   Format: {brokerage: [user_ids]}
         """
-        # HARD BLOCK — Platform must connect FIRST (for CRITICAL brokers only).
-        # Two cases to guard:
-        #   A) Platform broker registered (normal path): wait until CONNECTED.
-        #   B) Platform connection ATTEMPTED but failed before registration:
-        #      mark_platform_failed() populates _platform_failed_types so we
-        #      can catch this even though the broker is not in _platform_brokers.
+        # PLATFORM-FIRST RULE — gate user connections on platform availability.
         #
-        # Broker roles (from broker_registry.get_criticality()):
-        #   CRITICAL (e.g. Kraken)  — nonce-sensitive; failure BLOCKS all user
-        #                             connections until the platform reconnects.
-        #   PRIMARY  (e.g. Coinbase) — first-choice execution venue; failure is
-        #                             tolerated — system continues without it.
-        #   OPTIONAL / DEFERRED     — supplementary; skipped on failure entirely.
+        # The original rule blocked ALL user connections whenever ANY CRITICAL
+        # platform (Kraken) was not ready.  This caused a cascading failure:
+        # a Kraken nonce/lock issue would prevent Daivon Frazier and Tania
+        # Gilbert from connecting even though Coinbase was healthy.
         #
-        # Only CRITICAL brokers trigger a hard stop.  Every other tier is logged
-        # and skipped so that a Coinbase outage never blocks Kraken-connected users.
+        # The updated rule (via _should_skip_user_connections) only blocks
+        # users when ZERO platforms are available.  If at least one platform
+        # is connected, user accounts proceed regardless of which specific
+        # platform failed.
+        if self._should_skip_user_connections():
+            return {}
 
         def _is_critical_broker(bt: BrokerType) -> bool:
             """Return True only when this broker has CRITICAL criticality."""
@@ -5305,36 +5346,6 @@ class MultiAccountBrokerManager:
             # Safe fallback when registry is unavailable: only Kraken is critical.
             return bt == BrokerType.KRAKEN
 
-        for broker_type in list(self._platform_brokers.keys()):
-            if not _is_critical_broker(broker_type):
-                logger.info(
-                    "ℹ️  Platform %s is non-CRITICAL — skipping platform-first hard-block check.",
-                    broker_type.value.upper(),
-                )
-                continue
-            if not self.wait_for_platform_ready(broker_type):
-                logger.error(
-                    "⛔ PLATFORM-FIRST RULE: platform %s (CRITICAL) not ready — "
-                    "skipping ALL user connections to protect nonce integrity.",
-                    broker_type.value.upper(),
-                )
-                return {}
-
-        for broker_type in list(self._platform_failed_types):
-            if not _is_critical_broker(broker_type):
-                logger.warning(
-                    "⚠️ Platform %s (non-CRITICAL) previously FAILED — "
-                    "continuing user initialisation without it.",
-                    broker_type.value.upper(),
-                )
-                continue
-            logger.error(
-                "⛔ PLATFORM-FIRST RULE: platform %s (CRITICAL) connection previously FAILED — "
-                "refusing to connect user accounts.  Fix platform credentials/network "
-                "and restart the bot.",
-                broker_type.value.upper(),
-            )
-            return {}
 
         # Import user loader
         try:
