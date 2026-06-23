@@ -789,6 +789,7 @@ class ExecutionPipeline:
                             "State machine is stuck in %s; bypassing to allow trade execution. "
                             "Set LIVE_CAPITAL_VERIFIED=true and NIJA_FORCE_ACTIVATION=1 to fix permanently.",
                             request.symbol, request.side, state_value, state_value,
+                        )
                     _lcv_active = os.getenv("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {"true", "1", "yes", "enabled"}
                     _force_activation_active = os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
                     _local_fallback_active = os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in {"true", "1", "yes", "enabled"}
@@ -828,13 +829,6 @@ class ExecutionPipeline:
                             logger.debug(
                                 "[ExecutionGate] FORCE_TRADE: activate_live_trading() skipped: %s", _act_exc
                             )
-                    else:
-                        logger.warning(
-                            "🚫 [ExecutionGate] BLOCKED by state_machine | state=%s | symbol=%s side=%s size_usd=%.2f | "
-                            "WHY: state=%s is not LIVE_ACTIVE. "
-                            "FIX: Set FORCE_TRADE=1 to bypass, or set LIVE_CAPITAL_VERIFIED=true + NIJA_FORCE_ACTIVATION=1 "
-                            "to permanently activate. "
-                            "LIVE_CAPITAL_VERIFIED=%r DRY_RUN_MODE=%r NIJA_WRITER_FENCING_TOKEN=%s",
                         # Attempt to force-activate the FSM so subsequent cycles don't need
                         # the bypass.  This is a best-effort call; failure is non-fatal here
                         # since the bypass already allows this order through.
