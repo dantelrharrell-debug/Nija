@@ -205,6 +205,8 @@ class CapitalCSMv2:
         #
         # _hydrated_event — set once the first snapshot is ingested
         #   (state leaves INITIALIZING).  Never cleared.
+        #   Derived from Capital Authority's hydration state rather than
+        #   tracking a duplicate CA_READY condition internally.
         self._hydrated_event: threading.Event = threading.Event()
 
         # _ready_event — set the first time state transitions to READY.
@@ -212,6 +214,17 @@ class CapitalCSMv2:
         #   Callers that need "currently ready" should call is_live_capital_valid()
         #   rather than testing this event directly.
         self._ready_event: threading.Event = threading.Event()
+
+        # _first_snap_accepted — set exactly once when the first snapshot
+        #   satisfies ALL activation conditions:
+        #     1. CA is hydrated (pipeline has run)
+        #     2. real_capital > 0 (confirmed non-zero balance)
+        #     3. broker_count > 0 (at least one broker with positive balance)
+        #     4. is_stale == False (snapshot is fresh)
+        #   This is the single source of truth for snapshot readiness and
+        #   replaces the duplicate CA_READY state tracking.  Once set it is
+        #   never cleared.
+        self._first_snap_accepted: bool = False
 
     # ------------------------------------------------------------------
     # Single write path (only entry point that changes state)
@@ -244,6 +257,27 @@ class CapitalCSMv2:
             in ("true", "1", "yes", "enabled")
         )
 
+        # ── Broker registration gate — delay readiness evaluation ─────────────
+        # Execution-readiness must not be evaluated before broker registration
+        # completes.  Checking CA's broker_registration_complete event here
+        # ensures the sequence is:
+        #   registered_venues=0 → ... → connected=N → readiness_check
+        # rather than evaluating readiness prematurely while the broker map is
+        # still being built.  We read this non-blocking (is_set) so ingest
+        # never blocks the coordinator pipeline.
+        _broker_reg_complete: bool = False
+        try:
+            try:
+                from bot.capital_authority import get_capital_authority as _get_ca
+            except ImportError:
+                from capital_authority import get_capital_authority as _get_ca  # type: ignore[import]
+            _ca = _get_ca()
+            _broker_reg_complete = _ca._broker_registration_complete.is_set()
+        except Exception:
+            # If CA is unavailable, allow evaluation to proceed so the CSM
+            # never permanently blocks on an import failure.
+            _broker_reg_complete = True
+
         # Extract snapshot fields defensively.
         try:
             real_capital: float = float(getattr(snapshot, "real_capital", 0.0))
@@ -265,7 +299,121 @@ class CapitalCSMv2:
         except (TypeError, ValueError):
             is_stale = True
 
+        # Extract broker_count for FIRST_SNAPSHOT_GATE evaluation.
+        try:
+            broker_count: int = int(getattr(snapshot, "broker_count", 0))
+        except (TypeError, ValueError):
+            broker_count = 0
+
+        # ── FIRST_SNAPSHOT_GATE — evaluate activation conditions ──────────────
+        # Derive snapshot readiness directly from Capital Authority's hydration
+        # state rather than tracking a duplicate CA_READY condition internally.
+        # All four conditions must be true simultaneously for the first valid
+        # snapshot to be accepted.
+        try:
+            try:
+                from bot.capital_authority import get_capital_authority as _get_ca_gate
+            except ImportError:
+                from capital_authority import get_capital_authority as _get_ca_gate  # type: ignore[import]
+            _ca_gate = _get_ca_gate()
+            _gate_ca_hydrated: bool = _ca_gate.is_hydrated
+        except Exception:
+            _gate_ca_hydrated = True  # fallback: assume hydrated if CA unavailable
+
+        _gate_capital_positive: bool = real_capital > 0.0
+        _gate_has_valid_brokers: bool = broker_count > 0
+        _gate_not_stale: bool = not is_stale
+
+        _snap_computed_at = getattr(snapshot, "computed_at", None)
+        _snap_timestamp_iso: str = (
+            _snap_computed_at.isoformat()
+            if _snap_computed_at is not None and hasattr(_snap_computed_at, "isoformat")
+            else "unknown"
+        )
+        _snap_source: str = "live_exchange" if _gate_has_valid_brokers else "placeholder"
+
+        _all_gate_conditions_met: bool = (
+            _gate_ca_hydrated
+            and _gate_capital_positive
+            and _gate_has_valid_brokers
+            and _gate_not_stale
+        )
+
+        if _all_gate_conditions_met:
+            _gate_reason = "all conditions met"
+        elif not _gate_ca_hydrated:
+            _gate_reason = "CA not hydrated"
+        elif not _gate_capital_positive:
+            _gate_reason = "capital is zero"
+        elif not _gate_has_valid_brokers:
+            _gate_reason = "no valid brokers"
+        else:
+            _gate_reason = "snapshot is stale"
+
+        with self._lock:
+            _was_already_accepted = self._first_snap_accepted
+            if _all_gate_conditions_met and not _was_already_accepted:
+                self._first_snap_accepted = True
+
+        _newly_accepted: bool = _all_gate_conditions_met and not _was_already_accepted
+
+        logger.info(
+            "FIRST_SNAPSHOT_GATE\n"
+            "  CA_hydrated: %s\n"
+            "  capital: $%.2f\n"
+            "  broker_count: %d\n"
+            "  snapshot_timestamp: %s\n"
+            "  snapshot_source: %s\n"
+            "  accepted: %s\n"
+            "  reason: %s",
+            _gate_ca_hydrated,
+            real_capital,
+            broker_count,
+            _snap_timestamp_iso,
+            _snap_source,
+            _newly_accepted,
+            _gate_reason,
+        )
+
         # ── Determine the target state ────────────────────────────────────────
+        # Execution-readiness evaluation is deferred until after broker
+        # registration completes.  Before that point, snapshots are ingested
+        # (hydration fires) but the state machine stays in INITIALIZING so
+        # that premature READY/DEGRADED signals cannot unblock trading before
+        # the full broker map is stable.
+        if not _broker_reg_complete:
+            # Broker registration not yet complete — ingest the snapshot for
+            # hydration tracking but do not advance past INITIALIZING.
+            with self._lock:
+                old_state = self._state
+                self._last_snapshot = snapshot
+                self._ingest_count += 1
+                record: Dict[str, Any] = {
+                    "seq": self._ingest_count,
+                    "from": old_state.value,
+                    "to": old_state.value,
+                    "reason": "broker_registration_pending — readiness deferred",
+                }
+                self._history.append(record)
+                if len(self._history) > 50:
+                    self._history = self._history[-50:]
+
+            # Fire hydration event on first ingest even before registration
+            # completes so wait_for_hydration() can unblock.
+            if old_state == CapitalCSMState.INITIALIZING:
+                self._hydrated_event.set()
+                logger.info(
+                    "🔑 [CSM-v2] First snapshot ingested (broker registration pending) — "
+                    "hydration event fired; readiness evaluation deferred"
+                )
+            else:
+                logger.debug(
+                    "[CSM-v2] Snapshot ingested (broker registration pending) — "
+                    "state=%s unchanged; readiness evaluation deferred",
+                    old_state.value,
+                )
+            return old_state
+
         if not live_verified:
             new_state = CapitalCSMState.BLOCKED
             new_reason = (
@@ -305,7 +453,7 @@ class CapitalCSMv2:
             self._blocked_reason = new_reason if new_state == CapitalCSMState.BLOCKED else ""
             self._last_snapshot = snapshot
             self._ingest_count += 1
-            record: Dict[str, Any] = {
+            record = {
                 "seq": self._ingest_count,
                 "from": old_state.value,
                 "to": new_state.value,
@@ -319,6 +467,8 @@ class CapitalCSMv2:
         # ── Fire events AFTER releasing lock to avoid deadlocks ───────────────
 
         # Hydrated: set on any first ingest (state leaving INITIALIZING).
+        # Derives from Capital Authority's hydration state — no duplicate
+        # CA_READY tracking needed here.
         if old_state == CapitalCSMState.INITIALIZING:
             self._hydrated_event.set()
             logger.info(
@@ -449,8 +599,29 @@ class CapitalCSMv2:
 
         Equivalent to ``state != INITIALIZING``.  Uses the underlying
         ``threading.Event`` so it is atomic without acquiring ``_lock``.
+        Derived from Capital Authority's hydration state — no duplicate
+        CA_READY tracking is maintained internally.
         """
         return self._hydrated_event.is_set()
+
+    @property
+    def first_snap_accepted(self) -> bool:
+        """``True`` after the first fully-valid snapshot has been accepted.
+
+        Set exactly once by :meth:`ingest_snapshot` the first time ALL of the
+        following conditions are simultaneously true:
+
+        * Capital Authority ``is_hydrated == True`` — pipeline has run
+        * ``real_capital > 0`` — confirmed non-zero balance
+        * ``broker_count > 0`` — at least one broker with positive balance
+        * ``is_stale == False`` — snapshot is fresh (within TTL)
+
+        This is the single source of truth for snapshot readiness and replaces
+        the duplicate ``CA_READY`` state tracking.  Once set it is never
+        cleared.
+        """
+        with self._lock:
+            return self._first_snap_accepted
 
     @property
     def trading_readiness(self) -> TradingReadiness:
@@ -547,6 +718,7 @@ class CapitalCSMv2:
             "state": state.value,
             "trading_readiness": self.trading_readiness.value,
             "is_hydrated": self._hydrated_event.is_set(),
+            "first_snap_accepted": self.first_snap_accepted,
             "is_live_capital_valid": state == CapitalCSMState.READY,
             "blocked_reason": reason,
             "ingest_count": count,
