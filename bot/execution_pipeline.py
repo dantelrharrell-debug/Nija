@@ -1085,6 +1085,24 @@ class ExecutionPipeline:
         if not getattr(canonical_request, "strategy", ""):
             canonical_request = replace(canonical_request, strategy="unknown_strategy")
 
+        # ── Symbol normalization: ensure the symbol is in SYMBOL-ASSET format ──
+        # Upstream signal generators may produce symbols without a separator
+        # (e.g. "ADAUSD") or with a slash (e.g. "ADA/USD").  Normalize to the
+        # canonical dash-separated form (e.g. "ADA-USD") before any gate runs so
+        # that ECEL and downstream brokers always receive a consistent format.
+        _raw_symbol = getattr(canonical_request, "symbol", "") or ""
+        _normalized_symbol = self._normalize_pipeline_symbol(_raw_symbol)
+        if _normalized_symbol != _raw_symbol:
+            logger.info(
+                "🔧 [Pipeline.execute] SYMBOL NORMALIZED | raw=%r normalized=%r "
+                "broker=%s account_id=%s",
+                _raw_symbol,
+                _normalized_symbol,
+                getattr(canonical_request, "preferred_broker", "?"),
+                getattr(canonical_request, "account_id", "?"),
+            )
+            canonical_request = replace(canonical_request, symbol=_normalized_symbol)
+
         # ── Diagnostic: log every order entering the pipeline ─────────────────
         _ft_active_diag = (
             os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
@@ -2385,6 +2403,37 @@ class ExecutionPipeline:
             return "buy"
         if s in ("short", "sell"):
             return "sell"
+        return s
+
+    # Known quote assets for no-separator symbol splitting (e.g. ADAUSD → ADA-USD).
+    # Ordered longest-first so that USDC/USDT are matched before USD.
+    _PIPELINE_KNOWN_QUOTE_ASSETS = ("USDC", "USDT", "USD", "BTC", "ETH", "EUR", "GBP", "ZUSD")
+
+    @staticmethod
+    def _normalize_pipeline_symbol(raw_symbol: str) -> str:
+        """Normalize a symbol to the canonical SYMBOL-ASSET (dash-separated) format.
+
+        Handles three input forms:
+          * ``ADA-USD``  — already canonical, returned as-is.
+          * ``ADA/USD``  — slash-separated; slash is replaced with a dash.
+          * ``ADAUSD``   — no separator; split using known quote-asset suffixes.
+
+        This normalization runs at the pipeline entry point so that all
+        downstream gates (ECEL, exchange normalizer, broker adapters) always
+        receive a consistent symbol format regardless of how the upstream signal
+        generator produced it.
+        """
+        s = (raw_symbol or "").strip().upper()
+        # Normalise slash-separated form.
+        s = s.replace("/", "-")
+        # If still no dash, attempt to infer the separator from known quote assets.
+        if "-" not in s:
+            for quote in ExecutionPipeline._PIPELINE_KNOWN_QUOTE_ASSETS:
+                if s.endswith(quote) and len(s) > len(quote):
+                    base = s[: -len(quote)]
+                    if base:
+                        s = f"{base}-{quote}"
+                        break
         return s
 
     @staticmethod
