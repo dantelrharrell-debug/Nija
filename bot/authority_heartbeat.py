@@ -564,6 +564,16 @@ class AuthorityHeartbeatMonitor:
                     exc_info=True,
                 )
             logger.info("AUTHORITY_HEARTBEAT: _tick complete — marker write attempted")
+            # Write heartbeat to Redis with generation sync to prevent
+            # generation mismatch from causing spurious EMERGENCY_STOP.
+            try:
+                self._write_heartbeat_to_redis()
+            except Exception as _redis_write_exc:
+                logger.error(
+                    "AUTHORITY_HEARTBEAT: _tick _write_heartbeat_to_redis raised exception: %s",
+                    _redis_write_exc,
+                    exc_info=True,
+                )
             return
 
         self._consecutive_failures += 1
@@ -576,6 +586,62 @@ class AuthorityHeartbeatMonitor:
 
         if self._consecutive_failures >= self._max_failures:
             self._trigger_lockdown(err)
+
+    def _write_heartbeat_to_redis(self) -> None:
+        """Write heartbeat to Redis with generation sync.
+
+        Reads the current generation from Redis before writing so that any
+        out-of-band generation increment (e.g. a competing instance that
+        briefly held the lock) is detected and the local env var is resynced
+        before the next heartbeat validation cycle runs.  This prevents the
+        ``validate_generation_for_heartbeat()`` check from seeing a stale
+        local generation and triggering a false-positive EMERGENCY_STOP.
+        """
+        try:
+            try:
+                from bot.redis_env import get_redis_url
+            except ImportError:
+                from redis_env import get_redis_url  # type: ignore[import]
+
+            redis_url = get_redis_url()
+            if not redis_url:
+                logger.debug("AuthorityHeartbeat: Redis not configured — skipping Redis heartbeat write")
+                return
+
+            import redis as _redis_lib
+            self._redis_client = _redis_lib.from_url(redis_url, socket_connect_timeout=3)
+
+            # Get current generation from Redis BEFORE writing
+            redis_gen = self._redis_client.get("nija:writer_lease_generation")
+            local_gen = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "0")
+
+            # If mismatch detected, resync to Redis value
+            if redis_gen and str(redis_gen) != str(local_gen):
+                logger.warning(
+                    "AuthorityHeartbeat: generation mismatch detected — resyncing "
+                    "local=%s redis=%s",
+                    local_gen,
+                    redis_gen,
+                )
+                os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(redis_gen)
+                local_gen = str(redis_gen)
+
+            # Write heartbeat with current generation
+            heartbeat_data = {
+                "timestamp": time.time(),
+                "generation": local_gen,
+                "instance_id": os.environ.get("NIJA_WRITER_INSTANCE_ID", "unknown"),
+            }
+
+            self._redis_client.set(
+                "nija:writer_heartbeat_active",
+                json.dumps(heartbeat_data),
+                ex=30,  # 30 second TTL
+            )
+
+            logger.debug("AuthorityHeartbeat: wrote heartbeat with generation=%s", local_gen)
+        except Exception as e:
+            logger.error("AuthorityHeartbeat: failed to write heartbeat: %s", e)
 
     def _trigger_lockdown(self, reason: str) -> None:
         """Trigger authority lockdown — block all trading."""
