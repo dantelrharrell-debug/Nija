@@ -17,17 +17,27 @@ NIJA_AUTHORITY_HEARTBEAT_MARKER_STAGE  : Stage written to the heartbeat marker f
 HEARTBEAT_MARKER_PATH                  : Path of the heartbeat verification marker file
                                          (default: ./data/heartbeat_verified.flag).  Must
                                          match the value used by trading_state_machine.py.
+NIJA_HEARTBEAT_BACKOFF_BASE_S          : Base interval for exponential backoff on failure
+                                         (default: 5s).  The wait between retry attempts
+                                         doubles on each consecutive failure up to the cap.
+NIJA_HEARTBEAT_BACKOFF_CAP_S           : Maximum backoff interval between retry attempts
+                                         (default: 60s).
+NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED : When true, generation mismatches during
+                                         heartbeat validation trigger a lightweight sync
+                                         recovery (reset local generation to Redis value)
+                                         rather than immediately counting as a failure.
+                                         See writer_generation_tracker.py for details.
 
 Safety Contract
 ---------------
 - Heartbeat runs in a daemon thread; it does NOT block startup.
 - On lockdown: RuntimeError("AUTHORITY HEARTBEAT EXPIRED") is raised,
   the FSM is forced to EMERGENCY_STOP, and all order dispatch is blocked.
-- There is NO recovery path from lockdown without a full restart and
-  re-acquisition of the Redis writer lease.
+- Generation mismatch failures use exponential backoff with recovery attempts
+  before triggering lockdown, allowing transient divergence to self-heal.
 
 Author: NIJA Trading Systems
-Version: 2.0 (strict authority enforcement)
+Version: 2.1 (generation mismatch recovery + exponential backoff)
 """
 
 from __future__ import annotations
@@ -50,6 +60,10 @@ _DEFAULT_INTERVAL_S: float = 30.0
 _DEFAULT_TIMEOUT_S: float = 5.0
 _DEFAULT_MAX_FAILURES: int = 3
 
+# Exponential backoff defaults for heartbeat failure retry.
+_DEFAULT_BACKOFF_BASE_S: float = 5.0
+_DEFAULT_BACKOFF_CAP_S: float = 60.0
+
 
 def _cfg_float(name: str, default: float) -> float:
     try:
@@ -63,6 +77,23 @@ def _cfg_int(name: str, default: int) -> int:
         return max(1, int(os.environ.get(name, str(default)) or str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+
+
+def _backoff_wait_s(consecutive_failures: int) -> float:
+    """Compute exponential backoff wait time for a given failure count.
+
+    Doubles on each consecutive failure, capped at NIJA_HEARTBEAT_BACKOFF_CAP_S.
+    Used to space out retry attempts after heartbeat failures without immediately
+    triggering lockdown.
+    """
+    base = _cfg_float("NIJA_HEARTBEAT_BACKOFF_BASE_S", _DEFAULT_BACKOFF_BASE_S)
+    cap = _cfg_float("NIJA_HEARTBEAT_BACKOFF_CAP_S", _DEFAULT_BACKOFF_CAP_S)
+    wait = base * (2 ** max(0, consecutive_failures - 1))
+    return min(wait, cap)
 
 
 # ---------------------------------------------------------------------------
@@ -371,12 +402,20 @@ class AuthorityHeartbeatMonitor:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        # Tracks the error detail from the most recent failure for diagnostics.
+        self._last_failure_reason: str = ""
+        # Tracks whether the last failure was a generation mismatch specifically.
+        self._last_failure_is_generation_mismatch: bool = False
         logger.info(
             "AUTHORITY_HEARTBEAT: AuthorityHeartbeatMonitor.__init__ complete "
-            "interval_s=%.1f timeout_s=%.1f max_failures=%d",
+            "interval_s=%.1f timeout_s=%.1f max_failures=%d "
+            "backoff_base_s=%.1f backoff_cap_s=%.1f generation_recovery_enabled=%s",
             self._interval_s,
             self._timeout_s,
             self._max_failures,
+            _cfg_float("NIJA_HEARTBEAT_BACKOFF_BASE_S", _DEFAULT_BACKOFF_BASE_S),
+            _cfg_float("NIJA_HEARTBEAT_BACKOFF_CAP_S", _DEFAULT_BACKOFF_CAP_S),
+            _env_truthy("NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED"),
         )
 
     def start(self) -> None:
@@ -494,7 +533,13 @@ class AuthorityHeartbeatMonitor:
         )
 
     def _tick(self) -> None:
-        """Perform one heartbeat check and update failure counter."""
+        """Perform one heartbeat check and update failure counter.
+
+        On failure, logs detailed diagnostics including the current generation,
+        Redis generation, error details, and Redis connection state.  Applies
+        exponential backoff between retry attempts so transient failures do not
+        immediately trigger lockdown.
+        """
         logger.info(
             "AUTHORITY_HEARTBEAT: _tick started pid=%d thread=%s",
             os.getpid(),
@@ -509,21 +554,31 @@ class AuthorityHeartbeatMonitor:
                 exc_info=True,
             )
             ok, err = False, f"_check_authority_once exception: {_check_exc}"
+
+        # Classify the failure type for targeted diagnostics.
+        is_generation_mismatch = "generation_mismatch" in str(err) or "authority_lineage_generation_mismatch" in str(err)
+
         logger.info(
             "AUTHORITY_HEARTBEAT: _tick check result ok=%s err=%r "
-            "consecutive_failures=%d max_failures=%d",
+            "consecutive_failures=%d max_failures=%d is_generation_mismatch=%s",
             ok,
             err,
             self._consecutive_failures,
             self._max_failures,
+            is_generation_mismatch,
         )
         if ok:
             if self._consecutive_failures > 0:
                 logger.info(
-                    "AUTHORITY_HEARTBEAT: authority restored after %d failure(s)",
+                    "AUTHORITY_HEARTBEAT: authority restored after %d failure(s) "
+                    "(last_reason=%r last_was_generation_mismatch=%s)",
                     self._consecutive_failures,
+                    self._last_failure_reason,
+                    self._last_failure_is_generation_mismatch,
                 )
             self._consecutive_failures = 0
+            self._last_failure_reason = ""
+            self._last_failure_is_generation_mismatch = False
             # Signal to the writer-heartbeat gate that the authority heartbeat
             # is active and fresh.  This allows _writer_heartbeat_gate() in
             # trading_state_machine.py to pass when the Redis lock heartbeat
@@ -576,16 +631,62 @@ class AuthorityHeartbeatMonitor:
                 )
             return
 
+        # ── Failure path ─────────────────────────────────────────────────────
         self._consecutive_failures += 1
+        self._last_failure_reason = str(err or "")
+        self._last_failure_is_generation_mismatch = is_generation_mismatch
+
+        # Emit detailed diagnostics on every failure so operators can diagnose
+        # the root cause without waiting for lockdown.
+        _local_gen = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "<unset>")
+        _redis_gen_diag = "<unknown>"
+        _redis_conn_state = "unknown"
+        try:
+            try:
+                from bot.writer_generation_tracker import get_redis_generation
+            except ImportError:
+                from writer_generation_tracker import get_redis_generation  # type: ignore[import]
+            _rg, _rg_err = get_redis_generation()
+            _redis_gen_diag = str(_rg) if not _rg_err else f"<error:{_rg_err}>"
+            _redis_conn_state = "reachable" if not _rg_err else f"error:{_rg_err}"
+        except Exception as _diag_exc:
+            _redis_gen_diag = f"<diag_error:{_diag_exc}>"
+            _redis_conn_state = f"diag_error:{_diag_exc}"
+
+        backoff_s = _backoff_wait_s(self._consecutive_failures)
+
         logger.critical(
-            "AUTHORITY_HEARTBEAT: HEARTBEAT FAILURE #%d/%d — %s",
+            "AUTHORITY_HEARTBEAT: HEARTBEAT FAILURE #%d/%d — %s | "
+            "local_generation=%s redis_generation=%s redis_conn=%s "
+            "is_generation_mismatch=%s backoff_s=%.1f "
+            "generation_recovery_enabled=%s",
             self._consecutive_failures,
             self._max_failures,
             err,
+            _local_gen,
+            _redis_gen_diag,
+            _redis_conn_state,
+            is_generation_mismatch,
+            backoff_s,
+            _env_truthy("NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED"),
         )
 
         if self._consecutive_failures >= self._max_failures:
             self._trigger_lockdown(err)
+            return
+
+        # Apply exponential backoff before the next retry attempt.
+        # This gives transient failures (network blips, Redis restarts) time
+        # to resolve before the failure counter reaches the lockdown threshold.
+        if backoff_s > 0 and not self._stop_event.is_set():
+            logger.info(
+                "AUTHORITY_HEARTBEAT: applying backoff wait %.1fs before next retry "
+                "(failure=%d/%d)",
+                backoff_s,
+                self._consecutive_failures,
+                self._max_failures,
+            )
+            self._stop_event.wait(timeout=backoff_s)
 
     def _write_heartbeat_to_redis(self) -> None:
         """Write heartbeat to Redis with generation sync.
