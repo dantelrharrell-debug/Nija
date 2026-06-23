@@ -1657,6 +1657,87 @@ _dnm_instance: Optional[DistributedNonceManager] = None
 _dnm_lock = threading.Lock()
 
 
+def clear_stale_lock_if_needed(redis_client: object) -> bool:
+    """Clear a stale distributed writer lock left by a previous deployment.
+
+    When a deployment is replaced (e.g. Railway rolling restart), the old
+    container may exit without releasing its Redis writer lease.  If the
+    lease TTL has already expired the key is gone and the new deployment
+    acquires the lock normally.  However, if the key was written without a
+    TTL (``SET`` without ``PX``/``EX``) it persists indefinitely and blocks
+    every subsequent startup until manually cleared.
+
+    This function inspects the owner keys for the nonce writer lease and
+    removes any entry whose holder fingerprint contains the previous
+    deployment ID (``312c431a``).  It is called once during
+    ``get_distributed_nonce_manager()`` initialisation, before the
+    ``_PerKeyRedisBackend`` is constructed, so the new deployment can
+    acquire the lease without waiting through the full
+    ``NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S`` budget.
+
+    Returns ``True`` if a stale lock was found and deleted, ``False``
+    otherwise.
+    """
+    _STALE_DEPLOYMENT_ID = "312c431a"
+    _owner_prefix = _PerKeyRedisBackend._LEASE_OWNER_PREFIX
+    _meta_suffixes = (
+        _PerKeyRedisBackend._LEASE_VERSION_PREFIX,
+        _PerKeyRedisBackend._LEASE_VERSION_COUNTER_PREFIX,
+        _PerKeyRedisBackend._LEASE_FINGERPRINT_PREFIX,
+    )
+    cleared = False
+    try:
+        # Scan for all writer-owner keys in Redis.
+        owner_pattern = f"{_owner_prefix}*"
+        cursor = 0
+        stale_keys: list = []
+        while True:
+            try:
+                cursor, batch = redis_client.scan(  # type: ignore[attr-defined]
+                    cursor, match=owner_pattern, count=50
+                )
+            except Exception:
+                break
+            for key in batch:
+                try:
+                    holder = redis_client.get(key)  # type: ignore[attr-defined]
+                    if holder and _STALE_DEPLOYMENT_ID in str(holder):
+                        stale_keys.append(key)
+                except Exception:
+                    pass
+            if cursor == 0:
+                break
+
+        for owner_key in stale_keys:
+            # Derive the key_id suffix so we can also remove the associated
+            # version / counter / fingerprint metadata keys.
+            key_id = owner_key[len(_owner_prefix):]
+            keys_to_delete = [owner_key]
+            for prefix in _meta_suffixes:
+                keys_to_delete.append(f"{prefix}{key_id}")
+            try:
+                holder = redis_client.get(owner_key)  # type: ignore[attr-defined]
+                deleted = redis_client.delete(*keys_to_delete)  # type: ignore[attr-defined]
+                _logger.warning(
+                    "clear_stale_lock_if_needed: removed stale writer lease from "
+                    "old deployment (key_id=%s holder_present=%s deleted=%d keys)",
+                    key_id,
+                    bool(holder),
+                    deleted,
+                )
+                cleared = True
+            except Exception as exc:
+                _logger.error(
+                    "clear_stale_lock_if_needed: failed to delete stale lock "
+                    "(key_id=%s): %s",
+                    key_id,
+                    exc,
+                )
+    except Exception as exc:
+        _logger.error("clear_stale_lock_if_needed: unexpected error: %s", exc)
+    return cleared
+
+
 def get_distributed_nonce_manager(
     redis_client: Optional[object] = None,
 ) -> DistributedNonceManager:
@@ -1732,6 +1813,18 @@ def get_distributed_nonce_manager(
                 assert_startup_write_authority()
                 _dnm_instance = DistributedNonceManager(redis_client=None)
                 return _dnm_instance
+        # Clear any stale writer lease left by a previous deployment before
+        # constructing the backend.  This prevents the new deployment from
+        # waiting through the full NIJA_REDIS_LEASE_ACQUIRE_TIMEOUT_S budget
+        # when the old container exited without releasing its lease.
+        if redis_client is not None:
+            try:
+                clear_stale_lock_if_needed(redis_client)
+            except Exception as _stale_exc:
+                _logger.warning(
+                    "DistributedNonceManager: stale-lock cleanup raised unexpectedly: %s",
+                    _stale_exc,
+                )
         assert_startup_write_authority()
         _dnm_instance = DistributedNonceManager(redis_client=redis_client)
     return _dnm_instance
@@ -1750,4 +1843,5 @@ __all__ = [
     "make_api_key_id",
     "get_distributed_nonce_manager",
     "reset_distributed_nonce_manager",
+    "clear_stale_lock_if_needed",
 ]

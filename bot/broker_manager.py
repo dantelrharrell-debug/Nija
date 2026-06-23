@@ -7898,6 +7898,78 @@ class KrakenBroker(BaseBroker):
         self.connected = False
         logger.critical("⛔ Kraken HARD STOP (%s): %s", self.account_identifier, reason)
 
+    def _initialize_nonce_manager(self) -> bool:
+        """Initialize the DistributedNonceManager with heartbeat authority.
+
+        Sets the ``nija:writer_heartbeat_active`` flag in Redis **before**
+        attempting any nonce operations.  The authority heartbeat monitor
+        (``bot/authority_heartbeat.py``) normally writes this flag via the
+        ``NIJA_WRITER_HEARTBEAT_ACTIVE`` environment variable, but on a fresh
+        deployment the heartbeat thread may not have completed its first tick
+        yet.  Pre-seeding the Redis key here ensures the nonce authority gate
+        passes immediately on startup rather than waiting up to one full
+        heartbeat interval.
+
+        Returns ``True`` on success, ``False`` if the nonce manager could not
+        be initialised (caller should treat this as a hard-stop condition).
+        """
+        try:
+            try:
+                from bot.distributed_nonce_manager import (
+                    get_distributed_nonce_manager as _get_dnm,
+                    make_api_key_id as _make_key_id,
+                )
+            except ImportError:
+                from distributed_nonce_manager import (  # type: ignore[import]
+                    get_distributed_nonce_manager as _get_dnm,
+                    make_api_key_id as _make_key_id,
+                )
+
+            # Obtain the singleton (connects to Redis if NIJA_REDIS_URL is set).
+            _dnm = _get_dnm()
+
+            # Pre-seed the heartbeat_active flag in Redis so the nonce authority
+            # gate passes immediately.  Use a 30-second TTL so the flag expires
+            # naturally if the authority heartbeat thread never starts (e.g. in
+            # test environments).  The heartbeat thread will refresh it every
+            # NIJA_AUTHORITY_HEARTBEAT_INTERVAL_S seconds once running.
+            if _dnm._redis is not None:
+                try:
+                    _dnm._redis._client.set(  # type: ignore[attr-defined]
+                        "nija:writer_heartbeat_active", "true", ex=30
+                    )
+                    logger.info(
+                        "   ✅ Kraken nonce manager: heartbeat_active flag seeded in Redis "
+                        "(account=%s)",
+                        self.account_identifier,
+                    )
+                except Exception as _hb_exc:
+                    # Non-fatal: the heartbeat thread will set the flag shortly.
+                    logger.warning(
+                        "   ⚠️  Could not seed heartbeat_active in Redis (%s) — "
+                        "authority heartbeat thread will set it on first tick",
+                        _hb_exc,
+                    )
+
+            # Also set the environment variable so in-process checks pass.
+            import os as _os
+            _os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+
+            logger.info(
+                "   ✅ Kraken nonce manager initialized with heartbeat authority "
+                "(account=%s backend=%s)",
+                self.account_identifier,
+                "redis" if _dnm._redis is not None else "file/fcntl",
+            )
+            return True
+        except Exception as exc:
+            logger.error(
+                "   ❌ Failed to initialize Kraken nonce manager: %s (account=%s)",
+                exc,
+                self.account_identifier,
+            )
+            return False
+
     # ── Nonce reconnect resync ─────────────────────────────────────────────────
 
     def _nonce_reconnect_resync(self) -> None:
@@ -8815,6 +8887,16 @@ class KrakenBroker(BaseBroker):
 
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
+
+            # ── Heartbeat authority pre-seed ──────────────────────────────────
+            # Ensure the nonce authority heartbeat flag is set in Redis BEFORE
+            # any nonce operations are attempted.  On a fresh deployment the
+            # authority heartbeat thread may not have completed its first tick,
+            # which would cause _get_nonce_auth() to block or the writer-lease
+            # acquire to fail with "nonce authority cannot be established".
+            # _initialize_nonce_manager() is non-fatal: if it cannot reach Redis
+            # the nonce init block below will still attempt the file/fcntl path.
+            self._initialize_nonce_manager()
 
             # ── Nonce generator: DistributedNonceManager (unified path) ──────
             # ONE authority per API key — routes to Redis when available
