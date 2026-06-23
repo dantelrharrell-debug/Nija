@@ -1720,9 +1720,9 @@ def clear_stale_lock_if_needed(redis_client: object) -> bool:
                 deleted = redis_client.delete(*keys_to_delete)  # type: ignore[attr-defined]
                 _logger.warning(
                     "clear_stale_lock_if_needed: removed stale writer lease from "
-                    "old deployment (key_id=%s holder=%s deleted=%d keys)",
+                    "old deployment (key_id=%s holder_present=%s deleted=%d keys)",
                     key_id,
-                    holder,
+                    bool(holder),
                     deleted,
                 )
                 cleared = True
