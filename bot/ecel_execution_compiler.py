@@ -560,21 +560,27 @@ class ECELExecutionCompiler:
             _sym_for_reject = self._normalize_symbol(req.symbol, broker)
             return self._reject("UNSUPPORTED_SIDE", broker, _sym_for_reject, side, None, side=req.side)
 
-        # BEFORE normalization: check raw symbol format for Kraken compatibility
-        # Kraken requires symbols in format: SYMBOL-ASSET (e.g., ADA-USD, BTC-USD)
-        if "-" not in req.symbol:
-            # Diagnostic: log why symbol was rejected
+        # Normalize the symbol first so that slash-separated forms (e.g. ADA/USD)
+        # are canonicalized to ADA-USD before any format validation.
+        symbol = self._normalize_symbol(req.symbol, broker)
+        logger.debug(
+            "[ECEL compile] DIAG: symbol normalization | raw=%r normalized=%r broker=%s",
+            req.symbol,
+            symbol,
+            broker,
+        )
+
+        # Validate that the normalized symbol contains a dash separator.
+        # Both ADA-USD and ADA/USD are accepted (the latter is normalized above).
+        if "-" not in symbol:
             logger.warning(
                 "[ECEL compile] DIAG: INVALID_SYMBOL_FORMAT rejected | "
-                "req.symbol=%r has_dash=%s broker=%s",
+                "req.symbol=%r normalized=%r broker=%s",
                 req.symbol,
-                "-" in req.symbol,
+                symbol,
                 broker,
             )
-            return self._reject("INVALID_SYMBOL_FORMAT", broker, req.symbol, side, None, raw_symbol=req.symbol)
-
-        # NOW normalize the symbol for internal use
-        symbol = self._normalize_symbol(req.symbol, broker)
+            return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, raw_symbol=req.symbol)
 
         if order_type not in ("MARKET", "LIMIT"):
             return self._reject("UNSUPPORTED_ORDER_TYPE", broker, symbol, side, None, order_type=order_type)
@@ -584,7 +590,7 @@ class ECELExecutionCompiler:
 
         rule = self.schema.get_rule(broker, symbol)
         if rule is None:
-            return self._reject("NO_CONTRACT_RULE", broker, symbol, side, None, broker=broker)
+            return self._reject("NO_CONTRACT_RULE", broker, symbol, side, None, attempted_broker=broker)
 
         desired_notional = self._to_decimal(req.desired_notional_usd)
         if desired_notional <= 0:
