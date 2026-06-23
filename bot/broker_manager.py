@@ -6091,6 +6091,13 @@ class CoinbaseBroker(BaseBroker):
         UPDATED (Jan 11, 2026): Added invalid symbol caching to prevent repeated API calls
         - Caches known invalid symbols to avoid wasted API calls
         - Reduces log pollution from Coinbase SDK error messages
+
+        FIXED (2026): Corrected start-time calculation to use actual granularity seconds
+        - Previously hardcoded 300s (5-min candle) regardless of timeframe
+        - Coinbase API enforces max 300 candles per request (end-start <= granularity*300)
+        - Requesting 1m candles over a 16.7h window (300*200s) exceeded the 5h limit
+        - This caused the API to return an error, resulting in empty [] for every symbol
+        - Fix: calculate start = end - (granularity_seconds * min(count, 300))
         """
 
         # CRITICAL FIX (Jan 11, 2026): Check invalid symbols cache first
@@ -6098,6 +6105,16 @@ class CoinbaseBroker(BaseBroker):
         if symbol in self._invalid_symbols_cache:
             logging.debug(f"⚠️  Skipping cached invalid symbol: {symbol}")
             return []
+
+        # Diagnostic: log the first 3 candle fetch calls at WARNING level so they
+        # are visible in production logs without enabling DEBUG logging.
+        _candle_call_count = getattr(self, "_candle_call_count", 0) + 1
+        self._candle_call_count = _candle_call_count
+        if _candle_call_count <= 3:
+            logging.warning(
+                f"[get_candles] DIAG call #{_candle_call_count}: symbol={symbol} "
+                f"timeframe={timeframe} count={count} client_ready={self.client is not None}"
+            )
 
         # Wrapper function for rate-limited API call
         def _fetch_candles():
@@ -6108,23 +6125,62 @@ class CoinbaseBroker(BaseBroker):
                 "1h": "ONE_HOUR",
                 "1d": "ONE_DAY"
             }
+            # Granularity in seconds — used to compute the correct time window.
+            # Coinbase Advanced Trade API enforces: end - start <= granularity_seconds * 300
+            # Previously this was hardcoded to 300 (5-min candle seconds) regardless of
+            # the requested timeframe, causing the API to reject 1m/15m/1h requests with
+            # "start and end must be within 300 candles of each other" errors.
+            granularity_seconds_map = {
+                "1m": 60,
+                "5m": 300,
+                "15m": 900,
+                "1h": 3600,
+                "1d": 86400,
+            }
 
             granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
+            granularity_secs = granularity_seconds_map.get(timeframe, 300)
+
+            # Cap at 300 candles — Coinbase API hard limit per request
+            capped_count = min(count, 300)
 
             end = int(time.time())
-            start = end - (300 * count)  # 5 min candles
+            # FIXED: use actual granularity seconds so the time window matches the
+            # requested candle size.  The old code always used 300 (5-min seconds),
+            # which made 1m requests span 16.7 hours — 3× the API's 5-hour limit.
+            start = end - (granularity_secs * capped_count)
+
+            logging.debug(
+                f"[get_candles] {symbol} tf={timeframe} granularity={granularity} "
+                f"count={count} capped={capped_count} "
+                f"window={granularity_secs * capped_count}s "
+                f"start={start} end={end}"
+            )
 
             candles = self.client.get_candles(
                 product_id=symbol,
-                start=start,
-                end=end,
+                start=str(start),
+                end=str(end),
                 granularity=granularity
             )
 
             if hasattr(candles, 'candles'):
-                return [dict(vars(c)) for c in candles.candles]
+                raw = [dict(vars(c)) for c in candles.candles]
+                logging.debug(
+                    f"[get_candles] {symbol}: API returned {len(raw)} candles "
+                    f"(first={raw[0] if raw else 'EMPTY'}, last={raw[-1] if raw else 'EMPTY'})"
+                )
+                return raw
             elif isinstance(candles, dict) and 'candles' in candles:
-                return candles['candles']
+                raw = candles['candles']
+                logging.debug(
+                    f"[get_candles] {symbol}: API returned {len(raw)} candles (dict path)"
+                )
+                return raw
+            logging.warning(
+                f"[get_candles] {symbol}: unexpected response type {type(candles)} — "
+                f"no 'candles' attribute or key. Response: {str(candles)[:200]}"
+            )
             return []
 
         # Use rate limiter if available
@@ -6181,12 +6237,17 @@ class CoinbaseBroker(BaseBroker):
                     continue
                 else:
                     if attempt == RATE_LIMIT_MAX_RETRIES - 1:
-                        # Only log as debug - this is expected during rate limiting
-                        logging.debug(f"Failed to fetch candles for {symbol} after {RATE_LIMIT_MAX_RETRIES} attempts")
+                        # Log at warning level so candle fetch failures are visible in production
+                        logging.warning(
+                            f"⚠️  [get_candles] {symbol}: failed after {RATE_LIMIT_MAX_RETRIES} "
+                            f"attempts. Last error: {e}"
+                        )
                     else:
-                        # Only log non-rate-limit errors as errors
-                        if not is_rate_limited:
-                            logging.error(f"Error fetching candles for {symbol}: {e}")
+                        # Non-rate-limit, non-invalid-symbol error — always log at warning
+                        logging.warning(
+                            f"⚠️  [get_candles] {symbol} attempt {attempt+1}/{RATE_LIMIT_MAX_RETRIES} "
+                            f"failed: {type(e).__name__}: {e}"
+                        )
                     return []
 
         return []
