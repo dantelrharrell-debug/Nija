@@ -2251,25 +2251,17 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("=" * 70)
                     raise ExecutionFailed("Kraken order not confirmed - no order description")
 
-                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0
-                # cost field represents the total cost/value of the order
+                # NOTE: The Kraken AddOrder response does NOT include a `cost` field
+                # unless the order fills immediately. Checking cost > 0 here would hard-fail
+                # every market order that doesn't fill in the same API call.
+                # Actual fill cost is retrieved via QueryOrders below.
                 cost = float(order_result.get('cost', '0'))
-                if cost <= 0:
-                    logger.error("=" * 70)
-                    logger.error("❌ KRAKEN ORDER NOT CONFIRMED - INVALID COST")
-                    logger.error("=" * 70)
-                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
-                    logger.error(f"   Order ID: {order_id}")
-                    logger.error(f"   Cost: {cost} (must be > 0)")
-                    logger.error(f"   API Response: {result}")
-                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Cost must be greater than zero")
-                    logger.error("=" * 70)
-                    raise ExecutionFailed(f"Kraken order not confirmed - invalid cost: {cost}")
 
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Market {side} order: {kraken_symbol} (ID: {order_id})")
                 logger.info(f"   Order Description: {order_description}")
-                logger.info(f"   Order Cost: ${cost:.2f}")
+                if cost > 0:
+                    logger.info(f"   Order Cost (immediate fill): ${cost:.2f}")
 
                 # ✅ REQUIREMENT #2: Attempt to fetch order fill details
                 # Query the order to get filled price and volume
@@ -2594,21 +2586,12 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("=" * 70)
                     raise ExecutionFailed("Kraken limit order not confirmed - no order description")
 
-                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0 (for limit orders, cost may be 0 until filled)
-                # For limit orders, we'll verify volume instead since they may not fill immediately
-                volume = float(order_result.get('volume', '0'))
-                if volume <= 0:
-                    logger.error("=" * 70)
-                    logger.error("❌ KRAKEN LIMIT ORDER NOT CONFIRMED - INVALID VOLUME")
-                    logger.error("=" * 70)
-                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
-                    logger.error(f"   Order ID: {order_id}")
-                    logger.error(f"   Volume: {volume} (must be > 0)")
-                    logger.error(f"   API Response: {result}")
-                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Volume must be greater than zero")
-                    logger.error("=" * 70)
-                    raise ExecutionFailed(f"Kraken limit order not confirmed - invalid volume: {volume}")
-
+                # NOTE: The Kraken AddOrder response does NOT include a `volume` field
+                # for newly-placed limit orders. Checking volume > 0 here would hard-fail
+                # every limit order. The intended order volume is already in `size` (base
+                # currency), which was validated above. The exchange-assigned volume is
+                # confirmed by the txid and order description.
+                volume = size  # requested order size (base currency)
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
                 logger.info(f"   Order Description: {order_description}")
