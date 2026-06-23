@@ -730,6 +730,54 @@ class ExecutionPipeline:
                     # gates have prevented the state from reaching LIVE_ACTIVE at all).
                     # When FORCE_TRADE=1 is set, the operator has explicitly authorised
                     # live trading and the state machine should not block execution.
+                    # Diagnostic: log exactly why the state machine is blocking and what
+                    # conditions are needed to unblock it.
+                    _activation_committed = getattr(state_machine, "get_activation_committed", lambda: False)()
+                    _first_snap = getattr(state_machine, "get_first_snap_accepted", lambda: False)()
+                    print(
+                        f"[NIJA-PRINT] ExecutionGate STATE_MACHINE_DIAGNOSTIC | "
+                        f"symbol={request.symbol} side={request.side} "
+                        f"state={state_value} "
+                        f"activation_committed={_activation_committed} "
+                        f"first_snap_accepted={_first_snap} "
+                        f"LIVE_CAPITAL_VERIFIED={os.getenv('LIVE_CAPITAL_VERIFIED', 'unset')} "
+                        f"FORCE_TRADE={os.getenv('FORCE_TRADE', 'unset')} "
+                        f"NIJA_FORCE_ACTIVATION={os.getenv('NIJA_FORCE_ACTIVATION', 'unset')} "
+                        f"NIJA_WRITER_FENCING_TOKEN={'set' if os.getenv('NIJA_WRITER_FENCING_TOKEN') else 'unset'} "
+                        f"NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK={os.getenv('NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK', 'unset')}",
+                        flush=True,
+                    )
+                    logger.warning(
+                        "🔍 [ExecutionGate] STATE_MACHINE_DIAGNOSTIC | state=%s committed=%s "
+                        "first_snap=%s LIVE_CAPITAL_VERIFIED=%s FORCE_TRADE=%s "
+                        "NIJA_FORCE_ACTIVATION=%s fencing_token=%s local_fallback=%s | "
+                        "symbol=%s side=%s — to unblock: set NIJA_FORCE_ACTIVATION=1 or "
+                        "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true",
+                        state_value,
+                        _activation_committed,
+                        _first_snap,
+                        os.getenv("LIVE_CAPITAL_VERIFIED", "unset"),
+                        os.getenv("FORCE_TRADE", "unset"),
+                        os.getenv("NIJA_FORCE_ACTIVATION", "unset"),
+                        "set" if os.getenv("NIJA_WRITER_FENCING_TOKEN") else "unset",
+                        os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "unset"),
+                        request.symbol,
+                        request.side,
+                    )
+
+                    # FORCE_TRADE bypass: when FORCE_TRADE=1 is set and LIVE_CAPITAL_VERIFIED=true,
+                    # bypass the convergence-FSM check regardless of the current state value.
+                    #
+                    # Previously this bypass only fired when state_value == "LIVE_ACTIVE", which
+                    # created a deadlock: the state machine was stuck at OFF (because the
+                    # _startup_ownership_gate blocked arming due to missing Redis/fencing token),
+                    # so the bypass never fired and all orders were rejected.
+                    #
+                    # Fix: extend the bypass to cover OFF and LIVE_PENDING_CONFIRMATION states
+                    # when FORCE_TRADE=1 + LIVE_CAPITAL_VERIFIED=true are both set.  The operator
+                    # has explicitly authorized live trading; the FSM's distributed-authority
+                    # prerequisites (Redis fencing token, nonce lease) are infrastructure concerns
+                    # that should not block order submission when the operator override is active.
                     _ft_active = (
                         os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
                         or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
@@ -741,6 +789,24 @@ class ExecutionPipeline:
                             "State machine is stuck in %s; bypassing to allow trade execution. "
                             "Set LIVE_CAPITAL_VERIFIED=true and NIJA_FORCE_ACTIVATION=1 to fix permanently.",
                             request.symbol, request.side, state_value, state_value,
+                    _lcv_active = os.getenv("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {"true", "1", "yes", "enabled"}
+                    _force_activation_active = os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                    _local_fallback_active = os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in {"true", "1", "yes", "enabled"}
+
+                    # Bypass when: (FORCE_TRADE or NIJA_FORCE_ACTIVATION or local_fallback) AND LIVE_CAPITAL_VERIFIED
+                    # This covers state=OFF, LIVE_PENDING_CONFIRMATION, and LIVE_ACTIVE.
+                    _ft_bypass_sm = (
+                        (_ft_active or _force_activation_active or _local_fallback_active)
+                        and _lcv_active
+                    )
+                    if _ft_bypass_sm:
+                        logger.warning(
+                            "⚡ [ExecutionGate] FORCE_TRADE bypass: state_machine check ignored "
+                            "for %s %s — state=%s FORCE_TRADE=%s NIJA_FORCE_ACTIVATION=%s "
+                            "LIVE_CAPITAL_VERIFIED=true. Attempting FSM force-activation.",
+                            request.symbol, request.side, state_value,
+                            os.getenv("FORCE_TRADE", "0"),
+                            os.getenv("NIJA_FORCE_ACTIVATION", "0"),
                         )
                         print(
                             f"[NIJA-PRINT] ExecutionGate FORCE_TRADE_STATE_MACHINE_BYPASS | "
@@ -769,6 +835,37 @@ class ExecutionPipeline:
                             "FIX: Set FORCE_TRADE=1 to bypass, or set LIVE_CAPITAL_VERIFIED=true + NIJA_FORCE_ACTIVATION=1 "
                             "to permanently activate. "
                             "LIVE_CAPITAL_VERIFIED=%r DRY_RUN_MODE=%r NIJA_WRITER_FENCING_TOKEN=%s",
+                        # Attempt to force-activate the FSM so subsequent cycles don't need
+                        # the bypass.  This is a best-effort call; failure is non-fatal here
+                        # since the bypass already allows this order through.
+                        try:
+                            if hasattr(state_machine, "_force_live_active_transition"):
+                                _flt_result = state_machine._force_live_active_transition(
+                                    "ExecutionGate FORCE_TRADE bypass: forcing LIVE_ACTIVE to unblock order submission"
+                                )
+                                if _flt_result:
+                                    logger.critical(
+                                        "⚡ [ExecutionGate] FSM force-activated to LIVE_ACTIVE — "
+                                        "future orders will not need the FORCE_TRADE bypass. "
+                                        "symbol=%s side=%s",
+                                        request.symbol, request.side,
+                                    )
+                                    print(
+                                        f"[NIJA-PRINT] ExecutionGate FSM_FORCE_ACTIVATED | "
+                                        f"symbol={request.symbol} side={request.side} "
+                                        f"prev_state={state_value}",
+                                        flush=True,
+                                    )
+                        except Exception as _flt_exc:
+                            logger.warning(
+                                "[ExecutionGate] FSM force-activation attempt failed (non-fatal): %s",
+                                _flt_exc,
+                            )
+                    else:
+                        logger.warning(
+                            "🚫 [ExecutionGate] BLOCKED by state_machine | state=%s | symbol=%s side=%s size_usd=%.2f "
+                            "| To unblock: set NIJA_FORCE_ACTIVATION=1 (bypasses all gates) or "
+                            "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true (bypasses Redis requirement)",
                             state_value, request.symbol, request.side, request.size_usd,
                             state_value, _lcv_diag, _dry_run_diag,
                             "SET" if _writer_token_diag else "NOT_SET (Redis writer authority missing)",

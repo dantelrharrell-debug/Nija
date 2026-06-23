@@ -1323,6 +1323,32 @@ class TradingStateMachine:
                     "[STARTUP STATE OVERRIDE] FORCE_TRADE=1 but kill switch is active — "
                     "staying in OFF. Clear the kill switch to allow FORCE_TRADE activation."
                 )
+        # Diagnostic: emit startup state context so Railway logs show exactly what
+        # conditions are present at initialization time.
+        _force_trade_startup = _env_truthy("FORCE_TRADE") or _env_truthy("FORCE_TRADE_MODE")
+        _force_activation_startup = _env_truthy("NIJA_FORCE_ACTIVATION")
+        _local_fallback_startup = _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+        _fencing_token_startup = bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip())
+        print(
+            f"[NIJA-PRINT] STARTUP_STATE_OVERRIDE_DIAGNOSTIC | "
+            f"live_verified={live_verified} dry_run_mode={dry_run_mode} "
+            f"auto_activate={auto_activate} force_live={force_live} "
+            f"FORCE_TRADE={_force_trade_startup} NIJA_FORCE_ACTIVATION={_force_activation_startup} "
+            f"NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK={_local_fallback_startup} "
+            f"NIJA_WRITER_FENCING_TOKEN={'set' if _fencing_token_startup else 'unset'} "
+            f"heartbeat_required={heartbeat_required_first} heartbeat_ok={heartbeat_ok} "
+            f"heartbeat_err={heartbeat_err!r}",
+            flush=True,
+        )
+        logger.critical(
+            "[STARTUP STATE OVERRIDE] DIAGNOSTIC | live_verified=%s dry_run=%s auto_activate=%s "
+            "force_live=%s FORCE_TRADE=%s NIJA_FORCE_ACTIVATION=%s local_fallback=%s "
+            "fencing_token=%s heartbeat_required=%s heartbeat_ok=%s heartbeat_err=%s",
+            live_verified, dry_run_mode, auto_activate, force_live,
+            _force_trade_startup, _force_activation_startup, _local_fallback_startup,
+            "set" if _fencing_token_startup else "unset",
+            heartbeat_required_first, heartbeat_ok, heartbeat_err or "none",
+        )
 
         with self._lock:
             if dry_run_mode:
@@ -1337,13 +1363,46 @@ class TradingStateMachine:
             if live_verified and (auto_activate or force_live):
                 ownership_ok, ownership_err = _startup_ownership_gate()
                 if not ownership_ok:
+                    # FORCE_TRADE / FORCE_LIVE_TRANSITION bypass: when an operator override
+                    # flag is active, do NOT block at OFF — arm to LIVE_PENDING_CONFIRMATION
+                    # so the 5-minute LPC auto-transition timeout can fire even when Redis /
+                    # distributed writer authority is unavailable.  Without this, the state
+                    # stays at OFF forever and the LPC timeout never triggers.
+                    _force_override = (
+                        _env_truthy("FORCE_TRADE")
+                        or _env_truthy("FORCE_TRADE_MODE")
+                        or _env_truthy("NIJA_FORCE_ACTIVATION")
+                        or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+                    )
+                    if _force_override:
+                        logger.critical(
+                            "[STARTUP STATE OVERRIDE] ownership gate failed (%s) but FORCE_TRADE/NIJA_FORCE_ACTIVATION "
+                            "is set — arming to LIVE_PENDING_CONFIRMATION to allow LPC timeout activation. "
+                            "LIVE_CAPITAL_VERIFIED=%s AUTO_ACTIVATE=%s",
+                            ownership_err or "unknown",
+                            live_verified,
+                            auto_activate,
+                        )
+                        self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                        self._activation_committed = False
+                        self._execution_authority = False
+                        self._core_loop_owns_execution = True
+                        self._can_dispatch_trades = False
+                        self._pending_confirmation_since = time.monotonic()
+                        self._last_pending_log_time = None
+                        logger.critical(
+                            "[STARTUP STATE OVERRIDE] FORCE_TRADE armed: OFF -> LIVE_PENDING_CONFIRMATION "
+                            "(5-minute LPC timeout will auto-activate to LIVE_ACTIVE)"
+                        )
+                        return
                     self._current_state = TradingState.OFF
                     self._activation_committed = False
                     self._execution_authority = False
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s",
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s "
+                        "— set FORCE_TRADE=1 or NIJA_FORCE_ACTIVATION=1 to bypass this gate",
                         ownership_err or "unknown",
                     )
                     return
@@ -1386,13 +1445,43 @@ class TradingStateMachine:
             if live_verified and not dry_run_mode:
                 ownership_ok, ownership_err = _startup_ownership_gate()
                 if not ownership_ok:
+                    # FORCE_TRADE bypass: same logic as the AUTO_ACTIVATE path above.
+                    # When an operator override flag is active, arm to LIVE_PENDING_CONFIRMATION
+                    # instead of blocking at OFF so the LPC timeout can fire.
+                    _force_override_lcv = (
+                        _env_truthy("FORCE_TRADE")
+                        or _env_truthy("FORCE_TRADE_MODE")
+                        or _env_truthy("NIJA_FORCE_ACTIVATION")
+                        or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+                    )
+                    if _force_override_lcv:
+                        logger.critical(
+                            "[STARTUP STATE OVERRIDE] ownership gate failed (%s) but FORCE_TRADE/NIJA_FORCE_ACTIVATION "
+                            "is set — arming to LIVE_PENDING_CONFIRMATION (LPC timeout will activate). "
+                            "LIVE_CAPITAL_VERIFIED=%s",
+                            ownership_err or "unknown",
+                            live_verified,
+                        )
+                        self._current_state = TradingState.LIVE_PENDING_CONFIRMATION
+                        self._activation_committed = False
+                        self._execution_authority = False
+                        self._core_loop_owns_execution = True
+                        self._can_dispatch_trades = False
+                        self._pending_confirmation_since = time.monotonic()
+                        self._last_pending_log_time = None
+                        logger.critical(
+                            "[STARTUP STATE OVERRIDE] FORCE_TRADE armed: OFF -> LIVE_PENDING_CONFIRMATION "
+                            "(5-minute LPC timeout will auto-activate to LIVE_ACTIVE)"
+                        )
+                        return
                     self._current_state = TradingState.OFF
                     self._activation_committed = False
                     self._execution_authority = False
                     self._core_loop_owns_execution = True
                     self._can_dispatch_trades = False
                     logger.critical(
-                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s",
+                        "[STARTUP STATE OVERRIDE] BLOCKED LIVE ARMING: startup ownership missing reason=%s "
+                        "— set FORCE_TRADE=1 or NIJA_FORCE_ACTIVATION=1 to bypass this gate",
                         ownership_err or "unknown",
                     )
                     return
@@ -2381,12 +2470,95 @@ class TradingStateMachine:
         _live_gate_status = _collect_live_gate_status()
         _live_ok, _live_err = _live_activation_gate(_live_gate_status)
         if not _live_ok:
+            # Enhanced diagnostic: emit a structured print so Railway logs show exactly
+            # why the live gate is blocking and what env vars are needed to unblock it.
+            with self._lock:
+                _diag_state = self._current_state.value
+            print(
+                f"[NIJA-PRINT] COMMIT_ACTIVATION_BLOCKED | "
+                f"reason=SAFE_START detail={_live_err!r} "
+                f"state={_diag_state} "
+                f"LIVE_CAPITAL_VERIFIED={os.environ.get('LIVE_CAPITAL_VERIFIED', 'unset')} "
+                f"FORCE_TRADE={os.environ.get('FORCE_TRADE', 'unset')} "
+                f"NIJA_FORCE_ACTIVATION={os.environ.get('NIJA_FORCE_ACTIVATION', 'unset')} "
+                f"NIJA_WRITER_FENCING_TOKEN={'set' if os.environ.get('NIJA_WRITER_FENCING_TOKEN') else 'unset'} "
+                f"NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK={os.environ.get('NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK', 'unset')} "
+                f"NIJA_WRITER_HEARTBEAT_ACTIVE={os.environ.get('NIJA_WRITER_HEARTBEAT_ACTIVE', 'unset')} "
+                f"— FIX: set NIJA_FORCE_ACTIVATION=1 to bypass all gates immediately",
+                flush=True,
+            )
             _log_activation_diag_once(
                 "auto_activate_blocked",
                 ("SAFE_START", _live_err),
-                "[AUTO_ACTIVATE BLOCKED] reason=SAFE_START detail=%s",
+                "[AUTO_ACTIVATE BLOCKED] reason=SAFE_START detail=%s "
+                "state=%s LIVE_CAPITAL_VERIFIED=%s FORCE_TRADE=%s NIJA_FORCE_ACTIVATION=%s "
+                "fencing_token=%s local_fallback=%s heartbeat_active=%s "
+                "— FIX: set NIJA_FORCE_ACTIVATION=1 to bypass all gates immediately",
                 _live_err,
+                _diag_state,
+                os.environ.get("LIVE_CAPITAL_VERIFIED", "unset"),
+                os.environ.get("FORCE_TRADE", "unset"),
+                os.environ.get("NIJA_FORCE_ACTIVATION", "unset"),
+                "set" if os.environ.get("NIJA_WRITER_FENCING_TOKEN") else "unset",
+                os.environ.get("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "unset"),
+                os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", "unset"),
             )
+
+            # FORCE_TRADE fast-path: when FORCE_TRADE=1 (or NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK)
+            # and LIVE_CAPITAL_VERIFIED=true, bypass the live gate immediately via
+            # _force_live_active_transition() instead of waiting for the 5-minute LPC timeout.
+            # This is the same escape hatch used by the supervisor's hard-activation fallback,
+            # but applied here so the first commit_activation() call succeeds immediately.
+            _ft_fast_path = (
+                _env_truthy("FORCE_TRADE")
+                or _env_truthy("FORCE_TRADE_MODE")
+                or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+            )
+            if _ft_fast_path and _lcv_quick and not _dry_run_quick:
+                _kill_for_ft = False
+                try:
+                    try:
+                        from bot.kill_switch import get_kill_switch as _ks_ft
+                    except ImportError:
+                        from kill_switch import get_kill_switch as _ks_ft  # type: ignore[import]
+                    _kill_for_ft = bool(_ks_ft().is_active())
+                except Exception:
+                    pass
+                if not _kill_for_ft:
+                    logger.critical(
+                        "⚡ [COMMIT_ACTIVATION] FORCE_TRADE fast-path: live gate failed (%s) but "
+                        "FORCE_TRADE=true + LIVE_CAPITAL_VERIFIED=true — calling "
+                        "_force_live_active_transition() to bypass distributed-authority gates immediately. "
+                        "state=%s",
+                        _live_err,
+                        _diag_state,
+                    )
+                    print(
+                        f"[NIJA-PRINT] COMMIT_ACTIVATION_FORCE_TRADE_FAST_PATH | "
+                        f"state={_diag_state} live_err={_live_err!r} "
+                        f"FORCE_TRADE={os.environ.get('FORCE_TRADE', '0')} "
+                        f"LIVE_CAPITAL_VERIFIED={os.environ.get('LIVE_CAPITAL_VERIFIED', 'false')}",
+                        flush=True,
+                    )
+                    _ft_ok = self._force_live_active_transition(
+                        f"commit_activation FORCE_TRADE fast-path: bypassing live gate ({_live_err})"
+                    )
+                    if _ft_ok:
+                        logger.critical(
+                            "⚡ [COMMIT_ACTIVATION] FORCE_TRADE fast-path SUCCESS — "
+                            "FSM is now LIVE_ACTIVE. Orders will be submitted immediately."
+                        )
+                        print(
+                            "[NIJA-PRINT] COMMIT_ACTIVATION_FORCE_TRADE_FAST_PATH_SUCCESS | "
+                            "state=LIVE_ACTIVE",
+                            flush=True,
+                        )
+                        return True
+                    else:
+                        logger.warning(
+                            "⚡ [COMMIT_ACTIVATION] FORCE_TRADE fast-path: _force_live_active_transition "
+                            "returned False — check FSM state. Falling back to normal return False."
+                        )
             return False
 
         # ── Gate 0: idempotency — read under lock for thread-safety ──────
