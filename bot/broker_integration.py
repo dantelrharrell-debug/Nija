@@ -2591,6 +2591,7 @@ class KrakenBrokerAdapter(BrokerInterface):
                 # every limit order. The intended order volume is already in `size` (base
                 # currency), which was validated above. The exchange-assigned volume is
                 # confirmed by the txid and order description.
+                volume = size  # requested order size (base currency)
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
                 logger.info(f"   Order Description: {order_description}")
