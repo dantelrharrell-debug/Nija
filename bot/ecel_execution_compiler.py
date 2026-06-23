@@ -557,6 +557,19 @@ class ECELExecutionCompiler:
         if order_type not in ("MARKET", "LIMIT"):
             return self._reject("UNSUPPORTED_ORDER_TYPE", broker, symbol, side, None, order_type=order_type)
 
+        # Diagnostic: log symbol format check for first 5 calls
+        _compile_call_count = getattr(self, "_compile_call_count", 0) + 1
+        self._compile_call_count = _compile_call_count
+        if _compile_call_count <= 5:
+            logger.warning(
+                "[ECEL compile] DIAG call #%d: req.symbol=%r normalized_symbol=%r has_dash=%s broker=%s",
+                _compile_call_count,
+                req.symbol,
+                symbol,
+                "-" in symbol,
+                broker,
+            )
+
         if "-" not in symbol:
             return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, raw_symbol=req.symbol)
 
