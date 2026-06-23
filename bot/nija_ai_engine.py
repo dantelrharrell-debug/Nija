@@ -636,6 +636,20 @@ class NijaAIEngine:
                 score_floor = self._score_floor
             effective_floor = self.threshold_ctrl.get_effective_floor(score_floor)
 
+            # Diagnostic: log score breakdown for every symbol so score
+            # distribution is visible in production logs.
+            logger.info(
+                "🔢 [AI_SCORE] %s %s | composite=%.1f floor=%.1f "
+                "enhanced=%.1f opt_delta=%.2f gate_quality=%.1f wrss=%.2f "
+                "force_trade=%s",
+                symbol, side.upper(), composite, effective_floor,
+                float(breakdown.get("enhanced_score", 0.0)),
+                float(breakdown.get("optimizer_delta", 0.0)),
+                float(breakdown.get("gate_quality", 0.0)),
+                float(breakdown.get("wrss_factor", 1.0)),
+                self._force_trade_signal_enabled(),
+            )
+
             if composite < effective_floor:
                 if self._force_trade_signal_enabled():
                     logger.warning(
@@ -652,10 +666,15 @@ class NijaAIEngine:
                         regime=regime,
                         entry_type=entry_type,
                     )
-                logger.debug(
-                    "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f (adj%+.1f) — skipped",
+                logger.info(
+                    "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f (adj%+.1f) — skipped "
+                    "[enhanced=%.1f opt_delta=%.2f gate_quality=%.1f wrss=%.2f]",
                     symbol, side.upper(), composite, effective_floor,
                     self.threshold_ctrl.threshold_delta,
+                    float(breakdown.get("enhanced_score", 0.0)),
+                    float(breakdown.get("optimizer_delta", 0.0)),
+                    float(breakdown.get("gate_quality", 0.0)),
+                    float(breakdown.get("wrss_factor", 1.0)),
                 )
                 return None
 
