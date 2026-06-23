@@ -9292,15 +9292,45 @@ def main():
                             "in local-only mode (no distributed lock)"
                         )
                         break
-                    # Strategy construction also failed — log and break out so
-                    # the trading loop can handle a None strategy gracefully
-                    # rather than blocking the process indefinitely.
+                    # Strategy publication timed out and _ensure_strategy_fallback_published
+                    # failed (e.g. execution authority blocked the fallback).  Make one
+                    # final direct attempt to construct TradingStrategy() so the trading
+                    # loop always starts with a valid strategy object.
                     logger.error(
-                        "❌ Degraded fallback strategy construction failed — "
-                        "entering trading loop with no strategy object. "
-                        "Bot will operate in safe/no-trade mode until strategy recovers."
+                        "❌ _ensure_strategy_fallback_published failed — "
+                        "attempting direct TradingStrategy() construction as last resort"
                     )
-                    break
+                    try:
+                        _last_resort_strategy = TradingStrategy()
+                        if _last_resort_strategy is not None:
+                            _acquired_lr = _initialized_state_lock.acquire(
+                                timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S
+                            )
+                            if _acquired_lr:
+                                try:
+                                    _publish_strategy_runtime_readiness(
+                                        _last_resort_strategy,
+                                        context="supervisor last-resort direct construction",
+                                    )
+                                finally:
+                                    _initialized_state_lock.release()
+                            strategy = _last_resort_strategy
+                            logger.warning(
+                                "✅ Last-resort TradingStrategy() constructed directly — "
+                                "entering trading loop"
+                            )
+                            break
+                    except Exception as _lr_exc:
+                        logger.exception(
+                            "❌ Last-resort TradingStrategy() construction also failed: %s — "
+                            "cannot start trading loop without a strategy object",
+                            _lr_exc,
+                        )
+                    raise RuntimeError(
+                        "Startup blocked: strategy construction failed in all fallback paths "
+                        "(degraded timeout + _ensure_strategy_fallback_published + direct TradingStrategy()). "
+                        "Check broker credentials and apex strategy import."
+                    )
                 raise RuntimeError(
                     "Startup blocked: strategy publication timed out after bootstrap observer readiness"
                 )
@@ -9322,6 +9352,21 @@ def main():
                 )
                 _last_strategy_wait_log = _now
             time.sleep(2.0)
+
+    # ── FINAL GUARD: never call start_trading_engine with strategy=None ──────
+    # If strategy is still None here, all fallback paths have been exhausted.
+    # Raising here is safer than calling start_trading_engine(None) which
+    # silently exits run_trading_loop and leaves the bot in a no-trade state.
+    if strategy is None:
+        logger.critical(
+            "🚫 FATAL: strategy is None after all fallback paths — "
+            "cannot start trading loop. Check broker credentials, "
+            "apex strategy import, and execution authority configuration."
+        )
+        raise RuntimeError(
+            "Startup blocked: strategy is None after all initialization and fallback paths. "
+            "Cannot call start_trading_engine with strategy=None."
+        )
 
     logger.info("🚀 Entering main trading loop")
     logger.info("Step 6: entering main trading loop")
