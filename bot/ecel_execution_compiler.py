@@ -545,33 +545,39 @@ class ECELExecutionCompiler:
         remainder = (v % s).normalize()
         return remainder == Decimal("0")
 
+    @staticmethod
+    def _normalize_symbol(raw_symbol: str, broker: str) -> str:  # noqa: ARG004
+        """Normalize a raw symbol string to the canonical SYMBOL-ASSET format."""
+        return (raw_symbol or "").strip().upper().replace("/", "-")
+
     def compile(self, req: CompileRequest) -> CompileResult:
         broker = (req.broker or "coinbase").lower()
-        symbol = (req.symbol or "").strip().upper().replace("/", "-")
         side = (req.side or "").strip().lower()
         order_type = (req.order_type or "MARKET").strip().upper()
 
         if side not in ("buy", "sell"):
-            return self._reject("UNSUPPORTED_SIDE", broker, symbol, side, None, side=req.side)
+            # Use a best-effort normalized symbol for the rejection log only.
+            _sym_for_reject = self._normalize_symbol(req.symbol, broker)
+            return self._reject("UNSUPPORTED_SIDE", broker, _sym_for_reject, side, None, side=req.side)
+
+        # BEFORE normalization: check raw symbol format for Kraken compatibility
+        # Kraken requires symbols in format: SYMBOL-ASSET (e.g., ADA-USD, BTC-USD)
+        if "-" not in req.symbol:
+            # Diagnostic: log why symbol was rejected
+            logger.warning(
+                "[ECEL compile] DIAG: INVALID_SYMBOL_FORMAT rejected | "
+                "req.symbol=%r has_dash=%s broker=%s",
+                req.symbol,
+                "-" in req.symbol,
+                broker,
+            )
+            return self._reject("INVALID_SYMBOL_FORMAT", broker, req.symbol, side, None, raw_symbol=req.symbol)
+
+        # NOW normalize the symbol for internal use
+        symbol = self._normalize_symbol(req.symbol, broker)
 
         if order_type not in ("MARKET", "LIMIT"):
             return self._reject("UNSUPPORTED_ORDER_TYPE", broker, symbol, side, None, order_type=order_type)
-
-        # Diagnostic: log symbol format check for first 5 calls
-        _compile_call_count = getattr(self, "_compile_call_count", 0) + 1
-        self._compile_call_count = _compile_call_count
-        if _compile_call_count <= 5:
-            logger.warning(
-                "[ECEL compile] DIAG call #%d: req.symbol=%r normalized_symbol=%r has_dash=%s broker=%s",
-                _compile_call_count,
-                req.symbol,
-                symbol,
-                "-" in symbol,
-                broker,
-            )
-
-        if "-" not in symbol:
-            return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, raw_symbol=req.symbol)
 
         # Keep schema data fresh from public endpoints without blocking every call.
         self.schema.refresh_if_due(target_broker=broker)
