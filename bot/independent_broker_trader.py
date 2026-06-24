@@ -807,10 +807,19 @@ class IndependentBrokerTrader:
         logger.info(f"   {'═' * 55}")
         logger.info(f"   💰 Current balance: ${balance:.2f}")
         logger.info(f"   📊 Mode: PLATFORM (full strategy execution)")
+        logger.info(f"   🔑 Account type: PLATFORM (primary — trades first)")
         logger.info(f"   🔍 Will scan markets for opportunities")
         logger.info(f"   ⚡ Will execute trades if signals trigger")
         logger.info(f"   🔄 Will manage existing positions")
         logger.info(f"   {'═' * 55}")
+        # ── PLATFORM-FIRST: log ORDER ATTEMPT context so trades are traceable ──
+        logger.critical(
+            "🏦 [PLATFORM] ORDER ATTEMPT context | account=PLATFORM broker=%s "
+            "cycle=%d balance=$%.2f — platform account executing FIRST",
+            broker_name.upper(),
+            cycle_count,
+            balance,
+        )
 
         # ── Position adoption (every cycle — position tracker prevents duplicates) ──
         if hasattr(self.trading_strategy, 'adopt_existing_positions'):
@@ -1084,6 +1093,12 @@ class IndependentBrokerTrader:
         """
         broker_name = f"{user_id}_{broker_type.value}"
         logger.info(f"🚀 {broker_name} (USER) trading loop started")
+        logger.info(
+            "👤 [USER] Account type: USER (secondary — executes AFTER platform account) | "
+            "user_id=%s broker=%s",
+            user_id,
+            broker_type.value.upper(),
+        )
 
         # --- Step 4: Log platform context for this user thread ---
         # Resolve platform credentials for this exchange from the injected context

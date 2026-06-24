@@ -1977,6 +1977,16 @@ def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> 
             except Exception as _reg_err:
                 logger.debug("Failure manager registration skipped: %s", _reg_err)
 
+            # ── PLATFORM-FIRST: start platform broker threads before user threads ──
+            # Platform account is the primary trading account and must execute
+            # trades first in the account hierarchy. User accounts follow after.
+            logger.info("=" * 70)
+            logger.info("🔷 PLATFORM-FIRST: Starting PLATFORM broker threads (primary accounts)")
+            logger.info("=" * 70)
+            logger.info("   Platform account executes trades FIRST before any user accounts.")
+            logger.info("   User accounts will start AFTER all platform threads are running.")
+            logger.info("=" * 70)
+
             # Start a self-healing thread for each funded, connected platform broker
             _platform_stagger = 0
             for _broker_type, _broker in _broker_source.items():

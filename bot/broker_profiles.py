@@ -99,19 +99,20 @@ BROKER_PROFILES: dict = {
         "min_capital_usd": KRAKEN_MIN_CAPITAL,
         "min_order_usd": KRAKEN_MIN_ORDER,
 
-        # Micro-cap not applicable — Kraken is isolated
+        # Micro-cap not applicable — Kraken is the primary platform account
         "micro_cap_enabled": False,
 
-        # Isolated: no new entries; only exits allowed in STRICT mode.
+        # PLATFORM-FIRST: Kraken is the primary platform account and must
+        # execute trades as the first account in the hierarchy.
+        # Active execution: full entry + exit allowed.
         # When KRAKEN_EXECUTION_DISABLED=true, fully passive.
-        "execution_mode": "passive" if KRAKEN_EXECUTION_DISABLED else "isolated",
+        "execution_mode": "passive" if KRAKEN_EXECUTION_DISABLED else "active",
 
-        # Risk mode: log only — Kraken risk events are recorded but never
-        # block execution on other brokers
-        "risk_mode": "isolated",
+        # Risk mode: active — Kraken is the primary platform account
+        "risk_mode": "active",
 
-        # Kraken is EXCLUDED from execution capital weighting (Step 4)
-        "include_in_execution_capital": False,
+        # Kraken IS included in execution capital weighting (platform-first)
+        "include_in_execution_capital": True,
 
         # Step 6: flag consumed by KrakenBroker.place_market_order guard
         "execution_disabled": KRAKEN_EXECUTION_DISABLED,
