@@ -23,11 +23,11 @@ SEPARATOR = "=" * 70
 # Source: https://support.kraken.com/hc/en-us/articles/205893708-Minimum-order-size-volume-for-trading
 # Note: These minimums are subject to change. Verify against current Kraken documentation.
 #
-# CRITICAL FIX (Jan 22, 2026): Kraken $10 minimum trade size enforcement
-# Kraken enforces a $10 minimum trade size per exchange best practices
-# This prevents fee erosion on small trades and ensures profitability
-# UPDATE (Jan 22, 2026): Set to $10.00 to align with exchange rules and tier structure
-KRAKEN_MINIMUM_ORDER_USD = 10.00  # Kraken minimum trade size ($10 best practice)
+# Kraken minimum notional enforcement.
+# Kraken rejects orders below ~$15-20 USD on most pairs (ECEL reject: BELOW_MIN_NOTIONAL).
+# ADA-USD and similar altcoin pairs require at least $15; $20 provides a safe buffer
+# that covers all pairs and absorbs minor price fluctuations at order time.
+KRAKEN_MINIMUM_ORDER_USD = 20.00  # Kraken minimum notional ($20 — above exchange hard floor)
 
 KRAKEN_MINIMUMS = {
     # Major pairs
@@ -362,8 +362,8 @@ def validate_exchange_minimum(exchange: str, order_value_usd: float) -> Tuple[bo
     exchange = exchange.lower()
 
     if exchange == "kraken":
-        # Kraken requires $7.00 minimum with safety buffer
-        # Even with $5.50 official minimum, fees will burn you
+        # Kraken rejects orders below ~$15-20 USD (ECEL reject: BELOW_MIN_NOTIONAL).
+        # $20 floor covers all pairs including ADA-USD and other altcoin pairs.
         if order_value_usd < KRAKEN_MINIMUM_ORDER_USD:
             return False, (
                 f"Kraken order ${order_value_usd:.2f} below ${KRAKEN_MINIMUM_ORDER_USD:.2f} "
