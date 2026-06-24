@@ -343,6 +343,49 @@ def _check_authority_once(timeout_s: float) -> tuple[bool, str]:
                         "detected during heartbeat — %s",
                         gen_err,
                     )
+                    # Attempt an explicit reset to Redis before counting this
+                    # as a heartbeat failure.  reset_generation_to_redis() is
+                    # unconditional (no flag required, no cooldown) and handles
+                    # catastrophic divergence (e.g. local=882339 vs redis=753).
+                    try:
+                        try:
+                            from bot.writer_generation_tracker import reset_generation_to_redis
+                        except ImportError:
+                            from writer_generation_tracker import reset_generation_to_redis  # type: ignore[import]
+
+                        reset_ok, reset_msg = reset_generation_to_redis()
+                        if reset_ok:
+                            logger.critical(
+                                "AuthorityHeartbeatMonitor: generation reset succeeded — "
+                                "heartbeat cycle recovering without lockdown. %s",
+                                reset_msg,
+                            )
+                            # Re-validate after reset so the heartbeat passes
+                            # immediately rather than waiting for the next tick.
+                            gen_ok2, gen_err2 = validate_generation_for_heartbeat()
+                            if gen_ok2:
+                                logger.critical(
+                                    "AuthorityHeartbeatMonitor: post-reset generation "
+                                    "validation passed — heartbeat OK"
+                                )
+                                return True, ""
+                            logger.warning(
+                                "AuthorityHeartbeatMonitor: post-reset generation "
+                                "validation still failing (%s) — counting as failure",
+                                gen_err2,
+                            )
+                        else:
+                            logger.critical(
+                                "AuthorityHeartbeatMonitor: generation reset failed (%s) — "
+                                "counting heartbeat failure",
+                                reset_msg,
+                            )
+                    except Exception as reset_exc:
+                        logger.critical(
+                            "AuthorityHeartbeatMonitor: reset_generation_to_redis raised "
+                            "unexpected error (non-fatal): %s",
+                            reset_exc,
+                        )
                     return False, f"authority_lineage_generation_mismatch: {gen_err}"
             except Exception as gen_exc:
                 logger.warning(

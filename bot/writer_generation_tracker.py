@@ -102,6 +102,11 @@ _MISMATCH_LOG_THROTTLE_S: float = 5.0
 # as a "large" mismatch eligible for auto-clear recovery.
 _DEFAULT_MISMATCH_DELTA_THRESHOLD: int = 100
 
+# Divergence threshold above which the "nuclear option" full reset is applied
+# unconditionally, regardless of NIJA_GENERATION_MISMATCH_AUTO_CLEAR_STALE.
+# A delta of 882339 vs 753 (≈881586) is orders of magnitude above this.
+_NUCLEAR_RESET_DELTA_THRESHOLD: int = 1000
+
 # ---------------------------------------------------------------------------
 # Module-level state
 # ---------------------------------------------------------------------------
@@ -450,6 +455,85 @@ def check_and_handle_generation_mismatch() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def reset_generation_to_redis() -> tuple[bool, str]:
+    """Force-reset the local generation counter to the current Redis value.
+
+    This is the authoritative recovery entry point for severe generation
+    divergence (e.g. local=882339 vs redis=753).  It reads the live Redis
+    generation, resets ``NIJA_WRITER_LEASE_GENERATION`` to match, clears any
+    stale watermark / expected-generation constraints, and logs a full audit
+    trail of the before/after values.
+
+    Unlike ``attempt_generation_sync_recovery()``, this function:
+    - Does **not** require ``NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED=true``.
+    - Does **not** enforce the sync-recovery cooldown.
+    - Is safe to call unconditionally when the divergence is catastrophic.
+
+    Returns
+    -------
+    (success, message)
+        ``success=True`` when the local generation was successfully reset to
+        the Redis value.  ``message`` contains a full audit description.
+    """
+    local_before = get_local_generation()
+    redis_gen, err = get_redis_generation()
+
+    if err:
+        msg = (
+            f"GENERATION_RESET_FAILED: could not read Redis generation "
+            f"local_before={local_before} error={err}"
+        )
+        logger.critical(msg)
+        return False, msg
+
+    if redis_gen <= 0:
+        msg = (
+            f"GENERATION_RESET_FAILED: Redis generation is unusable "
+            f"local_before={local_before} redis_gen={redis_gen}"
+        )
+        logger.critical(msg)
+        return False, msg
+
+    delta = abs(local_before - redis_gen)
+
+    # Reset the primary local generation env var.
+    os.environ[_LOCAL_GENERATION_ENV] = str(redis_gen)
+
+    # Clear the monotonic watermark so the new value is not rejected as a
+    # regression by any downstream monotonic-check logic.
+    old_watermark = os.environ.get("NIJA_WRITER_LEASE_GENERATION_LAST", "<unset>")
+    os.environ["NIJA_WRITER_LEASE_GENERATION_LAST"] = str(redis_gen)
+
+    # Clear any stale expected-generation constraint from a previous cycle.
+    stale_expected = os.environ.get("NIJA_WRITER_LEASE_GENERATION_EXPECTED", "").strip()
+    if stale_expected and stale_expected != str(redis_gen):
+        os.environ.pop("NIJA_WRITER_LEASE_GENERATION_EXPECTED", None)
+        logger.warning(
+            "GENERATION_RESET: cleared stale NIJA_WRITER_LEASE_GENERATION_EXPECTED=%s "
+            "(now synced to redis=%d)",
+            stale_expected,
+            redis_gen,
+        )
+
+    logger.critical(
+        "GENERATION_RESET: local generation force-reset to Redis value "
+        "local_before=%d local_after=%d redis=%d delta=%d "
+        "watermark_before=%s watermark_after=%d",
+        local_before,
+        redis_gen,
+        redis_gen,
+        delta,
+        old_watermark,
+        redis_gen,
+    )
+
+    msg = (
+        f"generation_reset_ok local_before={local_before} local_after={redis_gen} "
+        f"redis={redis_gen} delta={delta}"
+    )
+    return True, msg
+
+
 def attempt_generation_sync_recovery(local: int, redis_gen: int) -> tuple[bool, str]:
     """Lightweight generation sync recovery for the heartbeat path.
 
@@ -473,6 +557,42 @@ def attempt_generation_sync_recovery(local: int, redis_gen: int) -> tuple[bool, 
     """
     global _last_sync_recovery_ts, _sync_recovery_count
 
+    # Validate that the Redis generation is a positive, usable value before
+    # any flag checks so we can apply the nuclear option unconditionally.
+    if redis_gen <= 0:
+        return False, f"redis_generation_unusable redis_gen={redis_gen}"
+
+    delta = abs(local - redis_gen)
+
+    # ── Nuclear option ────────────────────────────────────────────────────────
+    # When the divergence is catastrophically large (e.g. local=882339 vs
+    # redis=753, delta≈881586), bypass the recovery-enabled flag and the
+    # cooldown entirely and delegate to reset_generation_to_redis().  This
+    # handles the case where NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED was not
+    # set and the lightweight path would have returned "recovery_disabled".
+    if delta >= _NUCLEAR_RESET_DELTA_THRESHOLD:
+        logger.critical(
+            "GENERATION_SYNC_RECOVERY: NUCLEAR OPTION triggered — "
+            "divergence delta=%d exceeds threshold=%d "
+            "(local=%d redis=%d) — forcing full generation reset",
+            delta,
+            _NUCLEAR_RESET_DELTA_THRESHOLD,
+            local,
+            redis_gen,
+        )
+        success, reset_msg = reset_generation_to_redis()
+        if success:
+            with _mismatch_lock:
+                _last_sync_recovery_ts = time.monotonic()
+                _sync_recovery_count += 1
+                count = _sync_recovery_count
+            return True, (
+                f"nuclear_reset_applied delta={delta} "
+                f"threshold={_NUCLEAR_RESET_DELTA_THRESHOLD} "
+                f"recovery_count={count} {reset_msg}"
+            )
+        return False, f"nuclear_reset_failed: {reset_msg}"
+
     if not _env_truthy("NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED"):
         return False, "recovery_disabled"
 
@@ -486,12 +606,8 @@ def attempt_generation_sync_recovery(local: int, redis_gen: int) -> tuple[bool, 
                 f"{_SYNC_RECOVERY_COOLDOWN_S - since_last:.1f}"
             )
 
-    # Validate that the Redis generation is a positive, usable value.
-    if redis_gen <= 0:
-        return False, f"redis_generation_unusable redis_gen={redis_gen}"
-
     # Check for large-delta auto-clear eligibility.
-    delta = abs(local - redis_gen)
+
     try:
         delta_threshold = max(
             1,
@@ -686,6 +802,7 @@ __all__ = [
     "get_redis_generation",
     "validate_generation",
     "validate_generation_for_heartbeat",
+    "reset_generation_to_redis",
     "attempt_generation_sync_recovery",
     "attempt_lock_reacquisition",
     "check_and_handle_generation_mismatch",
