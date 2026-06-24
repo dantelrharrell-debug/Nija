@@ -355,8 +355,27 @@ class BootstrapStateMachine:
         # Retry counter: tracks how many times BOOT_FAILED_RETRY has been entered
         # so that force_transition_from_retry() can bypass stuck conditions after
         # _MAX_BOOT_FAILED_RETRIES consecutive failures.
+        #
+        # Raised from 3 → 10 to prevent premature EXTERNAL_RESTART_REQUIRED
+        # escalation during transient startup failures (e.g. stale CAPITAL_READY
+        # state detected on fresh boot, broker connectivity blips).  The
+        # force_transition_from_retry() path already handles the stuck-FSM case
+        # after 30 s, so a higher retry ceiling only adds resilience.
         self._boot_failed_retry_count: int = 0
-        self._MAX_BOOT_FAILED_RETRIES: int = 3
+        self._MAX_BOOT_FAILED_RETRIES: int = int(
+            os.environ.get("NIJA_MAX_BOOT_FAILED_RETRIES", "10")
+        )
+        # Exponential backoff for BOOT_FAILED_RETRY: each consecutive retry
+        # waits longer before the next PLATFORM_CONNECTING attempt.
+        # Base delay is 2 s; cap is 60 s.  Stored as wall-clock timestamp of
+        # the last BOOT_FAILED_RETRY entry so callers can compute the wait.
+        self._boot_failed_retry_last_ts: float = 0.0
+        self._BOOT_RETRY_BASE_DELAY_S: float = float(
+            os.environ.get("NIJA_BOOT_RETRY_BASE_DELAY_S", "2.0")
+        )
+        self._BOOT_RETRY_MAX_DELAY_S: float = float(
+            os.environ.get("NIJA_BOOT_RETRY_MAX_DELAY_S", "60.0")
+        )
 
     # ------------------------------------------------------------------
     # State access
@@ -572,10 +591,18 @@ class BootstrapStateMachine:
                 self._owner_thread_id = None
                 # Track consecutive BOOT_FAILED_RETRY entries for force-forward logic.
                 self._boot_failed_retry_count += 1
+                # Record timestamp for exponential backoff calculation.
+                self._boot_failed_retry_last_ts = time.time()
+                _backoff_s = min(
+                    self._BOOT_RETRY_BASE_DELAY_S * (2 ** (self._boot_failed_retry_count - 1)),
+                    self._BOOT_RETRY_MAX_DELAY_S,
+                )
                 logger.warning(
-                    "⚠️  [BootstrapFSM] BOOT_FAILED_RETRY entry #%d (max=%d)",
+                    "⚠️  [BootstrapFSM] BOOT_FAILED_RETRY entry #%d (max=%d) "
+                    "backoff_delay_s=%.1f",
                     self._boot_failed_retry_count,
                     self._MAX_BOOT_FAILED_RETRIES,
+                    _backoff_s,
                 )
             elif new_state in {
                 BootstrapState.BOOT_INIT,
@@ -635,15 +662,37 @@ class BootstrapStateMachine:
             # detect when the FSM has been stuck too many times.
             self._boot_failed_retry_count += 1
             _retry_count_snapshot = self._boot_failed_retry_count
+            # Record timestamp for exponential backoff calculation.
+            self._boot_failed_retry_last_ts = time.time()
 
+        _backoff = self.get_retry_backoff_delay_s()
         logger.warning(
             "⚠️  [BootstrapFSM] reset_for_retry: %s → BOOT_FAILED_RETRY  reason=%s  "
-            "retry_count=%d (max=%d)",
+            "retry_count=%d (max=%d) backoff_delay_s=%.1f",
             current.value,
             reason,
             _retry_count_snapshot,
             self._MAX_BOOT_FAILED_RETRIES,
+            _backoff,
         )
+
+    def get_retry_backoff_delay_s(self) -> float:
+        """Return the recommended backoff delay (seconds) before the next retry.
+
+        Uses exponential backoff: ``base * 2^(retry_count - 1)``, capped at
+        ``_BOOT_RETRY_MAX_DELAY_S``.  Returns 0.0 when no retries have occurred.
+
+        Callers should sleep for this duration after entering BOOT_FAILED_RETRY
+        before attempting to transition to PLATFORM_CONNECTING again.
+        """
+        with self._lock:
+            count = self._boot_failed_retry_count
+            base = self._BOOT_RETRY_BASE_DELAY_S
+            cap = self._BOOT_RETRY_MAX_DELAY_S
+        if count <= 0:
+            return 0.0
+        delay = base * (2 ** (count - 1))
+        return min(delay, cap)
 
     @property
     def boot_failed_retry_count(self) -> int:

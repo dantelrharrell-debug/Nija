@@ -262,6 +262,12 @@ def _reset_stale_bootstrap_fsm_for_fresh_attempt(*, init_done: bool) -> None:
     diagnostics report an already-ready phase while the runtime is still missing
     its trading objects.  Normalize only those advanced states; early states like
     LOCK_ACQUIRED/HEALTH_BOUND are intentionally preserved.
+
+    On a truly fresh startup (init_done=False) we also clear the
+    BOOT_FAILED_RETRY state so the retry counter does not carry over from a
+    previous process lifetime and trigger premature EXTERNAL_RESTART_REQUIRED
+    escalation.  The FSM is reset directly to BOOT_INIT so the full happy-path
+    can run cleanly from the beginning.
     """
     if init_done:
         return
@@ -287,6 +293,24 @@ def _reset_stale_bootstrap_fsm_for_fresh_attempt(*, init_done: bool) -> None:
                 "fresh startup without initialized strategy/threads found stale "
                 f"state={getattr(_state, 'value', str(_state))}"
             )
+            # After reset_for_retry the FSM is in BOOT_FAILED_RETRY.
+            # On a fresh process start the retry counter from any previous
+            # lifetime is meaningless — reset it so the new attempt starts
+            # from count=0 and does not immediately hit the max-retries ceiling.
+            try:
+                with _bfsm._lock:
+                    _bfsm._boot_failed_retry_count = 0
+                    _bfsm._boot_failed_retry_last_ts = 0.0
+                logger.info(
+                    "Fresh startup: BootstrapFSM retry counter reset to 0 "
+                    "(stale state=%s cleared)",
+                    getattr(_state, "value", str(_state)),
+                )
+            except Exception as _counter_reset_err:
+                logger.debug(
+                    "Fresh startup: retry counter reset skipped (non-fatal): %s",
+                    _counter_reset_err,
+                )
     except Exception as _stale_reset_err:
         logger.warning(
             "Fresh startup stale BootstrapFSM reset skipped (non-fatal): %s",

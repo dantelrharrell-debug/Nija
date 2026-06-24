@@ -3528,61 +3528,108 @@ class NijaCoreLoop:
         so per-symbol fetches never silently return None when the caller omits
         the broker argument.
 
-        Returns ``None`` when the broker call fails or returns no data.
+        Retry logic
+        -----------
+        On the first attempt the method tries every known candle-fetch method
+        on the broker object.  If all methods return insufficient data (< 10
+        rows) or raise exceptions, the method retries up to
+        ``NIJA_FETCH_DF_MAX_RETRIES`` times (default 2) with a short sleep
+        between attempts.  This handles transient rate-limit blips and
+        momentary API unavailability without blocking the entire trading loop.
+
+        Returns ``None`` when all retries are exhausted.
         """
         try:
-            if broker is None:
-                broker = getattr(self.apex, "broker_client", None)
-            if broker is None:
-                logger.warning(
-                    "⚠️ [_fetch_df] broker=None for symbol=%s — no broker_client on apex either. "
-                    "Cannot fetch candle data.",
-                    symbol,
-                )
-                return None
-            call_plan = (
-                ("get_candles", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
-                ("fetch_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
-                ("get_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
-                ("get_historical_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
-                ("get_market_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
-            )
-            _tried_methods = []
-            for method_name, primary_call, fallback_call in call_plan:
-                method = getattr(broker, method_name, None)
-                if not callable(method):
-                    continue
-                _tried_methods.append(method_name)
-                try:
-                    result = self._call_market_data_method(method, primary_call, fallback_call)
-                    df = self._coerce_market_data_frame(result)
-                    if df is not None and len(df) >= 10:
-                        return df
-                    # Log when a method exists but returns bad data (first symbol only)
-                    logger.debug(
-                        "_fetch_df: %s.%s returned df_len=%d for %s",
-                        type(broker).__name__, method_name,
-                        len(df) if df is not None else -1, symbol,
+            _max_retries = max(1, int(os.getenv("NIJA_FETCH_DF_MAX_RETRIES", "2") or "2"))
+            _retry_delay_s = max(0.1, float(os.getenv("NIJA_FETCH_DF_RETRY_DELAY_S", "1.0") or "1.0"))
+        except (TypeError, ValueError):
+            _max_retries = 2
+            _retry_delay_s = 1.0
+
+        for _attempt in range(1, _max_retries + 1):
+            try:
+                _broker = broker
+                if _broker is None:
+                    _broker = getattr(self.apex, "broker_client", None)
+                if _broker is None:
+                    logger.warning(
+                        "⚠️ [_fetch_df] broker=None for symbol=%s — no broker_client on apex either. "
+                        "Cannot fetch candle data.",
+                        symbol,
                     )
-                except Exception as _method_exc:
-                    logger.debug(
-                        "_fetch_df: %s.%s raised %s for %s",
-                        type(broker).__name__, method_name, _method_exc, symbol,
-                    )
-            if not _tried_methods:
-                # No matching method found on broker — log once at warning level
-                _broker_methods = [m for m in dir(broker) if not m.startswith("_")]
-                logger.warning(
-                    "⚠️ [_fetch_df] broker=%s has none of the expected candle methods "
-                    "(get_candles/fetch_ohlcv/get_ohlcv/get_historical_data/get_market_data). "
-                    "Available methods: %s",
-                    type(broker).__name__,
-                    _broker_methods[:20],
+                    return None
+                call_plan = (
+                    ("get_candles", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("fetch_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("get_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("get_historical_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("get_market_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
                 )
-            return None
-        except Exception as exc:
-            logger.warning("⚠️ [_fetch_df] unexpected error for %s: %s", symbol, exc)
-            return None
+                _tried_methods = []
+                for method_name, primary_call, fallback_call in call_plan:
+                    method = getattr(_broker, method_name, None)
+                    if not callable(method):
+                        continue
+                    _tried_methods.append(method_name)
+                    try:
+                        result = self._call_market_data_method(method, primary_call, fallback_call)
+                        df = self._coerce_market_data_frame(result)
+                        if df is not None and len(df) >= 10:
+                            if _attempt > 1:
+                                logger.info(
+                                    "✅ [_fetch_df] symbol=%s recovered on attempt %d/%d "
+                                    "via %s (df_len=%d)",
+                                    symbol, _attempt, _max_retries, method_name, len(df),
+                                )
+                            return df
+                        # Log when a method exists but returns bad data
+                        logger.debug(
+                            "_fetch_df: %s.%s returned df_len=%d for %s (attempt %d/%d)",
+                            type(_broker).__name__, method_name,
+                            len(df) if df is not None else -1, symbol,
+                            _attempt, _max_retries,
+                        )
+                    except Exception as _method_exc:
+                        logger.debug(
+                            "_fetch_df: %s.%s raised %s for %s (attempt %d/%d)",
+                            type(_broker).__name__, method_name, _method_exc, symbol,
+                            _attempt, _max_retries,
+                        )
+                if not _tried_methods:
+                    # No matching method found on broker — log once at warning level
+                    _broker_methods = [m for m in dir(_broker) if not m.startswith("_")]
+                    logger.warning(
+                        "⚠️ [_fetch_df] broker=%s has none of the expected candle methods "
+                        "(get_candles/fetch_ohlcv/get_ohlcv/get_historical_data/get_market_data). "
+                        "Available methods: %s",
+                        type(_broker).__name__,
+                        _broker_methods[:20],
+                    )
+                    return None  # No point retrying if no methods exist
+
+                # All methods returned insufficient data on this attempt.
+                if _attempt < _max_retries:
+                    logger.warning(
+                        "⚠️ [_fetch_df] symbol=%s — all candle methods returned insufficient "
+                        "data on attempt %d/%d; retrying in %.1fs",
+                        symbol, _attempt, _max_retries, _retry_delay_s,
+                    )
+                    time.sleep(_retry_delay_s)
+                else:
+                    logger.warning(
+                        "⚠️ [_fetch_df] symbol=%s — all %d fetch attempts exhausted; "
+                        "returning None (data_insufficient). "
+                        "Check broker connectivity and symbol format.",
+                        symbol, _max_retries,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "⚠️ [_fetch_df] unexpected error for %s (attempt %d/%d): %s",
+                    symbol, _attempt, _max_retries, exc,
+                )
+                if _attempt < _max_retries:
+                    time.sleep(_retry_delay_s)
+        return None
 
     @staticmethod
     def _call_market_data_method(
