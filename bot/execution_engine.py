@@ -772,25 +772,52 @@ class ExecutionEngine:
         available_balance_usd: Optional[float] = None,
         price_hint_usd: Optional[float] = None,
         strategy_name: str = "ExecutionEngine",
+        account_id: Optional[str] = None,
+        account_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Canonical market-order submit through ExecutionPipeline/ECEL."""
+        # Resolve account context for audit trail — fall back to user_id when
+        # no explicit account_id is provided by the caller.
+        _account_id = account_id or self.user_id or "unknown"
+        _account_type = (account_type or "").upper() or (
+            "PLATFORM" if _account_id in ("master", "platform", "platform_kraken") else "USER"
+        )
+        _exposure_usd: float = 0.0
+        _balance_snapshot: Optional[float] = available_balance_usd
+        try:
+            from bot.pre_trade_risk_engine import get_pre_trade_risk_engine as _get_ptre
+            _ptre = _get_ptre()
+            _exp_summary = _ptre.get_exposure_summary(_account_id)
+            _exposure_usd = float(_exp_summary.get("total_exposure_usd", 0.0))
+        except Exception:
+            pass
+
         print(
             f"[NIJA-PRINT] _submit_market_order_via_pipeline CALLED | "
+            f"account_id={_account_id} account_type={_account_type} "
             f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
             f"price_hint={float(price_hint_usd or 0.0):.6f} "
+            f"current_exposure_usd={_exposure_usd:.2f} "
+            f"available_balance_usd={float(_balance_snapshot or 0.0):.2f} "
             f"pipeline_available={get_execution_pipeline is not None and PipelineRequest is not None} "
             f"force_trade={os.getenv('FORCE_TRADE', 'false')}",
             flush=True,
         )
         logger.critical(
-            "🔌 [BrokerAdapter] ORDER SUBMISSION STARTED | "
+            "🔌 [BrokerAdapter] ORDER ATTEMPT | "
+            "account_id=%s account_type=%s "
             "symbol=%s side=%s size_usd=%.2f price_hint=%.6f strategy=%s "
+            "current_exposure_usd=%.2f available_balance_usd=%.2f "
             "pipeline_available=%s force_trade=%s",
+            _account_id,
+            _account_type,
             symbol,
             side,
             float(size_usd or 0.0),
             float(price_hint_usd or 0.0),
             strategy_name,
+            _exposure_usd,
+            float(_balance_snapshot or 0.0),
             get_execution_pipeline is not None and PipelineRequest is not None,
             os.getenv("FORCE_TRADE", "false"),
         )
@@ -856,15 +883,18 @@ class ExecutionEngine:
 
         _pipeline_t0 = _time.monotonic()
         print(
-            f"[NIJA-PRINT] BROKER CALL START | "
+            f"[NIJA-PRINT] ORDER ACCEPTED ATTEMPT | "
+            f"account_id={_account_id} account_type={_account_type} "
             f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
             f"broker={preferred_broker} price_hint={float(price_hint_usd or 0.0):.6f} "
             f"ack_timeout={os.getenv('NIJA_ACK_TIMEOUT_S', '30')}s",
             flush=True,
         )
         logger.critical(
-            "🔌 [BrokerAdapter] BROKER CALL START | "
+            "🔌 [BrokerAdapter] ORDER ACCEPTED ATTEMPT | "
+            "account_id=%s account_type=%s "
             "symbol=%s side=%s size_usd=%.2f broker=%s price_hint=%.6f ack_timeout=%ss",
+            _account_id, _account_type,
             symbol, side, float(size_usd or 0.0), preferred_broker,
             float(price_hint_usd or 0.0), os.getenv("NIJA_ACK_TIMEOUT_S", "30"),
         )
@@ -881,10 +911,14 @@ class ExecutionEngine:
                 price_hint_usd=price_hint_usd,
                 bid_price_usd=bid_price_usd,
                 ask_price_usd=ask_price_usd,
+                account_id=_account_id,
+                account_type=_account_type.lower() if _account_type else None,
                 metadata={
                     "broker_client": broker_client,
                     "broker_name": preferred_broker,
                     "price_hint_usd": price_hint_usd,
+                    "account_id": _account_id,
+                    "account_type": _account_type,
                 },
             )
         )
@@ -893,7 +927,8 @@ class ExecutionEngine:
         if not res.success:
             _pipeline_error = res.error or "unknown"
             print(
-                f"[NIJA-PRINT] ORDER REJECTED by ExecutionPipeline | "
+                f"[NIJA-PRINT] ORDER FAILED | "
+                f"account_id={_account_id} account_type={_account_type} "
                 f"symbol={symbol} side={side} size_usd={float(size_usd or 0.0):.2f} "
                 f"error={_pipeline_error!r} "
                 f"broker={getattr(res, 'broker', preferred_broker)} "
@@ -901,8 +936,10 @@ class ExecutionEngine:
                 flush=True,
             )
             logger.critical(
-                "❌ [BrokerAdapter] ORDER REJECTED by ExecutionPipeline | "
+                "❌ [BrokerAdapter] ORDER FAILED | "
+                "account_id=%s account_type=%s "
                 "symbol=%s side=%s size_usd=%.2f error=%r broker=%s latency_ms=%.0f",
+                _account_id, _account_type,
                 symbol, side, float(size_usd or 0.0),
                 _pipeline_error,
                 getattr(res, "broker", preferred_broker),
@@ -916,7 +953,8 @@ class ExecutionEngine:
             }
 
         print(
-            f"[NIJA-PRINT] ORDER ACCEPTED by ExecutionPipeline | "
+            f"[NIJA-PRINT] ORDER RESULT FILLED | "
+            f"account_id={_account_id} account_type={_account_type} "
             f"symbol={symbol} side={side} "
             f"filled_price={float(res.fill_price or 0.0):.6f} "
             f"filled_size_usd={float(res.filled_size_usd or 0.0):.2f} "
@@ -925,14 +963,31 @@ class ExecutionEngine:
             flush=True,
         )
         logger.critical(
-            "✅ [BrokerAdapter] ORDER ACCEPTED by ExecutionPipeline | "
+            "✅ [BrokerAdapter] ORDER RESULT | "
+            "account_id=%s account_type=%s "
             "symbol=%s side=%s filled_price=%.6f filled_size_usd=%.2f broker=%s latency_ms=%.0f",
+            _account_id, _account_type,
             symbol, side,
             float(res.fill_price or 0.0),
             float(res.filled_size_usd or 0.0),
             getattr(res, "broker", preferred_broker),
             _pipeline_elapsed_ms,
         )
+        # Record the filled trade in the structured trade ledger.
+        try:
+            self.record_trade_execution(
+                account_id=_account_id,
+                account_type=_account_type,
+                symbol=symbol,
+                side=side,
+                quantity=float(res.filled_size_usd or 0.0) / float(res.fill_price or 1.0),
+                fill_price=float(res.fill_price or 0.0),
+                fill_amount_usd=float(res.filled_size_usd or 0.0),
+                order_id=getattr(res, "broker", "pipeline"),
+                broker=getattr(res, "broker", preferred_broker),
+            )
+        except Exception as _rte_exc:
+            logger.debug("record_trade_execution skipped: %s", _rte_exc)
         return {
             "status": "filled",
             "order_id": "pipeline",
@@ -2112,8 +2167,16 @@ class ExecutionEngine:
                 except Exception:
                     pass
 
+            # Resolve account context for this execution attempt.
+            _exec_account_id = self.user_id or "unknown"
+            _exec_account_type = (
+                "PLATFORM"
+                if _exec_account_id in ("master", "platform", "platform_kraken")
+                else "USER"
+            )
             print(
                 f"[NIJA-PRINT] execute_entry CALLED | "
+                f"account_id={_exec_account_id} account_type={_exec_account_type} "
                 f"symbol={symbol} side={side} "
                 f"size=${float(position_size or 0.0):.2f} "
                 f"entry_price={float(entry_price or 0.0):.6f} "
@@ -2122,8 +2185,10 @@ class ExecutionEngine:
                 flush=True,
             )
             logger.critical(
-                "📋 [ExecutionEngine.execute_entry] ENTRY GATE STARTED | symbol=%s side=%s "
-                "position_size=$%.2f entry_price=%.6f stop_loss=%.6f",
+                "📋 [ExecutionEngine.execute_entry] ENTRY GATE STARTED | "
+                "account_id=%s account_type=%s "
+                "symbol=%s side=%s position_size=$%.2f entry_price=%.6f stop_loss=%.6f",
+                _exec_account_id, _exec_account_type,
                 symbol, side, position_size, entry_price, stop_loss,
             )
 
@@ -3073,7 +3138,9 @@ class ExecutionEngine:
                         )
                         _limit_qty = position_size / _limit_price if _limit_price > 0 else 0.0
                         logger.critical(
-                            "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                            "ORDER ATTEMPT | account_id=%s account_type=%s "
+                            "symbol=%s side=%s qty=%s notional=$%.2f",
+                            _exec_account_id, _exec_account_type,
                             symbol,
                             order_side,
                             f"{_limit_qty:.8f}",
@@ -3081,6 +3148,7 @@ class ExecutionEngine:
                         )
                         print(
                             f"[NIJA-PRINT] LIMIT ORDER ATTEMPT | "
+                            f"account_id={_exec_account_id} account_type={_exec_account_type} "
                             f"symbol={symbol} side={order_side} "
                             f"qty={_limit_qty:.8f} notional=${position_size:.2f} "
                             f"limit_price={_limit_price:.6f}",
@@ -3148,7 +3216,9 @@ class ExecutionEngine:
                             try:
                                 _fallback_qty = position_size / entry_price if entry_price > 0 else 0.0
                                 logger.critical(
-                                    "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                                    "ORDER ATTEMPT | account_id=%s account_type=%s "
+                                    "symbol=%s side=%s qty=%s notional=$%.2f",
+                                    _exec_account_id, _exec_account_type,
                                     symbol,
                                     order_side,
                                     f"{_fallback_qty:.8f}",
@@ -3156,6 +3226,7 @@ class ExecutionEngine:
                                 )
                                 print(
                                     f"[NIJA-PRINT] FALLBACK MARKET ORDER ATTEMPT | "
+                                    f"account_id={_exec_account_id} account_type={_exec_account_type} "
                                     f"symbol={symbol} side={order_side} "
                                     f"qty={_fallback_qty:.8f} notional=${position_size:.2f} "
                                     f"entry_price={float(entry_price or 0.0):.6f}",
@@ -3168,6 +3239,8 @@ class ExecutionEngine:
                                     size_usd=position_size,
                                     available_balance_usd=_spendable_usd or _available_usd,
                                     price_hint_usd=entry_price,
+                                    account_id=_exec_account_id,
+                                    account_type=_exec_account_type,
                                 )
                             except Exception as _fb_exc:
                                 _fallback_exc = _fb_exc
@@ -3303,7 +3376,9 @@ class ExecutionEngine:
                     _market_exc: Optional[Exception] = None
                     _pfunnel("execution_attempted")
                     logger.critical(
-                        "ORDER ATTEMPT | symbol=%s side=%s qty=%s notional=$%.2f",
+                        "ORDER ATTEMPT | account_id=%s account_type=%s "
+                        "symbol=%s side=%s qty=%s notional=$%.2f",
+                        _exec_account_id, _exec_account_type,
                         symbol,
                         order_side,
                         f"{_order_quantity:.8f}",
@@ -3311,6 +3386,7 @@ class ExecutionEngine:
                     )
                     print(
                         f"[NIJA-PRINT] ORDER ATTEMPT | "
+                        f"account_id={_exec_account_id} account_type={_exec_account_type} "
                         f"symbol={symbol} side={order_side} "
                         f"qty={_order_quantity:.8f} notional=${_order_size_usd:.2f} "
                         f"entry_price={float(entry_price or 0.0):.6f}",
@@ -3332,6 +3408,8 @@ class ExecutionEngine:
                                 size_usd=_order_size_usd,
                                 available_balance_usd=_spendable_usd or _available_usd,
                                 price_hint_usd=entry_price,
+                                account_id=_exec_account_id,
+                                account_type=_exec_account_type,
                             ),
                         )
                         result = _mkt_ctrl.last_broker_response
@@ -3348,6 +3426,8 @@ class ExecutionEngine:
                                 size_usd=_order_size_usd,
                                 available_balance_usd=_spendable_usd or _available_usd,
                                 price_hint_usd=entry_price,
+                                account_id=_exec_account_id,
+                                account_type=_exec_account_type,
                             )
                         except Exception as _mk_exc:
                             _market_exc = _mk_exc
@@ -3358,6 +3438,7 @@ class ExecutionEngine:
                     _market_result_error = (result or {}).get("error") or ""
                     print(
                         f"[NIJA-PRINT] ORDER RESULT | "
+                        f"account_id={_exec_account_id} account_type={_exec_account_type} "
                         f"symbol={symbol} side={order_side} "
                         f"status={_ecel_market_status!r} "
                         f"error={_market_result_error!r} "
@@ -3366,7 +3447,9 @@ class ExecutionEngine:
                     )
                     logger.critical(
                         "📊 [ExecutionEngine] ORDER RESULT | "
+                        "account_id=%s account_type=%s "
                         "symbol=%s side=%s status=%r error=%r latency_ms=%.0f",
+                        _exec_account_id, _exec_account_type,
                         symbol, order_side, _ecel_market_status,
                         _market_result_error, _market_elapsed_ms,
                     )
@@ -3394,13 +3477,16 @@ class ExecutionEngine:
                 _result_status_log = result.get('status', 'N/A') if result else 'NONE'
                 if result and _result_status_log not in ('error', 'unfilled', 'skipped', 'rejected'):
                     logger.critical(
-                        "✅ ORDER SENT SUCCESSFULLY: %s | side=%s | size=$%.2f | status=%s | order_id=%s",
+                        "✅ ORDER ACCEPTED | account_id=%s account_type=%s "
+                        "symbol=%s side=%s size=$%.2f status=%s order_id=%s",
+                        _exec_account_id, _exec_account_type,
                         symbol, side, position_size,
                         _result_status_log,
                         result.get('order_id') or result.get('id', 'N/A'),
                     )
                     logger.info(
-                        "✅ ORDER SUBMITTED: symbol=%s side=%s status=%s order_id=%s",
+                        "✅ ORDER SUBMITTED: account_id=%s symbol=%s side=%s status=%s order_id=%s",
+                        _exec_account_id,
                         symbol,
                         side,
                         _result_status_log,
@@ -3409,11 +3495,14 @@ class ExecutionEngine:
                 else:
                     _result_error_detail = (result or {}).get("error") or "no error detail"
                     logger.critical(
-                        "❌ ORDER FAILED: %s | side=%s | size=$%.2f | status=%s | error=%r",
+                        "❌ ORDER FAILED | account_id=%s account_type=%s "
+                        "symbol=%s side=%s size=$%.2f status=%s error=%r",
+                        _exec_account_id, _exec_account_type,
                         symbol, side, position_size, _result_status_log, _result_error_detail,
                     )
                     print(
                         f"[NIJA-PRINT] ORDER FAILED | "
+                        f"account_id={_exec_account_id} account_type={_exec_account_type} "
                         f"symbol={symbol} side={side} "
                         f"size=${float(position_size or 0.0):.2f} "
                         f"status={_result_status_log!r} "
@@ -3442,6 +3531,7 @@ class ExecutionEngine:
                     _broker_error_msg = details.get('detail') or (result or {}).get('error') or 'broker_error'
                     print(
                         f"[NIJA-PRINT] BROKER REJECTED ORDER | "
+                        f"account_id={_exec_account_id} account_type={_exec_account_type} "
                         f"symbol={symbol} side={side} "
                         f"size=${float(position_size or 0.0):.2f} "
                         f"status=error "
@@ -3451,7 +3541,9 @@ class ExecutionEngine:
                     )
                     logger.critical(
                         "❌ [ExecutionEngine] BROKER REJECTED ORDER | "
+                        "account_id=%s account_type=%s "
                         "symbol=%s side=%s size=$%.2f reason=%r hint=%r",
+                        _exec_account_id, _exec_account_type,
                         symbol, side, float(position_size or 0.0),
                         _broker_error_msg, details.get('hint', ''),
                     )
@@ -4923,6 +5015,98 @@ class ExecutionEngine:
             logger.error(f"   Traceback: {traceback.format_exc()}")
             return False
 
+    # ------------------------------------------------------------------
+    # Trade ledger — per-account fill recording
+    # ------------------------------------------------------------------
+
+    # Module-level in-memory trade ledger shared across all ExecutionEngine
+    # instances.  Keyed by account_id → list of trade dicts.  This is the
+    # canonical source for get_trade_summary_by_account() queries.
+    _TRADE_LEDGER: Dict[str, List[Dict[str, Any]]] = {}
+    _TRADE_LEDGER_LOCK = threading.Lock()
+
+    def record_trade_execution(
+        self,
+        *,
+        account_id: str,
+        account_type: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        fill_price: float,
+        fill_amount_usd: float,
+        order_id: str,
+        broker: str = "",
+    ) -> None:
+        """Record a filled trade in the structured per-account trade ledger.
+
+        Every successfully filled order should be passed through here so that
+        ``get_trade_summary_by_account()`` can produce accurate per-account
+        reports without querying the exchange.
+
+        Parameters
+        ----------
+        account_id:
+            Canonical account identifier (e.g. ``"platform_kraken"``,
+            ``"daivon_frazier"``, ``"tania_gilbert"``).
+        account_type:
+            ``"PLATFORM"`` or ``"USER"``.
+        symbol:
+            Trading pair in dash-separated form (e.g. ``"BTC-USD"``).
+        side:
+            ``"buy"`` / ``"sell"`` (normalised lowercase).
+        quantity:
+            Base-asset quantity filled.
+        fill_price:
+            Average fill price in USD.
+        fill_amount_usd:
+            Total USD value of the fill (``quantity × fill_price``).
+        order_id:
+            Exchange or pipeline order identifier.
+        broker:
+            Broker/exchange label (e.g. ``"kraken"``).
+        """
+        try:
+            from datetime import timezone as _tz
+            ts = datetime.now(_tz.utc).isoformat()
+        except Exception:
+            ts = datetime.utcnow().isoformat() + "Z"
+
+        record: Dict[str, Any] = {
+            "timestamp": ts,
+            "account_id": account_id,
+            "account_type": account_type,
+            "symbol": symbol,
+            "side": side.lower(),
+            "quantity": float(quantity),
+            "fill_price": float(fill_price),
+            "fill_amount_usd": float(fill_amount_usd),
+            "order_id": str(order_id),
+            "broker": broker,
+        }
+
+        with ExecutionEngine._TRADE_LEDGER_LOCK:
+            bucket = ExecutionEngine._TRADE_LEDGER.setdefault(account_id, [])
+            bucket.append(record)
+
+        logger.critical(
+            "📒 [TradeLedger] FILL RECORDED | "
+            "account_id=%s account_type=%s symbol=%s side=%s "
+            "qty=%.8f fill_price=%.6f fill_usd=%.2f order_id=%s broker=%s ts=%s",
+            account_id, account_type, symbol, side,
+            float(quantity), float(fill_price), float(fill_amount_usd),
+            order_id, broker, ts,
+        )
+        print(
+            f"[NIJA-PRINT] TRADE LEDGER | "
+            f"account_id={account_id} account_type={account_type} "
+            f"symbol={symbol} side={side} "
+            f"qty={float(quantity):.8f} fill_price={float(fill_price):.6f} "
+            f"fill_usd={float(fill_amount_usd):.2f} order_id={order_id} "
+            f"broker={broker} ts={ts}",
+            flush=True,
+        )
+
     def _close_bad_entry(self, symbol: str, side: str, entry_price: float,
                         loss_pct: float, position_size: float) -> None:
         """
@@ -4964,3 +5148,98 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Error closing bad entry: {e}")
             logger.error(f"⚠️ Manual intervention required to close {symbol}")
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic API — per-account trade summary
+# ---------------------------------------------------------------------------
+
+
+def get_trade_summary_by_account(
+    account_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a structured trade summary keyed by account.
+
+    This function queries the in-memory trade ledger populated by
+    ``ExecutionEngine.record_trade_execution()`` and produces a report
+    suitable for compliance audits, debugging, and real-time monitoring.
+
+    Parameters
+    ----------
+    account_id:
+        When provided, return the summary for that specific account only.
+        When ``None``, return summaries for **all** accounts.
+
+    Returns
+    -------
+    dict
+        Top-level keys:
+
+        * ``"generated_at"`` — ISO-8601 UTC timestamp of report generation.
+        * ``"accounts"`` — dict mapping account_id → per-account summary.
+
+        Each per-account summary contains:
+
+        * ``"account_id"`` — account identifier.
+        * ``"account_type"`` — ``"PLATFORM"`` or ``"USER"``.
+        * ``"total_trades"`` — total filled orders (buys + sells).
+        * ``"buy_count"`` — number of buy/long fills.
+        * ``"sell_count"`` — number of sell/short fills.
+        * ``"total_volume_usd"`` — cumulative USD fill volume.
+        * ``"last_10_trades"`` — list of the 10 most recent trade records.
+    """
+    try:
+        from datetime import timezone as _tz
+        _now = datetime.now(_tz.utc).isoformat()
+    except Exception:
+        _now = datetime.utcnow().isoformat() + "Z"
+
+    with ExecutionEngine._TRADE_LEDGER_LOCK:
+        if account_id is not None:
+            ledger_snapshot: Dict[str, List[Dict[str, Any]]] = {
+                account_id: list(ExecutionEngine._TRADE_LEDGER.get(account_id, []))
+            }
+        else:
+            ledger_snapshot = {
+                k: list(v) for k, v in ExecutionEngine._TRADE_LEDGER.items()
+            }
+
+    accounts: Dict[str, Any] = {}
+    for acct, trades in ledger_snapshot.items():
+        buy_count = sum(1 for t in trades if t.get("side") in ("buy", "long"))
+        sell_count = sum(1 for t in trades if t.get("side") in ("sell", "short"))
+        total_volume = sum(float(t.get("fill_amount_usd", 0.0)) for t in trades)
+        acct_type = trades[-1].get("account_type", "UNKNOWN") if trades else "UNKNOWN"
+        accounts[acct] = {
+            "account_id": acct,
+            "account_type": acct_type,
+            "total_trades": len(trades),
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "total_volume_usd": round(total_volume, 2),
+            "last_10_trades": trades[-10:],
+        }
+
+    result = {
+        "generated_at": _now,
+        "accounts": accounts,
+    }
+
+    logger.info(
+        "📊 [TradeSummary] get_trade_summary_by_account | "
+        "account_filter=%s total_accounts=%d",
+        account_id or "ALL",
+        len(accounts),
+    )
+    for acct, summary in accounts.items():
+        logger.info(
+            "   account=%s type=%s trades=%d buys=%d sells=%d volume_usd=%.2f",
+            acct,
+            summary["account_type"],
+            summary["total_trades"],
+            summary["buy_count"],
+            summary["sell_count"],
+            summary["total_volume_usd"],
+        )
+
+    return result

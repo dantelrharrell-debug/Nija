@@ -174,8 +174,9 @@ class PreTradeRiskEngine:
                     )
                     return PreTradeRiskDecision(
                         approved=False,
-                        reason="GLOBAL_EXPOSURE_CAP",
+                        reason=f"account={account_key} reason=GLOBAL_EXPOSURE_CAP",
                         details={
+                            "account_id": account_key,
                             "current_total_exposure_usd": current_total_exposure,
                             "next_total_exposure_usd": next_total,
                             "balance_usd": balance,
@@ -187,10 +188,24 @@ class PreTradeRiskEngine:
 
                 next_symbol = current_symbol_exposure + float(size_usd)
                 if next_symbol > balance * self.max_symbol_exposure_pct:
+                    logger.warning(
+                        "🚫 [PreTradeRisk] SYMBOL_AGGREGATION_CAP | account=%s symbol=%s "
+                        "order_size_usd=%.2f current_symbol_usd=%.2f next_symbol_usd=%.2f "
+                        "cap_usd=%.2f limit_pct=%.0f%% balance_usd=%.2f",
+                        account_key,
+                        symbol,
+                        float(size_usd),
+                        current_symbol_exposure,
+                        next_symbol,
+                        balance * self.max_symbol_exposure_pct,
+                        self.max_symbol_exposure_pct * 100,
+                        balance,
+                    )
                     return PreTradeRiskDecision(
                         approved=False,
-                        reason="SYMBOL_AGGREGATION_CAP",
+                        reason=f"account={account_key} reason=SYMBOL_AGGREGATION_CAP",
                         details={
+                            "account_id": account_key,
                             "symbol_exposure_usd": current_symbol_exposure,
                             "next_symbol_exposure_usd": next_symbol,
                             "balance_usd": balance,
@@ -241,6 +256,11 @@ class PreTradeRiskEngine:
         success: bool,
     ) -> None:
         if not success:
+            logger.debug(
+                "PreTradeRiskEngine.record_execution | account=%s symbol=%s side=%s "
+                "size_usd=%.2f success=False — exposure NOT updated",
+                account_id or "default", symbol, side, float(size_usd),
+            )
             return
 
         with self._lock:
@@ -252,17 +272,22 @@ class PreTradeRiskEngine:
             # Treat "buy", "long", "open" as exposure addition.
             if _side in ("sell", "close", "exit", "reduce"):
                 exposures[symbol] = max(0.0, float(exposures.get(symbol, 0.0)) - delta)
+                _direction = "REDUCED"
             else:
                 exposures[symbol] = float(exposures.get(symbol, 0.0)) + delta
+                _direction = "INCREASED"
 
             if exposures.get(symbol, 0.0) <= 0:
                 exposures.pop(symbol, None)
 
             _new_total = float(sum(exposures.values()))
-            logger.debug(
-                "PreTradeRiskEngine.record_execution | account=%s symbol=%s side=%s "
-                "size_usd=%.2f new_total_exposure_usd=%.2f",
-                account_key, symbol, side, delta, _new_total,
+            logger.info(
+                "📈 [PreTradeRisk] EXPOSURE_UPDATED | account=%s symbol=%s side=%s "
+                "size_usd=%.2f direction=%s new_symbol_exposure_usd=%.2f "
+                "new_total_exposure_usd=%.2f",
+                account_key, symbol, side, delta, _direction,
+                float(exposures.get(symbol, 0.0)),
+                _new_total,
             )
 
     @staticmethod
