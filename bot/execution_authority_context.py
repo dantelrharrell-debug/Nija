@@ -1318,6 +1318,52 @@ def can_execute() -> ExecutionDecision:
         and current_generation > 0
         and local_generation == current_generation
     )
+
+    # ── Generation sync recovery (lightweight heartbeat path) ─────────────────
+    # When NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED=true and the local
+    # generation is out of sync with Redis, attempt a lightweight sync recovery
+    # before the circuit-halt logic runs.  This prevents a transient generation
+    # divergence from immediately halting the execution circuit and blocking all
+    # trades.  The recovery resets the local env var to the Redis value (which
+    # is always the authoritative source of truth) and re-evaluates the gate.
+    if not lease_generation_current and _env_truthy("NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED"):
+        if local_generation > 0 and current_generation > 0 and local_generation != current_generation:
+            _local_generation_before_sync = local_generation
+            try:
+                try:
+                    from bot.writer_generation_tracker import attempt_generation_sync_recovery
+                except ImportError:
+                    from writer_generation_tracker import attempt_generation_sync_recovery  # type: ignore[import]
+                _sync_recovered, _sync_msg = attempt_generation_sync_recovery(
+                    local_generation, current_generation
+                )
+                if _sync_recovered:
+                    # Re-read the local generation after sync — it now matches Redis.
+                    local_generation = current_generation
+                    lease_generation_current = True
+                    logger.warning(
+                        "can_execute: generation sync recovery applied in execution gate — "
+                        "local_before=%d local_after=%d redis=%d msg=%s",
+                        _local_generation_before_sync,
+                        current_generation,
+                        current_generation,
+                        _sync_msg,
+                    )
+                else:
+                    logger.warning(
+                        "can_execute: generation sync recovery not applied "
+                        "local=%d redis=%d msg=%s",
+                        local_generation,
+                        current_generation,
+                        _sync_msg,
+                    )
+            except Exception as _sync_exc:
+                logger.warning(
+                    "can_execute: generation sync recovery raised unexpected error "
+                    "(non-fatal): %s",
+                    _sync_exc,
+                )
+
     lease_valid = False
     lease_error = ""
     try:

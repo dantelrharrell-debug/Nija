@@ -712,17 +712,26 @@ class AuthorityHeartbeatMonitor:
             import redis as _redis_lib
             self._redis_client = _redis_lib.from_url(redis_url, socket_connect_timeout=3)
 
+            # Resolve the canonical generation key — must match the Lua lease
+            # scripts in _PerKeyRedisBackend and writer_generation_tracker.py.
+            # Default: "nija:lease:generation" (NOT "nija:writer_lease_generation").
+            _generation_redis_key = (
+                os.environ.get("NIJA_LEASE_GENERATION_KEY", "").strip()
+                or "nija:lease:generation"
+            )
+
             # Get current generation from Redis BEFORE writing
-            redis_gen = self._redis_client.get("nija:writer_lease_generation")
+            redis_gen = self._redis_client.get(_generation_redis_key)
             local_gen = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "0")
 
             # If mismatch detected, resync to Redis value
             if redis_gen and str(redis_gen) != str(local_gen):
                 logger.warning(
                     "AuthorityHeartbeat: generation mismatch detected — resyncing "
-                    "local=%s redis=%s",
+                    "local=%s redis=%s key=%s",
                     local_gen,
                     redis_gen,
+                    _generation_redis_key,
                 )
                 os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(redis_gen)
                 local_gen = str(redis_gen)
