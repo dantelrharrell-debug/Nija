@@ -15,7 +15,7 @@ Environment overrides
 COINBASE_MIN_CAPITAL  — minimum USD balance for Coinbase to trade (default 1.0)
 COINBASE_MIN_ORDER    — minimum USD order size on Coinbase (default 1.0)
 KRAKEN_MIN_CAPITAL    — minimum USD balance for Kraken (default 25.0)
-KRAKEN_MIN_ORDER      — minimum USD order size on Kraken (default 10.0)
+KRAKEN_MIN_ORDER      — minimum USD order size on Kraken (default 20.0)
 """
 
 import os
@@ -64,8 +64,10 @@ COINBASE_MIN_ORDER: float = float(
 #: Minimum USD balance required for Kraken to open new positions.
 KRAKEN_MIN_CAPITAL: float = float(os.getenv("KRAKEN_MIN_CAPITAL", "25.0"))
 
-#: Minimum USD order size on Kraken (exchange hard-floor is $10).
-KRAKEN_MIN_ORDER: float = float(os.getenv("KRAKEN_MIN_ORDER", "10.0"))
+#: Minimum USD order size on Kraken.
+#: Kraken enforces a minimum notional of ~$15-20 USD on most pairs (e.g. ADA-USD).
+#: Setting this to $20 provides a safe buffer above the exchange hard floor.
+KRAKEN_MIN_ORDER: float = float(os.getenv("KRAKEN_MIN_ORDER", "20.0"))
 
 # ---------------------------------------------------------------------------
 # BROKER_PROFILES — per-broker policy registry
