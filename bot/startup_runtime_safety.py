@@ -47,4 +47,13 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
         notes.append("enabled:HF_SCALP_MODE")
 
     env.setdefault("HF_SCALPING_MODE", env.get("HF_SCALP_MODE", "1"))
+
+    # Ensure generation mismatch recovery is enabled by default so the bot
+    # can self-heal from diverged generation counters (e.g. local=882339 vs
+    # redis=753) without operator intervention.  Operators can explicitly
+    # disable this by setting NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED=false.
+    if not env_truthy(env.get("NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED")):
+        env["NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED"] = "true"
+        notes.append("enabled:NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED")
+
     return notes

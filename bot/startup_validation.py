@@ -991,6 +991,99 @@ def validate_operational_environment_config() -> StartupValidationResult:
     return result
 
 
+def check_and_reset_generation_mismatch() -> StartupValidationResult:
+    """Detect and auto-reset a generation counter mismatch at startup.
+
+    Reads the local ``NIJA_WRITER_LEASE_GENERATION`` env var and the live
+    Redis value.  When they diverge, calls ``reset_generation_to_redis()`` to
+    force-sync the local counter before the heartbeat monitor starts.  This
+    prevents the SEAK from being halted by a stale generation value that
+    accumulated across deployments (e.g. local=882339 vs redis=753).
+
+    The check is non-blocking and non-fatal: a Redis connectivity failure or
+    an unusable generation value is logged as a warning and does not prevent
+    startup.
+    """
+    result = StartupValidationResult()
+
+    try:
+        try:
+            from bot.writer_generation_tracker import (
+                get_local_generation,
+                get_redis_generation,
+                reset_generation_to_redis,
+            )
+        except ImportError:
+            from writer_generation_tracker import (  # type: ignore[import]
+                get_local_generation,
+                get_redis_generation,
+                reset_generation_to_redis,
+            )
+
+        local = get_local_generation()
+        if local <= 0:
+            # Generation not yet set — nothing to check at this stage.
+            result.add_info(
+                "GENERATION_STARTUP_CHECK: local generation not yet set — skipping"
+            )
+            return result
+
+        redis_gen, err = get_redis_generation()
+        if err:
+            result.add_warning(
+                f"GENERATION_STARTUP_CHECK: could not read Redis generation "
+                f"(non-fatal) — {err}"
+            )
+            return result
+
+        if redis_gen <= 0:
+            result.add_warning(
+                "GENERATION_STARTUP_CHECK: Redis generation key missing or zero — "
+                "skipping reset (Redis may not have a lease yet)"
+            )
+            return result
+
+        delta = abs(local - redis_gen)
+        if local == redis_gen:
+            result.add_info(
+                f"GENERATION_STARTUP_CHECK: generation OK local={local} redis={redis_gen}"
+            )
+            return result
+
+        # Mismatch detected — auto-reset.
+        logger.critical(
+            "GENERATION_STARTUP_CHECK: generation mismatch detected at startup "
+            "local=%d redis=%d delta=%d — auto-resetting to Redis value",
+            local,
+            redis_gen,
+            delta,
+        )
+        reset_ok, reset_msg = reset_generation_to_redis()
+        if reset_ok:
+            result.add_info(
+                f"GENERATION_STARTUP_CHECK: generation reset succeeded — {reset_msg}"
+            )
+            logger.critical(
+                "GENERATION_STARTUP_CHECK: startup generation reset complete — "
+                "local generation is now %d (was %d, delta=%d)",
+                redis_gen,
+                local,
+                delta,
+            )
+        else:
+            result.add_warning(
+                f"GENERATION_STARTUP_CHECK: generation reset failed (non-fatal) — "
+                f"{reset_msg}"
+            )
+    except Exception as exc:
+        result.add_warning(
+            f"GENERATION_STARTUP_CHECK: unexpected error during startup generation "
+            f"check (non-fatal) — {exc}"
+        )
+
+    return result
+
+
 def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationResult:
     """
     Run all startup validations and combine results.
@@ -1060,7 +1153,16 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
     if env_result.critical_failure:
         combined.mark_critical_failure(env_result.failure_reason)
 
-    # 8. Combined check: warn when live trading with unknown git metadata.
+    # 8. Detect and auto-reset generation counter mismatch before the heartbeat
+    #    monitor starts.  This is a non-fatal, non-blocking check that prevents
+    #    SEAK lockdown caused by a stale local generation (e.g. local=882339 vs
+    #    redis=753 after a deployment that did not cleanly persist the counter).
+    gen_result = check_and_reset_generation_mismatch()
+    combined.risks.extend(gen_result.risks)
+    combined.warnings.extend(gen_result.warnings)
+    combined.info.extend(gen_result.info)
+
+    # 9. Combined check: warn when live trading with unknown git metadata.
     # Git metadata is for auditability only and must not block live trading on
     # cloud deployments (e.g. Railway) where the git directory is unavailable
     # at runtime.  Downgraded from critical_failure to an audit risk warning so
