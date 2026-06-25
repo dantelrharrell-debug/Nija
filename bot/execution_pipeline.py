@@ -1170,9 +1170,30 @@ class ExecutionPipeline:
 
         if self._execution_observer is not None:
             try:
+                # Check long-term deterministic strategy suppression first.
                 suppressed, suppression_reason = self._execution_observer.is_strategy_suppressed(canonical_request.strategy)
                 if suppressed:
+                    logger.error(
+                        "🚫 [DETERMINISTIC] OrderFeasibility: strategy=%s blocked | %s",
+                        canonical_request.strategy,
+                        suppression_reason,
+                    )
                     return self._deny(canonical_request, t_start, f"OrderFeasibility deny: {suppression_reason}")
+
+                # Check short-term per-symbol transient suppression.
+                # This is a lightweight 5-second skip after a broker/network hiccup.
+                # It does NOT block the strategy for other symbols.
+                if hasattr(self._execution_observer, "is_symbol_transient_suppressed"):
+                    t_suppressed, t_reason = self._execution_observer.is_symbol_transient_suppressed(
+                        canonical_request.strategy, canonical_request.symbol
+                    )
+                    if t_suppressed:
+                        logger.warning(
+                            "⚡ [TRANSIENT] OrderFeasibility: symbol=%s skipped | %s",
+                            canonical_request.symbol,
+                            t_reason,
+                        )
+                        return self._deny(canonical_request, t_start, f"OrderFeasibility deny: {t_reason}")
             except Exception as exc:
                 return self._deny(canonical_request, t_start, f"OrderFeasibility deny: observer_error:{exc}")
 
