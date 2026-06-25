@@ -6538,7 +6538,7 @@ class AlpacaBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
-        enable_alpaca = os.getenv("ENABLE_ALPACA", "false").lower() in ("1", "true", "yes", "on")
+        enable_alpaca = os.getenv("ENABLE_ALPACA", "true").lower() in ("1", "true", "yes", "on")
         if not enable_alpaca:
             self.credentials_configured = False
             logger.warning(

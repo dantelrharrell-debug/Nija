@@ -267,11 +267,14 @@ GLOBAL_MIN_TRADE: float = float(os.environ.get("MIN_TRADE_USD", os.environ.get("
 
 # Backward-compatibility constants retained for legacy test/import paths.
 # Lowered to $50 to allow trading with ~$174 balance in HF scalp mode (Apr 2026).
-ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase"]
+# All enabled brokerages are included so the entry router considers every venue.
+ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase", "okx", "alpaca"]
 BROKER_MIN_BALANCE: Dict[str, float] = {
     "default": 50.0,
     "kraken": 50.0,
     "coinbase": 50.0,
+    "okx": 50.0,
+    "alpaca": 25.0,
 }
 
 _HEARTBEAT_STAGE_ORDER: Dict[str, int] = {
@@ -552,22 +555,80 @@ class TradingStrategy:
         logger.warning("⚠️  No connected primary broker found at init time")
 
     def _populate_symbols(self) -> None:
-        """Populate the symbol list from the primary broker."""
-        if self.broker is None:
+        """Populate the symbol universe from ALL connected brokers.
+
+        Collects tradeable instruments from every connected platform broker
+        (Kraken, Coinbase, OKX, Alpaca) and merges them into a single
+        deduplicated list.  This expands the scan universe from Kraken-only
+        crypto pairs to stocks, forex, commodities, and all crypto venues.
+        """
+        all_symbols: List[str] = []
+        broker_counts: dict = {}
+
+        # ── Collect symbols from all connected platform brokers ────────────
+        brokers_to_query: List[Any] = []
+
+        # Gather from MultiAccountBrokerManager platform brokers
+        if self.multi_account_manager is not None:
+            try:
+                _platform_brokers = getattr(
+                    self.multi_account_manager, "platform_brokers", {}
+                ) or {}
+                for _bt, _b in _platform_brokers.items():
+                    if _b is not None and getattr(_b, "connected", False):
+                        brokers_to_query.append(_b)
+            except Exception as _mabm_err:
+                logger.debug("MABM broker query failed during symbol population: %s", _mabm_err)
+
+        # Also include the primary broker if not already covered
+        if self.broker is not None and self.broker not in brokers_to_query:
+            brokers_to_query.append(self.broker)
+
+        # Fallback: try BrokerManager
+        if not brokers_to_query and self.broker_manager is not None:
+            try:
+                for _bt, _b in (getattr(self.broker_manager, "brokers", {}) or {}).items():
+                    if _b is not None and getattr(_b, "connected", False):
+                        brokers_to_query.append(_b)
+            except Exception as _bm_err:
+                logger.debug("BrokerManager broker query failed during symbol population: %s", _bm_err)
+
+        for _broker in brokers_to_query:
+            _broker_name = self._broker_key_from_obj(_broker)
+            try:
+                if hasattr(_broker, "get_all_products"):
+                    _products = _broker.get_all_products()
+                    if isinstance(_products, list) and _products:
+                        _count = len(_products)
+                        broker_counts[_broker_name] = _count
+                        all_symbols.extend(str(p) for p in _products if p)
+                        logger.info(
+                            "✅ [SymbolUniverse] %s: loaded %d symbols",
+                            _broker_name.upper(),
+                            _count,
+                        )
+            except Exception as _sym_err:
+                logger.debug(
+                    "Symbol population failed for broker %s: %s", _broker_name, _sym_err
+                )
+
+        if all_symbols:
+            # Deduplicate while preserving order (first occurrence wins)
+            seen: set = set()
+            merged: List[str] = []
+            for sym in all_symbols:
+                if sym not in seen:
+                    seen.add(sym)
+                    merged.append(sym)
+            self.symbols = merged
+            self._last_symbol_refresh_ts = time.time()
+            logger.info(
+                "✅ [SymbolUniverse] Merged %d unique symbols across %d broker(s): %s",
+                len(self.symbols),
+                len(broker_counts),
+                ", ".join(f"{k.upper()}={v}" for k, v in broker_counts.items()),
+            )
             return
-        try:
-            # Use get_all_products() — the standard method on all broker classes
-            if hasattr(self.broker, "get_all_products"):
-                products = self.broker.get_all_products()
-                if isinstance(products, list):
-                    self.symbols = [str(p) for p in products if p]
-                    self._last_symbol_refresh_ts = time.time()
-                    logger.info(
-                        "✅ Loaded %d symbols from broker", len(self.symbols)
-                    )
-                    return
-        except Exception as _sym_err:
-            logger.debug("Symbol population failed: %s", _sym_err)
 
         # Fallback: use a curated default list
         if not self.symbols:
