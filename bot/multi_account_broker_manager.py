@@ -6297,7 +6297,9 @@ class MultiAccountBrokerManager:
         time.sleep(0.5)
 
         # ── Alpaca ────────────────────────────────────────────────────────────
-        _enable_alpaca = os.environ.get("ENABLE_ALPACA", "false").strip().lower() in ("1", "true", "yes", "on")
+        # Alpaca is enabled by default when credentials are present.
+        # Set ENABLE_ALPACA=false to explicitly disable it.
+        _enable_alpaca = os.environ.get("ENABLE_ALPACA", "true").strip().lower() in ("1", "true", "yes", "on")
         _alpaca_key = os.environ.get("ALPACA_API_KEY", "").strip()
         _alpaca_secret = os.environ.get("ALPACA_API_SECRET", "").strip()
         _alpaca_creds_configured = bool(_alpaca_key and _alpaca_secret)
