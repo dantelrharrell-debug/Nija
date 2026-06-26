@@ -1739,7 +1739,15 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
-        """Get market data from Kraken."""
+        """Get market data from Kraken.
+
+        CRITICAL: pykrakenapi retries indefinitely on RemoteDisconnected errors,
+        which causes the signal loop to hang for hours on a single symbol.
+        Wraps get_ohlc_data() in a daemon thread with a hard 15-second timeout
+        so a broken Kraken connection never blocks the entire trading loop.
+        On timeout, returns None so the signal loop skips this symbol and
+        continues scanning the remaining symbols.
+        """
         try:
             if not self.kraken_api:
                 return None
@@ -1755,12 +1763,40 @@ class KrakenBrokerAdapter(BrokerInterface):
 
             kraken_interval = interval_map.get(timeframe.lower(), 5)
 
-            # Fetch OHLC data
-            ohlc, last = self.kraken_api.get_ohlc_data(
-                kraken_symbol,
-                interval=kraken_interval,
-                ascending=True
-            )
+            # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
+            # Wrap in a 15-second thread timeout so a broken connection never hangs the
+            # signal loop for hours (root cause of 49+ minute stalls at idx=11/911).
+            _ohlc_result_holder: List[Any] = [None]
+            _ohlc_err_holder: List[Any] = [None]
+            _kraken_symbol_cap = kraken_symbol
+            _kraken_interval_cap = kraken_interval
+
+            def _fetch_ohlc() -> None:
+                try:
+                    _ohlc_result_holder[0] = self.kraken_api.get_ohlc_data(
+                        _kraken_symbol_cap,
+                        interval=_kraken_interval_cap,
+                        ascending=True,
+                    )
+                except Exception as _oe:
+                    _ohlc_err_holder[0] = _oe
+
+            _ohlc_timeout = float(os.getenv("NIJA_KRAKEN_OHLC_TIMEOUT", "15"))
+            _ohlc_thread = threading.Thread(target=_fetch_ohlc, daemon=True)
+            _ohlc_thread.start()
+            _ohlc_thread.join(_ohlc_timeout)
+            if _ohlc_thread.is_alive():
+                logger.warning(
+                    "⏱️ get_ohlc_data for %s timed out after %.0fs — "
+                    "skipping symbol (NIJA_KRAKEN_OHLC_TIMEOUT=%.0f). "
+                    "Signal loop will continue with next symbol.",
+                    symbol, _ohlc_timeout, _ohlc_timeout,
+                )
+                return None
+            if _ohlc_err_holder[0] is not None:
+                raise _ohlc_err_holder[0]
+
+            ohlc, last = _ohlc_result_holder[0]
 
             # Convert to standard format (vectorised – avoids iterrows overhead)
             tail = ohlc.tail(limit)

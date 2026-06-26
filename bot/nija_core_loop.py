@@ -1961,6 +1961,7 @@ class NijaCoreLoop:
         # healthy but the market is producing no entries.
         _data_attempts = 0
         _data_successes = 0
+        _data_skipped_timeout = 0  # symbols skipped due to broker API timeout/connection error
         _scoring_errors = 0
         _abs_return_sum = 0.0
         _abs_return_count = 0
@@ -1998,7 +1999,7 @@ class NijaCoreLoop:
                 logger.critical(
                     "🔁 [Phase3] SIGNAL_LOOP_PROGRESS — symbol %d/%d | "
                     "symbol=%s candidates_so_far=%d scored_so_far=%d "
-                    "data_ok=%d data_fail=%d blocked_so_far=%d",
+                    "data_ok=%d data_fail=%d timeout_skipped=%d blocked_so_far=%d",
                     _symbol_idx + 1,
                     len(symbols),
                     symbol,
@@ -2006,13 +2007,15 @@ class NijaCoreLoop:
                     scored,
                     _data_successes,
                     _prog_data_fail,
+                    _data_skipped_timeout,
                     blocked,
                 )
                 print(
                     f"[NIJA-PRINT] SIGNAL_LOOP_PROGRESS | "
                     f"idx={_symbol_idx + 1}/{len(symbols)} sym={symbol} "
                     f"candidates={len(candidates)} scored={scored} "
-                    f"data_ok={_data_successes} data_fail={_prog_data_fail} blocked={blocked}",
+                    f"data_ok={_data_successes} data_fail={_prog_data_fail} "
+                    f"timeout_skipped={_data_skipped_timeout} blocked={blocked}",
                     flush=True,
                 )
             # Cap: stop scoring once we have 10× the available slots — enough
@@ -2038,16 +2041,25 @@ class NijaCoreLoop:
                 if df is None or _df_len < _MIN_CANDLES:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "data_insufficient")
-                    _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
+                    # df is None specifically indicates a timeout or connection
+                    # error (broker returned nothing at all vs. too-short data).
+                    if df is None:
+                        _data_skipped_timeout += 1
+                        _funnel["market_data"] = ("FAIL", "DATA_TIMEOUT_OR_EMPTY")
+                    else:
+                        _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     _gate_rejections["data_insufficient"] += 1
                     # Log the first 3 data failures at critical level so the
                     # root cause is visible even when debug logging is off.
                     if _gate_rejections["data_insufficient"] <= 3:
                         logger.critical(
                             "🚨 [DIAG] DATA_INSUFFICIENT symbol=%s df_len=%d "
-                            "(need>=%d) df_is_none=%s — broker returned no/short data. "
+                            "(need>=%d) df_is_none=%s — broker returned no/short data "
+                            "(timeout_skipped_so_far=%d). "
+                            "Signal loop skipping symbol and continuing. "
                             "data_insufficient_count=%d/%d",
                             symbol, _df_len, _MIN_CANDLES, df is None,
+                            _data_skipped_timeout,
                             _gate_rejections["data_insufficient"], _data_attempts,
                         )
                     continue
@@ -2338,7 +2350,7 @@ class NijaCoreLoop:
             "🔁 [Phase3] SIGNAL_LOOP_END — symbol scoring loop finished | "
             "symbols_total=%d scored=%d candidates=%d momentum_candidates=%d "
             "blocked=%d scoring_errors=%d data_insufficient=%d indicators_failed=%d "
-            "data_attempts=%d data_successes=%d",
+            "data_attempts=%d data_successes=%d timeout_skipped=%d",
             len(symbols),
             scored,
             len(candidates),
@@ -2349,15 +2361,27 @@ class NijaCoreLoop:
             _indic_fail_end,
             _data_attempts,
             _data_successes,
+            _data_skipped_timeout,
         )
         print(
             f"[NIJA-PRINT] SIGNAL_LOOP_END | symbols={len(symbols)} scored={scored} "
             f"candidates={len(candidates)} momentum={len(momentum_candidates)} "
             f"blocked={blocked} errors={_scoring_errors} "
             f"data_insufficient={_data_insuff_end} indicators_failed={_indic_fail_end} "
-            f"data_attempts={_data_attempts} data_successes={_data_successes}",
+            f"data_attempts={_data_attempts} data_successes={_data_successes} "
+            f"timeout_skipped={_data_skipped_timeout}",
             flush=True,
         )
+        # Diagnose timeout-skipped symbols — visible even when some symbols scored OK
+        if _data_skipped_timeout > 0:
+            logger.critical(
+                "⏱️ [DIAG] TIMEOUT_SKIPPED: %d/%d symbols returned None from broker "
+                "(API timeout or connection error). Signal loop skipped these symbols "
+                "and continued scanning. Check Kraken API connectivity. "
+                "Set NIJA_KRAKEN_OHLC_TIMEOUT / NIJA_CANDLE_FETCH_TIMEOUT to adjust.",
+                _data_skipped_timeout, _data_attempts,
+            )
+
         # Diagnose the most common failure mode: all symbols failing data fetch
         if scored == 0 and _data_attempts > 0:
             if _data_insuff_end == _data_attempts:
