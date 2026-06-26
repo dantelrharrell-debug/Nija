@@ -1055,6 +1055,20 @@ class CapitalAuthority:
                             continue
                         broker_key = normalize_broker_identifier(broker_identifier)
                         effective_broker_map[broker_key] = broker
+                # Also include connected user account brokers so their balances
+                # are counted when the primary broker_map was empty (fallback path).
+                user_brokers_map = getattr(canonical_broker_manager, "user_brokers", None) or {}
+                if isinstance(user_brokers_map, Mapping):
+                    for _uid, _ubroker_dict in user_brokers_map.items():
+                        if not isinstance(_ubroker_dict, Mapping):
+                            continue
+                        for _ubt, _ubroker in _ubroker_dict.items():
+                            if _ubroker is None:
+                                continue
+                            if not getattr(_ubroker, "connected", False):
+                                continue
+                            _ukey = f"{_uid}_{normalize_broker_identifier(_ubt)}"
+                            effective_broker_map[_ukey] = _ubroker
                 if effective_broker_map:
                     logger.info(
                         "[CapitalAuthority] refresh hydrated source graph from broker registry: brokers=%s",
