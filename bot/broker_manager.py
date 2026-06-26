@@ -12264,6 +12264,22 @@ class OKXBroker(BaseBroker):
             manager.register_broker("okx", self)
             assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
         try:
+            # ── candlelite permission fix ─────────────────────────────────────
+            # The okx SDK depends on candlelite, which writes a SETTINGS.config
+            # file to its own package directory inside site-packages on first
+            # import.  In containerised environments that directory is read-only,
+            # causing a [Errno 13] Permission denied error that prevents OKX from
+            # connecting at all.  Redirecting CANDLELITE_CONFIG_DIR to /tmp before
+            # the import ensures candlelite always has a writable location.
+            import tempfile as _tempfile
+            _candlelite_dir = os.path.join(_tempfile.gettempdir(), "candlelite")
+            try:
+                os.makedirs(_candlelite_dir, exist_ok=True)
+            except OSError:
+                _candlelite_dir = _tempfile.gettempdir()
+            os.environ.setdefault("CANDLELITE_CONFIG_DIR", _candlelite_dir)
+            # ─────────────────────────────────────────────────────────────────
+
             from okx.api import Account, Market, Trade
             import time
 
