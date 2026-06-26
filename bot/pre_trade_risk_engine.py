@@ -36,7 +36,7 @@ class PreTradeRiskEngine:
       entirely (fail-open) to avoid blocking orders when balance data is
       temporarily unavailable.
     * The default cap is read from the ``NIJA_MAX_TOTAL_EXPOSURE_PCT``
-      environment variable (default 0.80 = 80 %) so it matches the
+      environment variable (default 0.50 = 50 %) so it matches the
       portfolio-level risk configuration without requiring a code change.
     """
 
@@ -46,13 +46,24 @@ class PreTradeRiskEngine:
         max_total_exposure_pct: Optional[float] = None,
     ) -> None:
         # Allow the exposure cap to be tuned via environment variable so the
-        # production value (80 %) is respected without a code change.
+        # production value can be configured without a code change.
+        # Checks NIJA_MAX_TOTAL_EXPOSURE_PCT first, then NIJA_MAX_POSITION_SIZE_PCT,
+        # then MAX_POSITION_PCT, defaulting to 0.50 (50 %).
         if max_total_exposure_pct is None:
-            _env_cap = os.getenv("NIJA_MAX_TOTAL_EXPOSURE_PCT", "").strip()
+            _env_cap = (
+                os.getenv("NIJA_MAX_TOTAL_EXPOSURE_PCT", "").strip()
+                or os.getenv("NIJA_MAX_POSITION_SIZE_PCT", "").strip()
+                or os.getenv("MAX_POSITION_PCT", "").strip()
+            )
             try:
-                max_total_exposure_pct = float(_env_cap) if _env_cap else 0.80
+                if _env_cap:
+                    _parsed = float(_env_cap)
+                    # Support both fractional (0.50) and percentage (50) representations
+                    max_total_exposure_pct = _parsed / 100.0 if _parsed > 1.0 else _parsed
+                else:
+                    max_total_exposure_pct = 0.50
             except (TypeError, ValueError):
-                max_total_exposure_pct = 0.80
+                max_total_exposure_pct = 0.50
         self.max_symbol_exposure_pct = float(max_symbol_exposure_pct)
         self.max_total_exposure_pct = float(max_total_exposure_pct)
         self._lock = threading.RLock()
