@@ -1412,11 +1412,51 @@ class ExecutionPipeline:
 
         if self._pre_trade_risk_engine is not None:
             try:
+                # Resolve the live available balance for the risk check.
+                # The PipelineRequest.available_balance_usd field is populated by
+                # callers that know the balance at call time (e.g. ExecutionEngine).
+                # However, some call paths (e.g. submit_market_order_via_pipeline,
+                # SignalBroadcaster) do not set it, leaving it None.  When it is
+                # absent or zero, fall back to the CapitalAuthority singleton so
+                # the risk engine always receives the actual live account balance
+                # rather than a stale cached value or None (which would cause the
+                # cap check to be skipped entirely via the fail-open path).
+                _risk_balance: Optional[float] = working_request.available_balance_usd
+                if not _risk_balance:
+                    try:
+                        _ca_mod = None
+                        for _ca_mod_name in ("bot.capital_authority", "capital_authority"):
+                            try:
+                                import importlib as _il
+                                _ca_mod = _il.import_module(_ca_mod_name)
+                                break
+                            except ImportError:
+                                continue
+                        if _ca_mod is not None:
+                            _get_ca = getattr(_ca_mod, "get_capital_authority", None)
+                            if callable(_get_ca):
+                                _ca = _get_ca()
+                                _ca_balance = float(_ca.get_usable_capital() or 0.0)
+                                if _ca_balance > 0.0:
+                                    _risk_balance = _ca_balance
+                                    logger.info(
+                                        "📊 [Pipeline] PreTradeRisk: resolved live balance "
+                                        "from CapitalAuthority | account=%s balance_usd=%.2f "
+                                        "(request had available_balance_usd=%s)",
+                                        working_request.account_id,
+                                        _ca_balance,
+                                        working_request.available_balance_usd,
+                                    )
+                    except Exception as _ca_exc:
+                        logger.debug(
+                            "Pipeline: capital authority balance lookup failed (non-fatal): %s",
+                            _ca_exc,
+                        )
                 risk_decision = self._pre_trade_risk_engine.assess(
                     account_id=working_request.account_id,
                     symbol=working_request.symbol,
                     size_usd=working_request.size_usd,
-                    available_balance_usd=working_request.available_balance_usd,
+                    available_balance_usd=_risk_balance,
                 )
                 if not risk_decision.approved:
                     with execution_authority_scope():

@@ -131,6 +131,55 @@ def submit_market_order_via_pipeline(
 
     preferred_broker = _resolve_preferred_broker(broker)
 
+    # Resolve the live available balance from the CapitalAuthority so the
+    # PreTradeRiskEngine receives the correct account balance for the exposure
+    # cap check.  Without this, available_balance_usd is None and the risk
+    # engine either skips the cap (fail-open) or uses a stale cached value
+    # that may be far smaller than the real balance, causing false rejections.
+    _available_balance_usd: Optional[float] = None
+    try:
+        for _ca_mod_name in ("bot.capital_authority", "capital_authority"):
+            try:
+                import importlib as _il
+                _ca_mod = _il.import_module(_ca_mod_name)
+                _get_ca = getattr(_ca_mod, "get_capital_authority", None)
+                if callable(_get_ca):
+                    _ca = _get_ca()
+                    _ca_balance = float(_ca.get_usable_capital() or 0.0)
+                    if _ca_balance > 0.0:
+                        _available_balance_usd = _ca_balance
+                        logger.info(
+                            "[PipelineOrderSubmitter] resolved live balance from "
+                            "CapitalAuthority: $%.2f for symbol=%s side=%s",
+                            _ca_balance, symbol, side_norm,
+                        )
+                break
+            except ImportError:
+                continue
+    except Exception as _ca_exc:
+        logger.debug(
+            "[PipelineOrderSubmitter] capital authority balance lookup failed "
+            "(non-fatal, risk engine will use fail-open): %s",
+            _ca_exc,
+        )
+
+    # Fall back to broker's cached balance when CapitalAuthority is unavailable.
+    if not _available_balance_usd:
+        try:
+            if broker is not None and hasattr(broker, "get_account_balance"):
+                _raw = broker.get_account_balance()
+                if isinstance(_raw, dict):
+                    _available_balance_usd = float(
+                        _raw.get("trading_balance")
+                        or _raw.get("available_balance")
+                        or _raw.get("balance")
+                        or 0.0
+                    )
+                else:
+                    _available_balance_usd = float(_raw or 0.0)
+        except Exception:
+            pass
+
     res = get_execution_pipeline().execute(
         PipelineRequest(
             strategy=strategy,
@@ -140,6 +189,7 @@ def submit_market_order_via_pipeline(
             order_type="MARKET",
             preferred_broker=preferred_broker,
             price_hint_usd=price_hint_usd,
+            available_balance_usd=_available_balance_usd if _available_balance_usd else None,
         )
     )
 
