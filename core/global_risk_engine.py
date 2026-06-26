@@ -19,6 +19,7 @@ Date: January 27, 2026
 """
 
 import logging
+import os
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
@@ -27,6 +28,27 @@ import threading
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Environment-driven defaults for GlobalRiskEngine
+# ---------------------------------------------------------------------------
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float from an environment variable, falling back to *default*."""
+    val = os.getenv(name, "").strip()
+    try:
+        return float(val) if val else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int from an environment variable, falling back to *default*."""
+    val = os.getenv(name, "").strip()
+    try:
+        return int(float(val)) if val else default
+    except (TypeError, ValueError):
+        return default
 
 
 class RiskLevel(Enum):
@@ -127,27 +149,62 @@ class GlobalRiskEngine:
     """
 
     def __init__(self,
-                 max_portfolio_exposure_pct: float = 0.80,
-                 max_daily_loss_pct: float = 0.05,
-                 max_drawdown_pct: float = 0.20,
-                 max_total_positions: int = 50,
+                 max_portfolio_exposure_pct: Optional[float] = None,
+                 max_daily_loss_pct: Optional[float] = None,
+                 max_drawdown_pct: Optional[float] = None,
+                 max_total_positions: Optional[int] = None,
                  max_positions_per_account: int = 10,
                  correlation_threshold: float = 0.7):
         """
         Initialize Global Risk Engine
 
         Args:
-            max_portfolio_exposure_pct: Maximum portfolio exposure (0.80 = 80%)
-            max_daily_loss_pct: Maximum daily loss percentage (0.05 = 5%)
-            max_drawdown_pct: Maximum drawdown percentage (0.20 = 20%)
-            max_total_positions: Maximum total positions across all accounts
+            max_portfolio_exposure_pct: Maximum portfolio exposure (default 0.50 = 50%,
+                overridable via NIJA_MAX_POSITION_SIZE_PCT or MAX_POSITION_PCT env var)
+            max_daily_loss_pct: Maximum daily loss percentage (default 0.02 = 2%,
+                overridable via NIJA_MAX_DAILY_LOSS_PCT env var)
+            max_drawdown_pct: Maximum drawdown percentage (default 0.02 = 2%,
+                overridable via NIJA_MAX_DRAWDOWN_PCT env var)
+            max_total_positions: Maximum total positions across all accounts (default 8,
+                overridable via NIJA_MAX_POSITIONS or MAX_CONCURRENT_POSITIONS env var)
             max_positions_per_account: Maximum positions per individual account
             correlation_threshold: Correlation threshold for risk alerts
         """
-        self.max_portfolio_exposure_pct = max_portfolio_exposure_pct
-        self.max_daily_loss_pct = max_daily_loss_pct
-        self.max_drawdown_pct = max_drawdown_pct
-        self.max_total_positions = max_total_positions
+        # Portfolio exposure cap — prefer explicit arg, then env var, then safe default
+        if max_portfolio_exposure_pct is None:
+            max_portfolio_exposure_pct = (
+                _env_float("NIJA_MAX_POSITION_SIZE_PCT", 0.0)
+                or _env_float("MAX_POSITION_PCT", 0.0)
+                or 0.50
+            )
+        self.max_portfolio_exposure_pct = float(max_portfolio_exposure_pct)
+
+        # Daily loss limit
+        if max_daily_loss_pct is None:
+            _raw = _env_float("NIJA_MAX_DAILY_LOSS_PCT", 0.0)
+            # Support both fractional (0.02) and percentage (2) representations
+            if _raw > 1.0:
+                _raw = _raw / 100.0
+            max_daily_loss_pct = _raw if _raw > 0.0 else 0.02
+        self.max_daily_loss_pct = float(max_daily_loss_pct)
+
+        # Max drawdown
+        if max_drawdown_pct is None:
+            _raw = _env_float("NIJA_MAX_DRAWDOWN_PCT", 0.0)
+            if _raw > 1.0:
+                _raw = _raw / 100.0
+            max_drawdown_pct = _raw if _raw > 0.0 else 0.02
+        self.max_drawdown_pct = float(max_drawdown_pct)
+
+        # Max total positions
+        if max_total_positions is None:
+            max_total_positions = (
+                _env_int("NIJA_MAX_POSITIONS", 0)
+                or _env_int("MAX_CONCURRENT_POSITIONS", 0)
+                or 8
+            )
+        self.max_total_positions = int(max_total_positions)
+
         self.max_positions_per_account = max_positions_per_account
         self.correlation_threshold = correlation_threshold
 
