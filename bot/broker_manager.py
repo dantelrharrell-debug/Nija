@@ -2487,6 +2487,14 @@ class CoinbaseBroker(BaseBroker):
         self._balance_cache_time = None
         self._cache_ttl = 120  # Cache TTL in seconds (increased from 30s to 120s to reduce API calls and avoid rate limits)
 
+        # Short-lived candle cache: avoids redundant Coinbase API calls when the
+        # same symbol is requested multiple times within a single scan cycle.
+        # Key: (symbol, timeframe, count) → (candles_list, fetch_timestamp)
+        # TTL: 30 seconds — fresh enough for 1-minute candles, avoids rate-limit hits.
+        self._candle_cache: dict = {}
+        self._candle_cache_lock = threading.Lock()
+        self._candle_cache_ttl: float = float(os.getenv("NIJA_COINBASE_CANDLE_CACHE_TTL", "30"))
+
         # Initialize rate limiter for API calls to prevent 403/429 errors
         # Coinbase has strict rate limits: ~10 req/s burst but much lower sustained rate
         # Using 12 requests per minute (1 every 5 seconds) for safe sustained operation
@@ -6106,6 +6114,24 @@ class CoinbaseBroker(BaseBroker):
             logging.debug(f"⚠️  Skipping cached invalid symbol: {symbol}")
             return []
 
+        # Short-lived candle cache: serve from cache when the same (symbol, timeframe,
+        # count) was fetched within the last NIJA_COINBASE_CANDLE_CACHE_TTL seconds.
+        # This prevents redundant API calls when multiple strategy components request
+        # the same candle data within a single scan cycle, reducing latency and
+        # avoiding Coinbase rate-limit hits.
+        _cache_key = (symbol, timeframe, count)
+        with self._candle_cache_lock:
+            _cached_entry = self._candle_cache.get(_cache_key)
+        if _cached_entry is not None:
+            _cached_candles, _cached_ts = _cached_entry
+            _cache_age = time.time() - _cached_ts
+            if _cache_age < self._candle_cache_ttl:
+                logging.debug(
+                    f"[get_candles] {symbol}: returning cached candles "
+                    f"({len(_cached_candles)} rows, {_cache_age:.1f}s old)"
+                )
+                return _cached_candles
+
         # Diagnostic: log the first 3 candle fetch calls at WARNING level so they
         # are visible in production logs without enabling DEBUG logging.
         _candle_call_count = getattr(self, "_candle_call_count", 0) + 1
@@ -6183,15 +6209,50 @@ class CoinbaseBroker(BaseBroker):
             )
             return []
 
+        # Timeout for a single Coinbase candle fetch (configurable via env var).
+        # Prevents slow Coinbase responses from blocking the entire scan loop.
+        _cb_candle_timeout = float(os.getenv("NIJA_COINBASE_CANDLE_TIMEOUT", "20"))
+
         # Use rate limiter if available
         for attempt in range(RATE_LIMIT_MAX_RETRIES):
             try:
-                if self._rate_limiter:
-                    # Rate-limited call - automatically enforces minimum interval between requests
-                    return self._rate_limiter.call('get_candles', _fetch_candles)
-                else:
-                    # Fallback to direct call without rate limiting
-                    return _fetch_candles()
+                # Wrap the actual fetch in a daemon thread with a hard timeout so a
+                # slow or hung Coinbase connection never stalls the scan loop.
+                _fetch_result_holder: List[Any] = [None]
+                _fetch_err_holder: List[Any] = [None]
+
+                def _timed_fetch():
+                    try:
+                        if self._rate_limiter:
+                            _fetch_result_holder[0] = self._rate_limiter.call('get_candles', _fetch_candles)
+                        else:
+                            _fetch_result_holder[0] = _fetch_candles()
+                    except Exception as _fe:
+                        _fetch_err_holder[0] = _fe
+
+                _fetch_thread = threading.Thread(target=_timed_fetch, daemon=True)
+                _fetch_thread.start()
+                _fetch_thread.join(_cb_candle_timeout)
+
+                if _fetch_thread.is_alive():
+                    logging.warning(
+                        f"⏱️ [get_candles] {symbol}: Coinbase fetch timed out after "
+                        f"{_cb_candle_timeout:.0f}s — skipping symbol "
+                        f"(NIJA_COINBASE_CANDLE_TIMEOUT={_cb_candle_timeout:.0f})"
+                    )
+                    return []
+
+                if _fetch_err_holder[0] is not None:
+                    raise _fetch_err_holder[0]
+
+                _result = _fetch_result_holder[0] or []
+
+                # Store successful (non-empty) result in the short-lived candle cache
+                # so repeated requests within the same scan cycle are served instantly.
+                if _result:
+                    with self._candle_cache_lock:
+                        self._candle_cache[_cache_key] = (_result, time.time())
+                return _result
 
             except Exception as e:
                 error_str = str(e).lower()
@@ -7148,6 +7209,13 @@ class BinanceBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        enable_binance = os.getenv("ENABLE_BINANCE", "true").lower() in ("1", "true", "yes", "on")
+        if not enable_binance:
+            logger.warning(
+                "⚠️  Binance disabled (ENABLE_BINANCE=false) — skipping connection for %s",
+                getattr(self, "account_identifier", "PLATFORM"),
+            )
+            return False
         if self.account_type == AccountType.PLATFORM:
             try:
                 from bot.multi_account_broker_manager import get_broker_manager
@@ -7859,11 +7927,17 @@ class KrakenBroker(BaseBroker):
         self._kraken_balance_cache_ttl: int = _KRAKEN_BALANCE_CACHE_TTL_SECONDS
 
         # Short-lived price cache for get_current_price().
-        # Stores {symbol: {"price": float, "ts": float}} where ts = time.monotonic().
+        # Stores {symbol: {\"price\": float, \"ts\": float}} where ts = time.monotonic().
         # Used as a fallback when a live ticker fetch times out — if the cached
         # price is ≤10 s old it is returned so the scan loop is never blocked.
         self._price_cache: dict = {}
         self._price_cache_lock = threading.Lock()
+
+        # Cache of symbols that returned "EQuery:Unknown asset pair" from the
+        # Kraken Ticker API.  These are skipped on subsequent calls so they
+        # never block the scan loop or spam the Emergency Resolver.
+        self._unknown_pairs_cache: set = set()
+        self._unknown_pairs_lock = threading.Lock()
 
         # CONNECTION STABILITY: Initialize per-broker watchdog and HTTP pool manager
         # Mirrors the CoinbaseBroker pattern so Kraken connections benefit from the
@@ -10507,6 +10581,13 @@ class KrakenBroker(BaseBroker):
                 logger.error(f"❌ Price fetch failed for {symbol} — Kraken API not connected")
                 return 0.0
 
+            # Fast-path: skip symbols that previously returned "EQuery:Unknown asset pair"
+            # so they never block the scan loop or spam the Emergency Resolver.
+            with self._unknown_pairs_lock:
+                if symbol in self._unknown_pairs_cache:
+                    logger.debug(f"⏭️ Skipping cached unknown Kraken pair: {symbol}")
+                    return 0.0
+
             # CRITICAL: Use symbol mapper to convert to Kraken format
             # This ensures we use the correct format (e.g., XETHZUSD, XXBTZUSD)
             # instead of incorrect formats like ETHUSD, BTCUSD
@@ -10589,7 +10670,18 @@ class KrakenBroker(BaseBroker):
             else:
                 logger.warning(f"⚠️ Ticker API error for {symbol} — activating Emergency Resolver")
                 if ticker_result and 'error' in ticker_result and ticker_result['error']:
-                    logger.warning(f"   API errors: {', '.join(ticker_result['error'])}")
+                    api_errors = ticker_result['error']
+                    logger.warning(f"   API errors: {', '.join(api_errors)}")
+                    # Detect "EQuery:Unknown asset pair" — cache the symbol so future
+                    # calls skip it immediately without hitting the API or Emergency Resolver.
+                    if any("unknown asset pair" in e.lower() for e in api_errors):
+                        with self._unknown_pairs_lock:
+                            self._unknown_pairs_cache.add(symbol)
+                        logger.warning(
+                            f"⏭️ Kraken: '{symbol}' is an unknown asset pair — "
+                            f"cached and will be skipped on future price fetches"
+                        )
+                        return 0.0
                 return float(self._resolve_price_emergency(symbol) or 0.0)
 
         except Exception as e:
