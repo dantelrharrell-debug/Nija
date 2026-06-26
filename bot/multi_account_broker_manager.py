@@ -2260,6 +2260,30 @@ class MultiAccountBrokerManager:
                 )
                 broker_map[broker_type.value] = broker
 
+            # ── User broker aggregation ───────────────────────────────────────
+            # Include connected user account brokers in the capital snapshot so
+            # that user-held balances (e.g. Kraken user accounts, Coinbase user
+            # accounts) are counted toward the total.  Without this loop only
+            # platform-level balances are aggregated, causing CapitalAuthority to
+            # report a fraction of the true account balance and the risk engine to
+            # reject trades based on an artificially low exposure cap.
+            #
+            # Key format mirrors get_all_brokers(): "{user_id}_{broker_type.value}"
+            # This guarantees uniqueness and avoids collisions with platform keys.
+            for _user_id, _user_broker_dict in self.user_brokers.items():
+                for _user_broker_type, _user_broker in _user_broker_dict.items():
+                    if _user_broker is None:
+                        continue
+                    if not getattr(_user_broker, "connected", False):
+                        continue
+                    _user_broker_key = f"{_user_id}_{_user_broker_type.value}"
+                    broker_map[_user_broker_key] = _user_broker
+                    logger.info(
+                        "[CapitalAuthorityRefresh] trigger=%s include user_broker=%s reason=connected",
+                        trigger,
+                        _user_broker_key,
+                    )
+
             logger.info(
                 "[CapitalAuthorityRefresh] trigger=%s eligible_brokers=%s",
                 trigger,
