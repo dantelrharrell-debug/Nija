@@ -1005,6 +1005,68 @@ def _emit_trade_admission_telemetry(
         logger.debug("Execution drop telemetry emit failed: %s", exc)
 
 
+
+def _attempt_live_dispatch_commit_repair(reason: str) -> bool:
+    """Repair a stale startup-coordinator dispatch latch after LIVE activation.
+
+    A crash/exception between TradingStateMachine.transition_to(LIVE_ACTIVE) and
+    StartupCoordinator.finalize_activation_commit() can leave the runtime trading
+    FSM live while the coordinator still reports BOOT/WARM.  That makes the
+    lifecycle gate reject every order even though activation was already
+    committed.  Repair only when independent live-safety indicators agree that
+    the process is already live; the normal per-order gates below still validate
+    writer lease, nonce, heartbeat, broker health and circuit state.
+    """
+    trading_state = str(os.getenv("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper()
+    runtime_exec = _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    live_verified = _env_truthy("LIVE_CAPITAL_VERIFIED")
+    dry_run = _env_truthy("DRY_RUN_MODE") or _env_truthy("PAPER_MODE")
+    if trading_state != "LIVE_ACTIVE" or not runtime_exec or not live_verified or dry_run:
+        return False
+
+    try:
+        try:
+            from bot.kill_switch import get_kill_switch
+        except ImportError:
+            from kill_switch import get_kill_switch  # type: ignore[import]
+        if bool(get_kill_switch().is_active()):
+            return False
+    except Exception:
+        # If kill-switch state cannot be proven safe, do not repair the latch.
+        return False
+
+    try:
+        try:
+            from bot.startup_coordinator import get_startup_coordinator
+        except ImportError:
+            from startup_coordinator import get_startup_coordinator  # type: ignore[import]
+        coordinator = get_startup_coordinator()
+        before = coordinator.build_snapshot(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        )
+        if getattr(before, "lifecycle_phase", "") == "LIVE" and bool(getattr(before, "dispatch_enabled", False)):
+            return False
+        coordinator.force_activate_bypass(
+            f"live_dispatch_commit_repair:{reason}:previous_phase={getattr(before, 'lifecycle_phase', '<unknown>')}"
+        )
+        after = coordinator.build_snapshot(
+            trading_state="LIVE_ACTIVE",
+            activation_intent=True,
+        )
+        repaired = getattr(after, "lifecycle_phase", "") == "LIVE" and bool(getattr(after, "dispatch_enabled", False))
+        if repaired:
+            logger.critical(
+                "ExecutionAuthority: repaired stale startup-coordinator dispatch latch "
+                "after LIVE_ACTIVE commit (reason=%s previous_phase=%s)",
+                reason,
+                getattr(before, "lifecycle_phase", "<unknown>"),
+            )
+        return bool(repaired)
+    except Exception as exc:
+        logger.warning("ExecutionAuthority: live dispatch latch repair failed: %s", exc)
+        return False
+
 def can_execute() -> ExecutionDecision:
     """Canonical execution authority decision for all order-dispatch paths."""
     runtime_snapshot = runtime_authority_snapshot()
@@ -1021,6 +1083,13 @@ def can_execute() -> ExecutionDecision:
         from startup_coordinator import LifecyclePhase  # type: ignore[import]
 
     current_lifecycle_phase = str(runtime_snapshot.lifecycle_phase)
+    if current_lifecycle_phase != LifecyclePhase.LIVE.value:
+        if _attempt_live_dispatch_commit_repair(
+            f"can_execute_lifecycle_gate:{current_lifecycle_phase}"
+        ):
+            runtime_snapshot = runtime_authority_snapshot()
+            current_lifecycle_phase = str(runtime_snapshot.lifecycle_phase)
+
     if current_lifecycle_phase != LifecyclePhase.LIVE.value:
         reason_detail = f"lifecycle_phase:{current_lifecycle_phase}"
         _emit_trade_admission_telemetry(

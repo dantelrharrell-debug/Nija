@@ -16,7 +16,7 @@ Each file contains a single user configuration with format:
   "broker": "kraken",
   "role": "user",
   "enabled": true,
-  "copy_from_platform": true,
+  "copy_from_platform": false,
   "risk_multiplier": 1.0
 }
 """
@@ -62,9 +62,9 @@ class IndividualUserConfig:
         broker: str,
         role: str = "user",
         enabled: bool = True,
-        copy_from_platform: bool = True,
+        copy_from_platform: bool = False,
         risk_multiplier: float = 1.0,
-        independent_trading: bool = False,
+        independent_trading: bool = True,
         active_trading: bool = True,
         mode: str = "normal"
     ):
@@ -77,9 +77,9 @@ class IndividualUserConfig:
             broker: Brokerage type (e.g., 'kraken', 'alpaca', 'coinbase')
             role: User role (default: 'user')
             enabled: Whether this account is active
-            copy_from_platform: Whether to copy trades from master
+            copy_from_platform: Whether to copy trades from platform (default: False)
             risk_multiplier: Risk multiplier (default: 1.0)
-            independent_trading: Whether user should run independent trading thread (default: False)
+            independent_trading: Whether user should run independent trading thread (default: True)
             active_trading: Allow new trade entries for this user (default: True). Set False during
                             recovery to stop new entries while existing positions are closed out.
             mode: Per-account trading mode controlling risk rules (default: 'normal').
@@ -115,9 +115,9 @@ class IndividualUserConfig:
             broker=data['broker'],
             role=data.get('role', 'user'),
             enabled=data.get('enabled', True),
-            copy_from_platform=data.get('copy_from_platform', True),
+            copy_from_platform=data.get('copy_from_platform', False),
             risk_multiplier=data.get('risk_multiplier', 1.0),
-            independent_trading=data.get('independent_trading', False),
+            independent_trading=data.get('independent_trading', True),
             active_trading=data.get('active_trading', True),
             mode=data.get('mode', 'normal')
         )

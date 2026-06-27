@@ -3093,6 +3093,11 @@ class OKXBrokerAdapter(BrokerInterface):
 
     def connect(self) -> bool:
         """Connect to OKX API."""
+        logger.info(
+            "⏭️  OKX adapter disabled: skipping SDK import because okx/candlelite "
+            "is not read-only-container safe"
+        )
+        return False
         try:
             from okx.api import Account, Market, Trade
 

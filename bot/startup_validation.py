@@ -12,12 +12,15 @@ This module provides validation for:
 import os
 import re
 import logging
+import threading
 import math
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nija")
+_VALIDATION_REPORT_LOCK = threading.Lock()
+_VALIDATION_REPORT_EMITTED = False
 # Execution unlock timeout guardrails:
 # - minimum 1s avoids zero/negative no-wait unlock paths
 # - maximum 300s avoids long silent startup stalls due to bad configuration
@@ -245,6 +248,86 @@ def _kraken_credentials_viable() -> Tuple[bool, str]:
     return False, ""
 
 
+def _kraken_user_env_suffixes(user_id: str) -> List[str]:
+    """Return credential suffixes accepted by Kraken user-account loading code."""
+    normalized = str(user_id or "").strip().replace("-", "_")
+    if not normalized:
+        return []
+    if normalized.lower().startswith("user_"):
+        normalized = normalized[5:]
+    pieces = [normalized.split("_")[0], normalized, str(user_id).strip().replace("-", "_")]
+    suffixes: List[str] = []
+    seen = set()
+    for piece in pieces:
+        suffix = re.sub(r"[^A-Za-z0-9_]", "_", piece).upper().strip("_")
+        if suffix and suffix not in seen:
+            suffixes.append(suffix)
+            seen.add(suffix)
+    return suffixes
+
+
+def _kraken_user_credentials_viable(user_id: str) -> Tuple[bool, str, str]:
+    """Check one configured Kraken user's key/secret pair without making API calls."""
+    first_key_var = ""
+    first_secret_var = ""
+    for suffix in _kraken_user_env_suffixes(user_id):
+        key_var = f"KRAKEN_USER_{suffix}_API_KEY"
+        secret_var = f"KRAKEN_USER_{suffix}_API_SECRET"
+        if not first_key_var:
+            first_key_var = key_var
+            first_secret_var = secret_var
+        key = os.getenv(key_var, "").strip()
+        secret = os.getenv(secret_var, "").strip()
+        if (_credential_looks_valid(key, _MIN_LENGTHS["kraken_key"]) and
+                _credential_looks_valid(secret, _MIN_LENGTHS["kraken_secret"])):
+            return True, f"{key_var} / {secret_var}", ""
+        if key or secret:
+            missing = []
+            if not _credential_looks_valid(key, _MIN_LENGTHS["kraken_key"]):
+                missing.append(key_var)
+            if not _credential_looks_valid(secret, _MIN_LENGTHS["kraken_secret"]):
+                missing.append(secret_var)
+            return False, f"{key_var} / {secret_var}", ", ".join(missing)
+    expected = (
+        f"{first_key_var} / {first_secret_var}"
+        if first_key_var
+        else "KRAKEN_USER_<USER>_API_KEY / KRAKEN_USER_<USER>_API_SECRET"
+    )
+    return False, expected, "missing key and secret"
+
+
+def _enabled_kraken_config_users() -> List[str]:
+    """Return enabled Kraken users from config, respecting user-account feature flags."""
+    if os.getenv("NIJA_DISABLE_USER_ACCOUNTS", "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return []
+    if os.getenv("ENABLE_KRAKEN_USER_TRADING", "true").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "off",
+    ):
+        return []
+    try:
+        from config.user_loader import get_user_config_loader
+
+        loader = get_user_config_loader()
+        if not loader.all_users:
+            loader.load_all_users()
+        return [
+            str(user.user_id)
+            for user in loader.get_all_enabled_users()
+            if str(getattr(user, "broker_type", "")).lower() == "kraken"
+        ]
+    except Exception as exc:
+        logger.debug("Unable to load Kraken user config during startup validation: %s", exc)
+        return []
+
+
 def _coinbase_credentials_viable() -> Tuple[bool, str]:
     """
     Check whether Coinbase credentials look viable.
@@ -408,23 +491,19 @@ def validate_exchange_configuration() -> StartupValidationResult:
     # ------------------------------------------------------------------
     # OKX
     # ------------------------------------------------------------------
+    # OKX is intentionally not counted as viable in production startup.  The
+    # upstream okx SDK imports candlelite, which can attempt writes inside
+    # site-packages before application-level monkeypatches can run.  In
+    # read-only containers that import side effect can block startup/trading,
+    # so NIJA treats OKX as disabled even when credentials are present.
     okx_key_set = bool(os.getenv("OKX_API_KEY"))
-    okx_viable, okx_pair = _okx_credentials_viable()
-
-    if okx_viable:
-        viable_brokers.append("OKX")
-        result.add_info(f"✅ OKX credentials configured and viable ({okx_pair})")
-    elif okx_key_set:
-        result.add_warning(
-            "⚠️  OKX CREDENTIALS INVALID: Values look like placeholders.\n"
-            "    Required format:\n"
-            "      OKX_API_KEY=<alphanumeric key>\n"
-            "      OKX_API_SECRET=<alphanumeric secret>\n"
-            "      OKX_PASSPHRASE=<your passphrase (set when creating the API key)>\n"
-            "    Get credentials at: https://www.okx.com/account/my-api"
+    if okx_key_set:
+        result.add_info(
+            "ℹ️  OKX credentials present but ignored — OKX trading is disabled because "
+            "the OKX SDK/candlelite dependency is not safe in read-only containers"
         )
     else:
-        result.add_info("ℹ️  OKX credentials not configured (optional)")
+        result.add_info("ℹ️  OKX disabled (read-only-container incompatible optional broker)")
 
     # ------------------------------------------------------------------
     # Alpaca
@@ -592,9 +671,28 @@ def validate_account_hierarchy() -> StartupValidationResult:
         )
     elif kraken_platform_configured:
         result.add_info("✅ Kraken Platform account configured (correct hierarchy: Platform first)")
-        if kraken_users_configured:
+        enabled_kraken_users = _enabled_kraken_config_users()
+        viable_enabled_users: List[str] = []
+        for user_id in enabled_kraken_users:
+            viable, pair, missing = _kraken_user_credentials_viable(user_id)
+            if viable:
+                viable_enabled_users.append(user_id)
+                result.add_info(f"✅ Kraken user {user_id} credentials configured and viable ({pair})")
+            else:
+                result.add_warning(
+                    f"⚠️  KRAKEN USER CREDENTIALS INCOMPLETE: enabled user {user_id} cannot connect "
+                    f"until {missing or pair} is configured. Expected {pair}."
+                )
+        if viable_enabled_users:
             result.add_info(
-                f"✅ {len(kraken_users_configured)} Kraken user account(s) configured after Platform (correct order)"
+                f"✅ {len(viable_enabled_users)} enabled Kraken user account(s) have viable credentials after Platform (correct order)"
+            )
+        elif kraken_users_configured:
+            result.add_warning(
+                "⚠️  KRAKEN USER CREDENTIALS PRESENT BUT NOT MATCHED: found "
+                f"{len(kraken_users_configured)} KRAKEN_USER_*_API_KEY value(s), but no enabled Kraken "
+                "user config has a complete key/secret pair. User capital will not connect until "
+                "the env var names match enabled config users and include API secrets."
             )
 
     # ── Alpaca (optional broker) ───────────────────────────────────────────────
@@ -986,10 +1084,25 @@ def run_all_validations(git_branch: str, git_commit: str) -> StartupValidationRe
 def display_validation_results(result: StartupValidationResult):
     """
     Display validation results with visual formatting.
-    
+
     Args:
         result: StartupValidationResult to display
     """
+    global _VALIDATION_REPORT_EMITTED
+    with _VALIDATION_REPORT_LOCK:
+        duplicate_report = _VALIDATION_REPORT_EMITTED and not result.critical_failure
+        if not _VALIDATION_REPORT_EMITTED:
+            _VALIDATION_REPORT_EMITTED = True
+
+    if duplicate_report:
+        logger.info(
+            "🔍 STARTUP VALIDATION REPORT already emitted for this process; "
+            "suppressing duplicate retry report (warnings=%d risks=%d)",
+            len(result.warnings),
+            len(result.risks),
+        )
+        return
+
     logger.info("=" * 80)
     logger.info("🔍 STARTUP VALIDATION REPORT")
     logger.info("=" * 80)

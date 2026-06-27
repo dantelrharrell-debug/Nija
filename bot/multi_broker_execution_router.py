@@ -468,13 +468,20 @@ class MultiBrokerExecutionRouter:
         self._pending_request_symbol = request.symbol
         self._pending_request_side = request.side
 
-        # 2. Select broker
-        broker = self._select_broker(
-            ac,
-            request.preferred_broker,
-            request.side,
-            request.size_usd,
-        )
+        # 2. Select broker.  If the execution pipeline supplied the concrete
+        # live broker adapter for this platform/user account, honor that adapter
+        # directly instead of requiring the global BrokerManager registry to also
+        # contain the same account.  Without this, independent user brokers can
+        # be connected and still fail routing as "broker_not_registered" before
+        # their adapter ever receives the order.
+        broker = self._profile_for_direct_broker(ac, request)
+        if broker is None:
+            broker = self._select_broker(
+                ac,
+                request.preferred_broker,
+                request.side,
+                request.size_usd,
+            )
         if broker is None:
             elapsed_ms = (time.monotonic() - t0) * 1000
             error = f"NO_EXECUTION_VENUE_AVAILABLE for asset_class={ac.value}"
@@ -612,6 +619,66 @@ class MultiBrokerExecutionRouter:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+
+    def _profile_for_direct_broker(
+        self,
+        asset_class: AssetClass,
+        request: RouteRequest,
+    ) -> Optional[BrokerProfile]:
+        """Return a broker profile when request metadata carries a live adapter."""
+        meta = dict(getattr(request, "metadata", {}) or {})
+        if meta.get("broker_client") is None:
+            return None
+
+        preferred = str(request.preferred_broker or meta.get("broker_name") or "").strip().lower()
+        if not preferred:
+            broker_obj = meta.get("broker_client")
+            btype = getattr(broker_obj, "broker_type", None)
+            preferred = str(getattr(btype, "value", btype) or "").strip().lower()
+
+        with self._lock:
+            profile = self._brokers.get(preferred)
+            if profile is None:
+                for candidate in self._brokers.values():
+                    if candidate.available and asset_class in candidate.asset_classes:
+                        profile = candidate
+                        break
+
+        if profile is None:
+            return None
+        if not profile.available or asset_class not in profile.asset_classes:
+            logger.warning(
+                "Direct broker profile unavailable | preferred=%s asset_class=%s available=%s",
+                preferred,
+                asset_class.value,
+                getattr(profile, "available", None),
+            )
+            return None
+
+        with self._lock:
+            self._last_routing_decision = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "asset_class": asset_class.value,
+                "side": request.side,
+                "size_usd": float(request.size_usd or 0.0),
+                "selected_broker": profile.name,
+                "reason": "direct_broker_client",
+                "preferred_broker": request.preferred_broker,
+                "candidates": [{
+                    "broker": profile.name,
+                    "eligible": True,
+                    "reason": "direct_broker_client",
+                }],
+            }
+        logger.info(
+            "🎯 ROUTING DECISION → %s | reason=direct_broker_client | symbol=%s side=%s size=$%.2f",
+            profile.name,
+            request.symbol,
+            request.side,
+            float(request.size_usd or 0.0),
+        )
+        return profile
 
     def _get_scorer(self):
         """Return the BrokerPerformanceScorer singleton (lazy init)."""
@@ -1002,8 +1069,23 @@ class MultiBrokerExecutionRouter:
         """
         Dispatch crypto orders through the existing ExecutionRouter.
 
-        Falls back to a simulated fill when the inner router is unavailable.
+        Uses the live broker adapter first; falls back to the inner router only
+        when a real execution venue is registered.
         """
+        meta = dict(metadata or {})
+        direct_broker = meta.get("broker_client")
+        if direct_broker is None:
+            direct_broker = self._resolve_live_broker(broker_name)
+
+        if direct_broker is not None and str(order_type or "MARKET").upper() == "MARKET":
+            return self._dispatch_direct_broker_market_order(
+                direct_broker,
+                symbol=symbol,
+                side=side,
+                size_usd=size_usd,
+                metadata=meta,
+            )
+
         if (
             _INNER_ROUTER_AVAILABLE
             and get_execution_router is not None
@@ -1017,19 +1099,91 @@ class MultiBrokerExecutionRouter:
                 size_usd=size_usd,
                 order_type=order_type,
                 venue=broker_name,
-                metadata=dict(metadata or {}),
+                metadata=meta,
             )
             res = inner.execute(req)
-            if res.success:
+            if res.success and (float(getattr(res, "fill_price", 0.0) or 0.0) > 0):
                 return res.fill_price, res.filled_size_usd
-            raise RuntimeError(res.error or "Inner router returned failure")
+            raise RuntimeError(res.error or "Inner router returned failure before broker dispatch")
 
-        # Stub: simulate a fill (paper-trading / testing)
-        logger.warning(
-            "ExecutionRouter unavailable — simulating crypto fill for %s", symbol
+        raise RuntimeError("No live broker client or execution venue is registered for dispatch")
+
+
+    def _resolve_live_broker(self, broker_name: str) -> Optional[Any]:
+        """Return a live broker adapter for *broker_name* when the manager has one."""
+        broker_name = str(broker_name or "").strip().lower()
+        manager = self._get_broker_manager()
+        if manager is None:
+            return None
+        try:
+            for broker in manager.get_all_brokers().values():
+                btype = getattr(broker, "broker_type", None)
+                value = str(getattr(btype, "value", btype) or "").strip().lower()
+                name = str(getattr(broker, "NAME", "") or "").strip().lower()
+                if value == broker_name or broker_name in name:
+                    return broker
+        except Exception as exc:
+            logger.debug("Live broker resolution failed for %s: %s", broker_name, exc)
+        return None
+
+    @staticmethod
+    def _dispatch_direct_broker_market_order(
+        broker: Any,
+        *,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        metadata: Dict[str, Any],
+    ) -> Tuple[float, float]:
+        """Submit directly to the live broker adapter and normalize the ACK/fill."""
+        submit = getattr(broker, "place_market_order", None)
+        if not callable(submit):
+            submit = getattr(broker, "execute_order", None)
+        if not callable(submit):
+            submit = getattr(broker, "place_order", None)
+        if not callable(submit):
+            raise RuntimeError(f"Broker {broker!r} has no market-order submit method")
+
+        try:
+            result = submit(symbol, side, float(size_usd), size_type="quote")
+        except TypeError:
+            try:
+                result = submit(symbol=symbol, side=side, quantity=float(size_usd), size_type="quote")
+            except TypeError:
+                result = submit(symbol, side, float(size_usd))
+
+        if isinstance(result, tuple) and len(result) >= 2:
+            return float(result[0] or 0.0), float(result[1] or size_usd)
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Unsupported broker order response: {result!r}")
+
+        status = str(result.get("status") or result.get("state") or "").strip().lower()
+        if status in {"error", "failed", "rejected", "canceled", "cancelled"}:
+            raise RuntimeError(str(result.get("error") or result.get("message") or status))
+
+        fill_price = float(
+            result.get("filled_price")
+            or result.get("average_filled_price")
+            or result.get("average_fill_price")
+            or result.get("avg_price")
+            or result.get("price")
+            or metadata.get("price_hint_usd")
+            or 0.0
         )
-        simulated_price = 1.0  # caller should not rely on this in live mode
-        return simulated_price, size_usd
+        filled_usd = float(
+            result.get("filled_size_usd")
+            or result.get("filled_value")
+            or result.get("notional_usd")
+            or result.get("size_usd")
+            or size_usd
+        )
+
+        order_id = result.get("order_id") or result.get("id") or result.get("exchange_order_id")
+        if fill_price <= 0 and order_id:
+            fill_price = float(metadata.get("price_hint_usd") or 0.0)
+        if fill_price <= 0:
+            raise RuntimeError(f"Broker order acknowledged without fill price/order id: {result!r}")
+        return fill_price, filled_usd
 
     @staticmethod
     def _dispatch_equity_stub(

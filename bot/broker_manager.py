@@ -12107,6 +12107,11 @@ class OKXBroker(BaseBroker):
         """
         Connect to OKX Exchange API with retry logic.
 
+        OKX is disabled by default because the upstream okx/candlelite import
+        can write to site-packages in read-only containers before NIJA can
+        patch or redirect it.  Returning before the SDK import prevents OKX
+        from blocking Kraken/Coinbase/user trading.
+
         Requires environment variables:
         - OKX_API_KEY: Your OKX API key
         - OKX_API_SECRET: Your OKX API secret
@@ -12116,6 +12121,14 @@ class OKXBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        logging.info(
+            "⏭️  OKX disabled: skipping SDK import because okx/candlelite is not "
+            "read-only-container safe"
+        )
+        self.connected = False
+        self._is_available = False
+        return False
+
         if self.account_type == AccountType.PLATFORM:
             try:
                 from bot.multi_account_broker_manager import get_broker_manager

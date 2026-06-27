@@ -79,52 +79,23 @@ except ImportError:
 # nonce init) can log safely before the full logging pipeline is configured.
 logger = logging.getLogger("nija.bootstrap")
 
-# ── AUTHORITY HEARTBEAT — IMMEDIATE POST-IMPORT STARTUP ──────────────────────
-# This block executes immediately after imports, before any function
-# definitions, before any conditional logic, and before main() is called.
-# Moving it here ensures it runs as early as possible in the module load
-# sequence regardless of how bot.py is loaded (runpy, direct exec, or import).
-# The monitor is a singleton (idempotent) so calling it again later is safe.
+# ── AUTHORITY HEARTBEAT — DEFERRED UNTIL WRITER LINEAGE ─────────────────────
+# Do not start the authority heartbeat at module import time.  The heartbeat is
+# part of writer-authority proof, so it must wait until the Redis writer lock,
+# fencing token, and lease generation have been initialized by
+# _acquire_distributed_writer_lock().  Starting it here caused the monitor to
+# run with missing lineage and left live startup stuck in observer-only ticks.
 print(
-    "DIAG_MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor immediately after imports "
+    "DIAG_MODULE_LEVEL_HEARTBEAT_DEFERRED: waiting for writer lineage before authority heartbeat "
     f"pid={os.getpid()} __name__={__name__!r}",
     flush=True,
 )
 logger.info(
-    "MODULE_LEVEL_HEARTBEAT: starting authority heartbeat monitor immediately after imports "
-    "pid=%d __name__=%r fencing_token_present=%s fallback=%s",
+    "MODULE_LEVEL_HEARTBEAT_DEFERRED: authority heartbeat will start after writer lineage is initialized "
+    "pid=%d __name__=%r",
     os.getpid(),
     __name__,
-    bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
-    os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", ""),
 )
-try:
-    from bot.authority_heartbeat import start_authority_heartbeat as _early_start_ahb
-    _early_ahb_monitor = _early_start_ahb()
-    logger.info(
-        "MODULE_LEVEL_HEARTBEAT: monitor started successfully monitor=%r "
-        "thread_name=%s thread_alive=%s thread_daemon=%s",
-        _early_ahb_monitor,
-        _early_ahb_monitor._thread.name if _early_ahb_monitor._thread else "None",
-        _early_ahb_monitor._thread.is_alive() if _early_ahb_monitor._thread else False,
-        _early_ahb_monitor._thread.daemon if _early_ahb_monitor._thread else False,
-    )
-    print(
-        f"DIAG_MODULE_LEVEL_HEARTBEAT_OK: monitor started "
-        f"thread={_early_ahb_monitor._thread.name if _early_ahb_monitor._thread else 'None'} "
-        f"alive={_early_ahb_monitor._thread.is_alive() if _early_ahb_monitor._thread else False}",
-        flush=True,
-    )
-except Exception as _early_ahb_exc:
-    logger.error(
-        "MODULE_LEVEL_HEARTBEAT: monitor could not be started: %s",
-        _early_ahb_exc,
-        exc_info=True,
-    )
-    print(
-        f"DIAG_MODULE_LEVEL_HEARTBEAT_ERR: {_early_ahb_exc}",
-        flush=True,
-    )
 
 # Reserved process exit code used when startup is blocked by an active
 # distributed writer lock holder. This is an expected fail-closed condition
@@ -272,6 +243,48 @@ def _format_startup_phase_tag() -> str:
     except Exception:
         pass
     return "phase=unknown"
+
+
+def _reset_stale_bootstrap_fsm_for_fresh_attempt(*, init_done: bool) -> None:
+    """Reset stale advanced BootstrapFSM state before a true fresh startup.
+
+    Background capital/hydration helpers can advance BootstrapFSM to
+    CAPITAL_READY before ``TradingStrategy`` and worker threads are cached.  If a
+    fresh startup attempt then begins with no initialized strategy/threads, that
+    advanced FSM state is stale for this attempt and can make strict bootstrap
+    diagnostics report an already-ready phase while the runtime is still missing
+    its trading objects.  Normalize only those advanced states; early states like
+    LOCK_ACQUIRED/HEALTH_BOUND are intentionally preserved.
+    """
+    if init_done:
+        return
+    try:
+        if not _BOOTSTRAP_FSM_AVAILABLE or _get_bootstrap_fsm is None:
+            return
+        _bfsm = _get_bootstrap_fsm()
+        _state = getattr(_bfsm, "state", None)
+        _stale_states = {
+            _BootstrapState.CAPITAL_READY,
+            _BootstrapState.INIT_COMPLETE,
+            _BootstrapState.DEGRADED_READY,
+            _BootstrapState.THREADS_STARTING,
+            _BootstrapState.RUNNING_SUPERVISED,
+        }
+        if _state in _stale_states and hasattr(_bfsm, "reset_for_retry"):
+            logger.warning(
+                "Fresh startup detected stale BootstrapFSM state=%s without cached "
+                "strategy/threads; resetting to BOOT_FAILED_RETRY before strict bootstrap",
+                getattr(_state, "value", str(_state)),
+            )
+            _bfsm.reset_for_retry(
+                "fresh startup without initialized strategy/threads found stale "
+                f"state={getattr(_state, 'value', str(_state))}"
+            )
+    except Exception as _stale_reset_err:
+        logger.warning(
+            "Fresh startup stale BootstrapFSM reset skipped (non-fatal): %s",
+            _stale_reset_err,
+        )
 
 
 def _reset_startup_events_for_fresh_attempt(*, clear_initialized_state: bool = False) -> None:
@@ -2309,6 +2322,60 @@ os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "0")
 os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ALIVE_TS", "0")
 
 
+def _writer_lineage_ready() -> tuple[bool, str]:
+    """Return whether writer lock/fencing/generation lineage is initialized."""
+    token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    lease = os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", "").strip()
+    generation = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+    if not token:
+        return False, "fencing_token_missing"
+    if lease not in {"1", "true", "TRUE", "yes", "on"}:
+        return False, "writer_lease_not_acquired"
+    try:
+        if int(generation or "0") <= 0:
+            return False, "lease_generation_missing"
+    except (TypeError, ValueError):
+        return False, f"lease_generation_invalid:{generation!r}"
+    return True, "ok"
+
+
+def _start_authority_heartbeat_after_writer_lineage(context: str) -> bool:
+    """Start authority heartbeat only after writer lineage is complete."""
+    ready, detail = _writer_lineage_ready()
+    if not ready:
+        logger.warning(
+            "AUTHORITY_HEARTBEAT_DEFERRED: writer lineage not ready context=%s detail=%s "
+            "token_present=%s lease=%s generation=%s",
+            context,
+            detail,
+            bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
+            os.environ.get("NIJA_WRITER_LEASE_ACQUIRED", ""),
+            os.environ.get("NIJA_WRITER_LEASE_GENERATION", ""),
+        )
+        return False
+    try:
+        from bot.authority_heartbeat import start_authority_heartbeat as _start_ahb
+        _ahb_monitor = _start_ahb()
+        logger.info(
+            "AUTHORITY_HEARTBEAT_STARTED_AFTER_LINEAGE: context=%s monitor=%r "
+            "thread_name=%s thread_alive=%s generation=%s",
+            context,
+            _ahb_monitor,
+            _ahb_monitor._thread.name if _ahb_monitor._thread else "None",
+            _ahb_monitor._thread.is_alive() if _ahb_monitor._thread else False,
+            os.environ.get("NIJA_WRITER_LEASE_GENERATION", ""),
+        )
+        return True
+    except Exception as exc:
+        logger.error(
+            "AUTHORITY_HEARTBEAT_START_FAILED_AFTER_LINEAGE: context=%s error=%s",
+            context,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 def _writer_lock_scope() -> str:
     """Return a stable, non-secret scope id for the current Kraken key."""
     _raw = (
@@ -3423,30 +3490,36 @@ def _acquire_distributed_process_lock() -> None:
                     )
                 return
 
-        def _try_acquire_once() -> tuple[int, str, int]:
-            """Try one atomic acquire and return (token, holder, pttl_ms)."""
+        _lease_generation_key = os.environ.get("NIJA_LEASE_GENERATION_KEY", "nija:lease:generation").strip() or "nija:lease:generation"
+
+        def _try_acquire_once() -> tuple[int, str, int, int]:
+            """Try one atomic acquire and return (token, holder, pttl_ms, lease_generation)."""
             _res = _client.eval(
                 """
                 if redis.call('EXISTS', KEYS[1]) == 1 then
                     local holder = redis.call('GET', KEYS[1])
                     local pttl = redis.call('PTTL', KEYS[1])
-                    return {0, holder or '', pttl or -2}
+                    local generation = redis.call('GET', KEYS[3]) or '0'
+                    return {0, holder or '', pttl or -2, generation}
                 end
                 local token = redis.call('INCR', KEYS[2])
+                local generation = redis.call('INCR', KEYS[3])
                 local value = tostring(token) .. ':' .. ARGV[1]
                 redis.call('SET', KEYS[1], value, 'EX', tonumber(ARGV[2]))
                 local pttl = redis.call('PTTL', KEYS[1])
-                return {token, value, pttl or -2}
+                return {token, value, pttl or -2, generation}
                 """,
-                2,
+                3,
                 _lock_key,
                 _fencing_key,
+                _lease_generation_key,
                 _owner,
                 str(_ttl_s),
             )
             _token = 0
             _holder_local = "<unknown-holder>"
             _pttl_ms = -2
+            _lease_generation = 0
             if isinstance(_res, (list, tuple)):
                 if len(_res) >= 1:
                     try:
@@ -3460,7 +3533,12 @@ def _acquire_distributed_process_lock() -> None:
                         _pttl_ms = int(_res[2] or -2)
                     except (TypeError, ValueError):
                         _pttl_ms = -2
-            return _token, _holder_local, _pttl_ms
+                if len(_res) >= 4:
+                    try:
+                        _lease_generation = int(_res[3] or 0)
+                    except (TypeError, ValueError):
+                        _lease_generation = 0
+            return _token, _holder_local, _pttl_ms, _lease_generation
 
         def _read_lock_meta() -> dict[str, object]:
             try:
@@ -3469,7 +3547,7 @@ def _acquire_distributed_process_lock() -> None:
                 return {"present": False, "error": str(_meta_exc), "display": "<meta-read-failed>"}
 
         print("=== ATTEMPTING REDIS LOCK ===", flush=True)
-        _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+        _fencing_token, _holder, _holder_pttl_ms, _lease_generation = _try_acquire_once()
         acquired = _fencing_token > 0
         print(f"=== LOCK ACQUIRED: {acquired} ===", flush=True)
 
@@ -3480,34 +3558,35 @@ def _acquire_distributed_process_lock() -> None:
         # State flow: ATTEMPTING → [ACQUIRED + proceed] or CONTENDING → TIMEOUT → [DEGRADED or EXIT]
         
         # Configure explicit timeout (FIX 4 requirement: deterministic, not indefinite)
-        # Live mode: 120s (allows time for stale-lock rescue over Railway transients)
-        # Non-live mode: 60s (faster fallback to degraded mode for testing)
+        # Live mode: 45s by default; stale-lock rescue runs immediately and then
+        # every few seconds, so old Railway instances no longer force a long wait.
+        # Non-live mode: 30s (faster fallback to degraded mode for testing)
         _lock_acquire_timeout_s_raw = os.environ.get("NIJA_LOCK_ACQUIRE_TIMEOUT_S", "").strip()
         try:
-            _lock_acquire_timeout_s = float(_lock_acquire_timeout_s_raw) if _lock_acquire_timeout_s_raw else (120.0 if _live_mode else 60.0)
+            _lock_acquire_timeout_s = float(_lock_acquire_timeout_s_raw) if _lock_acquire_timeout_s_raw else (45.0 if _live_mode else 30.0)
         except (TypeError, ValueError):
-            _lock_acquire_timeout_s = 120.0 if _live_mode else 60.0
+            _lock_acquire_timeout_s = 45.0 if _live_mode else 30.0
         
-        # Enforce minimum timeout: live mode 30s (time for Railway recovery + rescue), non-live 15s
+        # Enforce minimum timeout: live mode 15s (one TTL window), non-live 5s.
         if _live_mode:
-            _lock_acquire_timeout_s = max(_lock_acquire_timeout_s, 30.0)
-        else:
             _lock_acquire_timeout_s = max(_lock_acquire_timeout_s, 15.0)
+        else:
+            _lock_acquire_timeout_s = max(_lock_acquire_timeout_s, 5.0)
         
         # Checkpoint interval: emit warnings + attempt stale-lock rescue (FIX 4: explicit checkpoints)
         _checkpoint_interval_s_raw = os.environ.get("NIJA_LOCK_CHECKPOINT_INTERVAL_S", "").strip()
         try:
-            _checkpoint_interval_s = float(_checkpoint_interval_s_raw) if _checkpoint_interval_s_raw else 30.0
+            _checkpoint_interval_s = float(_checkpoint_interval_s_raw) if _checkpoint_interval_s_raw else 5.0
         except (TypeError, ValueError):
-            _checkpoint_interval_s = 30.0
-        _checkpoint_interval_s = max(_checkpoint_interval_s, 5.0)  # Minimum 5s between checkpoints
+            _checkpoint_interval_s = 5.0
+        _checkpoint_interval_s = max(_checkpoint_interval_s, 1.0)  # Minimum 1s between checkpoints
         
         # Retry interval: time between lock acquisition attempts (FIX 4: bounded retry rate)
         _lock_retry_interval = 0.5  # 500ms between retries
         
         # Initialize FSM state  
         _wait_started_at = time.time()
-        _next_checkpoint = _wait_started_at + _checkpoint_interval_s
+        _next_checkpoint = _wait_started_at  # run stale-holder inspection immediately
         def _resolve_holder_state(holder_raw: str) -> tuple[dict[str, str], dict[str, object], dict[str, object]]:
             holder_info_local = parse_distributed_lock_holder(holder_raw)
             holder_inspection_local = inspect_lock_holder(_instance_identity, holder_info_local)
@@ -3519,10 +3598,10 @@ def _acquire_distributed_process_lock() -> None:
         try:
             _stale_heartbeat_timeout_s = max(
                 float(_ttl_s * 2),
-                float(os.environ.get("NIJA_STALE_RAILWAY_LOCK_HEARTBEAT_TIMEOUT_S", "90") or 90.0),
+                float(os.environ.get("NIJA_STALE_RAILWAY_LOCK_HEARTBEAT_TIMEOUT_S", str(_ttl_s * 2)) or (_ttl_s * 2)),
             )
         except (TypeError, ValueError):
-            _stale_heartbeat_timeout_s = max(float(_ttl_s * 2), 90.0)
+            _stale_heartbeat_timeout_s = float(_ttl_s * 2)
 
         _auto_clear_stale_railway = os.environ.get("NIJA_AUTO_CLEAR_STALE_RAILWAY_LOCK", "true").strip().lower() in {
             "1",
@@ -3671,7 +3750,7 @@ def _acquire_distributed_process_lock() -> None:
                         _rescue_trigger,
                         _holder_inspection.get("relationship"),
                     )
-                    _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+                    _fencing_token, _holder, _holder_pttl_ms, _lease_generation = _try_acquire_once()
                     _holder_info, _holder_inspection, _holder_meta = _resolve_holder_state(_holder)
                     if _fencing_token > 0:
                         break  # Acquired after rescue — exit loop
@@ -3684,7 +3763,7 @@ def _acquire_distributed_process_lock() -> None:
             # Sleep and retry lock acquisition
             time.sleep(_lock_retry_interval)
             try:
-                _fencing_token, _holder, _holder_pttl_ms = _try_acquire_once()
+                _fencing_token, _holder, _holder_pttl_ms, _lease_generation = _try_acquire_once()
                 _holder_info, _holder_inspection, _holder_meta = _resolve_holder_state(_holder)
                 if _fencing_token > 0:
                     break  # Successfully acquired — exit loop
@@ -3751,10 +3830,13 @@ def _acquire_distributed_process_lock() -> None:
             os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(token)
             os.environ["NIJA_WRITER_OWNER_ID"] = str(owner_id)
             os.environ["NIJA_WRITER_INSTANCE_ID"] = str(instance_id)
+            os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_lease_generation)
+            os.environ["NIJA_LEASE_GENERATION_KEY"] = _lease_generation_key
 
             logger.critical(
-                "WRITER AUTHORITY ESTABLISHED token=%s owner=%s instance=%s",
+                "WRITER AUTHORITY ESTABLISHED token=%s generation=%s owner=%s instance=%s",
                 token,
+                _lease_generation,
                 owner_id,
                 instance_id,
             )
@@ -3790,10 +3872,12 @@ def _acquire_distributed_process_lock() -> None:
             os.environ["NIJA_WRITER_LOCK_KEY"] = _lock_key
             os.environ["NIJA_WRITER_LOCK_META_KEY"] = _meta_key
             os.environ["NIJA_WRITER_LOCK_SCOPE"] = _scope
+            _start_authority_heartbeat_after_writer_lineage("distributed_writer_lock_acquired")
             print("✅ WRITER LOCK ACQUIRED", flush=True)
             print(
                 "🔒 Distributed writer lock acquired — "
-                f"key={_lock_key} fencing_token={_fencing_token} holder={_owner} meta_key={_meta_key}"
+                f"key={_lock_key} fencing_token={_fencing_token} "
+                f"generation={_lease_generation} holder={_owner} meta_key={_meta_key}"
             )
     except Exception as _lock_exc:
         _retry_on_nonrecoverable = os.environ.get(
@@ -4192,7 +4276,6 @@ def _start_health_server():
         print(f"❌ Health server failed to start: {e}")
 
 
-_apply_startup_debug_env_aliases()
 def _apply_startup_debug_env_aliases() -> None:
     """Apply operator-friendly debug env aliases before lock acquisition."""
     _fail_fast_singleton = os.environ.get("FAIL_FAST_SINGLETON", "").strip().lower()
@@ -4219,80 +4302,11 @@ _apply_startup_debug_env_aliases()
 _start_health_server()
 _acquire_process_lock()
 
-# ── Fallback fencing token bootstrap ─────────────────────────────────────────
-# If the Redis distributed lock was not acquired (e.g. Redis unavailable or
-# lock not required in this deployment), NIJA_WRITER_FENCING_TOKEN will not be
-# set.  Generate a process-local UUID token and attempt to register it in Redis
-# so that assert_distributed_writer_authority() and the writer-heartbeat gate
-# can pass.  This is a best-effort operation; if Redis is unavailable the
-# authority heartbeat monitor will use ping-only verification.
-if not os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip():
-    try:
-        import uuid as _uuid_mod
-        import hashlib as _hashlib_mod
-        _fb_token = str(_uuid_mod.uuid4())
-        os.environ["NIJA_WRITER_FENCING_TOKEN"] = _fb_token
-        os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "1"
-        print(
-            f"⚠️  NIJA_WRITER_FENCING_TOKEN not set by Redis lock; "
-            f"generated process-local fallback token={_fb_token[:8]}... "
-            "for authority heartbeat",
-            flush=True,
-        )
-        # Attempt to register the fallback token in Redis.
-        try:
-            from bot.redis_env import get_redis_url as _get_redis_url_fb
-            _fb_redis_url = _get_redis_url_fb()
-            if _fb_redis_url:
-                import redis as _redis_mod_fb
-                _fb_scope_raw = (
-                    os.environ.get("KRAKEN_PLATFORM_API_KEY", "").strip()
-                    or os.environ.get("KRAKEN_API_KEY", "").strip()
-                    or "default"
-                )
-                _fb_scope = _hashlib_mod.sha256(_fb_scope_raw.encode("utf-8")).hexdigest()[:16]
-                _fb_lock_key = (
-                    os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip()
-                    or f"nija:writer_lock:{_fb_scope}"
-                )
-                _fb_ttl_s = max(30, int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "30") or 30))
-                _fb_owner = os.environ.get("NIJA_WRITER_OWNER_ID", "fallback")
-                _fb_value = f"{_fb_token}:{_fb_owner}"
-                _fb_client = _redis_mod_fb.from_url(
-                    _fb_redis_url,
-                    decode_responses=True,
-                    socket_connect_timeout=3,
-                    socket_timeout=3,
-                )
-                _fb_set = _fb_client.set(_fb_lock_key, _fb_value, ex=_fb_ttl_s, nx=True)
-                if _fb_set:
-                    os.environ["NIJA_WRITER_LOCK_KEY"] = _fb_lock_key
-                    os.environ["NIJA_WRITER_LOCK_SCOPE"] = _fb_scope
-                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
-                    os.environ["NIJA_WRITER_FENCING_TOKEN_FALLBACK"] = "0"
-                    _fb_now_ts = str(time.time())
-                    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "1"
-                    os.environ["NIJA_WRITER_HEARTBEAT_ALIVE_TS"] = _fb_now_ts
-                    os.environ["NIJA_WRITER_HEARTBEAT_LAST_TS"] = _fb_now_ts
-                    print(
-                        f"✅ Fallback fencing token registered in Redis: "
-                        f"key={_fb_lock_key} ttl={_fb_ttl_s}s",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"⚠️  Redis lock key {_fb_lock_key} already held; "
-                        "using fallback-token (ping-only) authority mode",
-                        flush=True,
-                    )
-        except Exception as _fb_redis_err:
-            print(
-                f"⚠️  Could not register fallback fencing token in Redis: {_fb_redis_err}",
-                flush=True,
-            )
-    except Exception as _fb_err:
-        print(f"⚠️  Fallback fencing token generation failed: {_fb_err}", flush=True)
-
+# Writer fencing tokens are intentionally NOT generated before the Redis writer
+# lock is acquired.  Pre-lock fallback tokens allowed the authority heartbeat to
+# start with synthetic lineage and could make live startup appear healthy while
+# scanner/execution was still blocked.  Optional local fallback, when explicitly
+# allowed, is handled inside the writer-lock acquisition path.
 
 # Load .env and verify the result at runtime
 _dotenv_loaded = False
@@ -6034,6 +6048,12 @@ def _run_bot_startup_and_trading_with_retry():
         logger.info("Bootstrap start")
         while True:
             _next_attempt = attempt + 1
+            _pre_state_snap = _read_initialized_state_snapshot(context="fresh-attempt preflight")
+            _pre_init_done = (
+                _pre_state_snap.get("strategy") is not None
+                and "active_threads" in _pre_state_snap
+            )
+            _reset_stale_bootstrap_fsm_for_fresh_attempt(init_done=_pre_init_done)
             logger.info(
                 "🔁 [Startup] Bootstrap attempt #%d (%s, %s)",
                 _next_attempt,
@@ -6378,47 +6398,10 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
     # fast-path (which also calls it at line ~1536) is a safe no-op.
     _ensure_state_machine_loop_started()
     # ── Authority heartbeat monitor ───────────────────────────────────────────
-    # IMPORTANT: Start the authority heartbeat monitor BEFORE the fast-path
-    # early return so it runs on both first boot AND restarts/retries.
-    # The monitor is a singleton (idempotent start) so calling it here is safe
-    # even if it was already started by a previous code path.
-    # This verifies Redis connectivity and fencing token validity every 30 s.
-    # On success it sets NIJA_WRITER_HEARTBEAT_ACTIVE=1, updates
-    # NIJA_WRITER_HEARTBEAT_ALIVE_TS, and writes the heartbeat marker file so
-    # the activation gate's HEARTBEAT_VERIFICATION check passes.
-    logger.info(
-        "DIAG_HEARTBEAT_START: about to call start_authority_heartbeat() "
-        "fencing_token_present=%s fallback=%s",
-        bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
-        os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", ""),
-    )
-    logger.info(
-        "AUTHORITY_HEARTBEAT: pre-startup check — about to call start_authority_heartbeat() "
-        "fencing_token_present=%s fallback=%s",
-        bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
-        os.environ.get("NIJA_WRITER_FENCING_TOKEN_FALLBACK", ""),
-    )
-    try:
-        from bot.authority_heartbeat import start_authority_heartbeat as _start_ahb
-        _ahb_monitor = _start_ahb()
-        logger.info(
-            "AUTHORITY_HEARTBEAT: monitor started successfully monitor=%r "
-            "interval_s=%.1f timeout_s=%.1f max_failures=%d "
-            "thread_name=%s thread_alive=%s thread_daemon=%s",
-            _ahb_monitor,
-            _ahb_monitor._interval_s,
-            _ahb_monitor._timeout_s,
-            _ahb_monitor._max_failures,
-            _ahb_monitor._thread.name if _ahb_monitor._thread else "None",
-            _ahb_monitor._thread.is_alive() if _ahb_monitor._thread else False,
-            _ahb_monitor._thread.daemon if _ahb_monitor._thread else False,
-        )
-    except Exception as _ahb_exc:
-        logger.error(
-            "AUTHORITY_HEARTBEAT: monitor could not be started: %s",
-            _ahb_exc,
-            exc_info=True,
-        )
+    # Start only after writer lineage exists.  On first boot this happens after
+    # acquire_writer_lock(); on a fast-path re-entry the initialized state should
+    # already carry the lock/fencing/generation from the successful handoff.
+    _start_authority_heartbeat_after_writer_lineage("startup_fastpath_precheck")
 
     if _state_copy.get("strategy") is not None and "active_threads" in _state_copy:
         logger.warning("⚠️ Bypassing init - forcing run loop")
@@ -6461,11 +6444,13 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
         )
         return False
 
+    _start_authority_heartbeat_after_writer_lineage("startup_slowpath_after_lock")
     logger.info(
-        "AUTHORITY_HEARTBEAT: slow-path (first boot) — heartbeat monitor already started above "
-        "lock_acquired=%s fencing_token_present=%s",
+        "AUTHORITY_HEARTBEAT: slow-path (first boot) — heartbeat monitor gated by writer lineage "
+        "lock_acquired=%s fencing_token_present=%s generation=%s",
         lock_acquired,
         bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
+        os.environ.get("NIJA_WRITER_LEASE_GENERATION", ""),
     )
 
     # Coinbase is enabled by default. Set NIJA_DISABLE_COINBASE=true to disable.
