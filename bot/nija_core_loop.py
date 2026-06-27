@@ -3888,6 +3888,78 @@ class NijaCoreLoop:
             return None
         return normalized
 
+    @staticmethod
+    def _call_market_data_method(
+        method: Any,
+        primary_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+        fallback_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+    ) -> Any:
+        """Call a broker market-data method while tolerating signature drift."""
+        try:
+            args, kwargs = primary_call
+            return method(*args, **kwargs)
+        except TypeError:
+            args, kwargs = fallback_call
+            return method(*args, **kwargs)
+
+    @classmethod
+    def _coerce_market_data_frame(cls, result: Any) -> Optional[pd.DataFrame]:
+        """Normalize broker candle payload variants into an OHLCV DataFrame."""
+        if result is None:
+            return None
+        if isinstance(result, tuple):
+            if len(result) >= 2 and result[1]:
+                return None
+            result = result[0] if result else None
+        if isinstance(result, pd.DataFrame):
+            return cls._normalize_ohlcv_columns(result.copy())
+        if isinstance(result, Mapping):
+            for key in ("candles", "data", "ohlcv", "result", "rows"):
+                if key in result:
+                    return cls._coerce_market_data_frame(result.get(key))
+            return cls._normalize_ohlcv_columns(pd.DataFrame([result]))
+        if isinstance(result, (list, tuple)):
+            if not result:
+                return None
+            frame = pd.DataFrame(result)
+            if not frame.empty and all(isinstance(col, int) for col in frame.columns):
+                # CCXT-style rows: [timestamp, open, high, low, close, volume, ...]
+                if len(frame.columns) >= 6:
+                    frame = frame.iloc[:, :6]
+                    frame.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+                # Compact rows occasionally omit timestamp: [open, high, low, close, volume]
+                elif len(frame.columns) == 5:
+                    frame.columns = ["open", "high", "low", "close", "volume"]
+            return cls._normalize_ohlcv_columns(frame)
+        return None
+
+    @staticmethod
+    def _normalize_ohlcv_columns(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """Return a numeric OHLCV frame when the payload has usable candles."""
+        if frame is None or frame.empty:
+            return None
+        rename_map = {
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+            "price": "close",
+            "last": "close",
+        }
+        normalized = frame.rename(
+            columns={col: rename_map.get(str(col).lower(), col) for col in frame.columns}
+        )
+        required = {"open", "high", "low", "close", "volume"}
+        if not required.issubset(set(normalized.columns)):
+            return None
+        for col in required:
+            normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
+        normalized = normalized.dropna(subset=list(required))
+        if normalized.empty:
+            return None
+        return normalized
+
 
 # ---------------------------------------------------------------------------
 # Singleton factory

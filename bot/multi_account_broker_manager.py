@@ -6274,6 +6274,9 @@ class MultiAccountBrokerManager:
                 results["coinbase"] = {"broker": None, "connected": False, "error": str(exc)}
 
         # ── OKX ──────────────────────────────────────────────────────────────
+        # OKX uses NIJA's direct REST v5 client instead of the upstream okx SDK,
+        # avoiding candlelite/site-packages write side effects in read-only containers.
+        _disable_okx = os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
         # OKX is disabled unconditionally because the upstream okx/candlelite stack
         # can write into site-packages during import in read-only containers.
         # Do not instantiate OKX here; Kraken/Coinbase/user trading must not be

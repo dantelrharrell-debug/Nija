@@ -130,6 +130,8 @@ webencodings==0.5.1
 websocket-client==1.9.0
 websockets==13.1
 Werkzeug==3.1.4
+# OKX SDK intentionally omitted: NIJA uses direct OKX REST v5 because the
+# upstream okx/candlelite dependency is not safe in read-only containers.
 # OKX intentionally omitted: its okx/candlelite dependency is not safe in
 # read-only containers and OKX trading is disabled in runtime code.
 # Kraken Pro API

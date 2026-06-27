@@ -9,7 +9,10 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, cast
 import datetime as _dt_module
 from datetime import datetime, timezone
+import base64
 import functools
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -21,6 +24,7 @@ import traceback
 import uuid
 import weakref
 import threading
+from urllib.parse import urlencode
 
 # ── candlelite writable config dir ───────────────────────────────────────────
 # Must be set BEFORE any import that could trigger candlelite initialisation.
@@ -12300,6 +12304,109 @@ class KrakenBroker(BaseBroker):
         return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ADA-USD']
 
 
+class _OKXRestClient:
+    """Small OKX REST v5 client that avoids the okx/candlelite SDK import.
+
+    OKX's REST API supports direct HTTPS calls with OK-ACCESS headers, so NIJA
+    can trade OKX in read-only containers without importing the SDK dependency
+    that caused site-packages write attempts.
+    """
+
+    BASE_URL = "https://www.okx.com"
+
+    def __init__(self, api_key: str, api_secret: str, passphrase: str, *, simulated: bool = False, timeout: float = 10.0):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.passphrase = passphrase
+        self.simulated = simulated
+        self.timeout = timeout
+        if not _REQUESTS_AVAILABLE or _requests_lib is None:
+            raise RuntimeError("requests is required for OKX REST trading")
+        self.session = _requests_lib.Session()
+
+    @staticmethod
+    def _timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+    @staticmethod
+    def _json_body(payload: Optional[Dict[str, Any]]) -> str:
+        if not payload:
+            return ""
+        return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+    def _sign(self, timestamp: str, method: str, request_path: str, body: str) -> str:
+        message = f"{timestamp}{method.upper()}{request_path}{body}"
+        digest = hmac.new(
+            self.api_secret.encode("utf-8"),
+            message.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        return base64.b64encode(digest).decode("ascii")
+
+    def _headers(self, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if private:
+            headers.update(
+                {
+                    "OK-ACCESS-KEY": self.api_key,
+                    "OK-ACCESS-SIGN": self._sign(timestamp, method, request_path, body),
+                    "OK-ACCESS-TIMESTAMP": timestamp,
+                    "OK-ACCESS-PASSPHRASE": self.passphrase,
+                }
+            )
+        if self.simulated:
+            headers["x-simulated-trading"] = "1"
+        return headers
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+        private: bool = False,
+    ) -> Dict[str, Any]:
+        method = method.upper()
+        query = ""
+        clean_params = {k: v for k, v in (params or {}).items() if v is not None}
+        if clean_params:
+            query = "?" + urlencode(clean_params)
+        request_path = f"{path}{query}"
+        body = self._json_body(payload) if method != "GET" else ""
+        ts = self._timestamp()
+        response = self.session.request(
+            method,
+            f"{self.BASE_URL}{request_path}",
+            data=body if body else None,
+            headers=self._headers(ts, method, request_path, body, private=private),
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_balance(self) -> Dict[str, Any]:
+        return self._request("GET", "/api/v5/account/balance", private=True)
+
+    def place_order(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._request("POST", "/api/v5/trade/order", payload=kwargs, private=True)
+
+    def get_tickers(self, instType: str = "SPOT") -> Dict[str, Any]:
+        return self._request("GET", "/api/v5/market/tickers", params={"instType": instType})
+
+    def get_ticker(self, instId: str) -> Dict[str, Any]:
+        return self._request("GET", "/api/v5/market/ticker", params={"instId": instId})
+
+    def get_candles(self, instId: str, bar: str = "5m", limit: str = "100") -> Dict[str, Any]:
+        return self._request("GET", "/api/v5/market/candles", params={"instId": instId, "bar": bar, "limit": limit})
+
+    def get_instruments(self, instType: str = "SPOT") -> Dict[str, Any]:
+        return self._request("GET", "/api/v5/public/instruments", params={"instType": instType})
+
+    def get_fills(self, instId: str, limit: str = "100") -> Dict[str, Any]:
+        return self._request("GET", "/api/v5/trade/fills", params={"instId": instId, "limit": limit}, private=True)
+
+
 class OKXBroker(BaseBroker):
     """
     OKX Exchange integration for crypto spot and futures trading.
@@ -12354,6 +12461,7 @@ class OKXBroker(BaseBroker):
             self._is_available = False
 
     def connect(self) -> bool:
+        """Connect to OKX through direct REST v5 without importing okx/candlelite."""
         """
         Connect to OKX Exchange API with retry logic.
 
@@ -12432,130 +12540,76 @@ class OKXBroker(BaseBroker):
                 passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
 
+        # Support per-user credentials for USER accounts:
+        #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
+        if self.account_type == AccountType.USER and self.user_id:
+            _short_env, _full_env = _user_env_prefix(self.user_id)
+            api_key = os.getenv(f"OKX_USER_{_short_env}_API_KEY", "").strip()
+            api_secret = os.getenv(f"OKX_USER_{_short_env}_API_SECRET", "").strip()
+            passphrase = os.getenv(f"OKX_USER_{_short_env}_PASSPHRASE", "").strip()
+            if (not api_key or not api_secret or not passphrase) and _full_env != _short_env:
+                api_key = api_key or os.getenv(f"OKX_USER_{_full_env}_API_KEY", "").strip()
+                api_secret = api_secret or os.getenv(f"OKX_USER_{_full_env}_API_SECRET", "").strip()
+                passphrase = passphrase or os.getenv(f"OKX_USER_{_full_env}_PASSPHRASE", "").strip()
             if not api_key or not api_secret or not passphrase:
-                # Partial credentials are more likely a misconfiguration — warn at WARNING level
-                missing = []
-                if not api_key:
-                    missing.append("OKX_API_KEY")
-                if not api_secret:
-                    missing.append("OKX_API_SECRET")
-                if not passphrase:
-                    missing.append("OKX_PASSPHRASE")
-                have_any = bool(api_key or api_secret or passphrase)
-                if have_any:
-                    logging.warning(
-                        "⚠️  OKX credentials partially configured — missing: %s (skipping OKX)",
-                        ", ".join(missing),
-                    )
-                else:
-                    logging.info("ℹ️  OKX credentials not configured (optional broker — skipping)")
+                logging.info(
+                    "ℹ️  OKX USER credentials not configured for %s "
+                    "(checked OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE) — skipping",
+                    self.user_id, _short_env,
+                )
                 return False
+        else:
+            api_key = os.getenv("OKX_API_KEY", "").strip()
+            api_secret = os.getenv("OKX_API_SECRET", "").strip()
+            passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
 
+        self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
 
-            # Check for placeholder passphrase (most common user error)
-            # Note: Only checking passphrase because API keys are UUIDs/hex without obvious placeholder patterns
-            if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
-                logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
-                logging.warning("   Please set a valid OKX_PASSPHRASE in your environment")
-                logging.warning("   Current value looks like a placeholder (e.g., 'your_passphrase')")
-                logging.warning("   Replace it with your actual OKX API passphrase from https://www.okx.com/account/my-api")
-                return False
-
-            # Determine API flag (0 = live, 1 = testnet)
-            flag = "1" if self.use_testnet else "0"
-
-            # Initialize OKX API clients
-            self.account_api = Account(api_key, api_secret, passphrase, flag)
-            self.market_api = Market(api_key, api_secret, passphrase, flag)
-            self.trade_api = Trade(api_key, api_secret, passphrase, flag)
-
-            # Test connection by fetching account balance with retry logic
-            # Increased max attempts for 403 "too many errors" which indicates temporary API key blocking
-            # Note: 403 differs from 429 (rate limiting) - it means the API key was temporarily blocked
-            max_attempts = 5
-            base_delay = 5.0  # Increased from 2.0 to allow API key blocks to reset
-
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    if attempt > 1:
-                        # Add delay before retry with exponential backoff
-                        # For 403 errors, we need longer delays: 5s, 10s, 20s, 40s (attempts 2-5)
-                        delay = base_delay * (2 ** (attempt - 2))
-                        logging.info(f"🔄 Retrying OKX connection in {delay}s (attempt {attempt}/{max_attempts})...")
-                        time.sleep(delay)
-
-                    result = self.account_api.get_balance()
-
-                    if result and result.get('code') == '0':
-                        self.connected = True
-
-                        if attempt > 1:
-                            logging.info(f"✅ Connected to OKX API (succeeded on attempt {attempt})")
-
-                        env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
-                        logging.info("=" * 70)
-                        logging.info(f"✅ OKX CONNECTED ({env_type})")
-                        logging.info("=" * 70)
-
-                        # Log account info
-                        data = result.get('data', [])
-                        if data and len(data) > 0:
-                            total_eq = data[0].get('totalEq', '0')
-                            logging.info(f"   Total Account Value: ${float(total_eq):.2f}")
-
-                        logging.info("=" * 70)
-                        return True
-                    else:
-                        error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-
-                        # Check if error is retryable
-                        is_retryable = any(keyword in error_msg.lower() for keyword in [
-                            'timeout', 'connection', 'network', 'rate limit',
-                            'too many requests', 'service unavailable',
-                            '503', '504', '429', '403', 'forbidden',
-                            'too many errors', 'temporary', 'try again'
-                        ])
-
-                        if is_retryable and attempt < max_attempts:
-                            logging.warning(f"⚠️  OKX connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
-                            continue
-                        else:
-                            logging.warning(f"⚠️  OKX connection test failed: {error_msg}")
-                            return False
-
-                except Exception as e:
-                    error_msg = str(e)
-
-                    # Check if error is retryable (rate limiting, network issues, 403 errors, etc.)
-                    # CRITICAL: Include 403, forbidden, and "too many errors" as retryable
-                    # These indicate API key blocking and need longer cooldown periods
-                    is_retryable = any(keyword in error_msg.lower() for keyword in [
-                        'timeout', 'connection', 'network', 'rate limit',
-                        'too many requests', 'service unavailable',
-                        '503', '504', '429', '403', 'forbidden',
-                        'too many errors', 'temporary', 'try again'
-                    ])
-
-                    if is_retryable and attempt < max_attempts:
-                        logging.warning(f"⚠️  OKX connection attempt {attempt}/{max_attempts} failed (retryable): {error_msg}")
-                        continue
-                    else:
-                        # Handle authentication errors gracefully
-                        # Note: OKX error code 50119 = "API key doesn't exist"
-                        error_str = error_msg.lower()
-                        if 'api key' in error_str or '401' in error_str or 'authentication' in error_str or '50119' in error_str:
-                            logging.warning("⚠️  OKX authentication failed - invalid or expired API credentials")
-                            logging.warning("   Please check your OKX_API_KEY, OKX_API_SECRET, and OKX_PASSPHRASE")
-                        elif 'connection' in error_str or 'network' in error_str or 'timeout' in error_str:
-                            logging.warning("⚠️  OKX connection failed - network issue or API unavailable")
-                        else:
-                            logging.warning(f"⚠️  OKX connection failed: {e}")
-                        return False
-
-            # Should never reach here, but just in case
-            logging.error("❌ Failed to connect to OKX after maximum retry attempts")
+        if not api_key or not api_secret or not passphrase:
+            missing = []
+            if not api_key:
+                missing.append("OKX_API_KEY")
+            if not api_secret:
+                missing.append("OKX_API_SECRET")
+            if not passphrase:
+                missing.append("OKX_PASSPHRASE")
+            if api_key or api_secret or passphrase:
+                logging.warning("⚠️  OKX credentials partially configured — missing: %s (skipping OKX)", ", ".join(missing))
+            else:
+                logging.info("ℹ️  OKX credentials not configured (optional broker — skipping)")
             return False
 
+        if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
+            logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
+            return False
+
+        try:
+            rest_client = _OKXRestClient(api_key, api_secret, passphrase, simulated=self.use_testnet)
+            result = rest_client.get_balance()
+            if result and result.get("code") == "0":
+                self.account_api = rest_client
+                self.market_api = rest_client
+                self.trade_api = rest_client
+                self.connected = True
+                self._is_available = True
+                env_type = "🧪 TESTNET" if self.use_testnet else "🔴 LIVE"
+                logging.info("=" * 70)
+                logging.info("✅ OKX REST CONNECTED (%s, no SDK import)", env_type)
+                logging.info("=" * 70)
+                data = result.get("data", [])
+                if data:
+                    try:
+                        logging.info("   Total Account Value: $%.2f", float(data[0].get("totalEq", "0") or 0.0))
+                    except Exception:
+                        pass
+                return True
+            error_msg = result.get("msg", "Unknown error") if result else "No response"
+            logging.warning("⚠️  OKX REST connection test failed: %s", error_msg)
+            return False
+        except Exception as exc:
+            logging.warning("⚠️  OKX REST connection failed without SDK import: %s", exc)
+            self.connected = False
+            self._is_available = False
         except PermissionError as e:
             # candlelite writes SETTINGS.config to its site-packages dir on first
             # import.  In read-only container environments this raises PermissionError
@@ -12808,13 +12862,18 @@ class OKXBroker(BaseBroker):
             # Place market order
             # For spot trading: tdMode = 'cash'
             # For margin/futures: tdMode = 'cross' or 'isolated'
-            result = okx_submit(
-                instId=okx_symbol,
-                tdMode='cash',  # Spot trading mode
-                side=okx_side,
-                ordType='market',
-                sz=str(quantity)
-            )
+            order_payload = {
+                "instId": okx_symbol,
+                "tdMode": "cash",  # Spot trading mode
+                "side": okx_side,
+                "ordType": "market",
+                "sz": str(quantity),
+            }
+            if okx_side == "buy":
+                # NIJA passes quote/notional USD(T) for entry buys.  OKX spot
+                # market buys must be explicit to avoid interpreting sz as base.
+                order_payload["tgtCcy"] = "quote_ccy"
+            result = okx_submit(**order_payload)
 
             if result and result.get('code') == '0':
                 data = result.get('data', [])

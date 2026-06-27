@@ -3098,6 +3098,10 @@ class OKXBrokerAdapter(BrokerInterface):
         logger.info(f"OKX broker adapter initialized (testnet={self.testnet})")
 
     def connect(self) -> bool:
+        """Connect to OKX API through NIJA's direct REST client."""
+        if not self.api_key or not self.api_secret or not self.passphrase:
+            logger.error("OKX credentials not found")
+            return False
         """Connect to OKX API."""
         logger.info(
             "⏭️  OKX adapter disabled: skipping SDK import because okx/candlelite "
@@ -3105,40 +3109,30 @@ class OKXBrokerAdapter(BrokerInterface):
         )
         return False
         try:
-            from okx.api import Account, Market, Trade
-
-            if not self.api_key or not self.api_secret or not self.passphrase:
-                logger.error("OKX credentials not found")
-                return False
-
-            # API flag: "1" for testnet, "0" for live
-            flag = "1" if self.testnet else "0"
-
-            # Initialize OKX API clients
-            self.account_api = Account(self.api_key, self.api_secret,
-                                       self.passphrase, flag)
-            self.market_api = Market(self.api_key, self.api_secret,
-                                     self.passphrase, flag)
-            self.trade_api = Trade(self.api_key, self.api_secret,
-                                   self.passphrase, flag)
-
-            # Test connection
-            result = self.account_api.get_balance()
-
+            try:
+                from bot.broker_manager import _OKXRestClient
+            except ImportError:
+                from broker_manager import _OKXRestClient  # type: ignore[import]
+            rest_client = _OKXRestClient(
+                self.api_key,
+                self.api_secret,
+                self.passphrase,
+                simulated=self.testnet,
+            )
+            result = rest_client.get_balance()
             if result and result.get('code') == '0':
+                self.account_api = rest_client
+                self.market_api = rest_client
+                self.trade_api = rest_client
+                self.connected = True
                 env_type = "testnet" if self.testnet else "live"
-                logger.info(f"✅ OKX connected ({env_type})")
+                logger.info(f"✅ OKX connected via direct REST ({env_type}, no SDK import)")
                 return True
-            else:
-                error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-                logger.error(f"OKX connection test failed: {error_msg}")
-                return False
-
-        except ImportError:
-            logger.error("OKX SDK not installed or incompatible version. Install with: pip install okx==2.1.2")
+            error_msg = result.get('msg', 'Unknown error') if result else 'No response'
+            logger.error(f"OKX REST connection test failed: {error_msg}")
             return False
         except Exception as e:
-            logger.error(f"Failed to connect to OKX: {e}")
+            logger.error(f"Failed to connect to OKX through direct REST: {e}")
             return False
 
     def get_account_balance(self) -> Dict[str, Any]:
@@ -3262,13 +3256,17 @@ class OKXBrokerAdapter(BrokerInterface):
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
 
             # Place order
-            result = okx_submit(
-                instId=okx_symbol,
-                tdMode='cash',  # Spot trading
-                side=side.lower(),
-                ordType='market',
-                sz=str(size)
-            )
+            okx_side = side.lower()
+            order_payload = {
+                "instId": okx_symbol,
+                "tdMode": "cash",  # Spot trading
+                "side": okx_side,
+                "ordType": "market",
+                "sz": str(size),
+            }
+            if okx_side == "buy":
+                order_payload["tgtCcy"] = "quote_ccy"
+            result = okx_submit(**order_payload)
 
             if result and result.get('code') == '0':
                 data = result.get('data', [])

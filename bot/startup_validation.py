@@ -489,8 +489,28 @@ def validate_exchange_configuration() -> StartupValidationResult:
         result.add_info("ℹ️  Binance credentials not configured (optional)")
 
     # ------------------------------------------------------------------
-    # OKX
+    # OKX (direct REST client; no okx/candlelite SDK import)
     # ------------------------------------------------------------------
+    okx_disabled = os.getenv("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
+    okx_key_set = bool(os.getenv("OKX_API_KEY"))
+    okx_viable, okx_pair = _okx_credentials_viable()
+
+    if okx_disabled:
+        result.add_info("ℹ️  OKX disabled by NIJA_DISABLE_OKX=true")
+    elif okx_viable:
+        viable_brokers.append("OKX")
+        result.add_info(f"✅ OKX credentials configured and viable for direct REST trading ({okx_pair})")
+    elif okx_key_set:
+        result.add_warning(
+            "⚠️  OKX CREDENTIALS INVALID: Values look like placeholders.\n"
+            "    Required format:\n"
+            "      OKX_API_KEY=<alphanumeric key>\n"
+            "      OKX_API_SECRET=<alphanumeric secret>\n"
+            "      OKX_PASSPHRASE=<your passphrase (set when creating the API key)>\n"
+            "    OKX uses NIJA direct REST now; the okx/candlelite SDK is not imported."
+        )
+    else:
+        result.add_info("ℹ️  OKX credentials not configured (optional direct REST broker)")
     # OKX is intentionally not counted as viable in production startup.  The
     # upstream okx SDK imports candlelite, which can attempt writes inside
     # site-packages before application-level monkeypatches can run.  In
