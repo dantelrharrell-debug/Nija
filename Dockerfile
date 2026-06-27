@@ -49,9 +49,15 @@ ENV BUILD_TIMESTAMP=$BUILD_TIMESTAMP
 # Inject Git metadata at build time; script uses set -e so any failure aborts the build
 RUN ./inject_git_metadata.sh
 
+# Redirect candlelite config to a writable /tmp path so the okx SDK never
+# tries to write SETTINGS.config into the read-only site-packages directory.
+# This must be an ENV directive (not set in Python) so the variable is present
+# before any Python import runs.
+ENV CANDLELITE_CONFIG_DIR=/tmp/candlelite
+
 # Create necessary directories and set permissions
-RUN mkdir -p /app/cache /app/data /app/logs && \
-    chown -R nija:nija /app
+RUN mkdir -p /app/cache /app/data /app/logs /tmp/candlelite && \
+    chown -R nija:nija /app /tmp/candlelite
 
 # Switch to non-root user
 USER nija
