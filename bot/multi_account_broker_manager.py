@@ -6274,21 +6274,25 @@ class MultiAccountBrokerManager:
                 results["coinbase"] = {"broker": None, "connected": False, "error": str(exc)}
 
         # ── OKX ──────────────────────────────────────────────────────────────
-        # OKX uses NIJA's direct REST v5 client instead of the upstream okx SDK,
-        # avoiding candlelite/site-packages write side effects in read-only containers.
-        _disable_okx = os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
-        # OKX is disabled unconditionally because the upstream okx/candlelite stack
-        # can write into site-packages during import in read-only containers.
-        # Do not instantiate OKX here; Kraken/Coinbase/user trading must not be
-        # blocked by an optional broker import side effect.
-        _disable_okx = True
+        # OKX uses NIJA's direct REST v5 client — no okx/candlelite SDK import.
+        # Disabled by default; enable via OKX_ENABLED, NIJA_ENABLE_OKX, or
+        # OKX_PLATFORM_ENABLED.  Explicitly disabled via NIJA_DISABLE_OKX.
+        _okx_enabled = (
+            os.environ.get("OKX_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+            or os.environ.get("NIJA_ENABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
+            or os.environ.get("OKX_PLATFORM_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+        )
+        _disable_okx = (
+            os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
+            or not _okx_enabled
+        )
         _okx_key = os.environ.get("OKX_API_KEY", "").strip()
         _okx_secret = os.environ.get("OKX_API_SECRET", "").strip()
         _okx_passphrase = os.environ.get("OKX_PASSPHRASE", "").strip()
         _okx_creds_configured = bool(_okx_key and _okx_secret and _okx_passphrase)
 
         if _disable_okx:
-            logger.info("⏭️  OKX PLATFORM skipped (disabled by default: OKX SDK/candlelite is not read-only-container safe)")
+            logger.info("⏭️  OKX PLATFORM skipped (disabled by default; set OKX_ENABLED=true to enable)")
         elif not _okx_creds_configured:
             logger.info("⏭️  OKX PLATFORM skipped (credentials not configured)")
         else:
