@@ -3497,39 +3497,18 @@ class NijaCoreLoop:
         )
         try:
             from bot.competitive_profitability_policy import get_competitive_profitability_policy
-
             competitive_profile = get_competitive_profitability_policy().profile_entry(
                 df=df,
                 side="short" if action == "enter_short" else "long",
             )
             if not competitive_profile.liquidity_ok:
-                raise ValueError(
-                    "competitive profitability policy blocked illiquid fallback entry: "
-                    f"{competitive_profile.liquidity_reason}"
-                )
-            risk_fraction = competitive_profile.risk_fraction
-            stop_loss_pct = min(float(competitive_profile.stop_loss_pct), 3.0)
-            raw_tp = tuple(float(pct) for pct in competitive_profile.take_profit_pct)
-            tp1 = max(raw_tp[0] if len(raw_tp) > 0 else 0.0, 0.85)
-            tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
-            tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
-            take_profit_pct = (tp1, tp2, tp3)
-            trailing_stop_pct = competitive_profile.trailing_stop_pct
                 if _force_trade_active:
-                    # FORCE_TRADE active: log the liquidity warning but proceed
-                    # with the conservative default geometry instead of raising.
-                    # Raising here was the root cause of execute_action() never
-                    # being called — the ValueError was caught by the outer loop
-                    # and silently converted to a blocked entry.
                     logger.warning(
                         "⚡ [FORCE_TRADE] competitive_profitability_policy liquidity check "
-                        "FAILED for %s (%s) — bypassing block and using default geometry "
-                        "because FORCE_TRADE is active.",
+                        "FAILED for %s (%s) — using default fallback geometry.",
                         getattr(sig, "symbol", "UNKNOWN"),
                         competitive_profile.liquidity_reason,
                     )
-                    # Fall through to use the default risk_fraction / take_profit_pct
-                    # values set above; do NOT update them from the illiquid profile.
                 else:
                     raise ValueError(
                         "competitive profitability policy blocked illiquid fallback entry: "
@@ -3543,8 +3522,6 @@ class NijaCoreLoop:
                 tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
                 tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
                 take_profit_pct = (tp1, tp2, tp3)
-                stop_loss_pct = competitive_profile.stop_loss_pct
-                take_profit_pct = competitive_profile.take_profit_pct
                 trailing_stop_pct = competitive_profile.trailing_stop_pct
         except ValueError:
             raise
