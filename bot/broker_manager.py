@@ -12487,59 +12487,6 @@ class OKXBroker(BaseBroker):
         self._is_available = False
         return False
 
-        if self.account_type == AccountType.PLATFORM:
-            try:
-                from bot.multi_account_broker_manager import get_broker_manager
-            except ImportError:
-                from multi_account_broker_manager import get_broker_manager  # type: ignore[import]
-            manager = get_broker_manager()
-            manager.register_broker("okx", self)
-            assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
-        try:
-            # ── candlelite permission fix ─────────────────────────────────────
-            # The okx SDK depends on candlelite, which writes a SETTINGS.config
-            # file to its own package directory inside site-packages on first
-            # import.  In containerised environments that directory is read-only,
-            # causing a [Errno 13] Permission denied error that prevents OKX from
-            # connecting at all.  Redirecting CANDLELITE_CONFIG_DIR to /tmp before
-            # the import ensures candlelite always has a writable location.
-            import tempfile as _tempfile
-            _candlelite_dir = os.path.join(_tempfile.gettempdir(), "candlelite")
-            try:
-                os.makedirs(_candlelite_dir, exist_ok=True)
-            except OSError:
-                _candlelite_dir = _tempfile.gettempdir()
-            os.environ.setdefault("CANDLELITE_CONFIG_DIR", _candlelite_dir)
-            # ─────────────────────────────────────────────────────────────────
-
-            from okx.api import Account, Market, Trade
-            import time
-
-            # Support per-user credentials for USER accounts:
-            #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
-            if self.account_type == AccountType.USER and self.user_id:
-                _short_env, _full_env = _user_env_prefix(self.user_id)
-                api_key = os.getenv(f"OKX_USER_{_short_env}_API_KEY", "").strip()
-                api_secret = os.getenv(f"OKX_USER_{_short_env}_API_SECRET", "").strip()
-                passphrase = os.getenv(f"OKX_USER_{_short_env}_PASSPHRASE", "").strip()
-                # Fallback: full user_id in uppercase
-                if (not api_key or not api_secret or not passphrase) and _full_env != _short_env:
-                    api_key = api_key or os.getenv(f"OKX_USER_{_full_env}_API_KEY", "").strip()
-                    api_secret = api_secret or os.getenv(f"OKX_USER_{_full_env}_API_SECRET", "").strip()
-                    passphrase = passphrase or os.getenv(f"OKX_USER_{_full_env}_PASSPHRASE", "").strip()
-                if not api_key or not api_secret or not passphrase:
-                    logging.info(
-                        "ℹ️  OKX USER credentials not configured for %s "
-                        "(checked OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE) — skipping",
-                        self.user_id, _short_env,
-                    )
-                    return False
-            else:
-                api_key = os.getenv("OKX_API_KEY", "").strip()
-                api_secret = os.getenv("OKX_API_SECRET", "").strip()
-                passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
-            self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
-
         # Support per-user credentials for USER accounts:
         #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
         if self.account_type == AccountType.USER and self.user_id:
@@ -12606,10 +12553,6 @@ class OKXBroker(BaseBroker):
             error_msg = result.get("msg", "Unknown error") if result else "No response"
             logging.warning("⚠️  OKX REST connection test failed: %s", error_msg)
             return False
-        except Exception as exc:
-            logging.warning("⚠️  OKX REST connection failed without SDK import: %s", exc)
-            self.connected = False
-            self._is_available = False
         except PermissionError as e:
             # candlelite writes SETTINGS.config to its site-packages dir on first
             # import.  In read-only container environments this raises PermissionError
@@ -12624,18 +12567,10 @@ class OKXBroker(BaseBroker):
             else:
                 logging.warning("⚠️  OKX connect() PermissionError (non-critical): %s", e)
             return False
-
-        except ImportError as e:
-            # SDK not installed or import failed
-            logging.error("❌ OKX connection failed: SDK import error")
-            logging.error(f"   ImportError: {e}")
-            logging.error("   The OKX SDK (okx) failed to import")
-            logging.error("")
-            logging.error("   📋 Troubleshooting steps:")
-            logging.error("      1. Verify okx is in requirements.txt")
-            logging.error("      2. Check deployment logs for package installation errors")
-            logging.error("      3. Try manual install: pip install okx")
-            logging.error("      4. Check for dependency conflicts with: pip check")
+        except Exception as exc:
+            logging.warning("⚠️  OKX REST connection failed: %s", exc)
+            self.connected = False
+            self._is_available = False
             return False
 
     def get_account_balance(self, verbose: bool = True) -> float:
