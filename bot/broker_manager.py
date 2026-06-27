@@ -26,23 +26,9 @@ import weakref
 import threading
 from urllib.parse import urlencode
 
-# ── candlelite writable config dir ───────────────────────────────────────────
-# Must be set BEFORE any import that could trigger candlelite initialisation.
-# The okx SDK depends on candlelite, which tries to write SETTINGS.config into
-# its own site-packages directory on first import.  In containerised / read-only
-# environments this raises [Errno 13] Permission denied and prevents OKX from
-# connecting.  bot/__init__.py sets this first, but we repeat it here as a
-# safety net for cases where broker_manager is imported directly (e.g. tests,
-# scripts, or alternative entry points that bypass the package __init__).
-# os.environ.setdefault() is used so an operator-supplied value is never
-# overwritten, and so the two call-sites stay idempotent.
-_candlelite_dir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "candlelite")
-try:
-    os.makedirs(_candlelite_dir, exist_ok=True)
-except OSError:
-    _candlelite_dir = os.environ.get("TMPDIR", "/tmp")
-os.environ.setdefault("CANDLELITE_CONFIG_DIR", _candlelite_dir)
-del _candlelite_dir  # keep module namespace clean
+# ── OKX uses direct REST — no candlelite / okx SDK import needed ─────────────
+# NIJA's OKX integration uses _OKXRestClient (HMAC-signed HTTPS calls) instead
+# of the upstream okx/candlelite SDK.  No environment patching is required.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Optional: 'requests' is used for Kraken gateway routing (NIJA_KRAKEN_GATEWAY_URL).
@@ -12461,14 +12447,12 @@ class OKXBroker(BaseBroker):
             self._is_available = False
 
     def connect(self) -> bool:
-        """Connect to OKX through direct REST v5 without importing okx/candlelite."""
-        """
-        Connect to OKX Exchange API with retry logic.
+        """Connect to OKX through direct REST v5 without importing okx/candlelite.
 
-        OKX is disabled by default because the upstream okx/candlelite import
-        can write to site-packages in read-only containers before NIJA can
-        patch or redirect it.  Returning before the SDK import prevents OKX
-        from blocking Kraken/Coinbase/user trading.
+        Uses _OKXRestClient (HMAC-SHA256 signed HTTPS) so no okx SDK or
+        candlelite dependency is imported.  Failures are isolated — Kraken and
+        Coinbase continue trading even if OKX credentials are missing or the
+        connection test fails.
 
         Requires environment variables:
         - OKX_API_KEY: Your OKX API key
@@ -12479,58 +12463,50 @@ class OKXBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
-        logging.info(
-            "⏭️  OKX disabled: skipping SDK import because okx/candlelite is not "
-            "read-only-container safe"
-        )
-        self.connected = False
-        self._is_available = False
-        return False
-
-        # Support per-user credentials for USER accounts:
-        #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
-        if self.account_type == AccountType.USER and self.user_id:
-            _short_env, _full_env = _user_env_prefix(self.user_id)
-            api_key = os.getenv(f"OKX_USER_{_short_env}_API_KEY", "").strip()
-            api_secret = os.getenv(f"OKX_USER_{_short_env}_API_SECRET", "").strip()
-            passphrase = os.getenv(f"OKX_USER_{_short_env}_PASSPHRASE", "").strip()
-            if (not api_key or not api_secret or not passphrase) and _full_env != _short_env:
-                api_key = api_key or os.getenv(f"OKX_USER_{_full_env}_API_KEY", "").strip()
-                api_secret = api_secret or os.getenv(f"OKX_USER_{_full_env}_API_SECRET", "").strip()
-                passphrase = passphrase or os.getenv(f"OKX_USER_{_full_env}_PASSPHRASE", "").strip()
-            if not api_key or not api_secret or not passphrase:
-                logging.info(
-                    "ℹ️  OKX USER credentials not configured for %s "
-                    "(checked OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE) — skipping",
-                    self.user_id, _short_env,
-                )
-                return False
-        else:
-            api_key = os.getenv("OKX_API_KEY", "").strip()
-            api_secret = os.getenv("OKX_API_SECRET", "").strip()
-            passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
-
-        self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
-
-        if not api_key or not api_secret or not passphrase:
-            missing = []
-            if not api_key:
-                missing.append("OKX_API_KEY")
-            if not api_secret:
-                missing.append("OKX_API_SECRET")
-            if not passphrase:
-                missing.append("OKX_PASSPHRASE")
-            if api_key or api_secret or passphrase:
-                logging.warning("⚠️  OKX credentials partially configured — missing: %s (skipping OKX)", ", ".join(missing))
-            else:
-                logging.info("ℹ️  OKX credentials not configured (optional broker — skipping)")
-            return False
-
-        if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
-            logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
-            return False
-
         try:
+            # Support per-user credentials for USER accounts:
+            #   OKX_USER_{USERID}_API_KEY / _API_SECRET / _PASSPHRASE
+            if self.account_type == AccountType.USER and self.user_id:
+                _short_env, _full_env = _user_env_prefix(self.user_id)
+                api_key = os.getenv(f"OKX_USER_{_short_env}_API_KEY", "").strip()
+                api_secret = os.getenv(f"OKX_USER_{_short_env}_API_SECRET", "").strip()
+                passphrase = os.getenv(f"OKX_USER_{_short_env}_PASSPHRASE", "").strip()
+                if (not api_key or not api_secret or not passphrase) and _full_env != _short_env:
+                    api_key = api_key or os.getenv(f"OKX_USER_{_full_env}_API_KEY", "").strip()
+                    api_secret = api_secret or os.getenv(f"OKX_USER_{_full_env}_API_SECRET", "").strip()
+                    passphrase = passphrase or os.getenv(f"OKX_USER_{_full_env}_PASSPHRASE", "").strip()
+                if not api_key or not api_secret or not passphrase:
+                    logging.info(
+                        "ℹ️  OKX USER credentials not configured for %s "
+                        "(checked OKX_USER_%s_API_KEY / _API_SECRET / _PASSPHRASE) — skipping",
+                        self.user_id, _short_env,
+                    )
+                    return False
+            else:
+                api_key = os.getenv("OKX_API_KEY", "").strip()
+                api_secret = os.getenv("OKX_API_SECRET", "").strip()
+                passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
+
+            self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
+
+            if not api_key or not api_secret or not passphrase:
+                missing = []
+                if not api_key:
+                    missing.append("OKX_API_KEY")
+                if not api_secret:
+                    missing.append("OKX_API_SECRET")
+                if not passphrase:
+                    missing.append("OKX_PASSPHRASE")
+                if api_key or api_secret or passphrase:
+                    logging.warning("⚠️  OKX credentials partially configured — missing: %s (skipping OKX)", ", ".join(missing))
+                else:
+                    logging.info("ℹ️  OKX credentials not configured (optional broker — skipping)")
+                return False
+
+            if passphrase in PLACEHOLDER_PASSPHRASE_VALUES:
+                logging.warning("⚠️  OKX passphrase appears to be a placeholder value")
+                return False
+
             rest_client = _OKXRestClient(api_key, api_secret, passphrase, simulated=self.use_testnet)
             result = rest_client.get_balance()
             if result and result.get("code") == "0":
@@ -12552,23 +12528,10 @@ class OKXBroker(BaseBroker):
                 return True
             error_msg = result.get("msg", "Unknown error") if result else "No response"
             logging.warning("⚠️  OKX REST connection test failed: %s", error_msg)
-            return False
-        except PermissionError as e:
-            # candlelite writes SETTINGS.config to its site-packages dir on first
-            # import.  In read-only container environments this raises PermissionError
-            # before any OKX API call is made.  We catch it here so the crash is
-            # isolated to OKX — Kraken and Coinbase continue trading normally.
-            _e_str = str(e)
-            if "candlelite" in _e_str or "SETTINGS.config" in _e_str:
-                logging.warning(
-                    "⚠️  OKX candlelite permission error (non-critical) — "
-                    "Kraken + Coinbase continue trading: %s", e
-                )
-            else:
-                logging.warning("⚠️  OKX connect() PermissionError (non-critical): %s", e)
+            self.connected = False
             return False
         except Exception as exc:
-            logging.warning("⚠️  OKX REST connection failed: %s", exc)
+            logging.warning("⚠️  OKX REST connection failed (non-critical): %s", exc)
             self.connected = False
             self._is_available = False
             return False
