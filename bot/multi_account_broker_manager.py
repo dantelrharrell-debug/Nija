@@ -6297,7 +6297,15 @@ class MultiAccountBrokerManager:
             logger.info("⏭️  OKX PLATFORM skipped (NIJA_DISABLE_OKX=true)")
         elif not _okx_creds_configured:
             logger.info("⏭️  OKX PLATFORM skipped (credentials not configured)")
+        elif not _okx_enabled:
+            logger.info(
+                "⏭️  OKX PLATFORM skipped (disabled — set OKX_ENABLED=true, "
+                "NIJA_ENABLE_OKX=true, or OKX_PLATFORM_ENABLED=true to enable)"
+            )
         else:
+            logger.info(
+                "✅ OKX credentials present and enabled — initializing OKX platform broker"
+            )
             logger.info("📊 Attempting to connect OKX (PLATFORM — NON-CRITICAL)…")
             try:
                 broker = _guarded_create("okx", OKXBroker)
