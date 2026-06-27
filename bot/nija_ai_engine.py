@@ -338,10 +338,10 @@ class AdaptiveThresholdController:
 
     _TARGET_FLOOR:  float = 0.55   # raise threshold below this win rate
     _TARGET_CEIL:   float = 0.65   # lower threshold above this win rate
-    _WINDOW:        int   = 20     # rolling outcome window
+    _WINDOW:        int   = 150    # rolling outcome window (100–250 trade re-optimization)
     _STEP:          float = 0.5    # composite-score pts nudged per recompute
     _MAX_ADJ:       float = 5.0    # reduced from 8.0 → 5.0 (Apr 2026): max effective floor drops from 12→9 so WRSS-dampened scores still pass
-    _MIN_SAMPLES:   int   = 5      # outcomes needed before any adjustment
+    _MIN_SAMPLES:   int   = 100    # completed trades needed before performance re-optimization
 
     # Gate-domain adjustment — operates in the same units as
     # BASE_ENTRY_SCORE_THRESHOLD (0-9 scale) so ±3.0 stays meaningful.
@@ -450,7 +450,9 @@ class NijaAIEngine:
         # Can also be updated at runtime via set_score_floor().
         if _PMC_AVAILABLE and _get_pmc is not None:
             try:
-                self._score_floor: float = _get_pmc().params.min_score_absolute
+                _pmc_inst = _get_pmc()
+                _pmc_params = getattr(_pmc_inst, "market_adjusted_params", _pmc_inst.params)
+                self._score_floor: float = _pmc_params.min_score_absolute
             except Exception as _exc:
                 logger.debug("NijaAIEngine: profit mode score floor read failed — using default: %s", _exc)
                 self._score_floor = MIN_SCORE_ABSOLUTE
@@ -515,6 +517,67 @@ class NijaAIEngine:
     # Public API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _force_trade_signal_enabled() -> bool:
+        """Return True when operators explicitly request forced/probe entries.
+
+        This is intentionally opt-in.  It does not bypass broker, capital,
+        liquidity, lifecycle, or exchange submission gates; it only prevents
+        the AI signal layer from returning an empty candidate list when the
+        live deployment has FORCE_TRADE-style controls enabled.
+        """
+        truthy = {"1", "true", "yes", "on", "y", "enabled"}
+        for key in (
+            "FORCE_TRADE",
+            "FORCE_TRADE_MODE",
+            "NIJA_FORCE_TRADE",
+            "NIJA_FORCE_NEXT_CYCLE",
+            "NIJA_ALWAYS_TRADE_MODE",
+        ):
+            if str(os.getenv(key, "")).strip().lower() in truthy:
+                return True
+        return False
+
+    def _build_exploratory_signal(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        composite: float,
+        effective_floor: float,
+        breakdown: Dict[str, Any],
+        regime: Any,
+        entry_type: str,
+    ) -> AIEngineSignal:
+        """Build a bounded FORCE_TRADE signal from the best below-floor score.
+
+        The signal is explicitly marked so downstream ranking can keep it even
+        though it is below the normal score floor, while execution-side safety
+        gates still make the final submit/no-submit decision.
+        """
+        metadata = dict(breakdown or {})
+        metadata.update(
+            {
+                "force_trade_signal": True,
+                "below_score_floor": True,
+                "score_floor": float(effective_floor),
+                "score_shortfall": max(0.0, float(effective_floor) - float(composite)),
+                "selection_override": "FORCE_TRADE exploratory signal",
+            }
+        )
+        reason = self._build_reason(side, composite, metadata, regime)
+        reason = f"{reason} [FORCE_TRADE exploratory below-floor candidate]"
+        return AIEngineSignal(
+            symbol=symbol,
+            side=side,
+            composite_score=float(max(0.0, min(100.0, composite))),
+            position_multiplier=min(0.50, self._position_multiplier(max(0.0, composite))),
+            entry_type=entry_type,
+            threshold_used=effective_floor,
+            reason=reason,
+            metadata=metadata,
+        )
+
     def set_score_floor(self, value: float) -> None:
         """
         Override the composite-score floor used by this engine instance.
@@ -528,11 +591,13 @@ class NijaAIEngine:
         """
         clamped = max(TIER_WEAK, min(float(value), 95.0))
         with self._lock:
+            old = self._score_floor
             self._score_floor = clamped
-        logger.info(
-            "🤖 NijaAIEngine score floor updated → _score_floor=%.1f",
-            clamped,
-        )
+        if abs(old - clamped) >= 0.05:
+            logger.info(
+                "🤖 NijaAIEngine score floor updated → _score_floor=%.1f",
+                clamped,
+            )
 
     def evaluate_symbol(
         self,
@@ -572,6 +637,21 @@ class NijaAIEngine:
             effective_floor = self.threshold_ctrl.get_effective_floor(score_floor)
 
             if composite < effective_floor:
+                if self._force_trade_signal_enabled():
+                    logger.warning(
+                        "⚡ FORCE_TRADE AI signal override: %s %s score=%.1f < floor=%.1f — "
+                        "emitting bounded exploratory candidate for downstream safety gates",
+                        symbol, side.upper(), composite, effective_floor,
+                    )
+                    return self._build_exploratory_signal(
+                        symbol=symbol,
+                        side=side,
+                        composite=composite,
+                        effective_floor=effective_floor,
+                        breakdown=breakdown,
+                        regime=regime,
+                        entry_type=entry_type,
+                    )
                 logger.debug(
                     "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f (adj%+.1f) — skipped",
                     symbol, side.upper(), composite, effective_floor,
@@ -661,9 +741,15 @@ class NijaAIEngine:
         for sig in ranked:
             if slots_used >= max_take:
                 break
-            if sig.composite_score >= threshold:
+            force_signal = bool(getattr(sig, "metadata", {}).get("force_trade_signal"))
+            if sig.composite_score >= threshold or force_signal:
                 sig.threshold_used = threshold
-                sig.position_multiplier = self._position_multiplier(sig.composite_score)
+                if force_signal:
+                    # Keep forced exploratory probes small; hard execution gates
+                    # still decide whether an order may be submitted.
+                    sig.position_multiplier = min(0.50, self._position_multiplier(sig.composite_score))
+                else:
+                    sig.position_multiplier = self._position_multiplier(sig.composite_score)
                 selected.append(sig)
                 slots_used += 1
 
@@ -748,6 +834,14 @@ class NijaAIEngine:
         # unavailable or raises, so signals aren't artificially boosted.
         gate_quality = 0.0
         gate_results: Dict[str, bool] = {}
+        volume_gate_multiplier = None
+        if _PMC_AVAILABLE and _get_pmc is not None:
+            try:
+                _pmc_inst = _get_pmc()
+                _pmc_params = getattr(_pmc_inst, "market_adjusted_params", _pmc_inst.params)
+                volume_gate_multiplier = getattr(_pmc_params, "volume_gate_multiplier", None)
+            except Exception as exc:
+                logger.debug("NijaAIEngine: profit-mode volume gate read failed: %s", exc)
         gate = self._get_gate()
         if gate is not None:
             try:
@@ -759,6 +853,7 @@ class NijaAIEngine:
                     regime=regime,
                     broker=broker,
                     entry_type=entry_type,
+                    volume_gate_multiplier=volume_gate_multiplier,
                 )
                 breakdown["gate_passed"] = gate_result.passed
                 breakdown["gate_reason"] = gate_result.reason
@@ -950,3 +1045,21 @@ def record_trade_outcome(won: bool) -> None:
         record_trade_outcome(pnl_usd > 0)
     """
     get_nija_ai_engine().threshold_ctrl.record_outcome(won)
+    try:
+        from bot.adaptive_entry_thresholds import record_adaptive_trade_outcome
+    except Exception:
+        try:
+            from adaptive_entry_thresholds import record_adaptive_trade_outcome  # type: ignore
+        except Exception:
+            record_adaptive_trade_outcome = None  # type: ignore[assignment]
+    if record_adaptive_trade_outcome is not None:
+        record_adaptive_trade_outcome(1.0 if won else -1.0)
+    try:
+        from bot.competitive_profitability_policy import record_competitive_trade_outcome
+    except Exception:
+        try:
+            from competitive_profitability_policy import record_competitive_trade_outcome  # type: ignore
+        except Exception:
+            record_competitive_trade_outcome = None  # type: ignore[assignment]
+    if record_competitive_trade_outcome is not None:
+        record_competitive_trade_outcome(1.0 if won else -1.0)

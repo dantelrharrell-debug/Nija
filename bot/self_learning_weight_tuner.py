@@ -73,11 +73,16 @@ import math
 import threading
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija.weight_tuner")
+
+
+def _utc_now_iso() -> str:
+    """Return an explicit UTC timestamp without deprecated utcnow()."""
+    return datetime.now(timezone.utc).isoformat()
 
 # ---------------------------------------------------------------------------
 # ① SAFETY LAYER — NON-NEGOTIABLE
@@ -642,7 +647,7 @@ class TradeAttributionLog:
     def record_entry(self, trade_context: Dict) -> None:
         """Store the entry context at trade open."""
         record = {**trade_context, "status": "open",
-                  "timestamp": datetime.utcnow().isoformat()}
+                  "timestamp": _utc_now_iso()}
         with self._lock:
             self._records.append(record)
         self._append_line(record)
@@ -658,7 +663,7 @@ class TradeAttributionLog:
                     rec["status"] = "closed"
                     rec["pnl"] = round(pnl, 6)
                     rec["win"] = win
-                    rec["closed_at"] = datetime.utcnow().isoformat()
+                    rec["closed_at"] = _utc_now_iso()
                     self._append_line(rec)
                     return rec
         return None
@@ -925,7 +930,7 @@ class SelfLearningWeightTuner:
             if is_win:
                 ss.wins += 1
             ss.total_pnl += pnl_pct
-            ss.last_updated = datetime.utcnow().isoformat()
+            ss.last_updated = _utc_now_iso()
 
         if entry is None:
             logger.debug("WeightTuner: no pending entry for %s — skipping weight update", symbol)
@@ -978,7 +983,7 @@ class SelfLearningWeightTuner:
                 if closed:
                     ws.signal_weights = self._optimizer.run(ws.signal_weights, closed)
 
-            ws.last_updated = datetime.utcnow().isoformat()
+            ws.last_updated = _utc_now_iso()
 
             logger.info(
                 "⚖️  WeightTuner [%-10s] %s | signal=%s | wr=%.0f%% (%d trades)",
@@ -1274,7 +1279,7 @@ class SelfLearningWeightTuner:
                 },
                 "_meta": {
                     "version": "2.0",
-                    "last_save": datetime.utcnow().isoformat(),
+                    "last_save": _utc_now_iso(),
                 },
             }
             tmp = self.STATE_FILE.with_suffix(".tmp")
