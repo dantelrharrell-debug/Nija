@@ -126,6 +126,23 @@ def _parse_lock_token(raw_value: str) -> int:
         return 0
 
 
+def _writer_lineage_ready_for_token_validation() -> bool:
+    """Return True when runtime writer lineage/heartbeat is fully established."""
+    def _positive_int_env(name: str) -> bool:
+        raw = os.getenv(name, "").strip()
+        try:
+            return int(raw) > 0
+        except (TypeError, ValueError):
+            return False
+
+    lock_acquired = _env_truthy("NIJA_LOCK_ACQUIRED", "false")
+    lease_acquired = _env_truthy("NIJA_WRITER_LEASE_ACQUIRED", "false")
+    token_present = _positive_int_env("NIJA_WRITER_FENCING_TOKEN")
+    generation_present = _positive_int_env("NIJA_WRITER_LEASE_GENERATION")
+    heartbeat_active = _env_truthy("NIJA_WRITER_HEARTBEAT_ACTIVE", "false")
+    return lock_acquired and lease_acquired and token_present and generation_present and heartbeat_active
+
+
 def _step(n: int, title: str) -> None:
     log.info(SEPARATOR)
     log.info("STEP %d — %s", n, title)
@@ -404,15 +421,21 @@ def _step3_redis_health(redis_client: "redis.Redis") -> None:  # type: ignore[na
     except Exception as exc:
         log.warning("Could not read writer lock key %s: %s", lock_key, exc)
 
-    if strict_lock_required and not expected_token:
+    lineage_ready = _writer_lineage_ready_for_token_validation()
+    if strict_lock_required and lineage_ready and not expected_token:
         _fail("Distributed writer fencing token missing in strict/live mode")
         sys.exit(1)
-    if expected_token and current_token != expected_token:
+    if lineage_ready and expected_token and current_token != expected_token:
         _fail(
             "Distributed writer lock token mismatch "
             f"(expected={expected_token}, current={current_token or '<missing>'})"
         )
         sys.exit(1)
+    if strict_lock_required and not lineage_ready:
+        log.info(
+            "Deferring writer lock token validation until authority lineage is complete "
+            "(lock acquired + lease acquired + fencing token + lease generation + heartbeat active)."
+        )
 
     platform_key = _resolve_platform_key()
     lease_version = 0

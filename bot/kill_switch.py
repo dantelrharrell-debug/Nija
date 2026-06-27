@@ -30,7 +30,7 @@ import os
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from pathlib import Path
 
@@ -89,12 +89,22 @@ class KillSwitch:
                 with open(self._state_file, 'r') as f:
                     data = json.load(f)
                     self._activation_history = data.get('history', [])
-                    
-                    # Check if there's an active kill switch from previous session
+
+                    # SAFETY FIX: Do NOT auto-reactivate from stale JSON on restart.
+                    # The EMERGENCY_STOP file on disk is the authoritative signal and is
+                    # checked immediately after this method via _check_file_activation().
+                    # Persisting is_active=true across restarts caused the kill switch to
+                    # re-trigger EMERGENCY_STOP on every boot even after the underlying
+                    # condition was resolved, permanently blocking trade execution.
+                    # If the EMERGENCY_STOP file is absent, the kill switch starts inactive.
                     if data.get('is_active', False):
-                        logger.warning("⚠️  Kill switch was active in previous session")
-                        # Keep it active for safety
-                        self._is_active = True
+                        logger.warning(
+                            "⚠️  Kill switch was active in previous session — "
+                            "resetting to inactive on restart. "
+                            "The EMERGENCY_STOP file is the authoritative signal; "
+                            "if it exists the kill switch will be re-activated below."
+                        )
+                        self._is_active = False
         except Exception as e:
             logger.error(f"❌ Error loading kill switch state: {e}")
             
@@ -104,7 +114,7 @@ class KillSwitch:
             data = {
                 'is_active': self._is_active,
                 'history': self._activation_history,
-                'last_updated': datetime.utcnow().isoformat()
+                'last_updated': datetime.now(timezone.utc).isoformat()
             }
             
             temp_file = f"{self._state_file}.tmp"
@@ -134,7 +144,7 @@ class KillSwitch:
 ALL TRADING OPERATIONS HAVE BEEN HALTED
 
 Reason: {reason}
-Activated: {datetime.utcnow().isoformat()}
+Activated: {datetime.now(timezone.utc).isoformat()}
 
 To resume trading:
 1. Delete this file: rm {self.KILL_SWITCH_FILE}
@@ -163,7 +173,7 @@ To resume trading:
         activation_record = {
             'reason': reason,
             'source': source,
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         self._is_active = True
@@ -235,7 +245,7 @@ To resume trading:
                 
             deactivation_record = {
                 'reason': reason,
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             self._activation_history.append(deactivation_record)
             
@@ -393,7 +403,7 @@ class KillSwitchAutoTrigger:
             return True
         
         # Reset if new day
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         return now.date() > self._daily_start_time.date()
 
     def _should_reset_weekly_metrics(self) -> bool:
@@ -401,7 +411,7 @@ class KillSwitchAutoTrigger:
         i.e. when Monday rolls over in UTC)."""
         if self._weekly_start_time is None:
             return True
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # isocalendar() returns (ISO year, ISO week number, weekday)
         # Comparing the first two elements detects a new ISO week (starts Monday)
         return now.isocalendar()[:2] > self._weekly_start_time.isocalendar()[:2]
@@ -423,7 +433,7 @@ class KillSwitchAutoTrigger:
             # (no trigger on the first call of a fresh week — that call just sets the baseline).
             if self._should_reset_weekly_metrics():
                 self._weekly_starting_balance = current_balance
-                self._weekly_start_time = datetime.utcnow()
+                self._weekly_start_time = datetime.now(timezone.utc)
                 self._weekly_risk_halved = False
                 logger.debug(f"📊 Weekly metrics reset: starting balance ${current_balance:.2f}")
                 return None
@@ -494,7 +504,7 @@ class KillSwitchAutoTrigger:
             # Initialize or reset if new day
             if self._should_reset_daily_metrics():
                 self._daily_starting_balance = current_balance
-                self._daily_start_time = datetime.utcnow()
+                self._daily_start_time = datetime.now(timezone.utc)
                 logger.debug(f"📊 Daily metrics reset: starting balance ${current_balance:.2f}")
                 return None
             

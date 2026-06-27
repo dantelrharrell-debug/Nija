@@ -261,12 +261,20 @@ _HEARTBEAT_SYMBOL_CANDIDATES: List[str] = [
     "XRP-USD",
 ]
 
+# Global minimum trade size — single source of truth imported by position_sizer.py.
+# Lowered to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
+GLOBAL_MIN_TRADE: float = float(os.environ.get("MIN_TRADE_USD", os.environ.get("MIN_NOTIONAL_USD", "10.0")))
+
 # Backward-compatibility constants retained for legacy test/import paths.
-ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase"]
+# Lowered to $50 to allow trading with ~$174 balance in HF scalp mode (Apr 2026).
+# All enabled brokerages are included so the entry router considers every venue.
+ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase", "okx", "alpaca"]
 BROKER_MIN_BALANCE: Dict[str, float] = {
-    "default": 10.0,
-    "kraken": 10.0,
-    "coinbase": 10.0,
+    "default": 50.0,
+    "kraken": 50.0,
+    "coinbase": 50.0,
+    "okx": 50.0,
+    "alpaca": 25.0,
 }
 
 _HEARTBEAT_STAGE_ORDER: Dict[str, int] = {
@@ -547,22 +555,80 @@ class TradingStrategy:
         logger.warning("⚠️  No connected primary broker found at init time")
 
     def _populate_symbols(self) -> None:
-        """Populate the symbol list from the primary broker."""
-        if self.broker is None:
+        """Populate the symbol universe from ALL connected brokers.
+
+        Collects tradeable instruments from every connected platform broker
+        (Kraken, Coinbase, OKX, Alpaca) and merges them into a single
+        deduplicated list.  This expands the scan universe from Kraken-only
+        crypto pairs to stocks, forex, commodities, and all crypto venues.
+        """
+        all_symbols: List[str] = []
+        broker_counts: dict = {}
+
+        # ── Collect symbols from all connected platform brokers ────────────
+        brokers_to_query: List[Any] = []
+
+        # Gather from MultiAccountBrokerManager platform brokers
+        if self.multi_account_manager is not None:
+            try:
+                _platform_brokers = getattr(
+                    self.multi_account_manager, "platform_brokers", {}
+                ) or {}
+                for _bt, _b in _platform_brokers.items():
+                    if _b is not None and getattr(_b, "connected", False):
+                        brokers_to_query.append(_b)
+            except Exception as _mabm_err:
+                logger.debug("MABM broker query failed during symbol population: %s", _mabm_err)
+
+        # Also include the primary broker if not already covered
+        if self.broker is not None and self.broker not in brokers_to_query:
+            brokers_to_query.append(self.broker)
+
+        # Fallback: try BrokerManager
+        if not brokers_to_query and self.broker_manager is not None:
+            try:
+                for _bt, _b in (getattr(self.broker_manager, "brokers", {}) or {}).items():
+                    if _b is not None and getattr(_b, "connected", False):
+                        brokers_to_query.append(_b)
+            except Exception as _bm_err:
+                logger.debug("BrokerManager broker query failed during symbol population: %s", _bm_err)
+
+        for _broker in brokers_to_query:
+            _broker_name = self._broker_key_from_obj(_broker)
+            try:
+                if hasattr(_broker, "get_all_products"):
+                    _products = _broker.get_all_products()
+                    if isinstance(_products, list) and _products:
+                        _count = len(_products)
+                        broker_counts[_broker_name] = _count
+                        all_symbols.extend(str(p) for p in _products if p)
+                        logger.info(
+                            "✅ [SymbolUniverse] %s: loaded %d symbols",
+                            _broker_name.upper(),
+                            _count,
+                        )
+            except Exception as _sym_err:
+                logger.debug(
+                    "Symbol population failed for broker %s: %s", _broker_name, _sym_err
+                )
+
+        if all_symbols:
+            # Deduplicate while preserving order (first occurrence wins)
+            seen: set = set()
+            merged: List[str] = []
+            for sym in all_symbols:
+                if sym not in seen:
+                    seen.add(sym)
+                    merged.append(sym)
+            self.symbols = merged
+            self._last_symbol_refresh_ts = time.time()
+            logger.info(
+                "✅ [SymbolUniverse] Merged %d unique symbols across %d broker(s): %s",
+                len(self.symbols),
+                len(broker_counts),
+                ", ".join(f"{k.upper()}={v}" for k, v in broker_counts.items()),
+            )
             return
-        try:
-            # Use get_all_products() — the standard method on all broker classes
-            if hasattr(self.broker, "get_all_products"):
-                products = self.broker.get_all_products()
-                if isinstance(products, list):
-                    self.symbols = [str(p) for p in products if p]
-                    self._last_symbol_refresh_ts = time.time()
-                    logger.info(
-                        "✅ Loaded %d symbols from broker", len(self.symbols)
-                    )
-                    return
-        except Exception as _sym_err:
-            logger.debug("Symbol population failed: %s", _sym_err)
 
         # Fallback: use a curated default list
         if not self.symbols:
@@ -1280,6 +1346,9 @@ class TradingStrategy:
 
         candidates: Dict[Any, Any] = {}
 
+
+        candidates: Dict[Any, Any] = {}
+
         # 2. Include all platform brokers from MultiAccountBrokerManager.
         if self.multi_account_manager is not None:
             try:
@@ -1535,9 +1604,36 @@ class TradingStrategy:
         copy-mode users remain position-management only.
         """
         next_interval_s = 150
+        logger.critical(
+            "🔄 [RUN_CYCLE] TradingStrategy.run_cycle() ENTERED | "
+            "apex=%s nija_core_loop=%s",
+            type(self.apex).__name__ if self.apex is not None else "None",
+            type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else "None",
+        )
+        print(
+            f"[NIJA-PRINT] run_cycle ENTERED | "
+            f"apex={type(self.apex).__name__ if self.apex is not None else 'None'} "
+            f"nija_core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'}",
+            flush=True,
+        )
         if self.apex is not None:
             try:
                 self._ensure_nija_wiring()
+                print(
+                    f"[NIJA-PRINT] after _ensure_nija_wiring | "
+                    f"nija_core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'} "
+                    f"apex_has_run_cycle={hasattr(self.apex, 'run_cycle')} "
+                    f"apex_has_analyze_market={hasattr(self.apex, 'analyze_market')}",
+                    flush=True,
+                )
+                if self.nija_core_loop is None:
+                    logger.critical(
+                        "⚠️ [RUN_CYCLE] nija_core_loop is None after _ensure_nija_wiring — "
+                        "will use legacy analyze_market+execute_action path. "
+                        "apex_has_run_cycle=%s apex_has_analyze_market=%s",
+                        hasattr(self.apex, "run_cycle"),
+                        hasattr(self.apex, "analyze_market"),
+                    )
 
                 # Delegate to the caller-selected venue when provided.  This is
                 # required for per-broker platform loops and independent user
@@ -1590,12 +1686,26 @@ class TradingStrategy:
                         logger.warning("run_cycle: symbol universe is empty — skipping scan")
                         return next_interval_s
 
+                    logger.critical(
+                        "🔄 [RUN_CYCLE] calling nija_core_loop.run_scan_phase() | "
+                        "symbols=%d balance=$%.2f open_positions=%d",
+                        len(_symbols_to_scan), _account_balance, _open_positions_count,
+                    )
                     _core_result = self.nija_core_loop.run_scan_phase(
                         broker=_broker,
                         balance=_account_balance,
                         symbols=_symbols_to_scan,
                         open_positions_count=_open_positions_count,
                         user_mode=bool(user_mode),
+                    )
+                    logger.critical(
+                        "✅ [RUN_CYCLE] run_scan_phase() RETURNED | "
+                        "scored=%d entered=%d blocked=%d exited=%d next=%ss",
+                        _core_result.symbols_scored,
+                        _core_result.entries_taken,
+                        _core_result.entries_blocked,
+                        _core_result.exits_taken,
+                        _core_result.next_interval,
                     )
                     logger.info(
                         "run_cycle(core_loop): scored=%d entered=%d blocked=%d exited=%d next=%ss",
@@ -1616,6 +1726,24 @@ class TradingStrategy:
                     self.apex.run_cycle()
                 elif hasattr(self.apex, "analyze_market"):
                     # Legacy fallback: fetch market data then call analyze_market(df, symbol, balance).
+                    # CRITICAL FIX: capture the result and call execute_action() so signals are
+                    # connected to order submission.  Previously the result was discarded, causing
+                    # signals to be generated ("Score: X.X", "Trade allowed: True") but no trades
+                    # to be placed because _phase3_scan_and_enter() was never reached.
+                    print(
+                        "[NIJA-PRINT] legacy fallback path active — "
+                        f"nija_core_loop={self.nija_core_loop!r} "
+                        f"symbols={len(self.symbols)} "
+                        f"apex={type(self.apex).__name__}",
+                        flush=True,
+                    )
+                    logger.critical(
+                        "⚡ [RUN_CYCLE] legacy analyze_market path — "
+                        "nija_core_loop unavailable, calling analyze_market+execute_action directly | "
+                        "symbols=%d balance=$%.2f",
+                        len(self.symbols[:20]),
+                        _account_balance,
+                    )
                     for symbol in self.symbols[:20]:  # cap at 20 per cycle
                         try:
                             if _broker is None or not callable(getattr(_broker, "get_candles", None)):
@@ -1629,7 +1757,77 @@ class TradingStrategy:
                                 _df = _candles
                             if _df is None:
                                 continue
-                            self.apex.analyze_market(_df, symbol, _account_balance)
+                            # ── FIX: capture result and call execute_action() ──────────
+                            # analyze_market() generates signals and evaluates market
+                            # conditions but does NOT submit orders on its own.
+                            # execute_action() must be called explicitly with the result.
+                            print(
+                                f"[NIJA-PRINT] legacy path calling analyze_market | symbol={symbol}",
+                                flush=True,
+                            )
+                            _analysis = self.apex.analyze_market(_df, symbol, _account_balance)
+                            _action = _analysis.get("action") if isinstance(_analysis, dict) else None
+                            print(
+                                f"[NIJA-PRINT] legacy path analyze_market returned | "
+                                f"symbol={symbol} action={_action}",
+                                flush=True,
+                            )
+                            logger.critical(
+                                "🔍 [legacy_path] analyze_market returned | symbol=%s action=%s",
+                                symbol,
+                                _action,
+                            )
+                            # Call execute_action() for any non-hold action so orders are submitted.
+                            if (
+                                isinstance(_analysis, dict)
+                                and _action is not None
+                                and _action != "hold"
+                                and hasattr(self.apex, "execute_action")
+                            ):
+                                print(
+                                    f"[NIJA-PRINT] legacy path calling execute_action | "
+                                    f"symbol={symbol} action={_action}",
+                                    flush=True,
+                                )
+                                logger.critical(
+                                    "⚡ [legacy_path] calling execute_action | symbol=%s action=%s",
+                                    symbol,
+                                    _action,
+                                )
+                                _exec_result = self.apex.execute_action(_analysis, symbol)
+                                print(
+                                    f"[NIJA-PRINT] legacy path execute_action returned | "
+                                    f"symbol={symbol} action={_action} result={_exec_result}",
+                                    flush=True,
+                                )
+                                if _exec_result:
+                                    logger.critical(
+                                        "✅ [legacy_path] execute_action returned | symbol=%s action=%s result=%s",
+                                        symbol,
+                                        _action,
+                                        _exec_result,
+                                    )
+                                else:
+                                    logger.critical(
+                                        "❌ [legacy_path] execute_action FAILED | symbol=%s action=%s "
+                                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f result=%s — "
+                                        "See execute_action / ExecutionEngine logs above for the broker "
+                                        "rejection reason (gate name, error message, or exception).",
+                                        symbol,
+                                        _action,
+                                        float((_analysis or {}).get("position_size", 0.0) or 0.0),
+                                        float((_analysis or {}).get("entry_price", 0.0) or 0.0),
+                                        float((_analysis or {}).get("stop_loss", 0.0) or 0.0),
+                                        _exec_result,
+                                    )
+                                    print(
+                                        f"[NIJA-PRINT] legacy path ORDER REJECTED | "
+                                        f"symbol={symbol} action={_action} "
+                                        f"size=${float((_analysis or {}).get('position_size', 0.0) or 0.0):.2f} "
+                                        f"price={float((_analysis or {}).get('entry_price', 0.0) or 0.0):.6f} "
+                                        f"sl={float((_analysis or {}).get('stop_loss', 0.0) or 0.0):.6f}",
+                                        flush=True,
+                                    )
                         except Exception as _sym_err:
                             logger.debug("Symbol %s cycle error: %s", symbol, _sym_err)
             except Exception as _cycle_err:

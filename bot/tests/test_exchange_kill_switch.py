@@ -341,7 +341,7 @@ class TestThreatLevel:
 
 class TestAutoTrigger:
 
-    @patch("exchange_kill_switch.get_kill_switch", autospec=False)
+    @patch("bot.exchange_kill_switch.get_kill_switch", autospec=False)
     def test_auto_trigger_fires_on_red_gate(self, mock_get_ks, tmp_path):
         cfg = ExchangeKillSwitchConfig(
             api_burst_threshold=3,
@@ -363,7 +363,7 @@ class TestAutoTrigger:
         # Either positional or keyword 'source' argument should be EXCHANGE_MONITOR
         assert "EXCHANGE_MONITOR" in str(call_kwargs)
 
-    @patch("exchange_kill_switch.get_kill_switch", autospec=False)
+    @patch("bot.exchange_kill_switch.get_kill_switch", autospec=False)
     def test_auto_trigger_is_idempotent(self, mock_get_ks, tmp_path):
         cfg = ExchangeKillSwitchConfig(api_burst_threshold=2, auto_trigger_enabled=True)
         eksp = ExchangeKillSwitchProtector(cfg)
@@ -394,7 +394,7 @@ class TestAutoTrigger:
 
 class TestManualTriggerAndReset:
 
-    @patch("exchange_kill_switch.get_kill_switch", autospec=False)
+    @patch("bot.exchange_kill_switch.get_kill_switch", autospec=False)
     def test_manual_trigger(self, mock_get_ks, eksp, tmp_path):
         eksp.STATE_FILE = tmp_path / "state.json"
         mock_ks = MagicMock()
@@ -404,7 +404,7 @@ class TestManualTriggerAndReset:
         assert eksp.is_triggered()
         mock_ks.activate.assert_called_once()
 
-    @patch("exchange_kill_switch.get_kill_switch", autospec=False)
+    @patch("bot.exchange_kill_switch.get_kill_switch", autospec=False)
     def test_reset_clears_triggered_state(self, mock_get_ks, eksp, tmp_path):
         eksp.STATE_FILE = tmp_path / "state.json"
         mock_ks = MagicMock()
@@ -428,6 +428,55 @@ class TestManualTriggerAndReset:
             assert len(eksp._api_calls) == 0
             assert len(eksp._price_state) == 0
             assert len(eksp._fill_counts) == 0
+
+
+# ---------------------------------------------------------------------------
+# _load_state auto-reset on startup
+# ---------------------------------------------------------------------------
+
+class TestLoadStateAutoReset:
+    """_load_state() should auto-clear triggered=True when kill switch is inactive."""
+
+    @patch("bot.exchange_kill_switch.get_kill_switch", autospec=False)
+    def test_load_state_auto_resets_when_kill_switch_inactive(self, mock_get_ks, tmp_path):
+        """Persisted triggered=True is cleared when global kill switch is not active."""
+        mock_ks = MagicMock()
+        mock_ks.is_active.return_value = False
+        mock_get_ks.return_value = mock_ks
+
+        state_file = tmp_path / "state.json"
+        state_file.write_text('{"triggered": true, "trigger_reason": "old error", "history": []}')
+
+        cfg = ExchangeKillSwitchConfig(auto_trigger_enabled=False)
+        eksp = ExchangeKillSwitchProtector(cfg)
+        eksp.STATE_FILE = state_file
+        # Simulate _load_state() being called with the temp file already set
+        eksp._triggered = False  # reset to False (default init)
+        eksp._load_state()
+
+        assert not eksp.is_triggered(), (
+            "_triggered should be auto-cleared when kill switch is inactive on startup"
+        )
+
+    @patch("bot.exchange_kill_switch.get_kill_switch", autospec=False)
+    def test_load_state_preserves_triggered_when_kill_switch_active(self, mock_get_ks, tmp_path):
+        """Persisted triggered=True is kept when global kill switch is still active."""
+        mock_ks = MagicMock()
+        mock_ks.is_active.return_value = True
+        mock_get_ks.return_value = mock_ks
+
+        state_file = tmp_path / "state.json"
+        state_file.write_text('{"triggered": true, "trigger_reason": "live error", "history": []}')
+
+        cfg = ExchangeKillSwitchConfig(auto_trigger_enabled=False)
+        eksp = ExchangeKillSwitchProtector(cfg)
+        eksp.STATE_FILE = state_file
+        eksp._triggered = False
+        eksp._load_state()
+
+        assert eksp.is_triggered(), (
+            "_triggered should be preserved when kill switch is still active"
+        )
 
 
 # ---------------------------------------------------------------------------

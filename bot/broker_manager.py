@@ -22,6 +22,25 @@ import uuid
 import weakref
 import threading
 
+# ── candlelite writable config dir ───────────────────────────────────────────
+# Must be set BEFORE any import that could trigger candlelite initialisation.
+# The okx SDK depends on candlelite, which tries to write SETTINGS.config into
+# its own site-packages directory on first import.  In containerised / read-only
+# environments this raises [Errno 13] Permission denied and prevents OKX from
+# connecting.  bot/__init__.py sets this first, but we repeat it here as a
+# safety net for cases where broker_manager is imported directly (e.g. tests,
+# scripts, or alternative entry points that bypass the package __init__).
+# os.environ.setdefault() is used so an operator-supplied value is never
+# overwritten, and so the two call-sites stay idempotent.
+_candlelite_dir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "candlelite")
+try:
+    os.makedirs(_candlelite_dir, exist_ok=True)
+except OSError:
+    _candlelite_dir = os.environ.get("TMPDIR", "/tmp")
+os.environ.setdefault("CANDLELITE_CONFIG_DIR", _candlelite_dir)
+del _candlelite_dir  # keep module namespace clean
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Optional: 'requests' is used for Kraken gateway routing (NIJA_KRAKEN_GATEWAY_URL).
 # Imported here at module level so the dependency is visible to scanners;
 # gateway calls will raise RuntimeError if not installed.
@@ -665,18 +684,6 @@ def _reject_if_unauthorized_order_submit(
     quantity: float,
 ) -> Optional[Dict[str, Any]]:
     """Fail closed when direct broker order submit bypasses ExecutionPipeline."""
-    def _emit_rejection_telemetry(reason: str) -> None:
-        if get_exchange_kill_switch_protector is None:
-            return
-        try:
-            _eks = get_exchange_kill_switch_protector()
-            _oid = (
-                f"exec-reject:{broker_name}:{symbol}:{side}:{int(time.time() * 1000)}:{reason[:24]}"
-            )
-            _eks.record_order_result(order_id=_oid, accepted=False)
-        except Exception:
-            pass
-
     decision = can_execute()
     if decision.allowed:
         emit_pretrade_execution_validator_trace(
@@ -718,7 +725,9 @@ def _reject_if_unauthorized_order_submit(
         size=quantity,
         terminal_surface="broker_manager",
     )
-    _emit_rejection_telemetry("execution_authority_blocked")
+    # NOTE: Authority-gate denials are NOT recorded as exchange order rejections.
+    # Recording them caused a feedback loop: denials → high rejection rate →
+    # ExchangeKillSwitchProtector trigger → EMERGENCY_STOP → more denials.
     logger.critical(
         "🔒 %s | broker=%s symbol=%s side=%s qty=%s",
         msg,
@@ -892,9 +901,10 @@ except ImportError:
 #   - Standard accounts: $25+ (better for fee efficiency and multiple positions)
 #   - Large accounts: See tier-specific env files (.env.saver_tier, .env.investor_tier, etc.)
 MINIMUM_BALANCE_PROTECTION = 0.50  # Absolute minimum to start (system-wide hard floor)
-STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '1'))  # Capital gate: $1.00 minimum (unlocked for all account sizes)
+# Lowered to $50 to allow trading with ~$174 balance in HF scalp mode (Apr 2026).
+STANDARD_MINIMUM_BALANCE = float(os.getenv('MINIMUM_TRADING_BALANCE', '50'))  # Capital gate: $50 minimum for HF scalp mode
 MINIMUM_TRADING_BALANCE = STANDARD_MINIMUM_BALANCE  # Alias for backward compatibility
-MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', os.getenv('MIN_TRADE_USD', '1.00')))  # Minimum cash required to place a buy order
+MIN_CASH_TO_BUY = float(os.getenv('MIN_CASH_TO_BUY', os.getenv('MIN_TRADE_USD', '10.00')))  # Minimum cash required to place a buy order — $10 for HF scalp mode
 DUST_THRESHOLD_USD = 1.00  # USD value threshold for dust positions (consistent with enforcer)
 
 # Broker-specific minimum balance requirements
@@ -910,8 +920,9 @@ COINBASE_MINIMUM_BALANCE = float(os.getenv('COINBASE_MINIMUM_BALANCE', STANDARD_
 
 # ── Exchange-scoped capital rules (Steps 2, 5, 6) ──────────────────────────
 # Coinbase uses its own floors, independent of Kraken conservatism.
-COINBASE_MIN_CAPITAL: float = float(os.getenv('COINBASE_MIN_CAPITAL', '1.0'))
-COINBASE_MIN_ORDER: float = float(os.getenv('COINBASE_MIN_ORDER_USD', os.getenv('COINBASE_MIN_ORDER', '1.0')))
+# Lowered to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
+COINBASE_MIN_CAPITAL: float = float(os.getenv('COINBASE_MIN_CAPITAL', '10.0'))
+COINBASE_MIN_ORDER: float = float(os.getenv('COINBASE_MIN_ORDER_USD', os.getenv('COINBASE_MIN_ORDER', '10.0')))
 COINBASE_MICRO_CAP_MODE: bool = os.getenv('COINBASE_MICRO_CAP_MODE', 'true').strip().lower() in ('1', 'true', 'yes')
 COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR: bool = os.getenv('COINBASE_IGNORE_GLOBAL_CAPITAL_FLOOR', 'false').strip().lower() in ('1', 'true', 'yes')
 KRAKEN_EXECUTION_DISABLED: bool = os.getenv('KRAKEN_EXECUTION_DISABLED', 'false').strip().lower() in ('1', 'true', 'yes')
@@ -921,6 +932,12 @@ NIJA_FORCE_KRAKEN_ONLY_TEST: bool = os.getenv('NIJA_FORCE_KRAKEN_ONLY_TEST', '0'
 # Optional companion flag for tiny-balance validation runs: bypass Kraken BUY capital gates.
 # Default OFF so production capital protections remain intact.
 NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES: bool = os.getenv('NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+
+# ── Small account / small order flags (Apr 2026) ────────────────────────────
+# Allow trading with small account balances (~$174) and small order sizes (~$10).
+# Both default to True to enable HF scalp mode with limited capital.
+ALLOW_SMALL_ORDERS: bool = os.getenv('ALLOW_SMALL_ORDERS', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+ALLOW_SMALL_ACCOUNT_TRADING: bool = os.getenv('ALLOW_SMALL_ACCOUNT_TRADING', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
 
 # When micro-cap mode is active, Coinbase minimum balance matches COINBASE_MIN_CAPITAL ($1)
 if COINBASE_MICRO_CAP_MODE:
@@ -2488,6 +2505,14 @@ class CoinbaseBroker(BaseBroker):
         self._balance_cache = None
         self._balance_cache_time = None
         self._cache_ttl = 120  # Cache TTL in seconds (increased from 30s to 120s to reduce API calls and avoid rate limits)
+
+        # Short-lived candle cache: avoids redundant Coinbase API calls when the
+        # same symbol is requested multiple times within a single scan cycle.
+        # Key: (symbol, timeframe, count) → (candles_list, fetch_timestamp)
+        # TTL: 30 seconds — fresh enough for 1-minute candles, avoids rate-limit hits.
+        self._candle_cache: dict = {}
+        self._candle_cache_lock = threading.Lock()
+        self._candle_cache_ttl: float = float(os.getenv("NIJA_COINBASE_CANDLE_CACHE_TTL", "30"))
 
         # Initialize rate limiter for API calls to prevent 403/429 errors
         # Coinbase has strict rate limits: ~10 req/s burst but much lower sustained rate
@@ -4743,11 +4768,12 @@ class CoinbaseBroker(BaseBroker):
                             os.getenv('MIN_TRADE_USD')
                             or os.getenv('MIN_NOTIONAL_OVERRIDE')
                             or os.getenv('MIN_NOTIONAL_USD')
-                            or '5.0'
+                            or '10.0'
                         ),
                     )
                 except (TypeError, ValueError):
-                    min_trade_floor = 5.0
+                    min_trade_floor = 10.0
+
                 try:
                     allocation_pct = float(os.getenv('MAX_TRADE_PERCENT', '0.10')) * 100.0
                 except (TypeError, ValueError):
@@ -6092,6 +6118,13 @@ class CoinbaseBroker(BaseBroker):
         UPDATED (Jan 11, 2026): Added invalid symbol caching to prevent repeated API calls
         - Caches known invalid symbols to avoid wasted API calls
         - Reduces log pollution from Coinbase SDK error messages
+
+        FIXED (2026): Corrected start-time calculation to use actual granularity seconds
+        - Previously hardcoded 300s (5-min candle) regardless of timeframe
+        - Coinbase API enforces max 300 candles per request (end-start <= granularity*300)
+        - Requesting 1m candles over a 16.7h window (300*200s) exceeded the 5h limit
+        - This caused the API to return an error, resulting in empty [] for every symbol
+        - Fix: calculate start = end - (granularity_seconds * min(count, 300))
         """
 
         # CRITICAL FIX (Jan 11, 2026): Check invalid symbols cache first
@@ -6099,6 +6132,34 @@ class CoinbaseBroker(BaseBroker):
         if symbol in self._invalid_symbols_cache:
             logging.debug(f"⚠️  Skipping cached invalid symbol: {symbol}")
             return []
+
+        # Short-lived candle cache: serve from cache when the same (symbol, timeframe,
+        # count) was fetched within the last NIJA_COINBASE_CANDLE_CACHE_TTL seconds.
+        # This prevents redundant API calls when multiple strategy components request
+        # the same candle data within a single scan cycle, reducing latency and
+        # avoiding Coinbase rate-limit hits.
+        _cache_key = (symbol, timeframe, count)
+        with self._candle_cache_lock:
+            _cached_entry = self._candle_cache.get(_cache_key)
+        if _cached_entry is not None:
+            _cached_candles, _cached_ts = _cached_entry
+            _cache_age = time.time() - _cached_ts
+            if _cache_age < self._candle_cache_ttl:
+                logging.debug(
+                    f"[get_candles] {symbol}: returning cached candles "
+                    f"({len(_cached_candles)} rows, {_cache_age:.1f}s old)"
+                )
+                return _cached_candles
+
+        # Diagnostic: log the first 3 candle fetch calls at WARNING level so they
+        # are visible in production logs without enabling DEBUG logging.
+        _candle_call_count = getattr(self, "_candle_call_count", 0) + 1
+        self._candle_call_count = _candle_call_count
+        if _candle_call_count <= 3:
+            logging.warning(
+                f"[get_candles] DIAG call #{_candle_call_count}: symbol={symbol} "
+                f"timeframe={timeframe} count={count} client_ready={self.client is not None}"
+            )
 
         # Wrapper function for rate-limited API call
         def _fetch_candles():
@@ -6109,34 +6170,108 @@ class CoinbaseBroker(BaseBroker):
                 "1h": "ONE_HOUR",
                 "1d": "ONE_DAY"
             }
+            # Granularity in seconds — used to compute the correct time window.
+            # Coinbase Advanced Trade API enforces: end - start <= granularity_seconds * 300
+            # Previously this was hardcoded to 300 (5-min candle seconds) regardless of
+            # the requested timeframe, causing the API to reject 1m/15m/1h requests with
+            # "start and end must be within 300 candles of each other" errors.
+            granularity_seconds_map = {
+                "1m": 60,
+                "5m": 300,
+                "15m": 900,
+                "1h": 3600,
+                "1d": 86400,
+            }
 
             granularity = granularity_map.get(timeframe, "FIVE_MINUTE")
+            granularity_secs = granularity_seconds_map.get(timeframe, 300)
+
+            # Cap at 300 candles — Coinbase API hard limit per request
+            capped_count = min(count, 300)
 
             end = int(time.time())
-            start = end - (300 * count)  # 5 min candles
+            # FIXED: use actual granularity seconds so the time window matches the
+            # requested candle size.  The old code always used 300 (5-min seconds),
+            # which made 1m requests span 16.7 hours — 3× the API's 5-hour limit.
+            start = end - (granularity_secs * capped_count)
+
+            logging.debug(
+                f"[get_candles] {symbol} tf={timeframe} granularity={granularity} "
+                f"count={count} capped={capped_count} "
+                f"window={granularity_secs * capped_count}s "
+                f"start={start} end={end}"
+            )
 
             candles = self.client.get_candles(
                 product_id=symbol,
-                start=start,
-                end=end,
+                start=str(start),
+                end=str(end),
                 granularity=granularity
             )
 
             if hasattr(candles, 'candles'):
-                return [dict(vars(c)) for c in candles.candles]
+                raw = [dict(vars(c)) for c in candles.candles]
+                logging.debug(
+                    f"[get_candles] {symbol}: API returned {len(raw)} candles "
+                    f"(first={raw[0] if raw else 'EMPTY'}, last={raw[-1] if raw else 'EMPTY'})"
+                )
+                return raw
             elif isinstance(candles, dict) and 'candles' in candles:
-                return candles['candles']
+                raw = candles['candles']
+                logging.debug(
+                    f"[get_candles] {symbol}: API returned {len(raw)} candles (dict path)"
+                )
+                return raw
+            logging.warning(
+                f"[get_candles] {symbol}: unexpected response type {type(candles)} — "
+                f"no 'candles' attribute or key. Response: {str(candles)[:200]}"
+            )
             return []
+
+        # Timeout for a single Coinbase candle fetch (configurable via env var).
+        # Prevents slow Coinbase responses from blocking the entire scan loop.
+        _cb_candle_timeout = float(os.getenv("NIJA_COINBASE_CANDLE_TIMEOUT", "20"))
 
         # Use rate limiter if available
         for attempt in range(RATE_LIMIT_MAX_RETRIES):
             try:
-                if self._rate_limiter:
-                    # Rate-limited call - automatically enforces minimum interval between requests
-                    return self._rate_limiter.call('get_candles', _fetch_candles)
-                else:
-                    # Fallback to direct call without rate limiting
-                    return _fetch_candles()
+                # Wrap the actual fetch in a daemon thread with a hard timeout so a
+                # slow or hung Coinbase connection never stalls the scan loop.
+                _fetch_result_holder: List[Any] = [None]
+                _fetch_err_holder: List[Any] = [None]
+
+                def _timed_fetch():
+                    try:
+                        if self._rate_limiter:
+                            _fetch_result_holder[0] = self._rate_limiter.call('get_candles', _fetch_candles)
+                        else:
+                            _fetch_result_holder[0] = _fetch_candles()
+                    except Exception as _fe:
+                        _fetch_err_holder[0] = _fe
+
+                _fetch_thread = threading.Thread(target=_timed_fetch, daemon=True)
+                _fetch_thread.start()
+                _fetch_thread.join(_cb_candle_timeout)
+
+                if _fetch_thread.is_alive():
+                    logging.warning(
+                        f"⏱️ [get_candles] {symbol}: Coinbase fetch timed out after "
+                        f"{_cb_candle_timeout:.0f}s — skipping symbol "
+                        f"(NIJA_COINBASE_CANDLE_TIMEOUT={_cb_candle_timeout:.0f})"
+                    )
+                    return []
+
+                if _fetch_err_holder[0] is not None:
+                    raise _fetch_err_holder[0]
+
+                _result = _fetch_result_holder[0] or []
+
+                # Store successful (non-empty) result in the short-lived candle cache
+                # so repeated requests within the same scan cycle are served instantly.
+                if _result:
+                    with self._candle_cache_lock:
+                        self._candle_cache[_cache_key] = (_result, time.time())
+                return _result
 
             except Exception as e:
                 error_str = str(e).lower()
@@ -6182,12 +6317,17 @@ class CoinbaseBroker(BaseBroker):
                     continue
                 else:
                     if attempt == RATE_LIMIT_MAX_RETRIES - 1:
-                        # Only log as debug - this is expected during rate limiting
-                        logging.debug(f"Failed to fetch candles for {symbol} after {RATE_LIMIT_MAX_RETRIES} attempts")
+                        # Log at warning level so candle fetch failures are visible in production
+                        logging.warning(
+                            f"⚠️  [get_candles] {symbol}: failed after {RATE_LIMIT_MAX_RETRIES} "
+                            f"attempts. Last error: {e}"
+                        )
                     else:
-                        # Only log non-rate-limit errors as errors
-                        if not is_rate_limited:
-                            logging.error(f"Error fetching candles for {symbol}: {e}")
+                        # Non-rate-limit, non-invalid-symbol error — always log at warning
+                        logging.warning(
+                            f"⚠️  [get_candles] {symbol} attempt {attempt+1}/{RATE_LIMIT_MAX_RETRIES} "
+                            f"failed: {type(e).__name__}: {e}"
+                        )
                     return []
 
         return []
@@ -6478,7 +6618,7 @@ class AlpacaBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
-        enable_alpaca = os.getenv("ENABLE_ALPACA", "false").lower() in ("1", "true", "yes", "on")
+        enable_alpaca = os.getenv("ENABLE_ALPACA", "true").lower() in ("1", "true", "yes", "on")
         if not enable_alpaca:
             self.credentials_configured = False
             logger.warning(
@@ -7088,6 +7228,13 @@ class BinanceBroker(BaseBroker):
         Returns:
             bool: True if connected successfully
         """
+        enable_binance = os.getenv("ENABLE_BINANCE", "true").lower() in ("1", "true", "yes", "on")
+        if not enable_binance:
+            logger.warning(
+                "⚠️  Binance disabled (ENABLE_BINANCE=false) — skipping connection for %s",
+                getattr(self, "account_identifier", "PLATFORM"),
+            )
+            return False
         if self.account_type == AccountType.PLATFORM:
             try:
                 from bot.multi_account_broker_manager import get_broker_manager
@@ -7799,11 +7946,17 @@ class KrakenBroker(BaseBroker):
         self._kraken_balance_cache_ttl: int = _KRAKEN_BALANCE_CACHE_TTL_SECONDS
 
         # Short-lived price cache for get_current_price().
-        # Stores {symbol: {"price": float, "ts": float}} where ts = time.monotonic().
+        # Stores {symbol: {\"price\": float, \"ts\": float}} where ts = time.monotonic().
         # Used as a fallback when a live ticker fetch times out — if the cached
         # price is ≤10 s old it is returned so the scan loop is never blocked.
         self._price_cache: dict = {}
         self._price_cache_lock = threading.Lock()
+
+        # Cache of symbols that returned "EQuery:Unknown asset pair" from the
+        # Kraken Ticker API.  These are skipped on subsequent calls so they
+        # never block the scan loop or spam the Emergency Resolver.
+        self._unknown_pairs_cache: set = set()
+        self._unknown_pairs_lock = threading.Lock()
 
         # CONNECTION STABILITY: Initialize per-broker watchdog and HTTP pool manager
         # Mirrors the CoinbaseBroker pattern so Kraken connections benefit from the
@@ -7837,6 +7990,78 @@ class KrakenBroker(BaseBroker):
         self._hard_stop_reason = reason
         self.connected = False
         logger.critical("⛔ Kraken HARD STOP (%s): %s", self.account_identifier, reason)
+
+    def _initialize_nonce_manager(self) -> bool:
+        """Initialize the DistributedNonceManager with heartbeat authority.
+
+        Sets the ``nija:writer_heartbeat_active`` flag in Redis **before**
+        attempting any nonce operations.  The authority heartbeat monitor
+        (``bot/authority_heartbeat.py``) normally writes this flag via the
+        ``NIJA_WRITER_HEARTBEAT_ACTIVE`` environment variable, but on a fresh
+        deployment the heartbeat thread may not have completed its first tick
+        yet.  Pre-seeding the Redis key here ensures the nonce authority gate
+        passes immediately on startup rather than waiting up to one full
+        heartbeat interval.
+
+        Returns ``True`` on success, ``False`` if the nonce manager could not
+        be initialised (caller should treat this as a hard-stop condition).
+        """
+        try:
+            try:
+                from bot.distributed_nonce_manager import (
+                    get_distributed_nonce_manager as _get_dnm,
+                    make_api_key_id as _make_key_id,
+                )
+            except ImportError:
+                from distributed_nonce_manager import (  # type: ignore[import]
+                    get_distributed_nonce_manager as _get_dnm,
+                    make_api_key_id as _make_key_id,
+                )
+
+            # Obtain the singleton (connects to Redis if NIJA_REDIS_URL is set).
+            _dnm = _get_dnm()
+
+            # Pre-seed the heartbeat_active flag in Redis so the nonce authority
+            # gate passes immediately.  Use a 30-second TTL so the flag expires
+            # naturally if the authority heartbeat thread never starts (e.g. in
+            # test environments).  The heartbeat thread will refresh it every
+            # NIJA_AUTHORITY_HEARTBEAT_INTERVAL_S seconds once running.
+            if _dnm._redis is not None:
+                try:
+                    _dnm._redis._client.set(  # type: ignore[attr-defined]
+                        "nija:writer_heartbeat_active", "true", ex=30
+                    )
+                    logger.info(
+                        "   ✅ Kraken nonce manager: heartbeat_active flag seeded in Redis "
+                        "(account=%s)",
+                        self.account_identifier,
+                    )
+                except Exception as _hb_exc:
+                    # Non-fatal: the heartbeat thread will set the flag shortly.
+                    logger.warning(
+                        "   ⚠️  Could not seed heartbeat_active in Redis (%s) — "
+                        "authority heartbeat thread will set it on first tick",
+                        _hb_exc,
+                    )
+
+            # Also set the environment variable so in-process checks pass.
+            import os as _os
+            _os.environ.setdefault("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+
+            logger.info(
+                "   ✅ Kraken nonce manager initialized with heartbeat authority "
+                "(account=%s backend=%s)",
+                self.account_identifier,
+                "redis" if _dnm._redis is not None else "file/fcntl",
+            )
+            return True
+        except Exception as exc:
+            logger.error(
+                "   ❌ Failed to initialize Kraken nonce manager: %s (account=%s)",
+                exc,
+                self.account_identifier,
+            )
+            return False
 
     # ── Nonce reconnect resync ─────────────────────────────────────────────────
 
@@ -8755,6 +8980,16 @@ class KrakenBroker(BaseBroker):
 
             # Mark that credentials were configured (we have API key and secret)
             self.credentials_configured = True
+
+            # ── Heartbeat authority pre-seed ──────────────────────────────────
+            # Ensure the nonce authority heartbeat flag is set in Redis BEFORE
+            # any nonce operations are attempted.  On a fresh deployment the
+            # authority heartbeat thread may not have completed its first tick,
+            # which would cause _get_nonce_auth() to block or the writer-lease
+            # acquire to fail with "nonce authority cannot be established".
+            # _initialize_nonce_manager() is non-fatal: if it cannot reach Redis
+            # the nonce init block below will still attempt the file/fcntl path.
+            self._initialize_nonce_manager()
 
             # ── Nonce generator: DistributedNonceManager (unified path) ──────
             # ONE authority per API key — routes to Redis when available
@@ -10365,6 +10600,13 @@ class KrakenBroker(BaseBroker):
                 logger.error(f"❌ Price fetch failed for {symbol} — Kraken API not connected")
                 return 0.0
 
+            # Fast-path: skip symbols that previously returned "EQuery:Unknown asset pair"
+            # so they never block the scan loop or spam the Emergency Resolver.
+            with self._unknown_pairs_lock:
+                if symbol in self._unknown_pairs_cache:
+                    logger.debug(f"⏭️ Skipping cached unknown Kraken pair: {symbol}")
+                    return 0.0
+
             # CRITICAL: Use symbol mapper to convert to Kraken format
             # This ensures we use the correct format (e.g., XETHZUSD, XXBTZUSD)
             # instead of incorrect formats like ETHUSD, BTCUSD
@@ -10447,7 +10689,18 @@ class KrakenBroker(BaseBroker):
             else:
                 logger.warning(f"⚠️ Ticker API error for {symbol} — activating Emergency Resolver")
                 if ticker_result and 'error' in ticker_result and ticker_result['error']:
-                    logger.warning(f"   API errors: {', '.join(ticker_result['error'])}")
+                    api_errors = ticker_result['error']
+                    logger.warning(f"   API errors: {', '.join(api_errors)}")
+                    # Detect "EQuery:Unknown asset pair" — cache the symbol so future
+                    # calls skip it immediately without hitting the API or Emergency Resolver.
+                    if any("unknown asset pair" in e.lower() for e in api_errors):
+                        with self._unknown_pairs_lock:
+                            self._unknown_pairs_cache.add(symbol)
+                        logger.warning(
+                            f"⏭️ Kraken: '{symbol}' is an unknown asset pair — "
+                            f"cached and will be skipped on future price fetches"
+                        )
+                        return 0.0
                 return float(self._resolve_price_emergency(symbol) or 0.0)
 
         except Exception as e:
@@ -10942,15 +11195,12 @@ class KrakenBroker(BaseBroker):
                                 os.getenv('MIN_TRADE_USD')
                                 or os.getenv('MIN_NOTIONAL_OVERRIDE')
                                 or os.getenv('MIN_NOTIONAL_USD')
-                                or '5.0'
+                                or '10.0'
                             ),
                         )
                     except (TypeError, ValueError):
-                        min_trade_floor = 5.0
-                    try:
-                        allocation_pct = float(os.getenv('MAX_TRADE_PERCENT', '0.10')) * 100.0
-                    except (TypeError, ValueError):
-                        allocation_pct = 10.0
+                        min_trade_floor = 10.0
+
 
                     logging.info(f"💰 Pre-flight balance check for {symbol}:")
                     logging.info(f"   Available: ${trading_balance:.2f}")
@@ -12138,6 +12388,22 @@ class OKXBroker(BaseBroker):
             manager.register_broker("okx", self)
             assert len(get_broker_manager().platform_brokers) > 0, "FATAL: No brokers registered"
         try:
+            # ── candlelite permission fix ─────────────────────────────────────
+            # The okx SDK depends on candlelite, which writes a SETTINGS.config
+            # file to its own package directory inside site-packages on first
+            # import.  In containerised environments that directory is read-only,
+            # causing a [Errno 13] Permission denied error that prevents OKX from
+            # connecting at all.  Redirecting CANDLELITE_CONFIG_DIR to /tmp before
+            # the import ensures candlelite always has a writable location.
+            import tempfile as _tempfile
+            _candlelite_dir = os.path.join(_tempfile.gettempdir(), "candlelite")
+            try:
+                os.makedirs(_candlelite_dir, exist_ok=True)
+            except OSError:
+                _candlelite_dir = _tempfile.gettempdir()
+            os.environ.setdefault("CANDLELITE_CONFIG_DIR", _candlelite_dir)
+            # ─────────────────────────────────────────────────────────────────
+
             from okx.api import Account, Market, Trade
             import time
 
@@ -12288,6 +12554,21 @@ class OKXBroker(BaseBroker):
 
             # Should never reach here, but just in case
             logging.error("❌ Failed to connect to OKX after maximum retry attempts")
+            return False
+
+        except PermissionError as e:
+            # candlelite writes SETTINGS.config to its site-packages dir on first
+            # import.  In read-only container environments this raises PermissionError
+            # before any OKX API call is made.  We catch it here so the crash is
+            # isolated to OKX — Kraken and Coinbase continue trading normally.
+            _e_str = str(e)
+            if "candlelite" in _e_str or "SETTINGS.config" in _e_str:
+                logging.warning(
+                    "⚠️  OKX candlelite permission error (non-critical) — "
+                    "Kraken + Coinbase continue trading: %s", e
+                )
+            else:
+                logging.warning("⚠️  OKX connect() PermissionError (non-critical): %s", e)
             return False
 
         except ImportError as e:

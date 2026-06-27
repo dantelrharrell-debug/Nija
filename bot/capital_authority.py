@@ -520,6 +520,15 @@ class CapitalAuthority:
         # "authority not yet initialised" from "authority initialised with a
         # zero balance" should check this flag before reading total_capital.
         self._hydrated: bool = False
+        # First-snapshot acceptance flag — set to True exactly once, the first
+        # time publish_snapshot() receives a snapshot that satisfies ALL of:
+        #   1. is_hydrated == True  (pipeline has run)
+        #   2. real_capital > 0     (confirmed non-zero balance)
+        #   3. valid_broker_count > 0  (at least one broker with positive balance)
+        #   4. is_stale == False    (snapshot is fresh)
+        # This is the single source of truth for snapshot readiness and replaces
+        # the duplicate CA_READY state tracking.
+        self._first_snap_accepted: bool = False
         # Per-broker timestamps for the feed_broker_balance push path.
         # Monotonic guard: only advance a broker's balance when the incoming
         # feed timestamp is strictly newer than the recorded one.
@@ -1046,6 +1055,20 @@ class CapitalAuthority:
                             continue
                         broker_key = normalize_broker_identifier(broker_identifier)
                         effective_broker_map[broker_key] = broker
+                # Also include connected user account brokers so their balances
+                # are counted when the primary broker_map was empty (fallback path).
+                user_brokers_map = getattr(canonical_broker_manager, "user_brokers", None) or {}
+                if isinstance(user_brokers_map, Mapping):
+                    for _uid, _ubroker_dict in user_brokers_map.items():
+                        if not isinstance(_ubroker_dict, Mapping):
+                            continue
+                        for _ubt, _ubroker in _ubroker_dict.items():
+                            if _ubroker is None:
+                                continue
+                            if not getattr(_ubroker, "connected", False):
+                                continue
+                            _ukey = f"{_uid}_{normalize_broker_identifier(_ubt)}"
+                            effective_broker_map[_ukey] = _ubroker
                 if effective_broker_map:
                     logger.info(
                         "[CapitalAuthority] refresh hydrated source graph from broker registry: brokers=%s",
@@ -1720,6 +1743,36 @@ class CapitalAuthority:
         with self._lock:
             return len(self._broker_balances)
 
+    @property
+    def valid_broker_count(self) -> int:
+        """Number of brokers that have reported a strictly positive balance.
+
+        Unlike :attr:`registered_broker_count` (which counts all registered
+        brokers including those with a zero balance), this property counts only
+        brokers whose last reported balance is > 0.  Use this to confirm that
+        at least one broker has real funds before accepting a snapshot as valid.
+        """
+        with self._lock:
+            return sum(1 for bal in self._broker_balances.values() if bal > 0.0)
+
+    @property
+    def first_snap_accepted(self) -> bool:
+        """``True`` after the first fully-valid snapshot has been accepted.
+
+        Set exactly once by :meth:`publish_snapshot` the first time ALL of the
+        following conditions are simultaneously true:
+
+        * ``is_hydrated == True``   — pipeline has run at least once
+        * ``real_capital > 0``      — confirmed non-zero balance
+        * ``valid_broker_count > 0`` — at least one broker with positive balance
+        * ``is_stale == False``     — snapshot is fresh (within TTL)
+
+        This is the single source of truth for snapshot readiness and replaces
+        the duplicate ``CA_READY`` state tracking.  Once set it is never
+        cleared.
+        """
+        return self._first_snap_accepted
+
     def get_real_capital(self) -> float:
         """
         Gross observed equity across all registered brokers (USD + USDC).
@@ -2151,6 +2204,72 @@ class CapitalAuthority:
             ),
             len(new_balances),
         )
+
+        # ── FIRST_SNAPSHOT_GATE — evaluate and accept the first valid snapshot ──
+        # Check all four conditions for a fully-valid snapshot.  When all are
+        # met, set _first_snap_accepted exactly once (idempotent after that).
+        # This replaces the duplicate CA_READY state tracking and becomes the
+        # single source of truth for snapshot readiness.
+        _snap_is_stale: bool = bool(getattr(snapshot, "is_stale", True))
+        _snap_valid_broker_count: int = sum(
+            1 for bal in new_balances.values() if bal > 0.0
+        )
+        _snap_computed_at_iso: str = computed_at.isoformat()
+        _snap_source: str = (
+            "live_exchange" if _snap_valid_broker_count > 0 else "placeholder"
+        )
+
+        _gate_ca_hydrated: bool = self._hydrated
+        _gate_capital_positive: bool = snapshot_real > 0.0
+        _gate_has_valid_brokers: bool = _snap_valid_broker_count > 0
+        _gate_not_stale: bool = not _snap_is_stale
+
+        _all_conditions_met: bool = (
+            _gate_ca_hydrated
+            and _gate_capital_positive
+            and _gate_has_valid_brokers
+            and _gate_not_stale
+        )
+
+        if _all_conditions_met:
+            _gate_reason = "all conditions met"
+        elif not _gate_capital_positive:
+            _gate_reason = "capital is zero"
+        elif not _gate_has_valid_brokers:
+            _gate_reason = "no valid brokers"
+        elif _gate_not_stale is False:
+            _gate_reason = "snapshot is stale"
+        else:
+            _gate_reason = "CA not hydrated"
+
+        # Update _first_snap_accepted under the lock to prevent races between
+        # concurrent publish calls (though publish_snapshot is single-writer,
+        # the lock ensures visibility across threads that read the flag).
+        with self._lock:
+            _was_already_accepted = self._first_snap_accepted
+            if _all_conditions_met and not _was_already_accepted:
+                self._first_snap_accepted = True
+
+        _newly_accepted: bool = _all_conditions_met and not _was_already_accepted
+
+        logger.info(
+            "FIRST_SNAPSHOT_GATE\n"
+            "  CA_hydrated: %s\n"
+            "  capital: $%.2f\n"
+            "  broker_count: %d\n"
+            "  snapshot_timestamp: %s\n"
+            "  snapshot_source: %s\n"
+            "  accepted: %s\n"
+            "  reason: %s",
+            _gate_ca_hydrated,
+            snapshot_real,
+            _snap_valid_broker_count,
+            _snap_computed_at_iso,
+            _snap_source,
+            _newly_accepted,
+            _gate_reason,
+        )
+
         # CSM v3 — persist state immediately after a live publish.
         self._warm_start = False
         self._save_cached_state()

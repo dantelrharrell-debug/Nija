@@ -15,7 +15,7 @@ Environment overrides
 COINBASE_MIN_CAPITAL  — minimum USD balance for Coinbase to trade (default 1.0)
 COINBASE_MIN_ORDER    — minimum USD order size on Coinbase (default 1.0)
 KRAKEN_MIN_CAPITAL    — minimum USD balance for Kraken (default 25.0)
-KRAKEN_MIN_ORDER      — minimum USD order size on Kraken (default 10.0)
+KRAKEN_MIN_ORDER      — minimum USD order size on Kraken (default 20.0)
 """
 
 import os
@@ -64,8 +64,10 @@ COINBASE_MIN_ORDER: float = float(
 #: Minimum USD balance required for Kraken to open new positions.
 KRAKEN_MIN_CAPITAL: float = float(os.getenv("KRAKEN_MIN_CAPITAL", "25.0"))
 
-#: Minimum USD order size on Kraken (exchange hard-floor is $10).
-KRAKEN_MIN_ORDER: float = float(os.getenv("KRAKEN_MIN_ORDER", "10.0"))
+#: Minimum USD order size on Kraken.
+#: Kraken enforces a minimum notional of ~$15-20 USD on most pairs (e.g. ADA-USD).
+#: Setting this to $20 provides a safe buffer above the exchange hard floor.
+KRAKEN_MIN_ORDER: float = float(os.getenv("KRAKEN_MIN_ORDER", "20.0"))
 
 # ---------------------------------------------------------------------------
 # BROKER_PROFILES — per-broker policy registry
@@ -99,19 +101,20 @@ BROKER_PROFILES: dict = {
         "min_capital_usd": KRAKEN_MIN_CAPITAL,
         "min_order_usd": KRAKEN_MIN_ORDER,
 
-        # Micro-cap not applicable — Kraken is isolated
+        # Micro-cap not applicable — Kraken is the primary platform account
         "micro_cap_enabled": False,
 
-        # Isolated: no new entries; only exits allowed in STRICT mode.
+        # PLATFORM-FIRST: Kraken is the primary platform account and must
+        # execute trades as the first account in the hierarchy.
+        # Active execution: full entry + exit allowed.
         # When KRAKEN_EXECUTION_DISABLED=true, fully passive.
-        "execution_mode": "passive" if KRAKEN_EXECUTION_DISABLED else "isolated",
+        "execution_mode": "passive" if KRAKEN_EXECUTION_DISABLED else "active",
 
-        # Risk mode: log only — Kraken risk events are recorded but never
-        # block execution on other brokers
-        "risk_mode": "isolated",
+        # Risk mode: active — Kraken is the primary platform account
+        "risk_mode": "active",
 
-        # Kraken is EXCLUDED from execution capital weighting (Step 4)
-        "include_in_execution_capital": False,
+        # Kraken IS included in execution capital weighting (platform-first)
+        "include_in_execution_capital": True,
 
         # Step 6: flag consumed by KrakenBroker.place_market_order guard
         "execution_disabled": KRAKEN_EXECUTION_DISABLED,

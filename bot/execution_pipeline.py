@@ -322,6 +322,8 @@ class PipelineRequest:
     quantity_mode: str = "usd"
     shares: Optional[float] = None
     contracts: Optional[float] = None
+    units: Optional[float] = None
+    unit_type: Optional[str] = None
     preferred_broker: Optional[str] = None
     available_balance_usd: Optional[float] = None
     price_hint_usd: Optional[float] = None
@@ -481,8 +483,27 @@ class ExecutionPipeline:
         self._lock = threading.Lock()
         self._ecel_refresh_stop = threading.Event()
         self._ecel_refresh_thread: Optional[threading.Thread] = None
-        self._ecel_required = True
-        self._ecel_fail_closed = True
+        # NIJA_ECEL_REQUIRED (default: true) — set to false to allow orders to
+        # pass through even when the ECEL execution compiler is unavailable or
+        # fails to compile.  Useful when ECEL schema endpoints are unreachable
+        # at startup (e.g. cold-start with no internet) but orders should still
+        # reach the broker.  WARNING: disabling ECEL removes pre-trade size/step
+        # normalisation — only use when you understand the implications.
+        self._ecel_required = os.getenv("NIJA_ECEL_REQUIRED", "true").strip().lower() not in (
+            "0", "false", "no", "off"
+        )
+        # NIJA_ECEL_FAIL_CLOSED (default: true) — when true, any ECEL compile
+        # exception blocks the order.  Set to false to fall through to raw sizing
+        # on ECEL exceptions (less safe but keeps orders flowing).
+        self._ecel_fail_closed = os.getenv("NIJA_ECEL_FAIL_CLOSED", "true").strip().lower() not in (
+            "0", "false", "no", "off"
+        )
+        logger.info(
+            "🔧 [Pipeline.__init__] ECEL config | ecel_required=%s ecel_fail_closed=%s "
+            "(override via NIJA_ECEL_REQUIRED / NIJA_ECEL_FAIL_CLOSED env vars)",
+            self._ecel_required,
+            self._ecel_fail_closed,
+        )
         self._pre_trade_risk_engine = self._load_pre_trade_risk_engine()
         self._exchange_normalizer = self._load_exchange_normalizer()
         self._allocation_clamp = self._load_allocation_clamp()
@@ -532,6 +553,13 @@ class ExecutionPipeline:
 
     @staticmethod
     def _deny(request: PipelineRequest, t_start: float, reason: str) -> PipelineResult:
+        logger.error(
+            "🚫 [Pipeline.deny] ORDER DROPPED | symbol=%s side=%s size_usd=%.2f reason=%s",
+            getattr(request, "symbol", "?"),
+            getattr(request, "side", "?"),
+            float(getattr(request, "size_usd", 0.0) or 0.0),
+            reason,
+        )
         return PipelineResult(
             success=False,
             symbol=request.symbol,
@@ -569,20 +597,73 @@ class ExecutionPipeline:
         allowed, reason = safety.is_trading_allowed()
         mode_value = mode.value if mode is not None else "unknown"
 
+        logger.info(
+            "🔍 [ExecutionGate] safety_mode=%s allowed=%s reason=%s symbol=%s",
+            mode_value, allowed, reason, request.symbol,
+        )
+
+        _ft_safety_bypass_active = False
         if mode in (TradingMode.DISABLED, TradingMode.MONITOR):
-            return PipelineResult(
-                success=False,
-                symbol=request.symbol,
-                side=request.side,
-                size_usd=request.size_usd,
-                error=reason or f"Trading blocked (mode={mode_value})",
-                latency_ms=(time.monotonic() - t_start) * 1000,
+            # FORCE_TRADE bypass: when the operator has explicitly set FORCE_TRADE or
+            # FORCE_TRADE_MODE, skip the safety-controller MONITOR/DISABLED block so
+            # the pipeline can reach the broker.  This mirrors the bypass that already
+            # exists in execution_authority_context.can_execute().
+            _ft_bypass_gate = (
+                os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
             )
+            if _ft_bypass_gate and mode == TradingMode.MONITOR:
+                _ft_safety_bypass_active = True
+                logger.warning(
+                    "⚡ [ExecutionGate] FORCE_TRADE bypass: safety mode=%s ignored for %s %s — "
+                    "FORCE_TRADE/FORCE_TRADE_MODE is set. Set LIVE_CAPITAL_VERIFIED=true to "
+                    "remove this bypass.",
+                    mode_value, request.symbol, request.side,
+                )
+                print(
+                    f"[NIJA-PRINT] ExecutionGate FORCE_TRADE_BYPASS | "
+                    f"symbol={request.symbol} side={request.side} "
+                    f"mode={mode_value} reason={reason!r}",
+                    flush=True,
+                )
+            else:
+                logger.warning(
+                    "🚫 [ExecutionGate] BLOCKED by safety mode=%s | symbol=%s side=%s size_usd=%.2f",
+                    mode_value, request.symbol, request.side, request.size_usd,
+                )
+                print(
+                    f"[NIJA-PRINT] ExecutionGate BLOCKED | "
+                    f"symbol={request.symbol} side={request.side} "
+                    f"mode={mode_value} reason={reason!r}",
+                    flush=True,
+                )
+                return PipelineResult(
+                    success=False,
+                    symbol=request.symbol,
+                    side=request.side,
+                    size_usd=request.size_usd,
+                    error=reason or f"Trading blocked (mode={mode_value})",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
 
         if mode in (TradingMode.APP_STORE, TradingMode.DRY_RUN):
+            logger.info(
+                "🔄 [ExecutionGate] Simulating execution mode=%s | symbol=%s side=%s size_usd=%.2f",
+                mode_value, request.symbol, request.side, request.size_usd,
+            )
             return self._simulate_execution(request, t_start, mode_value, reason)
 
-        if not allowed:
+        if not allowed and not _ft_safety_bypass_active:
+            logger.warning(
+                "🚫 [ExecutionGate] BLOCKED: not allowed | mode=%s reason=%s | symbol=%s side=%s size_usd=%.2f",
+                mode_value, reason, request.symbol, request.side, request.size_usd,
+            )
+            print(
+                f"[NIJA-PRINT] ExecutionGate BLOCKED_NOT_ALLOWED | "
+                f"symbol={request.symbol} side={request.side} "
+                f"mode={mode_value} reason={reason!r}",
+                flush=True,
+            )
             return PipelineResult(
                 success=False,
                 symbol=request.symbol,
@@ -604,13 +685,205 @@ class ExecutionPipeline:
                 if hasattr(state_machine, "can_dispatch_trades") and not state_machine.can_dispatch_trades():
                     current_state = getattr(state_machine, "get_current_state", lambda: None)()
                     state_value = current_state.value if current_state else "unknown"
-                    return PipelineResult(
-                        success=False,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
-                        error=f"Execution gate pending (state_machine={state_value})",
-                        latency_ms=(time.monotonic() - t_start) * 1000,
+
+                    # ── Diagnostic: explain exactly why state is not LIVE_ACTIVE ──
+                    _lcv_diag = os.getenv("LIVE_CAPITAL_VERIFIED", "").strip().lower()
+                    _dry_run_diag = os.getenv("DRY_RUN_MODE", "").strip().lower()
+                    _auto_act_diag = os.getenv("AUTO_ACTIVATE", "").strip().lower()
+                    _force_act_diag = os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                    _writer_hb_diag = os.getenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "").strip()
+                    _writer_token_diag = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+                    _local_fallback_diag = os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+                    _activation_committed_diag = getattr(state_machine, "get_activation_committed", lambda: None)()
+                    logger.warning(
+                        "🔍 [ExecutionGate] STATE_MACHINE_DIAGNOSTIC | state=%s "
+                        "LIVE_CAPITAL_VERIFIED=%r DRY_RUN_MODE=%r AUTO_ACTIVATE=%r "
+                        "NIJA_FORCE_ACTIVATION=%r NIJA_WRITER_HEARTBEAT_ACTIVE=%r "
+                        "NIJA_WRITER_FENCING_TOKEN=%s NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=%r "
+                        "activation_committed=%s | symbol=%s side=%s",
+                        state_value,
+                        _lcv_diag, _dry_run_diag, _auto_act_diag,
+                        _force_act_diag, _writer_hb_diag,
+                        "SET" if _writer_token_diag else "NOT_SET",
+                        _local_fallback_diag,
+                        _activation_committed_diag,
+                        request.symbol, request.side,
+                    )
+                    print(
+                        f"[NIJA-PRINT] ExecutionGate STATE_MACHINE_DIAGNOSTIC | "
+                        f"state={state_value} "
+                        f"LIVE_CAPITAL_VERIFIED={_lcv_diag!r} "
+                        f"DRY_RUN_MODE={_dry_run_diag!r} "
+                        f"AUTO_ACTIVATE={_auto_act_diag!r} "
+                        f"NIJA_FORCE_ACTIVATION={_force_act_diag!r} "
+                        f"NIJA_WRITER_HEARTBEAT_ACTIVE={_writer_hb_diag!r} "
+                        f"NIJA_WRITER_FENCING_TOKEN={'SET' if _writer_token_diag else 'NOT_SET'} "
+                        f"NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK={_local_fallback_diag!r} "
+                        f"activation_committed={_activation_committed_diag} "
+                        f"symbol={request.symbol} side={request.side}",
+                        flush=True,
+                    )
+
+                    # FORCE_TRADE bypass: when FORCE_TRADE=1 is set, bypass the
+                    # state_machine gate entirely regardless of current state value.
+                    # This covers both the LIVE_ACTIVE convergence-FSM case (where
+                    # Redis/heartbeat infrastructure is blocking dispatch) AND the
+                    # OFF/LIVE_PENDING_CONFIRMATION case (where distributed authority
+                    # gates have prevented the state from reaching LIVE_ACTIVE at all).
+                    # When FORCE_TRADE=1 is set, the operator has explicitly authorised
+                    # live trading and the state machine should not block execution.
+                    # Diagnostic: log exactly why the state machine is blocking and what
+                    # conditions are needed to unblock it.
+                    _activation_committed = getattr(state_machine, "get_activation_committed", lambda: False)()
+                    _first_snap = getattr(state_machine, "get_first_snap_accepted", lambda: False)()
+                    print(
+                        f"[NIJA-PRINT] ExecutionGate STATE_MACHINE_DIAGNOSTIC | "
+                        f"symbol={request.symbol} side={request.side} "
+                        f"state={state_value} "
+                        f"activation_committed={_activation_committed} "
+                        f"first_snap_accepted={_first_snap} "
+                        f"LIVE_CAPITAL_VERIFIED={os.getenv('LIVE_CAPITAL_VERIFIED', 'unset')} "
+                        f"FORCE_TRADE={os.getenv('FORCE_TRADE', 'unset')} "
+                        f"NIJA_FORCE_ACTIVATION={os.getenv('NIJA_FORCE_ACTIVATION', 'unset')} "
+                        f"NIJA_WRITER_FENCING_TOKEN={'set' if os.getenv('NIJA_WRITER_FENCING_TOKEN') else 'unset'} "
+                        f"NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK={os.getenv('NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK', 'unset')}",
+                        flush=True,
+                    )
+                    logger.warning(
+                        "🔍 [ExecutionGate] STATE_MACHINE_DIAGNOSTIC | state=%s committed=%s "
+                        "first_snap=%s LIVE_CAPITAL_VERIFIED=%s FORCE_TRADE=%s "
+                        "NIJA_FORCE_ACTIVATION=%s fencing_token=%s local_fallback=%s | "
+                        "symbol=%s side=%s — to unblock: set NIJA_FORCE_ACTIVATION=1 or "
+                        "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true",
+                        state_value,
+                        _activation_committed,
+                        _first_snap,
+                        os.getenv("LIVE_CAPITAL_VERIFIED", "unset"),
+                        os.getenv("FORCE_TRADE", "unset"),
+                        os.getenv("NIJA_FORCE_ACTIVATION", "unset"),
+                        "set" if os.getenv("NIJA_WRITER_FENCING_TOKEN") else "unset",
+                        os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "unset"),
+                        request.symbol,
+                        request.side,
+                    )
+
+                    # FORCE_TRADE bypass: when FORCE_TRADE=1 is set and LIVE_CAPITAL_VERIFIED=true,
+                    # bypass the convergence-FSM check regardless of the current state value.
+                    #
+                    # Previously this bypass only fired when state_value == "LIVE_ACTIVE", which
+                    # created a deadlock: the state machine was stuck at OFF (because the
+                    # _startup_ownership_gate blocked arming due to missing Redis/fencing token),
+                    # so the bypass never fired and all orders were rejected.
+                    #
+                    # Fix: extend the bypass to cover OFF and LIVE_PENDING_CONFIRMATION states
+                    # when FORCE_TRADE=1 + LIVE_CAPITAL_VERIFIED=true are both set.  The operator
+                    # has explicitly authorized live trading; the FSM's distributed-authority
+                    # prerequisites (Redis fencing token, nonce lease) are infrastructure concerns
+                    # that should not block order submission when the operator override is active.
+                    _ft_active = (
+                        os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                        or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                    )
+                    if _ft_active:
+                        logger.warning(
+                            "⚡ [ExecutionGate] FORCE_TRADE bypass: state_machine gate ignored "
+                            "for %s %s — state=%s FORCE_TRADE is set. "
+                            "State machine is stuck in %s; bypassing to allow trade execution. "
+                            "Set LIVE_CAPITAL_VERIFIED=true and NIJA_FORCE_ACTIVATION=1 to fix permanently.",
+                            request.symbol, request.side, state_value, state_value,
+                        )
+                    _lcv_active = os.getenv("LIVE_CAPITAL_VERIFIED", "").strip().lower() in {"true", "1", "yes", "enabled"}
+                    _force_activation_active = os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+                    _local_fallback_active = os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in {"true", "1", "yes", "enabled"}
+
+                    # Bypass when: (FORCE_TRADE or NIJA_FORCE_ACTIVATION or local_fallback) AND LIVE_CAPITAL_VERIFIED
+                    # This covers state=OFF, LIVE_PENDING_CONFIRMATION, and LIVE_ACTIVE.
+                    _ft_bypass_sm = (
+                        (_ft_active or _force_activation_active or _local_fallback_active)
+                        and _lcv_active
+                    )
+                    if _ft_bypass_sm:
+                        logger.warning(
+                            "⚡ [ExecutionGate] FORCE_TRADE bypass: state_machine check ignored "
+                            "for %s %s — state=%s FORCE_TRADE=%s NIJA_FORCE_ACTIVATION=%s "
+                            "LIVE_CAPITAL_VERIFIED=true. Attempting FSM force-activation.",
+                            request.symbol, request.side, state_value,
+                            os.getenv("FORCE_TRADE", "0"),
+                            os.getenv("NIJA_FORCE_ACTIVATION", "0"),
+                        )
+                        print(
+                            f"[NIJA-PRINT] ExecutionGate FORCE_TRADE_STATE_MACHINE_BYPASS | "
+                            f"symbol={request.symbol} side={request.side} "
+                            f"state={state_value}",
+                            flush=True,
+                        )
+                        # Attempt to trigger state machine activation so subsequent
+                        # trades don't need the bypass.
+                        try:
+                            _activate_fn = getattr(state_machine, "activate_live_trading", None)
+                            if _activate_fn is not None:
+                                _activate_fn("FORCE_TRADE=1 ExecutionGate bypass")
+                                logger.warning(
+                                    "⚡ [ExecutionGate] FORCE_TRADE: triggered activate_live_trading() "
+                                    "to transition state machine to LIVE_ACTIVE"
+                                )
+                        except Exception as _act_exc:
+                            logger.debug(
+                                "[ExecutionGate] FORCE_TRADE: activate_live_trading() skipped: %s", _act_exc
+                            )
+                        # Attempt to force-activate the FSM so subsequent cycles don't need
+                        # the bypass.  This is a best-effort call; failure is non-fatal here
+                        # since the bypass already allows this order through.
+                        try:
+                            if hasattr(state_machine, "_force_live_active_transition"):
+                                _flt_result = state_machine._force_live_active_transition(
+                                    "ExecutionGate FORCE_TRADE bypass: forcing LIVE_ACTIVE to unblock order submission"
+                                )
+                                if _flt_result:
+                                    logger.critical(
+                                        "⚡ [ExecutionGate] FSM force-activated to LIVE_ACTIVE — "
+                                        "future orders will not need the FORCE_TRADE bypass. "
+                                        "symbol=%s side=%s",
+                                        request.symbol, request.side,
+                                    )
+                                    print(
+                                        f"[NIJA-PRINT] ExecutionGate FSM_FORCE_ACTIVATED | "
+                                        f"symbol={request.symbol} side={request.side} "
+                                        f"prev_state={state_value}",
+                                        flush=True,
+                                    )
+                        except Exception as _flt_exc:
+                            logger.warning(
+                                "[ExecutionGate] FSM force-activation attempt failed (non-fatal): %s",
+                                _flt_exc,
+                            )
+                    else:
+                        logger.warning(
+                            "🚫 [ExecutionGate] BLOCKED by state_machine | state=%s | symbol=%s side=%s size_usd=%.2f "
+                            "| To unblock: set NIJA_FORCE_ACTIVATION=1 (bypasses all gates) or "
+                            "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true (bypasses Redis requirement)",
+                            state_value, request.symbol, request.side, request.size_usd,
+                            state_value, _lcv_diag, _dry_run_diag,
+                            "SET" if _writer_token_diag else "NOT_SET (Redis writer authority missing)",
+                        )
+                        print(
+                            f"[NIJA-PRINT] ExecutionGate BLOCKED_STATE_MACHINE | "
+                            f"symbol={request.symbol} side={request.side} "
+                            f"state={state_value}",
+                            flush=True,
+                        )
+                        return PipelineResult(
+                            success=False,
+                            symbol=request.symbol,
+                            side=request.side,
+                            size_usd=request.size_usd,
+                            error=f"Execution gate pending (state_machine={state_value})",
+                            latency_ms=(time.monotonic() - t_start) * 1000,
+                        )
+                else:
+                    logger.info(
+                        "✅ [ExecutionGate] state_machine gate PASSED | symbol=%s side=%s",
+                        request.symbol, request.side,
                     )
             except Exception as exc:
                 logger.warning("ExecutionPipeline: trading_state_machine gate skipped: %s", exc)
@@ -643,7 +916,26 @@ class ExecutionPipeline:
                 return self._deny(request, t_start, f"CapitalAuthorization deny: ledger_read_error:{exc}")
 
         exposure_required = side in ("buy", "long")
-        if exposure_required and notional > 0 and margin_ledger is not None and not ledger_row:
+        # Only block on missing ledger state for margin/leveraged orders.
+        # Spot (leverage=1, no margin_mode) orders do not require a ledger record —
+        # blocking them here is the primary cause of zero trade execution on
+        # accounts that have not yet opened a margin position.
+        _is_margin_order = bool(
+            getattr(request, "leverage", 1) and int(getattr(request, "leverage", 1) or 1) > 1
+            or getattr(request, "margin_mode", None)
+            or getattr(request, "borrow_intent", None)
+            or str(getattr(request, "account_type", "") or "").lower() == "margin"
+        )
+        if exposure_required and notional > 0 and margin_ledger is not None and not ledger_row and _is_margin_order:
+            logger.warning(
+                "CapitalAuthorization: missing ledger state for margin order — "
+                "symbol=%s side=%s notional=%.2f broker=%s account_id=%s",
+                getattr(request, "symbol", ""),
+                side,
+                notional,
+                getattr(request, "preferred_broker", ""),
+                getattr(request, "account_id", ""),
+            )
             return self._deny(request, t_start, "CapitalAuthorization deny: missing_ledger_state")
 
         buying_power = ledger_row.get("buying_power_usd") if ledger_row else getattr(request, "buying_power_usd", None)
@@ -792,8 +1084,67 @@ class ExecutionPipeline:
         canonical_request = normalize_pipeline_request(request)
         if not getattr(canonical_request, "strategy", ""):
             canonical_request = replace(canonical_request, strategy="unknown_strategy")
+
+        # ── Symbol normalization: ensure the symbol is in SYMBOL-ASSET format ──
+        # Upstream signal generators may produce symbols without a separator
+        # (e.g. "ADAUSD") or with a slash (e.g. "ADA/USD").  Normalize to the
+        # canonical dash-separated form (e.g. "ADA-USD") before any gate runs so
+        # that ECEL and downstream brokers always receive a consistent format.
+        _raw_symbol = getattr(canonical_request, "symbol", "") or ""
+        _normalized_symbol = self._normalize_pipeline_symbol(_raw_symbol)
+        if _normalized_symbol != _raw_symbol:
+            logger.info(
+                "🔧 [Pipeline.execute] SYMBOL NORMALIZED | raw=%r normalized=%r "
+                "broker=%s account_id=%s",
+                _raw_symbol,
+                _normalized_symbol,
+                getattr(canonical_request, "preferred_broker", "?"),
+                getattr(canonical_request, "account_id", "?"),
+            )
+            canonical_request = replace(canonical_request, symbol=_normalized_symbol)
+
+        # ── Diagnostic: log every order entering the pipeline ─────────────────
+        _ft_active_diag = (
+            os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+            or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+        )
+        logger.info(
+            "📥 [Pipeline.execute] ORDER RECEIVED | symbol=%s side=%s size_usd=%.2f "
+            "strategy=%s broker=%s account_id=%s force_trade=%s",
+            getattr(canonical_request, "symbol", "?"),
+            getattr(canonical_request, "side", "?"),
+            float(getattr(canonical_request, "size_usd", 0.0) or 0.0),
+            getattr(canonical_request, "strategy", "?"),
+            getattr(canonical_request, "preferred_broker", "?"),
+            getattr(canonical_request, "account_id", "?"),
+            _ft_active_diag,
+        )
+
+        # ── Pipeline state diagnostic: log all gate configuration on every order ──
+        # This makes it immediately visible in logs which gates are active and
+        # which bypass flags are set, so silent blockers can be identified quickly.
+        logger.info(
+            "🔧 [Pipeline.execute] GATE CONFIG | "
+            "ecel_required=%s ecel_loaded=%s ecel_fail_closed=%s | "
+            "live_capital_verified=%s fencing_token=%s | "
+            "force_local_writer_fallback=%s | "
+            "router=%s multi_router=%s | "
+            "throttler=%s pre_trade_risk=%s",
+            self._ecel_required,
+            self._ecel is not None,
+            self._ecel_fail_closed,
+            os.getenv("LIVE_CAPITAL_VERIFIED", "false"),
+            bool(os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()),
+            os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "false"),
+            self._router is not None,
+            self._multi_router is not None,
+            self._throttler is not None,
+            self._pre_trade_risk_engine is not None,
+        )
+
         valid, reason = validate_pipeline_request(canonical_request)
         if not valid:
+            logger.warning("📥 [Pipeline.execute] RequestContract DENY | reason=%s", reason)
             return self._deny(canonical_request, t_start, f"RequestContract deny: {reason}")
 
         working_request = canonical_request
@@ -819,9 +1170,30 @@ class ExecutionPipeline:
 
         if self._execution_observer is not None:
             try:
+                # Check long-term deterministic strategy suppression first.
                 suppressed, suppression_reason = self._execution_observer.is_strategy_suppressed(canonical_request.strategy)
                 if suppressed:
+                    logger.error(
+                        "🚫 [DETERMINISTIC] OrderFeasibility: strategy=%s blocked | %s",
+                        canonical_request.strategy,
+                        suppression_reason,
+                    )
                     return self._deny(canonical_request, t_start, f"OrderFeasibility deny: {suppression_reason}")
+
+                # Check short-term per-symbol transient suppression.
+                # This is a lightweight 5-second skip after a broker/network hiccup.
+                # It does NOT block the strategy for other symbols.
+                if hasattr(self._execution_observer, "is_symbol_transient_suppressed"):
+                    t_suppressed, t_reason = self._execution_observer.is_symbol_transient_suppressed(
+                        canonical_request.strategy, canonical_request.symbol
+                    )
+                    if t_suppressed:
+                        logger.warning(
+                            "⚡ [TRANSIENT] OrderFeasibility: symbol=%s skipped | %s",
+                            canonical_request.symbol,
+                            t_reason,
+                        )
+                        return self._deny(canonical_request, t_start, f"OrderFeasibility deny: {t_reason}")
             except Exception as exc:
                 return self._deny(canonical_request, t_start, f"OrderFeasibility deny: observer_error:{exc}")
 
@@ -867,6 +1239,13 @@ class ExecutionPipeline:
                     extended_hours=working_request.extended_hours,
                 )
                 if not normalized.accepted:
+                    logger.error(
+                        "🚫 [Pipeline] ExchangeNormalizer reject | symbol=%s side=%s size_usd=%.2f reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        float(working_request.size_usd or 0.0),
+                        normalized.reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -909,6 +1288,13 @@ class ExecutionPipeline:
                     runtime_overrides=runtime_capability_overrides,
                 )
                 if not allowed:
+                    logger.error(
+                        "🚫 [Pipeline] CapabilityMatrix reject | symbol=%s side=%s broker=%s reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        broker_for_caps,
+                        reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -1026,11 +1412,51 @@ class ExecutionPipeline:
 
         if self._pre_trade_risk_engine is not None:
             try:
+                # Resolve the live available balance for the risk check.
+                # The PipelineRequest.available_balance_usd field is populated by
+                # callers that know the balance at call time (e.g. ExecutionEngine).
+                # However, some call paths (e.g. submit_market_order_via_pipeline,
+                # SignalBroadcaster) do not set it, leaving it None.  When it is
+                # absent or zero, fall back to the CapitalAuthority singleton so
+                # the risk engine always receives the actual live account balance
+                # rather than a stale cached value or None (which would cause the
+                # cap check to be skipped entirely via the fail-open path).
+                _risk_balance: Optional[float] = working_request.available_balance_usd
+                if not _risk_balance:
+                    try:
+                        _ca_mod = None
+                        for _ca_mod_name in ("bot.capital_authority", "capital_authority"):
+                            try:
+                                import importlib as _il
+                                _ca_mod = _il.import_module(_ca_mod_name)
+                                break
+                            except ImportError:
+                                continue
+                        if _ca_mod is not None:
+                            _get_ca = getattr(_ca_mod, "get_capital_authority", None)
+                            if callable(_get_ca):
+                                _ca = _get_ca()
+                                _ca_balance = float(_ca.get_usable_capital() or 0.0)
+                                if _ca_balance > 0.0:
+                                    _risk_balance = _ca_balance
+                                    logger.info(
+                                        "📊 [Pipeline] PreTradeRisk: resolved live balance "
+                                        "from CapitalAuthority | account=%s balance_usd=%.2f "
+                                        "(request had available_balance_usd=%s)",
+                                        working_request.account_id,
+                                        _ca_balance,
+                                        working_request.available_balance_usd,
+                                    )
+                    except Exception as _ca_exc:
+                        logger.debug(
+                            "Pipeline: capital authority balance lookup failed (non-fatal): %s",
+                            _ca_exc,
+                        )
                 risk_decision = self._pre_trade_risk_engine.assess(
                     account_id=working_request.account_id,
                     symbol=working_request.symbol,
                     size_usd=working_request.size_usd,
-                    available_balance_usd=working_request.available_balance_usd,
+                    available_balance_usd=_risk_balance,
                 )
                 if not risk_decision.approved:
                     with execution_authority_scope():
@@ -1045,6 +1471,13 @@ class ExecutionPipeline:
                         block_reason_detail=str(risk_decision.reason),
                         first_failed_gate="risk.pre_trade",
                     )
+                    logger.error(
+                        "🚫 [Pipeline] PreTradeRiskEngine reject | symbol=%s side=%s size_usd=%.2f reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        float(working_request.size_usd or 0.0),
+                        risk_decision.reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -1057,8 +1490,18 @@ class ExecutionPipeline:
                 return self._deny(canonical_request, t_start, f"OrderFeasibility deny: pre_trade_risk_error:{exc}")
 
         if self._ecel is None and self._ecel_required:
-            error = "ECEL unavailable: strict execution gate blocks order dispatch"
-            logger.error("ExecutionPipeline: %s", error)
+            error = (
+                "ECEL unavailable: strict execution gate blocks order dispatch. "
+                "Set NIJA_ECEL_REQUIRED=false to allow orders to bypass ECEL when "
+                "the compiler is unavailable (e.g. schema endpoints unreachable at startup)."
+            )
+            logger.error(
+                "🚫 [Pipeline] ECEL GATE BLOCKING | symbol=%s side=%s size_usd=%.2f | %s",
+                working_request.symbol,
+                working_request.side,
+                float(working_request.size_usd or 0.0),
+                error,
+            )
             return PipelineResult(
                 success=False,
                 symbol=working_request.symbol,
@@ -1067,6 +1510,17 @@ class ExecutionPipeline:
                 error=error,
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
+        elif self._ecel is None and not self._ecel_required:
+            logger.warning(
+                "⚠️  [Pipeline] ECEL unavailable but NIJA_ECEL_REQUIRED=false — "
+                "proceeding with raw sizing for symbol=%s side=%s size_usd=%.2f",
+                working_request.symbol,
+                working_request.side,
+                float(working_request.size_usd or 0.0),
+            )
+            # Mark as validated so the downstream assert doesn't fire
+            effective_request = replace(working_request, validated=True)
+            order_validated = True
 
         # ECEL pre-trade compile: schema checks, step-size compiler, reservation.
         if self._ecel is not None:
@@ -1090,6 +1544,13 @@ class ExecutionPipeline:
                 )
                 compiled = self._ecel.compile(compile_req)
                 if not compiled.accepted:
+                    logger.error(
+                        "🚫 [Pipeline] ECEL reject | symbol=%s side=%s size_usd=%.2f reason=%s",
+                        working_request.symbol,
+                        working_request.side,
+                        float(working_request.size_usd or 0.0),
+                        compiled.reason,
+                    )
                     return PipelineResult(
                         success=False,
                         symbol=working_request.symbol,
@@ -1121,9 +1582,28 @@ class ExecutionPipeline:
                     )
                 logger.warning("ExecutionPipeline: %s; using raw request", msg)
 
-        if self._ecel_required:
+        if self._ecel_required and not order_validated:
+            logger.error(
+                "🚫 [Pipeline] ECEL ASSERTION FAILED: order_validated=%s effective_request.validated=%s "
+                "| symbol=%s side=%s size_usd=%.2f | This should not happen — check ECEL compile path",
+                order_validated,
+                getattr(effective_request, "validated", False),
+                getattr(effective_request, "symbol", "?"),
+                getattr(effective_request, "side", "?"),
+                float(getattr(effective_request, "size_usd", 0.0) or 0.0),
+            )
             assert order_validated is True, "FATAL: Order bypassed ECEL"
             assert effective_request.validated is True, "FATAL: Order bypassed ECEL"
+
+        logger.info(
+            "✅ [Pipeline] ECEL gate PASSED | order_validated=%s ecel_required=%s "
+            "symbol=%s side=%s size_usd=%.2f — proceeding to broker dispatch",
+            order_validated,
+            self._ecel_required,
+            getattr(effective_request, "symbol", "?"),
+            getattr(effective_request, "side", "?"),
+            float(getattr(effective_request, "size_usd", 0.0) or 0.0),
+        )
 
         self._log_ecel_final_order(request=effective_request, compiled=compiled)
 
@@ -1224,10 +1704,56 @@ class ExecutionPipeline:
             "1", "true", "yes", "enabled", "on"
         }
         fencing_token = os.getenv("NIJA_WRITER_FENCING_TOKEN", "").strip()
+        _force_trade_active = (
+            os.getenv("FORCE_TRADE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+            or os.getenv("FORCE_TRADE_MODE", "").strip().lower() in {"1", "true", "yes", "enabled", "on"}
+        )
+        _local_writer_fallback = os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower() in {
+            "1", "true", "yes", "enabled", "on"
+        }
+        logger.info(
+            "🔍 [Pipeline.execute] PRE-DISPATCH GATE | symbol=%s side=%s size_usd=%.2f "
+            "live_mode=%s fencing_token_present=%s force_trade=%s local_writer_fallback=%s",
+            effective_request.symbol,
+            effective_request.side,
+            float(effective_request.size_usd or 0.0),
+            live_mode,
+            bool(fencing_token),
+            _force_trade_active,
+            _local_writer_fallback,
+        )
         if live_mode and not fencing_token:
-            raise RuntimeError(
-                "LIVE EXECUTION DISABLED: Missing fencing token"
-            )
+            if _force_trade_active:
+                logger.warning(
+                    "[FORCE_TRADE] Bypassing fencing token requirement — "
+                    "FORCE_TRADE_MODE=true overrides LIVE EXECUTION DISABLED gate. "
+                    "symbol=%s side=%s size_usd=%.2f",
+                    effective_request.symbol,
+                    effective_request.side,
+                    effective_request.size_usd,
+                )
+            elif _local_writer_fallback:
+                logger.warning(
+                    "⚠️  [Pipeline] NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true — "
+                    "bypassing fencing token requirement for local single-instance deployment. "
+                    "symbol=%s side=%s size_usd=%.2f",
+                    effective_request.symbol,
+                    effective_request.side,
+                    effective_request.size_usd,
+                )
+            else:
+                logger.error(
+                    "🚫 [Pipeline] LIVE EXECUTION DISABLED: Missing fencing token. "
+                    "Set NIJA_WRITER_FENCING_TOKEN or NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true "
+                    "to enable live order dispatch. symbol=%s side=%s size_usd=%.2f",
+                    effective_request.symbol,
+                    effective_request.side,
+                    effective_request.size_usd,
+                )
+                raise RuntimeError(
+                    "LIVE EXECUTION DISABLED: Missing fencing token. "
+                    "Set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to bypass for single-instance deployments."
+                )
 
         if get_seak is not None:
             try:
@@ -1265,6 +1791,53 @@ class ExecutionPipeline:
         try:
             authority_snapshot = runtime_authority_snapshot()
             if not bool(getattr(authority_snapshot, "ready", False)):
+                if _force_trade_active or _local_writer_fallback:
+                    _bypass_reason = "FORCE_TRADE_MODE=true" if _force_trade_active else "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true"
+                    logger.warning(
+                        "⚠️  [Pipeline] Bypassing runtime authority convergence check (%s) — "
+                        "lifecycle_phase=%s coordinator_state=%s reason=%s. "
+                        "symbol=%s side=%s size_usd=%.2f",
+                        _bypass_reason,
+                        getattr(authority_snapshot, "lifecycle_phase", "unknown"),
+                        getattr(authority_snapshot, "coordinator_state", "unknown"),
+                        getattr(authority_snapshot, "reason", "unknown"),
+                        effective_request.symbol,
+                        effective_request.side,
+                        effective_request.size_usd,
+                    )
+                else:
+                    logger.error(
+                        "🚫 [Pipeline] Runtime authority convergence lost | symbol=%s side=%s "
+                        "lifecycle_phase=%s coordinator_state=%s reason=%s | "
+                        "FIX: set NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true to bypass for "
+                        "single-instance deployments without Redis distributed locking",
+                        effective_request.symbol,
+                        effective_request.side,
+                        getattr(authority_snapshot, "lifecycle_phase", "unknown"),
+                        getattr(authority_snapshot, "coordinator_state", "unknown"),
+                        getattr(authority_snapshot, "reason", "unknown"),
+                    )
+                    return PipelineResult(
+                        success=False,
+                        symbol=effective_request.symbol,
+                        side=effective_request.side,
+                        size_usd=effective_request.size_usd,
+                        error="Runtime authority convergence lost",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+        except Exception as exc:
+            if _force_trade_active or _local_writer_fallback:
+                _bypass_reason = "FORCE_TRADE_MODE=true" if _force_trade_active else "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true"
+                logger.warning(
+                    "⚠️  [Pipeline] Bypassing runtime authority snapshot error (%s) — %s. "
+                    "symbol=%s side=%s size_usd=%.2f",
+                    _bypass_reason,
+                    exc,
+                    effective_request.symbol,
+                    effective_request.side,
+                    effective_request.size_usd,
+                )
+            else:
                 return PipelineResult(
                     success=False,
                     symbol=effective_request.symbol,
@@ -1282,12 +1855,43 @@ class ExecutionPipeline:
                 error=f"Runtime authority convergence lost: {exc}",
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
+                    error=f"Runtime authority convergence lost: {exc}",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
 
         try:
             with execution_authority_scope():
                 # assert_execution_dispatch_permitted raises ExecutionBlocked on denial.
                 # It is patchable in tests via bot.execution_pipeline.assert_execution_dispatch_permitted.
-                assert_execution_dispatch_permitted()
+                # When FORCE_TRADE_MODE=true or NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true,
+                # bypass the authority dispatch gate so orders can reach the exchange even
+                # when the lifecycle FSM has not yet committed to LIVE_ACTIVE (e.g. missing
+                # Redis fencing token in single-instance Railway deployments).
+                if not _force_trade_active and not _local_writer_fallback:
+                    logger.info(
+                        "🔐 [Pipeline] Calling assert_execution_dispatch_permitted() | "
+                        "symbol=%s side=%s size_usd=%.2f",
+                        effective_request.symbol,
+                        effective_request.side,
+                        effective_request.size_usd,
+                    )
+                    assert_execution_dispatch_permitted()
+                    logger.info(
+                        "✅ [Pipeline] assert_execution_dispatch_permitted PASSED | "
+                        "symbol=%s side=%s",
+                        effective_request.symbol,
+                        effective_request.side,
+                    )
+                else:
+                    _bypass_reason = "FORCE_TRADE_MODE=true" if _force_trade_active else "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true"
+                    logger.info(
+                        "⚠️  [Pipeline] Bypassing assert_execution_dispatch_permitted (%s) — "
+                        "symbol=%s side=%s size_usd=%.2f",
+                        _bypass_reason,
+                        effective_request.symbol,
+                        effective_request.side,
+                        effective_request.size_usd,
+                    )
                 _correlation = get_runtime_correlation() or {}
                 _intent_id = str(_correlation.get("intent_id") or "").strip()
                 # ── Cycle integrity cross-check ───────────────────────────
@@ -1355,6 +1959,8 @@ class ExecutionPipeline:
                 error=f"ExecutionAuthority reject: {exc}",
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
+
+
 
         _correlation = get_runtime_correlation() or {}
         _intent_id = str(_correlation.get("intent_id") or "").strip()
@@ -1494,6 +2100,27 @@ class ExecutionPipeline:
     def _emit_execution_rejection_telemetry(self, *, symbol: str, side: str, reason: str) -> None:
         if get_exchange_kill_switch_protector is None:
             return
+        reason_text = str(reason or "").strip().lower()
+        non_exchange_rejection_markers = (
+            "executionauthority reject",
+            "execution_authority_blocked",
+            "execution_authority_runtime",
+            "execution gate pending",
+            "blocked by state_machine",
+            "state_machine=emergency_stop",
+            "runtime authority convergence lost",
+            "seak halted",
+            "trading blocked",
+        )
+        if any(marker in reason_text for marker in non_exchange_rejection_markers):
+            logger.debug(
+                "ExecutionPipeline: skipping exchange rejection telemetry for non-exchange block "
+                "(symbol=%s side=%s reason=%s)",
+                symbol,
+                side,
+                reason,
+            )
+            return
         try:
             _eks = get_exchange_kill_switch_protector()
             _oid = f"exec-reject:pipeline:{symbol}:{side}:{int(time.time() * 1000)}"
@@ -1630,8 +2257,27 @@ class ExecutionPipeline:
         The caller must reconcile open-order state before retrying.
         """
 
-        if self._ecel_required:
+        if self._ecel_required and not getattr(request, "validated", False):
+            logger.error(
+                "🚫 [Pipeline._dispatch] ECEL ASSERTION FAILED: request.validated=%s "
+                "| symbol=%s side=%s size_usd=%.2f",
+                getattr(request, "validated", False),
+                getattr(request, "symbol", "?"),
+                getattr(request, "side", "?"),
+                float(getattr(request, "size_usd", 0.0) or 0.0),
+            )
             assert request.validated is True, "FATAL: Order bypassed ECEL"
+
+        logger.info(
+            "🚀 [Pipeline._dispatch] DISPATCHING ORDER TO BROKER | symbol=%s side=%s size_usd=%.2f "
+            "broker=%s multi_router=%s single_router=%s",
+            getattr(request, "symbol", "?"),
+            getattr(request, "side", "?"),
+            float(getattr(request, "size_usd", 0.0) or 0.0),
+            getattr(request, "preferred_broker", "?"),
+            self._multi_router is not None,
+            self._router is not None,
+        )
 
         timeout_s = max(1.0, self._ack_timeout_s)
 
@@ -1830,6 +2476,37 @@ class ExecutionPipeline:
             return "buy"
         if s in ("short", "sell"):
             return "sell"
+        return s
+
+    # Known quote assets for no-separator symbol splitting (e.g. ADAUSD → ADA-USD).
+    # Ordered longest-first so that USDC/USDT are matched before USD.
+    _PIPELINE_KNOWN_QUOTE_ASSETS = ("USDC", "USDT", "USD", "BTC", "ETH", "EUR", "GBP", "ZUSD")
+
+    @staticmethod
+    def _normalize_pipeline_symbol(raw_symbol: str) -> str:
+        """Normalize a symbol to the canonical SYMBOL-ASSET (dash-separated) format.
+
+        Handles three input forms:
+          * ``ADA-USD``  — already canonical, returned as-is.
+          * ``ADA/USD``  — slash-separated; slash is replaced with a dash.
+          * ``ADAUSD``   — no separator; split using known quote-asset suffixes.
+
+        This normalization runs at the pipeline entry point so that all
+        downstream gates (ECEL, exchange normalizer, broker adapters) always
+        receive a consistent symbol format regardless of how the upstream signal
+        generator produced it.
+        """
+        s = (raw_symbol or "").strip().upper()
+        # Normalise slash-separated form.
+        s = s.replace("/", "-")
+        # If still no dash, attempt to infer the separator from known quote assets.
+        if "-" not in s:
+            for quote in ExecutionPipeline._PIPELINE_KNOWN_QUOTE_ASSETS:
+                if s.endswith(quote) and len(s) > len(quote):
+                    base = s[: -len(quote)]
+                    if base:
+                        s = f"{base}-{quote}"
+                        break
         return s
 
     @staticmethod

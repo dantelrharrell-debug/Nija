@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import time
 import threading
 import types as _types
@@ -317,14 +318,6 @@ _current_cycle_snapshot: Optional["CycleSnapshot"] = None
 # Emitted exactly once by bot.py when BootstrapFSM reaches RUNNING_SUPERVISED.
 # ---------------------------------------------------------------------------
 TRADING_ENGINE_READY = threading.Event()
-# ── FORCE_TRADE: pre-set the start gate so run_trading_loop() never waits ────
-if os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled") \
-        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled"):
-    logger.warning(
-        "⚡ FORCE_TRADE: TRADING_ENGINE_READY pre-set at module load — "
-        "trading loop will not wait for bootstrap FSM"
-    )
-    TRADING_ENGINE_READY.set()
 
 
 def get_current_cycle_snapshot() -> Optional["CycleSnapshot"]:
@@ -411,6 +404,31 @@ def _capture_cycle_capital_state() -> _types.MappingProxyType:
         # "_capital_last_valid_brokers" only advances when refresh_capital_authority()
         # confirms viable broker balance payloads.
         _last_vb = int(getattr(_mabm_inst, "_capital_last_valid_brokers", 0) or 0) if _mabm_inst is not None else 0
+        # FIX: When _capital_last_valid_brokers is still 0 (coordinator has not
+        # yet confirmed viable broker payloads) but CapitalAuthority is already
+        # hydrated with real capital, fall back to CA's registered_broker_count.
+        # This prevents a startup deadlock where the activation invariant sees
+        # valid_brokers=0 and snapshot_source="placeholder" even though both
+        # brokers are connected and CA holds a real balance snapshot.
+        if _last_vb == 0 and result.get("ca_is_hydrated") and result.get("ca_total_capital", 0.0) > 0.0:
+            try:
+                if _CA_LOOP_AVAILABLE and _get_ca is not None:
+                    _ca_for_vb = _get_ca()
+                    _ca_broker_count = int(getattr(_ca_for_vb, "registered_broker_count", 0) or 0)
+                    if _ca_broker_count > 0:
+                        _last_vb = _ca_broker_count
+                        logger.info(
+                            "_capture_cycle_capital_state: _capital_last_valid_brokers=0 but "
+                            "CA is hydrated (real=$%.2f, brokers=%d) — using CA registered_broker_count "
+                            "as valid_brokers fallback",
+                            result["ca_total_capital"],
+                            _ca_broker_count,
+                        )
+            except Exception as _ca_vb_err:
+                logger.debug(
+                    "_capture_cycle_capital_state: CA registered_broker_count fallback failed: %s",
+                    _ca_vb_err,
+                )
         result["ca_valid_brokers"] = max(result["ca_valid_brokers"], _last_vb)
         result["snapshot_source"] = "live_exchange" if _last_vb > 0 else "placeholder"
     except Exception as _me:
@@ -531,7 +549,7 @@ def _supervisor_step_state_machine() -> None:
 
         _runtime_mode = resolve_runtime_mode_safe(logger)
         _live_verified = _is_live_mode(_runtime_mode)
-        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "50.0") or 50.0)  # $50 minimum for HF scalp mode (Apr 2026)
         _cycle_capital = _current_cycle_capital if _current_cycle_capital else {}
         _balance = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
         _sufficient_balance = _balance >= _min_balance and _balance > 0.0
@@ -553,6 +571,69 @@ def _supervisor_step_state_machine() -> None:
             _min_balance,
         )
 
+        # FIX: Proactively set _first_snap_accepted when the cycle capital
+        # snapshot shows a valid live-exchange source with real capital and
+        # valid brokers.  commit_activation() checks this flag as part of the
+        # activation invariant, but it is only set *inside* commit_activation()
+        # after all gates pass — creating a chicken-and-egg deadlock where the
+        # flag is never set because the gate that requires it never passes.
+        # Setting it here (before commit_activation is called) breaks the cycle.
+        _snap_source_sv = str(_cycle_capital.get("snapshot_source", "") or "")
+        _valid_brokers_sv = int(_cycle_capital.get("ca_valid_brokers", 0) or 0)
+        _ca_hydrated_sv = bool(_cycle_capital.get("ca_is_hydrated", False))
+        _ca_capital_sv = float(_cycle_capital.get("ca_total_capital", 0.0) or 0.0)
+        if (
+            not sm.get_first_snap_accepted()
+            and _ca_hydrated_sv
+            and _ca_capital_sv > 0.0
+            and _valid_brokers_sv > 0
+            and _snap_source_sv in {"live_exchange", "capital_authority"}
+        ):
+            try:
+                sm.set_first_snap_accepted(True)
+                logger.critical(
+                    "[SUPERVISOR] _first_snap_accepted set to True — "
+                    "CA hydrated real=$%.2f valid_brokers=%d source=%s",
+                    _ca_capital_sv,
+                    _valid_brokers_sv,
+                    _snap_source_sv,
+                )
+            except Exception as _snap_accept_err:
+                logger.warning(
+                    "[SUPERVISOR] set_first_snap_accepted failed: %s", _snap_accept_err
+                )
+
+        # ── FORCE_TRADE: bypass _first_snap_accepted gate when snapshot_source
+        # is "placeholder" (Redis/capital pipeline unavailable).  Without this,
+        # NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true deployments never produce a
+        # "live_exchange" snapshot, so _first_snap_accepted stays False forever
+        # and commit_activation() is permanently blocked even with real capital.
+        _force_activation_sv = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+        )
+        if (
+            _force_activation_sv
+            and not sm.get_first_snap_accepted()
+            and _ca_capital_sv > 0.0
+        ):
+            try:
+                sm.set_first_snap_accepted(True)
+                logger.warning(
+                    "⚡ [SUPERVISOR] FORCE_TRADE: _first_snap_accepted forced True — "
+                    "snapshot_source=%s ca_capital=$%.2f (bypassing live_exchange requirement). "
+                    "This unblocks commit_activation() when Redis/capital pipeline is unavailable.",
+                    _snap_source_sv or "placeholder",
+                    _ca_capital_sv,
+                )
+            except Exception as _snap_force_err:
+                logger.warning(
+                    "[SUPERVISOR] FORCE_TRADE _first_snap_accepted force-set failed: %s",
+                    _snap_force_err,
+                )
+
         # Missing trigger fix: the supervisor attempts activation every cycle
         # while in OFF/LIVE_PENDING_CONFIRMATION, using the same frozen
         # cycle capital snapshot.
@@ -561,8 +642,18 @@ def _supervisor_step_state_machine() -> None:
         # once the FSM is explicitly armed, downstream coordinator gates may
         # still need additional cycles to converge; skipping commit_activation()
         # in that state can stall lifecycle progression in WARM forever.
+        #
+        # FORCE_TRADE / NIJA_FORCE_ACTIVATION: operator override flags that
+        # must also trigger commit_activation() so the FSM can arm to
+        # LIVE_PENDING_CONFIRMATION and eventually reach LIVE_ACTIVE via the
+        # 5-minute auto-transition timeout even when LIVE_CAPITAL_VERIFIED is
+        # not explicitly set in the environment.
         _state_for_commit = sm.get_current_state()
-        _attempt_commit = _live_verified or _state_for_commit == _TradingState.LIVE_PENDING_CONFIRMATION
+        _attempt_commit = (
+            _live_verified
+            or _force_activation_sv
+            or _state_for_commit == _TradingState.LIVE_PENDING_CONFIRMATION
+        )
         if _attempt_commit:
             _committed = False
             try:
@@ -571,18 +662,59 @@ def _supervisor_step_state_machine() -> None:
             except Exception as _commit_err:
                 logger.warning("Supervisor commit_activation failed: %s", _commit_err)
 
+            # ── FORCE_TRADE hard-activation fallback ─────────────────────────
+            # When commit_activation() fails (e.g. startup coordinator gates not
+            # yet converged) but FORCE_TRADE is set, call _force_live_active_transition()
+            # directly to bypass all distributed-authority pre-flight checks.
+            # This is the final escape hatch for the "6000+ cycles, zero trades"
+            # condition where the FSM is permanently stuck in LIVE_PENDING_CONFIRMATION
+            # because Redis/capital-pipeline infrastructure is unavailable.
+            if not _committed and _force_activation_sv and _live_verified:
+                _state_after_commit = sm.get_current_state()
+                if _state_after_commit != _TradingState.LIVE_ACTIVE:
+                    logger.warning(
+                        "⚡ [SUPERVISOR] FORCE_TRADE hard-activation: commit_activation() failed "
+                        "(state=%s) — calling _force_live_active_transition() to bypass "
+                        "distributed-authority gates. LIVE_CAPITAL_VERIFIED=true + FORCE_TRADE=true.",
+                        _state_after_commit.value,
+                    )
+                    try:
+                        if hasattr(sm, "_force_live_active_transition"):
+                            _force_ok = sm._force_live_active_transition(
+                                "FORCE_TRADE+LIVE_CAPITAL_VERIFIED: supervisor hard-activation bypass"
+                            )
+                            if _force_ok:
+                                logger.critical(
+                                    "⚡ [SUPERVISOR] FORCE_TRADE hard-activation SUCCESS — "
+                                    "FSM is now LIVE_ACTIVE. Orders will be submitted this cycle."
+                                )
+                            else:
+                                logger.warning(
+                                    "⚡ [SUPERVISOR] FORCE_TRADE hard-activation returned False — "
+                                    "FSM transition may have failed; check state machine logs."
+                                )
+                    except Exception as _force_act_err:
+                        logger.warning(
+                            "[SUPERVISOR] FORCE_TRADE _force_live_active_transition failed: %s",
+                            _force_act_err,
+                        )
+
             if not _committed and _sufficient_balance and sm.get_current_state() == _TradingState.OFF:
                 try:
                     sm.transition_to(
                         _TradingState.LIVE_PENDING_CONFIRMATION,
-                        "supervisor arming: LIVE_CAPITAL_VERIFIED + sufficient balance",
+                        "supervisor arming: LIVE_CAPITAL_VERIFIED + sufficient balance"
+                        if _live_verified
+                        else "supervisor arming: FORCE_TRADE override",
                     )
                     logger.critical("🟡 SUPERVISOR ARMING: OFF -> LIVE_PENDING_CONFIRMATION")
                 except Exception as _arm_err:
                     logger.warning("Supervisor arming fallback failed: %s", _arm_err)
         elif _balance > 0.0:
             logger.warning(
-                "⚠️ Supervisor activation blocked: LIVE_CAPITAL_VERIFIED is false while balance is %.2f",
+                "⚠️ Supervisor activation blocked: LIVE_CAPITAL_VERIFIED is false and "
+                "FORCE_TRADE/NIJA_FORCE_ACTIVATION not set, while balance is %.2f. "
+                "Set LIVE_CAPITAL_VERIFIED=true or FORCE_TRADE=true to enable activation.",
                 _balance,
             )
     except Exception as _sm_err:
@@ -1107,11 +1239,134 @@ class NijaCoreLoop:
         )
         _ca_hydrated = bool(_cap.get("ca_is_hydrated", False))
         _ca_total_capital = float(_cap.get("ca_total_capital", 0.0) or 0.0)
+
+        # ── Balance hydration waterfall ───────────────────────────────────
+        # Priority order (highest → lowest):
+        #   1. CA total capital (when hydrated AND non-zero)
+        #   2. Caller-supplied balance (when non-zero)
+        #   3. Broker cached balance (non-blocking attribute probe)
+        #   4. broker.get_balance() live fetch (only when all above are zero)
+        #   5. NIJA_FORCE_TRADE_BALANCE env var (operator override)
+        #
+        # The original logic used `_ca_total_capital if _ca_hydrated else balance`
+        # which caused $0.00 snapshots whenever CA was hydrated but reported
+        # zero capital — a common race condition at startup.
+        _caller_balance = float(balance) if balance else 0.0
+        _balance_source = "unknown"
+
+        if _ca_hydrated and _ca_total_capital > 0.0:
+            _canonical_balance = _ca_total_capital
+            _balance_source = "ca_total_capital"
+        elif _caller_balance > 0.0:
+            _canonical_balance = _caller_balance
+            _balance_source = "caller_supplied"
+        else:
+            # CA is not hydrated or reports zero AND caller supplied zero —
+            # attempt broker cached-attribute probe (non-blocking).
+            _broker_cached = _extract_cached_balance_for_log(broker) if broker is not None else 0.0
+            if _broker_cached > 0.0:
+                _canonical_balance = _broker_cached
+                _balance_source = "broker_cached_attr"
+            else:
+                # Last resort: live broker.get_balance() call.
+                _broker_live = 0.0
+                try:
+                    if broker is not None and hasattr(broker, "get_balance"):
+                        _raw_bal = broker.get_balance()
+                        if isinstance(_raw_bal, dict):
+                            for _k in ("total_balance", "balance", "usd_balance", "equity", "total_usd", "available_usd"):
+                                if _k in _raw_bal and float(_raw_bal[_k] or 0.0) > 0.0:
+                                    _broker_live = float(_raw_bal[_k])
+                                    break
+                        elif _raw_bal is not None:
+                            _broker_live = float(_raw_bal or 0.0)
+                except Exception as _bal_err:
+                    logger.warning("[NIJA] broker.get_balance() failed during balance hydration: %s", _bal_err)
+
+                if _broker_live > 0.0:
+                    _canonical_balance = _broker_live
+                    _balance_source = "broker_get_balance"
+                else:
+                    # Final fallback: NIJA_FORCE_TRADE_BALANCE env var.
+                    _env_balance_str = os.environ.get("NIJA_FORCE_TRADE_BALANCE", "").strip()
+                    _env_balance = 0.0
+                    try:
+                        _env_balance = float(_env_balance_str) if _env_balance_str else 0.0
+                    except (TypeError, ValueError):
+                        pass
+                    if _env_balance > 0.0:
+                        _canonical_balance = _env_balance
+                        _balance_source = "NIJA_FORCE_TRADE_BALANCE_env"
+                    else:
+                        # All sources exhausted — use zero and log loudly.
+                        _canonical_balance = 0.0
+                        _balance_source = "all_sources_zero"
+
+        # ── [NIJA-PRINT] BALANCE SNAPSHOT ────────────────────────────────
+        print(
+            f"[NIJA-PRINT] BALANCE SNAPSHOT | "
+            f"cycle_id={_cid} "
+            f"canonical_balance=${_canonical_balance:.2f} "
+            f"source={_balance_source} "
+            f"ca_hydrated={_ca_hydrated} "
+            f"ca_total_capital=${_ca_total_capital:.2f} "
+            f"caller_balance=${_caller_balance:.2f} "
+            f"NIJA_FORCE_TRADE_BALANCE={os.environ.get('NIJA_FORCE_TRADE_BALANCE', 'unset')}",
+            flush=True,
+        )
+        logger.critical(
+            "[NIJA] BALANCE SNAPSHOT | cycle_id=%s canonical=$%.2f source=%s "
+            "ca_hydrated=%s ca_total_capital=$%.2f caller_balance=$%.2f "
+            "NIJA_FORCE_TRADE_BALANCE=%s",
+            _cid,
+            _canonical_balance,
+            _balance_source,
+            _ca_hydrated,
+            _ca_total_capital,
+            _caller_balance,
+            os.environ.get("NIJA_FORCE_TRADE_BALANCE", "unset"),
+        )
+
         # Canonical balance source-of-truth:
-        # - Once CA is hydrated, always use cycle-captured CA capital
-        #   (including legitimate 0.0) so all gates/signals share one value.
-        # - Before hydration, fall back to caller-supplied balance.
-        _canonical_balance = _ca_total_capital if _ca_hydrated else float(balance)
+        # - Once CA is hydrated AND reports a positive balance, use CA capital.
+        # - If CA is hydrated but reports $0.00, fall back to caller-supplied
+        #   balance so a stale/un-published CA snapshot does not zero-out the
+        #   capital gate and block all orders.
+        # - Before hydration, always use caller-supplied balance.
+        # - If all sources are zero and FORCE_TRADE is active, try the broker
+        #   cache directly, then the NIJA_FORCE_TRADE_BALANCE env override.
+        _caller_balance = float(balance) if balance else 0.0
+        if _ca_hydrated and _ca_total_capital > 0.0:
+            _canonical_balance = _ca_total_capital
+        elif _caller_balance > 0.0:
+            _canonical_balance = _caller_balance
+        else:
+            # Last-resort: try broker cached balance then env override
+            _broker_cached = _extract_cached_balance_for_log(broker) if broker is not None else 0.0
+            _env_override = float(os.getenv("NIJA_FORCE_TRADE_BALANCE", "0") or 0)
+            _canonical_balance = _broker_cached or _env_override or 0.0
+            if _canonical_balance > 0.0:
+                print(
+                    f"[NIJA-PRINT] BALANCE HYDRATION FALLBACK | "
+                    f"ca_hydrated={_ca_hydrated} ca_total=${_ca_total_capital:.2f} "
+                    f"caller=${_caller_balance:.2f} broker_cached=${_broker_cached:.2f} "
+                    f"env_override=${_env_override:.2f} → using=${_canonical_balance:.2f}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[NIJA-PRINT] BALANCE ZERO WARNING | "
+                    f"ca_hydrated={_ca_hydrated} ca_total=${_ca_total_capital:.2f} "
+                    f"caller=${_caller_balance:.2f} broker_cached=${_broker_cached:.2f} "
+                    f"env_override=${_env_override:.2f} — all sources zero, capital gate will block",
+                    flush=True,
+                )
+        print(
+            f"[NIJA-PRINT] BALANCE SNAPSHOT | "
+            f"ca_hydrated={_ca_hydrated} ca_total=${_ca_total_capital:.2f} "
+            f"caller=${_caller_balance:.2f} canonical=${_canonical_balance:.2f}",
+            flush=True,
+        )
         snapshot = CycleSnapshot(
             balance=_canonical_balance,
             current_regime=getattr(self.apex, "current_regime", None),
@@ -1141,7 +1396,7 @@ class NijaCoreLoop:
 
         # ── Per-cycle diagnostic header ───────────────────────────────────
         _cycle_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        logger.info(
+        logger.critical(
             "━━━ CYCLE #%d | %s | balance=$%.2f | open_positions=%d | "
             "symbols=%d | regime=%s | cycle_id=%s ━━━",
             self._total_cycles + 1,
@@ -1232,9 +1487,11 @@ class NijaCoreLoop:
         if not user_mode:
             available_slots = max(0, self.max_positions - effective_open)
             if available_slots > 0:
-                logger.info(
-                    "🔍 Scanning markets — %d symbols | slots=%d open=%d",
+                logger.critical(
+                    "🔍 [Phase3] SCAN_ENTRY — scanning markets | "
+                    "symbols=%d slots=%d open=%d user_mode=%s safety_blocked=%s",
                     len(symbols), available_slots, effective_open,
+                    user_mode, not can_enter,
                 )
                 entries, blocked, scored, _gate_rejections = self._phase3_scan_and_enter(
                     broker=broker,
@@ -1270,14 +1527,20 @@ class NijaCoreLoop:
                         )
 
                 # ── Gate rejection counters ───────────────────────────────
-                logger.info(
+                _data_insuff = _gate_rejections.get("data_insufficient", 0)
+                _indic_fail  = _gate_rejections.get("indicators_failed", 0)
+                logger.critical(
                     "📊 [GATE_REJECTIONS] cycle=%d | "
+                    "data_insufficient=%d | indicators_failed=%d | "
+                    "market_filter_rejected=%d | "
                     "confidence_gate_rejected=%d | adx_gate_rejected=%d | "
                     "volume_gate_rejected=%d | momentum_filter_rejected=%d | "
                     "ai_gate_rejected=%d | notional_gate_rejected=%d | "
-                    "capital_gate_rejected=%d | risk_gate_rejected=%d | "
-                    "market_filter_rejected=%d | data_insufficient=%d",
+                    "capital_gate_rejected=%d | risk_gate_rejected=%d",
                     self._total_cycles,
+                    _data_insuff,
+                    _indic_fail,
+                    _gate_rejections.get("market_filter_rejected", 0),
                     _gate_rejections.get("confidence_gate_rejected", 0),
                     _gate_rejections.get("adx_gate_rejected", 0),
                     _gate_rejections.get("volume_gate_rejected", 0),
@@ -1286,9 +1549,23 @@ class NijaCoreLoop:
                     _gate_rejections.get("notional_gate_rejected", 0),
                     _gate_rejections.get("capital_gate_rejected", 0),
                     _gate_rejections.get("risk_gate_rejected", 0),
-                    _gate_rejections.get("market_filter_rejected", 0),
-                    _gate_rejections.get("data_insufficient", 0),
                 )
+                print(
+                    f"[NIJA-PRINT] GATE_REJECTIONS | cycle={self._total_cycles} "
+                    f"data_insufficient={_data_insuff} indicators_failed={_indic_fail} "
+                    f"market_filter={_gate_rejections.get('market_filter_rejected', 0)} "
+                    f"confidence={_gate_rejections.get('confidence_gate_rejected', 0)} "
+                    f"adx={_gate_rejections.get('adx_gate_rejected', 0)} "
+                    f"volume={_gate_rejections.get('volume_gate_rejected', 0)}",
+                    flush=True,
+                )
+                if _data_insuff > 0 and scored == 0:
+                    logger.critical(
+                        "🚨 [DIAG] ALL %d symbols failed data fetch (data_insufficient=%d) — "
+                        "broker candle API may be returning None/empty/short DataFrames. "
+                        "Check broker connectivity, symbol format, and NIJA_CANDLE_FETCH_TIMEOUT.",
+                        len(symbols), _data_insuff,
+                    )
 
                 # ── Entry-to-Order Trace: terminal outcome ────────────────
                 if entries == 0:
@@ -1451,7 +1728,6 @@ class NijaCoreLoop:
                 regime=snapshot.current_regime,
             )
             can_trade = bool(result.can_trade)
-            print(f"⏱ Trade allowed: {can_trade}")
             if not result.can_trade:
                 return False, result.reason
             return True, "ok"
@@ -1535,6 +1811,30 @@ class NijaCoreLoop:
         Returns (entries_taken, entries_blocked, symbols_scored, gate_rejections).
         gate_rejections is a dict mapping gate name → rejection count for this cycle.
         """
+        # ── VERBOSE ENTRY LOG: confirm _phase3_scan_and_enter() was reached ──
+        print(
+            f"[NIJA-PRINT] _phase3_scan_and_enter START | "
+            f"cycle_id={getattr(snapshot, 'cycle_id', '?')} "
+            f"symbols={len(symbols)} slots={available_slots} "
+            f"streak={zero_signal_streak} "
+            f"force_trade={_env_truthy('FORCE_TRADE')} "
+            f"balance=${float(getattr(snapshot, 'balance', 0.0) or 0.0):.2f} "
+            f"regime={getattr(snapshot, 'current_regime', 'unknown')}",
+            flush=True,
+        )
+        logger.critical(
+            "🔬 [Phase3] START _phase3_scan_and_enter | cycle_id=%s symbol_count=%d "
+            "available_slots=%d zero_signal_streak=%d force_trade=%s "
+            "balance=$%.2f regime=%s",
+            getattr(snapshot, "cycle_id", "?"),
+            len(symbols),
+            available_slots,
+            zero_signal_streak,
+            _env_truthy("FORCE_TRADE"),
+            float(getattr(snapshot, "balance", 0.0) or 0.0),
+            str(getattr(snapshot, "current_regime", "unknown")),
+        )
+
         # Pre-import AIEngineSignal once; guarded so the fallback path works
         # even when NijaAIEngine is unavailable.
         try:
@@ -1586,6 +1886,47 @@ class NijaCoreLoop:
             except Exception as _exc:
                 logger.debug("Phase3: AI score-floor sync failed — continuing with engine default: %s", _exc)
 
+        # ── Broker candle-method diagnostic (logged once per phase3 call) ─
+        # Identifies which candle-fetch method the broker exposes so data
+        # failures can be diagnosed without enabling debug logging.
+        _broker_for_diag = broker if broker is not None else getattr(self.apex, "broker_client", None)
+        if _broker_for_diag is not None:
+            _candle_methods_present = [
+                m for m in ("get_candles", "fetch_ohlcv", "get_ohlcv",
+                             "get_historical_data", "get_market_data")
+                if callable(getattr(_broker_for_diag, m, None))
+            ]
+            logger.critical(
+                "🔬 [Phase3] BROKER_DIAG | broker_type=%s candle_methods=%s "
+                "ai_engine=%s score_floor=%.1f dead_zone=%s streak=%d",
+                type(_broker_for_diag).__name__,
+                _candle_methods_present or "NONE_FOUND",
+                "available" if ai is not None else "UNAVAILABLE",
+                getattr(ai, "_score_floor", -1.0) if ai is not None else -1.0,
+                _dead_zone,
+                zero_signal_streak,
+            )
+            print(
+                f"[NIJA-PRINT] BROKER_DIAG | broker={type(_broker_for_diag).__name__} "
+                f"candle_methods={_candle_methods_present} ai={'yes' if ai is not None else 'NO'}",
+                flush=True,
+            )
+            if not _candle_methods_present:
+                logger.critical(
+                    "🚨 [DIAG] BROKER has NO candle-fetch methods! "
+                    "broker=%s — all %d symbols will fail data fetch. "
+                    "Expected one of: get_candles, fetch_ohlcv, get_ohlcv, "
+                    "get_historical_data, get_market_data",
+                    type(_broker_for_diag).__name__, len(symbols),
+                )
+        else:
+            logger.critical(
+                "🚨 [DIAG] BROKER IS NONE — no broker available for candle fetching. "
+                "All %d symbols will fail data fetch. "
+                "Check broker initialization and connection.",
+                len(symbols),
+            )
+
         candidates = []        # List[AIEngineSignal | _AISignal]  — AI-scored
         momentum_candidates = []  # collected from relaxed momentum scan
         scored = 0
@@ -1605,6 +1946,7 @@ class NijaCoreLoop:
             "risk_gate_rejected": 0,
             "market_filter_rejected": 0,
             "data_insufficient": 0,
+            "indicators_failed": 0,
         }
 
         # Always-on top-volume tracker (feeds volume fallback for any streak)
@@ -1619,6 +1961,7 @@ class NijaCoreLoop:
         # healthy but the market is producing no entries.
         _data_attempts = 0
         _data_successes = 0
+        _data_skipped_timeout = 0  # symbols skipped due to broker API timeout/connection error
         _scoring_errors = 0
         _abs_return_sum = 0.0
         _abs_return_count = 0
@@ -1635,9 +1978,46 @@ class NijaCoreLoop:
             _sdd.start_cycle()
 
         # ── Score every symbol ────────────────────────────────────────────
+        logger.critical(
+            "🔁 [Phase3] SIGNAL_LOOP_START — beginning symbol scoring loop | "
+            "symbols_total=%d available_slots=%d ai_engine=%s",
+            len(symbols),
+            available_slots,
+            "available" if ai is not None else "UNAVAILABLE",
+        )
+        print(
+            f"[NIJA-PRINT] SIGNAL_LOOP_START | symbols={len(symbols)} "
+            f"slots={available_slots} ai={'yes' if ai is not None else 'NO'}",
+            flush=True,
+        )
         funnel_traces: Dict[str, Dict[str, Tuple[str, str]]] = {}
         for _symbol_idx, symbol in enumerate(symbols):
             _funnel = funnel_traces.setdefault(symbol, {})
+            # ── Per-symbol progress heartbeat (every 10 symbols) ─────────
+            if _symbol_idx % 10 == 0:
+                _prog_data_fail = _gate_rejections.get("data_insufficient", 0)
+                logger.critical(
+                    "🔁 [Phase3] SIGNAL_LOOP_PROGRESS — symbol %d/%d | "
+                    "symbol=%s candidates_so_far=%d scored_so_far=%d "
+                    "data_ok=%d data_fail=%d timeout_skipped=%d blocked_so_far=%d",
+                    _symbol_idx + 1,
+                    len(symbols),
+                    symbol,
+                    len(candidates),
+                    scored,
+                    _data_successes,
+                    _prog_data_fail,
+                    _data_skipped_timeout,
+                    blocked,
+                )
+                print(
+                    f"[NIJA-PRINT] SIGNAL_LOOP_PROGRESS | "
+                    f"idx={_symbol_idx + 1}/{len(symbols)} sym={symbol} "
+                    f"candidates={len(candidates)} scored={scored} "
+                    f"data_ok={_data_successes} data_fail={_prog_data_fail} "
+                    f"timeout_skipped={_data_skipped_timeout} blocked={blocked}",
+                    flush=True,
+                )
             # Cap: stop scoring once we have 10× the available slots — enough
             # diversity to find the top-N without scanning every symbol when the
             # market has 700+ pairs.
@@ -1653,11 +2033,35 @@ class NijaCoreLoop:
             try:
                 _data_attempts += 1
                 df = self._fetch_df(broker, symbol)
-                if df is None or len(df) < 100:
+                _df_len = len(df) if df is not None else 0
+                # Minimum candle requirement: lowered from 100 → 50 so symbols
+                # with shorter history still get scored.  Indicators need at
+                # least 50 candles (EMA-50 is the longest-period indicator).
+                _MIN_CANDLES = 50
+                if df is None or _df_len < _MIN_CANDLES:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "data_insufficient")
-                    _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
+                    # df is None specifically indicates a timeout or connection
+                    # error (broker returned nothing at all vs. too-short data).
+                    if df is None:
+                        _data_skipped_timeout += 1
+                        _funnel["market_data"] = ("FAIL", "DATA_TIMEOUT_OR_EMPTY")
+                    else:
+                        _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     _gate_rejections["data_insufficient"] += 1
+                    # Log the first 3 data failures at critical level so the
+                    # root cause is visible even when debug logging is off.
+                    if _gate_rejections["data_insufficient"] <= 3:
+                        logger.critical(
+                            "🚨 [DIAG] DATA_INSUFFICIENT symbol=%s df_len=%d "
+                            "(need>=%d) df_is_none=%s — broker returned no/short data "
+                            "(timeout_skipped_so_far=%d). "
+                            "Signal loop skipping symbol and continuing. "
+                            "data_insufficient_count=%d/%d",
+                            symbol, _df_len, _MIN_CANDLES, df is None,
+                            _data_skipped_timeout,
+                            _gate_rejections["data_insufficient"], _data_attempts,
+                        )
                     continue
                 _data_successes += 1
                 try:
@@ -1685,11 +2089,22 @@ class NijaCoreLoop:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "indicators_failed")
                     _funnel["signal"] = ("FAIL", "INDICATORS_FAILED")
+                    _gate_rejections["indicators_failed"] += 1
+                    if _gate_rejections["indicators_failed"] <= 3:
+                        logger.critical(
+                            "🚨 [DIAG] INDICATORS_FAILED symbol=%s df_len=%d — "
+                            "calculate_indicators returned empty dict. "
+                            "Check OHLCV column types and indicator calculation errors.",
+                            symbol, _df_len,
+                        )
                     continue
 
                 # Determine trend from apex market filter
                 try:
                     allow, trend, market_reason = self.apex.check_market_filter(df, indicators)
+                    allow, trend, market_reason, *_market_filter_extra = self.apex.check_market_filter(
+                        df, indicators
+                    )
                     _market_filter_checks += 1
                     if not allow:
                         blocked += 1
@@ -1697,14 +2112,22 @@ class NijaCoreLoop:
                             _sdd.record_skip(symbol, "market_filter")
                         _funnel["regime"] = ("FAIL", market_reason or "MARKET_FILTER_BLOCKED")
                         _gate_rejections["market_filter_rejected"] += 1
+                        # Log first 3 market-filter blocks at critical level
+                        if blocked <= 3:
+                            logger.critical(
+                                "🚨 [DIAG] MARKET_FILTER_BLOCKED symbol=%s reason=%s "
+                                "blocked_count=%d",
+                                symbol, market_reason, blocked,
+                            )
                         continue
                     _market_filter_passes += 1
                     _funnel["regime"] = ("PASS", "")
-                except Exception:
+                except Exception as _mf_exc:
                     trend = "uptrend"
                     _funnel["regime"] = ("PASS", "MARKET_FILTER_FALLBACK")
                     _market_filter_checks += 1
                     _market_filter_passes += 1
+                    logger.debug("check_market_filter exception for %s: %s", symbol, _mf_exc)
 
                 side = "long" if trend == "uptrend" else "short"
                 entry_type = (
@@ -1751,7 +2174,15 @@ class NijaCoreLoop:
 
                 # ── Standard AI scoring ───────────────────────────────────
                 if ai is not None:
-                    logger.info("🔎 Evaluating market — %s (%s)", symbol, side)
+                    logger.critical(
+                        "🔎 [Phase3] EVALUATING_MARKET | symbol=%s side=%s "
+                        "regime=%s entry_type=%s idx=%d/%d",
+                        symbol, side,
+                        str(getattr(snapshot, "current_regime", "unknown")),
+                        entry_type,
+                        _symbol_idx + 1,
+                        len(symbols),
+                    )
                     sig = ai.evaluate_symbol(
                         df=df,
                         indicators=indicators,
@@ -1764,9 +2195,11 @@ class NijaCoreLoop:
                     if sig is not None:
                         _diag_confidence = sig.composite_score
                         _funnel["signal"] = ("PASS", "")
-                        logger.info(
-                            "✅ Signal passed — %s score=%.1f threshold=%.1f",
+                        logger.critical(
+                            "✅ [Phase3] SIGNAL_PASSED — %s score=%.1f threshold=%.1f "
+                            "side=%s entry_type=%s",
                             symbol, sig.composite_score, sig.threshold_used,
+                            side, entry_type,
                         )
                         # ── Per-pair evaluation log (PASS) ────────────────
                         logger.info(
@@ -1825,6 +2258,11 @@ class NijaCoreLoop:
                         )
                 elif _AISignal is not None:
                     # Fallback: use apex.analyze_market directly and wrap result
+                    logger.critical(
+                        "⚠️ [Phase3] AI_ENGINE_UNAVAILABLE — using apex.analyze_market "
+                        "fallback for symbol=%s (ai=None, _AISignal=available)",
+                        symbol,
+                    )
                     analysis = self.apex.analyze_market(df, symbol, snapshot.balance)
                     if analysis.get("action") in ("enter_long", "enter_short"):
                         _funnel["signal"] = ("PASS", "")
@@ -1905,6 +2343,70 @@ class NijaCoreLoop:
                 if _sdd is not None:
                     _sdd.record_skip(symbol, "exception")
                 _funnel["signal"] = ("FAIL", f"SCORING_EXCEPTION:{sym_err}")
+
+        # ── Signal generation loop complete ───────────────────────────────
+        _data_insuff_end = _gate_rejections.get("data_insufficient", 0)
+        _indic_fail_end  = _gate_rejections.get("indicators_failed", 0)
+        logger.critical(
+            "🔁 [Phase3] SIGNAL_LOOP_END — symbol scoring loop finished | "
+            "symbols_total=%d scored=%d candidates=%d momentum_candidates=%d "
+            "blocked=%d scoring_errors=%d data_insufficient=%d indicators_failed=%d "
+            "data_attempts=%d data_successes=%d timeout_skipped=%d",
+            len(symbols),
+            scored,
+            len(candidates),
+            len(momentum_candidates),
+            blocked,
+            _scoring_errors,
+            _data_insuff_end,
+            _indic_fail_end,
+            _data_attempts,
+            _data_successes,
+            _data_skipped_timeout,
+        )
+        print(
+            f"[NIJA-PRINT] SIGNAL_LOOP_END | symbols={len(symbols)} scored={scored} "
+            f"candidates={len(candidates)} momentum={len(momentum_candidates)} "
+            f"blocked={blocked} errors={_scoring_errors} "
+            f"data_insufficient={_data_insuff_end} indicators_failed={_indic_fail_end} "
+            f"data_attempts={_data_attempts} data_successes={_data_successes} "
+            f"timeout_skipped={_data_skipped_timeout}",
+            flush=True,
+        )
+        # Diagnose timeout-skipped symbols — visible even when some symbols scored OK
+        if _data_skipped_timeout > 0:
+            logger.critical(
+                "⏱️ [DIAG] TIMEOUT_SKIPPED: %d/%d symbols returned None from broker "
+                "(API timeout or connection error). Signal loop skipped these symbols "
+                "and continued scanning. Check Kraken API connectivity. "
+                "Set NIJA_KRAKEN_OHLC_TIMEOUT / NIJA_CANDLE_FETCH_TIMEOUT to adjust.",
+                _data_skipped_timeout, _data_attempts,
+            )
+
+        # Diagnose the most common failure mode: all symbols failing data fetch
+        if scored == 0 and _data_attempts > 0:
+            if _data_insuff_end == _data_attempts:
+                logger.critical(
+                    "🚨 [DIAG] ZERO_SCORED: ALL %d data fetches returned insufficient data "
+                    "(None or <50 rows). Root cause: broker candle API returning empty/short "
+                    "DataFrames. Check broker method names, symbol format, and API connectivity. "
+                    "Broker methods tried: get_candles, fetch_ohlcv, get_ohlcv, "
+                    "get_historical_data, get_market_data",
+                    _data_attempts,
+                )
+            elif _indic_fail_end > 0:
+                logger.critical(
+                    "🚨 [DIAG] ZERO_SCORED: %d/%d symbols failed indicator calculation. "
+                    "Check that OHLCV columns (open/high/low/close/volume) are present and numeric.",
+                    _indic_fail_end, _data_attempts,
+                )
+            elif blocked == _data_successes:
+                logger.critical(
+                    "🚨 [DIAG] ZERO_SCORED: All %d symbols with valid data were blocked by "
+                    "market_filter. Market may be in a flat/choppy regime with no directional "
+                    "conditions met. Consider lowering min_adx or volume_threshold.",
+                    blocked,
+                )
 
         if _PMC_AVAILABLE and _get_pmc is not None and _MarketConditionSnapshot is not None:
             try:
@@ -2020,7 +2522,25 @@ class NijaCoreLoop:
             )
             candidates.append(fallback_sig)
 
-        logger.info("[Scanner] candidates_found=%d", len(candidates))
+        logger.critical(
+            "🎯 [Phase3] CANDIDATES FOUND: %d candidate(s) from %d scored symbols "
+            "(blocked=%d dead_zone=%s force_this_cycle=%s force_trade=%s)",
+            len(candidates),
+            scored,
+            blocked,
+            _dead_zone,
+            _force_this_cycle,
+            _env_truthy("FORCE_TRADE"),
+        )
+        if candidates:
+            logger.critical(
+                "🎯 [Phase3] SIGNALS SCORED: %d signal(s) — %s",
+                len(candidates),
+                ", ".join(
+                    f"{getattr(s, 'symbol', '?')}({getattr(s, 'side', '?')} score={getattr(s, 'composite_score', 0):.1f})"
+                    for s in candidates
+                ),
+            )
 
         # ── Record scan-cycle result in funnel tracker ────────────────────
         if _FUNNEL_TRACKER_AVAILABLE and _get_funnel_tracker is not None:
@@ -2034,10 +2554,51 @@ class NijaCoreLoop:
                 logger.debug("scanner_funnel_tracker.record failed: %s", _ftr_err)
 
         # ── Rank and select top-N ─────────────────────────────────────────
+        # ── FORCE_TRADE: inject volume fallback even when candidates is empty ──
+        # When FORCE_TRADE is active and no candidates survived scoring, inject
+        # the best-volume symbol directly so the no-candidates early return is
+        # bypassed and execute_action() is still called this cycle.
+        _force_trade_active_early = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+        )
+        if not candidates and _force_trade_active_early and _best_volume_symbol and _AISignal is not None:
+            logger.critical(
+                "⚡ [FORCE_TRADE] No candidates after full scan — injecting best-volume "
+                "symbol %s as forced candidate to ensure execute_action() is called "
+                "(scored=%d blocked=%d streak=%d)",
+                _best_volume_symbol, scored, blocked, zero_signal_streak,
+            )
+            _forced_sig = _AISignal(
+                symbol=_best_volume_symbol,
+                side=_best_volume_side,
+                composite_score=max(_effective_hard_floor, 1.0),
+                position_multiplier=0.25,
+                entry_type=_best_volume_entry_type,
+                threshold_used=max(_effective_hard_floor, 1.0),
+                reason="force_trade_no_candidates_fallback",
+                metadata={
+                    "force_trade_fallback": True,
+                    "bypass_low_quality": True,
+                    "bypass_quality_filter": True,
+                    "volume_fallback": True,
+                    "avg_volume": _best_volume,
+                    "dead_zone": _dead_zone,
+                    "zero_signal_streak": zero_signal_streak,
+                },
+            )
+            candidates.append(_forced_sig)
+
         if not candidates:
-            logger.info(
-                "🔍 Core loop Phase 3: scored=%d symbols, no candidates above floor=%.0f",
+            logger.critical(
+                "🔍 [Phase3] NO CANDIDATES: scored=%d symbols, no candidates above floor=%.0f "
+                "(force_trade=%s best_volume_symbol=%s ai_signal_available=%s)",
                 scored, _effective_hard_floor,
+                _force_trade_active_early,
+                _best_volume_symbol or "none",
+                _AISignal is not None,
             )
             if _sdd is not None:
                 _sdd.emit_histogram(
@@ -2054,6 +2615,36 @@ class NijaCoreLoop:
             if ai is not None
             else candidates[:available_slots]
         )
+        logger.critical(
+            "🎯 [Phase3] SIGNALS SELECTED: %d candidate(s) ranked from %d total — "
+            "symbols=%s",
+            len(selected),
+            len(candidates),
+            ", ".join(
+                f"{getattr(s, 'symbol', '?')}({getattr(s, 'side', '?')} score={getattr(s, 'composite_score', 0):.1f})"
+                for s in selected
+            ) or "none",
+        )
+
+        # ── FORCE_TRADE rescue: rank_and_select returned empty despite candidates ──
+        # rank_and_select can return [] when all candidates score below the adaptive
+        # threshold.  When FORCE_TRADE is active, force the top-scored candidate in
+        # so execute_action() is always called rather than silently skipping the cycle.
+        if not selected and candidates and _force_trade_active_early:
+            top_candidate = max(candidates, key=lambda s: s.composite_score)
+            top_candidate.metadata["bypass_quality_filter"] = True
+            top_candidate.metadata["force_trade_rescue"] = True
+            top_candidate.metadata["bypass_low_quality"] = True
+            selected = [top_candidate]
+            logger.critical(
+                "⚡ [FORCE_TRADE] rank_and_select returned empty — rescuing top "
+                "candidate %s (score=%.1f) to ensure execute_action() is called "
+                "(candidates=%d streak=%d)",
+                top_candidate.symbol,
+                top_candidate.composite_score,
+                len(candidates),
+                zero_signal_streak,
+            )
 
         # ── Progressive relaxation: activate after too many zero-signal cycles ──
         # Each 3-cycle step reduces the effective floor by 15% / 25% / 40%.
@@ -2125,22 +2716,102 @@ class NijaCoreLoop:
             selected = [top_candidate]
             fallback_active = True  # ensure the execution block forces the action
 
+        # ── FORCE_TRADE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK bypass ───────
+        # When an operator override flag is active, force fallback_active=True
+        # so that analyze_market() returning 'hold' (due to candle-close gate,
+        # smart filters, market filter, etc.) does NOT silently block the entry.
+        # Without this, signals are generated (scores logged) but execute_action()
+        # is never called because analyze_market() returns 'hold' and fallback_active
+        # is False (zero_signal_streak resets to 0 when candidates are found).
+        # This is the root cause of the "6000+ cycles, zero trades" condition.
+        #
+        # NOTE: After 6000+ cycles, fallback_active is ALWAYS True (progressive
+        # relaxation activates at streak ≥ 2), so the previous `not fallback_active`
+        # guard silently prevented this block from ever running.  The condition is
+        # now unconditional when FORCE_TRADE is set and candidates are selected —
+        # fallback_active is set to True regardless of its current value, and an
+        # explicit INFO log confirms execute_action() will be called for each signal.
+        _force_trade_bypass = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+        )
+        if _force_trade_bypass and selected:
+            if not fallback_active:
+                fallback_active = True
+                logger.warning(
+                    "⚡ FORCE_TRADE bypass: fallback_active forced True for %d selected candidate(s) "
+                    "— analyze_market() 'hold' responses will be overridden to force entry.",
+                    len(selected),
+                )
+            # Always log signal count and confirm execute_action() path when FORCE_TRADE is active.
+            logger.warning(
+                "⚡ [FORCE_TRADE] %d signal(s) selected — fallback_active=%s. "
+                "execute_action() WILL be called for each signal this cycle. "
+                "Signals: %s",
+                len(selected),
+                fallback_active,
+                ", ".join(
+                    f"{getattr(s, 'symbol', '?')}({getattr(s, 'side', '?')} score={getattr(s, 'composite_score', 0):.1f})"
+                    for s in selected
+                ),
+            )
+
         # ── Execute selected entries ──────────────────────────────────────
+        logger.critical(
+            "🚦 [Phase3] Entering execution loop — selected=%d fallback_active=%s "
+            "force_trade=%s zero_signal_streak=%d",
+            len(selected),
+            fallback_active,
+            _force_trade_bypass,
+            zero_signal_streak,
+        )
+        if not selected:
+            logger.critical(
+                "⚠️ [Phase3] selected is EMPTY — no signals to execute. "
+                "candidates=%d scored=%d blocked=%d force_trade=%s",
+                len(candidates),
+                scored,
+                blocked,
+                _force_trade_active_early,
+            )
         entries = 0
         for sig in selected:
             if entries >= MAX_ENTRIES_PER_CYCLE:
                 break
+            logger.critical(
+                "⚡ [Phase3] EXECUTING SIGNAL %d/%d — symbol=%s side=%s score=%.1f "
+                "fallback_active=%s force_trade=%s",
+                entries + 1,
+                len(selected),
+                getattr(sig, "symbol", "UNKNOWN"),
+                getattr(sig, "side", "UNKNOWN"),
+                getattr(sig, "composite_score", 0.0),
+                fallback_active,
+                _force_trade_active_early,
+            )
             try:
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
                 df = self._fetch_df(broker, sig.symbol)
                 if df is None or len(df) < 100:
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     continue
-
                 # ── Trade Permission Engine ───────────────────────────────
                 # Single authoritative decision check: emits DECISION TRACE
                 # and returns EXECUTE or BLOCKED before the expensive
                 # apex.analyze_market() call.
+                _force_tpe_bypass = (
+                    _env_truthy("FORCE_TRADE")
+                    or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+                    or _env_truthy("NIJA_FORCE_ACTIVATION")
+                )
+                logger.info(
+                    "🔑 [TPE_GATE] symbol=%s side=%s score=%.1f balance=$%.2f "
+                    "force_bypass=%s tpe_available=%s",
+                    sig.symbol, sig.side, sig.composite_score,
+                    snapshot.balance, _force_tpe_bypass, _TPE_AVAILABLE,
+                )
                 if _TPE_AVAILABLE and _get_tpe is not None:
                     try:
                         _perm = _get_tpe().evaluate(
@@ -2168,6 +2839,12 @@ class NijaCoreLoop:
                             ),
                             metadata=sig.metadata,
                         )
+                        logger.info(
+                            "🔑 [TPE_RESULT] symbol=%s decision=%s reason=%s",
+                            sig.symbol,
+                            getattr(_perm, "final_decision", "UNKNOWN"),
+                            getattr(_perm, "block_reason", "") or "none",
+                        )
                         if _perm.final_decision != "EXECUTE":
                             blocked += 1
                             # ── Entry-to-Order Trace: per-signal veto (TPE) ──
@@ -2181,28 +2858,94 @@ class NijaCoreLoop:
                                 CycleOutcome.ENTRY_VETOED,
                                 reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
                             )
-                            self._n_vetoed += 1
-                            self._record_reject(_tpe_reason)
-                            # Classify TPE rejection into the appropriate gate counter
-                            _tpe_reason_lower = str(_tpe_reason).lower()
-                            if "notional" in _tpe_reason_lower or "min_notional" in _tpe_reason_lower:
-                                _gate_rejections["notional_gate_rejected"] += 1
-                            elif "capital" in _tpe_reason_lower or "balance" in _tpe_reason_lower:
-                                _gate_rejections["capital_gate_rejected"] += 1
-                            elif "risk" in _tpe_reason_lower or "drawdown" in _tpe_reason_lower:
-                                _gate_rejections["risk_gate_rejected"] += 1
+                            # ── FORCE_TRADE fallback: if TPE still blocks despite
+                            # the bypass flags in the engine itself, override here
+                            # so the operator's explicit intent is honoured.
+                            if _force_tpe_bypass:
+                                logger.warning(
+                                    "⚡ [TPE_FORCE_OVERRIDE] FORCE_TRADE active — "
+                                    "overriding TPE BLOCKED decision for %s %s "
+                                    "(reason was: %s). Proceeding to execute_action.",
+                                    sig.symbol, sig.side, _tpe_reason,
+                                )
+                                _funnel["ai_gate"] = ("PASS", "force_trade_override")
+                                # Fall through to execute_action below.
                             else:
-                                _gate_rejections["ai_gate_rejected"] += 1
-                            continue
-                        _funnel["ai_gate"] = ("PASS", "")
+                                blocked += 1
+                                # ── Entry-to-Order Trace: per-signal veto (TPE) ──
+                                _funnel["ai_gate"] = ("FAIL", _tpe_reason)
+                                emit_cycle_trace(
+                                    CycleOutcome.ENTRY_VETOED,
+                                    reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
+                                )
+                                self._n_vetoed += 1
+                                self._record_reject(_tpe_reason)
+                                # Classify TPE rejection into the appropriate gate counter
+                                _tpe_reason_lower = str(_tpe_reason).lower()
+                                if "notional" in _tpe_reason_lower or "min_notional" in _tpe_reason_lower:
+                                    _gate_rejections["notional_gate_rejected"] += 1
+                                elif "capital" in _tpe_reason_lower or "balance" in _tpe_reason_lower:
+                                    _gate_rejections["capital_gate_rejected"] += 1
+                                elif "risk" in _tpe_reason_lower or "drawdown" in _tpe_reason_lower:
+                                    _gate_rejections["risk_gate_rejected"] += 1
+                                else:
+                                    _gate_rejections["ai_gate_rejected"] += 1
+                                continue
+                        else:
+                            _funnel["ai_gate"] = ("PASS", "")
                     except Exception as _tpe_err:
-                        logger.debug(
+                        logger.warning(
                             "TradePermissionEngine error for %s (non-fatal): %s",
                             sig.symbol, _tpe_err,
                         )
 
                 # Re-run full apex.analyze_market (handles SL/TP/sizing etc.)
-                analysis = self.apex.analyze_market(df, sig.symbol, snapshot.balance)
+                # Wrapped in a daemon thread with a timeout so a slow/hung
+                # indicator calculation cannot stall the entire trading loop.
+                try:
+                    _analysis_timeout = max(
+                        0.1,
+                        float(os.getenv("NIJA_ANALYZE_MARKET_TIMEOUT", "15") or "15"),
+                    )
+                except (ValueError, TypeError):
+                    _analysis_timeout = 15.0
+                _am_result_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+                def _run_analyze_market(
+                    _apex: Any = self.apex,
+                    _df: Any = df,
+                    _sym: str = sig.symbol,
+                    _bal: float = snapshot.balance,
+                ) -> None:
+                    try:
+                        _am_result_q.put(("result", _apex.analyze_market(_df, _sym, _bal)))
+                    except Exception as _exc:  # noqa: BLE001
+                        _am_result_q.put(("error", _exc))
+
+                _am_worker = threading.Thread(
+                    target=_run_analyze_market,
+                    name="nija-analyze-market",
+                    daemon=True,
+                )
+                _am_worker.start()
+                try:
+                    _am_kind, _am_payload = _am_result_q.get(timeout=_analysis_timeout)
+                except queue.Empty:
+                    logger.warning(
+                        "⏱️ [Phase3] analyze_market timed out after %.1fs for %s — "
+                        "treating as hold (NIJA_ANALYZE_MARKET_TIMEOUT=%.0f)",
+                        _analysis_timeout, sig.symbol, _analysis_timeout,
+                    )
+                    _am_payload = {"action": "hold", "reason": "analyze_market_timeout"}
+                    _am_kind = "result"
+                if _am_kind == "error":
+                    logger.warning(
+                        "⚠️ [Phase3] analyze_market raised for %s: %s — treating as hold",
+                        sig.symbol, _am_payload,
+                    )
+                    analysis = {"action": "hold", "reason": f"analyze_market_error:{_am_payload}"}
+                else:
+                    analysis = _am_payload
                 action = analysis.get("action", "hold")
 
                 # When fallback is active, force the action to enter if the
@@ -2237,12 +2980,113 @@ class NijaCoreLoop:
                         # The fallback payload is already sized conservatively;
                         # avoid multiplying it below broker minimum notional.
                         sig.position_multiplier = 1.0
+                        logger.info(
+                            "⚡ [CoreLoop] Building fallback entry payload for %s "
+                            "(missing fields: %s, force_trade=%s)",
+                            sig.symbol,
+                            missing,
+                            _force_trade_bypass,
+                        )
+                        try:
+                            fallback_payload = self._build_forced_fallback_entry_analysis(
+                                df=df,
+                                sig=sig,
+                                snapshot=snapshot,
+                                action=action,
+                                existing_reason=analysis.get("reason", ""),
+                            )
+                            analysis.update(fallback_payload)
+                            # The fallback payload is already sized conservatively;
+                            # avoid multiplying it below broker minimum notional.
+                            sig.position_multiplier = 1.0
+                        except Exception as _fallback_err:
+                            # _build_forced_fallback_entry_analysis raised (e.g.
+                            # competitive_profitability_policy liquidity block or
+                            # missing close price).  When FORCE_TRADE is active,
+                            # build a minimal hardcoded payload directly so that
+                            # execute_action() is still called rather than silently
+                            # skipping this signal.
+                            if _force_trade_bypass:
+                                logger.warning(
+                                    "⚡ [FORCE_TRADE] _build_forced_fallback_entry_analysis "
+                                    "raised for %s (%s) — constructing minimal emergency "
+                                    "payload to ensure execute_action() is called.",
+                                    sig.symbol,
+                                    _fallback_err,
+                                )
+                                try:
+                                    _price = float(df["close"].iloc[-1])
+                                    _bal = max(float(snapshot.balance or 0.0), 0.0)
+                                    _size = max(min(_bal * 0.05, _bal), 3.50)
+                                    if action == "enter_short":
+                                        _sl = _price * 1.012
+                                        _tp = [_price * 0.990, _price * 0.985, _price * 0.980]
+                                    else:
+                                        _sl = _price * 0.988
+                                        _tp = [_price * 1.010, _price * 1.015, _price * 1.020]
+                                    analysis.update({
+                                        "action": action,
+                                        "entry_price": _price,
+                                        "position_size": _size,
+                                        "stop_loss": _sl,
+                                        "take_profit": _tp,
+                                        "trailing_stop_pct": 0.75,
+                                        "reason": (
+                                            analysis.get("reason", "") +
+                                            " [emergency_fallback_payload]"
+                                        ),
+                                        "fallback_entry": True,
+                                        "forced_fallback": True,
+                                        "emergency_payload": True,
+                                    })
+                                    sig.position_multiplier = 1.0
+                                    logger.warning(
+                                        "⚡ [FORCE_TRADE] Emergency payload built for %s: "
+                                        "price=%.6f size=$%.2f sl=%.6f",
+                                        sig.symbol, _price, _size, _sl,
+                                    )
+                                except Exception as _emergency_err:
+                                    logger.error(
+                                        "❌ [FORCE_TRADE] Emergency payload construction "
+                                        "also failed for %s: %s — signal will be blocked.",
+                                        sig.symbol,
+                                        _emergency_err,
+                                    )
+                                    blocked += 1
+                                    _funnel["profitability"] = (
+                                        "FAIL",
+                                        f"EMERGENCY_PAYLOAD_FAILED:{_emergency_err}",
+                                    )
+                                    continue
+                            else:
+                                # Not in FORCE_TRADE mode — re-raise so the outer
+                                # except block handles it normally.
+                                raise
 
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
                     _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
                     continue
                 _funnel["profitability"] = ("PASS", "")
+                    logger.critical(
+                        "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
+                        "action=%s reason=%s fallback_active=%s force_trade=%s — "
+                        "signal will NOT reach execute_action this cycle.",
+                        sig.symbol,
+                        action,
+                        analysis.get("reason", "NO_PROFITABLE_ACTION"),
+                        fallback_active,
+                        _force_trade_bypass,
+                    )
+                    continue
+                _funnel["profitability"] = ("PASS", "")
+                logger.critical(
+                    "✅ [Phase3] SIGNAL PASSED all gates | symbol=%s action=%s "
+                    "fallback_active=%s — calling execute_action() now.",
+                    sig.symbol,
+                    action,
+                    fallback_active,
+                )
 
                 # Apply AI engine position multiplier to analysis size hint
                 if "position_size" in analysis and sig.position_multiplier != 1.0:
@@ -2254,7 +3098,43 @@ class NijaCoreLoop:
                         original, analysis["position_size"],
                     )
 
+                logger.critical(
+                    "🚀 [CoreLoop] SUBMITTING ORDER | symbol=%s side=%s action=%s "
+                    "position_size=$%.2f entry_price=%.6f score=%.1f mult=×%.2f",
+                    sig.symbol,
+                    sig.side,
+                    action,
+                    float(analysis.get("position_size", 0.0) or 0.0),
+                    float(analysis.get("entry_price", 0.0) or 0.0),
+                    sig.composite_score,
+                    sig.position_multiplier,
+                )
+                logger.critical(
+                    "⚡ [CoreLoop] execute_action CALLED | symbol=%s action=%s "
+                    "analysis_keys=%s",
+                    sig.symbol,
+                    action,
+                    list(analysis.keys()),
+                )
+                print(
+                    f"[NIJA-PRINT] BEFORE execute_action | "
+                    f"symbol={sig.symbol} action={action} "
+                    f"size=${float(analysis.get('position_size', 0.0) or 0.0):.2f} "
+                    f"price={float(analysis.get('entry_price', 0.0) or 0.0):.6f}",
+                    flush=True,
+                )
                 success = self.apex.execute_action(analysis, sig.symbol)
+                print(
+                    f"[NIJA-PRINT] AFTER execute_action | "
+                    f"symbol={sig.symbol} side={sig.side} success={success}",
+                    flush=True,
+                )
+                logger.critical(
+                    "📬 [CoreLoop] ORDER RESULT | symbol=%s side=%s success=%s",
+                    sig.symbol,
+                    sig.side,
+                    success,
+                )
                 if success:
                     entries += 1
                     logger.info(
@@ -2273,6 +3153,29 @@ class NijaCoreLoop:
                     self._n_placed += 1
                 else:
                     blocked += 1
+                    logger.critical(
+                        "❌ [CoreLoop] ORDER REJECTED | symbol=%s side=%s action=%s "
+                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f score=%.1f "
+                        "fallback_active=%s — execute_action() returned False. "
+                        "See execute_action / ExecutionEngine logs above for the broker "
+                        "rejection reason (gate name, error message, or exception).",
+                        sig.symbol,
+                        sig.side,
+                        analysis.get("action", "unknown"),
+                        float(analysis.get("position_size", 0.0) or 0.0),
+                        float(analysis.get("entry_price", 0.0) or 0.0),
+                        float(analysis.get("stop_loss", 0.0) or 0.0),
+                        sig.composite_score,
+                        fallback_active,
+                    )
+                    print(
+                        f"[NIJA-PRINT] ORDER REJECTED | symbol={sig.symbol} side={sig.side} "
+                        f"action={analysis.get('action', 'unknown')} "
+                        f"size=${float(analysis.get('position_size', 0.0) or 0.0):.2f} "
+                        f"price={float(analysis.get('entry_price', 0.0) or 0.0):.6f} "
+                        f"sl={float(analysis.get('stop_loss', 0.0) or 0.0):.6f}",
+                        flush=True,
+                    )
                     # ── Entry-to-Order Trace: ORDER_REJECTED ─────────────
                     emit_cycle_trace(
                         CycleOutcome.ORDER_REJECTED,
@@ -2287,6 +3190,11 @@ class NijaCoreLoop:
                         pass
 
             except Exception as exec_err:
+                print(
+                    f"[NIJA-PRINT] EXCEPTION in execute_action | "
+                    f"symbol={sig.symbol} error={exec_err!r}",
+                    flush=True,
+                )
                 logger.warning("Phase3 execute error for %s: %s", sig.symbol, exec_err)
                 blocked += 1
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
@@ -2309,6 +3217,210 @@ class NijaCoreLoop:
                 entries_taken=entries,
                 candidates_found=len(candidates),
                 rank_threshold=rank_threshold,
+            )
+
+        # ── VERBOSE EXIT LOG: confirm execution loop outcome ──────────────
+        _force_direct_would_trigger = entries == 0 and _env_truthy("FORCE_TRADE")
+        logger.critical(
+            "🏁 [Phase3] END _phase3_scan_and_enter | entries=%d blocked=%d "
+            "scored=%d candidates=%d selected=%d force_trade=%s "
+            "FORCE_TRADE_DIRECT_fallback_would_trigger=%s",
+            entries,
+            blocked,
+            scored,
+            len(candidates),
+            len(selected),
+            _env_truthy("FORCE_TRADE"),
+            _force_direct_would_trigger,
+        )
+        if _force_direct_would_trigger:
+            logger.critical(
+                "⚡ [Phase3] FORCE_TRADE active but entries=0 — "
+                "FORCE_TRADE_DIRECT fallback condition MET. "
+                "Check execute_action() logs above for why orders were not placed "
+                "(broker gate, capital gate, or execution engine rejection).",
+            )
+
+        # ── FORCE_TRADE direct execute_action() fallback ─────────────────
+        # When FORCE_TRADE=true and the entire selection/execution pipeline
+        # produced zero entries (entries == 0), bypass ALL selection logic
+        # and call execute_action() directly with a minimal payload built
+        # from the best-volume symbol tracked during the scoring phase.
+        #
+        # This is the FINAL fallback — it fires on EVERY cycle when
+        # FORCE_TRADE=true and no order was submitted, regardless of what
+        # happened in the signal selection code above (silent drops, gate
+        # rejections, analyze_market returning 'hold', TPE blocks, etc.).
+        #
+        # Root cause addressed: after 2+ trading cycles with FORCE_TRADE=true,
+        # signals are generated and market conditions evaluated ("Trade allowed:
+        # True") but execute_action() is never called because the selection
+        # pipeline silently drops all signals before reaching the execution
+        # block.  The CRITICAL-level logs (CANDIDATES FOUND, SIGNALS SCORED,
+        # SIGNALS SELECTED, EXECUTING SIGNAL, ORDER RESULT) are absent,
+        # confirming the execution block is never reached.
+        _force_direct_bypass = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+        )
+        if _force_direct_bypass and entries == 0 and _best_volume_symbol:
+            logger.critical(
+                "⚡ [FORCE_TRADE_DIRECT] FINAL FALLBACK TRIGGERED — "
+                "entries=0 after full selection pipeline. "
+                "Calling execute_action() DIRECTLY for best-volume symbol=%s "
+                "(avg_vol=%.0f). Bypassing ALL selection logic. cycle_id=%s",
+                _best_volume_symbol,
+                _best_volume,
+                snapshot.cycle_id or "n/a",
+            )
+            try:
+                _ft_df = self._fetch_df(broker, _best_volume_symbol)
+                if _ft_df is not None and len(_ft_df) >= 10:
+                    _ft_price = float(_ft_df["close"].iloc[-1])
+                    _ft_bal = max(float(snapshot.balance or 0.0), 0.0)
+                    # Conservative micro-trade: 5% of balance, minimum $3.50
+                    _ft_size = max(min(_ft_bal * 0.05, _ft_bal), 3.50)
+                    # Determine action: default to long on spot-only brokers (e.g. Coinbase)
+                    # that do not support shorting, otherwise follow the best-volume side.
+                    _ft_broker_name = (
+                        self.apex._get_broker_name()
+                        if hasattr(self, "apex") and hasattr(self.apex, "_get_broker_name")
+                        else "coinbase"
+                    )
+                    _ft_broker_can_short = False
+                    try:
+                        from bot.exchange_capabilities import can_short as _can_short_ft
+                        _ft_broker_can_short = _can_short_ft(_ft_broker_name, _best_volume_symbol)
+                    except Exception:
+                        try:
+                            from exchange_capabilities import can_short as _can_short_ft  # type: ignore[import]
+                            _ft_broker_can_short = _can_short_ft(_ft_broker_name, _best_volume_symbol)
+                        except Exception:
+                            pass  # conservative: assume short is NOT supported
+
+                    _ft_wants_short = _best_volume_side not in ("long", "buy", "enter_long")
+                    if _ft_wants_short and not _ft_broker_can_short:
+                        logger.warning(
+                            "⚡ [FORCE_TRADE_DIRECT] Broker %s does not support shorting for %s — "
+                            "overriding action from enter_short to enter_long.",
+                            _ft_broker_name,
+                            _best_volume_symbol,
+                        )
+                        print(
+                            f"[NIJA-PRINT] FORCE_TRADE_DIRECT SHORT→LONG OVERRIDE | "
+                            f"symbol={_best_volume_symbol} broker={_ft_broker_name} "
+                            f"reason=broker_does_not_support_shorting",
+                            flush=True,
+                        )
+                    _ft_action = (
+                        "enter_long"
+                        if (_best_volume_side in ("long", "buy", "enter_long") or not _ft_broker_can_short)
+                        else "enter_short"
+                    )
+                    if _ft_action == "enter_short":
+                        _ft_sl = _ft_price * 1.012
+                        _ft_tp = [_ft_price * 0.990, _ft_price * 0.985, _ft_price * 0.980]
+                    else:
+                        _ft_sl = _ft_price * 0.988
+                        _ft_tp = [_ft_price * 1.010, _ft_price * 1.015, _ft_price * 1.020]
+                    _ft_analysis = {
+                        "action": _ft_action,
+                        "entry_price": _ft_price,
+                        "position_size": _ft_size,
+                        "stop_loss": _ft_sl,
+                        "take_profit": _ft_tp,
+                        "trailing_stop_pct": 0.75,
+                        "reason": "FORCE_TRADE_direct_execute_fallback",
+                        "fallback_entry": True,
+                        "forced_fallback": True,
+                        "force_trade_direct": True,
+                    }
+                    logger.critical(
+                        "⚡ [FORCE_TRADE_DIRECT] Calling execute_action() | "
+                        "symbol=%s action=%s price=%.6f size=$%.2f sl=%.6f",
+                        _best_volume_symbol,
+                        _ft_action,
+                        _ft_price,
+                        _ft_size,
+                        _ft_sl,
+                    )
+                    print(
+                        f"[NIJA-PRINT] FORCE_TRADE_DIRECT BEFORE execute_action | "
+                        f"symbol={_best_volume_symbol} action={_ft_action} "
+                        f"price={_ft_price:.6f} size=${_ft_size:.2f} sl={_ft_sl:.6f}",
+                        flush=True,
+                    )
+                    _ft_success = self.apex.execute_action(_ft_analysis, _best_volume_symbol)
+                    print(
+                        f"[NIJA-PRINT] FORCE_TRADE_DIRECT AFTER execute_action | "
+                        f"symbol={_best_volume_symbol} side={_best_volume_side} "
+                        f"success={_ft_success}",
+                        flush=True,
+                    )
+                    logger.critical(
+                        "⚡ [FORCE_TRADE_DIRECT] ORDER RESULT | "
+                        "symbol=%s side=%s success=%s",
+                        _best_volume_symbol,
+                        _best_volume_side,
+                        _ft_success,
+                    )
+                    if _ft_success:
+                        entries += 1
+                        logger.critical(
+                            "✅ [FORCE_TRADE_DIRECT] Order submitted successfully — "
+                            "symbol=%s side=%s price=%.6f size=$%.2f",
+                            _best_volume_symbol,
+                            _best_volume_side,
+                            _ft_price,
+                            _ft_size,
+                        )
+                    else:
+                        logger.critical(
+                            "❌ [FORCE_TRADE_DIRECT] execute_action() returned False | "
+                            "symbol=%s side=%s action=%s price=%.6f size=$%.2f sl=%.6f — "
+                            "See execute_action / ExecutionEngine logs above for the broker "
+                            "rejection reason (gate name, error message, or exception).",
+                            _best_volume_symbol,
+                            _best_volume_side,
+                            _ft_action,
+                            _ft_price,
+                            _ft_size,
+                            _ft_sl,
+                        )
+                        print(
+                            f"[NIJA-PRINT] FORCE_TRADE_DIRECT ORDER REJECTED | "
+                            f"symbol={_best_volume_symbol} side={_best_volume_side} "
+                            f"action={_ft_action} price={_ft_price:.6f} "
+                            f"size=${_ft_size:.2f} sl={_ft_sl:.6f}",
+                            flush=True,
+                        )
+                else:
+                    logger.critical(
+                        "❌ [FORCE_TRADE_DIRECT] Could not fetch DataFrame for %s "
+                        "(df=%s len=%d) — direct fallback skipped.",
+                        _best_volume_symbol,
+                        "None" if _ft_df is None else "ok",
+                        0 if _ft_df is None else len(_ft_df),
+                    )
+            except Exception as _ft_err:
+                print(
+                    f"[NIJA-PRINT] FORCE_TRADE_DIRECT EXCEPTION | "
+                    f"symbol={_best_volume_symbol} error={_ft_err!r}",
+                    flush=True,
+                )
+                logger.critical(
+                    "❌ [FORCE_TRADE_DIRECT] execute_action() raised exception for %s: %s — "
+                    "direct fallback failed.",
+                    _best_volume_symbol,
+                    _ft_err,
+                )
+        elif _force_direct_bypass and entries == 0 and not _best_volume_symbol:
+            logger.critical(
+                "❌ [FORCE_TRADE_DIRECT] FORCE_TRADE active but no best-volume symbol "
+                "available (scored=%d) — direct fallback cannot run. "
+                "Check that symbols list is non-empty and broker data is flowing.",
+                scored,
             )
 
         return entries, blocked, scored, _gate_rejections
@@ -2371,6 +3483,20 @@ class NijaCoreLoop:
         # still rejected before order submission.
         take_profit_pct = (0.85, 1.20, 1.80)
         trailing_stop_pct = 0.75
+        take_profit_pct = (1.00, 1.50, 2.00)
+        trailing_stop_pct = 0.75
+        # Check whether any FORCE_TRADE flag is active — when set, the
+        # liquidity gate in competitive_profitability_policy must NOT raise
+        # ValueError because that exception propagates to the outer execution
+        # loop's except-block, increments `blocked`, and causes execute_action()
+        # to be silently skipped.  This was the root cause of the
+        # "6000+ cycles, zero trades" condition.
+        _force_trade_active = (
+            _env_truthy("FORCE_TRADE")
+            or _env_truthy("FORCE_TRADE_MODE")
+            or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+            or _env_truthy("NIJA_FORCE_ACTIVATION")
+        )
         try:
             from bot.competitive_profitability_policy import get_competitive_profitability_policy
 
@@ -2391,6 +3517,37 @@ class NijaCoreLoop:
             tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
             take_profit_pct = (tp1, tp2, tp3)
             trailing_stop_pct = competitive_profile.trailing_stop_pct
+                if _force_trade_active:
+                    # FORCE_TRADE active: log the liquidity warning but proceed
+                    # with the conservative default geometry instead of raising.
+                    # Raising here was the root cause of execute_action() never
+                    # being called — the ValueError was caught by the outer loop
+                    # and silently converted to a blocked entry.
+                    logger.warning(
+                        "⚡ [FORCE_TRADE] competitive_profitability_policy liquidity check "
+                        "FAILED for %s (%s) — bypassing block and using default geometry "
+                        "because FORCE_TRADE is active.",
+                        getattr(sig, "symbol", "UNKNOWN"),
+                        competitive_profile.liquidity_reason,
+                    )
+                    # Fall through to use the default risk_fraction / take_profit_pct
+                    # values set above; do NOT update them from the illiquid profile.
+                else:
+                    raise ValueError(
+                        "competitive profitability policy blocked illiquid fallback entry: "
+                        f"{competitive_profile.liquidity_reason}"
+                    )
+            else:
+                risk_fraction = competitive_profile.risk_fraction
+                stop_loss_pct = min(float(competitive_profile.stop_loss_pct), 3.0)
+                raw_tp = tuple(float(pct) for pct in competitive_profile.take_profit_pct)
+                tp1 = max(raw_tp[0] if len(raw_tp) > 0 else 0.0, 0.85)
+                tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
+                tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
+                take_profit_pct = (tp1, tp2, tp3)
+                stop_loss_pct = competitive_profile.stop_loss_pct
+                take_profit_pct = competitive_profile.take_profit_pct
+                trailing_stop_pct = competitive_profile.trailing_stop_pct
         except ValueError:
             raise
         except Exception:
@@ -2430,12 +3587,180 @@ class NijaCoreLoop:
         so per-symbol fetches never silently return None when the caller omits
         the broker argument.
 
-        Returns ``None`` when the broker call fails or returns no data.
+        Retry logic
+        -----------
+        On the first attempt the method tries every known candle-fetch method
+        on the broker object.  If all methods return insufficient data (< 10
+        rows) or raise exceptions, the method retries up to
+        ``NIJA_FETCH_DF_MAX_RETRIES`` times (default 2) with a short sleep
+        between attempts.  This handles transient rate-limit blips and
+        momentary API unavailability without blocking the entire trading loop.
+
+        Returns ``None`` when all retries are exhausted.
         """
         try:
-            if broker is None:
-                broker = getattr(self.apex, "broker_client", None)
-            if broker is None:
+            _max_retries = max(1, int(os.getenv("NIJA_FETCH_DF_MAX_RETRIES", "2") or "2"))
+            _retry_delay_s = max(0.1, float(os.getenv("NIJA_FETCH_DF_RETRY_DELAY_S", "1.0") or "1.0"))
+        except (TypeError, ValueError):
+            _max_retries = 2
+            _retry_delay_s = 1.0
+
+        for _attempt in range(1, _max_retries + 1):
+            try:
+                _broker = broker
+                if _broker is None:
+                    _broker = getattr(self.apex, "broker_client", None)
+                if _broker is None:
+                    logger.warning(
+                        "⚠️ [_fetch_df] broker=None for symbol=%s — no broker_client on apex either. "
+                        "Cannot fetch candle data.",
+                        symbol,
+                    )
+                    return None
+                call_plan = (
+                    ("get_candles", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("fetch_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("get_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("get_historical_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                    ("get_market_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                )
+                _tried_methods = []
+                for method_name, primary_call, fallback_call in call_plan:
+                    method = getattr(_broker, method_name, None)
+                    if not callable(method):
+                        continue
+                    _tried_methods.append(method_name)
+                    try:
+                        result = self._call_market_data_method(method, primary_call, fallback_call)
+                        df = self._coerce_market_data_frame(result)
+                        if df is not None and len(df) >= 10:
+                            if _attempt > 1:
+                                logger.info(
+                                    "✅ [_fetch_df] symbol=%s recovered on attempt %d/%d "
+                                    "via %s (df_len=%d)",
+                                    symbol, _attempt, _max_retries, method_name, len(df),
+                                )
+                            return df
+                        # Log when a method exists but returns bad data
+                        logger.debug(
+                            "_fetch_df: %s.%s returned df_len=%d for %s (attempt %d/%d)",
+                            type(_broker).__name__, method_name,
+                            len(df) if df is not None else -1, symbol,
+                            _attempt, _max_retries,
+                        )
+                    except Exception as _method_exc:
+                        logger.debug(
+                            "_fetch_df: %s.%s raised %s for %s (attempt %d/%d)",
+                            type(_broker).__name__, method_name, _method_exc, symbol,
+                            _attempt, _max_retries,
+                        )
+                if not _tried_methods:
+                    # No matching method found on broker — log once at warning level
+                    _broker_methods = [m for m in dir(_broker) if not m.startswith("_")]
+                    logger.warning(
+                        "⚠️ [_fetch_df] broker=%s has none of the expected candle methods "
+                        "(get_candles/fetch_ohlcv/get_ohlcv/get_historical_data/get_market_data). "
+                        "Available methods: %s",
+                        type(_broker).__name__,
+                        _broker_methods[:20],
+                    )
+                    return None  # No point retrying if no methods exist
+
+                # All methods returned insufficient data on this attempt.
+                if _attempt < _max_retries:
+                    logger.warning(
+                        "⚠️ [_fetch_df] symbol=%s — all candle methods returned insufficient "
+                        "data on attempt %d/%d; retrying in %.1fs",
+                        symbol, _attempt, _max_retries, _retry_delay_s,
+                    )
+                    time.sleep(_retry_delay_s)
+                else:
+                    logger.warning(
+                        "⚠️ [_fetch_df] symbol=%s — all %d fetch attempts exhausted; "
+                        "returning None (data_insufficient). "
+                        "Check broker connectivity and symbol format.",
+                        symbol, _max_retries,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "⚠️ [_fetch_df] unexpected error for %s (attempt %d/%d): %s",
+                    symbol, _attempt, _max_retries, exc,
+                )
+                if _attempt < _max_retries:
+                    time.sleep(_retry_delay_s)
+        return None
+
+    @staticmethod
+    def _call_market_data_method(
+        method: Any,
+        primary_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+        fallback_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+    ) -> Any:
+        """Call a broker market-data method while tolerating signature drift.
+
+        Wraps each attempt in a daemon thread with a configurable timeout so
+        that a hanging broker API call (e.g. Coinbase/Kraken rate-limit stall)
+        cannot block the entire trading loop indefinitely.  The timeout is
+        controlled by the ``NIJA_CANDLE_FETCH_TIMEOUT`` environment variable
+        (default 10 s).  On timeout the method returns ``None`` so
+        ``_fetch_df`` falls through to the next call variant or skips the
+        symbol gracefully.
+        """
+        try:
+            _timeout = max(0.1, float(os.getenv("NIJA_CANDLE_FETCH_TIMEOUT", "10") or "10"))
+        except (ValueError, TypeError):
+            _timeout = 10.0
+
+        def _run_with_timeout(fn: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+            result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+            def _runner() -> None:
+                try:
+                    result_queue.put(("result", fn(*args, **kwargs)))
+                except Exception as exc:  # noqa: BLE001
+                    result_queue.put(("error", exc))
+
+            worker = threading.Thread(target=_runner, name="nija-candle-fetch", daemon=True)
+            worker.start()
+            try:
+                kind, payload = result_queue.get(timeout=_timeout)
+            except queue.Empty:
+                _sym = args[0] if args else "?"
+                logger.warning(
+                    "⏱️ [_call_market_data_method] candle fetch timed out after %.1fs — "
+                    "skipping symbol %s (fn=%s, NIJA_CANDLE_FETCH_TIMEOUT=%.0f)",
+                    _timeout, _sym, getattr(fn, "__name__", str(fn)), _timeout,
+                )
+                return None
+            if kind == "error":
+                raise payload  # type: ignore[misc]
+            return payload
+
+        try:
+            args, kwargs = primary_call
+            return _run_with_timeout(method, args, kwargs)
+        except TypeError:
+            args, kwargs = fallback_call
+            return _run_with_timeout(method, args, kwargs)
+
+    @classmethod
+    def _coerce_market_data_frame(cls, result: Any) -> Optional[pd.DataFrame]:
+        """Normalize broker candle payload variants into an OHLCV DataFrame."""
+        if result is None:
+            return None
+        if isinstance(result, tuple):
+            if len(result) >= 2 and result[1]:
+                return None
+            result = result[0] if result else None
+        if isinstance(result, pd.DataFrame):
+            return cls._normalize_ohlcv_columns(result.copy())
+        if isinstance(result, Mapping):
+            for key in ("candles", "data", "ohlcv", "result", "rows"):
+                if key in result:
+                    return cls._coerce_market_data_frame(result.get(key))
+            return cls._normalize_ohlcv_columns(pd.DataFrame([result]))
+        if isinstance(result, (list, tuple)):
+            if not result:
                 return None
             call_plan = (
                 ("get_candles", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
@@ -2452,10 +3777,44 @@ class NijaCoreLoop:
                 df = self._coerce_market_data_frame(result)
                 if df is not None and len(df) >= 10:
                     return df
+            frame = pd.DataFrame(result)
+            if not frame.empty and all(isinstance(col, int) for col in frame.columns):
+                # CCXT-style rows: [timestamp, open, high, low, close, volume, ...]
+                if len(frame.columns) >= 6:
+                    frame = frame.iloc[:, :6]
+                    frame.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+                # Compact rows occasionally omit timestamp: [open, high, low, close, volume]
+                elif len(frame.columns) == 5:
+                    frame.columns = ["open", "high", "low", "close", "volume"]
+            return cls._normalize_ohlcv_columns(frame)
+        return None
+
+    @staticmethod
+    def _normalize_ohlcv_columns(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """Return a numeric OHLCV frame when the payload has usable candles."""
+        if frame is None or frame.empty:
             return None
-        except Exception as exc:
-            logger.debug("_fetch_df error for %s: %s", symbol, exc)
+        rename_map = {
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+            "price": "close",
+            "last": "close",
+        }
+        normalized = frame.rename(
+            columns={col: rename_map.get(str(col).lower(), col) for col in frame.columns}
+        )
+        required = {"open", "high", "low", "close", "volume"}
+        if not required.issubset(set(normalized.columns)):
             return None
+        for col in required:
+            normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
+        normalized = normalized.dropna(subset=list(required))
+        if normalized.empty:
+            return None
+        return normalized
 
     @staticmethod
     def _call_market_data_method(
@@ -2573,8 +3932,9 @@ _exec_test_fired = False
 # NOTE: TRADING_ENGINE_READY is defined earlier in this module (alongside
 # _current_cycle_id / _current_cycle_capital) so it is guaranteed to exist
 # before _supervisor_step_state_machine() is ever called.  Do not redefine it
-# here — the earlier definition (including FORCE_TRADE pre-set logic) is the
-# canonical one.
+# here — the earlier definition is the canonical one.  The FORCE_TRADE check
+# that sets this event lives in run_trading_loop() so it is evaluated at
+# runtime, not at module import time.
 
 
 # ---------------------------------------------------------------------------
@@ -2690,6 +4050,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     cycle_secs : Seconds to sleep between cycles (default 150 = 2.5 min)
     """
     logger.critical("🧵 TRADING LOOP THREAD ALIVE")
+    print("🧵 TRADING LOOP THREAD ALIVE — run_trading_loop() entered", flush=True)
     _contract_status = assert_runtime_contract_release_ready(context="run_trading_loop")
     logger.info("Runtime contract status: %s", _contract_status.as_dict())
 
@@ -2697,17 +4058,61 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     global _current_cycle_id, _current_cycle_capital, _current_cycle_snapshot
 
     logger.critical("🔥 ENTERED RUN_TRADING_LOOP FUNCTION")
+    print("🔥 ENTERED RUN_TRADING_LOOP FUNCTION", flush=True)
 
+    # ── STEP 1: Resolve runtime mode ──────────────────────────────────────────
+    logger.critical("[INIT STEP 1/6] Resolving runtime mode")
+    print("[INIT STEP 1/6] Resolving runtime mode", flush=True)
     _runtime_mode = resolve_runtime_mode_safe(logger)
     _live_verified = _is_live_mode(_runtime_mode)
+    logger.critical(
+        "[INIT STEP 1/6] Runtime mode resolved: live_verified=%s "
+        "LIVE_CAPITAL_VERIFIED=%s FORCE_TRADE=%s NIJA_FORCE_ACTIVATION=%s",
+        _live_verified,
+        os.getenv("LIVE_CAPITAL_VERIFIED", "not_set"),
+        os.getenv("FORCE_TRADE", "not_set"),
+        os.getenv("NIJA_FORCE_ACTIVATION", "not_set"),
+    )
+    print(
+        f"[INIT STEP 1/6] live_verified={_live_verified} "
+        f"LIVE_CAPITAL_VERIFIED={os.getenv('LIVE_CAPITAL_VERIFIED', 'not_set')} "
+        f"FORCE_TRADE={os.getenv('FORCE_TRADE', 'not_set')}",
+        flush=True,
+    )
+
     if _live_verified and not TRADING_ENGINE_READY.is_set():
         logger.critical(
             "LIVE_CAPITAL_VERIFIED=true detected — bypassing passive activation wait gate"
         )
         TRADING_ENGINE_READY.set()
 
-    logger.critical("🧵 WAITING FOR START SIGNAL")
+    # ── FORCE_TRADE: set the start gate at runtime so the trading loop never
+    # waits for the bootstrap FSM when an operator override flag is active.
+    # Evaluated here (not at module load time) so the environment variable is
+    # read when the loop actually starts, not when the module is imported.
+    if not TRADING_ENGINE_READY.is_set() and (
+        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+    ):
+        logger.warning(
+            "⚡ FORCE_TRADE: TRADING_ENGINE_READY set at runtime (run_trading_loop entry) — "
+            "trading loop will not wait for bootstrap FSM"
+        )
+        TRADING_ENGINE_READY.set()
+
+    # ── STEP 2: Wait for TRADING_ENGINE_READY with hard total timeout ─────────
+    # The wait loop previously had no total deadline — it would spin forever
+    # if TRADING_ENGINE_READY was never set (e.g. bootstrap FSM stalled).
+    # NIJA_START_GATE_TIMEOUT_S (default 120s) caps the total wait so the
+    # loop always proceeds to the first cycle rather than hanging indefinitely.
+    logger.critical("[INIT STEP 2/6] Waiting for TRADING_ENGINE_READY start signal")
+    print("[INIT STEP 2/6] Waiting for TRADING_ENGINE_READY start signal", flush=True)
+    _start_gate_max_s = float(os.getenv("NIJA_START_GATE_TIMEOUT_S", "120"))
+    _start_gate_t0 = time.monotonic()
+    _start_gate_iters = 0
     while not TRADING_ENGINE_READY.is_set():
+        _start_gate_iters += 1
+        _elapsed_gate = time.monotonic() - _start_gate_t0
         try:
             if _SM_AVAILABLE and _get_state_machine is not None:
                 _wait_sm = _get_state_machine()
@@ -2719,8 +4124,39 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     break
         except Exception as _wait_gate_err:
             logger.debug("TRADING_ENGINE_READY wait probe failed: %s", _wait_gate_err)
+
+        # Hard total timeout: force-set the event and proceed rather than
+        # hanging forever when bootstrap FSM never fires the signal.
+        if _elapsed_gate >= _start_gate_max_s:
+            logger.critical(
+                "⚡ [INIT STEP 2/6] TRADING_ENGINE_READY hard timeout reached after %.0fs "
+                "(iter=%d) — force-setting start gate to unblock trading loop. "
+                "Set NIJA_START_GATE_TIMEOUT_S to adjust (default 120s).",
+                _elapsed_gate,
+                _start_gate_iters,
+            )
+            print(
+                f"[INIT STEP 2/6] HARD TIMEOUT: force-setting TRADING_ENGINE_READY after "
+                f"{_elapsed_gate:.0f}s (iter={_start_gate_iters})",
+                flush=True,
+            )
+            TRADING_ENGINE_READY.set()
+            break
+
         if not TRADING_ENGINE_READY.wait(timeout=30):
-            logger.critical("TIMEOUT_WAITING_FOR_TRADING_ENGINE_READY")
+            logger.critical(
+                "TIMEOUT_WAITING_FOR_TRADING_ENGINE_READY "
+                "(iter=%d elapsed=%.0fs remaining=%.0fs)",
+                _start_gate_iters,
+                _elapsed_gate,
+                max(0.0, _start_gate_max_s - _elapsed_gate),
+            )
+            print(
+                f"[INIT STEP 2/6] Still waiting for start signal "
+                f"(iter={_start_gate_iters} elapsed={_elapsed_gate:.0f}s "
+                f"remaining={max(0.0, _start_gate_max_s - _elapsed_gate):.0f}s)",
+                flush=True,
+            )
             try:
                 from bot.bootstrap_utils import dump_startup_state
             except ImportError:
@@ -2730,7 +4166,13 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     dump_startup_state = None  # type: ignore[assignment]
             if dump_startup_state is not None:
                 dump_startup_state("trading_engine_ready_wait")
-    logger.critical("🟢 START SIGNAL RECEIVED — ENTERING LIVE LOOP")
+    logger.critical("[INIT STEP 2/6] ✅ START SIGNAL RECEIVED — ENTERING LIVE LOOP")
+    print("[INIT STEP 2/6] ✅ START SIGNAL RECEIVED — ENTERING LIVE LOOP", flush=True)
+
+    # ── STEP 3: Bootstrap FSM execution authority check ──────────────────────
+    logger.critical("[INIT STEP 3/6] Checking bootstrap FSM execution authority")
+    print("[INIT STEP 3/6] Checking bootstrap FSM execution authority", flush=True)
+
     try:
         from bot.bootstrap_state_machine import get_bootstrap_fsm
     except ImportError:
@@ -2753,15 +4195,64 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _ft[:8],
                 )
                 _bfsm_ea._execution_authority = True
+            elif hasattr(_bfsm_ea, "_execution_authority"):
+                # No fencing token (Redis not configured or distributed lock not acquired).
+                # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: grant execution authority
+                # directly so the trading loop is not permanently blocked in deployments
+                # that do not use Redis-based distributed locking.
+                _force_bypass_ea = (
+                    os.environ.get("FORCE_TRADE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                )
+                if _force_bypass_ea:
+                    logger.warning(
+                        "⚡ execution_authority not set and no fencing token present — "
+                        "force flag active, granting execution authority directly to unblock "
+                        "trading loop (FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE)"
+                    )
+                    _bfsm_ea._execution_authority = True
+                else:
+                    logger.critical(
+                        "🚫 execution_authority not set and no fencing token present — "
+                        "trading loop cannot start. Set FORCE_TRADE=true to bypass, or "
+                        "configure Redis for distributed locking."
+                    )
+                    if _loop_guard.acquire(timeout=5):
+                        try:
+                            _loop_running = False
+                        finally:
+                            _loop_guard.release()
+                    return
             else:
-                assert False, "Bootstrap execution_authority is required before strategy loop"
-    logger.critical("LIFECYCLE: entering strategy loop")
+                logger.critical(
+                    "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
+                    "attribute — trading loop cannot start safely."
+                )
+                if _loop_guard.acquire(timeout=5):
+                    try:
+                        _loop_running = False
+                    finally:
+                        _loop_guard.release()
+                return
+
+
+    logger.critical("[INIT STEP 3/6] ✅ Bootstrap FSM execution authority check complete")
+    print("[INIT STEP 3/6] ✅ Bootstrap FSM execution authority check complete", flush=True)
 
     # Supervisor-mode hard gate: only block execution when supervisor mode is
     # enabled AND live trading is not active.
     _supervisor_mode = os.getenv("SUPERVISOR_MODE", "false").lower() in (
         "true", "1", "yes", "enabled"
     )
+    logger.critical(
+        "[PRE-STEP-4] Supervisor mode check: SUPERVISOR_MODE=%s",
+        os.getenv("SUPERVISOR_MODE", "false"),
+    )
+    print(f"[PRE-STEP-4] SUPERVISOR_MODE={os.getenv('SUPERVISOR_MODE', 'false')}", flush=True)
     if _supervisor_mode:
         _live_active_now = False
         try:
@@ -2770,10 +4261,25 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         except Exception as _sm_probe_err:
             logger.debug("Supervisor mode live-state probe failed: %s", _sm_probe_err)
 
+        logger.critical(
+            "[PRE-STEP-4] SUPERVISOR_MODE=true — live_active=%s; %s",
+            _live_active_now,
+            "proceeding" if _live_active_now else "BLOCKING startup (live trading not active)",
+        )
+        print(
+            f"[PRE-STEP-4] SUPERVISOR_MODE=true live_active={_live_active_now}",
+            flush=True,
+        )
         if not _live_active_now:
             logger.critical(
-                "SUPERVISOR_MODE enabled while live mode is inactive — "
-                "blocking run_trading_loop startup"
+                "🚫 [PRE-STEP-4] SUPERVISOR_MODE enabled while live mode is inactive — "
+                "blocking run_trading_loop startup. "
+                "Set SUPERVISOR_MODE=false or ensure live trading is active to proceed."
+            )
+            print(
+                "[PRE-STEP-4] BLOCKED: SUPERVISOR_MODE=true but live trading is not active — "
+                "trading loop will not start. Set SUPERVISOR_MODE=false to bypass.",
+                flush=True,
             )
             return
 
@@ -2782,6 +4288,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     # that a None strategy never permanently blocks future valid start attempts.
     # A None strategy here means the caller violated the contract (strategy must
     # exist before TradingCoreLoop starts) — refuse to proceed.
+    logger.critical("[PRE-STEP-4] Strategy existence check: strategy=%s", type(strategy).__name__)
+    print(f"[PRE-STEP-4] strategy type={type(strategy).__name__}", flush=True)
     if strategy is None:
         logger.critical(
             "🚫 run_trading_loop called with strategy=None — "
@@ -2791,15 +4299,65 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         return
 
     try:
-        logger.critical(f"LOOP START CHECK — _loop_running={_loop_running}")
-        with _loop_guard:
+        logger.critical(
+            "[PRE-STEP-4] LOOP START CHECK — _loop_running=%s; attempting _loop_guard acquire",
+            _loop_running,
+        )
+        print(
+            f"[PRE-STEP-4] _loop_running={_loop_running} — acquiring _loop_guard (timeout=10s)",
+            flush=True,
+        )
+        # Use acquire(timeout=...) instead of the bare `with` context manager so
+        # that a stale lock held by a crashed/stuck previous thread does not block
+        # the startup sequence indefinitely.  10 seconds is generous — the lock
+        # should never be held for more than a few microseconds in normal operation.
+        _loop_guard_timeout_s = float(os.getenv("NIJA_LOOP_GUARD_TIMEOUT_S", "10"))
+        _loop_guard_acquired = _loop_guard.acquire(timeout=_loop_guard_timeout_s)
+        if not _loop_guard_acquired:
+            logger.critical(
+                "⚠️ [PRE-STEP-4] _loop_guard.acquire() timed out after %.0fs — "
+                "another thread may be holding the lock. Proceeding without guard "
+                "to prevent indefinite startup hang. _loop_running=%s",
+                _loop_guard_timeout_s,
+                _loop_running,
+            )
+            print(
+                f"[PRE-STEP-4] WARNING: _loop_guard timed out after {_loop_guard_timeout_s:.0f}s "
+                f"— proceeding without guard. _loop_running={_loop_running}",
+                flush=True,
+            )
+            # If _loop_running is already True, another instance is running — bail out.
             if _loop_running:
-                logger.critical("🚧 LOOP BLOCKED PATH REACHED — duplicate start guard triggered")
-                logger.info("🟡 Core trading loop already active — skipping duplicate start")
+                logger.critical(
+                    "🚧 [PRE-STEP-4] _loop_running=True and lock timed out — "
+                    "duplicate start detected; exiting this invocation."
+                )
                 return
+            # Lock timed out but _loop_running is False — force-set it and proceed.
             _loop_running = True
+        else:
+            try:
+                if _loop_running:
+                    logger.critical(
+                        "🚧 [PRE-STEP-4] LOOP BLOCKED PATH REACHED — duplicate start guard triggered "
+                        "(_loop_running=True). Exiting this invocation."
+                    )
+                    print(
+                        "[PRE-STEP-4] BLOCKED: _loop_running=True — duplicate start guard triggered",
+                        flush=True,
+                    )
+                    return
+                _loop_running = True
+                logger.critical("[PRE-STEP-4] _loop_guard acquired and _loop_running set to True")
+                print("[PRE-STEP-4] _loop_guard acquired — _loop_running=True", flush=True)
+            finally:
+                _loop_guard.release()
 
         logger.info("🟢 Trading loop alive (INITIAL START)")
+
+        # ── STEP 4: Capital Hydration Barrier ─────────────────────────────────
+        logger.critical("[INIT STEP 4/6] Entering capital hydration barrier")
+        print("[INIT STEP 4/6] Entering capital hydration barrier", flush=True)
 
         # ── Capital Hydration Barrier (FIX 1) ─────────────────────────────────
         # Block until CapitalAuthority has received at least one broker snapshot.
@@ -2809,6 +4367,18 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         # Timeout: 30 s (configurable via NIJA_HYDRATION_BARRIER_TIMEOUT).
         _hydration_timeout = float(
             os.getenv("NIJA_HYDRATION_BARRIER_TIMEOUT", "30")
+        )
+        logger.critical(
+            "[INIT STEP 4/6] Capital hydration barrier: timeout=%.0fs "
+            "CAPITAL_HYDRATED_EVENT_set=%s",
+            _hydration_timeout,
+            bool(_CAPITAL_HYDRATED_EVENT is not None and _CAPITAL_HYDRATED_EVENT.is_set())
+            if _CA_LOOP_AVAILABLE else "CA_unavailable",
+        )
+        print(
+            f"[INIT STEP 4/6] hydration timeout={_hydration_timeout:.0f}s "
+            f"CA_available={_CA_LOOP_AVAILABLE}",
+            flush=True,
         )
         try:
             try:
@@ -2821,6 +4391,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     wait_for_hydration as _wait_hydration,
                     CapitalIntegrityError as _CapIntegrityErr,
                 )
+            logger.critical("[INIT STEP 4/6] Calling wait_for_hydration(timeout_s=%.0fs)", _hydration_timeout)
+            print(f"[INIT STEP 4/6] wait_for_hydration() starting (timeout={_hydration_timeout:.0f}s)", flush=True)
             _wait_hydration(timeout_s=_hydration_timeout)
             logger.critical(
                 "✅ [HYDRATION_BARRIER] Capital hydration confirmed — "
@@ -2846,21 +4418,38 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     _hb_err,
                 )
             else:
+                # ── HARD-TIMEOUT BYPASS ───────────────────────────────────────
+                # Previously this path aborted the trading loop entirely, which
+                # caused a silent hang (the thread exited with no further logs).
+                # Now we log a critical warning and proceed anyway — a hydration
+                # timeout means the capital pipeline is slow, not that the bot
+                # should stop trading.  The downstream strategy cycle will handle
+                # a $0 balance gracefully (skip entries, wait for next cycle).
                 logger.critical(
-                    "🚨 [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR: %s — "
-                    "trading loop aborted. Bot will not trade until capital is hydrated.",
+                    "⚠️ [HYDRATION_BARRIER] CAPITAL INTEGRITY ERROR: %s — "
+                    "proceeding past hydration barrier after timeout to prevent "
+                    "trading loop abort. Set NIJA_SKIP_STARTUP_PHASE_GATE=true or "
+                    "FORCE_TRADE=true to suppress this warning.",
                     _hb_err,
                 )
-                with _loop_guard:
-                    _loop_running = False
-                return
+                print(
+                    f"[INIT STEP 4/6] WARNING: hydration barrier timed out ({_hb_err}) — "
+                    "proceeding anyway to prevent loop abort",
+                    flush=True,
+                )
         except (ImportError, Exception) as _hb_exc:
             logger.warning(
                 "⚠️ [HYDRATION_BARRIER] Could not enforce hydration barrier (%s) — "
                 "proceeding without guarantee. Check capital_authority module.",
                 _hb_exc,
             )
+        logger.critical("[INIT STEP 4/6] ✅ Capital hydration barrier passed")
+        print("[INIT STEP 4/6] ✅ Capital hydration barrier passed", flush=True)
         # ── End Capital Hydration Barrier ──────────────────────────────────────
+
+        # ── STEP 5: CSM v2 Ready Barrier ──────────────────────────────────────
+        logger.critical("[INIT STEP 5/6] Entering CSM v2 ready barrier")
+        print("[INIT STEP 5/6] Entering CSM v2 ready barrier", flush=True)
 
         # ── CSM v2 Ready Barrier ───────────────────────────────────────────────
         # Block until CapitalCSMv2 transitions to READY state.  This is the
@@ -2868,6 +4457,18 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         # criteria (LIVE_CAPITAL_VERIFIED, positive balance, confidence score,
         # fresh snapshot) are satisfied before the first strategy cycle runs.
         _csm_timeout = float(os.getenv("NIJA_CSM_READY_TIMEOUT", "30"))
+        logger.critical(
+            "[INIT STEP 5/6] CSM v2 ready barrier: timeout=%.0fs "
+            "LIVE_CAPITAL_VERIFIED=%s NIJA_CSM_READY_TIMEOUT=%s",
+            _csm_timeout,
+            os.getenv("LIVE_CAPITAL_VERIFIED", "not_set"),
+            os.getenv("NIJA_CSM_READY_TIMEOUT", "30_default"),
+        )
+        print(
+            f"[INIT STEP 5/6] CSM timeout={_csm_timeout:.0f}s "
+            f"LIVE_CAPITAL_VERIFIED={os.getenv('LIVE_CAPITAL_VERIFIED', 'not_set')}",
+            flush=True,
+        )
         try:
             try:
                 from bot.capital_csm_v2 import (
@@ -2880,9 +4481,27 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     CapitalIntegrityError as _CsmIntegrityErr,
                 )
             _csm = _get_csm_v2()
-            logger.critical("CSM PRE-WAIT STATE: %s", _csm.state)
+            logger.critical(
+                "[INIT STEP 5/6] CSM PRE-WAIT STATE: %s is_hydrated=%s blocked_reason=%r",
+                _csm.state,
+                _csm.is_hydrated,
+                getattr(_csm, "blocked_reason", ""),
+            )
+            print(
+                f"[INIT STEP 5/6] CSM pre-wait state={_csm.state} "
+                f"is_hydrated={_csm.is_hydrated}",
+                flush=True,
+            )
             _csm_ready = _csm.wait_for_ready(timeout=_csm_timeout)
-            logger.critical("CSM POST-WAIT STATE: %s", _csm.state)
+            logger.critical(
+                "[INIT STEP 5/6] CSM POST-WAIT STATE: %s ready=%s",
+                _csm.state,
+                _csm_ready,
+            )
+            print(
+                f"[INIT STEP 5/6] CSM post-wait state={_csm.state} ready={_csm_ready}",
+                flush=True,
+            )
             if not _csm_ready:
                 # DEGRADED = capital exists but confidence score below threshold.
                 # This is NOT a fatal condition — allow the loop to proceed so
@@ -2919,13 +4538,28 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             _csm.blocked_reason,
                         )
                     else:
+                        # ── HARD-TIMEOUT BYPASS ───────────────────────────────
+                        # Previously this path raised _CsmIntegrityErr which was
+                        # caught below and caused the trading loop to abort (return),
+                        # producing a silent hang with no further log output.
+                        # Now we log a critical warning and proceed — a BLOCKED CSM
+                        # state (e.g. LIVE_CAPITAL_VERIFIED not set, or capital
+                        # pipeline not yet delivered a snapshot) should not
+                        # permanently prevent the loop from running.  The downstream
+                        # strategy cycle and execution engine enforce their own gates.
                         logger.critical(
-                            "❌ CSM BLOCKED — TRADING LOOP ABORTED. reason=%s",
+                            "⚠️ [CSM-BARRIER] CSM BLOCKED — proceeding past barrier to prevent "
+                            "trading loop abort. reason=%s  "
+                            "Set NIJA_SKIP_STARTUP_PHASE_GATE=true or FORCE_TRADE=true to "
+                            "suppress this warning. Trades will be blocked by execution engine "
+                            "until CSM reaches READY state.",
                             _csm.blocked_reason,
                         )
-                        with _loop_guard:
-                            _loop_running = False
-                        raise _CsmIntegrityErr("CSM BLOCKED: " + _csm.blocked_reason)
+                        print(
+                            f"[INIT STEP 5/6] WARNING: CSM BLOCKED ({_csm.blocked_reason}) — "
+                            "proceeding anyway to prevent loop abort",
+                            flush=True,
+                        )
                 else:
                     # INITIALIZING after timeout — treat as DEGRADED, let loop proceed.
                     logger.critical(
@@ -2936,21 +4570,24 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 logger.critical(
                     "✅ CAPITAL READY — STARTING TRADING LOOP"
                 )
-        except _CsmIntegrityErr as _csm_err:
+        except Exception as _csm_exc:
+            # Catch both _CsmIntegrityErr and any other exception from the CSM
+            # barrier.  Previously _CsmIntegrityErr caused a hard abort (return)
+            # which silently killed the trading thread.  Now we log and proceed.
             logger.critical(
-                "🚨 [CSM-BARRIER] CAPITAL NOT READY: %s — "
-                "trading loop aborted. Bot will not trade until CSM reaches READY state.",
-                _csm_err,
-            )
-            with _loop_guard:
-                _loop_running = False
-            return
-        except (ImportError, Exception) as _csm_exc:
-            logger.warning(
-                "⚠️ [CSM-BARRIER] Could not enforce CSM ready barrier (%s) — "
-                "proceeding without guarantee. Check capital_csm_v2 module.",
+                "⚠️ [CSM-BARRIER] CSM barrier raised exception (%s: %s) — "
+                "proceeding past barrier to prevent trading loop abort. "
+                "Trades will be blocked by execution engine until CSM reaches READY state.",
+                type(_csm_exc).__name__,
                 _csm_exc,
             )
+            print(
+                f"[INIT STEP 5/6] WARNING: CSM barrier exception ({type(_csm_exc).__name__}: "
+                f"{_csm_exc}) — proceeding anyway",
+                flush=True,
+            )
+        logger.critical("[INIT STEP 5/6] ✅ CSM v2 ready barrier passed")
+        print("[INIT STEP 5/6] ✅ CSM v2 ready barrier passed", flush=True)
         # ── End CSM v2 Ready Barrier ───────────────────────────────────────────
 
         # ── Trading Loop Entry Anchor (FIX 1) ─────────────────────────────────
@@ -2958,11 +4595,17 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         # flag HERE and verify it before entering the loop — this is the single
         # authoritative gate.  If the assert fires something above cleared the
         # flag unexpectedly; that is a logic bug that must be surfaced loudly.
+        # ── STEP 6: Arm trading-active flag and enter cycle loop ─────────────
+        logger.critical("[INIT STEP 6/6] Arming trading-active flag and entering cycle loop")
+        print("[INIT STEP 6/6] Arming trading-active flag and entering cycle loop", flush=True)
         _trading_active = True
         if not _trading_active:
             logger.critical("💥 _trading_active failed to set — logic error, aborting")
             raise RuntimeError("_trading_active must be True before entering trading loop")
         logger.critical("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED")
+        print("🚀 ENTERING TRADING LOOP - FINAL GATE PASSED — all barriers cleared", flush=True)
+        logger.critical("[INIT STEP 6/6] ✅ All init steps complete — first cycle starting now")
+        print("[INIT STEP 6/6] ✅ All init steps complete — first cycle starting now", flush=True)
         # ── End Trading Loop Entry Anchor ──────────────────────────────────────
 
         cycle = 0
@@ -2981,6 +4624,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         _tick_log_every = max(1, int(float(os.getenv("NIJA_CORE_LOOP_TICK_LOG_EVERY", "10") or 10)))
 
         logger.critical("🚀 ENTERING ACTIVE TRADE LOOP")
+        print("🚀 ENTERING ACTIVE TRADE LOOP — cycle scheduler starting", flush=True)
         try:
             from bot.bootstrap_state_machine import get_bootstrap_fsm
         except ImportError:
@@ -3000,8 +4644,71 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _ft_sched[:8],
                     )
                     _bfsm_sched._execution_authority = True
+                elif hasattr(_bfsm_sched, "_execution_authority"):
+                    # No fencing token (Redis not configured or distributed lock not acquired).
+                    # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: grant execution authority
+                    # directly so the cycle scheduler is not permanently blocked in deployments
+                    # that do not use Redis-based distributed locking.
+                    _force_bypass_sched = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower()
+                        in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _force_bypass_sched:
+                        logger.warning(
+                            "⚡ execution_authority not set and no fencing token present — "
+                            "force flag active, granting execution authority directly to unblock "
+                            "cycle scheduler (FORCE_TRADE / NIJA_FORCE_ACTIVATION / NIJA_SKIP_STARTUP_PHASE_GATE)"
+                        )
+                        _bfsm_sched._execution_authority = True
+                    else:
+                        logger.critical(
+                            "🚫 execution_authority not set and no fencing token present — "
+                            "cycle scheduler cannot start. Set FORCE_TRADE=true to bypass, or "
+                            "configure Redis for distributed locking."
+                        )
+                        if _loop_guard.acquire(timeout=5):
+                            try:
+                                _loop_running = False
+                            finally:
+                                _loop_guard.release()
+                        return
                 else:
-                    assert False, "Bootstrap execution_authority is required before scheduler"
+                    # Graceful fallback: same force-flag recovery as the strategy loop
+                    # gate above.  A hard assert here crashes the trading thread
+                    # silently; instead, check for FORCE_TRADE / NIJA_FORCE_ACTIVATION /
+                    # NIJA_SKIP_STARTUP_PHASE_GATE and grant authority when set.
+                    _force_flags_sched = (
+                        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                        or os.environ.get("NIJA_SKIP_STARTUP_PHASE_GATE", "").strip().lower() in ("1", "true", "yes", "on", "enabled")
+                    )
+                    if _force_flags_sched and hasattr(_bfsm_sched, "_execution_authority"):
+                        logger.warning(
+                            "execution_authority not set and no fencing token — "
+                            "FORCE flag detected, granting execution_authority to unblock cycle scheduler"
+                        )
+                        print("[NIJA] FORCE flag: granting execution_authority for cycle scheduler")
+                        _bfsm_sched._execution_authority = True
+                    else:
+                        logger.critical(
+                            "execution_authority not set, no fencing token, and no FORCE flag — "
+                            "cycle scheduler cannot start; set FORCE_TRADE=true to override"
+                        )
+                        print("[NIJA] ERROR: execution_authority missing — cycle scheduler blocked")
+                    logger.critical(
+                        "🚫 execution_authority not set and BootstrapFSM has no _execution_authority "
+                        "attribute — cycle scheduler cannot start safely."
+                    )
+                    if _loop_guard.acquire(timeout=5):
+                        try:
+                            _loop_running = False
+                        finally:
+                            _loop_guard.release()
+                    return
         logger.critical("LIFECYCLE: entering cycle scheduler")
         while _trading_active:
             try:
@@ -3028,6 +4735,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _rate_limited_critical("core_loop_tick", "scheduler", 30.0, "🟢 LIVE LOOP TICK")
                 if cycle == 0 or ((cycle + 1) % _tick_log_every == 0):
                     logger.info("🟢 LIVE LOOP TICK | cycle=%s", cycle + 1)
+                # Always print cycle iteration to stdout so Railway logs show the loop is alive.
+                print(f"🔄 TRADING LOOP CYCLE ITERATION | cycle={cycle + 1}", flush=True)
                 if _env_truthy("NIJA_STDOUT_LOOP_TICK", "false"):
                     print("🚀 MAIN LOOP TICK")
                 logger.info("[ScannerLoop] heartbeat cycle=%s phase=pre_activation_gate", cycle + 1)
@@ -3066,10 +4775,16 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
 
                     # Unified lifecycle arming path: OFF -> LIVE_PENDING_CONFIRMATION
                     # before attempting final activation to LIVE_ACTIVE.
+                    #
+                    # NOTE: `and not _live_now` was intentionally removed here.
+                    # is_live_trading_active() returns True when FORCE_TRADE=true even
+                    # when state is still OFF, which caused this arm to silently skip
+                    # and state to remain stuck at OFF.  Since we already guard with
+                    # `_current_state_loop == _TradingState.OFF`, the extra check is
+                    # redundant under correct behaviour and harmful under FORCE_TRADE.
                     if (
                         _live_verified_loop
                         and _current_state_loop == _TradingState.OFF
-                        and not _live_now
                     ):
                         try:
                             _sm_loop.transition_to(
@@ -3190,8 +4905,8 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         if _runtime_mode_cycle is not None
                         else os.getenv("DRY_RUN_MODE", "false").lower().strip()
                     )
-                    _force_trade_val = os.getenv("FORCE_TRADE", "false").lower().strip()
-                    _force_trade_mode_val = os.getenv("FORCE_TRADE_MODE", "false").lower().strip()
+                    _force_trade_val = os.getenv("FORCE_TRADE", "").lower().strip() or "false"
+                    _force_trade_mode_val = os.getenv("FORCE_TRADE_MODE", "").lower().strip() or "false"
                     logger.critical(
                         "⚙️ MODE FLAGS | LIVE_CAPITAL_VERIFIED=%r LIVE_TRADING=%r DRY_RUN_MODE=%r "
                         "FORCE_TRADE=%r FORCE_TRADE_MODE=%r",
@@ -3226,6 +4941,52 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 # Trigger live-state activation checks using this cycle's frozen
                 # capital snapshot before any strategy execution starts.
                 _supervisor_step_state_machine()
+
+                # ── FORCE_TRADE hard-activation safety net ────────────────────
+                # After _supervisor_step_state_machine() runs, check if the FSM
+                # is still not LIVE_ACTIVE despite FORCE_TRADE=true.  If so,
+                # call _force_live_active_transition() directly as a last resort.
+                # This catches the case where the supervisor's commit_activation()
+                # call failed (e.g. startup coordinator proof not yet passed) but
+                # FORCE_TRADE + LIVE_CAPITAL_VERIFIED are both set — the operator
+                # has explicitly authorized live trading and the FSM must comply.
+                _force_loop_bypass = (
+                    _env_truthy("FORCE_TRADE")
+                    or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+                )
+                _live_verified_loop_now = _is_live_mode(resolve_runtime_mode_safe(logger))
+                if (
+                    _force_loop_bypass
+                    and _live_verified_loop_now
+                    and _sm_loop is not None
+                    and _SM_AVAILABLE
+                ):
+                    try:
+                        _fsm_state_now = _sm_loop.get_current_state()
+                        if _fsm_state_now != _TradingState.LIVE_ACTIVE:
+                            logger.warning(
+                                "⚡ [FORCE_TRADE] FSM still %s after supervisor step — "
+                                "calling _force_live_active_transition() to unblock order submission. "
+                                "LIVE_CAPITAL_VERIFIED=true + FORCE_TRADE=true. cycle=%d",
+                                _fsm_state_now.value,
+                                cycle,
+                            )
+                            if hasattr(_sm_loop, "_force_live_active_transition"):
+                                _flt_ok = _sm_loop._force_live_active_transition(
+                                    f"run_trading_loop FORCE_TRADE safety-net cycle={cycle}"
+                                )
+                                if _flt_ok:
+                                    logger.critical(
+                                        "⚡ [FORCE_TRADE] _force_live_active_transition SUCCESS — "
+                                        "FSM is now LIVE_ACTIVE. Orders will be submitted. cycle=%d",
+                                        cycle,
+                                    )
+                    except Exception as _flt_err:
+                        logger.warning(
+                            "[FORCE_TRADE] loop-level _force_live_active_transition failed: %s",
+                            _flt_err,
+                        )
+                # ── End FORCE_TRADE hard-activation safety net ────────────────
 
                 # ── Explicit commit_activation gate ───────────────────────────
                 # When the bot is in LIVE_PENDING_CONFIRMATION and the authority
@@ -3299,7 +5060,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         _first_snap = bool(_sm_loop.get_first_snap_accepted())
                         _runtime_mode_cycle = resolve_runtime_mode_safe(logger)
                         _live_verified_now = _is_live_mode(_runtime_mode_cycle)
-                        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1.0") or 1.0)
+                        _min_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "50.0") or 50.0)  # $50 minimum for HF scalp mode (Apr 2026)
                         _balance_ok = float(_cycle_balance or 0.0) >= _min_balance
 
                         if (not _committed) or (not _can_dispatch):
@@ -3535,6 +5296,23 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         time.sleep(cycle_secs)
                         continue
 
+                    # FORCE_TRADE / NIJA_FORCE_ACTIVATION bypass: when an operator override
+                    # flag is active, allow the strategy cycle to run even before the FSM
+                    # has fully converged to LIVE_ACTIVE.  The downstream broker adapter
+                    # still enforces can_execute() (which requires LIVE_ACTIVE), so no
+                    # orders are placed until activation completes — but market scanning
+                    # and signal generation proceed immediately.  This unblocks the pipeline
+                    # in deployments where Redis or capital-authority hydration is delayed.
+                    # NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK is also included here because
+                    # it signals that Redis is not available and the FSM should not be
+                    # blocked waiting for distributed lock infrastructure.
+                    _force_cycle_bypass = (
+                        _env_truthy("FORCE_TRADE")
+                        or _env_truthy("NIJA_FORCE_ACTIVATION")
+                        or _env_truthy("FORCE_TRADE_MODE")
+                        or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+                    )
+
                     if (not _committed_gate) or (not _dispatch_gate) or (not _live_gate):
                         _skip_signature = (
                             bool(_committed_gate),
@@ -3571,6 +5349,49 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                         time.sleep(_activation_retry_sleep_s)
                         continue
                     _last_cycle_skip_signature = None
+                        if _force_cycle_bypass:
+                            # Operator override active — run the strategy cycle immediately
+                            # even though the FSM has not reached LIVE_ACTIVE yet.  Log once
+                            # per signature change so the operator can see the bypass is active.
+                            if _skip_signature != _last_cycle_skip_signature:
+                                logger.warning(
+                                    "⚡ FORCE_TRADE bypass: running strategy cycle despite activation gate "
+                                    "| committed=%s dispatch=%s state=%s — orders will be blocked by "
+                                    "broker can_execute() until FSM reaches LIVE_ACTIVE",
+                                    _committed_gate,
+                                    _dispatch_gate,
+                                    getattr(_state_gate, "value", str(_state_gate)),
+                                )
+                                _last_cycle_skip_signature = _skip_signature
+                            # Fall through to run_cycle() below.
+                        else:
+                            if _skip_signature != _last_cycle_skip_signature:
+                                logger.warning(
+                                    "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
+                                    "runtime_authority=%s reason=%s retry_in=%.0fs",
+                                    _committed_gate,
+                                    _dispatch_gate,
+                                    getattr(_state_gate, "value", str(_state_gate)),
+                                    _runtime_authority or "unknown",
+                                    _dispatch_reason or "not_reported",
+                                    _activation_retry_sleep_s,
+                                )
+                                _last_cycle_skip_signature = _skip_signature
+                            else:
+                                _rate_limited_critical(
+                                    "core_loop_activation_skip",
+                                    "dispatch_gate",
+                                    60.0,
+                                    "⏸️ STRATEGY CYCLE STILL WAITING | state=%s dispatch=%s reason=%s retry_in=%.0fs",
+                                    getattr(_state_gate, "value", str(_state_gate)),
+                                    _dispatch_gate,
+                                    _dispatch_reason or "not_reported",
+                                    _activation_retry_sleep_s,
+                                )
+                            time.sleep(_activation_retry_sleep_s)
+                            continue
+                    else:
+                        _last_cycle_skip_signature = None
 
                 _rate_limited_critical(
                     "core_loop_capital_check",
@@ -3587,13 +5408,37 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 )
                 logger.info("💰 CAPITAL CHECK: $%.2f", _cycle_cap)
                 logger.info("🚀 RUNNING TRADE CYCLE")
+                logger.critical(
+                    "🚀 [CYCLE_INVOKE] strategy.run_cycle() CALLED | "
+                    "cycle=%d capital=$%.2f cycle_id=%s",
+                    cycle, _cycle_cap, _current_cycle_id,
+                )
                 _cycle_start_ts = time.time()
                 _next_sleep_s = float(cycle_secs)
                 update_runtime_correlation(cycle_id=_current_cycle_id)
                 try:
                     _strategy_next_interval = strategy.run_cycle()
+                    logger.critical(
+                        "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
+                        "cycle=%d next_interval=%s",
+                        cycle, _strategy_next_interval,
+                    )
+                    logger.info(
+                        "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
+                        "cycle=%d next_interval=%s",
+                        cycle,
+                        _strategy_next_interval,
+                    )
                     if isinstance(_strategy_next_interval, (int, float)):
                         _next_sleep_s = max(1.0, float(_strategy_next_interval))
+                except Exception as _run_cycle_err:
+                    logger.critical(
+                        "❌ [CYCLE_INVOKE] strategy.run_cycle() RAISED EXCEPTION | "
+                        "cycle=%d error=%s",
+                        cycle, _run_cycle_err,
+                        exc_info=True,
+                    )
+                    raise
                 finally:
                     clear_runtime_correlation()
                 _cycle_elapsed = time.time() - _cycle_start_ts

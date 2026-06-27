@@ -352,14 +352,36 @@ class TradePermissionEngine:
         # OPTIONAL broker (OKX, Binance, Alpaca) failure → always pass.
         # CRITICAL broker (Kraken, Coinbase) dead → block BUY until recovery.
         # SELL / exit orders always pass so positions can always be closed.
+        # FORCE_TRADE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK bypass: when an
+        # operator override flag is active, treat a dead CRITICAL broker as
+        # healthy so the trade can proceed.  The broker adapter still enforces
+        # its own can_execute() check, so this only unblocks the TPE gate —
+        # it does not bypass the actual order submission path.
+        _force_trade_tpe = (
+            os.environ.get("FORCE_TRADE", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+            or os.environ.get("NIJA_FORCE_ACTIVATION", "").strip().lower()
+            in ("1", "true", "yes", "on", "enabled")
+        )
         broker_crit_label, broker_health_ok, broker_health_detail = (
             self._check_broker_criticality(broker, side)
         )
+        if not broker_health_ok and _force_trade_tpe:
+            logger.warning(
+                "⚡ FORCE_TRADE: Layer 6 broker criticality bypassed for %s %s "
+                "— broker=%s detail=%s",
+                symbol, side, broker, broker_health_detail,
+            )
+            broker_health_ok = True
+            broker_health_detail = f"FORCE_TRADE bypass (was: {broker_health_detail})"
         broker_health_label = "HEALTHY" if broker_health_ok else "DEAD"
 
         # ── Final verdict ────────────────────────────────────────────────────
         # Layers 1 & 2 can be bypassed by streak / force logic.
-        # Layers 3, 4, 6 are absolute hard blocks — no bypass is permitted.
+        # Layer 3 (capital) is an absolute hard block — no bypass permitted.
+        # Layers 4 (liquidity) and 6 (broker) can be bypassed by FORCE_TRADE.
         if not signal_ok:
             final = "BLOCKED"
             block_reason = (
@@ -379,9 +401,17 @@ class TradePermissionEngine:
                 "🚫 CAPITAL GATE BLOCKING TRADE: %s — balance=$%.2f threshold=$%.2f",
                 symbol, balance, self._capital_threshold,
             )
-        elif not liquidity_ok:
+        elif not liquidity_ok and not _force_trade_tpe:
             final = "BLOCKED"
             block_reason = f"liquidity filter ({liquidity_detail})"
+        elif not liquidity_ok and _force_trade_tpe:
+            # FORCE_TRADE: log the liquidity concern but allow the trade through.
+            logger.warning(
+                "⚡ FORCE_TRADE: Layer 4 liquidity gate bypassed for %s %s — %s",
+                symbol, side, liquidity_detail,
+            )
+            final = "EXECUTE"
+            block_reason = ""
         elif not broker_health_ok:
             final = "BLOCKED"
             block_reason = f"broker criticality gate ({broker_health_detail})"

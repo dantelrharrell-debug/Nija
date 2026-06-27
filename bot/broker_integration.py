@@ -309,18 +309,6 @@ def _reject_if_unauthorized_order_submit(
     side: str,
     size: float,
 ) -> Optional[Dict[str, Any]]:
-    def _emit_rejection_telemetry(reason: str) -> None:
-        if get_exchange_kill_switch_protector is None:
-            return
-        try:
-            _eks = get_exchange_kill_switch_protector()
-            _oid = (
-                f"exec-reject:{broker_name}:{symbol}:{side}:{int(time.time() * 1000)}:{reason[:24]}"
-            )
-            _eks.record_order_result(order_id=_oid, accepted=False)
-        except Exception:
-            pass
-
     decision = can_execute()
     if decision.allowed:
         emit_pretrade_execution_validator_trace(
@@ -352,11 +340,6 @@ def _reject_if_unauthorized_order_submit(
         return None
 
     reason = str(getattr(decision, "reason", "execution_authority_violation") or "execution_authority_violation")
-    telemetry_reason = (
-        "distributed_writer_fence"
-        if ("fencing" in reason.lower() or "writer authority" in reason.lower())
-        else "execution_authority_violation"
-    )
     emit_pretrade_execution_validator_trace(
         decision,
         symbol=symbol,
@@ -364,7 +347,11 @@ def _reject_if_unauthorized_order_submit(
         size=size,
         terminal_surface="broker_integration",
     )
-    _emit_rejection_telemetry(telemetry_reason)
+    # NOTE: Authority-gate denials are NOT recorded as exchange order rejections.
+    # Recording them caused a feedback loop: denials → high rejection rate →
+    # ExchangeKillSwitchProtector trigger → EMERGENCY_STOP → more denials.
+    # Exchange-level rejections (real broker API errors) are recorded separately
+    # by broker adapters after the order actually reaches the exchange.
     logger.critical(
         "🔒 Execution authority violation: order submission blocked "
         "| broker=%s symbol=%s side=%s size=%s reason=%s",
@@ -1752,7 +1739,15 @@ class KrakenBrokerAdapter(BrokerInterface):
 
     def get_market_data(self, symbol: str, timeframe: str = '5m',
                        limit: int = 100) -> Optional[Dict]:
-        """Get market data from Kraken."""
+        """Get market data from Kraken.
+
+        CRITICAL: pykrakenapi retries indefinitely on RemoteDisconnected errors,
+        which causes the signal loop to hang for hours on a single symbol.
+        Wraps get_ohlc_data() in a daemon thread with a hard 15-second timeout
+        so a broken Kraken connection never blocks the entire trading loop.
+        On timeout, returns None so the signal loop skips this symbol and
+        continues scanning the remaining symbols.
+        """
         try:
             if not self.kraken_api:
                 return None
@@ -1768,12 +1763,40 @@ class KrakenBrokerAdapter(BrokerInterface):
 
             kraken_interval = interval_map.get(timeframe.lower(), 5)
 
-            # Fetch OHLC data
-            ohlc, last = self.kraken_api.get_ohlc_data(
-                kraken_symbol,
-                interval=kraken_interval,
-                ascending=True
-            )
+            # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
+            # Wrap in a 15-second thread timeout so a broken connection never hangs the
+            # signal loop for hours (root cause of 49+ minute stalls at idx=11/911).
+            _ohlc_result_holder: List[Any] = [None]
+            _ohlc_err_holder: List[Any] = [None]
+            _kraken_symbol_cap = kraken_symbol
+            _kraken_interval_cap = kraken_interval
+
+            def _fetch_ohlc() -> None:
+                try:
+                    _ohlc_result_holder[0] = self.kraken_api.get_ohlc_data(
+                        _kraken_symbol_cap,
+                        interval=_kraken_interval_cap,
+                        ascending=True,
+                    )
+                except Exception as _oe:
+                    _ohlc_err_holder[0] = _oe
+
+            _ohlc_timeout = float(os.getenv("NIJA_KRAKEN_OHLC_TIMEOUT", "15"))
+            _ohlc_thread = threading.Thread(target=_fetch_ohlc, daemon=True)
+            _ohlc_thread.start()
+            _ohlc_thread.join(_ohlc_timeout)
+            if _ohlc_thread.is_alive():
+                logger.warning(
+                    "⏱️ get_ohlc_data for %s timed out after %.0fs — "
+                    "skipping symbol (NIJA_KRAKEN_OHLC_TIMEOUT=%.0f). "
+                    "Signal loop will continue with next symbol.",
+                    symbol, _ohlc_timeout, _ohlc_timeout,
+                )
+                return None
+            if _ohlc_err_holder[0] is not None:
+                raise _ohlc_err_holder[0]
+
+            ohlc, last = _ohlc_result_holder[0]
 
             # Convert to standard format (vectorised – avoids iterrows overhead)
             tail = ohlc.tail(limit)
@@ -2264,25 +2287,17 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("=" * 70)
                     raise ExecutionFailed("Kraken order not confirmed - no order description")
 
-                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0
-                # cost field represents the total cost/value of the order
+                # NOTE: The Kraken AddOrder response does NOT include a `cost` field
+                # unless the order fills immediately. Checking cost > 0 here would hard-fail
+                # every market order that doesn't fill in the same API call.
+                # Actual fill cost is retrieved via QueryOrders below.
                 cost = float(order_result.get('cost', '0'))
-                if cost <= 0:
-                    logger.error("=" * 70)
-                    logger.error("❌ KRAKEN ORDER NOT CONFIRMED - INVALID COST")
-                    logger.error("=" * 70)
-                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Size: {size}")
-                    logger.error(f"   Order ID: {order_id}")
-                    logger.error(f"   Cost: {cost} (must be > 0)")
-                    logger.error(f"   API Response: {result}")
-                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Cost must be greater than zero")
-                    logger.error("=" * 70)
-                    raise ExecutionFailed(f"Kraken order not confirmed - invalid cost: {cost}")
 
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Market {side} order: {kraken_symbol} (ID: {order_id})")
                 logger.info(f"   Order Description: {order_description}")
-                logger.info(f"   Order Cost: ${cost:.2f}")
+                if cost > 0:
+                    logger.info(f"   Order Cost (immediate fill): ${cost:.2f}")
 
                 # ✅ REQUIREMENT #2: Attempt to fetch order fill details
                 # Query the order to get filled price and volume
@@ -2607,21 +2622,12 @@ class KrakenBrokerAdapter(BrokerInterface):
                     logger.error("=" * 70)
                     raise ExecutionFailed("Kraken limit order not confirmed - no order description")
 
-                # ✅ REQUIREMENT 1: HARD-FAIL - Verify cost > 0 (for limit orders, cost may be 0 until filled)
-                # For limit orders, we'll verify volume instead since they may not fill immediately
-                volume = float(order_result.get('volume', '0'))
-                if volume <= 0:
-                    logger.error("=" * 70)
-                    logger.error("❌ KRAKEN LIMIT ORDER NOT CONFIRMED - INVALID VOLUME")
-                    logger.error("=" * 70)
-                    logger.error(f"   Symbol: {kraken_symbol}, Side: {side}, Price: {price}, Size: {size}")
-                    logger.error(f"   Order ID: {order_id}")
-                    logger.error(f"   Volume: {volume} (must be > 0)")
-                    logger.error(f"   API Response: {result}")
-                    logger.error("   ⚠️  ORDER NOT CONFIRMED - Volume must be greater than zero")
-                    logger.error("=" * 70)
-                    raise ExecutionFailed(f"Kraken limit order not confirmed - invalid volume: {volume}")
-
+                # NOTE: The Kraken AddOrder response does NOT include a `volume` field
+                # for newly-placed limit orders. Checking volume > 0 here would hard-fail
+                # every limit order. The intended order volume is already in `size` (base
+                # currency), which was validated above. The exchange-assigned volume is
+                # confirmed by the txid and order description.
+                volume = size  # requested order size (base currency)
                 logger.info(f"✅ Kraken txid received: {order_id}")
                 logger.info(f"   Limit {side} order: {kraken_symbol} @ ${price} (ID: {order_id})")
                 logger.info(f"   Order Description: {order_description}")

@@ -545,27 +545,89 @@ class ECELExecutionCompiler:
         remainder = (v % s).normalize()
         return remainder == Decimal("0")
 
+    # Known quote assets used to split no-separator symbols (e.g. ADAUSD → ADA-USD).
+    # Ordered longest-first so that USDC is matched before USD.
+    _KNOWN_QUOTE_ASSETS = ("USDC", "USDT", "USD", "BTC", "ETH", "EUR", "GBP", "ZUSD")
+
+    @staticmethod
+    def _split_no_separator_symbol(symbol: str) -> str:
+        """Attempt to insert a dash separator into a symbol that has none.
+
+        Tries each known quote asset as a suffix match.  For example:
+          ``ADAUSD``  → ``ADA-USD``
+          ``BTCUSDC`` → ``BTC-USDC``
+          ``XBTUSD``  → ``XBT-USD``
+
+        Returns the original symbol unchanged when no known quote suffix is found.
+        """
+        for quote in ECELExecutionCompiler._KNOWN_QUOTE_ASSETS:
+            if symbol.endswith(quote) and len(symbol) > len(quote):
+                base = symbol[: -len(quote)]
+                if base:
+                    return f"{base}-{quote}"
+        return symbol
+
+    @staticmethod
+    def _normalize_symbol(raw_symbol: str, broker: str) -> str:  # noqa: ARG004
+        """Normalize a raw symbol string to the canonical SYMBOL-ASSET format.
+
+        Handles three input forms:
+          * ``ADA-USD``  — already canonical, returned as-is.
+          * ``ADA/USD``  — slash-separated; slash is replaced with a dash.
+          * ``ADAUSD``   — no separator; split using known quote-asset suffixes.
+        """
+        s = (raw_symbol or "").strip().upper()
+        # Normalise slash-separated form first.
+        s = s.replace("/", "-")
+        # If still no dash, attempt to infer the separator from known quote assets.
+        if "-" not in s:
+            s = ECELExecutionCompiler._split_no_separator_symbol(s)
+        return s
+
     def compile(self, req: CompileRequest) -> CompileResult:
         broker = (req.broker or "coinbase").lower()
-        symbol = (req.symbol or "").strip().upper().replace("/", "-")
         side = (req.side or "").strip().lower()
         order_type = (req.order_type or "MARKET").strip().upper()
 
         if side not in ("buy", "sell"):
-            return self._reject("UNSUPPORTED_SIDE", broker, symbol, side, None, side=req.side)
+            # Use a best-effort normalized symbol for the rejection log only.
+            _sym_for_reject = self._normalize_symbol(req.symbol, broker)
+            return self._reject("UNSUPPORTED_SIDE", broker, _sym_for_reject, side, None, side=req.side)
+
+        # Normalize the symbol first so that slash-separated (e.g. ADA/USD) and
+        # no-separator (e.g. ADAUSD) forms are canonicalized to ADA-USD before
+        # any format validation.
+        symbol = self._normalize_symbol(req.symbol, broker)
+        logger.info(
+            "[ECEL compile] DIAG: symbol normalization | raw=%r normalized=%r broker=%s",
+            req.symbol,
+            symbol,
+            broker,
+        )
+
+        # Validate that the normalized symbol contains a dash separator.
+        # ADA-USD, ADA/USD, and ADAUSD are all accepted (the latter two are
+        # normalized above).  Only truly unrecognisable formats are rejected.
+        if "-" not in symbol:
+            logger.warning(
+                "[ECEL compile] DIAG: INVALID_SYMBOL_FORMAT rejected | "
+                "req.symbol=%r normalized=%r broker=%s — "
+                "accepted formats: 'ADA-USD' (dash), 'ADA/USD' (slash), 'ADAUSD' (no-sep with known quote suffix)",
+                req.symbol,
+                symbol,
+                broker,
+            )
+            return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, raw_symbol=req.symbol)
 
         if order_type not in ("MARKET", "LIMIT"):
             return self._reject("UNSUPPORTED_ORDER_TYPE", broker, symbol, side, None, order_type=order_type)
-
-        if "-" not in symbol:
-            return self._reject("INVALID_SYMBOL_FORMAT", broker, symbol, side, None, symbol=symbol)
 
         # Keep schema data fresh from public endpoints without blocking every call.
         self.schema.refresh_if_due(target_broker=broker)
 
         rule = self.schema.get_rule(broker, symbol)
         if rule is None:
-            return self._reject("NO_CONTRACT_RULE", broker, symbol, side, None, broker=broker, symbol=symbol)
+            return self._reject("NO_CONTRACT_RULE", broker, symbol, side, None, attempted_broker=broker)
 
         desired_notional = self._to_decimal(req.desired_notional_usd)
         if desired_notional <= 0:

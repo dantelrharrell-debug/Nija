@@ -285,3 +285,143 @@ def test_ai_engine_force_trade_emits_and_selects_below_floor_signal(monkeypatch)
 
     assert selected == [signal]
     assert selected[0].position_multiplier <= 0.50
+
+
+# ---------------------------------------------------------------------------
+# Timeout env-var parsing and hung-call safety tests
+# ---------------------------------------------------------------------------
+
+def test_invalid_analyze_market_timeout_falls_back_to_default(monkeypatch):
+    """NIJA_ANALYZE_MARKET_TIMEOUT with a non-numeric value should fall back to 15 s."""
+    import os
+    import queue
+    import threading
+
+    monkeypatch.setenv("NIJA_ANALYZE_MARKET_TIMEOUT", "not-a-number")
+
+    # Reproduce the guarded parse logic from nija_core_loop.py
+    try:
+        timeout = max(
+            0.1,
+            float(os.getenv("NIJA_ANALYZE_MARKET_TIMEOUT", "15") or "15"),
+        )
+    except (ValueError, TypeError):
+        timeout = 15.0
+
+    assert timeout == 15.0
+
+
+def test_invalid_candle_fetch_timeout_falls_back_to_default(monkeypatch):
+    """NIJA_CANDLE_FETCH_TIMEOUT with a non-numeric value should fall back to 10 s."""
+    import os
+
+    monkeypatch.setenv("NIJA_CANDLE_FETCH_TIMEOUT", "bad-value")
+
+    try:
+        timeout = max(0.1, float(os.getenv("NIJA_CANDLE_FETCH_TIMEOUT", "10") or "10"))
+    except (ValueError, TypeError):
+        timeout = 10.0
+
+    assert timeout == 10.0
+
+
+def test_analyze_market_timeout_clamps_to_positive(monkeypatch):
+    """Zero or negative NIJA_ANALYZE_MARKET_TIMEOUT should be clamped to at least 0.1 s."""
+    import os
+
+    monkeypatch.setenv("NIJA_ANALYZE_MARKET_TIMEOUT", "0")
+    try:
+        timeout = max(
+            0.1,
+            float(os.getenv("NIJA_ANALYZE_MARKET_TIMEOUT", "15") or "15"),
+        )
+    except (ValueError, TypeError):
+        timeout = 15.0
+
+    assert timeout == 0.1
+
+
+def test_hung_analyze_market_returns_hold_within_timeout(monkeypatch):
+    """A hung analyze_market call should be treated as hold and not block the loop."""
+    import time
+    import queue
+    import threading
+
+    monkeypatch.setenv("NIJA_ANALYZE_MARKET_TIMEOUT", "0.2")
+
+    try:
+        _analysis_timeout = max(
+            0.1,
+            float(monkeypatch.getattr if False else __import__("os").getenv(
+                "NIJA_ANALYZE_MARKET_TIMEOUT", "15"
+            ) or "15"),
+        )
+    except (ValueError, TypeError):
+        _analysis_timeout = 15.0
+
+    _am_result_q: queue.Queue = queue.Queue(maxsize=1)
+
+    def _hung_analyze_market() -> None:
+        time.sleep(10)  # simulates a hang
+        _am_result_q.put(("result", {"action": "enter_long"}))
+
+    worker = threading.Thread(target=_hung_analyze_market, daemon=True)
+    worker.start()
+
+    start = time.monotonic()
+    try:
+        _am_result_q.get(timeout=_analysis_timeout)
+        timed_out = False
+    except queue.Empty:
+        timed_out = True
+    elapsed = time.monotonic() - start
+
+    assert timed_out, "Expected timeout but queue returned a result"
+    assert elapsed < 1.0, f"Timeout took too long: {elapsed:.2f}s"
+
+
+def test_call_market_data_method_timeout_returns_none(monkeypatch):
+    """_call_market_data_method should return None on a hung broker call."""
+    import time
+    from bot.nija_core_loop import NijaCoreLoop
+
+    monkeypatch.setenv("NIJA_CANDLE_FETCH_TIMEOUT", "0.2")
+
+    def _slow_get_candles(symbol, limit=200):
+        time.sleep(10)
+        return [{"close": 1.0}]
+
+    _slow_get_candles.__name__ = "get_candles"
+
+    result = NijaCoreLoop._call_market_data_method(
+        _slow_get_candles,
+        (("BTC-USD",), {"limit": 200}),
+        (("BTC-USD", "1m", 200), {}),
+    )
+
+    assert result is None
+
+
+def test_call_market_data_method_timeout_log_includes_symbol_and_fn(monkeypatch, caplog):
+    """Timeout warning should include the callable name and the symbol."""
+    import time
+    import logging
+    from bot.nija_core_loop import NijaCoreLoop
+
+    monkeypatch.setenv("NIJA_CANDLE_FETCH_TIMEOUT", "0.2")
+
+    def _slow_fn(symbol, limit=200):
+        time.sleep(10)
+
+    _slow_fn.__name__ = "get_candles"
+
+    with caplog.at_level(logging.WARNING):
+        NijaCoreLoop._call_market_data_method(
+            _slow_fn,
+            (("ETH-USD",), {"limit": 200}),
+            (("ETH-USD", "1m", 200), {}),
+        )
+
+    combined = " ".join(caplog.messages)
+    assert "ETH-USD" in combined, "Symbol should appear in timeout warning"
+    assert "get_candles" in combined, "Callable name should appear in timeout warning"

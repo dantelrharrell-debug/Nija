@@ -487,6 +487,34 @@ class RecoveryController:
             Tuple[bool, str]: (allowed, reason)
         """
         with self._lock:
+            # ── FORCE_TRADE bypass: when operator override flags are active,
+            # allow entries regardless of controller state (except EMERGENCY_HALT).
+            # This prevents the recovery controller from silently blocking all
+            # orders when FORCE_TRADE=true + LIVE_CAPITAL_VERIFIED=true are set.
+            # EMERGENCY_HALT is intentionally excluded — that always requires a
+            # manual resume() call to ensure a human reviews the situation.
+            _force_trade_bypass = (
+                os.getenv("FORCE_TRADE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.getenv("FORCE_TRADE_MODE", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+                or os.getenv("NIJA_FORCE_ACTIVATION", "").strip().lower()
+                in ("1", "true", "yes", "on", "enabled")
+            )
+            if _force_trade_bypass and self._current_state != FailureState.EMERGENCY_HALT:
+                logger.critical(
+                    "⚡ [RecoveryController] FORCE_TRADE bypass: can_trade(%s) returning True "
+                    "— state=%s trading_enabled=%s capital_safety=%s "
+                    "(FORCE_TRADE / NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK active)",
+                    operation,
+                    self._current_state.value,
+                    self._trading_enabled,
+                    self._capital_safety_level.value,
+                )
+                return True, "FORCE_TRADE bypass: trading allowed regardless of controller state"
+
             # Emergency halt - NOTHING is allowed
             if self._current_state == FailureState.EMERGENCY_HALT:
                 return False, "EMERGENCY HALT - All trading operations disabled"

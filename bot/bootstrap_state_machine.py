@@ -352,6 +352,30 @@ class BootstrapStateMachine:
         # Single-owner kernel: only the designated thread may drive transitions.
         # None until claim_bootstrap_ownership() is called.
         self._owner_thread_id: Optional[int] = None
+        # Retry counter: tracks how many times BOOT_FAILED_RETRY has been entered
+        # so that force_transition_from_retry() can bypass stuck conditions after
+        # _MAX_BOOT_FAILED_RETRIES consecutive failures.
+        #
+        # Raised from 3 → 10 to prevent premature EXTERNAL_RESTART_REQUIRED
+        # escalation during transient startup failures (e.g. stale CAPITAL_READY
+        # state detected on fresh boot, broker connectivity blips).  The
+        # force_transition_from_retry() path already handles the stuck-FSM case
+        # after 30 s, so a higher retry ceiling only adds resilience.
+        self._boot_failed_retry_count: int = 0
+        self._MAX_BOOT_FAILED_RETRIES: int = int(
+            os.environ.get("NIJA_MAX_BOOT_FAILED_RETRIES", "10")
+        )
+        # Exponential backoff for BOOT_FAILED_RETRY: each consecutive retry
+        # waits longer before the next PLATFORM_CONNECTING attempt.
+        # Base delay is 2 s; cap is 60 s.  Stored as wall-clock timestamp of
+        # the last BOOT_FAILED_RETRY entry so callers can compute the wait.
+        self._boot_failed_retry_last_ts: float = 0.0
+        self._BOOT_RETRY_BASE_DELAY_S: float = float(
+            os.environ.get("NIJA_BOOT_RETRY_BASE_DELAY_S", "2.0")
+        )
+        self._BOOT_RETRY_MAX_DELAY_S: float = float(
+            os.environ.get("NIJA_BOOT_RETRY_MAX_DELAY_S", "60.0")
+        )
 
     # ------------------------------------------------------------------
     # State access
@@ -557,14 +581,42 @@ class BootstrapStateMachine:
                 self._execution_authority = True
                 # Runtime supervision is active; release strict bootstrap ownership.
                 self._owner_thread_id = None
+                # Successful boot — reset the retry counter.
+                self._boot_failed_retry_count = 0
+            elif new_state == BootstrapState.BOOT_FAILED_RETRY:
+                self._boot_complete = False
+                self._execution_authority = False
+                # Retry/error states hand bootstrap control back to the next
+                # recovery attempt; stale owner IDs must not block re-entry.
+                self._owner_thread_id = None
+                # Track consecutive BOOT_FAILED_RETRY entries for force-forward logic.
+                self._boot_failed_retry_count += 1
+                # Record timestamp for exponential backoff calculation.
+                self._boot_failed_retry_last_ts = time.time()
+                _backoff_s = min(
+                    self._BOOT_RETRY_BASE_DELAY_S * (2 ** (self._boot_failed_retry_count - 1)),
+                    self._BOOT_RETRY_MAX_DELAY_S,
+                )
+                logger.warning(
+                    "⚠️  [BootstrapFSM] BOOT_FAILED_RETRY entry #%d (max=%d) "
+                    "backoff_delay_s=%.1f",
+                    self._boot_failed_retry_count,
+                    self._MAX_BOOT_FAILED_RETRIES,
+                    _backoff_s,
+                )
             elif new_state in {
                 BootstrapState.BOOT_INIT,
-                BootstrapState.BOOT_FAILED_RETRY,
                 BootstrapState.EXTERNAL_RESTART_REQUIRED,
                 BootstrapState.SHUTDOWN,
             }:
                 self._boot_complete = False
                 self._execution_authority = False
+                # Retry/error states hand bootstrap control back to the next
+                # recovery attempt; stale owner IDs must not block re-entry.
+                self._owner_thread_id = None
+            elif new_state == BootstrapState.PLATFORM_CONNECTING:
+                # Leaving BOOT_FAILED_RETRY successfully — reset counter.
+                self._boot_failed_retry_count = 0
 
         logger.info(
             "🔄 [BootstrapFSM] %s → %s  reason=%s",
@@ -601,14 +653,106 @@ class BootstrapStateMachine:
             }
             self._history.append(record)
             self._state = BootstrapState.BOOT_FAILED_RETRY
+            self._boot_complete = False
+            self._execution_authority = False
             self._balance_polling_disabled = False
             self._balance_polling_skip_logged = False
+            self._owner_thread_id = None
+            # Increment the retry counter so force_transition_from_retry() can
+            # detect when the FSM has been stuck too many times.
+            self._boot_failed_retry_count += 1
+            _retry_count_snapshot = self._boot_failed_retry_count
+            # Record timestamp for exponential backoff calculation.
+            self._boot_failed_retry_last_ts = time.time()
 
+        _backoff = self.get_retry_backoff_delay_s()
         logger.warning(
-            "⚠️  [BootstrapFSM] reset_for_retry: %s → BOOT_FAILED_RETRY  reason=%s",
+            "⚠️  [BootstrapFSM] reset_for_retry: %s → BOOT_FAILED_RETRY  reason=%s  "
+            "retry_count=%d (max=%d) backoff_delay_s=%.1f",
             current.value,
             reason,
+            _retry_count_snapshot,
+            self._MAX_BOOT_FAILED_RETRIES,
+            _backoff,
         )
+
+    def get_retry_backoff_delay_s(self) -> float:
+        """Return the recommended backoff delay (seconds) before the next retry.
+
+        Uses exponential backoff: ``base * 2^(retry_count - 1)``, capped at
+        ``_BOOT_RETRY_MAX_DELAY_S``.  Returns 0.0 when no retries have occurred.
+
+        Callers should sleep for this duration after entering BOOT_FAILED_RETRY
+        before attempting to transition to PLATFORM_CONNECTING again.
+        """
+        with self._lock:
+            count = self._boot_failed_retry_count
+            base = self._BOOT_RETRY_BASE_DELAY_S
+            cap = self._BOOT_RETRY_MAX_DELAY_S
+        if count <= 0:
+            return 0.0
+        delay = base * (2 ** (count - 1))
+        return min(delay, cap)
+
+    @property
+    def boot_failed_retry_count(self) -> int:
+        """Number of times BOOT_FAILED_RETRY has been entered consecutively."""
+        with self._lock:
+            return self._boot_failed_retry_count
+
+    def force_transition_from_retry(self, reason: str = "force_retry_transition") -> bool:
+        """Force a transition from BOOT_FAILED_RETRY to PLATFORM_CONNECTING.
+
+        This method bypasses the normal ownership check and is intended for use
+        when the FSM is stuck in BOOT_FAILED_RETRY and the normal transition
+        mechanism has failed.  It is safe to call from any thread.
+
+        Called automatically by the retry loop after ``_MAX_BOOT_FAILED_RETRIES``
+        consecutive failures to prevent the FSM from being permanently stuck.
+
+        Returns
+        -------
+        bool
+            ``True`` if the transition was applied; ``False`` if the FSM is not
+            in BOOT_FAILED_RETRY or is in a terminal state.
+        """
+        with self._lock:
+            current = self._state
+            if current != BootstrapState.BOOT_FAILED_RETRY:
+                logger.debug(
+                    "[BootstrapFSM] force_transition_from_retry: not in BOOT_FAILED_RETRY "
+                    "(state=%s) — no-op",
+                    current.value,
+                )
+                return False
+
+            logger.warning(
+                "🔧 [BootstrapFSM] force_transition_from_retry: forcing BOOT_FAILED_RETRY → "
+                "PLATFORM_CONNECTING after %d retries (reason=%s)",
+                self._boot_failed_retry_count,
+                reason,
+            )
+            record: Dict[str, Any] = {
+                "from": current.value,
+                "to": BootstrapState.PLATFORM_CONNECTING.value,
+                "reason": f"force_transition_from_retry: {reason}",
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            self._history.append(record)
+            self._state = BootstrapState.PLATFORM_CONNECTING
+            self._boot_complete = False
+            self._execution_authority = False
+            # Reset retry counter after forced transition.
+            self._boot_failed_retry_count = 0
+            # Claim ownership for the calling thread so it can drive forward.
+            self._owner_thread_id = threading.get_ident()
+
+        logger.warning(
+            "🔧 [BootstrapFSM] force_transition_from_retry: BOOT_FAILED_RETRY → "
+            "PLATFORM_CONNECTING applied (reason=%s)",
+            reason,
+        )
+        return True
 
     def finalize_boot(self, reason: str = "runtime handoff") -> bool:
         """Commit the final READY -> RUNNING handoff and grant execution authority.

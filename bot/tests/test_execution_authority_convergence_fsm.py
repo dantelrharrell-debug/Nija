@@ -310,6 +310,64 @@ class TestRuntimeAuthorityRevocation(unittest.TestCase):
                     self.assertFalse(sm.can_dispatch_trades())
                     self.assertFalse(sm.has_execution_authority())
 
+    def test_stale_emergency_stop_auto_clears_when_kill_switch_inactive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            sm = TradingStateMachine(state_file=state_path)
+            with sm._lock:
+                sm._current_state = TradingState.EMERGENCY_STOP
+                sm._activation_committed = False
+                sm._execution_authority = False
+                sm._core_loop_owns_execution = True
+                sm._can_dispatch_trades = False
+
+            with patch(
+                "bot.trading_state_machine._kill_switch_is_active",
+                return_value=(False, ""),
+            ):
+                self.assertFalse(sm.can_dispatch_trades())
+
+            self.assertEqual(sm.get_current_state(), TradingState.OFF)
+            with open(state_path, "r", encoding="utf-8") as fh:
+                persisted = json.load(fh)
+            self.assertEqual(persisted.get("current_state"), TradingState.OFF.value)
+
+    def test_state_read_auto_clears_stale_emergency_stop_when_kill_switch_inactive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            sm = TradingStateMachine(state_file=state_path)
+            with sm._lock:
+                sm._current_state = TradingState.EMERGENCY_STOP
+                sm._activation_committed = False
+                sm._execution_authority = False
+                sm._core_loop_owns_execution = True
+                sm._can_dispatch_trades = False
+
+            with patch(
+                "bot.trading_state_machine._kill_switch_is_active",
+                return_value=(False, ""),
+            ):
+                self.assertFalse(sm.is_emergency_stopped())
+                self.assertEqual(sm.get_current_state(), TradingState.OFF)
+
+    def test_emergency_stop_remains_when_kill_switch_active(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = os.path.join(tmp, "state.json")
+            sm = TradingStateMachine(state_file=state_path)
+            with sm._lock:
+                sm._current_state = TradingState.EMERGENCY_STOP
+                sm._activation_committed = False
+                sm._execution_authority = False
+                sm._core_loop_owns_execution = True
+                sm._can_dispatch_trades = False
+
+            with patch(
+                "bot.trading_state_machine._kill_switch_is_active",
+                return_value=(True, ""),
+            ):
+                self.assertFalse(sm.can_dispatch_trades())
+                self.assertEqual(sm.get_current_state(), TradingState.EMERGENCY_STOP)
+
 
 class _StubCapitalAuthority:
     is_hydrated = True

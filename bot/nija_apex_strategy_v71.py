@@ -52,8 +52,8 @@ try:
     from position_sizer import MIN_POSITION_USD, calculate_position_size as _calc_position_size
     _CALC_POSITION_SIZE_AVAILABLE = True
 except ImportError:
-    MIN_POSITION_USD = 2.0  # Default to $2 minimum (lowered from $5 on Jan 21, 2026)
-    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $2.00")
+    MIN_POSITION_USD = 10.0  # Default to $10 minimum for micro-cap / HF scalp mode (Apr 2026)
+    logger.warning("Could not import MIN_POSITION_USD from position_sizer, using default $10.00")
 
 # Import small account constants from fee_aware_config
 try:
@@ -62,12 +62,13 @@ try:
         SMALL_ACCOUNT_MAX_POSITION_PCT
     )
 except ImportError:
-    SMALL_ACCOUNT_THRESHOLD = 100.0  # Fallback
+    SMALL_ACCOUNT_THRESHOLD = 200.0  # Fallback — raised to cover $174 balance (Apr 2026)
     SMALL_ACCOUNT_MAX_POSITION_PCT = 0.30  # Fallback — aligned with MAX_POSITION_SIZE hard limit
     logger.warning("Could not import small account constants from fee_aware_config, using defaults")
 
 # Broker-specific minimum position sizes (Jan 24, 2026)
-KRAKEN_MIN_POSITION_USD = 10.0  # Kraken requires $10 minimum trade size per exchange rules
+# Env-overridable via KRAKEN_MIN_NOTIONAL_USD for micro-cap / HF scalp mode.
+KRAKEN_MIN_POSITION_USD = float(os.getenv('KRAKEN_MIN_NOTIONAL_USD', '10.0'))  # Kraken $10 minimum (env-overridable)
 
 # Minimum order sizes per broker (USD).  Keeps all four check-sites in sync
 # and prevents sub-minimum orders from being scored, sized, or submitted.
@@ -2822,7 +2823,7 @@ class NIJAApexStrategyV71:
             Dictionary with analysis results and recommended action
         """
         try:
-            print("📊 Evaluating market conditions...")
+            logger.debug("📊 Evaluating market conditions for %s", symbol)
             # Record that this pair's signal was evaluated (funnel stage 0)
             if SIGNAL_FUNNEL_AVAILABLE and get_signal_funnel is not None:
                 try:
@@ -2847,12 +2848,34 @@ class NIJAApexStrategyV71:
             current_time = datetime.now()
             candle_closed, candle_reason = self._check_candle_closed(df, current_time)
             if not candle_closed:
-                logger.info("   ⏳ %s: %s", symbol, candle_reason)
-                return {
-                    'action': 'hold',
-                    'reason': f'Waiting for candle close ({candle_reason})',
-                    'filter_stage': 'candle_close',
-                }
+                # ── FORCE_TRADE bypass: when operator override flags are active,
+                # skip the candle-close gate so analyze_market() can return a full
+                # entry payload.  Without this, the core loop's fallback_active path
+                # overrides the 'hold' action but receives an analysis dict with no
+                # entry_price / stop_loss / take_profit fields, forcing a fallback
+                # payload build on every cycle — adding latency and log noise.
+                _force_candle_bypass = (
+                    _os_apex.getenv("FORCE_TRADE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or _os_apex.getenv("FORCE_TRADE_MODE", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                    or _os_apex.getenv("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "").strip().lower()
+                    in ("1", "true", "yes", "on", "enabled")
+                )
+                if _force_candle_bypass:
+                    logger.critical(
+                        "⚡ [analyze_market] FORCE_TRADE: candle-close gate bypassed for %s "
+                        "(%s) — proceeding to entry signal generation.",
+                        symbol, candle_reason,
+                    )
+                    # Fall through to indicator calculation and entry signal generation.
+                else:
+                    logger.info("   ⏳ %s: %s", symbol, candle_reason)
+                    return {
+                        'action': 'hold',
+                        'reason': f'Waiting for candle close ({candle_reason})',
+                        'filter_stage': 'candle_close',
+                    }
 
             # _last_daily_target_usd stays 0: edge-driven mode, no dollar target blocking.
 
@@ -3523,6 +3546,7 @@ class NIJAApexStrategyV71:
                                 entry_type=_entry_type_l,
                                 gate_score_reduction=_gate_reduction_l,
                                 volume_gate_multiplier=_gate_vol_mult_l,
+                                symbol=symbol,
                             )
                             if not _gate_result_l.passed:
                                 _gate_score = _gate_result_l.gates.get("gate1_score")
@@ -4054,7 +4078,9 @@ class NIJAApexStrategyV71:
                     # in favour of fixed-percentage scalp levels.
                     if getattr(self, '_hf_scalp_active', False):
                         _sl_pct = getattr(self, '_hf_stop_pct', 0.0035)
-                        _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
+                        # Default fallback of 1.0 ensures tp_pct=1.0/100=1.0%,
+                        # safely above the execution engine MIN_TP_PCT of 0.800%.
+                        _tp_pct = getattr(self, '_hf_tp_pct', 1.0) / 100.0
                         stop_loss  = current_price * (1.0 - _sl_pct)
                         tp_levels  = [current_price * (1.0 + _tp_pct)]
                         logger.info(
@@ -4129,6 +4155,38 @@ class NIJAApexStrategyV71:
                                 self.current_regime, tp_levels
                             )
 
+                        # ── Absolute TP floor (LONG): tp1 must be ≥ 1.0% above entry ──
+                        # Hard floor applied after ALL overrides (exit config, regime
+                        # adjustment) to guarantee tp1 always clears the execution
+                        # engine's target_geometry_gate (MIN_TP_PCT = 0.800%).
+                        # 1.0% provides a comfortable safety margin above the 0.8% gate.
+                        _MIN_TP_FLOOR = float(_os_apex.getenv("MIN_TP_FLOOR_PCT", "0.010"))
+                        _tp_floor_price = current_price * (1.0 + _MIN_TP_FLOOR)
+                        if isinstance(tp_levels, dict):
+                            if tp_levels.get('tp1', 0.0) < _tp_floor_price:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR LONG] %s tp1=%.6f (%.3f%%) < floor=%.6f (%.1f%%) — raising to floor",
+                                    symbol,
+                                    tp_levels.get('tp1', 0.0),
+                                    (tp_levels.get('tp1', current_price) - current_price) / current_price * 100,
+                                    _tp_floor_price,
+                                    _MIN_TP_FLOOR * 100,
+                                )
+                                tp_levels['tp1'] = _tp_floor_price
+                                tp_levels['tp2'] = max(tp_levels.get('tp2', 0.0), current_price * (1.0 + _MIN_TP_FLOOR * 1.5))
+                                tp_levels['tp3'] = max(tp_levels.get('tp3', 0.0), current_price * (1.0 + _MIN_TP_FLOOR * 2.0))
+                        elif isinstance(tp_levels, list) and len(tp_levels) > 0:
+                            if tp_levels[0] < _tp_floor_price:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR LONG] %s tp1=%.6f (%.3f%%) < floor=%.6f (%.1f%%) — raising to floor",
+                                    symbol,
+                                    tp_levels[0],
+                                    (tp_levels[0] - current_price) / current_price * 100,
+                                    _tp_floor_price,
+                                    _MIN_TP_FLOOR * 100,
+                                )
+                                tp_levels[0] = _tp_floor_price
+
                         # ═══════════════════════════════════════════════════════════════
                         # LAYER 2: TRADE MATH VERIFICATION
                         # ═══════════════════════════════════════════════════════════════
@@ -4136,7 +4194,7 @@ class NIJAApexStrategyV71:
                         # This is our last line of defense against poor-quality setups
 
                         # Extract first target for ratio calculation
-                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels.get('tp1', current_price) if isinstance(tp_levels, dict) else tp_levels
 
                         # Compute reward and risk amounts
                         risk_dollars = abs(current_price - stop_loss)
@@ -4491,6 +4549,7 @@ class NIJAApexStrategyV71:
                                 entry_type=_entry_type_s,
                                 gate_score_reduction=_gate_reduction_s,
                                 volume_gate_multiplier=_gate_vol_mult_s,
+                                symbol=symbol,
                             )
                             if not _gate_result_s.passed:
                                 _gate_score_short = _gate_result_s.gates.get("gate1_score")
@@ -5026,7 +5085,9 @@ class NIJAApexStrategyV71:
                     # in favour of fixed-percentage scalp levels.
                     if getattr(self, '_hf_scalp_active', False):
                         _sl_pct = getattr(self, '_hf_stop_pct', 0.0035)
-                        _tp_pct = getattr(self, '_hf_tp_pct', 0.5) / 100.0
+                        # Default fallback of 1.0 ensures tp_pct=1.0/100=1.0%,
+                        # safely above the execution engine MIN_TP_PCT of 0.800%.
+                        _tp_pct = getattr(self, '_hf_tp_pct', 1.0) / 100.0
                         stop_loss  = current_price * (1.0 + _sl_pct)
                         tp_levels  = [current_price * (1.0 - _tp_pct)]
                         logger.info(
@@ -5097,13 +5158,45 @@ class NIJAApexStrategyV71:
                                 self.current_regime, tp_levels
                             )
 
+                        # ── Absolute TP floor (SHORT): tp1 must be ≥ 1.0% below entry ─
+                        # Hard floor applied after ALL overrides (exit config, regime
+                        # adjustment) to guarantee tp1 always clears the execution
+                        # engine's target_geometry_gate (MIN_TP_PCT = 0.800%).
+                        # 1.0% provides a comfortable safety margin above the 0.8% gate.
+                        _MIN_TP_FLOOR_S = float(_os_apex.getenv("MIN_TP_FLOOR_PCT", "0.010"))
+                        _tp_floor_price_s = current_price * (1.0 - _MIN_TP_FLOOR_S)
+                        if isinstance(tp_levels, dict):
+                            if tp_levels.get('tp1', current_price) > _tp_floor_price_s:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR SHORT] %s tp1=%.6f (%.3f%%) > floor=%.6f (%.1f%%) — lowering to floor",
+                                    symbol,
+                                    tp_levels.get('tp1', current_price),
+                                    (current_price - tp_levels.get('tp1', current_price)) / current_price * 100,
+                                    _tp_floor_price_s,
+                                    _MIN_TP_FLOOR_S * 100,
+                                )
+                                tp_levels['tp1'] = _tp_floor_price_s
+                                tp_levels['tp2'] = min(tp_levels.get('tp2', current_price), current_price * (1.0 - _MIN_TP_FLOOR_S * 1.5))
+                                tp_levels['tp3'] = min(tp_levels.get('tp3', current_price), current_price * (1.0 - _MIN_TP_FLOOR_S * 2.0))
+                        elif isinstance(tp_levels, list) and len(tp_levels) > 0:
+                            if tp_levels[0] > _tp_floor_price_s:
+                                logger.warning(
+                                    "⚠️  [TP FLOOR SHORT] %s tp1=%.6f (%.3f%%) > floor=%.6f (%.1f%%) — lowering to floor",
+                                    symbol,
+                                    tp_levels[0],
+                                    (current_price - tp_levels[0]) / current_price * 100,
+                                    _tp_floor_price_s,
+                                    _MIN_TP_FLOOR_S * 100,
+                                )
+                                tp_levels[0] = _tp_floor_price_s
+
                         # ═══════════════════════════════════════════════════════════════
                         # LAYER 2: TRADE MATH VERIFICATION (SHORT)
                         # ═══════════════════════════════════════════════════════════════
                         # Verify trade has acceptable math before accepting signal
 
                         # Extract first target for ratio calculation
-                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels
+                        first_target = tp_levels[0] if isinstance(tp_levels, list) else tp_levels.get('tp1', current_price) if isinstance(tp_levels, dict) else tp_levels
 
                         # Compute reward and risk amounts
                         risk_dollars = abs(stop_loss - current_price)
@@ -5333,6 +5426,28 @@ class NIJAApexStrategyV71:
         """
         action = action_data.get('action')
 
+        print(
+            f"[NIJA-PRINT] execute_action CALLED | "
+            f"symbol={symbol} action={action} "
+            f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+            f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+            f"sl={float(action_data.get('stop_loss', 0.0) or 0.0):.6f} "
+            f"force_trade={os.getenv('FORCE_TRADE', 'false')} "
+            f"fallback={bool(action_data.get('forced_fallback') or action_data.get('fallback_entry'))}",
+            flush=True,
+        )
+        logger.critical(
+            "🎯 [execute_action] CALLED | symbol=%s action=%s position_size=$%.2f "
+            "entry_price=%.6f stop_loss=%.6f force_trade=%s fallback_entry=%s",
+            symbol,
+            action,
+            float(action_data.get('position_size', 0.0) or 0.0),
+            float(action_data.get('entry_price', 0.0) or 0.0),
+            float(action_data.get('stop_loss', 0.0) or 0.0),
+            os.getenv("FORCE_TRADE", "false"),
+            bool(action_data.get('forced_fallback') or action_data.get('fallback_entry')),
+        )
+
         try:
             # EMERGENCY: Check if entries are blocked via STOP_ALL_ENTRIES.conf
             stop_entries_file = os.path.join(os.path.dirname(__file__), '..', 'STOP_ALL_ENTRIES.conf')
@@ -5367,6 +5482,13 @@ class NIJAApexStrategyV71:
                 return levels
 
             if action == 'enter_long':
+                logger.critical(
+                    "📤 [execute_action] Calling execute_entry | symbol=%s side=long "
+                    "position_size=$%.2f entry_price=%.6f",
+                    symbol,
+                    float(action_data.get('position_size', 0.0) or 0.0),
+                    float(action_data.get('entry_price', 0.0) or 0.0),
+                )
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
                     side='long',
@@ -5374,6 +5496,11 @@ class NIJAApexStrategyV71:
                     entry_price=action_data['entry_price'],
                     stop_loss=action_data['stop_loss'],
                     take_profit_levels=_take_profit_levels()
+                )
+                logger.critical(
+                    "📥 [execute_action] execute_entry returned | symbol=%s side=long position=%s",
+                    symbol,
+                    "FILLED" if position else "NONE/BLOCKED",
                 )
                 if position:
                     logger.info(f"Long entry executed: {symbol} @ {action_data['entry_price']:.2f}")
@@ -5390,9 +5517,25 @@ class NIJAApexStrategyV71:
                             logger.debug(f"Harvest layer register error (long): {_reg_err}")
                     return True
                 else:
-                    logger.warning(
-                        f"⚠️  EXECUTION BLOCKED: {symbol} long entry returned no position "
-                        f"(broker rejected or nonce pause) — skipping, next cycle will retry"
+                    logger.critical(
+                        "❌ [execute_action] LONG ENTRY FAILED | symbol=%s "
+                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f "
+                        "execute_entry returned None — broker rejected or gate blocked. "
+                        "Check ExecutionEngine logs above for the specific rejection reason "
+                        "(bootstrap_authority, capital_gate, recovery_controller, hard_controls, "
+                        "net_edge_gate, expectancy_gate, exchange_normalizer, or broker error).",
+                        symbol,
+                        float(action_data.get('position_size', 0.0) or 0.0),
+                        float(action_data.get('entry_price', 0.0) or 0.0),
+                        float(action_data.get('stop_loss', 0.0) or 0.0),
+                    )
+                    print(
+                        f"[NIJA-PRINT] LONG ENTRY FAILED | symbol={symbol} "
+                        f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+                        f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                        f"sl={float(action_data.get('stop_loss', 0.0) or 0.0):.6f} "
+                        f"execute_entry=None",
+                        flush=True,
                     )
                     return False
 
@@ -5409,11 +5552,26 @@ class NIJAApexStrategyV71:
                         logger.warning(f"   Exchange: {broker_name} (spot markets don't support shorting)")
                         logger.warning(f"   Symbol: {symbol}")
                         logger.warning(f"   ℹ️  Note: SHORT works on futures/perpetuals (e.g., BTC-PERP)")
+                        print(
+                            f"[NIJA-PRINT] execute_action BLOCKED SHORT | "
+                            f"symbol={symbol} broker={broker_name} "
+                            f"reason=broker_does_not_support_shorting "
+                            f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                            f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f}",
+                            flush=True,
+                        )
                         return False
                 else:
                     logger.warning(f"⚠️  Exchange capability check unavailable - allowing SHORT (risky!)")
 
                 # Execute SHORT entry
+                logger.critical(
+                    "📤 [execute_action] Calling execute_entry | symbol=%s side=short "
+                    "position_size=$%.2f entry_price=%.6f",
+                    symbol,
+                    float(action_data.get('position_size', 0.0) or 0.0),
+                    float(action_data.get('entry_price', 0.0) or 0.0),
+                )
                 position = self.execution_engine.execute_entry(
                     symbol=symbol,
                     side='short',
@@ -5421,6 +5579,11 @@ class NIJAApexStrategyV71:
                     entry_price=action_data['entry_price'],
                     stop_loss=action_data['stop_loss'],
                     take_profit_levels=_take_profit_levels()
+                )
+                logger.critical(
+                    "📥 [execute_action] execute_entry returned | symbol=%s side=short position=%s",
+                    symbol,
+                    "FILLED" if position else "NONE/BLOCKED",
                 )
                 if position:
                     logger.info(f"✅ Short entry executed: {symbol} @ {action_data['entry_price']:.2f} (broker: {broker_name})")
@@ -5437,9 +5600,26 @@ class NIJAApexStrategyV71:
                             logger.debug(f"Harvest layer register error (short): {_reg_err}")
                     return True
                 else:
-                    logger.warning(
-                        f"⚠️  EXECUTION BLOCKED: {symbol} short entry returned no position "
-                        f"(broker rejected or nonce pause) — skipping, next cycle will retry"
+                    logger.critical(
+                        "❌ [execute_action] SHORT ENTRY FAILED | symbol=%s broker=%s "
+                        "position_size=$%.2f entry_price=%.6f stop_loss=%.6f "
+                        "execute_entry returned None — broker rejected or gate blocked. "
+                        "Check ExecutionEngine logs above for the specific rejection reason "
+                        "(bootstrap_authority, capital_gate, recovery_controller, hard_controls, "
+                        "net_edge_gate, expectancy_gate, exchange_normalizer, or broker error).",
+                        symbol,
+                        broker_name,
+                        float(action_data.get('position_size', 0.0) or 0.0),
+                        float(action_data.get('entry_price', 0.0) or 0.0),
+                        float(action_data.get('stop_loss', 0.0) or 0.0),
+                    )
+                    print(
+                        f"[NIJA-PRINT] SHORT ENTRY FAILED | symbol={symbol} broker={broker_name} "
+                        f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+                        f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                        f"sl={float(action_data.get('stop_loss', 0.0) or 0.0):.6f} "
+                        f"execute_entry=None",
+                        flush=True,
                     )
                     return False
 
@@ -5599,7 +5779,25 @@ class NIJAApexStrategyV71:
             return False
 
         except Exception as e:
-            logger.error(f"Execution error: {e}")
+            logger.critical(
+                "❌ [execute_action] EXCEPTION | symbol=%s action=%s "
+                "position_size=$%.2f entry_price=%.6f stop_loss=%.6f "
+                "error=%r — order was NOT submitted to broker.",
+                symbol,
+                action_data.get('action', 'unknown'),
+                float(action_data.get('position_size', 0.0) or 0.0),
+                float(action_data.get('entry_price', 0.0) or 0.0),
+                float(action_data.get('stop_loss', 0.0) or 0.0),
+                e,
+            )
+            print(
+                f"[NIJA-PRINT] execute_action EXCEPTION | symbol={symbol} "
+                f"action={action_data.get('action', 'unknown')} "
+                f"size=${float(action_data.get('position_size', 0.0) or 0.0):.2f} "
+                f"price={float(action_data.get('entry_price', 0.0) or 0.0):.6f} "
+                f"error={e!r}",
+                flush=True,
+            )
             return False
 
     # ============================================================
