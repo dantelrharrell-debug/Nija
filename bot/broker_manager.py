@@ -22,6 +22,25 @@ import uuid
 import weakref
 import threading
 
+# ── candlelite writable config dir ───────────────────────────────────────────
+# Must be set BEFORE any import that could trigger candlelite initialisation.
+# The okx SDK depends on candlelite, which tries to write SETTINGS.config into
+# its own site-packages directory on first import.  In containerised / read-only
+# environments this raises [Errno 13] Permission denied and prevents OKX from
+# connecting.  bot/__init__.py sets this first, but we repeat it here as a
+# safety net for cases where broker_manager is imported directly (e.g. tests,
+# scripts, or alternative entry points that bypass the package __init__).
+# os.environ.setdefault() is used so an operator-supplied value is never
+# overwritten, and so the two call-sites stay idempotent.
+_candlelite_dir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "candlelite")
+try:
+    os.makedirs(_candlelite_dir, exist_ok=True)
+except OSError:
+    _candlelite_dir = os.environ.get("TMPDIR", "/tmp")
+os.environ.setdefault("CANDLELITE_CONFIG_DIR", _candlelite_dir)
+del _candlelite_dir  # keep module namespace clean
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Optional: 'requests' is used for Kraken gateway routing (NIJA_KRAKEN_GATEWAY_URL).
 # Imported here at module level so the dependency is visible to scanners;
 # gateway calls will raise RuntimeError if not installed.
