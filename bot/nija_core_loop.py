@@ -2101,6 +2101,7 @@ class NijaCoreLoop:
 
                 # Determine trend from apex market filter
                 try:
+                    allow, trend, market_reason = self.apex.check_market_filter(df, indicators)
                     allow, trend, market_reason, *_market_filter_extra = self.apex.check_market_filter(
                         df, indicators
                     )
@@ -2845,10 +2846,17 @@ class NijaCoreLoop:
                             getattr(_perm, "block_reason", "") or "none",
                         )
                         if _perm.final_decision != "EXECUTE":
+                            blocked += 1
+                            # ── Entry-to-Order Trace: per-signal veto (TPE) ──
                             _tpe_reason = (
                                 getattr(_perm, "block_reason", None)
                                 or getattr(_perm, "reason", None)
                                 or "trade_permission_engine"
+                            )
+                            _funnel["ai_gate"] = ("FAIL", _tpe_reason)
+                            emit_cycle_trace(
+                                CycleOutcome.ENTRY_VETOED,
+                                reason=f"trade_permission_engine({sig.symbol}:{_tpe_reason})",
                             )
                             # ── FORCE_TRADE fallback: if TPE still blocks despite
                             # the bypass flags in the engine itself, override here
@@ -2961,6 +2969,17 @@ class NijaCoreLoop:
                 if fallback_active and action in ("enter_long", "enter_short"):
                     missing = {"position_size", "entry_price", "stop_loss", "take_profit"} - set(analysis.keys())
                     if missing:
+                        fallback_payload = self._build_forced_fallback_entry_analysis(
+                            df=df,
+                            sig=sig,
+                            snapshot=snapshot,
+                            action=action,
+                            existing_reason=analysis.get("reason", ""),
+                        )
+                        analysis.update(fallback_payload)
+                        # The fallback payload is already sized conservatively;
+                        # avoid multiplying it below broker minimum notional.
+                        sig.position_multiplier = 1.0
                         logger.info(
                             "⚡ [CoreLoop] Building fallback entry payload for %s "
                             "(missing fields: %s, force_trade=%s)",
@@ -3047,6 +3066,8 @@ class NijaCoreLoop:
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
                     _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
+                    continue
+                _funnel["profitability"] = ("PASS", "")
                     logger.critical(
                         "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
                         "action=%s reason=%s fallback_active=%s force_trade=%s — "
@@ -3460,6 +3481,8 @@ class NijaCoreLoop:
         # geometry gate (MIN_TP_PCT defaults to 0.8%, MAX_SL_PCT to 3.0%).
         # The previous 0.60% TP1 generated a complete-looking payload that was
         # still rejected before order submission.
+        take_profit_pct = (0.85, 1.20, 1.80)
+        trailing_stop_pct = 0.75
         take_profit_pct = (1.00, 1.50, 2.00)
         trailing_stop_pct = 0.75
         # Check whether any FORCE_TRADE flag is active — when set, the
@@ -3482,6 +3505,18 @@ class NijaCoreLoop:
                 side="short" if action == "enter_short" else "long",
             )
             if not competitive_profile.liquidity_ok:
+                raise ValueError(
+                    "competitive profitability policy blocked illiquid fallback entry: "
+                    f"{competitive_profile.liquidity_reason}"
+                )
+            risk_fraction = competitive_profile.risk_fraction
+            stop_loss_pct = min(float(competitive_profile.stop_loss_pct), 3.0)
+            raw_tp = tuple(float(pct) for pct in competitive_profile.take_profit_pct)
+            tp1 = max(raw_tp[0] if len(raw_tp) > 0 else 0.0, 0.85)
+            tp2 = max(raw_tp[1] if len(raw_tp) > 1 else tp1, tp1 + 0.20)
+            tp3 = max(raw_tp[2] if len(raw_tp) > 2 else tp2, tp2 + 0.25)
+            take_profit_pct = (tp1, tp2, tp3)
+            trailing_stop_pct = competitive_profile.trailing_stop_pct
                 if _force_trade_active:
                     # FORCE_TRADE active: log the liquidity warning but proceed
                     # with the conservative default geometry instead of raising.
@@ -3707,6 +3742,93 @@ class NijaCoreLoop:
         except TypeError:
             args, kwargs = fallback_call
             return _run_with_timeout(method, args, kwargs)
+
+    @classmethod
+    def _coerce_market_data_frame(cls, result: Any) -> Optional[pd.DataFrame]:
+        """Normalize broker candle payload variants into an OHLCV DataFrame."""
+        if result is None:
+            return None
+        if isinstance(result, tuple):
+            if len(result) >= 2 and result[1]:
+                return None
+            result = result[0] if result else None
+        if isinstance(result, pd.DataFrame):
+            return cls._normalize_ohlcv_columns(result.copy())
+        if isinstance(result, Mapping):
+            for key in ("candles", "data", "ohlcv", "result", "rows"):
+                if key in result:
+                    return cls._coerce_market_data_frame(result.get(key))
+            return cls._normalize_ohlcv_columns(pd.DataFrame([result]))
+        if isinstance(result, (list, tuple)):
+            if not result:
+                return None
+            call_plan = (
+                ("get_candles", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("fetch_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("get_ohlcv", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("get_historical_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+                ("get_market_data", ((symbol,), {"limit": 200}), ((symbol, "1m", 200), {})),
+            )
+            for method_name, primary_call, fallback_call in call_plan:
+                method = getattr(broker, method_name, None)
+                if not callable(method):
+                    continue
+                result = self._call_market_data_method(method, primary_call, fallback_call)
+                df = self._coerce_market_data_frame(result)
+                if df is not None and len(df) >= 10:
+                    return df
+            frame = pd.DataFrame(result)
+            if not frame.empty and all(isinstance(col, int) for col in frame.columns):
+                # CCXT-style rows: [timestamp, open, high, low, close, volume, ...]
+                if len(frame.columns) >= 6:
+                    frame = frame.iloc[:, :6]
+                    frame.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+                # Compact rows occasionally omit timestamp: [open, high, low, close, volume]
+                elif len(frame.columns) == 5:
+                    frame.columns = ["open", "high", "low", "close", "volume"]
+            return cls._normalize_ohlcv_columns(frame)
+        return None
+
+    @staticmethod
+    def _normalize_ohlcv_columns(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """Return a numeric OHLCV frame when the payload has usable candles."""
+        if frame is None or frame.empty:
+            return None
+        rename_map = {
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+            "price": "close",
+            "last": "close",
+        }
+        normalized = frame.rename(
+            columns={col: rename_map.get(str(col).lower(), col) for col in frame.columns}
+        )
+        required = {"open", "high", "low", "close", "volume"}
+        if not required.issubset(set(normalized.columns)):
+            return None
+        for col in required:
+            normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
+        normalized = normalized.dropna(subset=list(required))
+        if normalized.empty:
+            return None
+        return normalized
+
+    @staticmethod
+    def _call_market_data_method(
+        method: Any,
+        primary_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+        fallback_call: Tuple[Tuple[Any, ...], Dict[str, Any]],
+    ) -> Any:
+        """Call a broker market-data method while tolerating signature drift."""
+        try:
+            args, kwargs = primary_call
+            return method(*args, **kwargs)
+        except TypeError:
+            args, kwargs = fallback_call
+            return method(*args, **kwargs)
 
     @classmethod
     def _coerce_market_data_frame(cls, result: Any) -> Optional[pd.DataFrame]:
@@ -5201,6 +5323,32 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             float(cycle_secs),
                             max(1.0, float(os.getenv("NIJA_ACTIVATION_RETRY_SLEEP_S", "10") or 10.0)),
                         )
+                        if _skip_signature != _last_cycle_skip_signature:
+                            logger.warning(
+                                "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
+                                "runtime_authority=%s reason=%s retry_in=%.0fs",
+                                _committed_gate,
+                                _dispatch_gate,
+                                getattr(_state_gate, "value", str(_state_gate)),
+                                _runtime_authority or "unknown",
+                                _dispatch_reason or "not_reported",
+                                _activation_retry_sleep_s,
+                            )
+                            _last_cycle_skip_signature = _skip_signature
+                        else:
+                            _rate_limited_critical(
+                                "core_loop_activation_skip",
+                                "dispatch_gate",
+                                60.0,
+                                "⏸️ STRATEGY CYCLE STILL WAITING | state=%s dispatch=%s reason=%s retry_in=%.0fs",
+                                getattr(_state_gate, "value", str(_state_gate)),
+                                _dispatch_gate,
+                                _dispatch_reason or "not_reported",
+                                _activation_retry_sleep_s,
+                            )
+                        time.sleep(_activation_retry_sleep_s)
+                        continue
+                    _last_cycle_skip_signature = None
                         if _force_cycle_bypass:
                             # Operator override active — run the strategy cycle immediately
                             # even though the FSM has not reached LIVE_ACTIVE yet.  Log once

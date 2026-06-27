@@ -1843,6 +1843,18 @@ class ExecutionPipeline:
                     symbol=effective_request.symbol,
                     side=effective_request.side,
                     size_usd=effective_request.size_usd,
+                    error="Runtime authority convergence lost",
+                    latency_ms=(time.monotonic() - t_start) * 1000,
+                )
+        except Exception as exc:
+            return PipelineResult(
+                success=False,
+                symbol=effective_request.symbol,
+                side=effective_request.side,
+                size_usd=effective_request.size_usd,
+                error=f"Runtime authority convergence lost: {exc}",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
                     error=f"Runtime authority convergence lost: {exc}",
                     latency_ms=(time.monotonic() - t_start) * 1000,
                 )

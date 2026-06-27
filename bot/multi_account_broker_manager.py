@@ -6274,14 +6274,18 @@ class MultiAccountBrokerManager:
                 results["coinbase"] = {"broker": None, "connected": False, "error": str(exc)}
 
         # ── OKX ──────────────────────────────────────────────────────────────
-        _disable_okx = os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
+        # OKX is disabled unconditionally because the upstream okx/candlelite stack
+        # can write into site-packages during import in read-only containers.
+        # Do not instantiate OKX here; Kraken/Coinbase/user trading must not be
+        # blocked by an optional broker import side effect.
+        _disable_okx = True
         _okx_key = os.environ.get("OKX_API_KEY", "").strip()
         _okx_secret = os.environ.get("OKX_API_SECRET", "").strip()
         _okx_passphrase = os.environ.get("OKX_PASSPHRASE", "").strip()
         _okx_creds_configured = bool(_okx_key and _okx_secret and _okx_passphrase)
 
         if _disable_okx:
-            logger.info("⏭️  OKX PLATFORM skipped (NIJA_DISABLE_OKX=true)")
+            logger.info("⏭️  OKX PLATFORM skipped (disabled by default: OKX SDK/candlelite is not read-only-container safe)")
         elif not _okx_creds_configured:
             logger.info("⏭️  OKX PLATFORM skipped (credentials not configured)")
         else:
