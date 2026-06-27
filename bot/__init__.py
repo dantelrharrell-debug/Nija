@@ -8,17 +8,10 @@ import sys
 import os
 import logging
 
-# ── candlelite writable config dir ───────────────────────────────────────────
-# OKX trading is disabled (ENABLE_OKX_TRADING=false). The candlelite
-# monkey-patching code has been removed. We still set CANDLELITE_CONFIG_DIR
-# to a writable /tmp path as a harmless precaution.
-_candlelite_dir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "candlelite")
-try:
-    os.makedirs(_candlelite_dir, exist_ok=True)
-except OSError:
-    _candlelite_dir = os.environ.get("TMPDIR", "/tmp")
-
-os.environ["CANDLELITE_CONFIG_DIR"] = _candlelite_dir
+# ── OKX uses direct REST — no candlelite / okx SDK import needed ─────────────
+# NIJA's OKX integration uses _OKXRestClient (HMAC-SHA256 signed HTTPS calls)
+# instead of the upstream okx/candlelite SDK, so no environment patching is
+# required.  The block below is intentionally removed.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Set up logging for the bot package

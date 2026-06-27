@@ -511,19 +511,6 @@ def validate_exchange_configuration() -> StartupValidationResult:
         )
     else:
         result.add_info("ℹ️  OKX credentials not configured (optional direct REST broker)")
-    # OKX is intentionally not counted as viable in production startup.  The
-    # upstream okx SDK imports candlelite, which can attempt writes inside
-    # site-packages before application-level monkeypatches can run.  In
-    # read-only containers that import side effect can block startup/trading,
-    # so NIJA treats OKX as disabled even when credentials are present.
-    okx_key_set = bool(os.getenv("OKX_API_KEY"))
-    if okx_key_set:
-        result.add_info(
-            "ℹ️  OKX credentials present but ignored — OKX trading is disabled because "
-            "the OKX SDK/candlelite dependency is not safe in read-only containers"
-        )
-    else:
-        result.add_info("ℹ️  OKX disabled (read-only-container incompatible optional broker)")
 
     # ------------------------------------------------------------------
     # Alpaca

@@ -3098,16 +3098,10 @@ class OKXBrokerAdapter(BrokerInterface):
         logger.info(f"OKX broker adapter initialized (testnet={self.testnet})")
 
     def connect(self) -> bool:
-        """Connect to OKX API through NIJA's direct REST client."""
+        """Connect to OKX API through NIJA's direct REST client (no SDK import)."""
         if not self.api_key or not self.api_secret or not self.passphrase:
-            logger.error("OKX credentials not found")
+            logger.warning("OKX credentials not found — skipping OKX adapter")
             return False
-        """Connect to OKX API."""
-        logger.info(
-            "⏭️  OKX adapter disabled: skipping SDK import because okx/candlelite "
-            "is not read-only-container safe"
-        )
-        return False
         try:
             try:
                 from bot.broker_manager import _OKXRestClient
@@ -3129,10 +3123,10 @@ class OKXBrokerAdapter(BrokerInterface):
                 logger.info(f"✅ OKX connected via direct REST ({env_type}, no SDK import)")
                 return True
             error_msg = result.get('msg', 'Unknown error') if result else 'No response'
-            logger.error(f"OKX REST connection test failed: {error_msg}")
+            logger.warning(f"OKX REST connection test failed (non-critical): {error_msg}")
             return False
         except Exception as e:
-            logger.error(f"Failed to connect to OKX through direct REST: {e}")
+            logger.warning(f"OKX adapter connect() failed (non-critical): {e}")
             return False
 
     def get_account_balance(self) -> Dict[str, Any]:
