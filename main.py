@@ -10,26 +10,6 @@ import runpy
 import traceback
 import threading
 
-# ── candlelite: force writable config dir BEFORE any bot import ───────────────
-# candlelite (a dependency of the okx SDK) resolves its config directory at
-# import time and caches the result in module-level variables.  If it is
-# imported before CANDLELITE_CONFIG_DIR is set it will try to write
-# SETTINGS.config into the read-only site-packages tree and raise
-# [Errno 13] Permission denied, preventing OKX from connecting.
-#
-# We set the env var here — at the very top of the process entry point, before
-# ANY bot package is imported — so that even if something in the import chain
-# pulls in candlelite transitively, it will already see the correct path.
-# bot/__init__.py performs the deeper monkey-patch of already-cached values.
-_cl_dir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "candlelite")
-try:
-    os.makedirs(_cl_dir, exist_ok=True)
-except OSError:
-    _cl_dir = os.environ.get("TMPDIR", "/tmp")
-os.environ["CANDLELITE_CONFIG_DIR"] = _cl_dir  # force, not setdefault
-del _cl_dir
-# ─────────────────────────────────────────────────────────────────────────────
-
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
