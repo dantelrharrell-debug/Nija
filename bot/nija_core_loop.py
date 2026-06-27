@@ -5370,32 +5370,6 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             float(cycle_secs),
                             max(1.0, float(os.getenv("NIJA_ACTIVATION_RETRY_SLEEP_S", "10") or 10.0)),
                         )
-                        if _skip_signature != _last_cycle_skip_signature:
-                            logger.warning(
-                                "⏸️ STRATEGY CYCLE SKIPPED | committed=%s dispatch=%s state=%s "
-                                "runtime_authority=%s reason=%s retry_in=%.0fs",
-                                _committed_gate,
-                                _dispatch_gate,
-                                getattr(_state_gate, "value", str(_state_gate)),
-                                _runtime_authority or "unknown",
-                                _dispatch_reason or "not_reported",
-                                _activation_retry_sleep_s,
-                            )
-                            _last_cycle_skip_signature = _skip_signature
-                        else:
-                            _rate_limited_critical(
-                                "core_loop_activation_skip",
-                                "dispatch_gate",
-                                60.0,
-                                "⏸️ STRATEGY CYCLE STILL WAITING | state=%s dispatch=%s reason=%s retry_in=%.0fs",
-                                getattr(_state_gate, "value", str(_state_gate)),
-                                _dispatch_gate,
-                                _dispatch_reason or "not_reported",
-                                _activation_retry_sleep_s,
-                            )
-                        time.sleep(_activation_retry_sleep_s)
-                        continue
-                    _last_cycle_skip_signature = None
                         if _force_cycle_bypass:
                             # Operator override active — run the strategy cycle immediately
                             # even though the FSM has not reached LIVE_ACTIVE yet.  Log once
