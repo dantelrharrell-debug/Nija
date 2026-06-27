@@ -18,8 +18,10 @@ import logging
 # and write to site-packages BEFORE the env var can take effect, which is the
 # exact crash we are trying to prevent.
 #
-# OKX trading is currently disabled (ENABLE_OKX_TRADING=false in railway.json)
-# so candlelite will not be imported at all during normal operation.
+# OKX trading is enabled (ENABLE_OKX_TRADING=true in railway.json).
+# If candlelite raises PermissionError despite this env var being set, the
+# OKXBroker.connect() method catches it gracefully so Kraken + Coinbase
+# continue trading without interruption.
 _candlelite_dir = os.path.join(os.environ.get("TMPDIR", "/tmp"), "candlelite")
 try:
     os.makedirs(_candlelite_dir, exist_ok=True)

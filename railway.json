@@ -21,7 +21,7 @@
     "healthCheckTimeout": 300
   },
   "variables": {
-    "ENABLE_OKX_TRADING": "false",
+    "ENABLE_OKX_TRADING": "true",
     "HF_SCALP_MODE": "1",
     "FORCE_TRADE": "true",
     "FORCE_TRADE_MODE": "true",
