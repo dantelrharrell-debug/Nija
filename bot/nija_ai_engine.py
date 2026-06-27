@@ -666,8 +666,6 @@ class NijaAIEngine:
                         regime=regime,
                         entry_type=entry_type,
                     )
-                logger.debug(
-                    "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f (adj%+.1f) — skipped",
                 logger.info(
                     "   🤖 AI Engine %s %s: score=%.1f < floor=%.1f (adj%+.1f) — skipped "
                     "[enhanced=%.1f opt_delta=%.2f gate_quality=%.1f wrss=%.2f]",
