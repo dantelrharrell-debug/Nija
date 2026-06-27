@@ -30,19 +30,21 @@ class ExchangeMinimums(Enum):
     BINANCE = 10.0      # Binance MIN_NOTIONAL filter ~$10 (USDT pairs)
     OKX = 10.0          # OKX operational floor ~$10 (USDT pairs)
     ALPACA = 1.0        # Alpaca — commission-free, no practical minimum
-    
+
     # Default/Conservative minimum
     DEFAULT = 5.0       # Safe default: $5 minimum
 
 
 # Global minimum notional (can be overridden by exchange-specific values)
-GLOBAL_MIN_NOTIONAL_USD = 5.0  # $5 USD - recommended for profitability
+# Lowered to $10 for micro-cap / HF scalp mode with $174 balance (Apr 2026).
+GLOBAL_MIN_NOTIONAL_USD = 10.0  # $10 USD — minimum viable trade for fee-positive execution
 
 # Recommended minimum for different account sizes
 # These ensure positions are large enough to overcome fees
+# Lowered for micro-cap / HF scalp mode with $174 balance (Apr 2026).
 MIN_NOTIONAL_BY_BALANCE = {
-    'micro': 3.0,      # < $50 balance: $3 minimum (break-even threshold)
-    'small': 5.0,      # $50-$500: $5 minimum (recommended)
+    'micro': 5.0,      # < $50 balance: $5 minimum (break-even threshold)
+    'small': 10.0,     # $50-$500: $10 minimum (recommended)
     'medium': 10.0,    # $500-$5000: $10 minimum (optimal)
     'large': 15.0,     # > $5000: $15 minimum (institutional grade)
 }

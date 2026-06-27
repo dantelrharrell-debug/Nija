@@ -8,10 +8,10 @@ Redis so they can be updated at runtime without a redeploy.
 
 Risk Rules (all configurable via env / Redis)
 ---------------------------------------------
-max_concurrent_positions   — default 7
-max_position_size_pct      — default 10 % of portfolio
-max_daily_loss_pct         — default 5 % of portfolio
-max_drawdown_pct           — default 15 % of portfolio
+max_concurrent_positions   — default 8  (env: NIJA_MAX_CONCURRENT_POSITIONS or MAX_CONCURRENT_POSITIONS)
+max_position_size_pct      — default 50 % of portfolio  (env: NIJA_MAX_POSITION_SIZE_PCT or MAX_POSITION_PCT)
+max_daily_loss_pct         — default 2 % of portfolio   (env: NIJA_MAX_DAILY_LOSS_PCT)
+max_drawdown_pct           — default 2 % of portfolio   (env: NIJA_MAX_DRAWDOWN_PCT)
 max_correlation            — default 0.80
 min_time_between_trades_ms — default 1 000 ms
 
@@ -62,10 +62,18 @@ _RISK_ENGINE_ENABLED: bool = (
 )
 
 _ENV_RULES: Dict[str, Any] = {
-    "max_concurrent_positions":    int(float(os.getenv("NIJA_MAX_CONCURRENT_POSITIONS",    "7"))),
-    "max_position_size_pct":       float(os.getenv("NIJA_MAX_POSITION_SIZE_PCT",           "10.0")),
-    "max_daily_loss_pct":          float(os.getenv("NIJA_MAX_DAILY_LOSS_PCT",              "5.0")),
-    "max_drawdown_pct":            float(os.getenv("NIJA_MAX_DRAWDOWN_PCT",                "15.0")),
+    "max_concurrent_positions":    int(float(
+        os.getenv("NIJA_MAX_CONCURRENT_POSITIONS", "")
+        or os.getenv("MAX_CONCURRENT_POSITIONS", "")
+        or "8"
+    )),
+    "max_position_size_pct":       float(
+        os.getenv("NIJA_MAX_POSITION_SIZE_PCT", "")
+        or os.getenv("MAX_POSITION_PCT", "")
+        or "50.0"
+    ),
+    "max_daily_loss_pct":          float(os.getenv("NIJA_MAX_DAILY_LOSS_PCT",              "2.0")),
+    "max_drawdown_pct":            float(os.getenv("NIJA_MAX_DRAWDOWN_PCT",                "2.0")),
     "max_correlation":             float(os.getenv("NIJA_MAX_CORRELATION",                 "0.80")),
     "min_time_between_trades_ms":  int(float(os.getenv("NIJA_MIN_TIME_BETWEEN_TRADES_MS", "1000"))),
 }
@@ -81,10 +89,10 @@ _REDIS_RULES_KEY = "nija:control:risk_rules"
 @dataclass
 class RiskRules:
     """Snapshot of active risk rules."""
-    max_concurrent_positions:   int   = 7
-    max_position_size_pct:      float = 10.0
-    max_daily_loss_pct:         float = 5.0
-    max_drawdown_pct:           float = 15.0
+    max_concurrent_positions:   int   = 8
+    max_position_size_pct:      float = 50.0
+    max_daily_loss_pct:         float = 2.0
+    max_drawdown_pct:           float = 2.0
     max_correlation:            float = 0.80
     min_time_between_trades_ms: int   = 1000
 
@@ -94,10 +102,10 @@ class RiskRules:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RiskRules":
         return cls(
-            max_concurrent_positions=int(d.get("max_concurrent_positions", 7)),
-            max_position_size_pct=float(d.get("max_position_size_pct", 10.0)),
-            max_daily_loss_pct=float(d.get("max_daily_loss_pct", 5.0)),
-            max_drawdown_pct=float(d.get("max_drawdown_pct", 15.0)),
+            max_concurrent_positions=int(d.get("max_concurrent_positions", 8)),
+            max_position_size_pct=float(d.get("max_position_size_pct", 50.0)),
+            max_daily_loss_pct=float(d.get("max_daily_loss_pct", 2.0)),
+            max_drawdown_pct=float(d.get("max_drawdown_pct", 2.0)),
             max_correlation=float(d.get("max_correlation", 0.80)),
             min_time_between_trades_ms=int(d.get("min_time_between_trades_ms", 1000)),
         )

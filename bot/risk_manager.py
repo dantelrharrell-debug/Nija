@@ -119,6 +119,14 @@ SL_MAX_CAP = 0.03               # 3% max stop distance from entry
 # Ensures take-profits always clear at least N× the current volatility.
 TP_ATR_MULTIPLIER = 2.0         # TP ≥ atr_pct × 2.0
 
+# Absolute minimum TP1 distance from entry (as a fraction of entry price).
+# This is the hard floor applied AFTER all R-multiple / fee-aware / ATR calculations
+# to guarantee tp1 always clears the execution_engine target_geometry_gate
+# (MIN_TP_PCT = 0.008 = 0.8%).  Set to 1.0% for a comfortable safety margin.
+# Override via env var MIN_TP_FLOOR_PCT (e.g. "0.010" for 1.0%).
+import os as _os_rm
+MIN_TP_FLOOR_PCT: float = float(_os_rm.getenv("MIN_TP_FLOOR_PCT", "0.010"))  # 1.0% floor
+
 # ATR threshold above which trades are skipped entirely ("Volatility Kill Switch").
 # If the 14-period ATR exceeds 4% of price the market is too noisy to trade safely.
 EXTREME_VOLATILITY_ATR_PCT = 0.04   # 4% ATR → skip trade
@@ -1444,6 +1452,45 @@ class AdaptiveRiskManager:
                 )
             tp1, tp2, tp3 = tp1_new, tp2_new, tp3_new
 
+        # ── Absolute minimum TP floor ─────────────────────────────────────────
+        # Regardless of stop distance, R-multiples, or ATR, tp1 must always be
+        # at least MIN_TP_FLOOR_PCT (default 1.0%) away from entry so the trade
+        # clears the execution_engine target_geometry_gate (MIN_TP_PCT = 0.8%).
+        # tp2 and tp3 are scaled proportionally if they fall below their own floors.
+        if entry_price > 0:
+            if side == 'long':
+                tp1_abs_floor = entry_price * (1.0 + MIN_TP_FLOOR_PCT)
+                tp2_abs_floor = entry_price * (1.0 + MIN_TP_FLOOR_PCT * 1.5)
+                tp3_abs_floor = entry_price * (1.0 + MIN_TP_FLOOR_PCT * 2.0)
+                if tp1 < tp1_abs_floor or tp2 < tp2_abs_floor or tp3 < tp3_abs_floor:
+                    logger.debug(
+                        "🎯 MIN_TP_FLOOR applied (long): floor=%.3f%%"
+                        " TP1 %.6f→%.6f  TP2 %.6f→%.6f  TP3 %.6f→%.6f",
+                        MIN_TP_FLOOR_PCT * 100,
+                        tp1, max(tp1, tp1_abs_floor),
+                        tp2, max(tp2, tp2_abs_floor),
+                        tp3, max(tp3, tp3_abs_floor),
+                    )
+                    tp1 = max(tp1, tp1_abs_floor)
+                    tp2 = max(tp2, tp2_abs_floor)
+                    tp3 = max(tp3, tp3_abs_floor)
+            else:  # short
+                tp1_abs_floor = entry_price * (1.0 - MIN_TP_FLOOR_PCT)
+                tp2_abs_floor = entry_price * (1.0 - MIN_TP_FLOOR_PCT * 1.5)
+                tp3_abs_floor = entry_price * (1.0 - MIN_TP_FLOOR_PCT * 2.0)
+                if tp1 > tp1_abs_floor or tp2 > tp2_abs_floor or tp3 > tp3_abs_floor:
+                    logger.debug(
+                        "🎯 MIN_TP_FLOOR applied (short): floor=%.3f%%"
+                        " TP1 %.6f→%.6f  TP2 %.6f→%.6f  TP3 %.6f→%.6f",
+                        MIN_TP_FLOOR_PCT * 100,
+                        tp1, min(tp1, tp1_abs_floor),
+                        tp2, min(tp2, tp2_abs_floor),
+                        tp3, min(tp3, tp3_abs_floor),
+                    )
+                    tp1 = min(tp1, tp1_abs_floor)
+                    tp2 = min(tp2, tp2_abs_floor)
+                    tp3 = min(tp3, tp3_abs_floor)
+
         return {
             'tp1': tp1,
             'tp2': tp2,
@@ -1628,7 +1675,9 @@ class AdaptiveRiskManager:
         # 1. Profitability after fees (fee-based minimum)
         # 2. Volatility-appropriate exits (ATR and bandwidth scaling)
         # 3. Never go below fee coverage even in extreme low volatility
+        # 4. Never go below the base R-multiple target (prevents adaptive shrinkage)
         adaptive_target = max(
+            base_target,             # Never shrink below the R-multiple base target
             fee_based_target,        # Always maintain minimum fee coverage
             atr_based_target,        # ATR-scaled target
             volatility_adjusted_target  # Volatility-scaled target (can be below base in low vol)

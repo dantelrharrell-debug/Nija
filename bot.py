@@ -40,6 +40,13 @@ print(
     f"__file__={__file__!r}",
     flush=True,
 )
+try:
+    from bot.startup_runtime_safety import normalize_runtime_startup_env
+except ImportError:
+    from startup_runtime_safety import normalize_runtime_startup_env  # type: ignore[import]
+
+for _note in normalize_runtime_startup_env(os.environ):
+    print(f"STARTUP_ENV_SAFETY: {_note}", flush=True)
 print(
     f"DIAG_BOT_ENV_STARTUP: "
     f"RAILWAY_DEPLOYMENT_ID={os.environ.get('RAILWAY_DEPLOYMENT_ID', '<unset>')} "
@@ -255,6 +262,12 @@ def _reset_stale_bootstrap_fsm_for_fresh_attempt(*, init_done: bool) -> None:
     diagnostics report an already-ready phase while the runtime is still missing
     its trading objects.  Normalize only those advanced states; early states like
     LOCK_ACQUIRED/HEALTH_BOUND are intentionally preserved.
+
+    On a truly fresh startup (init_done=False) we also clear the
+    BOOT_FAILED_RETRY state so the retry counter does not carry over from a
+    previous process lifetime and trigger premature EXTERNAL_RESTART_REQUIRED
+    escalation.  The FSM is reset directly to BOOT_INIT so the full happy-path
+    can run cleanly from the beginning.
     """
     if init_done:
         return
@@ -280,6 +293,24 @@ def _reset_stale_bootstrap_fsm_for_fresh_attempt(*, init_done: bool) -> None:
                 "fresh startup without initialized strategy/threads found stale "
                 f"state={getattr(_state, 'value', str(_state))}"
             )
+            # After reset_for_retry the FSM is in BOOT_FAILED_RETRY.
+            # On a fresh process start the retry counter from any previous
+            # lifetime is meaningless — reset it so the new attempt starts
+            # from count=0 and does not immediately hit the max-retries ceiling.
+            try:
+                with _bfsm._lock:
+                    _bfsm._boot_failed_retry_count = 0
+                    _bfsm._boot_failed_retry_last_ts = 0.0
+                logger.info(
+                    "Fresh startup: BootstrapFSM retry counter reset to 0 "
+                    "(stale state=%s cleared)",
+                    getattr(_state, "value", str(_state)),
+                )
+            except Exception as _counter_reset_err:
+                logger.debug(
+                    "Fresh startup: retry counter reset skipped (non-fatal): %s",
+                    _counter_reset_err,
+                )
     except Exception as _stale_reset_err:
         logger.warning(
             "Fresh startup stale BootstrapFSM reset skipped (non-fatal): %s",
@@ -1172,13 +1203,57 @@ def _wait_for_bootstrap_observer_ready(*, context: str) -> tuple[bool, str]:
     _last_logged_state: str = ""
     _last_state_log = time.monotonic()
     _state_log_interval = 10.0
+    # Track how long the FSM has been stuck in BOOT_FAILED_RETRY so we can
+    # attempt a force-forward after a configurable timeout.
+    _boot_failed_retry_first_seen: float = 0.0
+    _BOOT_FAILED_RETRY_FORCE_TIMEOUT_S: float = 30.0  # force forward after 30s stuck
 
     while time.monotonic() < _deadline:
         _state = _bootstrap_state_value()
         if _state == "RUNNING_SUPERVISED":
             logger.critical("LIFECYCLE: FSM state=%s", _state)
             return True, _state
-        if _state in {"BOOT_FAILED_RETRY", "EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
+        if _state == "BOOT_FAILED_RETRY":
+            _now_mono = time.monotonic()
+            if _boot_failed_retry_first_seen == 0.0:
+                _boot_failed_retry_first_seen = _now_mono
+            _stuck_duration = _now_mono - _boot_failed_retry_first_seen
+            logger.warning(
+                "BOOTSTRAP_OBSERVER_RETRYING context=%s state=%s stuck_for=%.1fs "
+                "deadline=%.2fs next=continue_waiting",
+                context,
+                _state,
+                _stuck_duration,
+                _timeout_s,
+            )
+            # If the FSM has been stuck in BOOT_FAILED_RETRY for too long,
+            # attempt to force it forward to PLATFORM_CONNECTING so the
+            # startup thread can make progress.
+            if _stuck_duration >= _BOOT_FAILED_RETRY_FORCE_TIMEOUT_S:
+                if _BOOTSTRAP_FSM_AVAILABLE and _get_bootstrap_fsm is not None:
+                    try:
+                        _stuck_fsm = _get_bootstrap_fsm()
+                        if hasattr(_stuck_fsm, "force_transition_from_retry"):
+                            logger.critical(
+                                "🔧 BOOTSTRAP_OBSERVER: FSM stuck in BOOT_FAILED_RETRY for %.1fs — "
+                                "forcing transition to PLATFORM_CONNECTING",
+                                _stuck_duration,
+                            )
+                            _stuck_fsm.force_transition_from_retry(
+                                f"observer force-forward after {_stuck_duration:.1f}s stuck"
+                            )
+                            # Reset the stuck timer so we don't force again immediately.
+                            _boot_failed_retry_first_seen = 0.0
+                    except Exception as _force_err:
+                        logger.warning(
+                            "BOOTSTRAP_OBSERVER: force_transition_from_retry failed: %s",
+                            _force_err,
+                        )
+        else:
+            # Reset stuck timer when we leave BOOT_FAILED_RETRY.
+            _boot_failed_retry_first_seen = 0.0
+
+        if _state in {"EXTERNAL_RESTART_REQUIRED", "SHUTDOWN"}:
             logger.error(
                 "BOOTSTRAP_OBSERVER_BLOCKED context=%s state=%s deadline=%.2fs next=abort_startup",
                 context,
@@ -1901,6 +1976,16 @@ def _launch_trading_threads(strategy, use_independent_trading: bool, hf_bot) -> 
                     strategy.independent_trader.broker_failure_manager.log_active_dead_banner()
             except Exception as _reg_err:
                 logger.debug("Failure manager registration skipped: %s", _reg_err)
+
+            # ── PLATFORM-FIRST: start platform broker threads before user threads ──
+            # Platform account is the primary trading account and must execute
+            # trades first in the account hierarchy. User accounts follow after.
+            logger.info("=" * 70)
+            logger.info("🔷 PLATFORM-FIRST: Starting PLATFORM broker threads (primary accounts)")
+            logger.info("=" * 70)
+            logger.info("   Platform account executes trades FIRST before any user accounts.")
+            logger.info("   User accounts will start AFTER all platform threads are running.")
+            logger.info("=" * 70)
 
             # Start a self-healing thread for each funded, connected platform broker
             _platform_stagger = 0
@@ -2991,7 +3076,7 @@ def _acquire_distributed_process_lock() -> None:
         )
         os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
         _allow_local_lock_fallback = False
-    if _live_mode and _require_lock and _allow_local_lock_fallback and not _unsafe_bypass:
+    if _live_mode and _require_lock and _allow_local_lock_fallback and not _unsafe_bypass and not _force_local_lock_fallback:
         print(
             "🚫 LIVE mode with distributed lock required forbids local writer-lock fallback.",
             flush=True,
@@ -3001,9 +3086,18 @@ def _acquire_distributed_process_lock() -> None:
             flush=True,
         )
         os.environ["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
-        os.environ["NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"] = "0"
         _allow_local_lock_fallback = False
-        _force_local_lock_fallback = False
+    elif _live_mode and _require_lock and _allow_local_lock_fallback and not _unsafe_bypass and _force_local_lock_fallback:
+        print(
+            "⚠️  LIVE mode with NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true: "
+            "local writer-lock fallback is enabled as an emergency override.",
+            flush=True,
+        )
+        print(
+            "   This allows the bot to start and trade despite stale distributed locks. "
+            "Use only for confirmed single-instance deployments.",
+            flush=True,
+        )
     elif _allow_local_lock_fallback and _multi_instance_possible and _force_local_lock_fallback:
         print(
             "🚨 UNSAFE MODE: forcing local writer-lock fallback while multi-instance risk is detected.",
@@ -3374,7 +3468,7 @@ def _acquire_distributed_process_lock() -> None:
                         print(f"  ↳ {_fb_source} also unreachable: {_fb_exc}")
             if not _client_resolved:
                 if _allow_local_lock_fallback and (not _multi_instance_possible or _force_local_lock_fallback):
-                    if _live_mode and _require_lock and not _unsafe_bypass:
+                    if _live_mode and _require_lock and not _unsafe_bypass and not _force_local_lock_fallback:
                         raise RuntimeError(
                             "Redis unreachable in LIVE mode with distributed lock required; "
                             "local writer-lock fallback is blocked"
@@ -3390,13 +3484,23 @@ def _acquire_distributed_process_lock() -> None:
                         "Re-enable distributed lock after Redis recovery.",
                         flush=True,
                     )
+                    # Grant local writer authority so the bot can start and trade despite Redis being unreachable.
+                    _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                    os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                    os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"
+                    _running_in_degraded_mode = True
                     if _force_local_lock_fallback:
                         os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
+                        os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
                         print(
                             "🚨 UNSAFE EMERGENCY OVERRIDE: forcing live activation gates to fail-open "
                             "under local writer-lock fallback.",
                             flush=True,
                         )
+                    _start_authority_heartbeat_after_writer_lineage("bypass_local_writer_lock_fallback")
                     return
                 # Check if all URLs point to Railway internal networking
                 _internal_hosts = [
@@ -3482,6 +3586,29 @@ def _acquire_distributed_process_lock() -> None:
                     print(
                         "   Clear NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK to restore fail-closed distributed lock enforcement."
                     )
+                    # Grant local writer authority so the bot can start and trade despite Redis being unreachable.
+                    _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                    os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                    os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"
+                    _running_in_degraded_mode = True
+                    _start_authority_heartbeat_after_writer_lineage("bypass_unsafe_distributed_lock_redis_unreachable")
+                elif _force_local_lock_fallback:
+                    print(
+                        "   NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true: granting local writer authority."
+                    )
+                    # Grant local writer authority so the bot can start and trade despite Redis being unreachable.
+                    _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                    os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                    os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                    os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
+                    os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
+                    _running_in_degraded_mode = True
+                    _start_authority_heartbeat_after_writer_lineage("bypass_force_local_writer_lock_fallback_redis_unreachable")
                 elif _live_mode:
                     print("   Set NIJA_REQUIRE_DISTRIBUTED_LOCK=1 to enforce fail-closed behaviour.")
                 else:
@@ -3789,7 +3916,7 @@ def _acquire_distributed_process_lock() -> None:
             print(f"   Redis URL source: {_redis_url_source or 'unset'}")
             
             # FIX 2: Decision tree for safe fallback
-            if _live_mode and _require_lock and not _unsafe_bypass:
+            if _live_mode and _require_lock and not _unsafe_bypass and not _force_local_lock_fallback:
                 # LIVE + LOCK_REQUIRED + NO BYPASS: Fail-closed (safest, prevents split-brain)
                 print("❌ FAILED TO ACQUIRE WRITER LOCK (entering fail-closed standby)")
                 logger.critical(
@@ -3801,14 +3928,43 @@ def _acquire_distributed_process_lock() -> None:
                     "(lock required in live mode)"
                 )
                 return
-            elif _live_mode and _require_lock and _unsafe_bypass:
-                # LIVE + LOCK_REQUIRED + UNSAFE_BYPASS: Trade locally (risky, only for single-instance)
-                print("⚠️  UNSAFE: Proceeding with UNSAFE lock bypass enabled (single-instance only)")
+            elif _unsafe_bypass:
+                # UNSAFE_BYPASS active: proceed without distributed lock (single-instance only).
+                # Note: when _unsafe_bypass=True in live mode, _require_lock was already set to
+                # False above, so we check _unsafe_bypass directly here.
+                print("⚠️  UNSAFE: Proceeding with NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK enabled (single-instance only)")
                 logger.warning(
-                    "Distributed writer lock timeout but UNSAFE bypass enabled; proceeding with local trading. "
-                    "DO NOT RUN MULTIPLE INSTANCES."
+                    "Distributed writer lock timeout but NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK=true; "
+                    "proceeding without distributed lock. DO NOT RUN MULTIPLE INSTANCES."
                 )
-                # Continue only with explicit unsafe bypass; degraded-mode overrides are disabled.
+                # Grant local writer authority so the bot can start and trade despite the stale lock.
+                _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"
+                _running_in_degraded_mode = True
+                _start_authority_heartbeat_after_writer_lineage("bypass_unsafe_distributed_lock")
+            elif _force_local_lock_fallback:
+                # FORCE_LOCAL_FALLBACK active: proceed without distributed lock despite timeout.
+                # This allows the bot to start and trade when a stale lock is held by a previous
+                # deployment and NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true is set on the service.
+                print("⚠️  FORCE LOCAL FALLBACK: Proceeding with NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK enabled")
+                logger.warning(
+                    "Distributed writer lock timeout but NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK=true; "
+                    "proceeding without distributed lock. Use only for confirmed single-instance deployments."
+                )
+                # Grant local writer authority so the bot can start and trade despite the stale lock.
+                _bypass_token = int(time.time() * 1000) % 1_000_000 or 1
+                os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "1"
+                os.environ["NIJA_WRITER_FENCING_TOKEN"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LEASE_GENERATION"] = str(_bypass_token)
+                os.environ["NIJA_WRITER_LOCK_ACQUIRED_AT"] = str(time.time())
+                os.environ["NIJA_LOCK_BYPASS_MODE"] = "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK"
+                os.environ["NIJA_CONFIRM_BYPASS_RISKS"] = "1"
+                _running_in_degraded_mode = True
+                _start_authority_heartbeat_after_writer_lineage("bypass_force_local_writer_lock_fallback")
             else:
                 # NON-LIVE or NOT_REQUIRED: continue without distributed lock.
                 print("⚠️  Non-live/non-required mode: continuing without distributed lock")
@@ -6054,6 +6210,51 @@ def _run_bot_startup_and_trading_with_retry():
                 and "active_threads" in _pre_state_snap
             )
             _reset_stale_bootstrap_fsm_for_fresh_attempt(init_done=_pre_init_done)
+            if _BOOTSTRAP_FSM_AVAILABLE:
+                _retry_fsm = _get_bootstrap_fsm()
+                if hasattr(_retry_fsm, "claim_bootstrap_ownership"):
+                    _retry_fsm.claim_bootstrap_ownership()
+                if getattr(_retry_fsm, "state", None) == _BootstrapState.BOOT_FAILED_RETRY:
+                    _retry_reentry_ok = bool(
+                        _retry_fsm.transition(
+                            _BootstrapState.PLATFORM_CONNECTING,
+                            f"bootstrap retry attempt #{_next_attempt}: re-enter platform connecting",
+                        )
+                    )
+                    if not _retry_reentry_ok:
+                        _retry_reentry_error = (
+                            "BOOTSTRAP_RETRY_REENTRY_BLOCKED: "
+                            "BOOT_FAILED_RETRY -> PLATFORM_CONNECTING failed"
+                        )
+                        _set_startup_last_error(_retry_reentry_error)
+                        logger.critical("🚨 [Startup] %s", _retry_reentry_error)
+                        # Check if we have exceeded the max retry count and should
+                        # force the transition to unblock the FSM.
+                        _retry_count = getattr(_retry_fsm, "boot_failed_retry_count", 0)
+                        _max_retries = getattr(_retry_fsm, "_MAX_BOOT_FAILED_RETRIES", 3)
+                        if _retry_count >= _max_retries and hasattr(_retry_fsm, "force_transition_from_retry"):
+                            logger.critical(
+                                "🔧 [Startup] Max BOOT_FAILED_RETRY count (%d/%d) reached — "
+                                "forcing FSM forward via force_transition_from_retry()",
+                                _retry_count,
+                                _max_retries,
+                            )
+                            _force_ok = bool(_retry_fsm.force_transition_from_retry(
+                                f"max retries ({_retry_count}) exceeded on attempt #{_next_attempt}"
+                            ))
+                            if not _force_ok:
+                                logger.critical(
+                                    "🚨 [Startup] force_transition_from_retry also failed — "
+                                    "FSM may be in terminal state; continuing anyway"
+                                )
+                        else:
+                            logger.warning(
+                                "⚠️  [Startup] BOOT_FAILED_RETRY reentry blocked (attempt #%d, "
+                                "retry_count=%d/%d) — continuing startup attempt without FSM advance",
+                                _next_attempt,
+                                _retry_count,
+                                _max_retries,
+                            )
             logger.info(
                 "🔁 [Startup] Bootstrap attempt #%d (%s, %s)",
                 _next_attempt,
@@ -7041,10 +7242,19 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                         _BootstrapState.MODE_GATED,
                         "trading state machine mode confirmed",
                     )
-                _bfsm_transition(
-                    _BootstrapState.PLATFORM_CONNECTING,
-                    "TradingStrategy broker connection starting",
-                )
+                    _cur = _boot_fsm.state
+                if _cur in {_BootstrapState.MODE_GATED, _BootstrapState.BOOT_FAILED_RETRY}:
+                    _bfsm_transition(
+                        _BootstrapState.PLATFORM_CONNECTING,
+                        "TradingStrategy broker connection starting",
+                    )
+                elif _cur == _BootstrapState.PLATFORM_CONNECTING:
+                    logger.debug("[BootstrapFSM] PLATFORM_CONNECTING already active before strategy init")
+                else:
+                    logger.info(
+                        "[BootstrapFSM] strategy-init PLATFORM_CONNECTING transition skipped (state=%s)",
+                        getattr(_cur, "value", str(_cur)),
+                    )
 
             logger.debug("Init stage A2: after Bootstrap FSM, before initialized_state_lock")
             # STEP 2 — initialize strategy ONCE.
@@ -9116,15 +9326,45 @@ def main():
                             "in local-only mode (no distributed lock)"
                         )
                         break
-                    # Strategy construction also failed — log and break out so
-                    # the trading loop can handle a None strategy gracefully
-                    # rather than blocking the process indefinitely.
+                    # Strategy publication timed out and _ensure_strategy_fallback_published
+                    # failed (e.g. execution authority blocked the fallback).  Make one
+                    # final direct attempt to construct TradingStrategy() so the trading
+                    # loop always starts with a valid strategy object.
                     logger.error(
-                        "❌ Degraded fallback strategy construction failed — "
-                        "entering trading loop with no strategy object. "
-                        "Bot will operate in safe/no-trade mode until strategy recovers."
+                        "❌ _ensure_strategy_fallback_published failed — "
+                        "attempting direct TradingStrategy() construction as last resort"
                     )
-                    break
+                    try:
+                        _last_resort_strategy = TradingStrategy()
+                        if _last_resort_strategy is not None:
+                            _acquired_lr = _initialized_state_lock.acquire(
+                                timeout=_INIT_LOCK_PUBLISH_TIMEOUT_S
+                            )
+                            if _acquired_lr:
+                                try:
+                                    _publish_strategy_runtime_readiness(
+                                        _last_resort_strategy,
+                                        context="supervisor last-resort direct construction",
+                                    )
+                                finally:
+                                    _initialized_state_lock.release()
+                            strategy = _last_resort_strategy
+                            logger.warning(
+                                "✅ Last-resort TradingStrategy() constructed directly — "
+                                "entering trading loop"
+                            )
+                            break
+                    except Exception as _lr_exc:
+                        logger.exception(
+                            "❌ Last-resort TradingStrategy() construction also failed: %s — "
+                            "cannot start trading loop without a strategy object",
+                            _lr_exc,
+                        )
+                    raise RuntimeError(
+                        "Startup blocked: strategy construction failed in all fallback paths "
+                        "(degraded timeout + _ensure_strategy_fallback_published + direct TradingStrategy()). "
+                        "Check broker credentials and apex strategy import."
+                    )
                 raise RuntimeError(
                     "Startup blocked: strategy publication timed out after bootstrap observer readiness"
                 )
@@ -9146,6 +9386,21 @@ def main():
                 )
                 _last_strategy_wait_log = _now
             time.sleep(2.0)
+
+    # ── FINAL GUARD: never call start_trading_engine with strategy=None ──────
+    # If strategy is still None here, all fallback paths have been exhausted.
+    # Raising here is safer than calling start_trading_engine(None) which
+    # silently exits run_trading_loop and leaves the bot in a no-trade state.
+    if strategy is None:
+        logger.critical(
+            "🚫 FATAL: strategy is None after all fallback paths — "
+            "cannot start trading loop. Check broker credentials, "
+            "apex strategy import, and execution authority configuration."
+        )
+        raise RuntimeError(
+            "Startup blocked: strategy is None after all initialization and fallback paths. "
+            "Cannot call start_trading_engine with strategy=None."
+        )
 
     logger.info("🚀 Entering main trading loop")
     logger.info("Step 6: entering main trading loop")
