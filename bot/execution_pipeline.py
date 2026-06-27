@@ -1855,9 +1855,6 @@ class ExecutionPipeline:
                 error=f"Runtime authority convergence lost: {exc}",
                 latency_ms=(time.monotonic() - t_start) * 1000,
             )
-                    error=f"Runtime authority convergence lost: {exc}",
-                    latency_ms=(time.monotonic() - t_start) * 1000,
-                )
 
         try:
             with execution_authority_scope():
