@@ -3066,8 +3066,6 @@ class NijaCoreLoop:
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
                     _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
-                    continue
-                _funnel["profitability"] = ("PASS", "")
                     logger.critical(
                         "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
                         "action=%s reason=%s fallback_active=%s force_trade=%s — "
