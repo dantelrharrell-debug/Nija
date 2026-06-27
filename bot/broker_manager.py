@@ -12543,6 +12543,21 @@ class OKXBroker(BaseBroker):
             logging.error("❌ Failed to connect to OKX after maximum retry attempts")
             return False
 
+        except PermissionError as e:
+            # candlelite writes SETTINGS.config to its site-packages dir on first
+            # import.  In read-only container environments this raises PermissionError
+            # before any OKX API call is made.  We catch it here so the crash is
+            # isolated to OKX — Kraken and Coinbase continue trading normally.
+            _e_str = str(e)
+            if "candlelite" in _e_str or "SETTINGS.config" in _e_str:
+                logging.warning(
+                    "⚠️  OKX candlelite permission error (non-critical) — "
+                    "Kraken + Coinbase continue trading: %s", e
+                )
+            else:
+                logging.warning("⚠️  OKX connect() PermissionError (non-critical): %s", e)
+            return False
+
         except ImportError as e:
             # SDK not installed or import failed
             logging.error("❌ OKX connection failed: SDK import error")
