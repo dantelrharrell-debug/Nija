@@ -12331,7 +12331,8 @@ class _OKXRestClient:
     def _sign(self, timestamp: str, method: str, request_path: str, body: str) -> str:
         # Signature message: timestamp + method + requestPath + body
         # The passphrase is NOT part of the signature — it is sent as OK-ACCESS-PASSPHRASE header only.
-        message = timestamp + method.upper() + request_path + body
+        # OKX requires the method in its original case (e.g. "GET", "POST") — do NOT re-uppercase here.
+        message = timestamp + method + request_path + body
         return base64.b64encode(hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).digest()).decode()
 
     def _headers(self, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
