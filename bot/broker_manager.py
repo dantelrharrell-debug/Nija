@@ -12366,6 +12366,19 @@ class _OKXRestClient:
         request_path = f"{path}{query}"
         body = self._json_body(payload) if method != "GET" else ""
         ts = self._timestamp()
+
+        # Log authentication context (no secrets exposed) before every request
+        # so that any subsequent failure has full context in the log stream.
+        logger.warning(
+            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s passphrase_present=%s",
+            method,
+            request_path,
+            self.BASE_URL,
+            os.getenv("OKX_SIMULATED_TRADING", "false").lower() == "true",
+            bool(self.api_key),
+            bool(self.passphrase),
+        )
+
         response = self.session.request(
             method,
             f"{self.BASE_URL}{request_path}",
@@ -12373,7 +12386,58 @@ class _OKXRestClient:
             headers=self._headers(ts, method, request_path, body, private=private),
             timeout=self.timeout,
         )
-        response.raise_for_status()
+
+        # Always log the raw OKX response body before raising so the exact
+        # error message from OKX is visible in the log stream.
+        if not response.ok:
+            logger.error(
+                "OKX_REQUEST_FAILED status=%s method=%s path=%s response_body=%s",
+                response.status_code,
+                method,
+                request_path,
+                response.text,
+            )
+
+            # Parse the JSON body even on HTTP 4xx responses so we can surface
+            # OKX-specific error codes and messages for faster diagnosis.
+            try:
+                err_body = response.json()
+                okx_code = err_body.get("code", "unknown")
+                okx_msg = err_body.get("msg", "")
+                logger.error(
+                    "OKX_ERROR_DETAIL okx_code=%s okx_msg=%s",
+                    okx_code,
+                    okx_msg,
+                )
+
+                # Emit targeted hints for the most common authentication failures
+                # so engineers can pinpoint the root cause without guessing.
+                _hint_map = {
+                    "50111": "Invalid API key — key may be deleted, expired, or belong to a different environment (live vs. demo).",
+                    "50112": "Invalid passphrase — OK-ACCESS-PASSPHRASE does not match the passphrase set when the API key was created.",
+                    "50113": "Invalid signature — HMAC-SHA256 mismatch; check secret key, timestamp format, or request-path construction.",
+                    "50114": "Timestamp out of sync — server time differs from request timestamp by more than 30 s; sync system clock.",
+                    "50119": "API key expired — the key's validity period has elapsed; create a new key.",
+                    "50110": "IP not whitelisted — the originating IP is not on the key's IP whitelist; add it in OKX API settings.",
+                    "50102": "Request timestamp expired — clock skew too large; ensure UTC time is accurate.",
+                    "50100": "API key does not exist — verify OKX_API_KEY is set correctly for this environment.",
+                }
+                hint = _hint_map.get(str(okx_code))
+                if hint:
+                    logger.error("OKX_AUTH_HINT %s", hint)
+                elif response.status_code in (401, 403):
+                    logger.error(
+                        "OKX_AUTH_HINT HTTP %s — possible causes: wrong environment "
+                        "(live key used with x-simulated-trading:1 or vice versa), "
+                        "IP not whitelisted, invalid/expired key, or signature mismatch.",
+                        response.status_code,
+                    )
+            except Exception:
+                # JSON parse failed — the raw body was already logged above.
+                pass
+
+            response.raise_for_status()
+
         return response.json()
 
     def get_balance(self) -> Dict[str, Any]:
