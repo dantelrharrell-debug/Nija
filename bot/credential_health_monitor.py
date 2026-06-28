@@ -98,7 +98,8 @@ class CredentialHealthMonitor:
             'platform_okx': {
                 'OKX_API_KEY',
                 'OKX_API_SECRET',
-                'OKX_PASSPHRASE'
+                'OKX_API_PASSPHRASE',  # preferred name
+                'OKX_PASSPHRASE',      # legacy alias — either one is sufficient
             },
             'platform_alpaca': {
                 'ALPACA_API_KEY',

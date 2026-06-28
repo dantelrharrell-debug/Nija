@@ -357,11 +357,15 @@ def _validate_okx() -> dict:
 
     key        = _get("OKX_API_KEY")
     secret     = _get("OKX_API_SECRET")
-    passphrase = _get("OKX_PASSPHRASE")
+    # Accept OKX_API_PASSPHRASE (preferred/documented) or OKX_PASSPHRASE (legacy alias)
+    passphrase = (
+        os.getenv("OKX_API_PASSPHRASE", "").strip()
+        or os.getenv("OKX_PASSPHRASE", "").strip()
+    )
 
     if not key and not secret and not passphrase:
         result["issues"].append(
-            "OKX_API_KEY, OKX_API_SECRET, and OKX_PASSPHRASE are all unset"
+            "OKX_API_KEY, OKX_API_SECRET, and OKX_API_PASSPHRASE are all unset"
         )
         return result
 
@@ -373,17 +377,20 @@ def _validate_okx() -> dict:
         result["issues"].append("OKX_API_SECRET is missing or empty")
     if not passphrase:
         result["issues"].append(
-            "OKX_PASSPHRASE is missing or empty — OKX requires a passphrase in addition to key/secret"
+            "OKX_API_PASSPHRASE (or OKX_PASSPHRASE) is missing or empty — "
+            "OKX requires a passphrase in addition to key/secret"
         )
 
-    # Detect placeholder passphrase values
+    # Detect placeholder passphrase values — only exact known placeholder strings.
+    # Real passphrases may contain special characters like @, -, _, digits, etc.
     _PLACEHOLDER_PASSPHRASES = {
         "your_passphrase", "your-passphrase", "passphrase",
         "your_password", "password", "changeme",
+        "<your passphrase>", "<passphrase>", "your_api_passphrase",
     }
     if passphrase and passphrase.lower() in _PLACEHOLDER_PASSPHRASES:
         result["issues"].append(
-            f"OKX_PASSPHRASE looks like a placeholder: '{passphrase}'"
+            f"OKX_API_PASSPHRASE looks like a placeholder: '{passphrase}'"
         )
 
     result["valid"] = len(result["issues"]) == 0
@@ -770,9 +777,12 @@ def validate_credentials() -> dict:
     step("OKX (optional)")
     okx_key_ok, _        = _check_var("OKX_API_KEY")
     okx_secret_ok, _     = _check_var("OKX_API_SECRET")
-    okx_passphrase_ok, _ = _check_var("OKX_PASSPHRASE")
+    # Accept OKX_API_PASSPHRASE (preferred) or OKX_PASSPHRASE (legacy alias)
+    okx_passphrase_ok, _ = _check_var("OKX_API_PASSPHRASE")
+    if not okx_passphrase_ok:
+        okx_passphrase_ok, _ = _check_var("OKX_PASSPHRASE")
     if okx_key_ok and okx_secret_ok and okx_passphrase_ok:
-        ok("OKX_API_KEY + OKX_API_SECRET + OKX_PASSPHRASE — all set")
+        ok("OKX_API_KEY + OKX_API_SECRET + OKX_API_PASSPHRASE — all set")
     else:
         info("OKX credentials not fully configured (optional broker)")
     results["okx"] = okx_key_ok and okx_secret_ok and okx_passphrase_ok
