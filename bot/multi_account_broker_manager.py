@@ -5798,7 +5798,8 @@ class MultiAccountBrokerManager:
                     elif name == "COINBASE":
                         cred_hint = "COINBASE_API_KEY / COINBASE_API_SECRET"
                     elif name == "OKX":
-                        cred_hint = "OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE"
+                        cred_hint = "OKX_API_KEY / OKX_API_SECRET / OKX_API_PASSPHRASE (or OKX_PASSPHRASE)"
+
                     else:
                         cred_hint = f"{name}_PLATFORM_API_KEY / {name}_PLATFORM_API_SECRET"
                     issues.append(
@@ -6290,8 +6291,14 @@ class MultiAccountBrokerManager:
         )
         _okx_key = os.environ.get("OKX_API_KEY", "").strip()
         _okx_secret = os.environ.get("OKX_API_SECRET", "").strip()
-        _okx_passphrase = os.environ.get("OKX_PASSPHRASE", "").strip()
+        # Prefer OKX_API_PASSPHRASE (documented/preferred name); fall back to
+        # OKX_PASSPHRASE as a legacy alias so both env var names are accepted.
+        _okx_passphrase = (
+            os.environ.get("OKX_API_PASSPHRASE", "").strip()
+            or os.environ.get("OKX_PASSPHRASE", "").strip()
+        )
         _okx_creds_configured = bool(_okx_key and _okx_secret and _okx_passphrase)
+
 
         if _disable_okx:
             logger.info("⏭️  OKX PLATFORM skipped (NIJA_DISABLE_OKX=true)")

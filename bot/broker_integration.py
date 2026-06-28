@@ -3091,6 +3091,7 @@ class OKXBrokerAdapter(BrokerInterface):
         self.api_key = api_key or os.getenv("OKX_API_KEY")
         self.api_secret = api_secret or os.getenv("OKX_API_SECRET")
         self.passphrase = passphrase or os.getenv("OKX_API_PASSPHRASE") or os.getenv("OKX_PASSPHRASE")
+
         self.testnet = testnet or os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
         self.account_api = None
         self.market_api = None
