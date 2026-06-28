@@ -1,7 +1,7 @@
 """Runtime compatibility patches loaded automatically by Python.
 
 This module keeps NIJA's OKX optional-broker behavior fail-soft while preserving
-full OKX authentication diagnostics.  It patches broker_manager after import so
+full OKX authentication diagnostics. It patches broker_manager after import so
 existing startup code does not need to import another helper explicitly.
 """
 
@@ -37,7 +37,32 @@ _OKX_AUTH_HINTS = {
 
 
 def _truthy_env(name: str, default: str = "false") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _clean_secret(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _clean_secret(value: Any) -> str:
+    """Normalize Railway/raw-env values without exposing their content.
+
+    Users often paste dotenv-style values into Railway, including surrounding
+    quotes. Those quotes become part of the API key/secret/passphrase and OKX
+    then returns 50119 because the key string no longer matches. Strip common
+    wrappers, whitespace, BOMs, and accidental inline comments.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip().lstrip("\ufeff")
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    # Some dashboards preserve an unmatched leading/trailing quote.
+    text = text.strip().strip('"').strip("'").strip()
+    return text
+
+
+def _clean_base_url(value: Any) -> str:
+    url = _clean_secret(value or "https://www.okx.com").rstrip("/")
+    if not url:
+        return "https://www.okx.com"
+    return url
 
 
 def _json_body(payload: Optional[Dict[str, Any]]) -> str:
@@ -59,18 +84,51 @@ def _patch_broker_manager(module: Any) -> None:
     logger = getattr(module, "logger", logging.getLogger("nija.broker"))
     requests_available = bool(getattr(module, "_REQUESTS_AVAILABLE", False))
     requests_lib = getattr(module, "_requests_lib", None)
+    original_client_init = okx_client_cls.__init__
+
+    def _init(self, api_key: str, api_secret: str, passphrase: str, *, simulated: bool = False, timeout: float = 10.0):
+        raw_key = str(api_key or "")
+        raw_secret = str(api_secret or "")
+        raw_passphrase = str(passphrase or "")
+        cleaned_key = _clean_secret(api_key)
+        cleaned_secret = _clean_secret(api_secret)
+        cleaned_passphrase = _clean_secret(passphrase)
+        original_client_init(self, cleaned_key, cleaned_secret, cleaned_passphrase, simulated=simulated, timeout=timeout)
+        self.BASE_URL = _clean_base_url(getattr(self, "BASE_URL", None) or os.getenv("OKX_BASE_URL", "https://www.okx.com"))
+        if raw_key != cleaned_key or raw_secret != cleaned_secret or raw_passphrase != cleaned_passphrase:
+            logger.warning(
+                "OKX_ENV_SANITIZED stripped quote/whitespace wrappers from one or more OKX credential variables "
+                "(key_len=%s secret_len=%s passphrase_len=%s)",
+                len(cleaned_key),
+                len(cleaned_secret),
+                len(cleaned_passphrase),
+            )
+        logger.info(
+            "OKX_ENV_SHAPE key_len=%s secret_len=%s passphrase_len=%s base_url=%s simulated=%s",
+            len(cleaned_key),
+            len(cleaned_secret),
+            len(cleaned_passphrase),
+            self.BASE_URL,
+            bool(simulated),
+        )
 
     def _headers(self, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
         if private:
+            api_key = _clean_secret(getattr(self, "api_key", ""))
+            api_secret = _clean_secret(getattr(self, "api_secret", ""))
+            passphrase = _clean_secret(getattr(self, "passphrase", ""))
+            self.api_key = api_key
+            self.api_secret = api_secret
+            self.passphrase = passphrase
             message = timestamp + method.upper() + request_path + body
             signature = base64.b64encode(
-                hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).digest()
+                hmac.new(api_secret.encode(), message.encode(), hashlib.sha256).digest()
             ).decode()
             headers: Dict[str, str] = {
-                "OK-ACCESS-KEY": self.api_key,
+                "OK-ACCESS-KEY": api_key,
                 "OK-ACCESS-SIGN": signature,
                 "OK-ACCESS-TIMESTAMP": timestamp,
-                "OK-ACCESS-PASSPHRASE": self.passphrase,
+                "OK-ACCESS-PASSPHRASE": passphrase,
                 "Content-Type": "application/json",
             }
         else:
@@ -90,15 +148,17 @@ def _patch_broker_manager(module: Any) -> None:
         body = _json_body(payload) if method != "GET" else ""
         timestamp = self._timestamp()
         simulated = bool(getattr(self, "simulated", False)) or _truthy_env("OKX_SIMULATED_TRADING")
+        self.BASE_URL = _clean_base_url(getattr(self, "BASE_URL", None) or os.getenv("OKX_BASE_URL", "https://www.okx.com"))
 
         logger.info(
-            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s passphrase_present=%s body_empty=%s",
+            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s key_len=%s passphrase_present=%s body_empty=%s",
             method,
             request_path,
             self.BASE_URL,
             simulated,
-            bool(getattr(self, "api_key", "")),
-            bool(getattr(self, "passphrase", "")),
+            bool(_clean_secret(getattr(self, "api_key", ""))),
+            len(_clean_secret(getattr(self, "api_key", ""))),
+            bool(_clean_secret(getattr(self, "passphrase", ""))),
             body == "",
         )
 
@@ -144,10 +204,6 @@ def _patch_broker_manager(module: Any) -> None:
             last_known = getattr(self, "_last_known_balance", None)
             if last_known is not None:
                 return last_known
-
-            # OKX is registered as a non-critical optional broker.  Once connect()
-            # has failed, capital hydration must skip it quietly instead of
-            # producing repeated ERROR logs and artificial zero-balance signals.
             setattr(self, "_is_available", False)
             now = time.monotonic()
             last_log = float(getattr(self, "_last_disconnected_balance_log_ts", 0.0) or 0.0)
@@ -159,6 +215,7 @@ def _patch_broker_manager(module: Any) -> None:
             return None
         return original_get_account_balance(self, verbose=verbose)
 
+    okx_client_cls.__init__ = _init
     okx_client_cls._headers = _headers
     okx_client_cls._request = _request
     okx_broker_cls.get_account_balance = get_account_balance
@@ -204,7 +261,6 @@ class _BrokerManagerPatchFinder(importlib.abc.MetaPathFinder):
         return None
 
 
-# Install the hook once.  If broker_manager was already imported, patch it now.
 if not any(isinstance(finder, _BrokerManagerPatchFinder) for finder in sys.meta_path):
     sys.meta_path.insert(0, _BrokerManagerPatchFinder())
 
