@@ -12298,7 +12298,7 @@ class _OKXRestClient:
     that caused site-packages write attempts.
     """
 
-    BASE_URL = os.environ.get("OKX_BASE_URL", "https://openapi.okx.com")
+    BASE_URL = os.getenv("OKX_BASE_URL", "https://www.okx.com").rstrip("/")
 
     def __init__(self, api_key: str, api_secret: str, passphrase: str, *, simulated: bool = False, timeout: float = 10.0):
         self.api_key = api_key
@@ -12335,17 +12335,17 @@ class _OKXRestClient:
         return base64.b64encode(hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).digest()).decode()
 
     def _headers(self, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
-        headers = {"Content-Type": "application/json"}
         if private:
-            headers.update(
-                {
-                    "OK-ACCESS-KEY": self.api_key,
-                    "OK-ACCESS-SIGN": self._sign(timestamp, method, request_path, body),
-                    "OK-ACCESS-TIMESTAMP": timestamp,
-                    "OK-ACCESS-PASSPHRASE": self.passphrase,
-                }
-            )
-        if self.simulated:
+            headers: Dict[str, str] = {
+                "OK-ACCESS-KEY": self.api_key,
+                "OK-ACCESS-SIGN": self._sign(timestamp, method, request_path, body),
+                "OK-ACCESS-TIMESTAMP": timestamp,
+                "OK-ACCESS-PASSPHRASE": self.passphrase,
+                "Content-Type": "application/json",
+            }
+        else:
+            headers = {"Content-Type": "application/json"}
+        if os.getenv("OKX_SIMULATED_TRADING", "false").lower() == "true":
             headers["x-simulated-trading"] = "1"
         return headers
 
