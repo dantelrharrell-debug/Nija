@@ -98,8 +98,11 @@ class CredentialHealthMonitor:
             'platform_okx': {
                 'OKX_API_KEY',
                 'OKX_API_SECRET',
-                'OKX_API_PASSPHRASE',  # preferred name
-                'OKX_PASSPHRASE',      # legacy alias — either one is sufficient
+                # Track OKX_API_PASSPHRASE (preferred). The validation layer also
+                # accepts OKX_PASSPHRASE as a legacy alias, but we only monitor
+                # the canonical name here to avoid false "missing" alerts when
+                # only one of the two is set.
+                'OKX_API_PASSPHRASE',
             },
             'platform_alpaca': {
                 'ALPACA_API_KEY',

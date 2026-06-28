@@ -552,7 +552,7 @@ def validate_exchange_configuration() -> StartupValidationResult:
             "non-placeholder credentials set. Check environment variables for: "
             "KRAKEN_PLATFORM_API_KEY/SECRET (or KRAKEN_API_KEY/SECRET), "
             "COINBASE_API_KEY/SECRET, BINANCE_API_KEY/SECRET, "
-            "OKX_API_KEY/SECRET/PASSPHRASE, or ALPACA_API_KEY/SECRET."
+            "OKX_API_KEY/OKX_API_SECRET/OKX_API_PASSPHRASE, or ALPACA_API_KEY/SECRET."
         )
         result.add_risk(
             StartupRisk.NO_VIABLE_BROKER,
