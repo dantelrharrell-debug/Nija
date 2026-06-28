@@ -374,14 +374,21 @@ def _binance_credentials_viable() -> Tuple[bool, str]:
 
 
 def _okx_credentials_viable() -> Tuple[bool, str]:
-    """Check whether OKX credentials look viable."""
+    """Check whether OKX credentials look viable.
+
+    Accepts both OKX_API_PASSPHRASE (preferred) and OKX_PASSPHRASE (legacy)
+    so that either env-var name works without requiring a rename.
+    """
     key = os.getenv("OKX_API_KEY", "").strip()
     secret = os.getenv("OKX_API_SECRET", "").strip()
-    passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
+    # Accept OKX_API_PASSPHRASE (documented name) or OKX_PASSPHRASE (legacy alias)
+    passphrase = (
+        os.getenv("OKX_API_PASSPHRASE") or os.getenv("OKX_PASSPHRASE") or ""
+    ).strip()
     if (_credential_looks_valid(key, _MIN_LENGTHS["okx_key"]) and
             _credential_looks_valid(secret, _MIN_LENGTHS["okx_secret"]) and
             _credential_looks_valid(passphrase, _MIN_LENGTHS["okx_passphrase"])):
-        return True, "OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE"
+        return True, "OKX_API_KEY / OKX_API_SECRET / OKX_API_PASSPHRASE"
     return False, ""
 
 
@@ -502,11 +509,12 @@ def validate_exchange_configuration() -> StartupValidationResult:
         result.add_info(f"✅ OKX credentials configured and viable for direct REST trading ({okx_pair})")
     elif okx_key_set:
         result.add_warning(
-            "⚠️  OKX CREDENTIALS INVALID: Values look like placeholders.\n"
+            "⚠️  OKX CREDENTIALS INVALID: Values look like placeholders or are incomplete.\n"
             "    Required format:\n"
-            "      OKX_API_KEY=<alphanumeric key>\n"
-            "      OKX_API_SECRET=<alphanumeric secret>\n"
-            "      OKX_PASSPHRASE=<your passphrase (set when creating the API key)>\n"
+            "      OKX_API_KEY=<UUID or alphanumeric key>\n"
+            "      OKX_API_SECRET=<hex or alphanumeric secret>\n"
+            "      OKX_API_PASSPHRASE=<your passphrase (set when creating the API key)>\n"
+            "    Note: OKX_API_PASSPHRASE may contain special characters (e.g. @, -, _).\n"
             "    OKX uses NIJA direct REST now; the okx/candlelite SDK is not imported."
         )
     else:
