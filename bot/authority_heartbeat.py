@@ -767,8 +767,14 @@ class AuthorityHeartbeatMonitor:
             redis_gen = self._redis_client.get(_generation_redis_key)
             local_gen = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "0")
 
+            # Normalize Redis value from bytes to int so that b'1285' and
+            # 1285 (or "1285") are not treated as a mismatch.
+            if redis_gen is not None:
+                redis_gen = redis_gen.decode() if isinstance(redis_gen, bytes) else redis_gen
+                redis_gen = int(redis_gen)
+
             # If mismatch detected, resync to Redis value
-            if redis_gen and str(redis_gen) != str(local_gen):
+            if redis_gen is not None and int(local_gen) != redis_gen:
                 logger.warning(
                     "AuthorityHeartbeat: generation mismatch detected — resyncing "
                     "local=%s redis=%s key=%s",
