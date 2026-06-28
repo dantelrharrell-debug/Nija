@@ -12369,14 +12369,23 @@ class _OKXRestClient:
 
         # Log authentication context (no secrets exposed) before every request
         # so that any subsequent failure has full context in the log stream.
+        # Sanitize API key for logging (first 4 and last 4 chars only)
+        api_key_sample = ""
+        if self.api_key and len(self.api_key) >= 8:
+            api_key_sample = f"{self.api_key[:4]}...{self.api_key[-4:]}"
+        elif self.api_key:
+            api_key_sample = "***"
+
         logger.warning(
-            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s passphrase_present=%s",
+            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s key_sample=%s passphrase_present=%s body_empty=%s",
             method,
             request_path,
             self.BASE_URL,
             os.getenv("OKX_SIMULATED_TRADING", "false").lower() == "true",
             bool(self.api_key),
+            api_key_sample,
             bool(self.passphrase),
+            not body,
         )
 
         response = self.session.request(
