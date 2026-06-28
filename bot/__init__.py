@@ -8,13 +8,8 @@ import sys
 import os
 import logging
 
-# ── OKX uses direct REST — no candlelite / okx SDK import needed ─────────────
-# NIJA's OKX integration uses _OKXRestClient (HMAC-SHA256 signed HTTPS calls)
-# instead of the upstream okx/candlelite SDK, so no environment patching is
-# required.  The block below is intentionally removed.
-# ─────────────────────────────────────────────────────────────────────────────
+# OKX uses direct REST with HMAC-SHA256 signed HTTPS calls.
 
-# Set up logging for the bot package
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -22,8 +17,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Package version
+try:
+    from .okx_runtime_patch import install_import_hook as _install_okx_runtime_patch
+    _install_okx_runtime_patch()
+except Exception as _okx_patch_exc:
+    logger.warning("OKX runtime patch unavailable: %s", _okx_patch_exc)
+
 __version__ = "7.2.0"
 
-# Verify we're in the bot directory context
 logger.debug(f"NIJA Bot package initialized (v{__version__})")
