@@ -12298,7 +12298,7 @@ class _OKXRestClient:
     that caused site-packages write attempts.
     """
 
-    BASE_URL = "https://www.okx.com"
+    BASE_URL = os.environ.get("OKX_BASE_URL", "https://openapi.okx.com")
 
     def __init__(self, api_key: str, api_secret: str, passphrase: str, *, simulated: bool = False, timeout: float = 10.0):
         self.api_key = api_key
