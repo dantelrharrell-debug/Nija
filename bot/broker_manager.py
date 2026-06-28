@@ -12490,7 +12490,11 @@ class OKXBroker(BaseBroker):
             else:
                 api_key = os.getenv("OKX_API_KEY", "").strip()
                 api_secret = os.getenv("OKX_API_SECRET", "").strip()
-                passphrase = os.getenv("OKX_PASSPHRASE", "").strip()
+                passphrase = (
+                    os.getenv("OKX_API_PASSPHRASE")
+                    or os.getenv("OKX_PASSPHRASE")
+                    or ""
+                ).strip()
 
             self.use_testnet = os.getenv("OKX_USE_TESTNET", "false").lower() in ["true", "1", "yes"]
 
