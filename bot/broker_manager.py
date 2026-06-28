@@ -12337,17 +12337,37 @@ class _OKXRestClient:
 
     def _headers(self, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
         if private:
+            prehash = timestamp + method.upper() + request_path + body
+            signature = self._sign(timestamp, method, request_path, body)
+            logger.warning(
+                "OKX_AUTH_DETAIL timestamp=%s prehash=%r signing_algo=Base64-HMAC-SHA256 signature_len=%s",
+                timestamp,
+                prehash,
+                len(signature),
+            )
             headers: Dict[str, str] = {
                 "OK-ACCESS-KEY": self.api_key,
-                "OK-ACCESS-SIGN": self._sign(timestamp, method, request_path, body),
+                "OK-ACCESS-SIGN": signature,
                 "OK-ACCESS-TIMESTAMP": timestamp,
                 "OK-ACCESS-PASSPHRASE": self.passphrase,
                 "Content-Type": "application/json",
             }
         else:
             headers = {"Content-Type": "application/json"}
-        if os.getenv("OKX_SIMULATED_TRADING", "false").lower() == "true":
+        # Send x-simulated-trading:1 only when explicitly in simulated/testnet mode.
+        # Live credentials must NOT include this header — OKX rejects live keys
+        # that arrive with x-simulated-trading:1 (and vice versa).
+        _sim_env = os.getenv("OKX_SIMULATED_TRADING", "").strip().lower()
+        _sim_active = self.simulated or _sim_env in {"1", "true", "yes", "y", "on"}
+        if _sim_active:
             headers["x-simulated-trading"] = "1"
+        logger.warning(
+            "OKX_HEADERS_DIAG simulated_instance=%s simulated_env=%r simulated_header_sent=%s headers_keys=%s",
+            self.simulated,
+            _sim_env or "absent",
+            _sim_active,
+            list(headers.keys()),
+        )
         return headers
 
     def _request(
@@ -12377,24 +12397,39 @@ class _OKXRestClient:
         elif self.api_key:
             api_key_sample = "***"
 
+        _sim_env_val = os.getenv("OKX_SIMULATED_TRADING", "").strip().lower()
+        _sim_active = self.simulated or _sim_env_val in {"1", "true", "yes", "y", "on"}
         logger.warning(
-            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s key_sample=%s passphrase_present=%s body_empty=%s",
+            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated_instance=%s simulated_env=%r "
+            "simulated_header_will_be_sent=%s key_present=%s key_sample=%s passphrase_present=%s "
+            "timestamp=%s body_empty=%s",
             method,
             request_path,
             self.BASE_URL,
-            os.getenv("OKX_SIMULATED_TRADING", "false").lower() == "true",
+            self.simulated,
+            _sim_env_val or "absent",
+            _sim_active,
             bool(self.api_key),
             api_key_sample,
             bool(self.passphrase),
+            ts,
             not body,
         )
 
+        request_headers = self._headers(ts, method, request_path, body, private=private)
         response = self.session.request(
             method,
             f"{self.BASE_URL}{request_path}",
             data=body if body else None,
-            headers=self._headers(ts, method, request_path, body, private=private),
+            headers=request_headers,
             timeout=self.timeout,
+        )
+        logger.warning(
+            "OKX_RESPONSE_DIAG status=%s method=%s path=%s response_body=%s",
+            response.status_code,
+            method,
+            request_path,
+            response.text,
         )
 
         # Always log the raw OKX response body before raising so the exact
@@ -12423,14 +12458,23 @@ class _OKXRestClient:
                 # Emit targeted hints for the most common authentication failures
                 # so engineers can pinpoint the root cause without guessing.
                 _hint_map = {
+                    "50100": "API key does not exist — verify OKX_API_KEY is set correctly for this environment.",
+                    "50101": "API key missing from request — verify OK-ACCESS-KEY header is being sent.",
+                    "50102": "Request timestamp expired — clock skew too large; ensure UTC time is accurate.",
+                    "50110": "IP not whitelisted — the originating IP is not on the key's IP whitelist; add it in OKX API settings.",
                     "50111": "Invalid API key — key may be deleted, expired, or belong to a different environment (live vs. demo).",
                     "50112": "Invalid passphrase — OK-ACCESS-PASSPHRASE does not match the passphrase set when the API key was created.",
-                    "50113": "Invalid signature — HMAC-SHA256 mismatch; check secret key, timestamp format, or request-path construction.",
+                    "50113": "Invalid signature — HMAC-SHA256 mismatch; check OKX_API_SECRET, timestamp format (RFC3339 with ms), and request-path construction.",
                     "50114": "Timestamp out of sync — server time differs from request timestamp by more than 30 s; sync system clock.",
-                    "50119": "API key expired — the key's validity period has elapsed; create a new key.",
-                    "50110": "IP not whitelisted — the originating IP is not on the key's IP whitelist; add it in OKX API settings.",
-                    "50102": "Request timestamp expired — clock skew too large; ensure UTC time is accurate.",
-                    "50100": "API key does not exist — verify OKX_API_KEY is set correctly for this environment.",
+                    "50119": (
+                        "API key does not exist in this OKX environment (error 50119) — "
+                        "the key is not found on the OKX account. Possible causes: "
+                        "(1) OKX_API_KEY value is wrong or was never created, "
+                        "(2) key belongs to a different OKX account or sub-account, "
+                        "(3) live key used with x-simulated-trading:1 header (or vice versa), "
+                        "(4) key was deleted from the OKX dashboard. "
+                        "Action: log into OKX → API Management and verify the key exists and matches OKX_API_KEY exactly."
+                    ),
                 }
                 hint = _hint_map.get(str(okx_code))
                 if hint:

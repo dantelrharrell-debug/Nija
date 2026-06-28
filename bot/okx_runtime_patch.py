@@ -35,7 +35,15 @@ def _okx_auth_hint(code: str, status: int) -> Optional[str]:
         "50112": "Invalid passphrase — OKX_API_PASSPHRASE/OKX_PASSPHRASE does not match the API key passphrase.",
         "50113": "Invalid signature — check OKX_API_SECRET, request path, body, timestamp, and HMAC-SHA256 signing.",
         "50114": "Timestamp outside allowed window — ensure the system clock is accurate and timestamp is UTC milliseconds.",
-        "50119": "API key does not exist in this OKX environment — verify the key, live/demo mode, subaccount, and base URL.",
+        "50119": (
+            "API key does not exist in this OKX environment (error 50119) — "
+            "the key is not found on the OKX account. Possible causes: "
+            "(1) OKX_API_KEY value is wrong or was never created, "
+            "(2) key belongs to a different OKX account or sub-account, "
+            "(3) live key used with x-simulated-trading:1 header (or vice versa), "
+            "(4) key was deleted from the OKX dashboard. "
+            "Action: log into OKX → API Management and verify the key exists and matches OKX_API_KEY exactly."
+        ),
     }
     if code in hints:
         return hints[code]
@@ -66,11 +74,18 @@ def apply_okx_runtime_patches() -> bool:
 
     def _headers(self: Any, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
         if private:
+            prehash = timestamp + method.upper() + request_path + body
             # OKX requires the method in its original case (e.g. "GET", "POST") — do NOT re-uppercase here.
             message = timestamp + method + request_path + body
             signature = base64.b64encode(
-                hmac.new(self.api_secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
+                hmac.new(self.api_secret.encode("utf-8"), prehash.encode("utf-8"), hashlib.sha256).digest()
             ).decode("utf-8")
+            logger.warning(
+                "OKX_AUTH_DETAIL timestamp=%s prehash=%r signing_algo=Base64-HMAC-SHA256 signature_len=%s",
+                timestamp,
+                prehash,
+                len(signature),
+            )
             headers: Dict[str, str] = {
                 "OK-ACCESS-KEY": self.api_key,
                 "OK-ACCESS-SIGN": signature,
@@ -80,8 +95,18 @@ def apply_okx_runtime_patches() -> bool:
             }
         else:
             headers = {"Content-Type": "application/json"}
-        if bool(getattr(self, "simulated", False)) or _env_truthy("OKX_SIMULATED_TRADING") or _env_truthy("OKX_USE_TESTNET"):
+        # Send x-simulated-trading:1 only when explicitly in simulated/testnet mode.
+        # Live credentials must NOT include this header — OKX rejects live keys
+        # that arrive with x-simulated-trading:1 (and vice versa).
+        _sim_active = bool(getattr(self, "simulated", False)) or _env_truthy("OKX_SIMULATED_TRADING") or _env_truthy("OKX_USE_TESTNET")
+        if _sim_active:
             headers["x-simulated-trading"] = "1"
+        logger.warning(
+            "OKX_HEADERS_DIAG simulated_instance=%s simulated_header_sent=%s headers_keys=%s",
+            bool(getattr(self, "simulated", False)),
+            _sim_active,
+            list(headers.keys()),
+        )
         return headers
 
     def _request(
@@ -101,23 +126,34 @@ def apply_okx_runtime_patches() -> bool:
         ts = self._timestamp()
         simulated = bool(getattr(self, "simulated", False)) or _env_truthy("OKX_SIMULATED_TRADING") or _env_truthy("OKX_USE_TESTNET")
 
-        logger.info(
-            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s passphrase_present=%s body_empty=%s",
+        logger.warning(
+            "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated_instance=%s simulated_active=%s "
+            "key_present=%s passphrase_present=%s timestamp=%s body_empty=%s",
             method,
             request_path,
             self.BASE_URL,
+            bool(getattr(self, "simulated", False)),
             simulated,
             bool(getattr(self, "api_key", "")),
             bool(getattr(self, "passphrase", "")),
+            ts,
             body == "",
         )
 
+        request_headers = self._headers(ts, method, request_path, body, private=private)
         response = self.session.request(
             method,
             f"{self.BASE_URL}{request_path}",
             data=body if body else None,
-            headers=self._headers(ts, method, request_path, body, private=private),
+            headers=request_headers,
             timeout=self.timeout,
+        )
+        logger.warning(
+            "OKX_RESPONSE_DIAG status=%s method=%s path=%s response_body=%s",
+            response.status_code,
+            method,
+            request_path,
+            response.text,
         )
 
         try:
