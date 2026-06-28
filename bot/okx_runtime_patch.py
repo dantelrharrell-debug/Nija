@@ -66,7 +66,8 @@ def apply_okx_runtime_patches() -> bool:
 
     def _headers(self: Any, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
         if private:
-            message = timestamp + method.upper() + request_path + body
+            # OKX requires the method in its original case (e.g. "GET", "POST") — do NOT re-uppercase here.
+            message = timestamp + method + request_path + body
             signature = base64.b64encode(
                 hmac.new(self.api_secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).digest()
             ).decode("utf-8")
