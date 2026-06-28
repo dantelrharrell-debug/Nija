@@ -12306,6 +12306,14 @@ class _OKXRestClient:
         self.passphrase = passphrase
         self.simulated = simulated
         self.timeout = timeout
+        logger.warning(
+            "OKX_AUTH_DIAG key=%s secret_len=%s passphrase_len=%s base_url=%s simulated=%s",
+            bool(api_key),
+            len(api_secret or ""),
+            len(passphrase or ""),
+            self.BASE_URL,
+            simulated,
+        )
         if not _REQUESTS_AVAILABLE or _requests_lib is None:
             raise RuntimeError("requests is required for OKX REST trading")
         self.session = _requests_lib.Session()
