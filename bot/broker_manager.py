@@ -12321,13 +12321,10 @@ class _OKXRestClient:
         return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
     def _sign(self, timestamp: str, method: str, request_path: str, body: str) -> str:
-        message = f"{timestamp}{method.upper()}{request_path}{body}"
-        digest = hmac.new(
-            self.api_secret.encode("utf-8"),
-            message.encode("utf-8"),
-            hashlib.sha256,
-        ).digest()
-        return base64.b64encode(digest).decode("ascii")
+        # Signature message: timestamp + method + requestPath + body
+        # The passphrase is NOT part of the signature — it is sent as OK-ACCESS-PASSPHRASE header only.
+        message = timestamp + method.upper() + request_path + body
+        return base64.b64encode(hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).digest()).decode()
 
     def _headers(self, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
