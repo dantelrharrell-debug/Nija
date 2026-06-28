@@ -358,10 +358,7 @@ def _validate_okx() -> dict:
     key        = _get("OKX_API_KEY")
     secret     = _get("OKX_API_SECRET")
     # Accept OKX_API_PASSPHRASE (preferred/documented) or OKX_PASSPHRASE (legacy alias)
-    passphrase = (
-        os.getenv("OKX_API_PASSPHRASE", "").strip()
-        or os.getenv("OKX_PASSPHRASE", "").strip()
-    )
+    passphrase = _get("OKX_API_PASSPHRASE") or _get("OKX_PASSPHRASE")
 
     if not key and not secret and not passphrase:
         result["issues"].append(
