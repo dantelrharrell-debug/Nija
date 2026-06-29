@@ -204,11 +204,22 @@ def apply_okx_runtime_patches() -> bool:
 
 
 def install_import_hook() -> None:
-    """Install a one-shot import hook that patches broker_manager after import."""
+    """Install a one-shot import hook that patches broker_manager after import.
+
+    Guard: if the hook is already installed (or the patch already applied),
+    this function is a no-op.  It is safe to call from multiple locations.
+    """
     import builtins
     import sys
 
+    # If the patch is already fully applied there is nothing left to do.
+    bm = sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
+    if bm is not None and getattr(bm, "_NIJA_OKX_RUNTIME_PATCHED", False):
+        return
+
     if getattr(builtins, "_NIJA_OKX_IMPORT_HOOK_INSTALLED", False):
+        # Hook already installed — attempt the patch in case broker_manager
+        # finished loading between the previous call and this one.
         apply_okx_runtime_patches()
         return
 
@@ -216,11 +227,12 @@ def install_import_hook() -> None:
 
     def guarded_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
         module = original_import(name, globals, locals, fromlist, level)
+        # Only trigger when the import being processed is actually broker_manager,
+        # not on every subsequent import (which would fire on every import call
+        # once broker_manager is in sys.modules).
         target_loaded = (
             name in {"bot.broker_manager", "broker_manager"}
             or name.endswith(".broker_manager")
-            or "bot.broker_manager" in sys.modules
-            or "broker_manager" in sys.modules
         )
         if target_loaded:
             try:
@@ -233,4 +245,6 @@ def install_import_hook() -> None:
 
     builtins.__import__ = guarded_import
     setattr(builtins, "_NIJA_OKX_IMPORT_HOOK_INSTALLED", True)
+    # broker_manager may already be loaded — attempt the patch immediately so
+    # the hook does not need to wait for the next import.
     apply_okx_runtime_patches()

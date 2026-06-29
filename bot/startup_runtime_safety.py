@@ -19,6 +19,10 @@ LIVE_BYPASS_FLAGS = (
 
 logger = logging.getLogger("nija.startup_runtime_safety")
 _POSITION_SYNC_AUTOWIRE_STARTED = False
+# Lock protecting the module-level _POSITION_SYNC_AUTOWIRE_STARTED flag so
+# concurrent callers (e.g. multiple threads calling normalize_runtime_startup_env
+# at startup) cannot race past the guard and launch duplicate worker threads.
+_POSITION_SYNC_AUTOWIRE_LOCK = threading.Lock()
 
 
 def env_truthy(value: str | None) -> bool:
@@ -34,8 +38,17 @@ def live_mode_enabled(env: MutableMapping[str, str]) -> bool:
 
 
 def _invoke_position_sync(strategy, source: str) -> None:
+    """Invoke startup position sync on *strategy* exactly once.
+
+    Guard: ``_startup_position_sync_done`` is set on the strategy instance
+    before the sync runs so that re-entrant or duplicate calls (e.g. from
+    reconnect handlers, health monitors, or multiple startup hooks) are
+    silently ignored.
+    """
     if getattr(strategy, "_startup_position_sync_done", False):
         return
+    # Set the flag BEFORE calling sync so that any re-entrant call triggered
+    # during sync (e.g. from a broker reconnect callback) is also a no-op.
     setattr(strategy, "_startup_position_sync_done", True)
     try:
         try:
@@ -50,13 +63,30 @@ def _invoke_position_sync(strategy, source: str) -> None:
 
 
 def _patch_trading_strategy_class(cls) -> bool:
+    """Wrap *cls.__init__* to trigger position sync after construction.
+
+    Guard: ``_nija_position_sync_wrapped`` is set on the wrapper function so
+    that calling this function multiple times on the same class is idempotent —
+    the class ``__init__`` is patched at most once regardless of how many times
+    this function is called.
+
+    The original ``__init__`` is captured in a closure variable
+    (``original_init``) *before* the wrapper is defined, so the wrapper always
+    calls the true original — never the already-patched version — preventing
+    double-wrapping and infinite recursion.
+    """
+    # Save the original __init__ BEFORE defining the wrapper so the closure
+    # always refers to the unpatched version.
     original_init = getattr(cls, "__init__", None)
     if original_init is None:
         return False
+    # Idempotency guard: if this class has already been patched, return True
+    # without re-wrapping (which would cause double-wrapping / infinite recursion).
     if getattr(original_init, "_nija_position_sync_wrapped", False):
         return True
 
     def _init_with_position_sync(self, *args, **kwargs):
+        # Call the ORIGINAL __init__, not the patched one.
         original_init(self, *args, **kwargs)
         _invoke_position_sync(self, "TradingStrategy.__init__")
 
@@ -67,10 +97,23 @@ def _patch_trading_strategy_class(cls) -> bool:
 
 
 def _install_position_sync_autowire() -> None:
+    """Start the background autowire worker thread — at most once per process.
+
+    Thread-safe: protected by ``_POSITION_SYNC_AUTOWIRE_LOCK`` so concurrent
+    callers cannot race past the ``_POSITION_SYNC_AUTOWIRE_STARTED`` flag and
+    launch duplicate worker threads.
+    """
     global _POSITION_SYNC_AUTOWIRE_STARTED
+    # Fast path: check without the lock first (common case after first call).
     if _POSITION_SYNC_AUTOWIRE_STARTED:
         return
-    _POSITION_SYNC_AUTOWIRE_STARTED = True
+    with _POSITION_SYNC_AUTOWIRE_LOCK:
+        # Re-check inside the lock to handle the race between the fast-path
+        # check and lock acquisition.
+        if _POSITION_SYNC_AUTOWIRE_STARTED:
+            return
+        _POSITION_SYNC_AUTOWIRE_STARTED = True
+
     if not env_truthy(os.getenv("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")):
         logger.warning("EXCHANGE_POSITION_SYNC autowire disabled by NIJA_STARTUP_POSITION_SYNC_ENABLED=false")
         return
