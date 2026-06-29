@@ -89,6 +89,16 @@ def _broker_tracker_position_count(broker) -> int | None:
     return None
 
 
+def _broker_name_for_log(broker) -> str:
+    if broker is None:
+        return "none"
+    broker_type = getattr(broker, "broker_type", None)
+    value = getattr(broker_type, "value", None)
+    if value:
+        return str(value).lower()
+    return type(broker).__name__.replace("Broker", "").lower()
+
+
 def _patch_core_loop_class(cls) -> bool:
     original_run_scan_phase = getattr(cls, "run_scan_phase", None)
     if original_run_scan_phase is None:
@@ -112,7 +122,7 @@ def _patch_core_loop_class(cls) -> bool:
                 kwargs["open_positions_count"] = broker_count
             logger.warning(
                 "BROKER_SLOT_SCOPE active broker=%s original_open=%s broker_open=%s max_positions=%s",
-                type(broker).__name__ if broker is not None else "None",
+                _broker_name_for_log(broker),
                 original_count,
                 broker_count,
                 getattr(self, "max_positions", None),
@@ -120,10 +130,56 @@ def _patch_core_loop_class(cls) -> bool:
         else:
             logger.info(
                 "BROKER_SLOT_SCOPE fallback_global_count broker=%s open_positions_count=%s",
-                type(broker).__name__ if broker is not None else "None",
+                _broker_name_for_log(broker),
                 kwargs.get("open_positions_count", args[3] if len(args) >= 4 else None),
             )
-        return original_run_scan_phase(self, *args, **kwargs)
+
+        started_at = time.monotonic()
+        result = original_run_scan_phase(self, *args, **kwargs)
+
+        try:
+            scored = int(getattr(result, "symbols_scored", 0) or 0)
+            entered = int(getattr(result, "entries_taken", 0) or 0)
+            blocked = int(getattr(result, "entries_blocked", 0) or 0)
+            exited = int(getattr(result, "exits_taken", 0) or 0)
+            veto_counts = getattr(self, "veto_reason_counts", {}) or {}
+            reject_counts = getattr(self, "reject_reason_counts", {}) or {}
+            top_veto = max(veto_counts.items(), key=lambda kv: kv[1])[0] if veto_counts else "none"
+            top_reject = max(reject_counts.items(), key=lambda kv: kv[1])[0] if reject_counts else "none"
+            if entered > 0:
+                status = "ORDER_PATH_ACTIVE"
+                reason = "entries_taken"
+            elif blocked > 0:
+                status = "ENTRY_BLOCKED"
+                reason = top_reject if top_reject != "none" else "blocked_candidates"
+            elif scored > 0:
+                status = "NO_ENTRY_FROM_SCORED_SYMBOLS"
+                reason = top_reject if top_reject != "none" else top_veto
+            else:
+                status = "NO_SCORABLE_SIGNAL"
+                reason = top_veto if top_veto != "none" else "market_data_or_filters"
+            logger.critical(
+                "ORDER_ADMISSION_SUMMARY broker=%s status=%s scored=%d entered=%d blocked=%d exited=%d "
+                "top_veto=%s top_reject=%s duration_ms=%d",
+                _broker_name_for_log(broker),
+                status,
+                scored,
+                entered,
+                blocked,
+                exited,
+                top_veto,
+                top_reject,
+                int((time.monotonic() - started_at) * 1000),
+            )
+            print(
+                f"[NIJA-PRINT] ORDER_ADMISSION_SUMMARY | broker={_broker_name_for_log(broker)} "
+                f"status={status} reason={reason} scored={scored} entered={entered} blocked={blocked} exited={exited}",
+                flush=True,
+            )
+        except Exception as exc:
+            logger.debug("ORDER_ADMISSION_SUMMARY failed: %s", exc)
+
+        return result
 
     _run_scan_phase_broker_scoped._nija_broker_slot_scoped = True  # type: ignore[attr-defined]
     cls.run_scan_phase = _run_scan_phase_broker_scoped
@@ -216,6 +272,8 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
     env.setdefault("HF_SCALPING_MODE", env.get("HF_SCALP_MODE", "1"))
     env.setdefault("NIJA_BROKER_SCOPED_POSITION_CAP", "true")
     env.setdefault("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")
+    env.setdefault("NIJA_LOG_TRADE_DECISIONS", "true")
+    env.setdefault("NIJA_PROFITABILITY_GUARD_ENABLED", "true")
 
     # Ensure generation mismatch recovery is enabled by default so the bot
     # can self-heal from diverged generation counters without operator intervention.
