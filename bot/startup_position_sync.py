@@ -65,7 +65,22 @@ def _tracker_count(tracker: Any) -> int:
 
 
 def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -> int:
-    """Fetch and adopt open positions from *broker* into its PositionTracker."""
+    """Fetch and adopt open positions from *broker* into its PositionTracker.
+
+    Guard: ``_startup_position_sync_adopted`` is set on the broker instance
+    after the first successful adoption so that repeated calls (e.g. from
+    reconnect handlers or multiple startup hooks) are silently skipped.
+    """
+    # Per-broker idempotency guard: adopt positions at most once per broker
+    # instance, regardless of how many times this function is called.
+    if getattr(broker, "_startup_position_sync_adopted", False):
+        logger.debug(
+            "EXCHANGE_POSITION_SYNC broker=%s skipped — already adopted on this instance",
+            broker_name,
+        )
+        return 0
+    broker._startup_position_sync_adopted = True
+
     tracker = getattr(broker, "position_tracker", None)
     if tracker is None:
         logger.warning("EXCHANGE_POSITION_SYNC broker=%s has no position_tracker — skipping", broker_name)
@@ -224,7 +239,24 @@ def _collect_connected_brokers(strategy: Any) -> Dict[str, Any]:
 
 
 def sync_exchange_positions_on_startup(strategy: Any) -> int:
-    """Sync open exchange positions into each connected broker's PositionTracker."""
+    """Sync open exchange positions into each connected broker's PositionTracker.
+
+    Guard: ``_startup_position_sync_done`` is checked on the strategy instance
+    so that this function is idempotent even when called directly (i.e. without
+    going through ``_invoke_position_sync`` in startup_runtime_safety).  The
+    flag is set before any broker work begins so re-entrant calls are no-ops.
+    """
+    # Defense-in-depth guard: the primary guard lives in _invoke_position_sync
+    # (startup_runtime_safety.py), but protect here too so direct callers are
+    # also safe from double-execution.
+    if getattr(strategy, "_startup_position_sync_done", False):
+        logger.debug("EXCHANGE_POSITION_SYNC skipped — already completed for this strategy instance")
+        return 0
+    # Do NOT set _startup_position_sync_done here — that flag is owned by
+    # _invoke_position_sync.  Setting it here would prevent the caller's guard
+    # from seeing the correct state.  Per-broker deduplication is handled by
+    # _adopt_broker_positions via _startup_position_sync_adopted.
+
     logger.info("EXCHANGE_POSITION_SYNC starting startup position synchronisation")
 
     eps = _get_entry_price_store()
