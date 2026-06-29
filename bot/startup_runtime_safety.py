@@ -16,6 +16,13 @@ LIVE_BYPASS_FLAGS = (
     "NIJA_FORCE_ACTIVATION",
     "NIJA_SKIP_STARTUP_PHASE_GATE",
 )
+REDIS_LOCK_EMERGENCY_FLAGS = (
+    "NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK",
+    "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK",
+    "NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY",
+    "NIJA_ALLOW_REDIS_DEGRADED",
+    "NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE",
+)
 
 logger = logging.getLogger("nija.startup_runtime_safety")
 _POSITION_SYNC_AUTOWIRE_STARTED = False
@@ -34,6 +41,38 @@ def live_mode_enabled(env: MutableMapping[str, str]) -> bool:
     """Return ``True`` when the runtime should be treated as live mode."""
 
     return not env_truthy(env.get("DRY_RUN_MODE")) and not env_truthy(env.get("PAPER_MODE"))
+
+
+def _redis_lock_emergency_enabled(env: MutableMapping[str, str]) -> bool:
+    return any(env_truthy(env.get(flag)) for flag in REDIS_LOCK_EMERGENCY_FLAGS)
+
+
+def _apply_redis_lock_emergency_fallback(env: MutableMapping[str, str], notes: list[str]) -> None:
+    """Respect explicit operator emergency fallback flags for stale Redis locks.
+
+    start.sh may clear NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK in live mode unless
+    NIJA_CONFIRM_BYPASS_RISKS is set.  When the operator has explicitly enabled
+    the safer emergency/degraded fallback flags, restore the effective runtime
+    behavior here before bot.py attempts the distributed writer lock.  This keeps
+    the service from crash-looping on stale Redis locks while still requiring an
+    explicit env flag to leave strict single-writer mode.
+    """
+    if not _redis_lock_emergency_enabled(env):
+        return
+
+    env["NIJA_CONFIRM_BYPASS_RISKS"] = "true"
+    env["NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK"] = "true"
+    env["NIJA_DISABLE_WRITER_LOCK"] = "true"
+    env["NIJA_STRICT_REDIS_LEASE"] = "0"
+    env["NIJA_REQUIRE_DISTRIBUTED_LOCK"] = "false"
+    env["NIJA_STRICT_WRITER_LOCK"] = "false"
+    env["NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS"] = "false"
+    env["NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE"] = "false"
+    env["NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS"] = "0"
+    env["NIJA_RUNTIME_DEGRADED_MODE"] = "true"
+    env["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "true"
+    env["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
+    notes.append("enabled:REDIS_LOCK_EMERGENCY_FALLBACK")
 
 
 def _invoke_position_sync(strategy, source: str) -> None:
@@ -246,7 +285,7 @@ def _install_broker_slot_scope_autowire() -> None:
 
 
 def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
-    """Fail closed on test/unsafe live-mode flags and restore default HF scalp mode."""
+    """Fail closed by default, but respect explicit Redis-lock emergency recovery flags."""
 
     _install_position_sync_autowire()
     _install_broker_slot_scope_autowire()
@@ -255,6 +294,7 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
     if not live_mode_enabled(env):
         return notes
 
+    _apply_redis_lock_emergency_fallback(env, notes)
     bypass_confirmed = env_truthy(env.get("NIJA_CONFIRM_BYPASS_RISKS"))
 
     if not bypass_confirmed:
