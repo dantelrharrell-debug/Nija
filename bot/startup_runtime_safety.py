@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
+import logging
+import os
+import sys
+import threading
+import time
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on", "enabled"}
 LIVE_BYPASS_FLAGS = (
@@ -11,6 +16,9 @@ LIVE_BYPASS_FLAGS = (
     "NIJA_FORCE_ACTIVATION",
     "NIJA_SKIP_STARTUP_PHASE_GATE",
 )
+
+logger = logging.getLogger("nija.startup_runtime_safety")
+_POSITION_SYNC_AUTOWIRE_STARTED = False
 
 
 def env_truthy(value: str | None) -> bool:
@@ -25,8 +33,67 @@ def live_mode_enabled(env: MutableMapping[str, str]) -> bool:
     return not env_truthy(env.get("DRY_RUN_MODE")) and not env_truthy(env.get("PAPER_MODE"))
 
 
+def _invoke_position_sync(strategy, source: str) -> None:
+    if getattr(strategy, "_startup_position_sync_done", False):
+        return
+    setattr(strategy, "_startup_position_sync_done", True)
+    try:
+        try:
+            from bot.startup_position_sync import sync_exchange_positions_on_startup
+        except ImportError:
+            from startup_position_sync import sync_exchange_positions_on_startup  # type: ignore[import]
+        logger.warning("EXCHANGE_POSITION_SYNC invocation starting source=%s", source)
+        adopted = sync_exchange_positions_on_startup(strategy)
+        logger.warning("EXCHANGE_POSITION_SYNC invocation complete adopted=%s source=%s", adopted, source)
+    except Exception as exc:
+        logger.exception("EXCHANGE_POSITION_SYNC invocation failed source=%s error=%s", source, exc)
+
+
+def _patch_trading_strategy_class(cls) -> bool:
+    original_init = getattr(cls, "__init__", None)
+    if original_init is None:
+        return False
+    if getattr(original_init, "_nija_position_sync_wrapped", False):
+        return True
+
+    def _init_with_position_sync(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        _invoke_position_sync(self, "TradingStrategy.__init__")
+
+    _init_with_position_sync._nija_position_sync_wrapped = True  # type: ignore[attr-defined]
+    cls.__init__ = _init_with_position_sync
+    logger.warning("EXCHANGE_POSITION_SYNC TradingStrategy.__init__ patched from startup_runtime_safety")
+    return True
+
+
+def _install_position_sync_autowire() -> None:
+    global _POSITION_SYNC_AUTOWIRE_STARTED
+    if _POSITION_SYNC_AUTOWIRE_STARTED:
+        return
+    _POSITION_SYNC_AUTOWIRE_STARTED = True
+    if not env_truthy(os.getenv("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")):
+        logger.warning("EXCHANGE_POSITION_SYNC autowire disabled by NIJA_STARTUP_POSITION_SYNC_ENABLED=false")
+        return
+
+    def _worker() -> None:
+        deadline = time.monotonic() + float(os.getenv("NIJA_POSITION_SYNC_AUTOWIRE_TIMEOUT_S", "120") or "120")
+        logger.warning("EXCHANGE_POSITION_SYNC autowire worker started source=startup_runtime_safety")
+        while time.monotonic() < deadline:
+            for module_name in ("bot.trading_strategy", "trading_strategy"):
+                module = sys.modules.get(module_name)
+                cls = getattr(module, "TradingStrategy", None) if module is not None else None
+                if cls is not None and _patch_trading_strategy_class(cls):
+                    return
+            time.sleep(0.25)
+        logger.warning("EXCHANGE_POSITION_SYNC autowire timeout: TradingStrategy class was not observed")
+
+    threading.Thread(target=_worker, name="startup-position-sync-autowire", daemon=True).start()
+
+
 def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
     """Fail closed on test/unsafe live-mode flags and restore default HF scalp mode."""
+
+    _install_position_sync_autowire()
 
     notes: list[str] = []
     if not live_mode_enabled(env):
