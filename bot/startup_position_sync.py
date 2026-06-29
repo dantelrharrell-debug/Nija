@@ -10,7 +10,7 @@ restart are visible to exit logic, P&L calculation, and duplicate-entry guards.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("nija")
 
@@ -65,22 +65,7 @@ def _tracker_count(tracker: Any) -> int:
 
 
 def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -> int:
-    """Fetch and adopt open positions from *broker* into its PositionTracker.
-
-    Guard: ``_startup_position_sync_adopted`` is set on the broker instance
-    after the first successful adoption so that repeated calls (e.g. from
-    reconnect handlers or multiple startup hooks) are silently skipped.
-    """
-    # Per-broker idempotency guard: adopt positions at most once per broker
-    # instance, regardless of how many times this function is called.
-    if getattr(broker, "_startup_position_sync_adopted", False):
-        logger.debug(
-            "EXCHANGE_POSITION_SYNC broker=%s skipped — already adopted on this instance",
-            broker_name,
-        )
-        return 0
-    broker._startup_position_sync_adopted = True
-
+    """Fetch and adopt open positions from *broker* into its PositionTracker."""
     tracker = getattr(broker, "position_tracker", None)
     if tracker is None:
         logger.warning("EXCHANGE_POSITION_SYNC broker=%s has no position_tracker — skipping", broker_name)
@@ -95,15 +80,23 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
 
     fetched_count = len(positions or [])
     logger.info(
-        "EXCHANGE_POSITION_SYNC broker=%s fetched=%d tracked_before=%d connected=%s",
+        "EXCHANGE_POSITION_SYNC broker=%s fetched=%d tracked_before=%d connected=%s already_adopted=%s",
         broker_name,
         fetched_count,
         before_count,
         getattr(broker, "connected", None),
+        getattr(broker, "_startup_position_sync_adopted", False),
     )
 
     if not positions:
         logger.info("EXCHANGE_POSITION_SYNC broker=%s adopted=0 skipped_existing=0 skipped_invalid=0 reason=no_open_positions", broker_name)
+        # Do not mark the broker adopted when no positions are returned. Some
+        # brokers connect before portfolio/position hydration is complete, so a
+        # later retry may still discover exchange holdings.
+        return 0
+
+    if getattr(broker, "_startup_position_sync_adopted", False):
+        logger.debug("EXCHANGE_POSITION_SYNC broker=%s skipped — already adopted on this instance", broker_name)
         return 0
 
     adopted = 0
@@ -182,8 +175,10 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
             logger.warning("EXCHANGE_POSITION_SYNC broker=%s position_adoption_error raw=%r error=%s", broker_name, pos, pos_exc)
 
     after_count = _tracker_count(tracker)
+    if adopted > 0 or skipped_existing > 0:
+        broker._startup_position_sync_adopted = True
     logger.info(
-        "EXCHANGE_POSITION_SYNC broker=%s fetched=%d adopted=%d skipped_existing=%d skipped_invalid=%d skipped_errors=%d tracked_before=%d tracked_after=%d",
+        "EXCHANGE_POSITION_SYNC broker=%s fetched=%d adopted=%d skipped_existing=%d skipped_invalid=%d skipped_errors=%d tracked_before=%d tracked_after=%d marked_adopted=%s",
         broker_name,
         fetched_count,
         adopted,
@@ -192,6 +187,7 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
         skipped_errors,
         before_count,
         after_count,
+        getattr(broker, "_startup_position_sync_adopted", False),
     )
     return adopted
 
@@ -239,24 +235,7 @@ def _collect_connected_brokers(strategy: Any) -> Dict[str, Any]:
 
 
 def sync_exchange_positions_on_startup(strategy: Any) -> int:
-    """Sync open exchange positions into each connected broker's PositionTracker.
-
-    Guard: ``_startup_position_sync_done`` is checked on the strategy instance
-    so that this function is idempotent even when called directly (i.e. without
-    going through ``_invoke_position_sync`` in startup_runtime_safety).  The
-    flag is set before any broker work begins so re-entrant calls are no-ops.
-    """
-    # Defense-in-depth guard: the primary guard lives in _invoke_position_sync
-    # (startup_runtime_safety.py), but protect here too so direct callers are
-    # also safe from double-execution.
-    if getattr(strategy, "_startup_position_sync_done", False):
-        logger.debug("EXCHANGE_POSITION_SYNC skipped — already completed for this strategy instance")
-        return 0
-    # Do NOT set _startup_position_sync_done here — that flag is owned by
-    # _invoke_position_sync.  Setting it here would prevent the caller's guard
-    # from seeing the correct state.  Per-broker deduplication is handled by
-    # _adopt_broker_positions via _startup_position_sync_adopted.
-
+    """Sync open exchange positions into each connected broker's PositionTracker."""
     logger.info("EXCHANGE_POSITION_SYNC starting startup position synchronisation")
 
     eps = _get_entry_price_store()
@@ -269,7 +248,7 @@ def sync_exchange_positions_on_startup(strategy: Any) -> int:
     )
 
     if not connected_brokers:
-        logger.warning("EXCHANGE_POSITION_SYNC no connected brokers found — position sync skipped")
+        logger.warning("EXCHANGE_POSITION_SYNC no connected brokers found — retry will remain eligible")
         return 0
 
     total_adopted = 0
