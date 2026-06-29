@@ -114,23 +114,27 @@ def _install_position_sync_autowire() -> None:
             return
         _POSITION_SYNC_AUTOWIRE_STARTED = True
 
-    if not env_truthy(os.getenv("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")):
-        logger.warning("EXCHANGE_POSITION_SYNC autowire disabled by NIJA_STARTUP_POSITION_SYNC_ENABLED=false")
-        return
+        # Both the env check and thread start live INSIDE the lock so the flag
+        # is guaranteed to be set before any thread is launched.  This prevents
+        # a second caller that slips past the fast-path check (before the flag
+        # is visible) from starting a duplicate worker thread.
+        if not env_truthy(os.getenv("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")):
+            logger.warning("EXCHANGE_POSITION_SYNC autowire disabled by NIJA_STARTUP_POSITION_SYNC_ENABLED=false")
+            return
 
-    def _worker() -> None:
-        deadline = time.monotonic() + float(os.getenv("NIJA_POSITION_SYNC_AUTOWIRE_TIMEOUT_S", "120") or "120")
-        logger.warning("EXCHANGE_POSITION_SYNC autowire worker started source=startup_runtime_safety")
-        while time.monotonic() < deadline:
-            for module_name in ("bot.trading_strategy", "trading_strategy"):
-                module = sys.modules.get(module_name)
-                cls = getattr(module, "TradingStrategy", None) if module is not None else None
-                if cls is not None and _patch_trading_strategy_class(cls):
-                    return
-            time.sleep(0.25)
-        logger.warning("EXCHANGE_POSITION_SYNC autowire timeout: TradingStrategy class was not observed")
+        def _worker() -> None:
+            deadline = time.monotonic() + float(os.getenv("NIJA_POSITION_SYNC_AUTOWIRE_TIMEOUT_S", "120") or "120")
+            logger.warning("EXCHANGE_POSITION_SYNC autowire worker started source=startup_runtime_safety")
+            while time.monotonic() < deadline:
+                for module_name in ("bot.trading_strategy", "trading_strategy"):
+                    module = sys.modules.get(module_name)
+                    cls = getattr(module, "TradingStrategy", None) if module is not None else None
+                    if cls is not None and _patch_trading_strategy_class(cls):
+                        return
+                time.sleep(0.25)
+            logger.warning("EXCHANGE_POSITION_SYNC autowire timeout: TradingStrategy class was not observed")
 
-    threading.Thread(target=_worker, name="startup-position-sync-autowire", daemon=True).start()
+        threading.Thread(target=_worker, name="startup-position-sync-autowire", daemon=True).start()
 
 
 def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
