@@ -1,8 +1,9 @@
 """Runtime compatibility patches loaded automatically by Python.
 
 This module keeps NIJA's OKX optional-broker behavior fail-soft while preserving
-full OKX authentication diagnostics. It patches broker_manager after import so
-existing startup code does not need to import another helper explicitly.
+full OKX authentication diagnostics. It also wires startup exchange-position
+adoption into the real TradingStrategy startup path so pre-existing exchange
+positions are visible to the internal PositionTracker after Railway restarts.
 """
 
 from __future__ import annotations
@@ -41,27 +42,22 @@ def _truthy_env(name: str, default: str = "false") -> bool:
 
 
 def _clean_secret(value: Any) -> str:
-    """Normalize Railway/raw-env values without exposing their content.
-
-    Users often paste dotenv-style values into Railway, including surrounding
-    quotes. Those quotes become part of the API key/secret/passphrase and OKX
-    then returns 50119 because the key string no longer matches. Strip common
-    wrappers, whitespace, BOMs, and accidental inline comments.
-    """
+    """Normalize Railway/raw-env values without exposing their content."""
     if value is None:
         return ""
     text = str(value).strip().lstrip("\ufeff")
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
         text = text[1:-1].strip()
-    # Some dashboards preserve an unmatched leading/trailing quote.
     text = text.strip().strip('"').strip("'").strip()
     return text
 
 
 def _clean_base_url(value: Any) -> str:
-    url = _clean_secret(value or "https://www.okx.com").rstrip("/")
+    url = _clean_secret(value or "https://us.okx.com").rstrip("/")
     if not url:
-        return "https://www.okx.com"
+        return "https://us.okx.com"
+    if url in {"https://www.okx.com", "https://openapi.okx.com"} and _truthy_env("OKX_US_REGION", "true"):
+        return "https://us.okx.com"
     return url
 
 
@@ -71,8 +67,48 @@ def _json_body(payload: Optional[Dict[str, Any]]) -> str:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
+def _invoke_startup_position_sync(strategy: Any, *, source: str) -> None:
+    if getattr(strategy, "_startup_position_sync_done", False):
+        return
+    setattr(strategy, "_startup_position_sync_done", True)
+    if not _truthy_env("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true"):
+        _LOG.warning("EXCHANGE_POSITION_SYNC disabled by NIJA_STARTUP_POSITION_SYNC_ENABLED=false")
+        return
+    try:
+        try:
+            from bot.startup_position_sync import sync_exchange_positions_on_startup
+        except ImportError:
+            from startup_position_sync import sync_exchange_positions_on_startup  # type: ignore[import]
+        _LOG.warning("EXCHANGE_POSITION_SYNC invocation starting source=%s", source)
+        adopted = sync_exchange_positions_on_startup(strategy)
+        _LOG.warning("EXCHANGE_POSITION_SYNC invocation complete adopted=%s source=%s", adopted, source)
+    except Exception as exc:
+        _LOG.exception("EXCHANGE_POSITION_SYNC invocation failed source=%s error=%s", source, exc)
+
+
+def _patch_trading_strategy(module: Any) -> None:
+    marker = f"trading_strategy:{getattr(module, '__name__', '')}:{id(module)}"
+    if marker in _PATCHED:
+        return
+    cls = getattr(module, "TradingStrategy", None)
+    if cls is None:
+        return
+    original_init = getattr(cls, "__init__", None)
+    if original_init is None or getattr(original_init, "_nija_position_sync_wrapped", False):
+        return
+
+    def _init_with_position_sync(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        _invoke_startup_position_sync(self, source="TradingStrategy.__init__")
+
+    _init_with_position_sync._nija_position_sync_wrapped = True
+    cls.__init__ = _init_with_position_sync
+    _PATCHED.add(marker)
+    _LOG.warning("EXCHANGE_POSITION_SYNC TradingStrategy hook installed on %s", getattr(module, "__name__", "trading_strategy"))
+
+
 def _patch_broker_manager(module: Any) -> None:
-    marker = f"{getattr(module, '__name__', '')}:{id(module)}"
+    marker = f"broker_manager:{getattr(module, '__name__', '')}:{id(module)}"
     if marker in _PATCHED:
         return
 
@@ -85,6 +121,7 @@ def _patch_broker_manager(module: Any) -> None:
     requests_available = bool(getattr(module, "_REQUESTS_AVAILABLE", False))
     requests_lib = getattr(module, "_requests_lib", None)
     original_client_init = okx_client_cls.__init__
+    okx_client_cls.BASE_URL = _clean_base_url(os.getenv("OKX_BASE_URL", "https://us.okx.com"))
 
     def _init(self, api_key: str, api_secret: str, passphrase: str, *, simulated: bool = False, timeout: float = 10.0):
         raw_key = str(api_key or "")
@@ -94,7 +131,7 @@ def _patch_broker_manager(module: Any) -> None:
         cleaned_secret = _clean_secret(api_secret)
         cleaned_passphrase = _clean_secret(passphrase)
         original_client_init(self, cleaned_key, cleaned_secret, cleaned_passphrase, simulated=simulated, timeout=timeout)
-        self.BASE_URL = _clean_base_url(getattr(self, "BASE_URL", None) or os.getenv("OKX_BASE_URL", "https://www.okx.com"))
+        self.BASE_URL = _clean_base_url(getattr(self, "BASE_URL", None) or os.getenv("OKX_BASE_URL", "https://us.okx.com"))
         if raw_key != cleaned_key or raw_secret != cleaned_secret or raw_passphrase != cleaned_passphrase:
             logger.warning(
                 "OKX_ENV_SANITIZED stripped quote/whitespace wrappers from one or more OKX credential variables "
@@ -148,7 +185,7 @@ def _patch_broker_manager(module: Any) -> None:
         body = _json_body(payload) if method != "GET" else ""
         timestamp = self._timestamp()
         simulated = bool(getattr(self, "simulated", False)) or _truthy_env("OKX_SIMULATED_TRADING")
-        self.BASE_URL = _clean_base_url(getattr(self, "BASE_URL", None) or os.getenv("OKX_BASE_URL", "https://www.okx.com"))
+        self.BASE_URL = _clean_base_url(getattr(self, "BASE_URL", None) or os.getenv("OKX_BASE_URL", "https://us.okx.com"))
 
         logger.info(
             "OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated=%s key_present=%s key_len=%s passphrase_present=%s body_empty=%s",
@@ -223,7 +260,7 @@ def _patch_broker_manager(module: Any) -> None:
     _LOG.info("OKX runtime patch applied to %s", getattr(module, "__name__", "broker_manager"))
 
 
-class _BrokerManagerPatchLoader(importlib.abc.Loader):
+class _NijaPatchLoader(importlib.abc.Loader):
     def __init__(self, wrapped: importlib.abc.Loader):
         self._wrapped = wrapped
 
@@ -235,15 +272,18 @@ class _BrokerManagerPatchLoader(importlib.abc.Loader):
 
     def exec_module(self, module):
         self._wrapped.exec_module(module)
-        if getattr(module, "__name__", "") in {"bot.broker_manager", "broker_manager"}:
-            try:
+        name = getattr(module, "__name__", "")
+        try:
+            if name in {"bot.broker_manager", "broker_manager"}:
                 _patch_broker_manager(module)
-            except Exception as exc:
-                _LOG.warning("OKX runtime patch failed for %s: %s", getattr(module, "__name__", "broker_manager"), exc)
+            elif name in {"bot.trading_strategy", "trading_strategy"}:
+                _patch_trading_strategy(module)
+        except Exception as exc:
+            _LOG.warning("NIJA runtime patch failed for %s: %s", name, exc)
 
 
-class _BrokerManagerPatchFinder(importlib.abc.MetaPathFinder):
-    TARGETS = {"bot.broker_manager", "broker_manager"}
+class _NijaPatchFinder(importlib.abc.MetaPathFinder):
+    TARGETS = {"bot.broker_manager", "broker_manager", "bot.trading_strategy", "trading_strategy"}
 
     def find_spec(self, fullname, path=None, target=None):
         if fullname not in self.TARGETS:
@@ -256,18 +296,21 @@ class _BrokerManagerPatchFinder(importlib.abc.MetaPathFinder):
                 continue
             spec = find_spec(fullname, path, target)
             if spec is not None and spec.loader is not None:
-                spec.loader = _BrokerManagerPatchLoader(spec.loader)
+                spec.loader = _NijaPatchLoader(spec.loader)
                 return spec
         return None
 
 
-if not any(isinstance(finder, _BrokerManagerPatchFinder) for finder in sys.meta_path):
-    sys.meta_path.insert(0, _BrokerManagerPatchFinder())
+if not any(isinstance(finder, _NijaPatchFinder) for finder in sys.meta_path):
+    sys.meta_path.insert(0, _NijaPatchFinder())
 
-for _name in ("bot.broker_manager", "broker_manager"):
+for _name in ("bot.broker_manager", "broker_manager", "bot.trading_strategy", "trading_strategy"):
     _module = sys.modules.get(_name)
     if _module is not None:
         try:
-            _patch_broker_manager(_module)
+            if _name in {"bot.broker_manager", "broker_manager"}:
+                _patch_broker_manager(_module)
+            else:
+                _patch_trading_strategy(_module)
         except Exception as _exc:
-            _LOG.warning("OKX runtime patch failed for preloaded %s: %s", _name, _exc)
+            _LOG.warning("NIJA runtime patch failed for preloaded %s: %s", _name, _exc)
