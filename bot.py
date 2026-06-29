@@ -7543,6 +7543,30 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
                 else "UNAVAILABLE",
             )
 
+            # ── EXCHANGE POSITION SYNC ────────────────────────────────────────
+            # Adopt any open positions / non-zero holdings that existed on the
+            # exchanges before this restart.  Must run AFTER brokers are
+            # connected (balance hydration above guarantees this) and BEFORE
+            # the trading loop starts so exit logic, P&L, and duplicate-entry
+            # guards are immediately aware of all live holdings.
+            try:
+                from bot.startup_position_sync import sync_exchange_positions_on_startup as _sync_positions
+                _sync_positions(strategy)
+            except ImportError:
+                try:
+                    from startup_position_sync import sync_exchange_positions_on_startup as _sync_positions  # type: ignore[import]
+                    _sync_positions(strategy)
+                except ImportError:
+                    logger.warning(
+                        "startup_position_sync module not found — exchange position sync skipped"
+                    )
+            except Exception as _sync_err:
+                logger.warning(
+                    "EXCHANGE_POSITION_SYNC failed (non-fatal, trading will continue): %s",
+                    _sync_err,
+                )
+            # ── END EXCHANGE POSITION SYNC ────────────────────────────────────
+
             _minimum_trading_balance = float(os.getenv("MINIMUM_TRADING_BALANCE", "1"))
             logger.info(
                 "\n🧠 FINAL PRE-TRADE CHECK\n"
