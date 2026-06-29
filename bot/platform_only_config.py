@@ -82,6 +82,9 @@ _COINBASE_TO_KRAKEN: dict = {
     "DOT-USD":  "DOTUSD",
     "MATIC-USD":"MATICUSD",
     "LTC-USD":  "XLTCZUSD",
+    # Platform holdings — actively traded by the platform account
+    "ACH-USD":  "ACHUSD",
+    "AB-USD":   "ABUSD",
 }
 
 def _to_kraken_symbol(cb_symbol: str) -> str:
@@ -91,6 +94,10 @@ def _to_kraken_symbol(cb_symbol: str) -> str:
 
 # Only trade these top-tier cryptocurrencies (default list).
 # If NIJA_SCAN_SYMBOLS is set, these lists are REPLACED at runtime.
+#
+# Platform holdings (ADA, ACH, AB) are included so the HF scalping strategy
+# actively trades the assets the platform account already holds, generating
+# profit from idle capital rather than leaving it as a reserve.
 WHITELISTED_ASSETS = (
     _NIJA_SCAN_SYMBOLS_OVERRIDE
     if _NIJA_SCAN_SYMBOLS_OVERRIDE
@@ -99,6 +106,9 @@ WHITELISTED_ASSETS = (
         "ETH-USD",   # Ethereum - Smart contract platform leader
         "SOL-USD",   # Solana - High-performance blockchain
         "DOGE-USD",  # Dogecoin - high retail volume, tight spreads
+        "ADA-USD",   # Cardano - platform holding (Kraken + Coinbase)
+        "ACH-USD",   # Alchemy Pay - platform holding (Kraken)
+        "AB-USD",    # AB token - platform holding (Kraken)
     ]
 )
 
@@ -111,6 +121,9 @@ WHITELISTED_ASSETS_KRAKEN = (
         "XETHZUSD",  # ETH on Kraken
         "SOLUSD",    # SOL on Kraken
         "XDGUSD",    # DOGE on Kraken
+        "ADAUSD",    # ADA on Kraken (platform holding)
+        "ACHUSD",    # ACH on Kraken (platform holding)
+        "ABUSD",     # AB on Kraken (platform holding)
     ]
 )
 
@@ -123,6 +136,7 @@ WHITELISTED_ASSETS_COINBASE = (
         "ETH-USD",
         "SOL-USD",
         "DOGE-USD",
+        "ADA-USD",   # ADA on Coinbase (platform holding)
     ]
 )
 

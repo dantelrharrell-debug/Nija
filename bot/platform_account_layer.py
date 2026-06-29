@@ -52,6 +52,57 @@ from typing import Dict, List, Optional
 logger = logging.getLogger("nija.platform_account_layer")
 
 # ---------------------------------------------------------------------------
+# NIJA_PLATFORM_ONLY_MODE
+# ---------------------------------------------------------------------------
+# When set to "true" / "1" / "yes", the platform account is treated as the
+# PRIMARY and SOLE active trader.  User accounts are demoted to observers
+# (copy-trading disabled, no independent threads started).
+#
+# When set to "false" / "0" (default), the platform account trades alongside
+# user accounts — each in its own independent thread.
+#
+# Set via Railway environment variable:
+#   NIJA_PLATFORM_ONLY_MODE=true   → platform trades exclusively
+#   NIJA_PLATFORM_ONLY_MODE=false  → platform + users trade together (default)
+#
+# Companion flag: NIJA_PLATFORM_TRADING_ENABLED
+#   When true (default), the platform account actively opens new positions.
+#   When false, the platform account is in exit-only / reserve mode.
+NIJA_PLATFORM_ONLY_MODE: bool = (
+    os.getenv("NIJA_PLATFORM_ONLY_MODE", "false").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+
+NIJA_PLATFORM_TRADING_ENABLED: bool = (
+    os.getenv("NIJA_PLATFORM_TRADING_ENABLED", "true").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+
+# Number of position slots reserved for the platform account when running
+# alongside user accounts.  Defaults to 2 so the platform always has room
+# to open trades even when user slots are fully occupied.
+NIJA_PLATFORM_RESERVED_SLOTS: int = int(
+    os.getenv("NIJA_PLATFORM_RESERVED_SLOTS", "2")
+)
+
+if NIJA_PLATFORM_ONLY_MODE:
+    logger.info(
+        "🏦 NIJA_PLATFORM_ONLY_MODE=true — platform account is the SOLE active trader; "
+        "user account threads will NOT be started"
+    )
+elif NIJA_PLATFORM_TRADING_ENABLED:
+    logger.info(
+        "🏦 NIJA_PLATFORM_TRADING_ENABLED=true — platform account will trade alongside "
+        "user accounts (%d reserved slot(s))",
+        NIJA_PLATFORM_RESERVED_SLOTS,
+    )
+else:
+    logger.info(
+        "🏦 NIJA_PLATFORM_TRADING_ENABLED=false — platform account is in RESERVE mode "
+        "(exit-only; no new entries)"
+    )
+
+# ---------------------------------------------------------------------------
 # Supported exchanges
 # ---------------------------------------------------------------------------
 
@@ -373,6 +424,39 @@ class PlatformAccountLayer:
     def mark_platform_connected(self, connected: bool = True) -> None:
         """Called by the broker manager once NIJA's platform account connects."""
         self._status.platform_connected = connected
+
+    # ------------------------------------------------------------------
+    # Platform trading mode helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def is_platform_only_mode() -> bool:
+        """Return True when NIJA_PLATFORM_ONLY_MODE=true.
+
+        In platform-only mode the platform account is the sole active trader.
+        User account independent-trading threads are suppressed so all
+        execution capacity is dedicated to the platform portfolio.
+        """
+        return NIJA_PLATFORM_ONLY_MODE
+
+    @staticmethod
+    def is_platform_trading_enabled() -> bool:
+        """Return True when the platform account should actively open new positions.
+
+        Controlled by NIJA_PLATFORM_TRADING_ENABLED (default: true).
+        When false the platform account operates in exit-only / reserve mode.
+        """
+        return NIJA_PLATFORM_TRADING_ENABLED
+
+    @staticmethod
+    def get_platform_reserved_slots() -> int:
+        """Return the number of position slots reserved for the platform account.
+
+        Controlled by NIJA_PLATFORM_RESERVED_SLOTS (default: 2).
+        These slots are guaranteed to the platform even when user accounts
+        are fully utilising their own position caps.
+        """
+        return NIJA_PLATFORM_RESERVED_SLOTS
 
     def mark_user_connected(
         self,

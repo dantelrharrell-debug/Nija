@@ -923,6 +923,18 @@ NIJA_FORCE_KRAKEN_ONLY_TEST: bool = os.getenv('NIJA_FORCE_KRAKEN_ONLY_TEST', '0'
 # Default OFF so production capital protections remain intact.
 NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES: bool = os.getenv('NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES', '0').strip().lower() in ('1', 'true', 'yes', 'on')
 
+# ── Platform account active trading flags ───────────────────────────────────
+# NIJA_PLATFORM_ONLY_MODE: when true, platform account is the sole active trader.
+# NIJA_PLATFORM_TRADING_ENABLED: when true (default), platform account opens new positions.
+# NIJA_PLATFORM_LIFT_CAPITAL_GATES: when true, bypass the minimum-balance capital gate
+#   for PLATFORM-type brokers so that holdings (ADA, ACH, AB) count toward tradeable
+#   capital even when USD cash alone is below KRAKEN_MINIMUM_BALANCE.
+#   Defaults to true so the platform account is never silently blocked by a cash-only
+#   balance check when it holds crypto assets worth more than the minimum.
+NIJA_PLATFORM_ONLY_MODE: bool = os.getenv('NIJA_PLATFORM_ONLY_MODE', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+NIJA_PLATFORM_TRADING_ENABLED: bool = os.getenv('NIJA_PLATFORM_TRADING_ENABLED', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+NIJA_PLATFORM_LIFT_CAPITAL_GATES: bool = os.getenv('NIJA_PLATFORM_LIFT_CAPITAL_GATES', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+
 # ── Small account / small order flags (Apr 2026) ────────────────────────────
 # Allow trading with small account balances (~$174) and small order sizes (~$10).
 # Both default to True to enable HF scalp mode with limited capital.
@@ -9396,7 +9408,21 @@ class KrakenBroker(BaseBroker):
                         # FIX 2: FORCED EXIT OVERRIDES - Allow connection even when balance < minimum
                         # This enables emergency sells to close losing positions
                         # FIX (Jan 23, 2026): Use total_funds (available + held) for minimum check
-                        if total_funds < KRAKEN_MINIMUM_BALANCE and not NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
+                        #
+                        # PLATFORM ACCOUNT GATE LIFT: When NIJA_PLATFORM_LIFT_CAPITAL_GATES=true
+                        # (default) and this is a PLATFORM account, bypass the minimum-balance
+                        # EXIT-ONLY gate.  Platform holdings (ADA, ACH, AB) are priced into
+                        # total_funds via compute_total_usd_balance(), so the gate should never
+                        # fire for a funded platform account.  The explicit bypass ensures that
+                        # a cold-start pricing miss never silently locks the platform out of
+                        # new entries.
+                        _is_platform_acct = getattr(self, 'account_type', None) == AccountType.PLATFORM
+                        _lift_gate = (
+                            NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
+                            or (NIJA_PLATFORM_LIFT_CAPITAL_GATES and _is_platform_acct)
+                            or (NIJA_PLATFORM_TRADING_ENABLED and _is_platform_acct)
+                        )
+                        if total_funds < KRAKEN_MINIMUM_BALANCE and not _lift_gate:
                             logger.warning("=" * 70)
                             logger.warning("⚠️ KRAKEN: Account balance below minimum for NEW ENTRIES")
                             logger.warning("=" * 70)
@@ -9421,13 +9447,21 @@ class KrakenBroker(BaseBroker):
                         else:
                             # Normal mode - full trading allowed
                             self.exit_only_mode = False
-                            if total_funds < KRAKEN_MINIMUM_BALANCE and NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES:
-                                logger.warning(
-                                    "⚠️ NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1: allowing Kraken BUY entries "
-                                    "below minimum balance for test validation "
-                                    "(total_funds=$%.2f, minimum=$%.2f)",
-                                    total_funds, KRAKEN_MINIMUM_BALANCE,
-                                )
+                            if total_funds < KRAKEN_MINIMUM_BALANCE and _lift_gate:
+                                if _is_platform_acct and NIJA_PLATFORM_LIFT_CAPITAL_GATES:
+                                    logger.info(
+                                        "🏦 PLATFORM ACCOUNT: capital gate lifted — platform account "
+                                        "will trade with total holdings $%.2f (cash $%.2f + crypto $%.2f). "
+                                        "Set NIJA_PLATFORM_LIFT_CAPITAL_GATES=false to disable.",
+                                        total_funds, total, max(0.0, total_funds - total),
+                                    )
+                                else:
+                                    logger.warning(
+                                        "⚠️ NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES=1: allowing Kraken BUY entries "
+                                        "below minimum balance for test validation "
+                                        "(total_funds=$%.2f, minimum=$%.2f)",
+                                        total_funds, KRAKEN_MINIMUM_BALANCE,
+                                    )
 
                         logger.info("=" * 70)
 
@@ -10894,10 +10928,16 @@ class KrakenBroker(BaseBroker):
                         "Use for controlled testing only."
                     )
                 self._capital_gate_runtime_warned = True
+            _is_platform_order = getattr(self, 'account_type', None) == AccountType.PLATFORM
+            _platform_gate_lifted = (
+                NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES
+                or (NIJA_PLATFORM_LIFT_CAPITAL_GATES and _is_platform_order)
+                or (NIJA_PLATFORM_TRADING_ENABLED and _is_platform_order)
+            )
             if (side.lower() == 'buy'
                     and getattr(self, 'exit_only_mode', False)
                     and not force_liquidate
-                    and not NIJA_KRAKEN_TEST_LIFT_CAPITAL_GATES):
+                    and not _platform_gate_lifted):
                 logger.error(f"❌ BUY order rejected: Kraken is in EXIT-ONLY mode (balance < ${KRAKEN_MINIMUM_BALANCE:.2f})")
                 logger.error(f"   Only SELL orders are allowed to close existing positions")
                 logger.error(f"   To enable new entries, fund your account to at least ${KRAKEN_MINIMUM_BALANCE:.2f}")

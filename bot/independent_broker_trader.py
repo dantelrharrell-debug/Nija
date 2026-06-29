@@ -70,12 +70,25 @@ except ImportError:
 
 # Import PlatformAccountLayer singleton for platform-context injection into user threads
 try:
-    from bot.platform_account_layer import get_platform_account_layer
+    from bot.platform_account_layer import (
+        get_platform_account_layer,
+        NIJA_PLATFORM_ONLY_MODE,
+        NIJA_PLATFORM_TRADING_ENABLED,
+        NIJA_PLATFORM_RESERVED_SLOTS,
+    )
 except ImportError:
     try:
-        from platform_account_layer import get_platform_account_layer
+        from platform_account_layer import (  # type: ignore[import]
+            get_platform_account_layer,
+            NIJA_PLATFORM_ONLY_MODE,
+            NIJA_PLATFORM_TRADING_ENABLED,
+            NIJA_PLATFORM_RESERVED_SLOTS,
+        )
     except ImportError:
         get_platform_account_layer = None
+        NIJA_PLATFORM_ONLY_MODE = False
+        NIJA_PLATFORM_TRADING_ENABLED = True
+        NIJA_PLATFORM_RESERVED_SLOTS = 2
 
 # Import account isolation manager for failure isolation
 try:
@@ -1648,6 +1661,18 @@ class IndependentBrokerTrader:
             logger.warning("")
 
         # Start threads for USER brokers
+        # NIJA_PLATFORM_ONLY_MODE: when enabled, suppress all user threads so the
+        # platform account has exclusive access to all execution capacity.
+        if NIJA_PLATFORM_ONLY_MODE and funded_users:
+            logger.info("=" * 70)
+            logger.info("🏦 NIJA_PLATFORM_ONLY_MODE=true — USER BROKER THREADS SUPPRESSED")
+            logger.info("=" * 70)
+            logger.info("   Platform account is the SOLE active trader.")
+            logger.info("   User accounts are in observer mode (no independent threads).")
+            logger.info("   Set NIJA_PLATFORM_ONLY_MODE=false to re-enable user trading.")
+            logger.info("=" * 70)
+            funded_users = {}  # Clear so the summary below reflects the suppression
+
         if funded_users:
             logger.info("=" * 70)
             logger.info("👤 STARTING USER BROKER THREADS")

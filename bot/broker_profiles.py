@@ -51,18 +51,26 @@ KRAKEN_EXECUTION_DISABLED: bool = (
 
 #: Minimum USD balance required for Coinbase to open new positions.
 #: COINBASE_MIN_ORDER_USD is accepted as an alias (Step 5).
+#: Lowered to $10 to allow the platform's Coinbase ADA holdings (~$9.94) to
+#: participate in trading.  The platform account's Coinbase balance includes
+#: crypto holdings priced in USD, so the effective gate is the full portfolio
+#: value.  Override via COINBASE_MIN_CAPITAL env var if needed.
 COINBASE_MIN_CAPITAL: float = float(
-    os.getenv("COINBASE_MIN_CAPITAL", "30.0")
+    os.getenv("COINBASE_MIN_CAPITAL", "10.0")
 )
 
 #: Minimum USD order size allowed on Coinbase.
 #: COINBASE_MIN_ORDER_USD takes precedence when set (Step 5).
 COINBASE_MIN_ORDER: float = float(
-    os.getenv("COINBASE_MIN_ORDER_USD", os.getenv("COINBASE_MIN_ORDER", "30.0"))
+    os.getenv("COINBASE_MIN_ORDER_USD", os.getenv("COINBASE_MIN_ORDER", "10.0"))
 )
 
 #: Minimum USD balance required for Kraken to open new positions.
-KRAKEN_MIN_CAPITAL: float = float(os.getenv("KRAKEN_MIN_CAPITAL", "25.0"))
+#: Lowered to $10 so the platform account (which holds ADA, ACH, AB worth ~$108)
+#: is never blocked by a cash-only balance check.  The total_funds value used
+#: during connect() includes crypto holdings priced in USD, so the effective
+#: gate is the full portfolio value, not just the USD cash balance.
+KRAKEN_MIN_CAPITAL: float = float(os.getenv("KRAKEN_MIN_CAPITAL", "10.0"))
 
 #: Minimum USD order size on Kraken.
 #: Kraken enforces a minimum notional of ~$15-20 USD on most pairs (e.g. ADA-USD).
