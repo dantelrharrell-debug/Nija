@@ -24,6 +24,14 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from bot.pending_order_reconciler import reconcile_stale_pending_orders
+except ImportError:
+    try:
+        from pending_order_reconciler import reconcile_stale_pending_orders  # type: ignore[import]
+    except ImportError:
+        reconcile_stale_pending_orders = None  # type: ignore[assignment]
+
 logger = logging.getLogger("nija.trading_strategy")
 
 # Balance calls must never stall startup/trade eligibility indefinitely.
@@ -1678,6 +1686,42 @@ class TradingStrategy:
                         logger.debug("run_cycle open-position probe failed: %s", _pos_err)
 
                 if self.nija_core_loop is not None:
+                    # ── Reconcile stale pending orders before scanning ────────
+                    # Clears orders that timed out or were filled/cancelled on the
+                    # exchange but never updated locally, preventing them from
+                    # blocking new entries via symbol-lock contention.
+                    if reconcile_stale_pending_orders is not None:
+                        try:
+                            _reconcile_result = reconcile_stale_pending_orders(
+                                owner=self,
+                                broker=_broker,
+                            )
+                            if (
+                                _reconcile_result.cleared
+                                or _reconcile_result.filled
+                                or _reconcile_result.cancelled
+                            ):
+                                logger.warning(
+                                    "🧹 [RECONCILE] stale pending orders cleared before scan | "
+                                    "cleared=%d filled=%d cancelled=%d still_pending=%d errors=%d",
+                                    _reconcile_result.cleared,
+                                    _reconcile_result.filled,
+                                    _reconcile_result.cancelled,
+                                    _reconcile_result.still_pending,
+                                    _reconcile_result.errors,
+                                )
+                            else:
+                                logger.debug(
+                                    "[RECONCILE] no stale pending orders | still_pending=%d",
+                                    _reconcile_result.still_pending,
+                                )
+                        except Exception as _reconcile_err:
+                            logger.warning(
+                                "[RECONCILE] reconcile_stale_pending_orders failed (non-fatal): %s",
+                                _reconcile_err,
+                            )
+                    # ── End reconcile stale pending orders ───────────────────
+
                     _symbols_to_scan = self.symbols or []
                     if not _symbols_to_scan:
                         self._maybe_refresh_symbols(force=True)
@@ -1707,6 +1751,7 @@ class TradingStrategy:
                         _core_result.exits_taken,
                         _core_result.next_interval,
                     )
+
                     logger.info(
                         "run_cycle(core_loop): scored=%d entered=%d blocked=%d exited=%d next=%ss",
                         _core_result.symbols_scored,
@@ -1715,16 +1760,20 @@ class TradingStrategy:
                         _core_result.exits_taken,
                         _core_result.next_interval,
                     )
+
                     try:
                         next_interval_s = max(1, int(_core_result.next_interval))
                     except Exception:
                         next_interval_s = 150
                     return next_interval_s
 
+
+
                 # Run the APEX strategy cycle
                 if hasattr(self.apex, "run_cycle"):
                     self.apex.run_cycle()
                 elif hasattr(self.apex, "analyze_market"):
+
                     # Legacy fallback: fetch market data then call analyze_market(df, symbol, balance).
                     # CRITICAL FIX: capture the result and call execute_action() so signals are
                     # connected to order submission.  Previously the result was discarded, causing
