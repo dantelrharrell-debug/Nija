@@ -48,15 +48,7 @@ def _redis_lock_emergency_enabled(env: MutableMapping[str, str]) -> bool:
 
 
 def _apply_redis_lock_emergency_fallback(env: MutableMapping[str, str], notes: list[str]) -> None:
-    """Respect explicit operator emergency fallback flags for stale Redis locks.
-
-    start.sh may clear NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK in live mode unless
-    NIJA_CONFIRM_BYPASS_RISKS is set.  When the operator has explicitly enabled
-    the safer emergency/degraded fallback flags, restore the effective runtime
-    behavior here before bot.py attempts the distributed writer lock.  This keeps
-    the service from crash-looping on stale Redis locks while still requiring an
-    explicit env flag to leave strict single-writer mode.
-    """
+    """Respect explicit operator emergency fallback flags for stale Redis locks."""
     if not _redis_lock_emergency_enabled(env):
         return
 
@@ -75,11 +67,7 @@ def _apply_redis_lock_emergency_fallback(env: MutableMapping[str, str], notes: l
     notes.append("enabled:REDIS_LOCK_EMERGENCY_FALLBACK")
 
 
-def _invoke_position_sync(strategy, source: str) -> None:
-    """Invoke startup position sync on *strategy* exactly once."""
-    if getattr(strategy, "_startup_position_sync_done", False):
-        return
-    setattr(strategy, "_startup_position_sync_done", True)
+def _invoke_position_sync_once(strategy, source: str) -> int:
     try:
         try:
             from bot.startup_position_sync import sync_exchange_positions_on_startup
@@ -88,8 +76,82 @@ def _invoke_position_sync(strategy, source: str) -> None:
         logger.warning("EXCHANGE_POSITION_SYNC invocation starting source=%s", source)
         adopted = sync_exchange_positions_on_startup(strategy)
         logger.warning("EXCHANGE_POSITION_SYNC invocation complete adopted=%s source=%s", adopted, source)
+        return int(adopted or 0)
     except Exception as exc:
         logger.exception("EXCHANGE_POSITION_SYNC invocation failed source=%s error=%s", source, exc)
+        return 0
+
+
+def _invoke_position_sync(strategy, source: str) -> None:
+    """Invoke startup position sync and keep retrying until hydrated brokers are visible.
+
+    TradingStrategy.__init__ can run before platform/user brokers finish connecting.  The
+    previous implementation marked sync as done immediately, so early empty attempts
+    permanently suppressed adoption.  This method now starts a bounded retry worker and
+    only marks completion after connected brokers have produced tracked/adopted positions
+    or after the retry window expires with explicit diagnostics.
+    """
+    if getattr(strategy, "_startup_position_sync_retry_started", False):
+        return
+    setattr(strategy, "_startup_position_sync_retry_started", True)
+
+    def _tracked_total() -> int:
+        total = 0
+        seen: set[int] = set()
+        for attr in ("multi_account_manager", "broker_manager"):
+            owner = getattr(strategy, attr, None)
+            if owner is None:
+                continue
+            containers = []
+            if hasattr(owner, "platform_brokers"):
+                containers.append(getattr(owner, "platform_brokers", {}) or {})
+            if hasattr(owner, "user_brokers"):
+                for nested in (getattr(owner, "user_brokers", {}) or {}).values():
+                    containers.append(nested or {})
+            if hasattr(owner, "brokers"):
+                containers.append(getattr(owner, "brokers", {}) or {})
+            for container in containers:
+                for broker in (container or {}).values():
+                    tracker = getattr(broker, "position_tracker", None)
+                    if tracker is not None and id(tracker) not in seen:
+                        seen.add(id(tracker))
+                        getter = getattr(tracker, "get_all_positions", None)
+                        if callable(getter):
+                            try:
+                                total += len(getter() or [])
+                            except Exception:
+                                pass
+        return total
+
+    def _worker() -> None:
+        delay = float(os.getenv("NIJA_POSITION_SYNC_RETRY_INTERVAL_S", "3") or "3")
+        timeout = float(os.getenv("NIJA_POSITION_SYNC_RETRY_TIMEOUT_S", "90") or "90")
+        deadline = time.monotonic() + timeout
+        attempt = 0
+        while time.monotonic() <= deadline:
+            attempt += 1
+            setattr(strategy, "_startup_position_sync_done", False)
+            logger.warning("EXCHANGE_POSITION_SYNC retry_attempt=%d source=%s", attempt, source)
+            adopted = _invoke_position_sync_once(strategy, f"{source}:retry:{attempt}")
+            tracked = _tracked_total()
+            if adopted > 0 or tracked > 0:
+                setattr(strategy, "_startup_position_sync_done", True)
+                logger.warning(
+                    "EXCHANGE_POSITION_SYNC retry_success attempt=%d adopted=%d tracked_total=%d",
+                    attempt,
+                    adopted,
+                    tracked,
+                )
+                return
+            time.sleep(delay)
+        logger.warning(
+            "EXCHANGE_POSITION_SYNC retry_exhausted source=%s tracked_total=%d timeout_s=%.1f — no exchange positions adopted",
+            source,
+            _tracked_total(),
+            timeout,
+        )
+
+    threading.Thread(target=_worker, name="startup-position-sync-retry", daemon=True).start()
 
 
 def _patch_trading_strategy_class(cls) -> bool:
