@@ -68,6 +68,7 @@ for _key, _value in (("MIN_TRADE_USD", "10"), ("MIN_NOTIONAL_OVERRIDE", "10"), (
         os.environ[_key] = _value
 
 _PATCH_HOOKS = (
+    ("writer_lock_release_guard", "Writer lock release guard"),
     ("min_notional_runtime_patch", "Adaptive min-notional runtime patch"),
     ("kraken_equity_runtime_patch", "Kraken equity hydration patch"),
     ("capital_balance_propagation_patch", "Capital balance propagation patch"),
