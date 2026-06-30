@@ -4,16 +4,32 @@ import sys as _sys
 
 print("🔥 PYTHON ENTRYPOINT HIT", flush=True)
 
+import importlib
 import logging
 import os
 import runpy
 import traceback
 import threading
 
-from bot.startup_runtime_safety import normalize_runtime_startup_env
-
 _ROOT = os.path.dirname(os.path.abspath(__file__))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+
 logger = logging.getLogger(__name__)
+
+
+def _run_pre_startup_sanitization() -> None:
+    """Sanitize live Redis bypass flags before startup safety initializes."""
+
+    try:
+        sanitizer = importlib.import_module("bot.strict_live_startup_sanitizer")
+        sanitizer.sanitize("main_pre_startup_runtime_safety")
+    except Exception as exc:
+        logger.warning("Strict live startup sanitizer unavailable before startup safety init: %s", exc)
+
+
+_run_pre_startup_sanitization()
+from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 # ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
 # Emitted at import time so we can confirm main.py is being loaded and identify
