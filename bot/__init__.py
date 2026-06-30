@@ -82,6 +82,12 @@ try:
 except Exception as _pipeline_patch_exc:
     logger.warning("Execution pipeline runtime patch unavailable: %s", _pipeline_patch_exc)
 
+try:
+    from .coinbase_position_runtime_patch import install_import_hook as _install_coinbase_position_patch
+    _install_coinbase_position_patch()
+except Exception as _coinbase_position_patch_exc:
+    logger.warning("Coinbase position runtime patch unavailable: %s", _coinbase_position_patch_exc)
+
 __version__ = "7.2.0"
 
 logger.debug(f"NIJA Bot package initialized (v{__version__})")
