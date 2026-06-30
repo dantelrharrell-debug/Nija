@@ -86,6 +86,7 @@ for _key, _value in {
     "NIJA_FULL_EXECUTION_OBSERVABILITY": "true",
     "NIJA_KRAKEN_EQUITY_HYDRATION": "true",
     "NIJA_CAPITAL_BALANCE_PROPAGATION": "true",
+    "NIJA_LIVE_ENTRY_RUNTIME_FIXES": "true",
     "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S": "90",
     "NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "90",
     "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "90",
@@ -100,7 +101,15 @@ except Exception as _exc:
     logger.warning("NIJA startup patch unavailable: %s", _exc)
 _strict_live_cleanup("bot_init_after_sitecustomize")
 
-for _key, _value in (("MIN_TRADE_USD", "10"), ("MIN_NOTIONAL_OVERRIDE", "10"), ("MIN_CASH_TO_BUY", "5"), ("KRAKEN_MIN_NOTIONAL_USD", "10"), ("COINBASE_MIN_ORDER_USD", "1"), ("OKX_MIN_ORDER_USD", "10")):
+for _key, _value in (
+    ("MIN_TRADE_USD", "2"),
+    ("MIN_POSITION_USD", "2"),
+    ("MIN_NOTIONAL_OVERRIDE", "2"),
+    ("MIN_CASH_TO_BUY", "5"),
+    ("KRAKEN_MIN_NOTIONAL_USD", "2"),
+    ("COINBASE_MIN_ORDER_USD", "1"),
+    ("OKX_MIN_ORDER_USD", "2"),
+):
     try:
         if float(os.environ.get(_key, _value) or _value) > float(_value):
             os.environ[_key] = _value
@@ -118,6 +127,7 @@ _PATCH_HOOKS = (
     ("full_execution_observability_patch", "Full execution observability"),
     ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
+    ("live_entry_runtime_fixes", "Live entry runtime fixes"),
     ("okx_runtime_patch", "OKX runtime patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
     ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
