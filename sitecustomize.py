@@ -6,6 +6,7 @@ side-effect limited: normalize environment defaults before bot modules read them
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 
@@ -75,10 +76,14 @@ def _force_strict_redis_authority(label: str = "startup") -> None:
         retries = int(float(os.environ.get(_env_name("NIJA", "FAIL", "CLOSED", "MAX", "RETRY", "ATTEMPTS"), "0") or "0"))
     except Exception:
         retries = 0
-    if retries <= 0:
-        os.environ[_env_name("NIJA", "FAIL", "CLOSED", "MAX", "RETRY", "ATTEMPTS")] = "12"
+    if retries < 36:
+        os.environ[_env_name("NIJA", "FAIL", "CLOSED", "MAX", "RETRY", "ATTEMPTS")] = "36"
     if cleared:
-        logger.warning("STRICT_REDIS_AUTHORITY_ENFORCED label=%s cleared=%s require_distributed_lock=true strict_redis_lease=1", label, ",".join(cleared))
+        logger.warning(
+            "STRICT_REDIS_AUTHORITY_ENFORCED label=%s cleared=%s require_distributed_lock=true strict_redis_lease=1",
+            label,
+            ",".join(cleared),
+        )
 
 
 def _normalize_okx() -> None:
@@ -120,13 +125,33 @@ def _runtime_defaults() -> None:
         "NIJA_COLLAPSE_STARTUP_REGISTRATION_GATE": "true",
         "NIJA_ADAPTIVE_MIN_NOTIONAL_ENABLED": "true",
         "NIJA_POST_LOCK_CAPITAL_REFRESH": "true",
+        "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S": "180",
+        "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S": "180",
+        "NIJA_REDIS_LOCK_ACQUIRE_TIMEOUT_S": "180",
+        "NIJA_LOCK_ACQUIRE_TIMEOUT_S": "180",
+        "NIJA_FAIL_CLOSED_LOCK_ACQUIRE_TIMEOUT_S": "180",
+        "NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "120",
+        "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S": "120",
+        "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "120",
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
 
 
+def _install_activation_snapshot_bridge() -> None:
+    try:
+        module = importlib.import_module("bot.activation_snapshot_bridge_patch")
+        installer = getattr(module, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            logger.warning("ACTIVATION_SNAPSHOT_BRIDGE_INSTALL_REQUESTED")
+    except Exception as exc:
+        logger.warning("Activation snapshot bridge unavailable: %s", exc)
+
+
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
+_install_activation_snapshot_bridge()
 _normalize_micro_cap_floors()
 _force_strict_redis_authority("sitecustomize_final")
