@@ -103,6 +103,18 @@ def _set_max_floor(name: str, value: float) -> None:
         os.environ[name] = str(value)
 
 
+def _set_min_floor(name: str, value: float) -> None:
+    current = _float_env(name, value)
+    if name not in os.environ or current < value:
+        os.environ[name] = str(value)
+
+
+def _set_max_ceiling(name: str, value: float) -> None:
+    current = _float_env(name, value)
+    if name not in os.environ or current > value:
+        os.environ[name] = str(value)
+
+
 def _normalize_micro_cap_floors() -> None:
     if not _live_mode():
         return
@@ -113,6 +125,43 @@ def _normalize_micro_cap_floors() -> None:
     _set_max_floor("COINBASE_MIN_ORDER_USD", _float_env("NIJA_COINBASE_MICRO_MIN_ORDER_USD", 1.0))
     _set_max_floor("OKX_MIN_ORDER_USD", _float_env("NIJA_OKX_MICRO_MIN_ORDER_USD", 10.0))
     os.environ.setdefault("NIJA_MIN_NOTIONAL_SPENDABLE_CAP", "true")
+
+
+def _normalize_writer_lock_timing() -> None:
+    if not (_live_mode() and _redis_configured()):
+        return
+
+    # Lock wait must be longer than stale-holder rescue eligibility.  The latest
+    # Railway log showed wait=180s but stale threshold=240s, which can restart the
+    # new writer before rescue is even legally allowed.  Keep strict Redis safety,
+    # but align the clocks so a truly dead holder can be rescued inside the wait.
+    for name in (
+        "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S",
+        "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S",
+        "NIJA_REDIS_LOCK_ACQUIRE_TIMEOUT_S",
+        "NIJA_LOCK_ACQUIRE_TIMEOUT_S",
+        "NIJA_FAIL_CLOSED_LOCK_ACQUIRE_TIMEOUT_S",
+    ):
+        _set_min_floor(name, 300.0)
+
+    for name in (
+        "NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S",
+        "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S",
+        "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S",
+        "STALE_LOCK_HEARTBEAT_THRESHOLD_S",
+        "WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S",
+        "RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S",
+        "NIJA_WRITER_HEARTBEAT_STALE_THRESHOLD_S",
+        "NIJA_LOCK_HEARTBEAT_STALE_THRESHOLD_S",
+    ):
+        _set_max_ceiling(name, 120.0)
+
+    logger.warning(
+        "WRITER_LOCK_TIMING_NORMALIZED wait_s=%s stale_threshold_s=%s max_retry_attempts=%s",
+        os.environ.get("NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S"),
+        os.environ.get("NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S"),
+        os.environ.get("NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS"),
+    )
 
 
 def _runtime_defaults() -> None:
@@ -126,17 +175,18 @@ def _runtime_defaults() -> None:
         "NIJA_COLLAPSE_STARTUP_REGISTRATION_GATE": "true",
         "NIJA_ADAPTIVE_MIN_NOTIONAL_ENABLED": "true",
         "NIJA_POST_LOCK_CAPITAL_REFRESH": "true",
-        "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S": "180",
-        "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S": "180",
-        "NIJA_REDIS_LOCK_ACQUIRE_TIMEOUT_S": "180",
-        "NIJA_LOCK_ACQUIRE_TIMEOUT_S": "180",
-        "NIJA_FAIL_CLOSED_LOCK_ACQUIRE_TIMEOUT_S": "180",
+        "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S": "300",
+        "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S": "300",
+        "NIJA_REDIS_LOCK_ACQUIRE_TIMEOUT_S": "300",
+        "NIJA_LOCK_ACQUIRE_TIMEOUT_S": "300",
+        "NIJA_FAIL_CLOSED_LOCK_ACQUIRE_TIMEOUT_S": "300",
         "NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "120",
         "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S": "120",
         "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "120",
     }
     for key, value in defaults.items():
         os.environ.setdefault(key, value)
+    _normalize_writer_lock_timing()
 
 
 def _install_activation_snapshot_bridge() -> None:
@@ -161,3 +211,4 @@ _runtime_defaults()
 _install_activation_snapshot_bridge()
 _normalize_micro_cap_floors()
 _force_strict_redis_authority("sitecustomize_final")
+_normalize_writer_lock_timing()
