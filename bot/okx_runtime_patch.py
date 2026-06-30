@@ -1,9 +1,8 @@
 """Runtime hardening for NIJA's optional OKX broker.
 
-This module deliberately avoids changing Kraken/Coinbase execution.  It patches
-only the optional OKX direct REST client so authentication failures are diagnosable
-but do not keep polluting startup/capital-refresh logs after OKX has already been
-classified as unavailable.
+This module deliberately avoids changing Kraken/Coinbase execution. It patches
+only the optional OKX direct REST client/broker so OKX can be enabled without
+SDK/candlelite dependency issues and without invalid USD-USDT startup probes.
 """
 
 from __future__ import annotations
@@ -19,10 +18,18 @@ from urllib.parse import urlencode
 
 logger = logging.getLogger("nija.broker")
 _TRUTHY = {"1", "true", "yes", "y", "on"}
+_CASH_CURRENCIES = {"USD", "USDT", "USDC"}
 
 
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "false").strip().lower() in _TRUTHY
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return default
 
 
 def _okx_auth_hint(code: str, status: int) -> Optional[str]:
@@ -44,6 +51,7 @@ def _okx_auth_hint(code: str, status: int) -> Optional[str]:
             "(4) key was deleted from the OKX dashboard. "
             "Action: log into OKX → API Management and verify the key exists and matches OKX_API_KEY exactly."
         ),
+        "51001": "Invalid OKX instrument. Do not probe synthetic cash pairs like USD-USDT; build instruments from OKX tickers/instruments.",
     }
     if code in hints:
         return hints[code]
@@ -56,11 +64,7 @@ def _okx_auth_hint(code: str, status: int) -> Optional[str]:
 
 
 def apply_okx_runtime_patches() -> bool:
-    """Patch bot.broker_manager OKX classes when available.
-
-    Returns True when the broker_manager module was present and patching completed.
-    Returns False when called before broker_manager has finished importing.
-    """
+    """Patch bot.broker_manager OKX classes when available."""
     import sys
 
     bm = sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
@@ -75,8 +79,6 @@ def apply_okx_runtime_patches() -> bool:
     def _headers(self: Any, timestamp: str, method: str, request_path: str, body: str, *, private: bool) -> Dict[str, str]:
         if private:
             prehash = timestamp + method.upper() + request_path + body
-            # OKX requires the method in its original case (e.g. "GET", "POST") — do NOT re-uppercase here.
-            message = timestamp + method + request_path + body
             signature = base64.b64encode(
                 hmac.new(self.api_secret.encode("utf-8"), prehash.encode("utf-8"), hashlib.sha256).digest()
             ).decode("utf-8")
@@ -95,9 +97,6 @@ def apply_okx_runtime_patches() -> bool:
             }
         else:
             headers = {"Content-Type": "application/json"}
-        # Send x-simulated-trading:1 only when explicitly in simulated/testnet mode.
-        # Live credentials must NOT include this header — OKX rejects live keys
-        # that arrive with x-simulated-trading:1 (and vice versa).
         _sim_active = bool(getattr(self, "simulated", False)) or _env_truthy("OKX_SIMULATED_TRADING") or _env_truthy("OKX_USE_TESTNET")
         if _sim_active:
             headers["x-simulated-trading"] = "1"
@@ -161,29 +160,96 @@ def apply_okx_runtime_patches() -> bool:
         except ValueError:
             parsed = {"code": f"HTTP_{response.status_code}", "msg": response.text or "Non-JSON OKX response"}
 
-        if not response.ok:
-            okx_code = str(parsed.get("code", "unknown"))
+        okx_code = str(parsed.get("code", "0"))
+        if (not response.ok) or okx_code not in {"0", ""}:
             okx_msg = str(parsed.get("msg", ""))
-            logger.error(
-                "OKX_REQUEST_FAILED status=%s method=%s path=%s response_body=%s",
+            log_fn = logger.error if not response.ok else logger.warning
+            log_fn(
+                "OKX_REQUEST_FAILED status=%s method=%s path=%s okx_code=%s okx_msg=%s response_body=%s",
                 response.status_code,
                 method,
                 request_path,
+                okx_code,
+                okx_msg,
                 response.text,
             )
-            logger.error("OKX_ERROR_DETAIL okx_code=%s okx_msg=%s", okx_code, okx_msg)
             hint = _okx_auth_hint(okx_code, response.status_code)
             if hint:
-                logger.error("OKX_AUTH_HINT %s", hint)
+                log_fn("OKX_HINT %s", hint)
             parsed.setdefault("http_status", response.status_code)
             parsed.setdefault("request_path", request_path)
-            return parsed
-
         return parsed
 
+    def get_ticker(self: Any, instId: str) -> Dict[str, Any]:
+        normalized = str(instId or "").upper().strip()
+        # USD/USDT/USDC are account cash currencies, not tradable spot positions.
+        # Never call OKX /market/ticker for synthetic cash conversion pairs.
+        if normalized in {"USD-USDT", "USDT-USD", "USDC-USDT", "USDT-USDC", "USD-USDC", "USDC-USD"}:
+            logger.warning("OKX_CASH_PAIR_TICKER_SKIPPED instId=%s reason=synthetic_cash_pair", normalized)
+            return {"code": "0", "msg": "synthetic_cash_pair_skipped", "data": []}
+        return self._request("GET", "/api/v5/market/ticker", params={"instId": instId})
+
     original_get_account_balance = okx_cls.get_account_balance
+    original_get_positions = okx_cls.get_positions
+
+    def get_positions(self: Any) -> list[Dict[str, Any]]:
+        """Return only real crypto positions; treat USD/USDT/USDC as cash."""
+        try:
+            if not getattr(self, "account_api", None):
+                return []
+            result = self.account_api.get_balance()
+            if not (result and result.get("code") == "0"):
+                return []
+            data = result.get("data", [])
+            if not data:
+                return []
+            details = data[0].get("details", [])
+            raw_holdings: list[tuple[str, float, str]] = []
+            for detail in details:
+                ccy = str(detail.get("ccy") or "").upper().strip()
+                available = _safe_float(detail.get("availBal", 0))
+                cash_bal = _safe_float(detail.get("cashBal", 0))
+                amount = max(available, cash_bal)
+                if not ccy or ccy in _CASH_CURRENCIES or amount <= 0:
+                    continue
+                raw_holdings.append((ccy, amount, f"{ccy}-USDT"))
+
+            if not raw_holdings:
+                return []
+
+            batch_prices: Dict[str, float] = {}
+            if getattr(self, "market_api", None):
+                try:
+                    tickers_result = self.market_api.get_tickers(instType="SPOT")
+                    if tickers_result and tickers_result.get("code") == "0":
+                        for ticker in tickers_result.get("data", []):
+                            inst_id = str(ticker.get("instId", ""))
+                            batch_prices[inst_id] = _safe_float(ticker.get("last", 0))
+                except Exception as ticker_err:
+                    logger.warning("OKX batch ticker fetch failed: %s", ticker_err)
+
+            positions = []
+            for ccy, amount, okx_symbol in raw_holdings:
+                current_price = batch_prices.get(okx_symbol, 0.0)
+                if current_price <= 0.0:
+                    current_price = self.get_current_price(f"{ccy}-USD") or 0.0
+                positions.append({
+                    "symbol": f"{ccy}-USD",
+                    "quantity": amount,
+                    "currency": ccy,
+                    "current_price": current_price,
+                    "size_usd": amount * current_price if current_price > 0 else 0.0,
+                })
+            return positions
+        except Exception as exc:
+            logger.error("Error fetching OKX positions: %s", exc)
+            try:
+                return original_get_positions(self)
+            except Exception:
+                return []
 
     def get_account_balance(self: Any, verbose: bool = True) -> float:
+        """Use OKX authenticated balance as source of truth and count USD cash."""
         if not getattr(self, "account_api", None):
             last_known = getattr(self, "_last_known_balance", None)
             if last_known is not None:
@@ -193,33 +259,90 @@ def apply_okx_runtime_patches() -> bool:
                 logger.info("OKX balance skipped — optional OKX broker is not connected and has no last known balance")
                 setattr(self, "_okx_disconnected_balance_logged", True)
             return 0.0
-        return original_get_account_balance(self, verbose=verbose)
+        try:
+            result = self.account_api.get_balance()
+            if result and result.get("code") == "0":
+                data = result.get("data", [])
+                if not data:
+                    return 0.0
+                root = data[0]
+                details = root.get("details", [])
+                usd_available = 0.0
+                usdt_available = 0.0
+                usdc_available = 0.0
+                noncash_position_value = 0.0
+                for detail in details:
+                    ccy = str(detail.get("ccy") or "").upper().strip()
+                    avail = _safe_float(detail.get("availBal", 0))
+                    cash = _safe_float(detail.get("cashBal", 0))
+                    eq_usd = _safe_float(detail.get("eqUsd", 0))
+                    amount = max(avail, cash, eq_usd)
+                    if ccy == "USD":
+                        usd_available += amount
+                    elif ccy == "USDT":
+                        usdt_available += amount
+                    elif ccy == "USDC":
+                        usdc_available += amount
+                    elif amount > 0:
+                        noncash_position_value += eq_usd if eq_usd > 0 else 0.0
+                total_eq = _safe_float(root.get("totalEq", 0))
+                total_equity = total_eq if total_eq > 0 else (usd_available + usdt_available + usdc_available + noncash_position_value)
+                if verbose:
+                    raw = {
+                        "usd": usd_available,
+                        "usdt": usdt_available,
+                        "usdc": usdc_available,
+                        "trading_balance": usd_available + usdt_available + usdc_available,
+                        "usd_held": 0.0,
+                        "usdt_held": 0.0,
+                        "total_held": noncash_position_value,
+                        "total_funds": total_equity,
+                    }
+                    try:
+                        _log_balance_snapshot = getattr(bm, "_log_balance_snapshot")
+                        _log_balance_snapshot(
+                            account_label=f"okx:{getattr(self, 'account_identifier', 'PLATFORM')}",
+                            source="okx.account.balance",
+                            usd_available=usd_available,
+                            secondary_available=usdt_available + usdc_available,
+                            secondary_label="USDT/USDC",
+                            usd_held=0.0,
+                            secondary_held=noncash_position_value,
+                            raw_balances=raw,
+                            emit_info=True,
+                            emit_critical=True,
+                        )
+                    except Exception:
+                        logger.info("OKX balance: total=$%.2f usd=$%.2f usdt=$%.2f usdc=$%.2f", total_equity, usd_available, usdt_available, usdc_available)
+                setattr(self, "_last_known_balance", total_equity)
+                setattr(self, "_balance_fetch_errors", 0)
+                setattr(self, "_is_available", True)
+                return total_equity
+            return original_get_account_balance(self, verbose=verbose)
+        except Exception as exc:
+            logger.error("OKX patched balance fetch failed: %s", exc)
+            return original_get_account_balance(self, verbose=verbose)
 
     rest_cls._headers = _headers
     rest_cls._request = _request
+    rest_cls.get_ticker = get_ticker
+    okx_cls.get_positions = get_positions
     okx_cls.get_account_balance = get_account_balance
     bm._NIJA_OKX_RUNTIME_PATCHED = True
-    logger.info("✅ OKX runtime auth-failure patch applied")
+    logger.info("✅ OKX runtime patch applied: auth diagnostics, cash-aware balance, no USD-USDT probe")
     return True
 
 
 def install_import_hook() -> None:
-    """Install a one-shot import hook that patches broker_manager after import.
-
-    Guard: if the hook is already installed (or the patch already applied),
-    this function is a no-op.  It is safe to call from multiple locations.
-    """
+    """Install a one-shot import hook that patches broker_manager after import."""
     import builtins
     import sys
 
-    # If the patch is already fully applied there is nothing left to do.
     bm = sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
     if bm is not None and getattr(bm, "_NIJA_OKX_RUNTIME_PATCHED", False):
         return
 
     if getattr(builtins, "_NIJA_OKX_IMPORT_HOOK_INSTALLED", False):
-        # Hook already installed — attempt the patch in case broker_manager
-        # finished loading between the previous call and this one.
         apply_okx_runtime_patches()
         return
 
@@ -227,9 +350,6 @@ def install_import_hook() -> None:
 
     def guarded_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
         module = original_import(name, globals, locals, fromlist, level)
-        # Only trigger when the import being processed is actually broker_manager,
-        # not on every subsequent import (which would fire on every import call
-        # once broker_manager is in sys.modules).
         target_loaded = (
             name in {"bot.broker_manager", "broker_manager"}
             or name.endswith(".broker_manager")
@@ -245,6 +365,4 @@ def install_import_hook() -> None:
 
     builtins.__import__ = guarded_import
     setattr(builtins, "_NIJA_OKX_IMPORT_HOOK_INSTALLED", True)
-    # broker_manager may already be loaded — attempt the patch immediately so
-    # the hook does not need to wait for the next import.
     apply_okx_runtime_patches()
