@@ -62,6 +62,7 @@ os.environ.setdefault("NIJA_BROKER_SCOPED_POSITION_CAP", "true")
 os.environ.setdefault("NIJA_PROFITABILITY_GUARD_ENABLED", "true")
 os.environ.setdefault("NIJA_LOG_TRADE_DECISIONS", "true")
 os.environ.setdefault("NIJA_NONCE_REBUILD_WAIT_FOR_LINEAGE_S", "15")
+os.environ.setdefault("NIJA_ADAPTIVE_MIN_NOTIONAL_ENABLED", "true")
 
 try:
     # Import the repo-level startup patch explicitly because some Railway start
@@ -69,6 +70,12 @@ try:
     importlib.import_module("sitecustomize")
 except Exception as _startup_patch_exc:
     logger.warning("NIJA startup patch unavailable: %s", _startup_patch_exc)
+
+try:
+    from .min_notional_runtime_patch import install_import_hook as _install_min_notional_patch
+    _install_min_notional_patch()
+except Exception as _min_notional_patch_exc:
+    logger.warning("Adaptive min-notional runtime patch unavailable: %s", _min_notional_patch_exc)
 
 try:
     from .okx_runtime_patch import install_import_hook as _install_okx_runtime_patch
