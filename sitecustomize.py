@@ -6,9 +6,10 @@ side-effect limited: normalize environment defaults before bot modules read them
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger("nija.startup_patch")
 _TRUTHY = {"1", "true", "yes", "on", "y", "enabled"}
@@ -140,7 +141,12 @@ def _runtime_defaults() -> None:
 
 def _install_activation_snapshot_bridge() -> None:
     try:
-        module = importlib.import_module("bot.activation_snapshot_bridge_patch")
+        patch_path = Path(__file__).resolve().parent / "bot" / "activation_snapshot_bridge_patch.py"
+        spec = importlib.util.spec_from_file_location("nija_activation_snapshot_bridge_patch", patch_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load spec for {patch_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
         installer = getattr(module, "install_import_hook", None)
         if callable(installer):
             installer()
