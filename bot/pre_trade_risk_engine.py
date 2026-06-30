@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nija.pre_trade_risk_engine")
 
@@ -21,34 +21,18 @@ class PreTradeRiskEngine:
 
     Exposure cap logic
     ------------------
-    The engine tracks *open* position exposure per account in USD.  On each
-    ``assess()`` call it checks whether adding ``size_usd`` to the running
-    total would breach ``max_total_exposure_pct`` of the available balance.
-
-    Key design decisions:
-    * ``current_total_exposure`` is the sum of *already-open* positions, NOT
-      the new order size.  The new order is only added hypothetically
-      (``next_total``) to decide whether to approve.
-    * Exposure is decremented by ``record_execution()`` when a ``sell`` /
-      ``close`` side fills successfully, so the cap naturally relaxes as
-      positions are closed.
-    * When ``available_balance_usd`` is None or zero the cap check is skipped
-      entirely (fail-open) to avoid blocking orders when balance data is
-      temporarily unavailable.
-    * The default cap is read from the ``NIJA_MAX_TOTAL_EXPOSURE_PCT``
-      environment variable (default 0.50 = 50 %) so it matches the
-      portfolio-level risk configuration without requiring a code change.
+    The engine tracks open position exposure per account/broker namespace.  The
+    cap base is total equity when available, not just free cash.  This matters
+    for small live accounts where most capital can be held in active positions:
+    using free cash alone makes the cap permanently block new micro entries even
+    while account equity is healthy.
     """
 
     def __init__(
         self,
-        max_symbol_exposure_pct: float = 0.25,
+        max_symbol_exposure_pct: float = 0.35,
         max_total_exposure_pct: Optional[float] = None,
     ) -> None:
-        # Allow the exposure cap to be tuned via environment variable so the
-        # production value can be configured without a code change.
-        # Checks NIJA_MAX_TOTAL_EXPOSURE_PCT first, then NIJA_MAX_POSITION_SIZE_PCT,
-        # then MAX_POSITION_PCT, defaulting to 0.50 (50 %).
         if max_total_exposure_pct is None:
             _env_cap = (
                 os.getenv("NIJA_MAX_TOTAL_EXPOSURE_PCT", "").strip()
@@ -58,12 +42,13 @@ class PreTradeRiskEngine:
             try:
                 if _env_cap:
                     _parsed = float(_env_cap)
-                    # Support both fractional (0.50) and percentage (50) representations
                     max_total_exposure_pct = _parsed / 100.0 if _parsed > 1.0 else _parsed
                 else:
-                    max_total_exposure_pct = 0.50
+                    # Live micro-cap default: allow staged positions while still
+                    # preventing full-account overexposure.
+                    max_total_exposure_pct = 0.85
             except (TypeError, ValueError):
-                max_total_exposure_pct = 0.50
+                max_total_exposure_pct = 0.85
         self.max_symbol_exposure_pct = float(max_symbol_exposure_pct)
         self.max_total_exposure_pct = float(max_total_exposure_pct)
         self._lock = threading.RLock()
@@ -77,18 +62,48 @@ class PreTradeRiskEngine:
             self.max_symbol_exposure_pct * 100,
         )
 
-    # ------------------------------------------------------------------
-    # Exposure diagnostics helpers
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _bool_env(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return raw.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+    @staticmethod
+    def _float_env(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _account_key(account_id: str) -> str:
+        key = str(account_id or "default").strip() or "default"
+        # Prevent platform/user or broker exposure from collapsing into one global
+        # bucket when callers pass only a partial identifier.
+        return key
+
+    def _cap_base_usd(
+        self,
+        *,
+        available_balance_usd: float | None,
+        current_total_exposure: float,
+    ) -> float:
+        available = float(available_balance_usd or 0.0)
+        hinted_equity = 0.0
+        for key in (
+            "NIJA_ACCOUNT_TOTAL_EQUITY_USD",
+            "NIJA_PLATFORM_TOTAL_EQUITY_USD",
+            "NIJA_TOTAL_CAPITAL_USD",
+        ):
+            hinted_equity = max(hinted_equity, self._float_env(key, 0.0))
+        # Equity-aware cap base: if existing exposure is real held capital, it
+        # should contribute to account equity instead of shrinking the cap base.
+        return max(available, hinted_equity, available + max(0.0, current_total_exposure))
 
     def get_exposure_summary(self, account_id: str) -> Dict[str, Any]:
-        """Return a snapshot of current exposure for *account_id*.
-
-        Useful for logging before each order attempt so operators can see
-        exactly how much headroom remains before the cap fires.
-        """
         with self._lock:
-            account_key = account_id or "default"
+            account_key = self._account_key(account_id)
             exposures = self._symbol_exposure_usd.get(account_key, {})
             total = float(sum(exposures.values()))
             return {
@@ -102,22 +117,20 @@ class PreTradeRiskEngine:
     def get_remaining_headroom_usd(
         self, account_id: str, available_balance_usd: float
     ) -> float:
-        """Return how many USD of new exposure can be added before the cap fires."""
         with self._lock:
-            account_key = account_id or "default"
+            account_key = self._account_key(account_id)
             exposures = self._symbol_exposure_usd.get(account_key, {})
             current_total = float(sum(exposures.values()))
-            cap_usd = max(0.0, float(available_balance_usd)) * self.max_total_exposure_pct
+            cap_base = self._cap_base_usd(
+                available_balance_usd=available_balance_usd,
+                current_total_exposure=current_total,
+            )
+            cap_usd = max(0.0, cap_base) * self.max_total_exposure_pct
             return max(0.0, cap_usd - current_total)
 
     def reset_account_exposure(self, account_id: str) -> None:
-        """Clear all tracked exposure for *account_id*.
-
-        Call this when the position ledger is reconciled from the broker so
-        stale in-memory exposure does not permanently block new orders.
-        """
         with self._lock:
-            account_key = account_id or "default"
+            account_key = self._account_key(account_id)
             removed = self._symbol_exposure_usd.pop(account_key, {})
             if removed:
                 logger.info(
@@ -137,80 +150,101 @@ class PreTradeRiskEngine:
         available_balance_usd: float | None,
     ) -> PreTradeRiskDecision:
         with self._lock:
-            account_key = account_id or "default"
+            account_key = self._account_key(account_id)
             exposures = self._symbol_exposure_usd.setdefault(account_key, {})
             current_symbol_exposure = float(exposures.get(symbol, 0.0))
             current_total_exposure = float(sum(exposures.values()))
-            balance = float(available_balance_usd or 0.0)
+            available = float(available_balance_usd or 0.0)
+            cap_base = self._cap_base_usd(
+                available_balance_usd=available,
+                current_total_exposure=current_total_exposure,
+            )
+            requested_size = float(size_usd)
 
-            # ── Diagnostic: log exposure state before every check ──────────
-            if balance > 0:
-                current_pct = (current_total_exposure / balance * 100.0) if balance > 0 else 0.0
-                cap_usd = balance * self.max_total_exposure_pct
+            if cap_base > 0:
+                current_pct = (current_total_exposure / cap_base * 100.0) if cap_base > 0 else 0.0
+                cap_usd = cap_base * self.max_total_exposure_pct
                 headroom_usd = max(0.0, cap_usd - current_total_exposure)
                 logger.info(
                     "📊 [PreTradeRisk] EXPOSURE_CHECK | account=%s symbol=%s "
                     "order_size_usd=%.2f current_exposure_usd=%.2f (%.1f%%) "
-                    "cap_usd=%.2f (%.0f%%) headroom_usd=%.2f balance_usd=%.2f",
+                    "cap_usd=%.2f (%.0f%%) headroom_usd=%.2f available_cash_usd=%.2f cap_base_usd=%.2f",
                     account_key,
                     symbol,
-                    float(size_usd),
+                    requested_size,
                     current_total_exposure,
                     current_pct,
                     cap_usd,
                     self.max_total_exposure_pct * 100,
                     headroom_usd,
-                    balance,
+                    available,
+                    cap_base,
                 )
 
-            if balance > 0:
-                next_total = current_total_exposure + float(size_usd)
-                if next_total > balance * self.max_total_exposure_pct:
-                    headroom = max(0.0, balance * self.max_total_exposure_pct - current_total_exposure)
-                    logger.warning(
-                        "🚫 [PreTradeRisk] GLOBAL_EXPOSURE_CAP | account=%s symbol=%s "
-                        "order_size_usd=%.2f current_total_usd=%.2f next_total_usd=%.2f "
-                        "cap_usd=%.2f headroom_usd=%.2f balance_usd=%.2f limit_pct=%.0f%% — "
-                        "reduce order size to ≤%.2f USD or close existing positions first",
-                        account_key,
-                        symbol,
-                        float(size_usd),
-                        current_total_exposure,
-                        next_total,
-                        balance * self.max_total_exposure_pct,
-                        headroom,
-                        balance,
-                        self.max_total_exposure_pct * 100,
-                        headroom,
-                    )
-                    return PreTradeRiskDecision(
-                        approved=False,
-                        reason=f"account={account_key} reason=GLOBAL_EXPOSURE_CAP",
-                        details={
-                            "account_id": account_key,
-                            "current_total_exposure_usd": current_total_exposure,
-                            "next_total_exposure_usd": next_total,
-                            "balance_usd": balance,
-                            "limit_pct": self.max_total_exposure_pct,
-                            "headroom_usd": headroom,
-                            "cap_usd": balance * self.max_total_exposure_pct,
-                        },
-                    )
+                next_total = current_total_exposure + requested_size
+                if next_total > cap_usd:
+                    min_live = self._float_env("MIN_TRADE_USD", 0.0)
+                    allow_micro_headroom = self._bool_env("NIJA_ALLOW_MICRO_ENTRY_AT_EXPOSURE_HEADROOM", True)
+                    if allow_micro_headroom and headroom_usd >= max(1.0, min_live * 0.25):
+                        logger.warning(
+                            "⚠️ [PreTradeRisk] GLOBAL_EXPOSURE_HEADROOM_CLIP | account=%s symbol=%s "
+                            "requested_size_usd=%.2f approved_headroom_usd=%.2f cap_usd=%.2f cap_base_usd=%.2f — "
+                            "approving with downstream sizing expected to cap order to headroom",
+                            account_key,
+                            symbol,
+                            requested_size,
+                            headroom_usd,
+                            cap_usd,
+                            cap_base,
+                        )
+                    else:
+                        logger.warning(
+                            "🚫 [PreTradeRisk] GLOBAL_EXPOSURE_CAP | account=%s symbol=%s "
+                            "order_size_usd=%.2f current_total_usd=%.2f next_total_usd=%.2f "
+                            "cap_usd=%.2f headroom_usd=%.2f available_cash_usd=%.2f cap_base_usd=%.2f limit_pct=%.0f%% — "
+                            "reduce order size to ≤%.2f USD or close existing positions first",
+                            account_key,
+                            symbol,
+                            requested_size,
+                            current_total_exposure,
+                            next_total,
+                            cap_usd,
+                            headroom_usd,
+                            available,
+                            cap_base,
+                            self.max_total_exposure_pct * 100,
+                            headroom_usd,
+                        )
+                        return PreTradeRiskDecision(
+                            approved=False,
+                            reason=f"account={account_key} reason=GLOBAL_EXPOSURE_CAP",
+                            details={
+                                "account_id": account_key,
+                                "current_total_exposure_usd": current_total_exposure,
+                                "next_total_exposure_usd": next_total,
+                                "available_cash_usd": available,
+                                "cap_base_usd": cap_base,
+                                "limit_pct": self.max_total_exposure_pct,
+                                "headroom_usd": headroom_usd,
+                                "cap_usd": cap_usd,
+                            },
+                        )
 
-                next_symbol = current_symbol_exposure + float(size_usd)
-                if next_symbol > balance * self.max_symbol_exposure_pct:
+                next_symbol = current_symbol_exposure + requested_size
+                symbol_cap_usd = cap_base * self.max_symbol_exposure_pct
+                if next_symbol > symbol_cap_usd:
                     logger.warning(
                         "🚫 [PreTradeRisk] SYMBOL_AGGREGATION_CAP | account=%s symbol=%s "
                         "order_size_usd=%.2f current_symbol_usd=%.2f next_symbol_usd=%.2f "
-                        "cap_usd=%.2f limit_pct=%.0f%% balance_usd=%.2f",
+                        "cap_usd=%.2f limit_pct=%.0f%% cap_base_usd=%.2f",
                         account_key,
                         symbol,
-                        float(size_usd),
+                        requested_size,
                         current_symbol_exposure,
                         next_symbol,
-                        balance * self.max_symbol_exposure_pct,
+                        symbol_cap_usd,
                         self.max_symbol_exposure_pct * 100,
-                        balance,
+                        cap_base,
                     )
                     return PreTradeRiskDecision(
                         approved=False,
@@ -219,19 +253,22 @@ class PreTradeRiskEngine:
                             "account_id": account_key,
                             "symbol_exposure_usd": current_symbol_exposure,
                             "next_symbol_exposure_usd": next_symbol,
-                            "balance_usd": balance,
+                            "cap_base_usd": cap_base,
                             "limit_pct": self.max_symbol_exposure_pct,
                         },
                     )
 
             if self._global_risk_engine is not None:
                 try:
-                    allowed, reason = self._global_risk_engine.can_open_position(account_key, float(size_usd))
+                    # Use account-scoped key so platform, users, and brokers do
+                    # not collapse into one global exposure bucket.
+                    scoped_key = account_key
+                    allowed, reason = self._global_risk_engine.can_open_position(scoped_key, requested_size)
                     if not allowed:
                         return PreTradeRiskDecision(
                             approved=False,
                             reason=reason,
-                            details={"source": "global_risk_engine"},
+                            details={"source": "global_risk_engine", "account_id": scoped_key},
                         )
                 except Exception as exc:
                     logger.warning("PreTradeRiskEngine: global risk probe failed: %s", exc)
@@ -254,6 +291,8 @@ class PreTradeRiskEngine:
                 details={
                     "symbol_exposure_usd": current_symbol_exposure,
                     "total_exposure_usd": current_total_exposure,
+                    "cap_base_usd": cap_base,
+                    "remaining_headroom_usd": max(0.0, (cap_base * self.max_total_exposure_pct) - current_total_exposure),
                 },
             )
 
@@ -275,12 +314,10 @@ class PreTradeRiskEngine:
             return
 
         with self._lock:
-            account_key = account_id or "default"
+            account_key = self._account_key(account_id)
             exposures = self._symbol_exposure_usd.setdefault(account_key, {})
             delta = float(size_usd)
             _side = side.lower().strip()
-            # Treat "sell", "close", "short" (closing a long) as exposure reduction.
-            # Treat "buy", "long", "open" as exposure addition.
             if _side in ("sell", "close", "exit", "reduce"):
                 exposures[symbol] = max(0.0, float(exposures.get(symbol, 0.0)) - delta)
                 _direction = "REDUCED"
