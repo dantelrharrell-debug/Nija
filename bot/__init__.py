@@ -109,6 +109,7 @@ for _key, _value in (("MIN_TRADE_USD", "10"), ("MIN_NOTIONAL_OVERRIDE", "10"), (
 
 _PATCH_HOOKS = (
     ("strict_live_startup_sanitizer", "Strict live startup sanitizer"),
+    ("live_redis_execution_bypass_guard", "Live Redis execution bypass guard"),
     ("writer_lock_release_guard", "Writer lock release guard"),
     ("min_notional_runtime_patch", "Adaptive min-notional runtime patch"),
     ("kraken_equity_runtime_patch", "Kraken equity hydration patch"),
