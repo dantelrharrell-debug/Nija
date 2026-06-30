@@ -1,9 +1,9 @@
 """Strict live startup sanitizer.
 
-The logs showed a brief local-writer startup path before strict Redis authority
-normalization corrected the environment. In live mode with Redis configured,
-that path should never be visible. This module runs at package import and
-normalizes the process environment before authority modules are imported.
+This module runs before the trading runtime imports authority/execution modules.
+In live mode with Redis configured, no local-writer, degraded-authority, or
+operator force-trade flag may remain truthy. These flags previously allowed
+startup code to re-open live execution gates after capital was already healthy.
 """
 
 from __future__ import annotations
@@ -14,6 +14,10 @@ import os
 logger = logging.getLogger("nija.strict_live_startup_sanitizer")
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _FORBIDDEN_LIVE_FLAGS = (
+    "FORCE_TRADE",
+    "FORCE_TRADE_MODE",
+    "FORCE_LIVE_TRANSITION",
+    "NIJA_FORCE_ACTIVATION",
     "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK",
     "NIJA_DISABLE_WRITER_LOCK",
     "NIJA_CONFIRM_BYPASS_RISKS",
@@ -54,6 +58,7 @@ def sanitize(reason: str = "package_import") -> None:
     os.environ["NIJA_STRICT_REDIS_LEASE"] = "1"
     os.environ["NIJA_STRICT_WRITER_LOCK"] = "true"
     os.environ["NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS"] = "true"
+    os.environ["NIJA_FAIL_CLOSED_RETRY_ON_LOCK_FAILURE"] = "true"
     try:
         attempts = int(float(os.environ.get("NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS", "0") or "0"))
     except Exception:
