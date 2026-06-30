@@ -30,6 +30,124 @@ def _env_name(*parts: str) -> str:
     return "_".join(parts)
 
 
+def _copy_first_present_env(canonical: str, aliases: tuple[str, ...]) -> str:
+    """Populate *canonical* from the first non-empty alias without exposing values."""
+    if str(os.environ.get(canonical, "")).strip():
+        return ""
+    for alias in aliases:
+        value = str(os.environ.get(alias, "")).strip()
+        if value:
+            os.environ[canonical] = value
+            return alias
+    return ""
+
+
+def _normalize_credential_aliases(label: str) -> None:
+    """Accept common Railway/user secret aliases and map them to NIJA canonical names.
+
+    The shell startup diagnostic currently checks one exact name for Tania Kraken
+    and OKX.  Runtime code should still work when the same secret exists under a
+    common alternate name such as KRAKEN_USER_TANIA_GILBERT_* or OKX_SECRET_KEY.
+    This function copies aliases into the canonical variables only when the
+    canonical variable is empty, so it never overwrites a deliberately configured
+    production value.
+    """
+    alias_map: dict[str, tuple[str, ...]] = {
+        # Kraken platform canonical names.
+        "KRAKEN_PLATFORM_API_KEY": (
+            "KRAKEN_API_KEY",
+            "KRAKEN_MASTER_API_KEY",
+            "KRAKEN_MASTER_KEY",
+            "KRAKEN_PLATFORM_KEY",
+        ),
+        "KRAKEN_PLATFORM_API_SECRET": (
+            "KRAKEN_API_SECRET",
+            "KRAKEN_PRIVATE_KEY",
+            "KRAKEN_SECRET_KEY",
+            "KRAKEN_MASTER_API_SECRET",
+            "KRAKEN_MASTER_SECRET",
+            "KRAKEN_PLATFORM_SECRET",
+        ),
+        # Daivon aliases retained for consistency with existing user-prefix code.
+        "KRAKEN_USER_DAIVON_API_KEY": (
+            "KRAKEN_USER_DAIVON_FRAZIER_API_KEY",
+            "KRAKEN_DAIVON_API_KEY",
+            "DAIVON_KRAKEN_API_KEY",
+            "KRAKEN_USER_1_API_KEY",
+            "KRAKEN_USER1_API_KEY",
+        ),
+        "KRAKEN_USER_DAIVON_API_SECRET": (
+            "KRAKEN_USER_DAIVON_FRAZIER_API_SECRET",
+            "KRAKEN_DAIVON_API_SECRET",
+            "DAIVON_KRAKEN_API_SECRET",
+            "KRAKEN_USER_1_API_SECRET",
+            "KRAKEN_USER1_API_SECRET",
+            "KRAKEN_DAIVON_SECRET",
+            "DAIVON_KRAKEN_SECRET",
+        ),
+        # Tania is the account that the latest Railway log marked as not configured.
+        "KRAKEN_USER_TANIA_API_KEY": (
+            "KRAKEN_USER_TANIA_GILBERT_API_KEY",
+            "KRAKEN_TANIA_API_KEY",
+            "TANIA_KRAKEN_API_KEY",
+            "KRAKEN_USER_2_API_KEY",
+            "KRAKEN_USER2_API_KEY",
+            "KRAKEN_USER_TANIA_KEY",
+        ),
+        "KRAKEN_USER_TANIA_API_SECRET": (
+            "KRAKEN_USER_TANIA_GILBERT_API_SECRET",
+            "KRAKEN_TANIA_API_SECRET",
+            "TANIA_KRAKEN_API_SECRET",
+            "KRAKEN_USER_2_API_SECRET",
+            "KRAKEN_USER2_API_SECRET",
+            "KRAKEN_USER_TANIA_SECRET",
+            "KRAKEN_TANIA_SECRET",
+            "TANIA_KRAKEN_SECRET",
+        ),
+        # OKX commonly calls its secret OKX_SECRET_KEY and passphrase OKX_API_PASSPHRASE.
+        "OKX_API_KEY": (
+            "OKX_PLATFORM_API_KEY",
+            "OKX_MASTER_API_KEY",
+            "OKX_KEY",
+        ),
+        "OKX_API_SECRET": (
+            "OKX_SECRET_KEY",
+            "OKX_PLATFORM_API_SECRET",
+            "OKX_MASTER_API_SECRET",
+            "OKX_SECRET",
+        ),
+        "OKX_PASSPHRASE": (
+            "OKX_API_PASSPHRASE",
+            "OKX_PASS_PHRASE",
+            "OKX_PLATFORM_PASSPHRASE",
+            "OKX_MASTER_PASSPHRASE",
+            "OKX_PASSWORD",
+        ),
+        # Alpaca user aliases, so the diagnostic/runtime do not disagree on Tania.
+        "ALPACA_USER_TANIA_API_KEY": (
+            "ALPACA_USER_TANIA_GILBERT_API_KEY",
+            "ALPACA_TANIA_API_KEY",
+            "TANIA_ALPACA_API_KEY",
+            "ALPACA_USER_2_API_KEY",
+            "ALPACA_USER2_API_KEY",
+        ),
+        "ALPACA_USER_TANIA_API_SECRET": (
+            "ALPACA_USER_TANIA_GILBERT_API_SECRET",
+            "ALPACA_TANIA_API_SECRET",
+            "TANIA_ALPACA_API_SECRET",
+            "ALPACA_USER_2_API_SECRET",
+            "ALPACA_USER2_API_SECRET",
+        ),
+    }
+    used: list[str] = []
+    for canonical, aliases in alias_map.items():
+        source = _copy_first_present_env(canonical, aliases)
+        if source:
+            used.append(f"{canonical}<-{source}")
+    if used:
+        logger.warning("CREDENTIAL_ALIAS_NORMALIZED label=%s mapped=%s", label, ",".join(used))
+
+
 def _strict_live_cleanup(label: str) -> None:
     if not _redis_configured():
         return
@@ -64,6 +182,7 @@ def _strict_live_cleanup(label: str) -> None:
         logger.warning("STRICT_LIVE_STARTUP_CLEANUP label=%s cleared=%s", label, ",".join(cleared))
 
 
+_normalize_credential_aliases("bot_init_first")
 try:
     _strict_sanitizer = importlib.import_module(".strict_live_startup_sanitizer", __name__)
     _strict_sanitizer.sanitize("bot_init_first")
@@ -99,6 +218,7 @@ try:
     importlib.import_module("sitecustomize")
 except Exception as _exc:
     logger.warning("NIJA startup patch unavailable: %s", _exc)
+_normalize_credential_aliases("bot_init_after_sitecustomize")
 _strict_live_cleanup("bot_init_after_sitecustomize")
 
 for _key, _value in (
