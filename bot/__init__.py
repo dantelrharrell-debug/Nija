@@ -58,17 +58,40 @@ os.environ.setdefault("NIJA_NONCE_REBUILD_WAIT_FOR_LINEAGE_S", "15")
 os.environ.setdefault("NIJA_ADAPTIVE_MIN_NOTIONAL_ENABLED", "true")
 os.environ.setdefault("NIJA_NO_TRADE_WATCHDOG_ENABLED", "true")
 os.environ.setdefault("NIJA_NO_TRADE_WATCHDOG_INTERVAL", "10")
+os.environ.setdefault("NIJA_DECISION_PIPELINE_TRACE", "true")
 
 try:
     importlib.import_module("sitecustomize")
 except Exception as _startup_patch_exc:
     logger.warning("NIJA startup patch unavailable: %s", _startup_patch_exc)
 
+# sitecustomize historically forced these to 50.  Re-assert adaptive micro-cap
+# defaults immediately after importing it, before execution modules load.
+for _key, _value in (
+    ("MIN_TRADE_USD", "10"),
+    ("MIN_NOTIONAL_OVERRIDE", "10"),
+    ("MIN_CASH_TO_BUY", "5"),
+    ("KRAKEN_MIN_NOTIONAL_USD", "10"),
+    ("COINBASE_MIN_ORDER_USD", "1"),
+    ("OKX_MIN_ORDER_USD", "10"),
+):
+    try:
+        if float(os.environ.get(_key, _value) or _value) > float(_value):
+            os.environ[_key] = _value
+    except Exception:
+        os.environ[_key] = _value
+
 try:
     from .min_notional_runtime_patch import install_import_hook as _install_min_notional_patch
     _install_min_notional_patch()
 except Exception as _min_notional_patch_exc:
     logger.warning("Adaptive min-notional runtime patch unavailable: %s", _min_notional_patch_exc)
+
+try:
+    from .decision_pipeline_runtime_patch import install_import_hook as _install_decision_pipeline_patch
+    _install_decision_pipeline_patch()
+except Exception as _decision_pipeline_exc:
+    logger.warning("Decision pipeline telemetry unavailable: %s", _decision_pipeline_exc)
 
 try:
     from .no_trade_watchdog_runtime_patch import install_import_hook as _install_no_trade_watchdog_patch
