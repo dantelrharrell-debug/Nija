@@ -8,7 +8,7 @@ import os
 import logging
 import importlib
 
-# This package initializer runs before any bot.* submodule is imported.  Use it
+# This package initializer runs before any bot.* submodule is imported. Use it
 # for process-wide safety defaults that must be active before execution authority,
 # nonce management, broker_manager, or the execution pipeline are loaded.
 logging.basicConfig(
@@ -32,7 +32,7 @@ def _redis_configured() -> bool:
 
 
 # Live production safety: if Redis exists, never let an old Railway emergency
-# variable keep NIJA in local-writer bypass mode.  This must happen before
+# variable keep NIJA in local-writer bypass mode. This must happen before
 # bot.execution_authority_context imports and reads the env.
 if _redis_configured():
     _cleared = []
@@ -54,7 +54,7 @@ if _redis_configured():
             ",".join(_cleared),
         )
 
-# Force safe runtime defaults early.  These are still tunable upward in Railway.
+# Force safe runtime defaults early. These are still tunable upward in Railway.
 os.environ.setdefault("NIJA_RECONCILE_BROKER_OPEN_ORDERS", "true")
 os.environ.setdefault("NIJA_PENDING_ORDER_TIMEOUT_S", "90")
 os.environ.setdefault("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")
@@ -75,6 +75,12 @@ try:
     _install_okx_runtime_patch()
 except Exception as _okx_patch_exc:
     logger.warning("OKX runtime patch unavailable: %s", _okx_patch_exc)
+
+try:
+    from .execution_pipeline_runtime_patch import install_import_hook as _install_execution_pipeline_patch
+    _install_execution_pipeline_patch()
+except Exception as _pipeline_patch_exc:
+    logger.warning("Execution pipeline runtime patch unavailable: %s", _pipeline_patch_exc)
 
 __version__ = "7.2.0"
 
