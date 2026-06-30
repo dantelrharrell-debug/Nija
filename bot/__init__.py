@@ -60,6 +60,7 @@ os.environ.setdefault("NIJA_NO_TRADE_WATCHDOG_ENABLED", "true")
 os.environ.setdefault("NIJA_NO_TRADE_WATCHDOG_INTERVAL", "10")
 os.environ.setdefault("NIJA_DECISION_PIPELINE_TRACE", "true")
 os.environ.setdefault("NIJA_FULL_EXECUTION_OBSERVABILITY", "true")
+os.environ.setdefault("NIJA_KRAKEN_EQUITY_HYDRATION", "true")
 
 try:
     importlib.import_module("sitecustomize")
@@ -85,6 +86,12 @@ try:
     _install_min_notional_patch()
 except Exception as _min_notional_patch_exc:
     logger.warning("Adaptive min-notional runtime patch unavailable: %s", _min_notional_patch_exc)
+
+try:
+    from .kraken_equity_runtime_patch import install_import_hook as _install_kraken_equity_patch
+    _install_kraken_equity_patch()
+except Exception as _kraken_equity_exc:
+    logger.warning("Kraken equity hydration patch unavailable: %s", _kraken_equity_exc)
 
 try:
     from .full_execution_observability_patch import install_import_hook as _install_full_execution_observability_patch
