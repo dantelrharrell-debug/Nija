@@ -2,55 +2,13 @@
 No-Failure Activation Contract
 ================================
 
-Three runtime invariants that guarantee trading starts on every boot without
-silent exception paths.
+Runtime startup hydration helpers.
 
-Invariant 1 — MONOTONIC SNAPSHOT PROGRESSION
-    ``publish_snapshot()`` in ``capital_authority.py`` now stamps
-    ``_broker_feed_timestamps`` with ``computed_at`` for every broker in the
-    accepted snapshot.  The push path (``feed_broker_balance``) therefore
-    cannot overwrite a coordinator-published snapshot with a stale feed,
-    even on first boot when no prior feed timestamp exists.
-
-Invariant 2 — GUARANTEED CA HYDRATION LOOP
-    :class:`CAHydrationLoop` starts a background daemon thread that calls
-    ``CapitalRefreshCoordinator.execute_refresh()`` every ``retry_interval_s``
-    (default 5 s) until ``CAPITAL_HYDRATED_EVENT`` fires or ``max_attempts``
-    is exhausted.  On exhaustion it signals the fallback timer to fire
-    immediately instead of waiting for its natural deadline.
-
-Invariant 3 — FORCED ACTIVATION FALLBACK TIMER
-    :class:`ForcedActivationFallbackTimer` starts a background daemon thread.
-    After ``fallback_timeout_s`` seconds (default 90 s), if
-    ``CAPITAL_HYDRATED_EVENT`` is still unset, it:
-
-    * Force-sets ``CAPITAL_HYDRATED_EVENT``
-    * Force-sets ``CAPITAL_SYSTEM_READY``
-    * Releases ``STARTUP_LOCK``
-    * Force-opens ``StartupReadinessGate``
-
-    Trading always starts — even when the broker pipeline is unavailable.
-
-Usage (call once from bot startup after brokers are registered)::
-
-    from bot.no_failure_activation_contract import install_no_failure_activation_contract
-
-    install_no_failure_activation_contract(
-        coordinator=mabm._capital_coordinator,
-        broker_map=connected_broker_map,
-    )
-
-The ``coordinator`` and ``broker_map`` arguments are optional.  When omitted
-the hydration loop is skipped (only the fallback timer and monotonic fix are
-active — the monotonic fix is a compile-time patch applied at import time).
-
-Thread safety
--------------
-All three features are fully thread-safe.  Multiple calls to
-``install_no_failure_activation_contract()`` are idempotent — each
-component is created at most once per process.
-
-Author: NIJA Trading Systems
+Safety rule for live Redis deployments
+--------------------------------------
+A live Redis deployment must fail closed. ``FORCE_TRADE`` and related operator
+flags may request extra diagnostics, but they must never force-set readiness
+keys, release the startup lock, or bypass distributed writer authority.
 """
 
 from __future__ import annotations
@@ -62,6 +20,66 @@ import time
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("nija.no_failure_activation_contract")
+_TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
+_FORCE_FLAGS = ("FORCE_TRADE", "FORCE_TRADE_MODE", "FORCE_LIVE_TRANSITION", "NIJA_FORCE_ACTIVATION")
+
+
+# ---------------------------------------------------------------------------
+# Environment / policy helpers
+# ---------------------------------------------------------------------------
+
+
+def _truthy(name: str, default: str = "") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() in _TRUTHY
+
+
+def _redis_configured() -> bool:
+    return bool(
+        str(os.environ.get("NIJA_REDIS_URL", "")).strip()
+        or str(os.environ.get("REDIS_URL", "")).strip()
+        or str(os.environ.get("REDIS_PRIVATE_URL", "")).strip()
+        or str(os.environ.get("REDIS_PUBLIC_URL", "")).strip()
+    )
+
+
+def _live_mode() -> bool:
+    return not _truthy("DRY_RUN_MODE") and not _truthy("PAPER_MODE")
+
+
+def _live_redis_mode() -> bool:
+    return _live_mode() and _redis_configured()
+
+
+def _force_requested() -> bool:
+    return any(_truthy(flag) for flag in _FORCE_FLAGS)
+
+
+def _sanitize_live_force_flags(reason: str) -> bool:
+    """Clear force flags in live Redis mode and return True if anything changed."""
+    if not _live_redis_mode():
+        return False
+    cleared: list[str] = []
+    for flag in _FORCE_FLAGS:
+        if _truthy(flag):
+            os.environ[flag] = "false"
+            cleared.append(flag)
+    if cleared:
+        logger.critical(
+            "LIVE_REDIS_FORCE_ACTIVATION_BLOCKED reason=%s cleared=%s — startup remains fail-closed",
+            reason,
+            ",".join(cleared),
+        )
+        return True
+    return False
+
+
+def _forced_activation_allowed() -> bool:
+    """Return True only for explicitly allowed non-live-Redis recovery flows."""
+    _sanitize_live_force_flags("policy_check")
+    if _live_redis_mode():
+        return False
+    return _force_requested() and _truthy("NIJA_ALLOW_FORCED_ACTIVATION_FALLBACK")
+
 
 # ---------------------------------------------------------------------------
 # Lazy import helpers (avoid circular imports at module load time)
@@ -69,7 +87,6 @@ logger = logging.getLogger("nija.no_failure_activation_contract")
 
 
 def _get_capital_hydrated_event() -> threading.Event:
-    """Return the process-wide CAPITAL_HYDRATED_EVENT."""
     try:
         from capital_authority import CAPITAL_HYDRATED_EVENT
         return CAPITAL_HYDRATED_EVENT
@@ -79,7 +96,6 @@ def _get_capital_hydrated_event() -> threading.Event:
 
 
 def _get_capital_system_ready() -> threading.Event:
-    """Return the process-wide CAPITAL_SYSTEM_READY event."""
     try:
         from capital_authority import CAPITAL_SYSTEM_READY
         return CAPITAL_SYSTEM_READY
@@ -89,7 +105,6 @@ def _get_capital_system_ready() -> threading.Event:
 
 
 def _get_startup_lock() -> threading.Event:
-    """Return the process-wide STARTUP_LOCK event."""
     try:
         from capital_authority import STARTUP_LOCK
         return STARTUP_LOCK
@@ -99,7 +114,6 @@ def _get_startup_lock() -> threading.Event:
 
 
 def _get_readiness_table():
-    """Return the readiness_table module, or None if unavailable."""
     try:
         from bot.readiness_table import mark_ready, snapshot
         return mark_ready, snapshot
@@ -121,37 +135,12 @@ _install_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
-# Invariant 2 — Guaranteed CA Hydration Loop
+# Guaranteed CA Hydration Loop
 # ---------------------------------------------------------------------------
 
 
 class CAHydrationLoop:
-    """
-    Background daemon thread that retries ``CapitalRefreshCoordinator.execute_refresh()``
-    until :data:`~capital_authority.CAPITAL_HYDRATED_EVENT` fires.
-
-    The loop stops as soon as the coordinator has successfully published at
-    least one snapshot (even a zero-balance one) — after that, the runtime
-    coordinator inside :class:`~multi_account_broker_manager.MultiAccountBrokerManager`
-    drives ongoing refreshes.
-
-    Parameters
-    ----------
-    coordinator:
-        The :class:`~capital_flow_state_machine.CapitalRefreshCoordinator`
-        singleton.  The loop calls ``execute_refresh(broker_map)`` directly.
-    broker_map:
-        ``{broker_id: broker_instance}`` dict passed to every refresh call.
-    retry_interval_s:
-        Seconds to sleep between retry attempts.  Default 5 s.
-    max_attempts:
-        Maximum number of attempts before declaring hydration impossible and
-        triggering the fallback timer immediately.  Default 12 (≈ 60 s).
-    fallback_trigger:
-        Optional :class:`threading.Event`.  When set by this loop on
-        exhaustion, the :class:`ForcedActivationFallbackTimer` wakes
-        immediately instead of waiting for its natural deadline.
-    """
+    """Background loop that retries CapitalRefreshCoordinator.execute_refresh()."""
 
     def __init__(
         self,
@@ -170,7 +159,6 @@ class CAHydrationLoop:
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        """Spawn the background hydration loop thread."""
         self._thread = threading.Thread(
             target=self._run,
             name="nija-ca-hydration-loop",
@@ -184,29 +172,26 @@ class CAHydrationLoop:
         )
 
     def stop(self) -> None:
-        """Signal the loop to stop at the next sleep boundary."""
         self._stop_event.set()
 
     def _run(self) -> None:
         capital_hydrated = _get_capital_hydrated_event()
         attempt = 0
-        _bootstrap_balance_probe = None
+        bootstrap_balance_probe = None
         try:
-            from bot.bootstrap_utils import (
-                resolve_bootstrap_balance_probe as _resolve_bootstrap_balance_probe,
-            )
-            _bootstrap_balance_probe = _resolve_bootstrap_balance_probe()
+            from bot.bootstrap_utils import resolve_bootstrap_balance_probe
+            bootstrap_balance_probe = resolve_bootstrap_balance_probe()
         except ImportError:
-            _bootstrap_balance_probe = None
+            bootstrap_balance_probe = None
 
         while not self._stop_event.is_set():
-            if _bootstrap_balance_probe is not None and _bootstrap_balance_probe():
+            _sanitize_live_force_flags("hydration_loop")
+            if bootstrap_balance_probe is not None and bootstrap_balance_probe():
                 logger.info("Stopping startup balance loop")
                 logger.debug(
                     "[CAHydrationLoop] bootstrap FSM reports BALANCE_HYDRATED — exiting hydration loop"
                 )
                 return
-            # If capital authority is already hydrated, nothing left to do.
             if capital_hydrated.is_set():
                 logger.info(
                     "[CAHydrationLoop] CAPITAL_HYDRATED_EVENT set — loop done after %d attempt(s)",
@@ -215,11 +200,7 @@ class CAHydrationLoop:
                 return
 
             attempt += 1
-            logger.info(
-                "[CAHydrationLoop] hydration attempt %d/%d",
-                attempt,
-                self._max_attempts,
-            )
+            logger.info("[CAHydrationLoop] hydration attempt %d/%d", attempt, self._max_attempts)
 
             if self._coordinator is not None and self._broker_map:
                 try:
@@ -229,8 +210,7 @@ class CAHydrationLoop:
                     )
                     if snapshot is not None:
                         logger.info(
-                            "[CAHydrationLoop] execute_refresh returned snapshot "
-                            "(real=$%.2f) on attempt %d",
+                            "[CAHydrationLoop] execute_refresh returned snapshot (real=$%.2f) on attempt %d",
                             float(getattr(snapshot, "real_capital", None) or 0.0),
                             attempt,
                         )
@@ -241,51 +221,35 @@ class CAHydrationLoop:
                         exc,
                     )
 
-            # Check again after the refresh attempt.
             if capital_hydrated.is_set():
                 logger.info(
                     "[CAHydrationLoop] CAPITAL_HYDRATED_EVENT set after attempt %d — done",
                     attempt,
                 )
                 return
-
             if attempt >= self._max_attempts:
                 logger.critical(
-                    "[CAHydrationLoop] EXHAUSTED after %d attempts — "
-                    "CAPITAL_HYDRATED_EVENT still unset; triggering fallback timer now",
+                    "[CAHydrationLoop] EXHAUSTED after %d attempts — CAPITAL_HYDRATED_EVENT still unset",
                     attempt,
                 )
-                if self._fallback_trigger is not None:
+                if self._fallback_trigger is not None and _forced_activation_allowed():
                     self._fallback_trigger.set()
+                else:
+                    logger.critical(
+                        "[CAHydrationLoop] fallback trigger suppressed — forced activation is not allowed by policy"
+                    )
                 return
 
-            # Sleep until next attempt, waking early if stop is requested.
             self._stop_event.wait(timeout=self._retry_interval_s)
 
 
 # ---------------------------------------------------------------------------
-# Invariant 3 — Fail-Closed Activation Monitor
+# Fail-Closed Activation Monitor
 # ---------------------------------------------------------------------------
 
 
 class ForcedActivationFallbackTimer:
-    """
-    Deadline-based monitor that preserves fail-closed startup.
-
-    A background daemon thread waits up to ``fallback_timeout_s`` seconds for
-    :data:`~capital_authority.CAPITAL_HYDRATED_EVENT` to fire naturally.  If
-     it has not fired by the deadline — or if ``trigger_event`` is set early
-     by :class:`CAHydrationLoop` — the monitor emits a critical log and leaves
-     startup blocked until the real readiness gates are satisfied.
-
-    Parameters
-    ----------
-    fallback_timeout_s:
-        Maximum seconds to wait before forcing activation.  Default 90 s.
-    trigger_event:
-        Optional :class:`threading.Event` supplied by :class:`CAHydrationLoop`.
-        When set, the timer wakes and fires the fallback immediately.
-    """
+    """Deadline monitor that never force-opens live Redis startup gates."""
 
     def __init__(
         self,
@@ -297,7 +261,6 @@ class ForcedActivationFallbackTimer:
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        """Spawn the background fallback timer thread."""
         self._thread = threading.Thread(
             target=self._run,
             name="nija-forced-activation-fallback",
@@ -305,81 +268,54 @@ class ForcedActivationFallbackTimer:
         )
         self._thread.start()
         logger.info(
-            "[ForcedActivationFallback] timer started — fires in %.0fs if not pre-empted",
+            "[ForcedActivationFallback] timer started — deadline=%.0fs policy=fail_closed_live_redis",
             self._fallback_timeout_s,
         )
 
     def fire_early(self) -> None:
-        """Trigger the fallback immediately without waiting for the deadline."""
         self._trigger_event.set()
 
     def _run(self) -> None:
         capital_hydrated = _get_capital_hydrated_event()
-
-        # Wait for the deadline OR an early trigger from the hydration loop.
         self._trigger_event.wait(timeout=self._fallback_timeout_s)
 
-        # If capital is already hydrated (normal path), nothing to do.
         if capital_hydrated.is_set():
             logger.info(
-                "[ForcedActivationFallback] CAPITAL_HYDRATED_EVENT already set — no forced activation needed"
+                "[ForcedActivationFallback] CAPITAL_HYDRATED_EVENT already set — no fallback needed"
             )
             return
 
-        # FORCE_TRADE bypass: when FORCE_TRADE=true (or FORCE_TRADE_MODE=true),
-        # force-open all startup gates so the bot enters the trading loop
-        # immediately instead of remaining blocked indefinitely.
-        _force_trade = (
-            os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on")
-            or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on")
-        )
-        if _force_trade:
+        if _forced_activation_allowed():
             logger.warning(
-                "⚡ [ForcedActivationFallback] FORCE_TRADE active — "
-                "forcing all startup gates open so trading loop can start"
+                "⚠️ [ForcedActivationFallback] non-live-Redis forced fallback explicitly allowed — setting startup gates"
             )
             try:
                 capital_hydrated.set()
-                logger.info("[ForcedActivationFallback] CAPITAL_HYDRATED_EVENT force-set")
-            except Exception as exc:
-                logger.warning("[ForcedActivationFallback] failed to set CAPITAL_HYDRATED_EVENT: %s", exc)
-            try:
                 _get_capital_system_ready().set()
-                logger.info("[ForcedActivationFallback] CAPITAL_SYSTEM_READY force-set")
-            except Exception as exc:
-                logger.warning("[ForcedActivationFallback] failed to set CAPITAL_SYSTEM_READY: %s", exc)
-            try:
                 _get_startup_lock().set()
-                logger.info("[ForcedActivationFallback] STARTUP_LOCK force-set")
-            except Exception as exc:
-                logger.warning("[ForcedActivationFallback] failed to set STARTUP_LOCK: %s", exc)
-            try:
-                _rt_mark_ready, _ = _get_readiness_table()
-                if _rt_mark_ready is not None:
-                    # Force-open all required readiness keys so the truth table
-                    # evaluates to is_ready()=True and trading can proceed.
-                    for _force_key in (
-                        "broker_connected", "balance_hydrated", "capital_ready",
-                        "risk_ready", "strategy_ready", "execution_ready",
-                        "nonce_ready", "bootstrap_ready",
+                rt_mark_ready, _ = _get_readiness_table()
+                if rt_mark_ready is not None:
+                    for key in (
+                        "broker_connected",
+                        "balance_hydrated",
+                        "capital_ready",
+                        "risk_ready",
+                        "strategy_ready",
+                        "execution_ready",
+                        "nonce_ready",
+                        "bootstrap_ready",
                     ):
-                        _rt_mark_ready(_force_key)
-                    logger.info("[ForcedActivationFallback] all readiness table keys force-set")
+                        rt_mark_ready(key)
             except Exception as exc:
-                logger.warning("[ForcedActivationFallback] failed to force-set readiness table: %s", exc)
+                logger.warning("[ForcedActivationFallback] allowed fallback failed: %s", exc)
             return
 
-        # Fail closed: do not force-open any startup gates.
         logger.critical(
-            "🚨 [ForcedActivationFallback] ACTIVATION BLOCKED — "
-            "CAPITAL_HYDRATED_EVENT was not set within %.0fs; "
-            "startup remains blocked until capital hydration completes.",
+            "🚨 [ForcedActivationFallback] ACTIVATION BLOCKED — CAPITAL_HYDRATED_EVENT was not set within %.0fs; startup remains fail-closed until real readiness gates pass.",
             self._fallback_timeout_s,
         )
-
         logger.critical(
-            "🚨 [ForcedActivationFallback] NO OVERRIDE APPLIED — investigate broker connectivity, "
-            "nonce sync, and capital hydration before startup may continue."
+            "🚨 [ForcedActivationFallback] NO OVERRIDE APPLIED — FORCE_TRADE cannot force-open live Redis startup gates."
         )
 
 
@@ -395,59 +331,20 @@ def install_no_failure_activation_contract(
     max_hydration_attempts: int = 12,
     fallback_timeout_s: float = 90.0,
 ) -> None:
-    """
-    Install the no-failure activation contract for this process.
-
-    Idempotent — safe to call multiple times; each component is started at
-    most once.
-
-    Invariant 1 (monotonic snapshot progression) is already active via the
-    patch applied to ``capital_authority.publish_snapshot()`` — no runtime
-    action is needed here.
-
-    Parameters
-    ----------
-    coordinator:
-        :class:`~capital_flow_state_machine.CapitalRefreshCoordinator`
-        singleton.  When supplied, the hydration loop will call
-        ``coordinator.execute_refresh(broker_map)`` on every retry.
-        When ``None``, Invariant 2 is skipped (only the fallback timer runs).
-    broker_map:
-        ``{broker_id: broker_instance}`` dict for the hydration loop refresh
-        calls.  Ignored when *coordinator* is ``None``.
-    retry_interval_s:
-        Seconds between hydration loop retry attempts (Invariant 2).
-    max_hydration_attempts:
-        Maximum hydration loop retries before triggering fallback early
-        (Invariant 2).
-    fallback_timeout_s:
-        Deadline for the forced-activation fallback timer (Invariant 3).
-    """
+    """Install startup hydration helpers exactly once per process."""
     global _hydration_loop_installed, _fallback_timer_installed
 
-    _force_trade = (
-        os.environ.get("FORCE_TRADE", "").strip().lower() in ("1", "true", "yes", "on")
-        or os.environ.get("FORCE_TRADE_MODE", "").strip().lower() in ("1", "true", "yes", "on")
-    )
+    _sanitize_live_force_flags("install")
+    force_requested = _force_requested()
+    force_allowed = _forced_activation_allowed()
 
     with _install_lock:
-        # ── Shared trigger event between hydration loop and fallback timer ──
-        # When the hydration loop exhausts retries it sets this event so the
-        # fallback timer fires immediately instead of waiting for its deadline.
         trigger = threading.Event()
 
-        # ── Invariant 3: forced activation fallback timer ────────────────────
-        # When FORCE_TRADE=true the timer is started with a short deadline so
-        # it fires quickly and force-opens all startup gates.  Without
-        # FORCE_TRADE the timer is not started and startup fails closed until
-        # readiness gates are naturally satisfied.
         if not _fallback_timer_installed:
-            if _force_trade:
+            if force_allowed:
                 logger.warning(
-                    "⚡ [install_no_failure_activation_contract] FORCE_TRADE active — "
-                    "starting ForcedActivationFallbackTimer (deadline=%.0fs) to force-open "
-                    "startup gates if capital hydration does not complete in time",
-                    fallback_timeout_s,
+                    "⚠️ [install_no_failure_activation_contract] forced fallback enabled for non-live-Redis recovery only"
                 )
                 fallback_timer = ForcedActivationFallbackTimer(
                     fallback_timeout_s=fallback_timeout_s,
@@ -455,15 +352,17 @@ def install_no_failure_activation_contract(
                 )
                 fallback_timer.start()
             else:
+                if force_requested:
+                    logger.critical(
+                        "LIVE_REDIS_FORCE_ACTIVATION_SUPPRESSED — FORCE_TRADE requested but fallback timer not started"
+                    )
                 logger.info(
-                    "[install_no_failure_activation_contract] forced activation fallback removed; "
-                    "startup now fails closed until readiness gates are naturally satisfied"
+                    "[install_no_failure_activation_contract] forced activation fallback disabled; startup fails closed until readiness gates are naturally satisfied"
                 )
             _fallback_timer_installed = True
         else:
             logger.debug("[install_no_failure_activation_contract] fallback timer policy already installed")
 
-        # ── Invariant 2: hydration loop ──────────────────────────────────────
         if not _hydration_loop_installed:
             if coordinator is not None and broker_map:
                 loop = CAHydrationLoop(
@@ -477,22 +376,18 @@ def install_no_failure_activation_contract(
                 _hydration_loop_installed = True
             else:
                 logger.info(
-                    "[install_no_failure_activation_contract] "
-                    "coordinator/broker_map not provided — Invariant 2 (hydration loop) skipped; "
-                    "Invariant 3 (fallback timer) is active only when FORCE_TRADE=true"
+                    "[install_no_failure_activation_contract] coordinator/broker_map not provided — hydration loop skipped"
                 )
-                # Mark as installed anyway so repeated calls with a coordinator
-                # do not start a second loop.
                 _hydration_loop_installed = True
         else:
             logger.debug("[install_no_failure_activation_contract] hydration loop already installed")
 
     logger.info(
-        "✅ [no_failure_activation_contract] installed — "
-        "force_trade=%s forced_fallback=%s fallback_timeout=%.0fs retry_interval=%.0fs max_attempts=%d",
-        _force_trade,
-        "enabled" if _force_trade else "disabled",
+        "✅ [no_failure_activation_contract] installed — force_requested=%s forced_fallback=%s fallback_timeout=%.0fs retry_interval=%.0fs max_attempts=%d live_redis=%s",
+        force_requested,
+        "enabled" if force_allowed else "disabled",
         fallback_timeout_s,
         retry_interval_s,
         max_hydration_attempts,
+        _live_redis_mode(),
     )
