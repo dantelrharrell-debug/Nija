@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
+import importlib
 import logging
 import os
 import sys
@@ -45,6 +46,10 @@ _POSITION_SYNC_AUTOWIRE_STARTED = False
 _POSITION_SYNC_AUTOWIRE_LOCK = threading.Lock()
 _RUNTIME_CORE_LOOP_PATCH_STARTED = False
 _RUNTIME_CORE_LOOP_PATCH_LOCK = threading.Lock()
+_CAPITAL_GATE_LATCH_PATCH_STARTED = False
+_CAPITAL_GATE_LATCH_PATCH_LOCK = threading.Lock()
+_OKX_BALANCE_PATCH_STARTED = False
+_OKX_BALANCE_PATCH_LOCK = threading.Lock()
 
 
 def env_truthy(value: str | None) -> bool:
@@ -114,7 +119,6 @@ def _apply_redis_lock_emergency_fallback(env: MutableMapping[str, str], notes: l
         notes.append("blocked:REDIS_LOCK_EMERGENCY_FALLBACK_LIVE_REDIS")
         _enforce_strict_live_redis_authority(env, notes)
         return
-
     # Non-Redis live recovery remains explicit/operator-confirmed.  This path is
     # kept only for deployments that truly have no Redis endpoint configured.
     env["NIJA_CONFIRM_BYPASS_RISKS"] = "true"
@@ -130,6 +134,39 @@ def _apply_redis_lock_emergency_fallback(env: MutableMapping[str, str], notes: l
     env["NIJA_ALLOW_DEGRADED_WRITER_AUTHORITY"] = "true"
     env["NIJA_ALLOW_LOCAL_WRITER_LOCK_FALLBACK"] = "true"
     notes.append("enabled:REDIS_LOCK_EMERGENCY_FALLBACK")
+
+
+def _resolve_class(module_names: tuple[str, ...], class_name: str):
+    """Resolve a runtime class from loaded modules, then by safe import.
+
+    The previous autowire workers only inspected ``sys.modules``.  In Railway
+    starts where ``startup_runtime_safety`` ran before the core modules loaded,
+    this produced false timeouts even though the classes existed on disk.  This
+    helper preserves the cheap loaded-module fast path, then imports the target
+    module if it has not appeared yet.
+    """
+
+    for module_name in module_names:
+        module = sys.modules.get(module_name)
+        cls = getattr(module, class_name, None) if module is not None else None
+        if cls is not None:
+            return cls
+
+    for module_name in module_names:
+        try:
+            module = importlib.import_module(module_name)
+        except Exception as exc:
+            logger.debug(
+                "runtime class import probe failed module=%s class=%s error=%s",
+                module_name,
+                class_name,
+                exc,
+            )
+            continue
+        cls = getattr(module, class_name, None)
+        if cls is not None:
+            return cls
+    return None
 
 
 def _invoke_position_sync_once(strategy, source: str) -> int:
@@ -274,6 +311,7 @@ def _patch_core_loop_class(cls) -> bool:
 
     def _run_scan_phase_broker_scoped(self, *args, **kwargs):
         broker = kwargs.get("broker") if "broker" in kwargs else (args[0] if args else None)
+        broker_name = _broker_name_for_log(broker)
         broker_count = _broker_tracker_position_count(broker)
         if broker_count is not None:
             original_count = kwargs.get("open_positions_count")
@@ -288,7 +326,7 @@ def _patch_core_loop_class(cls) -> bool:
                 kwargs["open_positions_count"] = broker_count
             logger.warning(
                 "BROKER_SLOT_SCOPE active broker=%s original_open=%s broker_open=%s max_positions=%s",
-                _broker_name_for_log(broker),
+                broker_name,
                 original_count,
                 broker_count,
                 getattr(self, "max_positions", None),
@@ -296,11 +334,21 @@ def _patch_core_loop_class(cls) -> bool:
         else:
             logger.info(
                 "BROKER_SLOT_SCOPE fallback_global_count broker=%s open_positions_count=%s",
-                _broker_name_for_log(broker),
+                broker_name,
                 kwargs.get("open_positions_count", args[3] if len(args) >= 4 else None),
             )
 
         started_at = time.monotonic()
+        cycle_id = int(getattr(self, "_nija_trade_loop_heartbeat_cycle", 0) or 0) + 1
+        setattr(self, "_nija_trade_loop_heartbeat_cycle", cycle_id)
+        logger.critical(
+            "TRADE_LOOP_HEARTBEAT cycle=%d phase=scan_start broker=%s open_positions=%s max_positions=%s",
+            cycle_id,
+            broker_name,
+            kwargs.get("open_positions_count", args[3] if len(args) >= 4 else None),
+            getattr(self, "max_positions", None),
+        )
+
         result = original_run_scan_phase(self, *args, **kwargs)
 
         try:
@@ -324,10 +372,26 @@ def _patch_core_loop_class(cls) -> bool:
             else:
                 status = "NO_SCORABLE_SIGNAL"
                 reason = top_veto if top_veto != "none" else "market_data_or_filters"
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            logger.critical(
+                "TRADE_LOOP_HEARTBEAT cycle=%d phase=scan_complete broker=%s status=%s reason=%s "
+                "scored=%d entered=%d blocked=%d exited=%d top_veto=%s top_reject=%s duration_ms=%d",
+                cycle_id,
+                broker_name,
+                status,
+                reason,
+                scored,
+                entered,
+                blocked,
+                exited,
+                top_veto,
+                top_reject,
+                duration_ms,
+            )
             logger.critical(
                 "ORDER_ADMISSION_SUMMARY broker=%s status=%s scored=%d entered=%d blocked=%d exited=%d "
                 "top_veto=%s top_reject=%s duration_ms=%d",
-                _broker_name_for_log(broker),
+                broker_name,
                 status,
                 scored,
                 entered,
@@ -335,10 +399,10 @@ def _patch_core_loop_class(cls) -> bool:
                 exited,
                 top_veto,
                 top_reject,
-                int((time.monotonic() - started_at) * 1000),
+                duration_ms,
             )
             print(
-                f"[NIJA-PRINT] ORDER_ADMISSION_SUMMARY | broker={_broker_name_for_log(broker)} "
+                f"[NIJA-PRINT] ORDER_ADMISSION_SUMMARY | broker={broker_name} "
                 f"status={status} reason={reason} scored={scored} entered={entered} blocked={blocked} exited={exited}",
                 flush=True,
             )
@@ -350,6 +414,146 @@ def _patch_core_loop_class(cls) -> bool:
     _run_scan_phase_broker_scoped._nija_broker_slot_scoped = True  # type: ignore[attr-defined]
     cls.run_scan_phase = _run_scan_phase_broker_scoped
     logger.warning("BROKER_SLOT_SCOPE NijaCoreLoop.run_scan_phase patched from startup_runtime_safety")
+    return True
+
+
+def _patch_capital_authority_class(cls) -> bool:
+    """Add unambiguous first-snapshot latch telemetry after publish_snapshot()."""
+    original_publish = getattr(cls, "publish_snapshot", None)
+    if original_publish is None:
+        return False
+    if getattr(original_publish, "_nija_first_snapshot_latch_wrapped", False):
+        return True
+
+    def _publish_snapshot_with_latch_log(self, snapshot, writer_id: str):
+        accepted_by_publish = original_publish(self, snapshot, writer_id)
+        try:
+            real_capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
+            broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
+            is_stale = bool(getattr(snapshot, "is_stale", True))
+            valid_broker_count = 0
+            for value in (getattr(snapshot, "broker_balances", {}) or {}).values():
+                try:
+                    if float(value or 0.0) > 0.0:
+                        valid_broker_count += 1
+                except Exception:
+                    pass
+            conditions_met = bool(
+                accepted_by_publish
+                and getattr(self, "is_hydrated", False)
+                and real_capital > 0.0
+                and valid_broker_count > 0
+                and not is_stale
+            )
+            latch = bool(getattr(self, "first_snap_accepted", False))
+            logger.info(
+                "FIRST_SNAPSHOT_GATE_LATCH accepted_by_publish=%s accepted_conditions=%s "
+                "accepted_latched=%s capital=$%.2f broker_count=%d valid_brokers=%d stale=%s",
+                accepted_by_publish,
+                conditions_met,
+                latch,
+                real_capital,
+                broker_count,
+                valid_broker_count,
+                is_stale,
+            )
+        except Exception as exc:
+            logger.debug("FIRST_SNAPSHOT_GATE_LATCH log failed: %s", exc)
+        return accepted_by_publish
+
+    _publish_snapshot_with_latch_log._nija_first_snapshot_latch_wrapped = True  # type: ignore[attr-defined]
+    cls.publish_snapshot = _publish_snapshot_with_latch_log
+    logger.warning("FIRST_SNAPSHOT_GATE CapitalAuthority.publish_snapshot latch telemetry patched")
+    return True
+
+
+def _patch_capital_csm_class(cls) -> bool:
+    """Add unambiguous first-snapshot latch telemetry after CSM ingest_snapshot()."""
+    original_ingest = getattr(cls, "ingest_snapshot", None)
+    if original_ingest is None:
+        return False
+    if getattr(original_ingest, "_nija_csm_first_snapshot_latch_wrapped", False):
+        return True
+
+    def _ingest_snapshot_with_latch_log(self, snapshot):
+        state = original_ingest(self, snapshot)
+        try:
+            real_capital = float(getattr(snapshot, "real_capital", 0.0) or 0.0)
+            broker_count = int(getattr(snapshot, "broker_count", 0) or 0)
+            is_stale = bool(getattr(snapshot, "is_stale", True))
+            latch = bool(getattr(self, "first_snap_accepted", False))
+            logger.info(
+                "FIRST_SNAPSHOT_GATE_CSM_LATCH accepted_latched=%s state=%s capital=$%.2f broker_count=%d stale=%s",
+                latch,
+                getattr(state, "value", state),
+                real_capital,
+                broker_count,
+                is_stale,
+            )
+        except Exception as exc:
+            logger.debug("FIRST_SNAPSHOT_GATE_CSM_LATCH log failed: %s", exc)
+        return state
+
+    _ingest_snapshot_with_latch_log._nija_csm_first_snapshot_latch_wrapped = True  # type: ignore[attr-defined]
+    cls.ingest_snapshot = _ingest_snapshot_with_latch_log
+    logger.warning("FIRST_SNAPSHOT_GATE CapitalCSMv2.ingest_snapshot latch telemetry patched")
+    return True
+
+
+def _okx_seed_balance_payload(manager) -> None:
+    """Force OKX's last-known balance to match the live balance after connect()."""
+    try:
+        try:
+            from bot.broker_manager import BrokerType
+        except ImportError:
+            from broker_manager import BrokerType  # type: ignore[import]
+        broker = (getattr(manager, "_platform_brokers", {}) or {}).get(BrokerType.OKX)
+        if broker is None:
+            return
+        raw = broker.get_account_balance()
+        if isinstance(raw, dict):
+            balance = float(
+                raw.get("trading_balance")
+                or raw.get("total_funds")
+                or raw.get("usd")
+                or raw.get("cash")
+                or 0.0
+            )
+        else:
+            balance = float(raw or 0.0)
+        setattr(broker, "_last_known_balance", balance)
+        if hasattr(broker, "_last_balance_payload_for_capital"):
+            setattr(broker, "_last_balance_payload_for_capital", raw)
+        logger.info(
+            "OKX_CAPITAL_READY_BALANCE_SYNC total=$%.2f raw_type=%s",
+            balance,
+            type(raw).__name__,
+        )
+    except Exception as exc:
+        logger.debug("OKX_CAPITAL_READY_BALANCE_SYNC failed: %s", exc)
+
+
+def _patch_mabm_class(cls) -> bool:
+    """Patch platform-ready handling so OKX capital logs use the hydrated balance."""
+    original_mark_connected = getattr(cls, "_mark_platform_connected", None)
+    if original_mark_connected is None:
+        return False
+    if getattr(original_mark_connected, "_nija_okx_balance_sync_wrapped", False):
+        return True
+
+    def _mark_platform_connected_with_okx_sync(self, broker_type, *args, **kwargs):
+        result = original_mark_connected(self, broker_type, *args, **kwargs)
+        try:
+            broker_value = getattr(broker_type, "value", str(broker_type)).lower()
+            if broker_value == "okx":
+                _okx_seed_balance_payload(self)
+        except Exception as exc:
+            logger.debug("OKX_CAPITAL_READY_BALANCE_SYNC wrapper failed: %s", exc)
+        return result
+
+    _mark_platform_connected_with_okx_sync._nija_okx_balance_sync_wrapped = True  # type: ignore[attr-defined]
+    cls._mark_platform_connected = _mark_platform_connected_with_okx_sync
+    logger.warning("OKX capital-ready balance propagation patched from startup_runtime_safety")
     return True
 
 
@@ -371,13 +575,11 @@ def _install_position_sync_autowire() -> None:
             deadline = time.monotonic() + float(os.getenv("NIJA_POSITION_SYNC_AUTOWIRE_TIMEOUT_S", "120") or "120")
             logger.warning("EXCHANGE_POSITION_SYNC autowire worker started source=startup_runtime_safety")
             while time.monotonic() < deadline:
-                for module_name in ("bot.trading_strategy", "trading_strategy"):
-                    module = sys.modules.get(module_name)
-                    cls = getattr(module, "TradingStrategy", None) if module is not None else None
-                    if cls is not None and _patch_trading_strategy_class(cls):
-                        return
+                cls = _resolve_class(("bot.trading_strategy", "trading_strategy"), "TradingStrategy")
+                if cls is not None and _patch_trading_strategy_class(cls):
+                    return
                 time.sleep(0.25)
-            logger.warning("EXCHANGE_POSITION_SYNC autowire timeout: TradingStrategy class was not observed")
+            logger.error("EXCHANGE_POSITION_SYNC autowire timeout: TradingStrategy class was not observed or importable")
 
         threading.Thread(target=_worker, name="startup-position-sync-autowire", daemon=True).start()
 
@@ -400,15 +602,74 @@ def _install_broker_slot_scope_autowire() -> None:
             deadline = time.monotonic() + float(os.getenv("NIJA_BROKER_SLOT_SCOPE_TIMEOUT_S", "120") or "120")
             logger.warning("BROKER_SLOT_SCOPE autowire worker started source=startup_runtime_safety")
             while time.monotonic() < deadline:
-                for module_name in ("bot.nija_core_loop", "nija_core_loop"):
-                    module = sys.modules.get(module_name)
-                    cls = getattr(module, "NijaCoreLoop", None) if module is not None else None
-                    if cls is not None and _patch_core_loop_class(cls):
-                        return
+                cls = _resolve_class(("bot.nija_core_loop", "nija_core_loop"), "NijaCoreLoop")
+                if cls is not None and _patch_core_loop_class(cls):
+                    return
                 time.sleep(0.25)
-            logger.warning("BROKER_SLOT_SCOPE autowire timeout: NijaCoreLoop class was not observed")
+            logger.error("BROKER_SLOT_SCOPE autowire timeout: NijaCoreLoop class was not observed or importable")
 
         threading.Thread(target=_worker, name="broker-slot-scope-autowire", daemon=True).start()
+
+
+def _install_capital_gate_latch_autowire() -> None:
+    """Patch capital gate telemetry classes once available."""
+    global _CAPITAL_GATE_LATCH_PATCH_STARTED
+    if _CAPITAL_GATE_LATCH_PATCH_STARTED:
+        return
+    with _CAPITAL_GATE_LATCH_PATCH_LOCK:
+        if _CAPITAL_GATE_LATCH_PATCH_STARTED:
+            return
+        _CAPITAL_GATE_LATCH_PATCH_STARTED = True
+
+        def _worker() -> None:
+            deadline = time.monotonic() + float(os.getenv("NIJA_CAPITAL_GATE_PATCH_TIMEOUT_S", "120") or "120")
+            patched_authority = False
+            patched_csm = False
+            logger.warning("FIRST_SNAPSHOT_GATE latch autowire worker started source=startup_runtime_safety")
+            while time.monotonic() < deadline:
+                if not patched_authority:
+                    cls = _resolve_class(("bot.capital_authority", "capital_authority"), "CapitalAuthority")
+                    if cls is not None:
+                        patched_authority = _patch_capital_authority_class(cls)
+                if not patched_csm:
+                    cls = _resolve_class(("bot.capital_csm_v2", "capital_csm_v2"), "CapitalCSMv2")
+                    if cls is not None:
+                        patched_csm = _patch_capital_csm_class(cls)
+                if patched_authority and patched_csm:
+                    return
+                time.sleep(0.25)
+            if not patched_authority:
+                logger.error("FIRST_SNAPSHOT_GATE latch autowire timeout: CapitalAuthority class was not observed or importable")
+            if not patched_csm:
+                logger.error("FIRST_SNAPSHOT_GATE latch autowire timeout: CapitalCSMv2 class was not observed or importable")
+
+        threading.Thread(target=_worker, name="capital-gate-latch-autowire", daemon=True).start()
+
+
+def _install_okx_balance_autowire() -> None:
+    """Patch MABM so OKX's capital-ready state cannot log a stale $0.00 total."""
+    global _OKX_BALANCE_PATCH_STARTED
+    if _OKX_BALANCE_PATCH_STARTED:
+        return
+    with _OKX_BALANCE_PATCH_LOCK:
+        if _OKX_BALANCE_PATCH_STARTED:
+            return
+        _OKX_BALANCE_PATCH_STARTED = True
+
+        def _worker() -> None:
+            deadline = time.monotonic() + float(os.getenv("NIJA_OKX_BALANCE_PATCH_TIMEOUT_S", "120") or "120")
+            logger.warning("OKX capital-ready balance autowire worker started source=startup_runtime_safety")
+            while time.monotonic() < deadline:
+                cls = _resolve_class(
+                    ("bot.multi_account_broker_manager", "multi_account_broker_manager"),
+                    "MultiAccountBrokerManager",
+                )
+                if cls is not None and _patch_mabm_class(cls):
+                    return
+                time.sleep(0.25)
+            logger.error("OKX capital-ready balance autowire timeout: MultiAccountBrokerManager class was not observed or importable")
+
+        threading.Thread(target=_worker, name="okx-balance-autowire", daemon=True).start()
 
 
 def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
@@ -416,6 +677,8 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
 
     _install_position_sync_autowire()
     _install_broker_slot_scope_autowire()
+    _install_capital_gate_latch_autowire()
+    _install_okx_balance_autowire()
 
     notes: list[str] = []
     if not live_mode_enabled(env):
@@ -429,6 +692,12 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
         if not bypass_confirmed:
             _clear_truthy_flags(env, LIVE_BYPASS_FLAGS, notes)
 
+    # FORCE_TRADE must not bypass authority/activation gates in live mode.
+    # The trading state machine can still activate when the real gates pass.
+    if env_truthy(env.get("FORCE_TRADE")):
+        env["FORCE_TRADE"] = "false"
+        notes.append("cleared:FORCE_TRADE")
+
     hf_flip_mode = env_truthy(env.get("HF_FLIP_MODE"))
     hf_scalp_mode = env_truthy(env.get("HF_SCALP_MODE"))
     if not hf_flip_mode and not hf_scalp_mode:
@@ -440,6 +709,7 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
     env.setdefault("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")
     env.setdefault("NIJA_LOG_TRADE_DECISIONS", "true")
     env.setdefault("NIJA_PROFITABILITY_GUARD_ENABLED", "true")
+    env.setdefault("NIJA_TRADE_LOOP_HEARTBEAT_REQUIRED", "true")
 
     # Ensure generation mismatch recovery is enabled by default so the bot
     # can self-heal from diverged generation counters without operator intervention.
