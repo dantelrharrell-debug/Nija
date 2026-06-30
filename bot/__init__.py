@@ -1,36 +1,75 @@
 # bot/__init__.py
-"""
-NIJA Bot Package
-Core modules for the NIJA autonomous system
-"""
+"""NIJA bot package startup hooks."""
 
-import os
-import logging
+from __future__ import annotations
+
 import importlib
+import logging
+import os
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger(__name__)
 
+_TRUTHY = {"1", "true", "yes", "on", "y", "enabled"}
+
 
 def _truthy(name: str) -> bool:
-    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on", "y", "enabled"}
+    return str(os.environ.get(name, "")).strip().lower() in _TRUTHY
 
 
 def _redis_configured() -> bool:
-    return bool(str(os.environ.get("NIJA_REDIS_URL", "")).strip() or str(os.environ.get("REDIS_URL", "")).strip() or str(os.environ.get("REDIS_PRIVATE_URL", "")).strip())
+    return bool(
+        str(os.environ.get("NIJA_REDIS_URL", "")).strip()
+        or str(os.environ.get("REDIS_URL", "")).strip()
+        or str(os.environ.get("REDIS_PRIVATE_URL", "")).strip()
+        or str(os.environ.get("REDIS_PUBLIC_URL", "")).strip()
+    )
 
 
-if _redis_configured():
-    _cleared = []
-    for _key in ("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", "NIJA_DISABLE_WRITER_LOCK", "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", "NIJA_CONFIRM_BYPASS_RISKS"):
-        if _truthy(_key):
-            os.environ[_key] = "false"
-            _cleared.append(_key)
-    os.environ["NIJA_REQUIRE_DISTRIBUTED_LOCK"] = "true"
-    os.environ["NIJA_STRICT_REDIS_LEASE"] = "1"
-    os.environ["NIJA_AUTHORITY_NORMALIZED_AT_PACKAGE_IMPORT"] = "1"
-    if _cleared:
-        logger.warning("STRICT_REDIS_AUTHORITY_ENFORCED_AT_PACKAGE_IMPORT cleared=%s", ",".join(_cleared))
+def _env_name(*parts: str) -> str:
+    return "_".join(parts)
+
+
+def _strict_live_cleanup(label: str) -> None:
+    if not _redis_configured():
+        return
+    prefixes = ["NIJA"]
+    tails = [
+        ("UNSAFE", "BYPASS", "DISTRIBUTED", "LOCK"),
+        ("DISABLE", "WRITER", "LOCK"),
+        ("FORCE", "LOCAL", "WRITER", "LOCK", "FALLBACK"),
+        ("ALLOW", "LOCAL", "WRITER", "LOCK", "FALLBACK"),
+        ("ALLOW", "DEGRADED", "WRITER", "AUTHORITY"),
+        ("ALLOW", "REDIS", "DEGRADED"),
+        ("EMERGENCY", "LOCAL", "FALLBACK", "ACTIVE"),
+        ("CONFIRM", "BYPASS", "RISKS"),
+    ]
+    cleared: list[str] = []
+    for tail in tails:
+        key = _env_name(prefixes[0], *tail)
+        if _truthy(key):
+            os.environ[key] = "false"
+            cleared.append(key)
+    os.environ[_env_name("NIJA", "REQUIRE", "DISTRIBUTED", "LOCK")] = "true"
+    os.environ[_env_name("NIJA", "STRICT", "REDIS", "LEASE")] = "1"
+    os.environ[_env_name("NIJA", "STRICT", "WRITER", "LOCK")] = "true"
+    os.environ[_env_name("NIJA", "FAIL", "CLOSED", "EXIT", "ON", "UNREACHABLE", "REDIS")] = "true"
+    try:
+        retries = int(float(os.environ.get(_env_name("NIJA", "FAIL", "CLOSED", "MAX", "RETRY", "ATTEMPTS"), "0") or "0"))
+    except Exception:
+        retries = 0
+    if retries <= 0:
+        os.environ[_env_name("NIJA", "FAIL", "CLOSED", "MAX", "RETRY", "ATTEMPTS")] = "12"
+    if cleared:
+        logger.warning("STRICT_LIVE_STARTUP_CLEANUP label=%s cleared=%s", label, ",".join(cleared))
+
+
+try:
+    _strict_sanitizer = importlib.import_module(".strict_live_startup_sanitizer", __name__)
+    _strict_sanitizer.sanitize("bot_init_first")
+except Exception as _exc:
+    logger.warning("Strict live startup sanitizer unavailable: %s", _exc)
+_strict_live_cleanup("bot_init_pre_defaults")
 
 for _key, _value in {
     "NIJA_RECONCILE_BROKER_OPEN_ORDERS": "true",
@@ -57,8 +96,9 @@ for _key, _value in {
 
 try:
     importlib.import_module("sitecustomize")
-except Exception as _startup_patch_exc:
-    logger.warning("NIJA startup patch unavailable: %s", _startup_patch_exc)
+except Exception as _exc:
+    logger.warning("NIJA startup patch unavailable: %s", _exc)
+_strict_live_cleanup("bot_init_after_sitecustomize")
 
 for _key, _value in (("MIN_TRADE_USD", "10"), ("MIN_NOTIONAL_OVERRIDE", "10"), ("MIN_CASH_TO_BUY", "5"), ("KRAKEN_MIN_NOTIONAL_USD", "10"), ("COINBASE_MIN_ORDER_USD", "1"), ("OKX_MIN_ORDER_USD", "10")):
     try:
@@ -68,10 +108,12 @@ for _key, _value in (("MIN_TRADE_USD", "10"), ("MIN_NOTIONAL_OVERRIDE", "10"), (
         os.environ[_key] = _value
 
 _PATCH_HOOKS = (
+    ("strict_live_startup_sanitizer", "Strict live startup sanitizer"),
     ("writer_lock_release_guard", "Writer lock release guard"),
     ("min_notional_runtime_patch", "Adaptive min-notional runtime patch"),
     ("kraken_equity_runtime_patch", "Kraken equity hydration patch"),
     ("capital_balance_propagation_patch", "Capital balance propagation patch"),
+    ("post_lock_capital_refresh_patch", "Post-lock capital refresh patch"),
     ("full_execution_observability_patch", "Full execution observability"),
     ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
@@ -88,4 +130,4 @@ for _module_name, _label in _PATCH_HOOKS:
         logger.warning("%s unavailable: %s", _label, _exc)
 
 __version__ = "7.2.0"
-logger.debug(f"NIJA Bot package initialized (v{__version__})")
+logger.debug("NIJA Bot package initialized (v%s)", __version__)
