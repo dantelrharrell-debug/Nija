@@ -1,16 +1,13 @@
 # bot/__init__.py
 """
 NIJA Bot Package
-Core trading modules for the NIJA autonomous trading system
+Core modules for the NIJA autonomous system
 """
 
 import os
 import logging
 import importlib
 
-# This package initializer runs before any bot.* submodule is imported. Use it
-# for process-wide safety defaults that must be active before execution authority,
-# nonce management, broker_manager, or the execution pipeline are loaded.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -31,9 +28,6 @@ def _redis_configured() -> bool:
     )
 
 
-# Live production safety: if Redis exists, never let an old Railway emergency
-# variable keep NIJA in local-writer bypass mode. This must happen before
-# bot.execution_authority_context imports and reads the env.
 if _redis_configured():
     _cleared = []
     for _key in (
@@ -54,7 +48,6 @@ if _redis_configured():
             ",".join(_cleared),
         )
 
-# Force safe runtime defaults early. These are still tunable upward in Railway.
 os.environ.setdefault("NIJA_RECONCILE_BROKER_OPEN_ORDERS", "true")
 os.environ.setdefault("NIJA_PENDING_ORDER_TIMEOUT_S", "90")
 os.environ.setdefault("NIJA_STARTUP_POSITION_SYNC_ENABLED", "true")
@@ -63,10 +56,10 @@ os.environ.setdefault("NIJA_PROFITABILITY_GUARD_ENABLED", "true")
 os.environ.setdefault("NIJA_LOG_TRADE_DECISIONS", "true")
 os.environ.setdefault("NIJA_NONCE_REBUILD_WAIT_FOR_LINEAGE_S", "15")
 os.environ.setdefault("NIJA_ADAPTIVE_MIN_NOTIONAL_ENABLED", "true")
+os.environ.setdefault("NIJA_NO_TRADE_WATCHDOG_ENABLED", "true")
+os.environ.setdefault("NIJA_NO_TRADE_WATCHDOG_INTERVAL", "10")
 
 try:
-    # Import the repo-level startup patch explicitly because some Railway start
-    # modes do not auto-import sitecustomize soon enough for authority checks.
     importlib.import_module("sitecustomize")
 except Exception as _startup_patch_exc:
     logger.warning("NIJA startup patch unavailable: %s", _startup_patch_exc)
@@ -76,6 +69,12 @@ try:
     _install_min_notional_patch()
 except Exception as _min_notional_patch_exc:
     logger.warning("Adaptive min-notional runtime patch unavailable: %s", _min_notional_patch_exc)
+
+try:
+    from .no_trade_watchdog_runtime_patch import install_import_hook as _install_no_trade_watchdog_patch
+    _install_no_trade_watchdog_patch()
+except Exception as _watchdog_exc:
+    logger.warning("Runtime scan diagnostics unavailable: %s", _watchdog_exc)
 
 try:
     from .okx_runtime_patch import install_import_hook as _install_okx_runtime_patch
