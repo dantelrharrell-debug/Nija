@@ -246,6 +246,7 @@ _PATCH_HOOKS = (
     ("post_lock_capital_refresh_patch", "Post-lock capital refresh patch"),
     ("full_execution_observability_patch", "Full execution observability"),
     ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
+    ("live_execution_authority_blocker_patch", "Live execution authority blocker patch"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
     ("okx_runtime_patch", "OKX runtime patch"),
@@ -260,5 +261,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.0"
+__version__ = "7.2.1"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
