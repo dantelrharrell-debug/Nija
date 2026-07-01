@@ -156,6 +156,38 @@ def _install_trading_state_dispatch_latch_repair() -> None:
         logger.warning("TRADING_STATE_DISPATCH_LATCH_REPAIR_INSTALL_FAILED err=%s", exc)
 
 
+def _install_downstream_risk_governor_equity_repair() -> None:
+    """Install portfolio-equity repair for downstream RiskGovernor checks."""
+
+    try:
+        repair = importlib.import_module("bot.downstream_risk_governor_equity_repair_patch")
+        installer = getattr(repair, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("DOWNSTREAM_RISK_GOVERNOR_EQUITY_REPAIR_INSTALL_REQUESTED", flush=True)
+            logger.warning("DOWNSTREAM_RISK_GOVERNOR_EQUITY_REPAIR_INSTALL_REQUESTED")
+        else:
+            logger.warning("DOWNSTREAM_RISK_GOVERNOR_EQUITY_REPAIR_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("DOWNSTREAM_RISK_GOVERNOR_EQUITY_REPAIR_INSTALL_FAILED err=%s", exc)
+
+
+def _install_usdt_kraken_ecel_routing_repair() -> None:
+    """Install Kraken routing and ECEL rule repair for *-USDT spot pairs."""
+
+    try:
+        repair = importlib.import_module("bot.usdt_kraken_ecel_routing_repair_patch")
+        installer = getattr(repair, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED", flush=True)
+            logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED")
+        else:
+            logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_FAILED err=%s", exc)
+
+
 _install_logging_format_guard()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
@@ -165,6 +197,8 @@ _install_forced_fallback_payload_repair()
 _install_execution_pipeline_gate_repair()
 _install_hard_controls_csm_repair()
 _install_trading_state_dispatch_latch_repair()
+_install_downstream_risk_governor_equity_repair()
+_install_usdt_kraken_ecel_routing_repair()
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 # ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
