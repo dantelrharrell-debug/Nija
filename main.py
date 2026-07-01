@@ -92,11 +92,28 @@ def _install_forced_fallback_payload_repair() -> None:
         logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_FAILED err=%s", exc)
 
 
+def _install_execution_pipeline_gate_repair() -> None:
+    """Install the stale LIVE_ACTIVE execution-pipeline gate repair hook."""
+
+    try:
+        repair = importlib.import_module("bot.execution_pipeline_gate_repair_patch")
+        installer = getattr(repair, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_REQUESTED", flush=True)
+            logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_REQUESTED")
+        else:
+            logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_FAILED err=%s", exc)
+
+
 _run_pre_startup_sanitization()
 _install_strategy_publication()
 _install_authority_readiness_repair()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
+_install_execution_pipeline_gate_repair()
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 # ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
