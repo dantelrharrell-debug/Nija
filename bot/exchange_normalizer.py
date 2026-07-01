@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -60,17 +61,56 @@ class ExchangeNormalizer:
 
         if self._validator is not None:
             try:
-                outcome = self._validator.validate_and_normalize(
-                    symbol=symbol,
-                    side=side,
-                    quantity=float(quantity if quantity is not None else normalized_notional),
-                    price=float(price_hint_usd or 0.0),
-                    size_type="base" if quantity_mode in {"shares", "contracts", "base"} else "quote",
-                    asset_class=asset_class,
-                    quantity_mode=quantity_mode,
-                    time_in_force=time_in_force,
-                    extended_hours=extended_hours,
-                )
+                validator_fn = self._validator.validate_and_normalize
+                validator_kwargs = {
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": float(quantity if quantity is not None else normalized_notional),
+                    "price": float(price_hint_usd or 0.0),
+                    "size_type": "base" if quantity_mode in {"shares", "contracts", "base"} else "quote",
+                    "quantity_mode": quantity_mode,
+                    "time_in_force": time_in_force,
+                    "extended_hours": extended_hours,
+                }
+                try:
+                    accepted_params = set(inspect.signature(validator_fn).parameters.keys())
+                    if not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in inspect.signature(validator_fn).parameters.values()):
+                        validator_kwargs = {
+                            key: value
+                            for key, value in validator_kwargs.items()
+                            if key in accepted_params
+                        }
+                    elif "asset_class" not in validator_kwargs:
+                        # Kept for clarity; VAR_KEYWORD accepts all optional keys.
+                        pass
+                    if "asset_class" in accepted_params or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD
+                        for p in inspect.signature(validator_fn).parameters.values()
+                    ):
+                        validator_kwargs["asset_class"] = asset_class
+                except (TypeError, ValueError):
+                    # Some callables do not expose a signature; keep the legacy shape
+                    # but retry without optional keys if it raises below.
+                    validator_kwargs["asset_class"] = asset_class
+
+                try:
+                    outcome = validator_fn(**validator_kwargs)
+                except TypeError as exc:
+                    # Backward-compatible retry for older validators that do not accept
+                    # asset_class / quantity_mode / session-specific kwargs.
+                    if "unexpected keyword argument" not in str(exc):
+                        raise
+                    fallback_kwargs = {
+                        key: value
+                        for key, value in validator_kwargs.items()
+                        if key not in {"asset_class", "quantity_mode", "time_in_force", "extended_hours"}
+                    }
+                    logger.info(
+                        "ExchangeNormalizer: retrying validator for %s without optional kwargs after compatibility error: %s",
+                        symbol,
+                        exc,
+                    )
+                    outcome = validator_fn(**fallback_kwargs)
                 if quantity_mode in {"shares", "contracts", "base"}:
                     normalized_notional = round(float(outcome.adjusted_qty) * float(price_hint_usd or 0.0), 2)
                 else:
