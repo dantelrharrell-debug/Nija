@@ -18,6 +18,22 @@ if _ROOT not in _sys.path:
 logger = logging.getLogger(__name__)
 
 
+def _install_logging_format_guard() -> None:
+    """Install logging format protection before any startup modules emit logs."""
+
+    try:
+        guard = importlib.import_module("bot.logging_format_guard_patch")
+        installer = getattr(guard, "install_import_hook", None) or getattr(guard, "install", None)
+        if callable(installer):
+            installer()
+            print("LOGGING_FORMAT_GUARD_INSTALL_REQUESTED", flush=True)
+            logger.warning("LOGGING_FORMAT_GUARD_INSTALL_REQUESTED")
+        else:
+            logger.warning("LOGGING_FORMAT_GUARD_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("LOGGING_FORMAT_GUARD_INSTALL_FAILED err=%s", exc)
+
+
 def _run_pre_startup_sanitization() -> None:
     """Sanitize live Redis bypass flags before startup safety initializes."""
 
@@ -108,6 +124,7 @@ def _install_execution_pipeline_gate_repair() -> None:
         logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_FAILED err=%s", exc)
 
 
+_install_logging_format_guard()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
 _install_authority_readiness_repair()
