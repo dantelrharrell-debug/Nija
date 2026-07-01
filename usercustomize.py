@@ -78,3 +78,10 @@ def _position_sync_hook_watchdog() -> None:
 
 
 threading.Thread(target=_position_sync_hook_watchdog, name="position-sync-hook", daemon=True).start()
+
+try:
+    from bot.strategy_publication_patch import install_import_hook as _install_strategy_publication
+    _install_strategy_publication()
+    logger.warning("STRATEGY_PUBLICATION_INSTALL_REQUESTED")
+except Exception as exc:
+    logger.warning("STRATEGY_PUBLICATION_INSTALL_FAILED err=%s", exc)
