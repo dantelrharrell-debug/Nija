@@ -131,10 +131,6 @@ def _normalize_writer_lock_timing() -> None:
     if not (_live_mode() and _redis_configured()):
         return
 
-    # Lock wait must be longer than stale-holder rescue eligibility.  The latest
-    # Railway log showed wait=180s but stale threshold=240s, which can restart the
-    # new writer before rescue is even legally allowed.  Keep strict Redis safety,
-    # but align the clocks so a truly dead holder can be rescued inside the wait.
     for name in (
         "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S",
         "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S",
@@ -205,6 +201,15 @@ def _install_patch_module(*, filename: str, module_name: str, success_log: str, 
         logger.warning("%s unavailable: %s", error_prefix, exc)
 
 
+def _install_logging_format_guard() -> None:
+    _install_patch_module(
+        filename="logging_format_guard_patch.py",
+        module_name="nija_logging_format_guard_patch",
+        success_log="LOGGING_FORMAT_GUARD_INSTALL_REQUESTED",
+        error_prefix="Logging format guard",
+    )
+
+
 def _install_activation_snapshot_bridge() -> None:
     _install_patch_module(
         filename="activation_snapshot_bridge_patch.py",
@@ -268,6 +273,16 @@ def _install_forced_fallback_payload_repair() -> None:
     )
 
 
+def _install_execution_pipeline_gate_repair() -> None:
+    _install_patch_module(
+        filename="execution_pipeline_gate_repair_patch.py",
+        module_name="nija_execution_pipeline_gate_repair_patch",
+        success_log="EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_REQUESTED",
+        error_prefix="Execution pipeline gate repair",
+    )
+
+
+_install_logging_format_guard()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
@@ -275,6 +290,7 @@ _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
+_install_execution_pipeline_gate_repair()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
