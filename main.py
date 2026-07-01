@@ -124,6 +124,22 @@ def _install_execution_pipeline_gate_repair() -> None:
         logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_FAILED err=%s", exc)
 
 
+def _install_hard_controls_csm_repair() -> None:
+    """Install hard-controls stale CSM-v2 capital-readiness repair hook."""
+
+    try:
+        repair = importlib.import_module("bot.hard_controls_csm_repair_patch")
+        installer = getattr(repair, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("HARD_CONTROLS_CSM_REPAIR_INSTALL_REQUESTED", flush=True)
+            logger.warning("HARD_CONTROLS_CSM_REPAIR_INSTALL_REQUESTED")
+        else:
+            logger.warning("HARD_CONTROLS_CSM_REPAIR_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("HARD_CONTROLS_CSM_REPAIR_INSTALL_FAILED err=%s", exc)
+
+
 _install_logging_format_guard()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
@@ -131,6 +147,7 @@ _install_authority_readiness_repair()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
 _install_execution_pipeline_gate_repair()
+_install_hard_controls_csm_repair()
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 # ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
