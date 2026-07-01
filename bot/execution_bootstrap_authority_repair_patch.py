@@ -21,6 +21,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from types import ModuleType
 from typing import Any, Callable, Optional
@@ -28,7 +29,9 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger("nija.execution_bootstrap_authority_repair")
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
+_MONITOR_STARTED = False
 _REPAIR_LOCK = threading.Lock()
+_INSTALL_LOCK = threading.Lock()
 
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
 
@@ -56,9 +59,23 @@ def _capital_hydrated() -> bool:
         except ImportError:
             from capital_authority import get_capital_authority  # type: ignore[import]
         ca = get_capital_authority()
-        if not bool(getattr(ca, "is_hydrated", False)):
+        hydrated = bool(getattr(ca, "is_hydrated", False))
+        if not hydrated:
             return False
-        return float(getattr(ca, "total_capital", 0.0) or 0.0) > 0.0
+        best = 0.0
+        for attr in ("total_capital", "real_capital"):
+            try:
+                best = max(best, float(getattr(ca, attr, 0.0) or 0.0))
+            except Exception:
+                pass
+        for meth in ("get_real_capital", "get_usable_capital"):
+            getter = getattr(ca, meth, None)
+            if callable(getter):
+                try:
+                    best = max(best, float(getter() or 0.0))
+                except Exception:
+                    pass
+        return best > 0.0
     except Exception as exc:
         logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR capital_probe_failed err=%s", exc)
         return False
@@ -108,6 +125,7 @@ def _repair_bootstrap_authority(reason: str) -> bool:
     ok, detail = _runtime_live_authorized()
     if not ok:
         logger.critical("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_WAITING detail=%s reason=%s", detail, reason)
+        print(f"[NIJA-PRINT] EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_WAITING | detail={detail} reason={reason}", flush=True)
         return False
 
     with _REPAIR_LOCK:
@@ -124,6 +142,7 @@ def _repair_bootstrap_authority(reason: str) -> bool:
                 else getattr(bfsm, "execution_authority", False)
             )
             if auth_before:
+                logger.info("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_ALREADY_READY reason=%s state=%s", reason, state_before)
                 return True
 
             target = getattr(BootstrapState, "RUNNING_SUPERVISED", None)
@@ -156,6 +175,10 @@ def _repair_bootstrap_authority(reason: str) -> bool:
                 os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")[:8],
                 os.environ.get("NIJA_WRITER_LEASE_GENERATION", ""),
             )
+            print(
+                f"[NIJA-PRINT] EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_APPLIED | reason={reason} from_state={getattr(state_before, 'value', state_before)} generation={os.environ.get('NIJA_WRITER_LEASE_GENERATION', '')}",
+                flush=True,
+            )
             return True
         except Exception as exc:
             logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR failed err=%s", exc)
@@ -182,32 +205,55 @@ def _install_on_execution_engine(module: ModuleType) -> bool:
     setattr(cls, "execute_entry", _patched_execute_entry)
     _PATCHED = True
     logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
+    print(f"[NIJA-PRINT] EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_PATCHED | module={getattr(module, '__name__', '<unknown>')}", flush=True)
     return True
 
 
 def _try_patch_loaded() -> bool:
     patched = False
-    for name in ("bot.execution_engine", "execution_engine"):
-        module = sys.modules.get(name)
-        if isinstance(module, ModuleType):
+    # Patch exact known module names plus any module that exposes ExecutionEngine.
+    for name, module in list(sys.modules.items()):
+        if not isinstance(module, ModuleType):
+            continue
+        if name in {"bot.execution_engine", "execution_engine"} or hasattr(module, "ExecutionEngine"):
             patched = _install_on_execution_engine(module) or patched
     return patched
 
 
+def _start_monitor() -> None:
+    global _MONITOR_STARTED
+    if _MONITOR_STARTED:
+        return
+    _MONITOR_STARTED = True
+
+    def _monitor() -> None:
+        deadline = time.time() + float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "300") or "300")
+        while time.time() < deadline:
+            if _try_patch_loaded():
+                return
+            time.sleep(0.25)
+        logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_MONITOR_EXPIRED patched=%s", _PATCHED)
+
+    threading.Thread(target=_monitor, name="execution-bootstrap-authority-repair-monitor", daemon=True).start()
+    logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_MONITOR_STARTED")
+
+
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
-    _try_patch_loaded()
-    if _ORIGINAL_IMPORT_MODULE is not None:
-        logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
-        return
+    with _INSTALL_LOCK:
+        _try_patch_loaded()
+        _start_monitor()
+        if _ORIGINAL_IMPORT_MODULE is not None:
+            logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+            return
 
-    _ORIGINAL_IMPORT_MODULE = importlib.import_module
+        _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
-    def _wrapped_import_module(name: str, package: str | None = None):
-        module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
-        if name in {"bot.execution_engine", "execution_engine"}:
-            _install_on_execution_engine(module)
-        return module
+        def _wrapped_import_module(name: str, package: str | None = None):
+            module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
+            if name in {"bot.execution_engine", "execution_engine"}:
+                _install_on_execution_engine(module)
+            return module
 
-    importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-    logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_COMPLETE patched=%s", _PATCHED)
+        importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
+        logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_COMPLETE patched=%s", _PATCHED)
