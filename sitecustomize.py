@@ -189,10 +189,10 @@ def _runtime_defaults() -> None:
     _normalize_writer_lock_timing()
 
 
-def _install_activation_snapshot_bridge() -> None:
+def _install_patch_module(*, filename: str, module_name: str, success_log: str, error_prefix: str) -> None:
     try:
-        patch_path = Path(__file__).resolve().parent / "bot" / "activation_snapshot_bridge_patch.py"
-        spec = importlib.util.spec_from_file_location("nija_activation_snapshot_bridge_patch", patch_path)
+        patch_path = Path(__file__).resolve().parent / "bot" / filename
+        spec = importlib.util.spec_from_file_location(module_name, patch_path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"could not load spec for {patch_path}")
         module = importlib.util.module_from_spec(spec)
@@ -200,31 +200,43 @@ def _install_activation_snapshot_bridge() -> None:
         installer = getattr(module, "install_import_hook", None)
         if callable(installer):
             installer()
-            logger.warning("ACTIVATION_SNAPSHOT_BRIDGE_INSTALL_REQUESTED")
+            logger.warning(success_log)
     except Exception as exc:
-        logger.warning("Activation snapshot bridge unavailable: %s", exc)
+        logger.warning("%s unavailable: %s", error_prefix, exc)
+
+
+def _install_activation_snapshot_bridge() -> None:
+    _install_patch_module(
+        filename="activation_snapshot_bridge_patch.py",
+        module_name="nija_activation_snapshot_bridge_patch",
+        success_log="ACTIVATION_SNAPSHOT_BRIDGE_INSTALL_REQUESTED",
+        error_prefix="Activation snapshot bridge",
+    )
 
 
 def _install_live_active_dispatch_bridge() -> None:
-    try:
-        patch_path = Path(__file__).resolve().parent / "bot" / "live_active_dispatch_bridge_patch.py"
-        spec = importlib.util.spec_from_file_location("nija_live_active_dispatch_bridge_patch", patch_path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"could not load spec for {patch_path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        installer = getattr(module, "install_import_hook", None)
-        if callable(installer):
-            installer()
-            logger.warning("LIVE_ACTIVE_DISPATCH_BRIDGE_INSTALL_REQUESTED")
-    except Exception as exc:
-        logger.warning("Live-active dispatch bridge unavailable: %s", exc)
+    _install_patch_module(
+        filename="live_active_dispatch_bridge_patch.py",
+        module_name="nija_live_active_dispatch_bridge_patch",
+        success_log="LIVE_ACTIVE_DISPATCH_BRIDGE_INSTALL_REQUESTED",
+        error_prefix="Live-active dispatch bridge",
+    )
+
+
+def _install_activation_pending_commit_monitor() -> None:
+    _install_patch_module(
+        filename="activation_pending_commit_monitor_patch.py",
+        module_name="nija_activation_pending_commit_monitor_patch",
+        success_log="ACTIVATION_PENDING_COMMIT_MONITOR_INSTALL_REQUESTED",
+        error_prefix="Activation pending commit monitor",
+    )
 
 
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
 _install_activation_snapshot_bridge()
+_install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
 _normalize_micro_cap_floors()
 _force_strict_redis_authority("sitecustomize_final")
