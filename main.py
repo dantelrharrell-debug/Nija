@@ -44,8 +44,25 @@ def _install_strategy_publication() -> None:
         logger.warning("STRATEGY_PUBLICATION_INSTALL_FAILED err=%s", exc)
 
 
+def _install_authority_readiness_repair() -> None:
+    """Install the post-LIVE_ACTIVE authority-readiness repair hook."""
+
+    try:
+        repair = importlib.import_module("bot.execution_authority_readiness_repair_patch")
+        installer = getattr(repair, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("AUTHORITY_READY_REPAIR_INSTALL_REQUESTED", flush=True)
+            logger.warning("AUTHORITY_READY_REPAIR_INSTALL_REQUESTED")
+        else:
+            logger.warning("AUTHORITY_READY_REPAIR_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("AUTHORITY_READY_REPAIR_INSTALL_FAILED err=%s", exc)
+
+
 _run_pre_startup_sanitization()
 _install_strategy_publication()
+_install_authority_readiness_repair()
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 # ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
