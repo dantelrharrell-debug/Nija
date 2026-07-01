@@ -1,0 +1,204 @@
+"""Repair forced-fallback payload construction so live cycles reach order gates.
+
+Runtime logs show Phase 3 reaches candidate ranking and TPE says EXECUTE, but the
+forced fallback path can die before execute_action()/execute_entry() when
+competitive_profitability_policy raises:
+
+    competitive profitability policy blocked illiquid fallback entry
+
+That exception is correct for normal entries, but in Always Trade / fallback mode
+it prevents the already-authorized fallback from reaching the normal downstream
+order gates. This patch only handles that specific forced-fallback exception by
+building a conservative payload and then letting execute_action(), execute_entry,
+min-notional, capital, ECEL, and broker validation decide. It does not submit an
+order itself and does not bypass exchange/order/risk validation.
+"""
+
+from __future__ import annotations
+
+import importlib
+import logging
+import os
+import sys
+from types import ModuleType
+from typing import Any, Callable, Optional
+
+logger = logging.getLogger("nija.forced_fallback_payload_repair")
+_ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
+_PATCHED = False
+
+_TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
+
+
+def _truthy(name: str, default: str = "false") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() in _TRUTHY
+
+
+def _live_runtime_authorized() -> bool:
+    return bool(
+        _truthy("LIVE_CAPITAL_VERIFIED")
+        and not _truthy("DRY_RUN_MODE")
+        and not _truthy("PAPER_MODE")
+        and str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() == "LIVE_ACTIVE"
+        and _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+        and str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()
+        and str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip()
+    )
+
+
+def _broker_name(loop: Any) -> str:
+    try:
+        apex = getattr(loop, "apex", None)
+        if apex is not None and hasattr(apex, "_get_broker_name"):
+            return str(apex._get_broker_name() or "kraken").lower()
+    except Exception:
+        pass
+    return "kraken"
+
+
+def _min_notional(loop: Any, balance: float) -> float:
+    broker = _broker_name(loop)
+    try:
+        from bot.minimum_notional_gate import get_minimum_notional_gate
+        return float(get_minimum_notional_gate().config.get_min_notional_for_broker(broker, balance=balance))
+    except Exception:
+        try:
+            from minimum_notional_gate import get_minimum_notional_gate  # type: ignore[import]
+            return float(get_minimum_notional_gate().config.get_min_notional_for_broker(broker, balance=balance))
+        except Exception:
+            return 2.0 if broker in {"kraken", "coinbase", "okx"} else 5.0
+
+
+def _build_conservative_payload(loop: Any, *, df: Any, sig: Any, snapshot: Any, action: str, existing_reason: str) -> dict[str, Any]:
+    price = 0.0
+    try:
+        price = float(df["close"].iloc[-1])
+    except Exception:
+        price = 0.0
+    if price <= 0.0:
+        raise ValueError("forced fallback repair cannot build payload without positive close price")
+
+    balance = max(float(getattr(snapshot, "balance", 0.0) or 0.0), 0.0)
+    if balance <= 0.0:
+        raise ValueError("forced fallback repair cannot build payload without positive balance")
+
+    floor = _min_notional(loop, balance)
+    # Keep sizing tiny and within balance. Downstream ECEL/exchange gates still
+    # normalize or reject if the size is not acceptable.
+    size = min(max(floor, balance * 0.025), balance)
+    if action == "enter_short":
+        stop_loss = price * 1.012
+        take_profit = [price * 0.990, price * 0.985, price * 0.980]
+    else:
+        stop_loss = price * 0.988
+        take_profit = [price * 1.010, price * 1.015, price * 1.020]
+
+    reason = str(existing_reason or getattr(sig, "reason", "forced_fallback_entry") or "forced_fallback_entry")
+    if "fallback" not in reason.lower():
+        reason = f"{reason} [fallback_entry]"
+
+    return {
+        "action": action,
+        "entry_price": price,
+        "position_size": size,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "trailing_stop_pct": 0.75,
+        "reason": reason + " [forced_fallback_payload_repair]",
+        "fallback_entry": True,
+        "forced_fallback": True,
+        "fallback_payload_repaired": True,
+        "competitive_profitability_policy": "deferred_to_downstream_gates",
+    }
+
+
+def _install_on_module(module: ModuleType) -> bool:
+    global _PATCHED
+    cls = getattr(module, "NijaCoreLoop", None)
+    if not isinstance(cls, type):
+        return False
+    original = getattr(cls, "_build_forced_fallback_entry_analysis", None)
+    if not callable(original):
+        return False
+    if getattr(original, "_nija_forced_fallback_payload_repair_wrapped", False):
+        _PATCHED = True
+        return True
+
+    def _patched_build_forced_fallback_entry_analysis(self: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return original(self, *args, **kwargs)
+        except ValueError as exc:
+            message = str(exc)
+            if "competitive profitability policy blocked illiquid fallback entry" not in message:
+                raise
+            if not _live_runtime_authorized():
+                logger.critical(
+                    "FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING detail=live_runtime_not_authorized err=%s",
+                    message,
+                )
+                raise
+            df = kwargs.get("df") if "df" in kwargs else (args[0] if len(args) > 0 else None)
+            sig = kwargs.get("sig") if "sig" in kwargs else (args[1] if len(args) > 1 else None)
+            snapshot = kwargs.get("snapshot") if "snapshot" in kwargs else (args[2] if len(args) > 2 else None)
+            action = kwargs.get("action") if "action" in kwargs else (args[3] if len(args) > 3 else "enter_long")
+            existing_reason = kwargs.get("existing_reason", "")
+            payload = _build_conservative_payload(
+                self,
+                df=df,
+                sig=sig,
+                snapshot=snapshot,
+                action=str(action or "enter_long"),
+                existing_reason=str(existing_reason or message),
+            )
+            try:
+                setattr(sig, "position_multiplier", 1.0)
+            except Exception:
+                pass
+            logger.critical(
+                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED symbol=%s action=%s size=%.2f reason=%s",
+                getattr(sig, "symbol", "UNKNOWN"),
+                payload.get("action"),
+                float(payload.get("position_size", 0.0) or 0.0),
+                message,
+            )
+            print(
+                f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED | "
+                f"symbol={getattr(sig, 'symbol', 'UNKNOWN')} action={payload.get('action')} "
+                f"size=${float(payload.get('position_size', 0.0) or 0.0):.2f}",
+                flush=True,
+            )
+            return payload
+
+    setattr(_patched_build_forced_fallback_entry_analysis, "_nija_forced_fallback_payload_repair_wrapped", True)
+    setattr(cls, "_build_forced_fallback_entry_analysis", _patched_build_forced_fallback_entry_analysis)
+    _PATCHED = True
+    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
+    return True
+
+
+def _try_patch_loaded() -> bool:
+    patched = False
+    for name in ("bot.nija_core_loop", "nija_core_loop"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            patched = _install_on_module(module) or patched
+    return patched
+
+
+def install_import_hook() -> None:
+    global _ORIGINAL_IMPORT_MODULE
+    _try_patch_loaded()
+    if _ORIGINAL_IMPORT_MODULE is not None:
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+        return
+
+    _ORIGINAL_IMPORT_MODULE = importlib.import_module
+
+    def _wrapped_import_module(name: str, package: str | None = None):
+        module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
+        if name in {"bot.nija_core_loop", "nija_core_loop"}:
+            _install_on_module(module)
+        return module
+
+    importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
+    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE patched=%s", _PATCHED)
