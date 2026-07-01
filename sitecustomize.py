@@ -241,10 +241,20 @@ def _install_trading_strategy_apex_wiring() -> None:
     )
 
 
+def _install_phase3_scan_budget() -> None:
+    _install_patch_module(
+        filename="phase3_scan_budget_patch.py",
+        module_name="nija_phase3_scan_budget_patch",
+        success_log="PHASE3_SCAN_BUDGET_INSTALL_REQUESTED",
+        error_prefix="Phase3 scan budget patch",
+    )
+
+
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
 _install_trading_strategy_apex_wiring()
+_install_phase3_scan_budget()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
