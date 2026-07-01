@@ -250,11 +250,31 @@ def _install_phase3_scan_budget() -> None:
     )
 
 
+def _install_execution_bootstrap_authority_repair() -> None:
+    _install_patch_module(
+        filename="execution_bootstrap_authority_repair_patch.py",
+        module_name="nija_execution_bootstrap_authority_repair_patch",
+        success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED",
+        error_prefix="Execution bootstrap authority repair",
+    )
+
+
+def _install_forced_fallback_payload_repair() -> None:
+    _install_patch_module(
+        filename="forced_fallback_payload_repair_patch.py",
+        module_name="nija_forced_fallback_payload_repair_patch",
+        success_log="FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_REQUESTED",
+        error_prefix="Forced fallback payload repair",
+    )
+
+
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
 _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
+_install_execution_bootstrap_authority_repair()
+_install_forced_fallback_payload_repair()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
