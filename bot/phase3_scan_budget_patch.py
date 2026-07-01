@@ -26,8 +26,6 @@ _PATCHED = False
 _COUNTER = 0
 _COUNTER_LOCK = threading.Lock()
 
-# High-liquidity USD symbols first. Keep both common exchange formats because
-# Kraken/Coinbase/OKX adapters may expose either USD or USDT quote symbols.
 _PRIORITY_BASES = (
     "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "LINK", "LTC", "BCH",
     "AVAX", "DOT", "ATOM", "HBAR", "NEAR", "AAVE", "UNI", "ETC", "XLM",
@@ -49,9 +47,6 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _budget_for(symbol_count: int, available_slots: int) -> int:
-    # Runtime evidence showed selected candidates could be reached in a small
-    # 5-symbol pass. Keep default compact; operators can raise it with
-    # NIJA_PHASE3_MAX_SYMBOLS_PER_CYCLE.
     default_budget = max(4, min(8, max(available_slots, 1)))
     budget = _int_env("NIJA_PHASE3_MAX_SYMBOLS_PER_CYCLE", default_budget)
     minimum = _int_env("NIJA_PHASE3_MIN_SYMBOLS_PER_CYCLE", min(4, default_budget))
@@ -74,9 +69,7 @@ def _priority_rank(symbol: str) -> int:
 def _prioritize_symbols(symbols: list[str]) -> tuple[list[str], int]:
     if not symbols:
         return symbols, 0
-    priority = [s for s in symbols if _priority_rank(s) <= len(_PRIORITY_SYMBOLS)]
-    # Preserve priority ordering by the curated list, then original order for the
-    # remaining long tail. De-dupe without losing original symbol spelling.
+    priority = [s for s in symbols if _priority_rank(s) < len(_PRIORITY_SYMBOLS)]
     priority.sort(key=_priority_rank)
     seen: set[str] = set()
     ordered: list[str] = []
@@ -96,8 +89,6 @@ def _rotate_symbols(symbols: list[str], budget: int) -> tuple[list[str], int, in
         return symbols, 0, 0
 
     ordered, priority_count = _prioritize_symbols(symbols)
-    # Always keep at least one liquid priority symbol in the first cycles when
-    # available, then rotate the remainder so the full universe is still covered.
     priority_slice = ordered[: min(priority_count, max(1, min(budget, 3)))]
     remainder = ordered[priority_count:] if priority_count else ordered
     remaining_budget = max(0, budget - len(priority_slice))
@@ -167,7 +158,7 @@ def _install_on_module(module: ModuleType) -> bool:
         )
 
     setattr(_patched_phase3_scan_and_enter, "_nija_phase3_scan_budget_wrapped", True)
-    setattr(cls, "_phase3_scan_and_enter", _patched_phase3_scan_budget_wrapped if False else _patched_phase3_scan_and_enter)
+    setattr(cls, "_phase3_scan_and_enter", _patched_phase3_scan_and_enter)
     _PATCHED = True
     logger.warning("PHASE3_SCAN_BUDGET_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
     return True
