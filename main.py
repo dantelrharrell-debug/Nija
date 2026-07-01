@@ -72,7 +72,7 @@ print(
     f"LIVE_CAPITAL_VERIFIED={os.environ.get('LIVE_CAPITAL_VERIFIED', '<unset>')} "
     f"DRY_RUN_MODE={os.environ.get('DRY_RUN_MODE', '<unset>')} "
     f"FORCE_TRADE={os.environ.get('FORCE_TRADE', '<unset>')} "
-    f"HF_SCALP_MODE={os.environ.get('HF_SCALP_MODE', '<unset')}",
+    f"HF_SCALP_MODE={os.environ.get('HF_SCALP_MODE', '<unset>')}",
     flush=True,
 )
 
