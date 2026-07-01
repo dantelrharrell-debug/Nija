@@ -146,6 +146,7 @@ def _install_on_module(module: ModuleType) -> bool:
                 raise
             if not _live_runtime_authorized():
                 logger.critical("FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING detail=live_runtime_not_authorized err=%s", message)
+                print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING | detail=live_runtime_not_authorized err={message}", flush=True)
                 raise
             df = kwargs.get("df") if "df" in kwargs else (args[0] if len(args) > 0 else None)
             sig = kwargs.get("sig") if "sig" in kwargs else (args[1] if len(args) > 1 else None)
@@ -167,7 +168,11 @@ def _install_on_module(module: ModuleType) -> bool:
             tp = payload.get("take_profit") if isinstance(payload.get("take_profit"), dict) else {}
             logger.critical(
                 "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED symbol=%s action=%s size=%.2f tp1=%s reason=%s",
-                getattr(sig, "symbol", "UNKNOWN"), payload.get("action"), float(payload.get("position_size", 0.0) or 0.0), tp.get("tp1"), message,
+                getattr(sig, "symbol", "UNKNOWN"),
+                payload.get("action"),
+                float(payload.get("position_size", 0.0) or 0.0),
+                tp.get("tp1"),
+                message,
             )
             print(
                 f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED | symbol={getattr(sig, 'symbol', 'UNKNOWN')} "
@@ -180,14 +185,20 @@ def _install_on_module(module: ModuleType) -> bool:
     setattr(cls, "_build_forced_fallback_entry_analysis", _patched_build_forced_fallback_entry_analysis)
     _PATCHED = True
     logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
+    print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED | module={getattr(module, '__name__', '<unknown>')}", flush=True)
     return True
 
 
 def _try_patch_loaded() -> bool:
     patched = False
-    for name in ("bot.nija_core_loop", "nija_core_loop"):
-        module = sys.modules.get(name)
-        if isinstance(module, ModuleType):
+    # Patch exact known names and every loaded module exposing NijaCoreLoop.
+    # Some Railway/runpy paths can load a second class object after the first
+    # successful patch, so callers should keep scanning instead of stopping at
+    # the first patched module.
+    for name, module in list(sys.modules.items()):
+        if not isinstance(module, ModuleType):
+            continue
+        if name in {"bot.nija_core_loop", "nija_core_loop"} or hasattr(module, "NijaCoreLoop"):
             patched = _install_on_module(module) or patched
     return patched
 
@@ -199,12 +210,12 @@ def _start_module_monitor() -> None:
     _MONITOR_STARTED = True
 
     def _monitor() -> None:
-        deadline = time.time() + float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "240") or "240")
+        deadline = time.time() + float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "300") or "300")
+        patched_any = False
         while time.time() < deadline:
-            if _try_patch_loaded():
-                return
+            patched_any = _try_patch_loaded() or patched_any
             time.sleep(0.25)
-        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_EXPIRED patched=%s", _PATCHED)
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_COMPLETE patched=%s patched_any=%s", _PATCHED, patched_any)
 
     thread = threading.Thread(target=_monitor, name="forced-fallback-payload-repair-monitor", daemon=True)
     thread.start()
@@ -224,8 +235,12 @@ def install_import_hook() -> None:
 
         def _wrapped_import_module(name: str, package: str | None = None):
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
-            if name in {"bot.nija_core_loop", "nija_core_loop"}:
+            if name in {"bot.nija_core_loop", "nija_core_loop"} or hasattr(module, "NijaCoreLoop"):
                 _install_on_module(module)
+            # Also rescan all loaded modules after imports because normal import
+            # statements can populate sys.modules without calling this wrapper for
+            # the target name directly.
+            _try_patch_loaded()
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
