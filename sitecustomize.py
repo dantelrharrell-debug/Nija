@@ -232,9 +232,19 @@ def _install_activation_pending_commit_monitor() -> None:
     )
 
 
+def _install_trading_strategy_apex_wiring() -> None:
+    _install_patch_module(
+        filename="trading_strategy_apex_wiring_patch.py",
+        module_name="nija_trading_strategy_apex_wiring_patch",
+        success_log="TRADING_STRATEGY_APEX_WIRING_INSTALL_REQUESTED",
+        error_prefix="TradingStrategy APEX wiring repair",
+    )
+
+
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
+_install_trading_strategy_apex_wiring()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
