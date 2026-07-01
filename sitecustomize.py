@@ -282,6 +282,15 @@ def _install_execution_pipeline_gate_repair() -> None:
     )
 
 
+def _install_hard_controls_csm_repair() -> None:
+    _install_patch_module(
+        filename="hard_controls_csm_repair_patch.py",
+        module_name="nija_hard_controls_csm_repair_patch",
+        success_log="HARD_CONTROLS_CSM_REPAIR_INSTALL_REQUESTED",
+        error_prefix="Hard controls CSM repair",
+    )
+
+
 _install_logging_format_guard()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
@@ -291,6 +300,7 @@ _install_phase3_scan_budget()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
 _install_execution_pipeline_gate_repair()
+_install_hard_controls_csm_repair()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
