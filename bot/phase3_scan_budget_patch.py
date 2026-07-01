@@ -6,9 +6,10 @@ zero execute attempts because the scan spends minutes traversing the large symbo
 universe before reaching the rank/submit section.
 
 This patch does not loosen signal thresholds, bypass risk/order gates, or force
-orders. It only applies a per-cycle symbol budget before delegating to the
+orders. It applies a rotating per-cycle symbol budget before delegating to the
 existing _phase3_scan_and_enter implementation so each live cycle reaches the
-existing ranking and execute_action path promptly.
+existing ranking and execute_action path promptly while still covering different
+parts of the universe across cycles.
 """
 
 from __future__ import annotations
@@ -17,12 +18,15 @@ import importlib
 import logging
 import os
 import sys
+import threading
 from types import ModuleType
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.phase3_scan_budget")
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
+_COUNTER = 0
+_COUNTER_LOCK = threading.Lock()
 
 
 def _int_env(name: str, default: int) -> int:
@@ -34,15 +38,28 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _budget_for(symbol_count: int, available_slots: int) -> int:
-    # Candidate cap inside the original method is available_slots*10. The budget
-    # should be lower than a giant universe but high enough to give the ranker a
-    # diverse set. Default 80 keeps 10 symbols/slot when slots=8, while allowing
-    # operators to tighten to 40/50 if exchange calls are slow.
-    default_budget = max(24, min(80, max(available_slots, 1) * 10))
+    # Runtime evidence showed ~10 symbols in ~48s. A default budget of 8 lets the
+    # cycle reach ranking/execution in one short pass instead of spending minutes
+    # on 80+ symbols. Operators can raise it with NIJA_PHASE3_MAX_SYMBOLS_PER_CYCLE.
+    default_budget = max(4, min(8, max(available_slots, 1)))
     budget = _int_env("NIJA_PHASE3_MAX_SYMBOLS_PER_CYCLE", default_budget)
-    minimum = _int_env("NIJA_PHASE3_MIN_SYMBOLS_PER_CYCLE", min(24, default_budget))
+    minimum = _int_env("NIJA_PHASE3_MIN_SYMBOLS_PER_CYCLE", min(4, default_budget))
     budget = max(minimum, budget)
     return min(max(1, int(symbol_count)), budget)
+
+
+def _rotate_symbols(symbols: list[str], budget: int) -> tuple[list[str], int]:
+    global _COUNTER
+    count = len(symbols)
+    if count <= budget:
+        return symbols, 0
+    with _COUNTER_LOCK:
+        offset = (_COUNTER * budget) % count
+        _COUNTER += 1
+    window = symbols[offset:offset + budget]
+    if len(window) < budget:
+        window.extend(symbols[:budget - len(window)])
+    return window, offset
 
 
 def _install_on_module(module: ModuleType) -> bool:
@@ -68,18 +85,20 @@ def _install_on_module(module: ModuleType) -> bool:
     ):
         original_count = len(symbols or [])
         budget = _budget_for(original_count, int(available_slots or 0))
+        offset = 0
         if original_count > budget:
-            symbols = list(symbols[:budget])
+            symbols, offset = _rotate_symbols(list(symbols), budget)
             logger.critical(
-                "PHASE3_SCAN_BUDGET_APPLIED original_symbols=%d budget=%d slots=%d cycle_id=%s",
+                "PHASE3_SCAN_BUDGET_APPLIED original_symbols=%d budget=%d slots=%d offset=%d cycle_id=%s",
                 original_count,
                 budget,
                 available_slots,
+                offset,
                 getattr(snapshot, "cycle_id", ""),
             )
             print(
                 f"[NIJA-PRINT] PHASE3_SCAN_BUDGET_APPLIED | original={original_count} "
-                f"budget={budget} slots={available_slots}",
+                f"budget={budget} slots={available_slots} offset={offset}",
                 flush=True,
             )
         return original(
