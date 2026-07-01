@@ -300,6 +300,24 @@ def _install_trading_state_dispatch_latch_repair() -> None:
     )
 
 
+def _install_downstream_risk_governor_equity_repair() -> None:
+    _install_patch_module(
+        filename="downstream_risk_governor_equity_repair_patch.py",
+        module_name="nija_downstream_risk_governor_equity_repair_patch",
+        success_log="DOWNSTREAM_RISK_GOVERNOR_EQUITY_REPAIR_INSTALL_REQUESTED",
+        error_prefix="Downstream risk governor equity repair",
+    )
+
+
+def _install_usdt_kraken_ecel_routing_repair() -> None:
+    _install_patch_module(
+        filename="usdt_kraken_ecel_routing_repair_patch.py",
+        module_name="nija_usdt_kraken_ecel_routing_repair_patch",
+        success_log="USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED",
+        error_prefix="USDT Kraken ECEL routing repair",
+    )
+
+
 _install_logging_format_guard()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
@@ -311,6 +329,8 @@ _install_forced_fallback_payload_repair()
 _install_execution_pipeline_gate_repair()
 _install_hard_controls_csm_repair()
 _install_trading_state_dispatch_latch_repair()
+_install_downstream_risk_governor_equity_repair()
+_install_usdt_kraken_ecel_routing_repair()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
