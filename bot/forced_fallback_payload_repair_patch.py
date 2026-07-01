@@ -12,6 +12,10 @@ order gates. This patch only handles that specific forced-fallback exception by
 building a conservative payload and then letting execute_action(), execute_entry,
 min-notional, capital, ECEL, and broker validation decide. It does not submit an
 order itself and does not bypass exchange/order/risk validation.
+
+The installer includes both an importlib wrapper and a short module-watch thread
+because nija_core_loop may be loaded through normal import statements that do not
+call importlib.import_module directly.
 """
 
 from __future__ import annotations
@@ -20,12 +24,16 @@ import importlib
 import logging
 import os
 import sys
+import threading
+import time
 from types import ModuleType
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.forced_fallback_payload_repair")
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
+_MONITOR_STARTED = False
+_INSTALL_LOCK = threading.Lock()
 
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
 
@@ -185,20 +193,41 @@ def _try_patch_loaded() -> bool:
     return patched
 
 
+def _start_module_monitor() -> None:
+    global _MONITOR_STARTED
+    if _MONITOR_STARTED:
+        return
+    _MONITOR_STARTED = True
+
+    def _monitor() -> None:
+        deadline = time.time() + float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "240") or "240")
+        while time.time() < deadline:
+            if _try_patch_loaded():
+                return
+            time.sleep(0.25)
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_EXPIRED patched=%s", _PATCHED)
+
+    thread = threading.Thread(target=_monitor, name="forced-fallback-payload-repair-monitor", daemon=True)
+    thread.start()
+    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_STARTED")
+
+
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
-    _try_patch_loaded()
-    if _ORIGINAL_IMPORT_MODULE is not None:
-        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
-        return
+    with _INSTALL_LOCK:
+        _try_patch_loaded()
+        _start_module_monitor()
+        if _ORIGINAL_IMPORT_MODULE is not None:
+            logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+            return
 
-    _ORIGINAL_IMPORT_MODULE = importlib.import_module
+        _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
-    def _wrapped_import_module(name: str, package: str | None = None):
-        module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
-        if name in {"bot.nija_core_loop", "nija_core_loop"}:
-            _install_on_module(module)
-        return module
+        def _wrapped_import_module(name: str, package: str | None = None):
+            module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
+            if name in {"bot.nija_core_loop", "nija_core_loop"}:
+                _install_on_module(module)
+            return module
 
-    importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE patched=%s", _PATCHED)
+        importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE patched=%s", _PATCHED)
