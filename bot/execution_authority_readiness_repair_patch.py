@@ -1,11 +1,13 @@
-"""Repair stale startup readiness bits after LIVE_ACTIVE handoff.
+"""Repair stale startup readiness and dispatch bits after LIVE_ACTIVE handoff.
 
 The runtime can reach LIVE_ACTIVE and start TradingLoop while the readiness-table
-still reflects an earlier startup snapshot. In that state the live execution gate
-can keep returning dispatch=False even though strict writer authority, heartbeat,
-nonce sync, nonce lease, and lease-generation continuity are already valid.
+or the internal dispatch flag still reflects an earlier startup snapshot. In that
+state the coordinator may correctly report runtime_authority_state=EXECUTING,
+but TradingStateMachine.can_dispatch_trades() can still return False because the
+ExecutionAuthorityConvergenceFSM waits for can_dispatch_trades=True before it can
+authorize — a circular post-commit latch.
 
-This module repairs only stale readiness-table state after those strict runtime
+This module repairs only stale in-process handoff state after strict runtime
 checks pass. It does not change signal thresholds, loosen order-admission gates,
 skip exchange safety checks, or submit orders.
 """
@@ -41,13 +43,26 @@ def _truthy(name: str, default: str = "false") -> bool:
     return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "enabled", "on"}
 
 
-def _live_runtime_ready() -> bool:
+def _live_runtime_ready(tsm_obj: Any | None = None) -> bool:
+    fsm_live = False
+    fsm_committed = False
+    if tsm_obj is not None:
+        try:
+            state = tsm_obj.get_current_state()
+            fsm_live = str(getattr(state, "value", state)).strip().upper() == "LIVE_ACTIVE"
+        except Exception:
+            fsm_live = False
+        try:
+            fsm_committed = bool(tsm_obj.get_activation_committed())
+        except Exception:
+            fsm_committed = False
+    env_live_state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper() == "LIVE_ACTIVE"
     return bool(
         _truthy("LIVE_CAPITAL_VERIFIED")
         and not _truthy("DRY_RUN_MODE")
         and not _truthy("PAPER_MODE")
-        and os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper() == "LIVE_ACTIVE"
-        and _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+        and (env_live_state or fsm_live)
+        and (_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY") or fsm_committed)
         and os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
     )
 
@@ -98,6 +113,17 @@ def _strategy_published() -> bool:
     return False
 
 
+def _readiness_all_ready() -> bool:
+    try:
+        try:
+            from bot.readiness_table import is_ready
+        except ImportError:
+            from readiness_table import is_ready  # type: ignore[import]
+        return bool(is_ready())
+    except Exception:
+        return False
+
+
 def _mark_live_readiness_ready(reason: str) -> None:
     try:
         try:
@@ -131,6 +157,56 @@ def _strict_runtime_authority_ready(tsm: ModuleType) -> tuple[bool, str]:
     return True, ""
 
 
+def _reset_execution_circuit_breaker_after_strict_recovery(tsm: ModuleType, reason: str) -> None:
+    """Clear startup-transient breaker counts only after strict writer/nonce gates pass."""
+    try:
+        lock = getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_LOCK", None)
+        counts = getattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_COUNTS", None)
+        if lock is None or not isinstance(counts, dict):
+            return
+        with lock:
+            had_counts = dict(counts)
+            counts.clear()
+            setattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_TRIPPED", False)
+            setattr(tsm, "_EXECUTION_CIRCUIT_BREAKER_REASON", "")
+        if had_counts:
+            logger.critical(
+                "AUTHORITY_READY_REPAIR_EXEC_CIRCUIT_RESET reason=%s prior_counts=%s",
+                reason,
+                had_counts,
+            )
+    except Exception as exc:
+        logger.warning("AUTHORITY_READY_REPAIR exec_circuit_reset_failed err=%s", exc)
+
+
+def _runtime_coordinator_executing(tsm: ModuleType, tsm_obj: Any) -> tuple[bool, str]:
+    try:
+        get_global_state = getattr(tsm, "_get_global_state", None)
+        if not callable(get_global_state):
+            return False, "global_state_unavailable"
+        state = tsm_obj.get_current_state()
+        trading_state = str(getattr(state, "value", state) or "UNKNOWN")
+        activation_intent_fn = getattr(tsm, "_activation_intent_present", None)
+        intent = True
+        if callable(activation_intent_fn):
+            try:
+                intent = bool(activation_intent_fn())
+            except Exception:
+                intent = True
+        snapshot = get_global_state().capture(
+            trading_state=trading_state,
+            activation_intent=bool(intent),
+        ).startup
+        runtime_state = str(getattr(snapshot, "runtime_authority_state", "") or "")
+        lifecycle = str(getattr(snapshot, "lifecycle_phase", "") or "")
+        permitted = bool(getattr(snapshot, "execution_permitted", False))
+        if runtime_state == "EXECUTING" and lifecycle == "LIVE" and permitted:
+            return True, "coordinator_executing"
+        return False, f"coordinator_not_executing state={runtime_state} lifecycle={lifecycle} permitted={permitted}"
+    except Exception as exc:
+        return False, f"coordinator_probe_failed:{exc}"
+
+
 def _repair_live_readiness_if_safe(tsm: ModuleType, reason: str) -> bool:
     if not _live_runtime_ready():
         return False
@@ -148,6 +224,7 @@ def _repair_live_readiness_if_safe(tsm: ModuleType, reason: str) -> bool:
         logger.critical("AUTHORITY_READY_REPAIR_WAITING detail=%s", strict_detail or "not_ready")
         return False
 
+    _reset_execution_circuit_breaker_after_strict_recovery(tsm, reason)
     _mark_live_readiness_ready(reason)
     logger.critical(
         "AUTHORITY_READY_REPAIR_APPLIED token_prefix=%s generation=%s reason=%s",
@@ -156,6 +233,53 @@ def _repair_live_readiness_if_safe(tsm: ModuleType, reason: str) -> bool:
         reason,
     )
     return True
+
+
+def _repair_post_commit_dispatch_if_safe(tsm: ModuleType, tsm_obj: Any, reason: str) -> bool:
+    if not _live_runtime_ready(tsm_obj):
+        return False
+    if not _kill_switch_clear():
+        return False
+    if not _capital_hydrated():
+        return False
+    if not _strategy_published():
+        return False
+    if not _readiness_all_ready():
+        _repair_live_readiness_if_safe(tsm, f"dispatch_precheck:{reason}")
+        if not _readiness_all_ready():
+            return False
+
+    strict_ready, strict_detail = _strict_runtime_authority_ready(tsm)
+    if not strict_ready:
+        logger.critical("AUTHORITY_READY_REPAIR_DISPATCH_WAITING detail=%s", strict_detail or "not_ready")
+        return False
+    _reset_execution_circuit_breaker_after_strict_recovery(tsm, f"dispatch:{reason}")
+
+    coordinator_ok, coordinator_detail = _runtime_coordinator_executing(tsm, tsm_obj)
+    if not coordinator_ok:
+        logger.critical("AUTHORITY_READY_REPAIR_DISPATCH_WAITING detail=%s", coordinator_detail)
+        return False
+
+    try:
+        with tsm_obj._lock:  # type: ignore[attr-defined]
+            tsm_obj._activation_committed = True
+            tsm_obj._execution_authority = True
+            tsm_obj._core_loop_owns_execution = False
+            tsm_obj._can_dispatch_trades = True
+            state = tsm_obj._current_state
+            os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+            os.environ["NIJA_RUNTIME_TRADING_STATE"] = str(getattr(state, "value", state) or "LIVE_ACTIVE")
+        logger.critical(
+            "AUTHORITY_READY_REPAIR_DISPATCH_LATCHED reason=%s token_prefix=%s generation=%s coordinator=%s",
+            reason,
+            os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")[:8],
+            os.environ.get("NIJA_WRITER_LEASE_GENERATION", ""),
+            coordinator_detail,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("AUTHORITY_READY_REPAIR dispatch_latch_failed err=%s", exc)
+        return False
 
 
 def _install_on_module(tsm: ModuleType) -> bool:
@@ -194,6 +318,36 @@ def _install_on_module(tsm: ModuleType) -> bool:
         setattr(_patched_strategy_ready_gate, "_nija_strategy_ready_repair_wrapped", True)
         setattr(tsm, "_strategy_ready_gate", _patched_strategy_ready_gate)
         installed_any = True
+
+    tsm_cls = getattr(tsm, "TradingStateMachine", None)
+    if isinstance(tsm_cls, type):
+        original_can_execute = getattr(tsm_cls, "can_execute", None)
+        if callable(original_can_execute) and not getattr(original_can_execute, "_nija_dispatch_repair_wrapped", False):
+            def _patched_can_execute(self, require_executing: bool = True) -> bool:
+                try:
+                    if bool(original_can_execute(self, require_executing=require_executing)):
+                        return True
+                except Exception as exc:
+                    logger.warning("AUTHORITY_READY_REPAIR original_can_execute_failed err=%s", exc)
+                return _repair_post_commit_dispatch_if_safe(tsm, self, f"can_execute:require_executing={require_executing}")
+
+            setattr(_patched_can_execute, "_nija_dispatch_repair_wrapped", True)
+            setattr(tsm_cls, "can_execute", _patched_can_execute)
+            installed_any = True
+
+        original_can_dispatch = getattr(tsm_cls, "can_dispatch_trades", None)
+        if callable(original_can_dispatch) and not getattr(original_can_dispatch, "_nija_dispatch_repair_wrapped", False):
+            def _patched_can_dispatch_trades(self) -> bool:
+                try:
+                    if bool(original_can_dispatch(self)):
+                        return True
+                except Exception as exc:
+                    logger.warning("AUTHORITY_READY_REPAIR original_can_dispatch_failed err=%s", exc)
+                return _repair_post_commit_dispatch_if_safe(tsm, self, "can_dispatch_trades")
+
+            setattr(_patched_can_dispatch_trades, "_nija_dispatch_repair_wrapped", True)
+            setattr(tsm_cls, "can_dispatch_trades", _patched_can_dispatch_trades)
+            installed_any = True
 
     if installed_any:
         _PATCHED = True
