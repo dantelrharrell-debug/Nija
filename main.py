@@ -28,7 +28,24 @@ def _run_pre_startup_sanitization() -> None:
         logger.warning("Strict live startup sanitizer unavailable before startup safety init: %s", exc)
 
 
+def _install_strategy_publication() -> None:
+    """Install the live strategy publication hook before bot.py is executed."""
+
+    try:
+        publisher = importlib.import_module("bot.strategy_publication_patch")
+        installer = getattr(publisher, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            print("STRATEGY_PUBLICATION_INSTALL_REQUESTED", flush=True)
+            logger.warning("STRATEGY_PUBLICATION_INSTALL_REQUESTED")
+        else:
+            logger.warning("STRATEGY_PUBLICATION_INSTALL_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("STRATEGY_PUBLICATION_INSTALL_FAILED err=%s", exc)
+
+
 _run_pre_startup_sanitization()
+_install_strategy_publication()
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
 # ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
@@ -55,7 +72,7 @@ print(
     f"LIVE_CAPITAL_VERIFIED={os.environ.get('LIVE_CAPITAL_VERIFIED', '<unset>')} "
     f"DRY_RUN_MODE={os.environ.get('DRY_RUN_MODE', '<unset>')} "
     f"FORCE_TRADE={os.environ.get('FORCE_TRADE', '<unset>')} "
-    f"HF_SCALP_MODE={os.environ.get('HF_SCALP_MODE', '<unset>')}",
+    f"HF_SCALP_MODE={os.environ.get('HF_SCALP_MODE', '<unset')}",
     flush=True,
 )
 
