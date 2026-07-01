@@ -291,6 +291,15 @@ def _install_hard_controls_csm_repair() -> None:
     )
 
 
+def _install_trading_state_dispatch_latch_repair() -> None:
+    _install_patch_module(
+        filename="trading_state_dispatch_latch_repair_patch.py",
+        module_name="nija_trading_state_dispatch_latch_repair_patch",
+        success_log="TRADING_STATE_DISPATCH_LATCH_REPAIR_INSTALL_REQUESTED",
+        error_prefix="Trading state dispatch latch repair",
+    )
+
+
 _install_logging_format_guard()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
@@ -301,6 +310,7 @@ _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
 _install_execution_pipeline_gate_repair()
 _install_hard_controls_csm_repair()
+_install_trading_state_dispatch_latch_repair()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
