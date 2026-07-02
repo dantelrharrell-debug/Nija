@@ -174,6 +174,9 @@ def _runtime_defaults() -> None:
         "NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED": "true",
         "NIJA_COINBASE_EXECUTION_FAILOVER_ENABLED": "true",
         "NIJA_EXECUTION_ENTRY_SAFE_LOGGER_ENABLED": "true",
+        "NIJA_FALLBACK_REPAIR_MIN_TP1_PCT": "0.012",
+        "NIJA_FALLBACK_REPAIR_MIN_TP2_PCT": "0.018",
+        "NIJA_FALLBACK_REPAIR_MIN_TP3_PCT": "0.026",
         "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S": "300",
         "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S": "300",
         "NIJA_REDIS_LOCK_ACQUIRE_TIMEOUT_S": "300",
@@ -276,6 +279,15 @@ def _install_forced_fallback_payload_repair() -> None:
     )
 
 
+def _install_fallback_take_profit_geometry_repair() -> None:
+    _install_patch_module(
+        filename="fallback_take_profit_geometry_repair_patch.py",
+        module_name="nija_fallback_take_profit_geometry_repair_patch",
+        success_log="FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_REQUESTED",
+        error_prefix="Fallback take-profit geometry repair",
+    )
+
+
 def _install_execution_pipeline_gate_repair() -> None:
     _install_patch_module(
         filename="execution_pipeline_gate_repair_patch.py",
@@ -347,6 +359,7 @@ _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
+_install_fallback_take_profit_geometry_repair()
 _install_execution_pipeline_gate_repair()
 _install_hard_controls_csm_repair()
 _install_trading_state_dispatch_latch_repair()
