@@ -31,6 +31,8 @@ _PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
+_PATCHED_CLASS_IDS: set[int] = set()
+_PATCHED_MODULE_NAMES: set[str] = set()
 
 
 def _truthy(name: str, default: str = "true") -> bool:
@@ -93,11 +95,15 @@ def _install_on_module(module: ModuleType) -> bool:
     cls = getattr(module, "ExecutionEngine", None)
     if not isinstance(cls, type):
         return False
+    module_name = str(getattr(module, "__name__", "<unknown>"))
+    class_id = id(cls)
     original = getattr(cls, "execute_entry", None)
     if not callable(original):
         return False
-    if getattr(original, "_nija_execution_entry_nonblocking_logger_wrapped", False):
+    if class_id in _PATCHED_CLASS_IDS or getattr(original, "_nija_execution_entry_nonblocking_logger_wrapped", False):
         _PATCHED = True
+        _PATCHED_CLASS_IDS.add(class_id)
+        _PATCHED_MODULE_NAMES.add(module_name)
         return True
 
     def _patched_execute_entry(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -115,8 +121,10 @@ def _install_on_module(module: ModuleType) -> bool:
     setattr(_patched_execute_entry, "_nija_execution_entry_nonblocking_logger_wrapped", True)
     setattr(cls, "execute_entry", _patched_execute_entry)
     _PATCHED = True
-    logger.warning("EXECUTION_ENTRY_SAFE_LOGGER_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
-    print(f"[NIJA-PRINT] EXECUTION_ENTRY_SAFE_LOGGER_PATCHED | module={getattr(module, '__name__', '<unknown>')}", flush=True)
+    _PATCHED_CLASS_IDS.add(class_id)
+    _PATCHED_MODULE_NAMES.add(module_name)
+    logger.warning("EXECUTION_ENTRY_SAFE_LOGGER_PATCHED module=%s", module_name)
+    print(f"[NIJA-PRINT] EXECUTION_ENTRY_SAFE_LOGGER_PATCHED | module={module_name}", flush=True)
     return True
 
 
@@ -142,7 +150,12 @@ def _start_monitor() -> None:
         while time.time() < deadline:
             patched_any = _try_patch_loaded() or patched_any
             time.sleep(0.25)
-        logger.warning("EXECUTION_ENTRY_SAFE_LOGGER_MONITOR_COMPLETE patched=%s patched_any=%s", _PATCHED, patched_any)
+        logger.warning(
+            "EXECUTION_ENTRY_SAFE_LOGGER_MONITOR_COMPLETE patched=%s patched_any=%s modules=%s",
+            _PATCHED,
+            patched_any,
+            sorted(_PATCHED_MODULE_NAMES),
+        )
 
     threading.Thread(target=_monitor, name="execution-entry-safe-logger-monitor", daemon=True).start()
     logger.warning("EXECUTION_ENTRY_SAFE_LOGGER_MONITOR_STARTED")
