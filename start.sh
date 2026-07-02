@@ -1292,7 +1292,7 @@ fi
 
 # OKX
 echo "   📊 OKX (Master):"
-if [ -n "${OKX_API_KEY}" ] && [ -n "${OKX_API_SECRET}" ] && [ -n "${OKX_PASSPHRASE}" ]; then
+if [ -n "${OKX_API_KEY}" ] && [ -n "${OKX_API_SECRET}" ] && [ -n "${OKX_API_PASSPHRASE:-${OKX_PASSPHRASE:-}}" ]; then
     echo "      ✅ Configured (Key: ${#OKX_API_KEY} chars, Secret: ${#OKX_API_SECRET} chars)"
 else
     echo "      ❌ Not configured"
@@ -1373,7 +1373,7 @@ if is_truthy "${DRY_RUN_MODE_VAL}"; then
     echo ""
     echo "   ℹ️  Multi-exchange trading: verify credentials for each exchange you want:"
     echo "      KRAKEN_PLATFORM_API_KEY / KRAKEN_PLATFORM_API_SECRET  (primary broker)"
-    echo "      OKX_API_KEY / OKX_API_SECRET / OKX_PASSPHRASE         (optional)"
+    echo "      OKX_API_KEY / OKX_API_SECRET / OKX_API_PASSPHRASE     (optional)"
     echo "      BINANCE_API_KEY / BINANCE_API_SECRET                  (optional)"
     echo "      ALPACA_API_KEY / ALPACA_API_SECRET                    (optional)"
 elif is_truthy "${LIVE_CAPITAL_VERIFIED_VAL}"; then
