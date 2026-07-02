@@ -43,17 +43,8 @@ def _copy_first_present_env(canonical: str, aliases: tuple[str, ...]) -> str:
 
 
 def _normalize_credential_aliases(label: str) -> None:
-    """Accept common Railway/user secret aliases and map them to NIJA canonical names.
-
-    The shell startup diagnostic currently checks one exact name for Tania Kraken
-    and OKX.  Runtime code should still work when the same secret exists under a
-    common alternate name such as KRAKEN_USER_TANIA_GILBERT_* or OKX_SECRET_KEY.
-    This function copies aliases into the canonical variables only when the
-    canonical variable is empty, so it never overwrites a deliberately configured
-    production value.
-    """
+    """Accept common Railway/user secret aliases and map them to NIJA canonical names."""
     alias_map: dict[str, tuple[str, ...]] = {
-        # Kraken platform canonical names.
         "KRAKEN_PLATFORM_API_KEY": (
             "KRAKEN_API_KEY",
             "KRAKEN_MASTER_API_KEY",
@@ -68,7 +59,6 @@ def _normalize_credential_aliases(label: str) -> None:
             "KRAKEN_MASTER_SECRET",
             "KRAKEN_PLATFORM_SECRET",
         ),
-        # Daivon aliases retained for consistency with existing user-prefix code.
         "KRAKEN_USER_DAIVON_API_KEY": (
             "KRAKEN_USER_DAIVON_FRAZIER_API_KEY",
             "KRAKEN_DAIVON_API_KEY",
@@ -85,7 +75,6 @@ def _normalize_credential_aliases(label: str) -> None:
             "KRAKEN_DAIVON_SECRET",
             "DAIVON_KRAKEN_SECRET",
         ),
-        # Tania is the account that the latest Railway log marked as not configured.
         "KRAKEN_USER_TANIA_API_KEY": (
             "KRAKEN_USER_TANIA_GILBERT_API_KEY",
             "KRAKEN_TANIA_API_KEY",
@@ -104,7 +93,6 @@ def _normalize_credential_aliases(label: str) -> None:
             "KRAKEN_TANIA_SECRET",
             "TANIA_KRAKEN_SECRET",
         ),
-        # OKX commonly calls its secret OKX_SECRET_KEY and passphrase OKX_API_PASSPHRASE.
         "OKX_API_KEY": (
             "OKX_PLATFORM_API_KEY",
             "OKX_MASTER_API_KEY",
@@ -123,7 +111,6 @@ def _normalize_credential_aliases(label: str) -> None:
             "OKX_MASTER_PASSPHRASE",
             "OKX_PASSWORD",
         ),
-        # Alpaca user aliases, so the diagnostic/runtime do not disagree on Tania.
         "ALPACA_USER_TANIA_API_KEY": (
             "ALPACA_USER_TANIA_GILBERT_API_KEY",
             "ALPACA_TANIA_API_KEY",
@@ -207,6 +194,7 @@ for _key, _value in {
     "NIJA_CAPITAL_BALANCE_PROPAGATION": "true",
     "NIJA_LIVE_ENTRY_RUNTIME_FIXES": "true",
     "NIJA_EXECUTABLE_TRADE_RUNTIME_PATCH": "true",
+    "NIJA_GENERATION_MISMATCH_RECOVERY_COOLDOWN_S": "0",
     "NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD": "10.50",
     "NIJA_APPLY_GLOBAL_EXECUTABLE_MIN_TRADE": "true",
     "HF_TAKE_PROFIT_PCT": "1.0",
@@ -255,6 +243,7 @@ _PATCH_HOOKS = (
     ("post_lock_capital_refresh_patch", "Post-lock capital refresh patch"),
     ("full_execution_observability_patch", "Full execution observability"),
     ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
+    ("generation_sync_timing_patch", "Generation sync timing patch"),
     ("live_execution_authority_blocker_patch", "Live execution authority blocker patch"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
