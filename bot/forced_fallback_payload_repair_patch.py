@@ -15,6 +15,7 @@ _PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
+_WRAP_ATTR = "_nija_forced_fallback_payload_repair_wrapped"
 
 # ExecutionEngine's target-geometry gate currently rejects stop losses wider
 # than MAX_SL_PCT=0.003 (0.300%). Keep fallback repairs below that hard gate;
@@ -33,6 +34,24 @@ def _float_env(name: str, default: float) -> float:
         return float(os.environ.get(name, default) or default)
     except Exception:
         return default
+
+
+def _wrapper_chain_has_attr(fn: Any, attr: str) -> bool:
+    """Return True if any wrapper in a __wrapped__ chain already has attr.
+
+    Multiple fallback repair patches wrap the same NijaCoreLoop method. Without
+    chain-aware idempotence, the patches can alternately wrap each other on every
+    monitor scan and flood Railway logs with repeated PATCHED markers. This keeps
+    the wrapper stack stable after one successful install.
+    """
+    seen: set[int] = set()
+    cur = fn
+    while callable(cur) and id(cur) not in seen:
+        seen.add(id(cur))
+        if getattr(cur, attr, False):
+            return True
+        cur = getattr(cur, "__wrapped__", None)
+    return False
 
 
 def _state_machine_live_active() -> tuple[bool, str]:
@@ -301,7 +320,7 @@ def _install_on_module(module: ModuleType) -> bool:
     original = getattr(cls, "_build_forced_fallback_entry_analysis", None)
     if not callable(original):
         return False
-    if getattr(original, "_nija_forced_fallback_payload_repair_wrapped", False):
+    if _wrapper_chain_has_attr(original, _WRAP_ATTR):
         _PATCHED = True
         return True
 
@@ -369,7 +388,8 @@ def _install_on_module(module: ModuleType) -> bool:
             )
             return payload
 
-    setattr(_patched_build_forced_fallback_entry_analysis, "_nija_forced_fallback_payload_repair_wrapped", True)
+    setattr(_patched_build_forced_fallback_entry_analysis, _WRAP_ATTR, True)
+    setattr(_patched_build_forced_fallback_entry_analysis, "__wrapped__", original)
     setattr(cls, "_build_forced_fallback_entry_analysis", _patched_build_forced_fallback_entry_analysis)
     _PATCHED = True
     logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
@@ -381,8 +401,8 @@ def _try_patch_loaded() -> bool:
     patched = False
     # Patch exact known names and every loaded module exposing NijaCoreLoop.
     # Some Railway/runpy paths can load a second class object after the first
-    # successful patch, so callers should keep scanning instead of stopping at
-    # the first patched module.
+    # successful patch, so callers should keep scanning without stacking the same
+    # wrapper repeatedly.
     for name, module in list(sys.modules.items()):
         if not isinstance(module, ModuleType):
             continue
