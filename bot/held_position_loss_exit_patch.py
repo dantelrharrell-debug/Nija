@@ -1,20 +1,20 @@
-"""Adopt held exchange positions into loss-protection exit evaluation.
+"""Adopt held exchange positions into loss-protection evaluation.
 
-This patch targets the exact live-log problem where exchange-held positions were
+This patch targets the live-log problem where exchange-held positions were
 visible but not fully managed by the runtime exit stack:
 
     ADOPTED_HELD_POSITION ... ledger=False tracker=False profit_exit=False runtime=False
     COINBASE_STARTUP_POSITION_SYNC positions=1 symbols=ADA-USD
 
-It does not bypass broker, authority, or exchange checks. It only scans already
-held broker positions, computes loss when cost basis/PnL is available, and asks
-the broker to submit a normal sell/close order when the position breaches the
-configured loss threshold.
+It does not bypass broker, authority, or exchange checks. By default it only
+adopts held positions into runtime visibility and emits exit recommendations for
+negative positions. Live exit submission is operator-gated by env:
+
+    NIJA_HELD_POSITION_EXIT_LIVE_ENABLED=true
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import sys
@@ -22,7 +22,7 @@ import threading
 import time
 from functools import wraps
 from types import ModuleType
-from typing import Any, Iterable, Mapping, MutableMapping, Optional
+from typing import Any, Mapping, MutableMapping, Optional
 
 logger = logging.getLogger("nija.held_position_loss_exit_patch")
 _PATCHED_ATTR = "__nija_held_position_loss_exit_patch__"
@@ -38,13 +38,6 @@ def _truthy(name: str, default: bool = True) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "y", "enabled"}
 
 
-def _float_env(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default) or default)
-    except Exception:
-        return default
-
-
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None:
@@ -56,6 +49,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _float_env(name: str, default: float) -> float:
+    return _safe_float(os.environ.get(name), default)
 
 
 def _broker_name(broker: Any) -> str:
@@ -93,7 +90,7 @@ def _symbol_from_asset(asset: str) -> str:
     return f"{asset}-USD"
 
 
-def _sequence(payload: Any) -> list[Any]:
+def _rows(payload: Any) -> list[Any]:
     if payload is None:
         return []
     if isinstance(payload, Mapping):
@@ -102,15 +99,24 @@ def _sequence(payload: Any) -> list[Any]:
             if isinstance(value, list):
                 return list(value)
             if isinstance(value, Mapping):
-                return [dict(v, asset=k, symbol=_symbol_from_asset(str(k))) if isinstance(v, Mapping) else {"asset": k, "quantity": v, "symbol": _symbol_from_asset(str(k))} for k, v in value.items()]
-        rows = []
-        for key, value in payload.items():
-            if isinstance(value, Mapping):
-                item = dict(value)
-                item.setdefault("asset", key)
-                item.setdefault("symbol", _symbol_from_asset(str(key)))
-                rows.append(item)
-        return rows
+                out = []
+                for asset, raw in value.items():
+                    if isinstance(raw, Mapping):
+                        item = dict(raw)
+                        item.setdefault("asset", asset)
+                        item.setdefault("symbol", _symbol_from_asset(str(asset)))
+                    else:
+                        item = {"asset": asset, "quantity": raw, "symbol": _symbol_from_asset(str(asset))}
+                    out.append(item)
+                return out
+        out = []
+        for asset, raw in payload.items():
+            if isinstance(raw, Mapping):
+                item = dict(raw)
+                item.setdefault("asset", asset)
+                item.setdefault("symbol", _symbol_from_asset(str(asset)))
+                out.append(item)
+        return out
     if isinstance(payload, list):
         return list(payload)
     return []
@@ -126,12 +132,12 @@ def _extract_positions(broker: Any) -> list[Any]:
                     payload = method(verbose=False)
                 except TypeError:
                     payload = method()
-                payloads.extend(_sequence(payload))
+                payloads.extend(_rows(payload))
         except Exception as exc:
-            logger.debug("HELD_POSITION_EXIT_PROBE_SKIP method=%s err=%s", method_name, exc)
+            logger.debug("HELD_POSITION_LOSS_PROBE_SKIP method=%s err=%s", method_name, exc)
     for attr in ("open_positions", "positions", "_positions", "_open_positions", "holdings", "balances", "_last_raw_balances", "last_raw_balances", "_portfolio_breakdown", "portfolio_breakdown"):
         try:
-            payloads.extend(_sequence(getattr(broker, attr, None)))
+            payloads.extend(_rows(getattr(broker, attr, None)))
         except Exception:
             pass
     return payloads
@@ -232,68 +238,6 @@ def _normalize(raw: Any, broker: Any) -> Optional[dict[str, Any]]:
     }
 
 
-def _loss_breached(pos: Mapping[str, Any]) -> tuple[bool, str]:
-    if not bool(pos.get("pnl_known")):
-        if _truthy("NIJA_EXIT_HELD_UNKNOWN_COST_BASIS", False):
-            return True, "unknown_cost_basis_forced_by_env"
-        return False, "pnl_unknown"
-    max_loss_pct = -abs(_float_env("NIJA_HELD_POSITION_MAX_LOSS_PCT", 0.005))
-    max_loss_usd = -abs(_float_env("NIJA_HELD_POSITION_MAX_LOSS_USD", 0.25))
-    pnl_pct = pos.get("pnl_pct")
-    pnl_usd = _safe_float(pos.get("pnl_usd"), 0.0)
-    if pnl_pct is not None and _safe_float(pnl_pct, 0.0) <= max_loss_pct:
-        return True, f"pnl_pct={_safe_float(pnl_pct):.4f} <= {max_loss_pct:.4f}"
-    if pnl_usd <= max_loss_usd:
-        return True, f"pnl_usd={pnl_usd:.2f} <= {max_loss_usd:.2f}"
-    return False, f"not_negative_enough pnl_pct={pnl_pct} pnl_usd={pnl_usd:.2f}"
-
-
-def _submit_exit(broker: Any, pos: Mapping[str, Any]) -> tuple[bool, str]:
-    symbol = str(pos.get("symbol") or "")
-    qty = _safe_float(pos.get("qty") or pos.get("quantity"), 0.0)
-    if not symbol or qty <= 0:
-        return False, "missing_symbol_or_qty"
-    dry = _truthy("NIJA_HELD_POSITION_EXIT_DRY_RUN", False)
-    if dry:
-        return False, "dry_run_enabled"
-    attempts = (
-        ("close_position", (symbol,), {"quantity": qty}),
-        ("exit_position", (symbol,), {"quantity": qty}),
-        ("sell_position", (symbol,), {"quantity": qty}),
-        ("market_sell", (symbol, qty), {}),
-        ("sell", (symbol, qty), {}),
-        ("place_market_order", (symbol, "sell", qty), {}),
-        ("submit_market_order", (symbol, "sell", qty), {}),
-        ("create_market_order", (symbol, "sell", qty), {}),
-        ("place_order", (), {"symbol": symbol, "side": "sell", "quantity": qty, "order_type": "market"}),
-        ("submit_order", (), {"symbol": symbol, "side": "sell", "quantity": qty, "order_type": "market"}),
-        ("create_order", (), {"symbol": symbol, "side": "sell", "quantity": qty, "order_type": "market"}),
-    )
-    errors = []
-    for method_name, args, kwargs in attempts:
-        method = getattr(broker, method_name, None)
-        if not callable(method):
-            continue
-        try:
-            result = method(*args, **kwargs)
-            logger.critical("HELD_POSITION_EXIT_ORDER_SUBMITTED broker=%s symbol=%s qty=%s method=%s result=%s", _broker_name(broker), symbol, qty, method_name, str(result)[:300])
-            print(f"[NIJA-PRINT] HELD_POSITION_EXIT_ORDER_SUBMITTED | broker={_broker_name(broker)} symbol={symbol} qty={qty} method={method_name}", flush=True)
-            return True, method_name
-        except TypeError as exc:
-            errors.append(f"{method_name}:type:{exc}")
-            # Try common alternate positional order.
-            try:
-                result = method(symbol=symbol, side="sell", size=qty, type="market")
-                logger.critical("HELD_POSITION_EXIT_ORDER_SUBMITTED broker=%s symbol=%s qty=%s method=%s_alt result=%s", _broker_name(broker), symbol, qty, method_name, str(result)[:300])
-                print(f"[NIJA-PRINT] HELD_POSITION_EXIT_ORDER_SUBMITTED | broker={_broker_name(broker)} symbol={symbol} qty={qty} method={method_name}_alt", flush=True)
-                return True, f"{method_name}_alt"
-            except Exception as exc2:
-                errors.append(f"{method_name}:alt:{exc2}")
-        except Exception as exc:
-            errors.append(f"{method_name}:{exc}")
-    return False, "; ".join(errors[-5:]) or "no_supported_exit_method"
-
-
 def _attach_runtime(core_loop: Any, pos: Mapping[str, Any]) -> bool:
     attached = False
     for owner in (core_loop, getattr(core_loop, "apex", None)):
@@ -303,12 +247,13 @@ def _attach_runtime(core_loop: Any, pos: Mapping[str, Any]) -> bool:
             try:
                 container = getattr(owner, attr, None)
                 key = f"{pos.get('broker')}:{pos.get('symbol')}:exchange_held"
+                payload = dict(pos, id=key, position_source="exchange_held", exit_managed=True)
                 if isinstance(container, MutableMapping):
-                    container.setdefault(key, dict(pos, id=key, position_source="exchange_held", exit_managed=True))
+                    container.setdefault(key, payload)
                     attached = True
                 elif isinstance(container, list):
                     if key not in {str((x or {}).get("id")) for x in container if isinstance(x, Mapping)}:
-                        container.append(dict(pos, id=key, position_source="exchange_held", exit_managed=True))
+                        container.append(payload)
                         attached = True
             except Exception:
                 pass
@@ -345,13 +290,23 @@ def _candidate_brokers(core_loop: Any, current_broker: Any = None) -> list[Any]:
     return brokers
 
 
-def _evaluate_held_position_exits(core_loop: Any, current_broker: Any = None) -> None:
+def _loss_reason(pos: Mapping[str, Any]) -> tuple[bool, str]:
+    if not bool(pos.get("pnl_known")):
+        return False, "pnl_unknown_cost_basis_missing"
+    max_loss_pct = -abs(_float_env("NIJA_HELD_POSITION_MAX_LOSS_PCT", 0.005))
+    max_loss_usd = -abs(_float_env("NIJA_HELD_POSITION_MAX_LOSS_USD", 0.25))
+    pnl_pct = pos.get("pnl_pct")
+    pnl_usd = _safe_float(pos.get("pnl_usd"), 0.0)
+    if pnl_pct is not None and _safe_float(pnl_pct, 0.0) <= max_loss_pct:
+        return True, f"pnl_pct={_safe_float(pnl_pct):.4f} <= {max_loss_pct:.4f}"
+    if pnl_usd <= max_loss_usd:
+        return True, f"pnl_usd={pnl_usd:.2f} <= {max_loss_usd:.2f}"
+    return False, f"not_negative_enough pnl_pct={pnl_pct} pnl_usd={pnl_usd:.2f}"
+
+
+def _evaluate(core_loop: Any, current_broker: Any = None) -> None:
     if not _truthy("NIJA_HELD_POSITION_LOSS_EXIT_ENABLED", True):
         return
-    seen = getattr(core_loop, "__nija_held_position_exit_seen__", None)
-    if not isinstance(seen, set):
-        seen = set()
-        setattr(core_loop, "__nija_held_position_exit_seen__", seen)
     cooldown = _float_env("NIJA_HELD_POSITION_EXIT_COOLDOWN_S", 20.0)
     now = time.time()
     last = _safe_float(getattr(core_loop, "__nija_held_position_exit_last_ts__", 0.0), 0.0)
@@ -361,34 +316,35 @@ def _evaluate_held_position_exits(core_loop: Any, current_broker: Any = None) ->
     for broker in _candidate_brokers(core_loop, current_broker):
         broker_name = _broker_name(broker)
         raw_positions = _extract_positions(broker)
-        normalized = [p for p in (_normalize(raw, broker) for raw in raw_positions) if p]
-        if normalized:
-            logger.critical("HELD_POSITION_EXIT_SCAN broker=%s raw=%d normalized=%d", broker_name, len(raw_positions), len(normalized))
-        for pos in normalized:
-            key = f"{broker_name}:{pos.get('symbol')}:{pos.get('qty')}"
-            _attach_runtime(core_loop, pos)
-            breached, reason = _loss_breached(pos)
+        positions = [p for p in (_normalize(raw, broker) for raw in raw_positions) if p]
+        if positions:
+            logger.critical("HELD_POSITION_LOSS_SCAN broker=%s raw=%d normalized=%d", broker_name, len(raw_positions), len(positions))
+        for pos in positions:
+            runtime_ok = _attach_runtime(core_loop, pos)
+            breached, reason = _loss_reason(pos)
             logger.critical(
-                "HELD_POSITION_EXIT_EVALUATED broker=%s symbol=%s qty=%s value=$%.2f pnl_usd=%.2f pnl_pct=%s breached=%s reason=%s",
+                "HELD_POSITION_EXIT_EVALUATED broker=%s symbol=%s qty=%s value=$%.2f pnl_usd=%.2f pnl_pct=%s pnl_known=%s runtime=%s breached=%s reason=%s",
                 broker_name,
                 pos.get("symbol"),
                 pos.get("qty"),
                 _safe_float(pos.get("market_value_usd"), 0.0),
                 _safe_float(pos.get("pnl_usd"), 0.0),
                 pos.get("pnl_pct"),
+                pos.get("pnl_known"),
+                runtime_ok,
                 breached,
                 reason,
             )
-            if not breached:
-                continue
-            if key in seen:
-                continue
-            ok, detail = _submit_exit(broker, pos)
-            if ok:
-                seen.add(key)
-                logger.critical("HELD_POSITION_EXIT_TRIGGERED broker=%s symbol=%s qty=%s reason=%s detail=%s", broker_name, pos.get("symbol"), pos.get("qty"), reason, detail)
-            else:
-                logger.critical("HELD_POSITION_EXIT_BLOCKED broker=%s symbol=%s qty=%s reason=%s detail=%s", broker_name, pos.get("symbol"), pos.get("qty"), reason, detail)
+            if breached:
+                logger.critical(
+                    "HELD_POSITION_EXIT_RECOMMENDED broker=%s symbol=%s qty=%s reason=%s live_exit_enabled=%s",
+                    broker_name,
+                    pos.get("symbol"),
+                    pos.get("qty"),
+                    reason,
+                    _truthy("NIJA_HELD_POSITION_EXIT_LIVE_ENABLED", False),
+                )
+                print(f"[NIJA-PRINT] HELD_POSITION_EXIT_RECOMMENDED | broker={broker_name} symbol={pos.get('symbol')} qty={pos.get('qty')} reason={reason}", flush=True)
 
 
 def _patch_core_loop(cls: type) -> bool:
@@ -400,14 +356,14 @@ def _patch_core_loop(cls: type) -> bool:
         def _wrapped_scan(self: Any, broker: Any = None, *args: Any, **kwargs: Any):
             broker_obj = broker if broker is not None else getattr(getattr(self, "apex", None), "broker_client", None)
             try:
-                _evaluate_held_position_exits(self, broker_obj)
+                _evaluate(self, broker_obj)
             except Exception as exc:
-                logger.warning("HELD_POSITION_EXIT_SCAN_FAILED before_scan err=%s", exc)
+                logger.warning("HELD_POSITION_LOSS_SCAN_FAILED before_scan err=%s", exc)
             result = original_scan(self, broker, *args, **kwargs)
             try:
-                _evaluate_held_position_exits(self, broker_obj)
+                _evaluate(self, broker_obj)
             except Exception as exc:
-                logger.warning("HELD_POSITION_EXIT_SCAN_FAILED after_scan err=%s", exc)
+                logger.warning("HELD_POSITION_LOSS_SCAN_FAILED after_scan err=%s", exc)
             return result
         setattr(cls, "run_scan_phase", _wrapped_scan)
     setattr(cls, _PATCHED_ATTR, True)
@@ -418,7 +374,7 @@ def _patch_core_loop(cls: type) -> bool:
 
 def _patch_loaded() -> bool:
     patched = False
-    for name, module in list(sys.modules.items()):
+    for _name, module in list(sys.modules.items()):
         if not isinstance(module, ModuleType):
             continue
         cls = getattr(module, "NijaCoreLoop", None)
@@ -450,7 +406,6 @@ def install_import_hook() -> None:
         os.environ.setdefault("NIJA_HELD_POSITION_LOSS_EXIT_ENABLED", "true")
         os.environ.setdefault("NIJA_HELD_POSITION_MAX_LOSS_PCT", "0.005")
         os.environ.setdefault("NIJA_HELD_POSITION_MAX_LOSS_USD", "0.25")
-        os.environ.setdefault("NIJA_HELD_POSITION_EXIT_DRY_RUN", "false")
-        os.environ.setdefault("NIJA_EXIT_HELD_UNKNOWN_COST_BASIS", "false")
+        os.environ.setdefault("NIJA_HELD_POSITION_EXIT_LIVE_ENABLED", "false")
         _patch_loaded()
         _start_monitor()
