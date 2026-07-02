@@ -16,6 +16,13 @@ _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
 
+# ExecutionEngine's target-geometry gate currently rejects stop losses wider
+# than MAX_SL_PCT=0.003 (0.300%). Keep fallback repairs below that hard gate;
+# do not loosen the execution gate itself.
+_FALLBACK_HARD_MAX_SL_PCT = 0.0028
+_FALLBACK_DEFAULT_SL_PCT = 0.0025
+_FALLBACK_MIN_SL_PCT = 0.0015
+
 
 def _truthy(name: str, default: str = "false") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUTHY
@@ -173,6 +180,13 @@ def _min_notional(loop: Any, balance: float) -> float:
             return 2.0 if broker in {"kraken", "coinbase", "okx"} else 5.0
 
 
+def _fallback_sl_pct() -> float:
+    requested = _float_env("NIJA_FALLBACK_REPAIR_SL_PCT", _FALLBACK_DEFAULT_SL_PCT)
+    # The previous default/env value could be 0.012 (1.2%), which fails the
+    # target_geometry_gate. Clamp fallback payloads below the execution hard cap.
+    return max(_FALLBACK_MIN_SL_PCT, min(requested, _FALLBACK_HARD_MAX_SL_PCT))
+
+
 def _build_conservative_payload(loop: Any, *, df: Any, sig: Any, snapshot: Any, action: str, existing_reason: str) -> dict[str, Any]:
     try:
         price = float(df["close"].iloc[-1])
@@ -188,7 +202,7 @@ def _build_conservative_payload(loop: Any, *, df: Any, sig: Any, snapshot: Any, 
     floor = _min_notional(loop, balance)
     size = min(max(floor, balance * 0.025), balance)
 
-    sl_pct = max(0.008, min(_float_env("NIJA_FALLBACK_REPAIR_SL_PCT", 0.012), 0.030))
+    sl_pct = _fallback_sl_pct()
     tp1_pct = max(_float_env("NIJA_FALLBACK_REPAIR_TP1_PCT", 0.040), sl_pct * 2.5, 0.030)
     tp2_pct = max(_float_env("NIJA_FALLBACK_REPAIR_TP2_PCT", 0.060), tp1_pct + 0.010)
     tp3_pct = max(_float_env("NIJA_FALLBACK_REPAIR_TP3_PCT", 0.080), tp2_pct + 0.010)
@@ -203,6 +217,8 @@ def _build_conservative_payload(loop: Any, *, df: Any, sig: Any, snapshot: Any, 
             "expected_win_rate": expected_win_rate,
             "market_quality": 1.0,
             "regime": "fallback_repair",
+            "fallback_sl_pct": sl_pct,
+            "fallback_max_sl_pct": _FALLBACK_HARD_MAX_SL_PCT,
         }
     else:
         stop_loss = price * (1.0 - sl_pct)
@@ -213,6 +229,8 @@ def _build_conservative_payload(loop: Any, *, df: Any, sig: Any, snapshot: Any, 
             "expected_win_rate": expected_win_rate,
             "market_quality": 1.0,
             "regime": "fallback_repair",
+            "fallback_sl_pct": sl_pct,
+            "fallback_max_sl_pct": _FALLBACK_HARD_MAX_SL_PCT,
         }
 
     reason = str(existing_reason or getattr(sig, "reason", "fallback_entry") or "fallback_entry")
@@ -226,11 +244,12 @@ def _build_conservative_payload(loop: Any, *, df: Any, sig: Any, snapshot: Any, 
         "stop_loss": stop_loss,
         "take_profit": take_profit,
         "trailing_stop_pct": 0.75,
-        "reason": reason + " [fallback_payload_repair_cost_aware]",
+        "reason": reason + " [fallback_payload_repair_cost_aware_target_geometry_capped]",
         "fallback_entry": True,
         "forced_fallback": True,
         "fallback_payload_repaired": True,
         "fallback_edge_geometry_repaired": True,
+        "fallback_target_geometry_capped": True,
         "competitive_profitability_policy": "handled_by_downstream_gates",
     }
 
@@ -277,18 +296,21 @@ def _install_on_module(module: ModuleType) -> bool:
             except Exception:
                 pass
             tp = payload.get("take_profit") if isinstance(payload.get("take_profit"), dict) else {}
+            sl_pct = float(tp.get("fallback_sl_pct", 0.0) or 0.0)
             logger.critical(
-                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED symbol=%s action=%s size=%.2f tp1=%s auth=%s reason=%s",
+                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED symbol=%s action=%s size=%.2f tp1=%s sl_pct=%.4f auth=%s reason=%s",
                 getattr(sig, "symbol", "UNKNOWN"),
                 payload.get("action"),
                 float(payload.get("position_size", 0.0) or 0.0),
                 tp.get("tp1"),
+                sl_pct,
                 auth_detail,
                 message,
             )
             print(
                 f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED | symbol={getattr(sig, 'symbol', 'UNKNOWN')} "
-                f"action={payload.get('action')} size=${float(payload.get('position_size', 0.0) or 0.0):.2f} edge_geometry=true",
+                f"action={payload.get('action')} size=${float(payload.get('position_size', 0.0) or 0.0):.2f} "
+                f"edge_geometry=true sl_pct={sl_pct * 100.0:.3f}%",
                 flush=True,
             )
             return payload
