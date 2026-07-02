@@ -173,6 +173,7 @@ def _runtime_defaults() -> None:
         "NIJA_POST_LOCK_CAPITAL_REFRESH": "true",
         "NIJA_GENERATION_MISMATCH_RECOVERY_ENABLED": "true",
         "NIJA_COINBASE_EXECUTION_FAILOVER_ENABLED": "true",
+        "NIJA_EXECUTION_ENTRY_SAFE_LOGGER_ENABLED": "true",
         "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S": "300",
         "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S": "300",
         "NIJA_REDIS_LOCK_ACQUIRE_TIMEOUT_S": "300",
@@ -329,6 +330,15 @@ def _install_coinbase_execution_failover() -> None:
     )
 
 
+def _install_execution_entry_safe_logger() -> None:
+    _install_patch_module(
+        filename="execution_entry_nonblocking_logger_patch.py",
+        module_name="nija_execution_entry_nonblocking_logger_patch",
+        success_log="EXECUTION_ENTRY_SAFE_LOGGER_INSTALL_REQUESTED",
+        error_prefix="Execution entry safe logger",
+    )
+
+
 _install_logging_format_guard()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
@@ -343,6 +353,7 @@ _install_trading_state_dispatch_latch_repair()
 _install_downstream_risk_governor_equity_repair()
 _install_usdt_kraken_ecel_routing_repair()
 _install_coinbase_execution_failover()
+_install_execution_entry_safe_logger()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
