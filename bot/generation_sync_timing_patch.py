@@ -7,8 +7,21 @@ import os
 logger = logging.getLogger("nija.generation_sync_timing_patch")
 
 
+def _install_final_gate_repair() -> None:
+    try:
+        module = importlib.import_module("bot.live_active_execution_gate_final_patch")
+        installer = getattr(module, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL_CHAINED_FROM_GENERATION_SYNC")
+            print("[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_CHAINED_FROM_GENERATION_SYNC", flush=True)
+    except Exception as exc:
+        logger.debug("final gate repair chain deferred: %s", exc)
+
+
 def install_import_hook() -> None:
     os.environ["NIJA_GENERATION_MISMATCH_RECOVERY_COOLDOWN_S"] = "0"
+    _install_final_gate_repair()
     for name in ("bot.writer_generation_tracker", "writer_generation_tracker"):
         try:
             module = importlib.import_module(name)
