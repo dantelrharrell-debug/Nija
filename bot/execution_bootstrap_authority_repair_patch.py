@@ -40,19 +40,58 @@ def _truthy(name: str, default: str = "false") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUTHY
 
 
-def _kill_switch_clear() -> bool:
+def _state_machine_live_active() -> tuple[bool, str]:
+    try:
+        try:
+            from bot.trading_state_machine import get_state_machine
+        except ImportError:
+            from trading_state_machine import get_state_machine  # type: ignore[import]
+        sm = get_state_machine()
+        cur = getattr(sm, "get_current_state", lambda: None)()
+        state = str(getattr(cur, "value", cur) or "").strip().upper()
+        if state == "LIVE_ACTIVE":
+            return True, "state_machine_live_active"
+        return False, f"state_machine_not_live_active:{state or 'unknown'}"
+    except Exception as exc:
+        return False, f"state_machine_probe_failed:{exc}"
+
+
+def _coordinator_executing() -> tuple[bool, str]:
+    try:
+        for mod_name in ("bot.startup_coordinator", "startup_coordinator"):
+            try:
+                mod = importlib.import_module(mod_name)
+            except Exception:
+                continue
+            getter = getattr(mod, "get_startup_coordinator", None)
+            if not callable(getter):
+                continue
+            coord = getter()
+            runtime_state = getattr(coord, "runtime_state", getattr(coord, "_runtime_state", None))
+            coord_state = getattr(coord, "state", getattr(coord, "_state", None))
+            runtime_text = str(getattr(runtime_state, "value", runtime_state) or "").upper()
+            coord_text = str(getattr(coord_state, "value", coord_state) or "").upper()
+            if "EXECUT" in runtime_text or "DISPATCH" in coord_text:
+                return True, f"coordinator_runtime={runtime_text} coordinator_state={coord_text}"
+        return False, "coordinator_not_executing"
+    except Exception as exc:
+        return False, f"coordinator_probe_failed:{exc}"
+
+
+def _kill_switch_clear() -> tuple[bool, str]:
     try:
         try:
             from bot.kill_switch import get_kill_switch
         except ImportError:
             from kill_switch import get_kill_switch  # type: ignore[import]
-        return not bool(get_kill_switch().is_active())
+        active = bool(get_kill_switch().is_active())
+        return (not active), f"kill_switch_active={active}"
     except Exception as exc:
         logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR kill_switch_probe_failed err=%s", exc)
-        return False
+        return False, f"kill_switch_probe_failed:{exc}"
 
 
-def _capital_hydrated() -> bool:
+def _capital_ready() -> tuple[bool, str]:
     try:
         try:
             from bot.capital_authority import get_capital_authority
@@ -60,8 +99,8 @@ def _capital_hydrated() -> bool:
             from capital_authority import get_capital_authority  # type: ignore[import]
         ca = get_capital_authority()
         hydrated = bool(getattr(ca, "is_hydrated", False))
-        if not hydrated:
-            return False
+        first_snap = bool(getattr(ca, "first_snap_accepted", False))
+        valid_brokers = int(getattr(ca, "valid_broker_count", 0) or 0)
         best = 0.0
         for attr in ("total_capital", "real_capital"):
             try:
@@ -75,10 +114,20 @@ def _capital_hydrated() -> bool:
                     best = max(best, float(getter() or 0.0))
                 except Exception:
                     pass
-        return best > 0.0
+        fresh = True
+        fresh_getter = getattr(ca, "is_fresh", None)
+        if callable(fresh_getter):
+            try:
+                fresh = bool(fresh_getter(ttl_s=180.0))
+            except TypeError:
+                fresh = bool(fresh_getter())
+            except Exception:
+                fresh = False
+        ok = hydrated and first_snap and valid_brokers > 0 and best > 0.0 and fresh
+        return ok, f"capital hydrated={hydrated} first_snap={first_snap} valid_brokers={valid_brokers} amount={best:.2f} fresh={fresh}"
     except Exception as exc:
         logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR capital_probe_failed err=%s", exc)
-        return False
+        return False, f"capital_probe_failed:{exc}"
 
 
 def _strict_writer_nonce_ready() -> tuple[bool, str]:
@@ -93,9 +142,17 @@ def _strict_writer_nonce_ready() -> tuple[bool, str]:
         ok, detail = probe()
         if not bool(ok):
             return False, str(detail or "runtime_writer_nonce_not_ready")
-        return True, "ok"
+        return True, "strict_writer_nonce_ok"
     except Exception as exc:
         return False, f"runtime_writer_nonce_probe_failed:{exc}"
+
+
+def _writer_lease_present() -> tuple[bool, str]:
+    token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()
+    generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip()
+    if token and generation:
+        return True, f"writer_token_prefix={token[:8]} generation={generation}"
+    return False, "writer_token_or_generation_missing"
 
 
 def _runtime_live_authorized() -> tuple[bool, str]:
@@ -103,22 +160,28 @@ def _runtime_live_authorized() -> tuple[bool, str]:
         return False, "live_capital_not_verified"
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return False, "simulation_mode"
-    if str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() != "LIVE_ACTIVE":
-        return False, "runtime_state_not_live_active"
-    if not _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY"):
-        return False, "runtime_execution_authority_missing"
-    if not str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip():
-        return False, "writer_fencing_token_missing"
-    if not str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip():
-        return False, "writer_lease_generation_missing"
-    if not _kill_switch_clear():
-        return False, "kill_switch_active_or_unknown"
-    if not _capital_hydrated():
-        return False, "capital_not_hydrated"
+
+    writer_ok, writer_detail = _writer_lease_present()
+    if not writer_ok:
+        return False, writer_detail
+    kill_ok, kill_detail = _kill_switch_clear()
+    if not kill_ok:
+        return False, kill_detail
+    cap_ok, cap_detail = _capital_ready()
+    if not cap_ok:
+        return False, cap_detail
     nonce_ok, nonce_detail = _strict_writer_nonce_ready()
     if not nonce_ok:
         return False, f"strict_writer_nonce:{nonce_detail}"
-    return True, "strict_live_runtime_authorized"
+
+    env_state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper()
+    env_auth = _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    sm_ok, sm_detail = _state_machine_live_active()
+    coord_ok, coord_detail = _coordinator_executing()
+
+    if (env_state == "LIVE_ACTIVE" and env_auth) or sm_ok or coord_ok:
+        return True, f"strict_live_runtime_authorized env_state={env_state or 'unset'} env_auth={env_auth} {sm_detail} {coord_detail} {cap_detail} {writer_detail} {nonce_detail} {kill_detail}"
+    return False, f"not_live_authorized env_state={env_state or 'unset'} env_auth={env_auth} {sm_detail} {coord_detail}"
 
 
 def _repair_bootstrap_authority(reason: str) -> bool:
@@ -169,9 +232,10 @@ def _repair_bootstrap_authority(reason: str) -> bool:
                         }
                     )
             logger.critical(
-                "EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_APPLIED reason=%s from_state=%s token_prefix=%s generation=%s",
+                "EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_APPLIED reason=%s from_state=%s detail=%s token_prefix=%s generation=%s",
                 reason,
                 getattr(state_before, "value", state_before),
+                detail,
                 os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")[:8],
                 os.environ.get("NIJA_WRITER_LEASE_GENERATION", ""),
             )
@@ -228,11 +292,11 @@ def _start_monitor() -> None:
 
     def _monitor() -> None:
         deadline = time.time() + float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "300") or "300")
+        patched_any = False
         while time.time() < deadline:
-            if _try_patch_loaded():
-                return
+            patched_any = _try_patch_loaded() or patched_any
             time.sleep(0.25)
-        logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_MONITOR_EXPIRED patched=%s", _PATCHED)
+        logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_MONITOR_COMPLETE patched=%s patched_any=%s", _PATCHED, patched_any)
 
     threading.Thread(target=_monitor, name="execution-bootstrap-authority-repair-monitor", daemon=True).start()
     logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_MONITOR_STARTED")
@@ -251,8 +315,9 @@ def install_import_hook() -> None:
 
         def _wrapped_import_module(name: str, package: str | None = None):
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
-            if name in {"bot.execution_engine", "execution_engine"}:
+            if name in {"bot.execution_engine", "execution_engine"} or hasattr(module, "ExecutionEngine"):
                 _install_on_execution_engine(module)
+            _try_patch_loaded()
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
