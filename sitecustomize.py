@@ -1,7 +1,8 @@
 """NIJA Python startup normalizer.
 
 This module is imported automatically by Python. Keep it deterministic and
-side-effect limited: normalize environment defaults before bot modules read them.
+side-effect limited: normalize environment defaults before bot modules read them,
+then request runtime patch installation.
 """
 
 from __future__ import annotations
@@ -48,6 +49,24 @@ def _live_mode() -> bool:
 
 def _env_name(*parts: str) -> str:
     return "_".join(parts)
+
+
+def _set_max_floor(name: str, value: float) -> None:
+    current = _float_env(name, value)
+    if name not in os.environ or current > value:
+        os.environ[name] = str(value)
+
+
+def _set_min_floor(name: str, value: float) -> None:
+    current = _float_env(name, value)
+    if name not in os.environ or current < value:
+        os.environ[name] = str(value)
+
+
+def _set_max_ceiling(name: str, value: float) -> None:
+    current = _float_env(name, value)
+    if name not in os.environ or current > value:
+        os.environ[name] = str(value)
 
 
 def _force_strict_redis_authority(label: str = "startup") -> None:
@@ -97,24 +116,6 @@ def _normalize_okx() -> None:
             os.environ[name] = _clean(os.environ.get(name))
 
 
-def _set_max_floor(name: str, value: float) -> None:
-    current = _float_env(name, value)
-    if name not in os.environ or current > value:
-        os.environ[name] = str(value)
-
-
-def _set_min_floor(name: str, value: float) -> None:
-    current = _float_env(name, value)
-    if name not in os.environ or current < value:
-        os.environ[name] = str(value)
-
-
-def _set_max_ceiling(name: str, value: float) -> None:
-    current = _float_env(name, value)
-    if name not in os.environ or current > value:
-        os.environ[name] = str(value)
-
-
 def _normalize_micro_cap_floors() -> None:
     if not _live_mode():
         return
@@ -130,7 +131,6 @@ def _normalize_micro_cap_floors() -> None:
 def _normalize_writer_lock_timing() -> None:
     if not (_live_mode() and _redis_configured()):
         return
-
     for name in (
         "NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S",
         "NIJA_DISTRIBUTED_LOCK_ACQUIRE_TIMEOUT_S",
@@ -139,7 +139,6 @@ def _normalize_writer_lock_timing() -> None:
         "NIJA_FAIL_CLOSED_LOCK_ACQUIRE_TIMEOUT_S",
     ):
         _set_min_floor(name, 300.0)
-
     for name in (
         "NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S",
         "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S",
@@ -151,7 +150,6 @@ def _normalize_writer_lock_timing() -> None:
         "NIJA_LOCK_HEARTBEAT_STALE_THRESHOLD_S",
     ):
         _set_max_ceiling(name, 120.0)
-
     logger.warning(
         "WRITER_LOCK_TIMING_NORMALIZED wait_s=%s stale_threshold_s=%s max_retry_attempts=%s",
         os.environ.get("NIJA_WRITER_LOCK_ACQUIRE_TIMEOUT_S"),
@@ -175,6 +173,7 @@ def _runtime_defaults() -> None:
         "NIJA_COINBASE_EXECUTION_FAILOVER_ENABLED": "true",
         "NIJA_EXECUTION_ENTRY_SAFE_LOGGER_ENABLED": "true",
         "NIJA_RUNTIME_EXECUTION_AUTHORITY": "true",
+        "NIJA_RISK_GATE_EXECUTION_BRIDGE_ENABLED": "true",
         "NIJA_FALLBACK_REPAIR_MIN_TP1_PCT": "0.012",
         "NIJA_FALLBACK_REPAIR_MIN_TP2_PCT": "0.018",
         "NIJA_FALLBACK_REPAIR_MIN_TP3_PCT": "0.026",
@@ -209,147 +208,71 @@ def _install_patch_module(*, filename: str, module_name: str, success_log: str, 
 
 
 def _install_logging_format_guard() -> None:
-    _install_patch_module(
-        filename="logging_format_guard_patch.py",
-        module_name="nija_logging_format_guard_patch",
-        success_log="LOGGING_FORMAT_GUARD_INSTALL_REQUESTED",
-        error_prefix="Logging format guard",
-    )
+    _install_patch_module(filename="logging_format_guard_patch.py", module_name="nija_logging_format_guard_patch", success_log="LOGGING_FORMAT_GUARD_INSTALL_REQUESTED", error_prefix="Logging format guard")
 
 
 def _install_activation_snapshot_bridge() -> None:
-    _install_patch_module(
-        filename="activation_snapshot_bridge_patch.py",
-        module_name="nija_activation_snapshot_bridge_patch",
-        success_log="ACTIVATION_SNAPSHOT_BRIDGE_INSTALL_REQUESTED",
-        error_prefix="Activation snapshot bridge",
-    )
+    _install_patch_module(filename="activation_snapshot_bridge_patch.py", module_name="nija_activation_snapshot_bridge_patch", success_log="ACTIVATION_SNAPSHOT_BRIDGE_INSTALL_REQUESTED", error_prefix="Activation snapshot bridge")
 
 
 def _install_live_active_dispatch_bridge() -> None:
-    _install_patch_module(
-        filename="live_active_dispatch_bridge_patch.py",
-        module_name="nija_live_active_dispatch_bridge_patch",
-        success_log="LIVE_ACTIVE_DISPATCH_BRIDGE_INSTALL_REQUESTED",
-        error_prefix="Live-active dispatch bridge",
-    )
+    _install_patch_module(filename="live_active_dispatch_bridge_patch.py", module_name="nija_live_active_dispatch_bridge_patch", success_log="LIVE_ACTIVE_DISPATCH_BRIDGE_INSTALL_REQUESTED", error_prefix="Live-active dispatch bridge")
 
 
 def _install_activation_pending_commit_monitor() -> None:
-    _install_patch_module(
-        filename="activation_pending_commit_monitor_patch.py",
-        module_name="nija_activation_pending_commit_monitor_patch",
-        success_log="ACTIVATION_PENDING_COMMIT_MONITOR_INSTALL_REQUESTED",
-        error_prefix="Activation pending commit monitor",
-    )
+    _install_patch_module(filename="activation_pending_commit_monitor_patch.py", module_name="nija_activation_pending_commit_monitor_patch", success_log="ACTIVATION_PENDING_COMMIT_MONITOR_INSTALL_REQUESTED", error_prefix="Activation pending commit monitor")
 
 
 def _install_trading_strategy_apex_wiring() -> None:
-    _install_patch_module(
-        filename="trading_strategy_apex_wiring_patch.py",
-        module_name="nija_trading_strategy_apex_wiring_patch",
-        success_log="TRADING_STRATEGY_APEX_WIRING_INSTALL_REQUESTED",
-        error_prefix="TradingStrategy APEX wiring repair",
-    )
+    _install_patch_module(filename="trading_strategy_apex_wiring_patch.py", module_name="nija_trading_strategy_apex_wiring_patch", success_log="TRADING_STRATEGY_APEX_WIRING_INSTALL_REQUESTED", error_prefix="TradingStrategy APEX wiring repair")
 
 
 def _install_phase3_scan_budget() -> None:
-    _install_patch_module(
-        filename="phase3_scan_budget_patch.py",
-        module_name="nija_phase3_scan_budget_patch",
-        success_log="PHASE3_SCAN_BUDGET_INSTALL_REQUESTED",
-        error_prefix="Phase3 scan budget patch",
-    )
+    _install_patch_module(filename="phase3_scan_budget_patch.py", module_name="nija_phase3_scan_budget_patch", success_log="PHASE3_SCAN_BUDGET_INSTALL_REQUESTED", error_prefix="Phase3 scan budget patch")
 
 
 def _install_execution_bootstrap_authority_repair() -> None:
-    _install_patch_module(
-        filename="execution_bootstrap_authority_repair_patch.py",
-        module_name="nija_execution_bootstrap_authority_repair_patch",
-        success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED",
-        error_prefix="Execution bootstrap authority repair",
-    )
+    _install_patch_module(filename="execution_bootstrap_authority_repair_patch.py", module_name="nija_execution_bootstrap_authority_repair_patch", success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED", error_prefix="Execution bootstrap authority repair")
 
 
 def _install_forced_fallback_payload_repair() -> None:
-    _install_patch_module(
-        filename="forced_fallback_payload_repair_patch.py",
-        module_name="nija_forced_fallback_payload_repair_patch",
-        success_log="FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_REQUESTED",
-        error_prefix="Forced fallback payload repair",
-    )
+    _install_patch_module(filename="forced_fallback_payload_repair_patch.py", module_name="nija_forced_fallback_payload_repair_patch", success_log="FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_REQUESTED", error_prefix="Forced fallback payload repair")
 
 
 def _install_fallback_take_profit_geometry_repair() -> None:
-    _install_patch_module(
-        filename="fallback_take_profit_geometry_repair_patch.py",
-        module_name="nija_fallback_take_profit_geometry_repair_patch",
-        success_log="FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_REQUESTED",
-        error_prefix="Fallback take-profit geometry repair",
-    )
+    _install_patch_module(filename="fallback_take_profit_geometry_repair_patch.py", module_name="nija_fallback_take_profit_geometry_repair_patch", success_log="FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_REQUESTED", error_prefix="Fallback take-profit geometry repair")
 
 
 def _install_execution_pipeline_gate_repair() -> None:
-    _install_patch_module(
-        filename="execution_pipeline_gate_repair_patch.py",
-        module_name="nija_execution_pipeline_gate_repair_patch",
-        success_log="EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_REQUESTED",
-        error_prefix="Execution pipeline gate repair",
-    )
+    _install_patch_module(filename="execution_pipeline_gate_repair_patch.py", module_name="nija_execution_pipeline_gate_repair_patch", success_log="EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_REQUESTED", error_prefix="Execution pipeline gate repair")
 
 
 def _install_hard_controls_csm_repair() -> None:
-    _install_patch_module(
-        filename="hard_controls_csm_repair_patch.py",
-        module_name="nija_hard_controls_csm_repair_patch",
-        success_log="HARD_CONTROLS_CSM_REPAIR_INSTALL_REQUESTED",
-        error_prefix="Hard controls CSM repair",
-    )
+    _install_patch_module(filename="hard_controls_csm_repair_patch.py", module_name="nija_hard_controls_csm_repair_patch", success_log="HARD_CONTROLS_CSM_REPAIR_INSTALL_REQUESTED", error_prefix="Hard controls CSM repair")
 
 
 def _install_trading_state_dispatch_latch_repair() -> None:
-    _install_patch_module(
-        filename="trading_state_dispatch_latch_repair_patch.py",
-        module_name="nija_trading_state_dispatch_latch_repair_patch",
-        success_log="TRADING_STATE_DISPATCH_LATCH_REPAIR_INSTALL_REQUESTED",
-        error_prefix="Trading state dispatch latch repair",
-    )
+    _install_patch_module(filename="trading_state_dispatch_latch_repair_patch.py", module_name="nija_trading_state_dispatch_latch_repair_patch", success_log="TRADING_STATE_DISPATCH_LATCH_REPAIR_INSTALL_REQUESTED", error_prefix="Trading state dispatch latch repair")
 
 
 def _install_downstream_risk_governor_equity_repair() -> None:
-    _install_patch_module(
-        filename="downstream_risk_governor_equity_repair_patch.py",
-        module_name="nija_downstream_risk_governor_equity_repair_patch",
-        success_log="DOWNSTREAM_RISK_GOVERNOR_EQUITY_REPAIR_INSTALL_REQUESTED",
-        error_prefix="Downstream risk governor equity repair",
-    )
+    _install_patch_module(filename="downstream_risk_governor_equity_repair_patch.py", module_name="nija_downstream_risk_governor_equity_repair_patch", success_log="DOWNSTREAM_RISK_GOVERNOR_EQUITY_REPAIR_INSTALL_REQUESTED", error_prefix="Downstream risk governor equity repair")
 
 
 def _install_usdt_kraken_ecel_routing_repair() -> None:
-    _install_patch_module(
-        filename="usdt_kraken_ecel_routing_repair_patch.py",
-        module_name="nija_usdt_kraken_ecel_routing_repair_patch",
-        success_log="USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED",
-        error_prefix="USDT Kraken ECEL routing repair",
-    )
+    _install_patch_module(filename="usdt_kraken_ecel_routing_repair_patch.py", module_name="nija_usdt_kraken_ecel_routing_repair_patch", success_log="USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED", error_prefix="USDT Kraken ECEL routing repair")
 
 
 def _install_coinbase_execution_failover() -> None:
-    _install_patch_module(
-        filename="coinbase_execution_failover_patch.py",
-        module_name="nija_coinbase_execution_failover_patch",
-        success_log="COINBASE_EXECUTION_FAILOVER_INSTALL_REQUESTED",
-        error_prefix="Coinbase execution failover",
-    )
+    _install_patch_module(filename="coinbase_execution_failover_patch.py", module_name="nija_coinbase_execution_failover_patch", success_log="COINBASE_EXECUTION_FAILOVER_INSTALL_REQUESTED", error_prefix="Coinbase execution failover")
 
 
 def _install_execution_entry_safe_logger() -> None:
-    _install_patch_module(
-        filename="execution_entry_nonblocking_logger_patch.py",
-        module_name="nija_execution_entry_nonblocking_logger_patch",
-        success_log="EXECUTION_ENTRY_SAFE_LOGGER_INSTALL_REQUESTED",
-        error_prefix="Execution entry safe logger",
-    )
+    _install_patch_module(filename="execution_entry_nonblocking_logger_patch.py", module_name="nija_execution_entry_nonblocking_logger_patch", success_log="EXECUTION_ENTRY_SAFE_LOGGER_INSTALL_REQUESTED", error_prefix="Execution entry safe logger")
+
+
+def _install_risk_gate_execution_bridge() -> None:
+    _install_patch_module(filename="risk_gate_execution_bridge_patch.py", module_name="nija_risk_gate_execution_bridge_patch", success_log="RISK_GATE_EXECUTION_BRIDGE_INSTALL_REQUESTED", error_prefix="Risk gate execution bridge")
 
 
 _install_logging_format_guard()
@@ -368,6 +291,7 @@ _install_downstream_risk_governor_equity_repair()
 _install_usdt_kraken_ecel_routing_repair()
 _install_coinbase_execution_failover()
 _install_execution_entry_safe_logger()
+_install_risk_gate_execution_bridge()
 _install_activation_snapshot_bridge()
 _install_activation_pending_commit_monitor()
 _install_live_active_dispatch_bridge()
