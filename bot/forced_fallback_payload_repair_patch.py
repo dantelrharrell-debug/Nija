@@ -28,16 +28,126 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-def _live_runtime_authorized() -> bool:
-    return bool(
-        _truthy("LIVE_CAPITAL_VERIFIED")
-        and not _truthy("DRY_RUN_MODE")
-        and not _truthy("PAPER_MODE")
-        and str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() == "LIVE_ACTIVE"
-        and _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
-        and str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()
-        and str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip()
-    )
+def _state_machine_live_active() -> tuple[bool, str]:
+    try:
+        try:
+            from bot.trading_state_machine import get_state_machine
+        except ImportError:
+            from trading_state_machine import get_state_machine  # type: ignore[import]
+        sm = get_state_machine()
+        cur = getattr(sm, "get_current_state", lambda: None)()
+        state = str(getattr(cur, "value", cur) or "").strip().upper()
+        if state == "LIVE_ACTIVE":
+            return True, "state_machine_live_active"
+        return False, f"state_machine_not_live_active:{state or 'unknown'}"
+    except Exception as exc:
+        return False, f"state_machine_probe_failed:{exc}"
+
+
+def _coordinator_executing() -> tuple[bool, str]:
+    try:
+        for mod_name in ("bot.startup_coordinator", "startup_coordinator"):
+            try:
+                mod = importlib.import_module(mod_name)
+            except Exception:
+                continue
+            getter = getattr(mod, "get_startup_coordinator", None)
+            if not callable(getter):
+                continue
+            coord = getter()
+            runtime_state = getattr(coord, "runtime_state", getattr(coord, "_runtime_state", None))
+            coord_state = getattr(coord, "state", getattr(coord, "_state", None))
+            runtime_text = str(getattr(runtime_state, "value", runtime_state) or "").upper()
+            coord_text = str(getattr(coord_state, "value", coord_state) or "").upper()
+            if "EXECUT" in runtime_text or "DISPATCH" in coord_text:
+                return True, f"coordinator_runtime={runtime_text} coordinator_state={coord_text}"
+        return False, "coordinator_not_executing"
+    except Exception as exc:
+        return False, f"coordinator_probe_failed:{exc}"
+
+
+def _capital_ready() -> tuple[bool, str]:
+    try:
+        try:
+            from bot.capital_authority import get_capital_authority
+        except ImportError:
+            from capital_authority import get_capital_authority  # type: ignore[import]
+        ca = get_capital_authority()
+        hydrated = bool(getattr(ca, "is_hydrated", False))
+        first_snap = bool(getattr(ca, "first_snap_accepted", False))
+        valid_brokers = int(getattr(ca, "valid_broker_count", 0) or 0)
+        best = 0.0
+        for attr in ("total_capital", "real_capital"):
+            try:
+                best = max(best, float(getattr(ca, attr, 0.0) or 0.0))
+            except Exception:
+                pass
+        for meth in ("get_real_capital", "get_usable_capital"):
+            getter = getattr(ca, meth, None)
+            if callable(getter):
+                try:
+                    best = max(best, float(getter() or 0.0))
+                except Exception:
+                    pass
+        fresh = True
+        fresh_getter = getattr(ca, "is_fresh", None)
+        if callable(fresh_getter):
+            try:
+                fresh = bool(fresh_getter(ttl_s=180.0))
+            except TypeError:
+                fresh = bool(fresh_getter())
+            except Exception:
+                fresh = False
+        ok = hydrated and first_snap and valid_brokers > 0 and best > 0.0 and fresh
+        return ok, f"capital hydrated={hydrated} first_snap={first_snap} valid_brokers={valid_brokers} amount={best:.2f} fresh={fresh}"
+    except Exception as exc:
+        return False, f"capital_probe_failed:{exc}"
+
+
+def _kill_switch_clear() -> tuple[bool, str]:
+    try:
+        try:
+            from bot.kill_switch import get_kill_switch
+        except ImportError:
+            from kill_switch import get_kill_switch  # type: ignore[import]
+        active = bool(get_kill_switch().is_active())
+        return (not active), f"kill_switch_active={active}"
+    except Exception as exc:
+        return False, f"kill_switch_probe_failed:{exc}"
+
+
+def _writer_lease_present() -> tuple[bool, str]:
+    token = str(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")).strip()
+    generation = str(os.environ.get("NIJA_WRITER_LEASE_GENERATION", "")).strip()
+    if token and generation:
+        return True, f"writer_token_prefix={token[:8]} generation={generation}"
+    return False, "writer_token_or_generation_missing"
+
+
+def _live_runtime_authorized() -> tuple[bool, str]:
+    if not _truthy("LIVE_CAPITAL_VERIFIED"):
+        return False, "live_capital_not_verified"
+    if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
+        return False, "simulation_mode"
+
+    writer_ok, writer_detail = _writer_lease_present()
+    if not writer_ok:
+        return False, writer_detail
+    kill_ok, kill_detail = _kill_switch_clear()
+    if not kill_ok:
+        return False, kill_detail
+    cap_ok, cap_detail = _capital_ready()
+    if not cap_ok:
+        return False, cap_detail
+
+    env_state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper()
+    env_auth = _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+    sm_ok, sm_detail = _state_machine_live_active()
+    coord_ok, coord_detail = _coordinator_executing()
+
+    if (env_state == "LIVE_ACTIVE" and env_auth) or sm_ok or coord_ok:
+        return True, f"authorized env_state={env_state or 'unset'} env_auth={env_auth} {sm_detail} {coord_detail} {cap_detail} {writer_detail} {kill_detail}"
+    return False, f"not_live_authorized env_state={env_state or 'unset'} env_auth={env_auth} {sm_detail} {coord_detail}"
 
 
 def _broker_name(loop: Any) -> str:
@@ -144,9 +254,10 @@ def _install_on_module(module: ModuleType) -> bool:
             message = str(exc)
             if "competitive profitability policy blocked illiquid fallback entry" not in message:
                 raise
-            if not _live_runtime_authorized():
-                logger.critical("FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING detail=live_runtime_not_authorized err=%s", message)
-                print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING | detail=live_runtime_not_authorized err={message}", flush=True)
+            authorized, auth_detail = _live_runtime_authorized()
+            if not authorized:
+                logger.critical("FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING detail=%s err=%s", auth_detail, message)
+                print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING | detail={auth_detail} err={message}", flush=True)
                 raise
             df = kwargs.get("df") if "df" in kwargs else (args[0] if len(args) > 0 else None)
             sig = kwargs.get("sig") if "sig" in kwargs else (args[1] if len(args) > 1 else None)
@@ -167,11 +278,12 @@ def _install_on_module(module: ModuleType) -> bool:
                 pass
             tp = payload.get("take_profit") if isinstance(payload.get("take_profit"), dict) else {}
             logger.critical(
-                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED symbol=%s action=%s size=%.2f tp1=%s reason=%s",
+                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED symbol=%s action=%s size=%.2f tp1=%s auth=%s reason=%s",
                 getattr(sig, "symbol", "UNKNOWN"),
                 payload.get("action"),
                 float(payload.get("position_size", 0.0) or 0.0),
                 tp.get("tp1"),
+                auth_detail,
                 message,
             )
             print(
