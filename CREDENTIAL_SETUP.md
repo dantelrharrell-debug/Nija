@@ -170,8 +170,9 @@ OKX requires three credentials: key, secret, **and** a passphrase.
 ```
 OKX_API_KEY=<your-api-key>
 OKX_API_SECRET=<your-secret-key>
-OKX_PASSPHRASE=<your-passphrase>
+OKX_API_PASSPHRASE=<your-passphrase>   # OKX_PASSPHRASE also works
 OKX_USE_TESTNET=false   # Set to true for demo trading
+PRIMARY_EXECUTION_VENUE=okx   # Optional: force NIJA to route new entries to OKX
 ```
 
 ---

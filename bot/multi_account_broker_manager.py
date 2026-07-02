@@ -106,17 +106,23 @@ except ImportError:
 try:
     from bot.execution_venue_config import (
         get_coinbase_platform_skip_reasons,
+        get_okx_platform_skip_reasons,
         should_initialize_coinbase_platform,
+        should_initialize_okx_platform,
     )
 except ImportError:
     try:
         from execution_venue_config import (  # type: ignore[no-redef]
             get_coinbase_platform_skip_reasons,
+            get_okx_platform_skip_reasons,
             should_initialize_coinbase_platform,
+            should_initialize_okx_platform,
         )
     except ImportError:
         get_coinbase_platform_skip_reasons = None  # type: ignore[assignment]
+        get_okx_platform_skip_reasons = None  # type: ignore[assignment]
         should_initialize_coinbase_platform = None  # type: ignore[assignment]
+        should_initialize_okx_platform = None  # type: ignore[assignment]
 
 # Import CapitalAuthority singleton for unified multi-broker capital readiness
 try:
@@ -6277,18 +6283,6 @@ class MultiAccountBrokerManager:
         # ── OKX ──────────────────────────────────────────────────────────────
         # OKX uses NIJA's direct REST v5 client (_OKXRestClient) — no upstream
         # okx/candlelite SDK is imported, so read-only containers are safe.
-        # OKX is enabled when any of OKX_ENABLED, NIJA_ENABLE_OKX, or
-        # OKX_PLATFORM_ENABLED is set to a truthy value.  It is skipped only
-        # when NIJA_DISABLE_OKX=true AND none of the enable flags are set.
-        _okx_enabled = (
-            os.environ.get("OKX_ENABLED", "false").strip().lower() in ("1", "true", "yes")
-            or os.environ.get("NIJA_ENABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
-            or os.environ.get("OKX_PLATFORM_ENABLED", "false").strip().lower() in ("1", "true", "yes")
-        )
-        _disable_okx = (
-            not _okx_enabled
-            and os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() in ("1", "true", "yes")
-        )
         _okx_key = os.environ.get("OKX_API_KEY", "").strip()
         _okx_secret = os.environ.get("OKX_API_SECRET", "").strip()
         # Prefer OKX_API_PASSPHRASE (documented/preferred name); fall back to
@@ -6298,20 +6292,32 @@ class MultiAccountBrokerManager:
             or os.environ.get("OKX_PASSPHRASE", "").strip()
         )
         _okx_creds_configured = bool(_okx_key and _okx_secret and _okx_passphrase)
+        _okx_allowed = (
+            should_initialize_okx_platform(
+                os.environ,
+                credentials_configured=_okx_creds_configured,
+            )
+            if should_initialize_okx_platform is not None
+            else _okx_creds_configured
+            and os.environ.get("NIJA_DISABLE_OKX", "false").strip().lower() not in ("1", "true", "yes")
+        )
 
-
-        if _disable_okx:
-            logger.info("⏭️  OKX PLATFORM skipped (NIJA_DISABLE_OKX=true)")
-        elif not _okx_creds_configured:
-            logger.info("⏭️  OKX PLATFORM skipped (credentials not configured)")
-        elif not _okx_enabled:
+        if not _okx_allowed:
+            _skip_reasons = (
+                get_okx_platform_skip_reasons(
+                    os.environ,
+                    credentials_configured=_okx_creds_configured,
+                )
+                if get_okx_platform_skip_reasons is not None
+                else ["credentials not configured" if not _okx_creds_configured else "NIJA_DISABLE_OKX=true"]
+            )
             logger.info(
-                "⏭️  OKX PLATFORM skipped (disabled — set OKX_ENABLED=true, "
-                "NIJA_ENABLE_OKX=true, or OKX_PLATFORM_ENABLED=true to enable)"
+                "⏭️  OKX PLATFORM skipped (%s)",
+                ", ".join(_skip_reasons) if _skip_reasons else "okx platform gate closed",
             )
         else:
             logger.info(
-                "✅ OKX credentials present and enabled — initializing OKX platform broker"
+                "✅ OKX credentials present — initializing OKX platform broker"
             )
             logger.info("📊 Attempting to connect OKX (PLATFORM — NON-CRITICAL)…")
             try:

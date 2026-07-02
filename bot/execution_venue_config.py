@@ -43,6 +43,33 @@ def should_initialize_coinbase_platform(env: Optional[Mapping[str, str]] = None)
     return not get_coinbase_platform_skip_reasons(env)
 
 
+def get_okx_platform_skip_reasons(
+    env: Optional[Mapping[str, str]] = None,
+    *,
+    credentials_configured: bool,
+) -> List[str]:
+    """Explain why OKX platform initialization is blocked."""
+    source = _env(env)
+    reasons: List[str] = []
+    if _is_disabled(source.get("NIJA_DISABLE_OKX", "")):
+        reasons.append("NIJA_DISABLE_OKX=true")
+    if not credentials_configured:
+        reasons.append("credentials not configured")
+    return reasons
+
+
+def should_initialize_okx_platform(
+    env: Optional[Mapping[str, str]] = None,
+    *,
+    credentials_configured: bool,
+) -> bool:
+    """Return True when OKX credentials are present and the venue is not disabled."""
+    return not get_okx_platform_skip_reasons(
+        env,
+        credentials_configured=credentials_configured,
+    )
+
+
 def get_preferred_execution_venue(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """Return a forced single venue, or None when multi-venue routing should decide."""
     source = _env(env)

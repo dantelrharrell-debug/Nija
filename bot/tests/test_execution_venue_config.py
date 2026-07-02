@@ -3,8 +3,10 @@ import unittest
 from bot.execution_venue_config import (
     _parse_bool_flag,
     get_coinbase_platform_skip_reasons,
+    get_okx_platform_skip_reasons,
     get_preferred_execution_venue,
     should_initialize_coinbase_platform,
+    should_initialize_okx_platform,
 )
 
 
@@ -83,6 +85,24 @@ class ExecutionVenueConfigTests(unittest.TestCase):
             with self.subTest(venue=venue):
                 env = {"PRIMARY_EXECUTION_VENUE": venue}
                 self.assertEqual(get_preferred_execution_venue(env), venue)
+
+    def test_okx_platform_allowed_with_credentials_by_default(self):
+        self.assertTrue(should_initialize_okx_platform({}, credentials_configured=True))
+
+    def test_okx_platform_blocked_without_credentials(self):
+        self.assertFalse(should_initialize_okx_platform({}, credentials_configured=False))
+        self.assertEqual(
+            get_okx_platform_skip_reasons({}, credentials_configured=False),
+            ["credentials not configured"],
+        )
+
+    def test_okx_platform_blocked_when_disabled(self):
+        env = {"NIJA_DISABLE_OKX": "true"}
+        self.assertFalse(should_initialize_okx_platform(env, credentials_configured=True))
+        self.assertEqual(
+            get_okx_platform_skip_reasons(env, credentials_configured=True),
+            ["NIJA_DISABLE_OKX=true"],
+        )
 
     def test_multi_venue_markers_do_not_force_single_broker(self):
         for marker in ("", "multi_venue", "multi-venue", "auto", "all", "best"):

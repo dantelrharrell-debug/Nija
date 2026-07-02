@@ -187,11 +187,44 @@ def test_coinbase_auto_downgrade():
     print()
 
 
+def test_preferred_execution_venue_overrides_default_priority():
+    """PRIMARY_EXECUTION_VENUE should move an eligible broker to the front."""
+    import os
+
+    print("=" * 70)
+    print("TEST 4: Preferred Execution Venue Override")
+    print("=" * 70)
+
+    previous = os.environ.get("PRIMARY_EXECUTION_VENUE")
+    os.environ["PRIMARY_EXECUTION_VENUE"] = "okx"
+    try:
+        strategy = TradingStrategy()
+        all_brokers = {
+            BrokerType.KRAKEN: MockBroker(BrokerType.KRAKEN, balance=50.0, exit_only=False),
+            BrokerType.OKX: MockBroker(BrokerType.OKX, balance=50.0, exit_only=False),
+            BrokerType.COINBASE: MockBroker(BrokerType.COINBASE, balance=50.0, exit_only=False),
+        }
+
+        broker, name, status = strategy._select_entry_broker(all_brokers)
+        print(f"✓ Test 4: Preferred venue okx - Selected: {name}")
+        assert broker.broker_type == BrokerType.OKX, "Should select OKX when PRIMARY_EXECUTION_VENUE=okx"
+        assert name == "okx", f"Name should be 'okx', got: {name}"
+    finally:
+        if previous is None:
+            os.environ.pop("PRIMARY_EXECUTION_VENUE", None)
+        else:
+            os.environ["PRIMARY_EXECUTION_VENUE"] = previous
+
+    print("✅ Preferred venue override test passed!")
+    print()
+
+
 if __name__ == "__main__":
     try:
         test_broker_eligibility()
         test_broker_priority_selection()
         test_coinbase_auto_downgrade()
+        test_preferred_execution_venue_overrides_default_priority()
 
         print("=" * 70)
         print("✅ ALL TESTS PASSED!")

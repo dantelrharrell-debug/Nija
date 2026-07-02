@@ -85,6 +85,14 @@ except ImportError:
             yield {}
 
 try:
+    from bot.execution_venue_config import get_preferred_execution_venue
+except ImportError:
+    try:
+        from execution_venue_config import get_preferred_execution_venue  # type: ignore[import]
+    except ImportError:
+        get_preferred_execution_venue = None  # type: ignore[assignment]
+
+try:
     from bot.market_readiness_gate import MarketReadinessGate
     _MARKET_READINESS_GATE_AVAILABLE = True
 except ImportError:
@@ -780,7 +788,16 @@ class TradingStrategy:
 
         status: Dict[str, str] = {}
         inspected = set()
-        for name in ENTRY_BROKER_PRIORITY:
+        priority_order = list(ENTRY_BROKER_PRIORITY)
+        preferred_venue = (
+            get_preferred_execution_venue(os.environ)
+            if get_preferred_execution_venue is not None
+            else None
+        )
+        if preferred_venue in by_key:
+            priority_order = [preferred_venue] + [name for name in priority_order if name != preferred_venue]
+
+        for name in priority_order:
             broker = by_key.get(name)
             if broker is None:
                 status[name] = "not configured"

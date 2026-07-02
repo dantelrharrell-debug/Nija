@@ -2959,20 +2959,20 @@ NIJA now supports multiple cryptocurrency exchanges:
 ### 🔌 Quick Setup for OKX
 
 ```bash
-# 1. Install OKX SDK
-pip install okx
+# 1. Get API credentials from https://www.okx.com/account/my-api
 
-# 2. Get API credentials from https://www.okx.com/account/my-api
-
-# 3. Add to .env file
+# 2. Add to .env file
 export OKX_API_KEY="your_api_key"
 export OKX_API_SECRET="your_secret"
-export OKX_PASSPHRASE="your_passphrase"
+export OKX_API_PASSPHRASE="your_passphrase"  # OKX_PASSPHRASE also works
 export OKX_USE_TESTNET="true"  # false for live trading
+export PRIMARY_EXECUTION_VENUE="okx"         # optional: force entries to OKX first
 
-# 4. Test connection
+# 3. Test connection
 python test_okx_connection.py
 ```
+
+NIJA connects to OKX with its built-in direct REST client, so no OKX SDK install is required.
 
 See complete guide: [OKX_SETUP_GUIDE.md](OKX_SETUP_GUIDE.md)
 
