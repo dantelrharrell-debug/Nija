@@ -19,9 +19,22 @@ def _install_final_gate_repair() -> None:
         logger.debug("final gate repair chain deferred: %s", exc)
 
 
+def _install_dispatch_scope_bridge() -> None:
+    try:
+        module = importlib.import_module("bot.dispatch_scope_bridge_patch")
+        installer = getattr(module, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            logger.warning("DISPATCH_SCOPE_BRIDGE_CHAINED_FROM_GENERATION_SYNC")
+            print("[NIJA-PRINT] DISPATCH_SCOPE_BRIDGE_CHAINED_FROM_GENERATION_SYNC", flush=True)
+    except Exception as exc:
+        logger.debug("dispatch scope bridge chain deferred: %s", exc)
+
+
 def install_import_hook() -> None:
     os.environ["NIJA_GENERATION_MISMATCH_RECOVERY_COOLDOWN_S"] = "0"
     _install_final_gate_repair()
+    _install_dispatch_scope_bridge()
     for name in ("bot.writer_generation_tracker", "writer_generation_tracker"):
         try:
             module = importlib.import_module(name)
