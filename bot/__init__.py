@@ -206,6 +206,15 @@ for _key, _value in {
     "NIJA_KRAKEN_EQUITY_HYDRATION": "true",
     "NIJA_CAPITAL_BALANCE_PROPAGATION": "true",
     "NIJA_LIVE_ENTRY_RUNTIME_FIXES": "true",
+    "NIJA_EXECUTABLE_TRADE_RUNTIME_PATCH": "true",
+    "NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD": "10.50",
+    "NIJA_APPLY_GLOBAL_EXECUTABLE_MIN_TRADE": "true",
+    "HF_TAKE_PROFIT_PCT": "1.0",
+    "NIJA_MICROCAP_TP1_PERCENT": "1.0",
+    "NIJA_MICROCAP_STOP_LOSS_PERCENT": "0.30",
+    "MIN_EXPECTANCY_THRESHOLD_PCT": "0.00",
+    "MIN_TP_PCT": "0.010",
+    "MAX_SL_PCT": "0.003",
     "NIJA_WRITER_LOCK_STALE_HEARTBEAT_THRESHOLD_S": "90",
     "NIJA_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "90",
     "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "90",
@@ -222,16 +231,16 @@ _normalize_credential_aliases("bot_init_after_sitecustomize")
 _strict_live_cleanup("bot_init_after_sitecustomize")
 
 for _key, _value in (
-    ("MIN_TRADE_USD", "2"),
-    ("MIN_POSITION_USD", "2"),
-    ("MIN_NOTIONAL_OVERRIDE", "2"),
+    ("MIN_TRADE_USD", "10.50"),
+    ("MIN_POSITION_USD", "10.50"),
+    ("MIN_NOTIONAL_OVERRIDE", "10.50"),
     ("MIN_CASH_TO_BUY", "5"),
-    ("KRAKEN_MIN_NOTIONAL_USD", "2"),
+    ("KRAKEN_MIN_NOTIONAL_USD", "10.50"),
     ("COINBASE_MIN_ORDER_USD", "1"),
     ("OKX_MIN_ORDER_USD", "2"),
 ):
     try:
-        if float(os.environ.get(_key, _value) or _value) > float(_value):
+        if float(os.environ.get(_key, _value) or _value) < float(_value):
             os.environ[_key] = _value
     except Exception:
         os.environ[_key] = _value
@@ -249,6 +258,7 @@ _PATCH_HOOKS = (
     ("live_execution_authority_blocker_patch", "Live execution authority blocker patch"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
+    ("executable_trade_runtime_patch", "Executable trade runtime repair"),
     ("okx_runtime_patch", "OKX runtime patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
     ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
@@ -261,5 +271,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.1"
+__version__ = "7.2.2"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
