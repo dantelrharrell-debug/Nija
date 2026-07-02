@@ -27,3 +27,10 @@ Describe what problem this PR solves and why it is needed.
 - [ ] Local checks passed
 - [ ] CI checks passed
 - [ ] Monitoring/observability impact reviewed
+
+### NIJA Safety Checks
+
+- [ ] `python -m py_compile` clean on all changed `.py` files
+- [ ] No bypass flags committed (FORCE_TRADE, NIJA_FORCE_ACTIVATION, NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK, NIJA_DISABLE_WRITER_LOCK, NIJA_SKIP_STARTUP_PHASE_GATE)
+- [ ] Authority-gate denials are NOT recorded as exchange order rejections (kill-switch feedback loop invariant preserved)
+- [ ] For trading logic changes: strategy change backtested before live deployment
