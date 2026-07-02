@@ -244,6 +244,7 @@ _PATCH_HOOKS = (
     ("full_execution_observability_patch", "Full execution observability"),
     ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
     ("generation_sync_timing_patch", "Generation sync timing patch"),
+    ("execution_entry_tp_geometry_patch", "Execution entry TP geometry patch"),
     ("live_execution_authority_blocker_patch", "Live execution authority blocker patch"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
