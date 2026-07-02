@@ -182,9 +182,48 @@ def _min_notional(loop: Any, balance: float) -> float:
 
 def _fallback_sl_pct() -> float:
     requested = _float_env("NIJA_FALLBACK_REPAIR_SL_PCT", _FALLBACK_DEFAULT_SL_PCT)
-    # The previous default/env value could be 0.012 (1.2%), which fails the
-    # target_geometry_gate. Clamp fallback payloads below the execution hard cap.
+    # The previous default/env value could be 0.012 (1.2%), and the native
+    # fallback builder can produce ~0.45%. Both fail target_geometry_gate.
     return max(_FALLBACK_MIN_SL_PCT, min(requested, _FALLBACK_HARD_MAX_SL_PCT))
+
+
+def _cap_payload_geometry(payload: Any) -> tuple[Any, bool, float, float]:
+    """Normalize any successful fallback payload so it also obeys execution geometry.
+
+    Returns (payload, changed, old_sl_pct, new_sl_pct). This is intentionally
+    applied even when the native fallback builder succeeds, because the latest
+    live logs show it can return a stop-loss wider than ExecutionEngine.MAX_SL_PCT.
+    """
+
+    if not isinstance(payload, dict):
+        return payload, False, 0.0, 0.0
+    try:
+        price = float(payload.get("entry_price") or 0.0)
+        stop = float(payload.get("stop_loss") or 0.0)
+    except Exception:
+        return payload, False, 0.0, 0.0
+    if price <= 0.0 or stop <= 0.0:
+        return payload, False, 0.0, 0.0
+
+    old_sl_pct = abs((price - stop) / price)
+    capped_pct = _fallback_sl_pct()
+    if old_sl_pct <= capped_pct:
+        return payload, False, old_sl_pct, old_sl_pct
+
+    action = str(payload.get("action") or "enter_long").lower()
+    if action == "enter_short":
+        payload["stop_loss"] = price * (1.0 + capped_pct)
+    else:
+        payload["stop_loss"] = price * (1.0 - capped_pct)
+
+    tp = payload.get("take_profit")
+    if isinstance(tp, dict):
+        tp["fallback_sl_pct"] = capped_pct
+        tp["fallback_max_sl_pct"] = _FALLBACK_HARD_MAX_SL_PCT
+    payload["fallback_target_geometry_capped"] = True
+    payload["fallback_edge_geometry_repaired"] = True
+    payload["reason"] = str(payload.get("reason") or "fallback_entry") + " [fallback_target_geometry_capped]"
+    return payload, True, old_sl_pct, capped_pct
 
 
 def _build_conservative_payload(loop: Any, *, df: Any, sig: Any, snapshot: Any, action: str, existing_reason: str) -> dict[str, Any]:
@@ -268,7 +307,22 @@ def _install_on_module(module: ModuleType) -> bool:
 
     def _patched_build_forced_fallback_entry_analysis(self: Any, *args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
-            return original(self, *args, **kwargs)
+            payload = original(self, *args, **kwargs)
+            payload, changed, old_pct, new_pct = _cap_payload_geometry(payload)
+            if changed:
+                symbol = getattr(args[1], "symbol", "UNKNOWN") if len(args) > 1 else getattr(kwargs.get("sig"), "symbol", "UNKNOWN")
+                logger.critical(
+                    "FORCED_FALLBACK_PAYLOAD_GEOMETRY_NORMALIZED symbol=%s old_sl_pct=%.4f new_sl_pct=%.4f",
+                    symbol,
+                    old_pct,
+                    new_pct,
+                )
+                print(
+                    f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_GEOMETRY_NORMALIZED | symbol={symbol} "
+                    f"old_sl_pct={old_pct * 100.0:.3f}% new_sl_pct={new_pct * 100.0:.3f}%",
+                    flush=True,
+                )
+            return payload
         except ValueError as exc:
             message = str(exc)
             if "competitive profitability policy blocked illiquid fallback entry" not in message:
