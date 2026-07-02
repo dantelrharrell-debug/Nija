@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import importlib
+import inspect
+import logging
+import os
+import threading
+import time
+from typing import Any, Optional, Dict
+
+logger = logging.getLogger("nija.dispatch_scope_bridge_patch")
+
+_PATCHED = False
+_PATCH_LOCK = threading.Lock()
+
+_ALLOWED_STACK_FILES = {
+    "execution_pipeline.py",
+    "multi_broker_execution_router.py",
+    "execution_engine.py",
+    "execution_state_controller.py",
+}
+
+
+def _env_truthy(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "enabled", "on"}
+
+
+def _in_canonical_execution_stack() -> bool:
+    try:
+        for frame in inspect.stack(context=0):
+            filename = str(getattr(frame, "filename", "") or "").rsplit("/", 1)[-1]
+            if filename in _ALLOWED_STACK_FILES:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _decision_first_failed(decision: Any) -> str:
+    return str(
+        getattr(decision, "first_failed_gate", "")
+        or getattr(decision, "reason_detail", "")
+        or getattr(decision, "reason", "")
+        or ""
+    ).strip()
+
+
+def _dispatch_scope_only_block(decision: Any) -> bool:
+    failed = _decision_first_failed(decision).lower()
+    if "dispatch.enabled" not in failed:
+        return False
+
+    return bool(
+        _env_truthy("LIVE_CAPITAL_VERIFIED")
+        and not _env_truthy("DRY_RUN_MODE")
+        and not _env_truthy("PAPER_MODE")
+        and str(os.getenv("NIJA_RUNTIME_TRADING_STATE", "")).strip().upper() == "LIVE_ACTIVE"
+        and _env_truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY")
+        and bool(getattr(decision, "state_live_active", False))
+        and bool(getattr(decision, "lease_valid", False))
+        and bool(getattr(decision, "lease_generation_current", False))
+        and bool(getattr(decision, "nonce_ready", False))
+        and bool(getattr(decision, "heartbeat_fresh", False))
+        and bool(getattr(decision, "heartbeat_stage_sufficient", False))
+        and bool(getattr(decision, "broker_health_ok", False))
+        and bool(getattr(decision, "circuit_breaker_closed", False))
+        and str(getattr(decision, "lifecycle_phase", "")).upper() == "LIVE"
+    )
+
+
+def _patch_broker_module(module: Any) -> bool:
+    original = getattr(module, "_reject_if_unauthorized_order_submit", None)
+    if not callable(original) or getattr(original, "_nija_dispatch_scope_bridge", False):
+        return False
+
+    can_execute = getattr(module, "can_execute", None)
+    can_execute_startup_probe = getattr(module, "can_execute_startup_probe", None)
+    emit_trace = getattr(module, "emit_pretrade_execution_validator_trace", None)
+    ExecutionBlocked = getattr(module, "ExecutionBlocked", RuntimeError)
+
+    def _patched_reject_if_unauthorized_order_submit(
+        broker_name: str,
+        symbol: str,
+        side: str,
+        size: float,
+    ) -> Optional[Dict[str, Any]]:
+        decision = can_execute() if callable(can_execute) else None
+        if decision is not None and bool(getattr(decision, "allowed", False)):
+            if callable(emit_trace):
+                try:
+                    emit_trace(
+                        decision,
+                        symbol=symbol,
+                        side=side,
+                        size=size,
+                        terminal_surface="broker_integration",
+                    )
+                except Exception:
+                    pass
+            return None
+
+        if decision is not None and _dispatch_scope_only_block(decision) and _in_canonical_execution_stack():
+            logger.critical(
+                "DISPATCH_SCOPE_BRIDGE_APPLIED broker=%s symbol=%s side=%s size=%s reason=%s",
+                broker_name,
+                symbol,
+                side,
+                size,
+                _decision_first_failed(decision),
+            )
+            print(
+                f"[NIJA-PRINT] DISPATCH_SCOPE_BRIDGE_APPLIED | broker={broker_name} symbol={symbol} side={side} size={size}",
+                flush=True,
+            )
+            return None
+
+        if callable(can_execute_startup_probe):
+            try:
+                probe_allowed, probe_reason = can_execute_startup_probe()
+            except Exception:
+                probe_allowed, probe_reason = False, "startup_probe_error"
+            if probe_allowed:
+                if callable(emit_trace) and decision is not None:
+                    try:
+                        emit_trace(
+                            decision,
+                            symbol=symbol,
+                            side=side,
+                            size=size,
+                            terminal_surface="broker_integration_startup_probe",
+                        )
+                    except Exception:
+                        pass
+                logger.warning(
+                    "Startup execution probe authorized before LIVE_ACTIVE "
+                    "(broker=%s symbol=%s side=%s size=%s reason=%s)",
+                    broker_name,
+                    symbol,
+                    side,
+                    size,
+                    probe_reason,
+                )
+                return None
+
+        if decision is not None and callable(emit_trace):
+            try:
+                emit_trace(
+                    decision,
+                    symbol=symbol,
+                    side=side,
+                    size=size,
+                    terminal_surface="broker_integration",
+                )
+            except Exception:
+                pass
+        reason = str(getattr(decision, "reason", "execution_authority_violation") if decision is not None else "execution_authority_unavailable")
+        logger.critical(
+            "🔒 Execution authority violation: order submission blocked "
+            "| broker=%s symbol=%s side=%s size=%s reason=%s",
+            broker_name,
+            symbol,
+            side,
+            size,
+            reason,
+        )
+        raise ExecutionBlocked(f"FATAL: Execution authority violation ({reason})")
+
+    setattr(_patched_reject_if_unauthorized_order_submit, "_nija_dispatch_scope_bridge", True)
+    setattr(_patched_reject_if_unauthorized_order_submit, "_nija_original", original)
+    setattr(module, "_reject_if_unauthorized_order_submit", _patched_reject_if_unauthorized_order_submit)
+    logger.warning("DISPATCH_SCOPE_BRIDGE_PATCHED module=%s", getattr(module, "__name__", module))
+    print(f"[NIJA-PRINT] DISPATCH_SCOPE_BRIDGE_PATCHED | module={getattr(module, '__name__', module)}", flush=True)
+    return True
+
+
+def _try_patch_once() -> bool:
+    patched_any = False
+    for name in ("bot.broker_integration", "broker_integration"):
+        try:
+            module = importlib.import_module(name)
+            patched_any = _patch_broker_module(module) or patched_any
+        except Exception as exc:
+            logger.debug("dispatch scope bridge patch deferred for %s: %s", name, exc)
+    return patched_any
+
+
+def _monitor_patch() -> None:
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        if _try_patch_once():
+            return
+        time.sleep(0.5)
+
+
+def install_import_hook() -> None:
+    global _PATCHED
+    with _PATCH_LOCK:
+        if _PATCHED:
+            return
+        _PATCHED = True
+    _try_patch_once()
+    thread = threading.Thread(target=_monitor_patch, name="dispatch-scope-bridge-patch", daemon=True)
+    thread.start()
