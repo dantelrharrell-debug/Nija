@@ -28,6 +28,7 @@ _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
+_WRAP_ATTR = "_nija_fallback_take_profit_geometry_repair_wrapped"
 
 # ExecutionEngine requires tp_pct >= 1.000%. Use a small buffer so float/rounding
 # cannot put fallback tp1 right back on the rejection boundary.
@@ -42,6 +43,23 @@ def _float_env(name: str, default: float) -> float:
         return float(os.environ.get(name, default) or default)
     except Exception:
         return default
+
+
+def _wrapper_chain_has_attr(fn: Any, attr: str) -> bool:
+    """Return True if any wrapper in a __wrapped__ chain already has attr.
+
+    This patch and the fallback payload repair both wrap the same method. Chain
+    awareness prevents wrapper ping-pong where each monitor scan wraps the other
+    patch again and floods logs with repeated PATCHED markers.
+    """
+    seen: set[int] = set()
+    cur = fn
+    while callable(cur) and id(cur) not in seen:
+        seen.add(id(cur))
+        if getattr(cur, attr, False):
+            return True
+        cur = getattr(cur, "__wrapped__", None)
+    return False
 
 
 def _target_tp_pcts() -> tuple[float, float, float]:
@@ -114,7 +132,7 @@ def _install_on_module(module: ModuleType) -> bool:
     original = getattr(cls, "_build_forced_fallback_entry_analysis", None)
     if not callable(original):
         return False
-    if getattr(original, "_nija_fallback_take_profit_geometry_repair_wrapped", False):
+    if _wrapper_chain_has_attr(original, _WRAP_ATTR):
         _PATCHED = True
         return True
 
@@ -137,7 +155,8 @@ def _install_on_module(module: ModuleType) -> bool:
             )
         return payload
 
-    setattr(_patched_build_forced_fallback_entry_analysis, "_nija_fallback_take_profit_geometry_repair_wrapped", True)
+    setattr(_patched_build_forced_fallback_entry_analysis, _WRAP_ATTR, True)
+    setattr(_patched_build_forced_fallback_entry_analysis, "__wrapped__", original)
     setattr(cls, "_build_forced_fallback_entry_analysis", _patched_build_forced_fallback_entry_analysis)
     _PATCHED = True
     logger.warning("FORCED_FALLBACK_TP_GEOMETRY_REPAIR_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
