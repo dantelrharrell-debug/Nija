@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import importlib
 import logging
+import os
 import sys
 import textwrap
 import threading
@@ -19,6 +20,8 @@ _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
 _PHASE3_WRAP_ATTR = "_nija_phase3_fallback_hold_skip_phase3_wrapped_v20260703y"
 _MARKER = "PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703y"
+_CORE_LOOP_MODULES = {"bot.nija_core_loop", "nija_core_loop"}
+_TRUTHY_ENV_VALUES = {"1", "true", "t", "yes", "y", "enabled", "on"}
 
 _SKIP_BLOCK = '''
                 if isinstance(analysis, dict):
@@ -50,6 +53,28 @@ _SKIP_BLOCK = '''
 '''
 
 
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _is_core_loop_module(module: ModuleType) -> bool:
+    module_name = str(getattr(module, "__name__", ""))
+    if module_name not in _CORE_LOOP_MODULES:
+        return False
+    module_file = str(getattr(module, "__file__", "") or "")
+    if module_file and Path(module_file).name != "nija_core_loop.py":
+        logger.debug(
+            "PHASE3_FALLBACK_HOLD_SKIP_TARGET_SKIPPED marker=20260703y module=%s file=%s reason=not_core_loop_file",
+            module_name,
+            module_file,
+        )
+        return False
+    return True
+
+
 def _function_source_from_file(module: ModuleType, func_name: str) -> tuple[str, int]:
     path = Path(str(getattr(module, "__file__", "")))
     if not path.exists():
@@ -66,8 +91,15 @@ def _function_source_from_file(module: ModuleType, func_name: str) -> tuple[str,
 
 
 def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> bool:
+    if not _is_core_loop_module(module):
+        return False
+
     current = getattr(cls, "_phase3_scan_and_enter", None)
     if not callable(current):
+        logger.debug(
+            "PHASE3_FALLBACK_HOLD_SKIP_TARGET_SKIPPED marker=20260703y class=%s reason=no_phase3_method",
+            f"{label}.{getattr(cls, '__name__', '<unknown>')}",
+        )
         return False
     if getattr(current, _PHASE3_WRAP_ATTR, False):
         _PATCHED_CLASSES.add(f"{label}.{cls.__name__}._phase3_scan_and_enter")
@@ -85,9 +117,21 @@ def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> boo
         return False
 
     patched_source = source.replace(needle, _SKIP_BLOCK + "                " + needle, 1)
-    namespace = dict(getattr(current, "__globals__", vars(module)))
+
+    # Compile the generated function with the real nija_core_loop module globals.
+    # The runtime can wrap _phase3_scan_and_enter before this patch installs;
+    # using current.__globals__ in that case points at the wrapper module instead
+    # of bot.nija_core_loop and drops names such as _env_truthy, MIN_SCORE_HARD_FLOOR,
+    # logger, and FORCE_NEXT_CYCLE.  Start with vars(module), then backfill any
+    # wrapper-only globals without overriding core-loop symbols.
+    namespace = dict(vars(module))
+    for key, value in getattr(current, "__globals__", {}).items():
+        namespace.setdefault(key, value)
+    namespace.setdefault("_env_truthy", getattr(module, "_env_truthy", _env_truthy))
+    namespace.setdefault("logger", getattr(module, "logger", logging.getLogger("nija.core_loop")))
+
     try:
-        exec(compile(patched_source, "<phase3_fallback_hold_skip_file_source>", "exec"), namespace)
+        exec(compile(patched_source, "<phase3_fallback_hold_skip_file_source>", "exec"), namespace, namespace)
         patched = namespace.get("_phase3_scan_and_enter")
         if not callable(patched):
             raise RuntimeError("patched function not produced")
@@ -105,6 +149,8 @@ def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> boo
 
 
 def _install_on_module(module: ModuleType) -> bool:
+    if not _is_core_loop_module(module):
+        return False
     cls = getattr(module, "NijaCoreLoop", None)
     if isinstance(cls, type):
         return _patch_core_loop_phase3(module, cls, label=getattr(module, "__name__", "<unknown>"))
@@ -114,7 +160,7 @@ def _install_on_module(module: ModuleType) -> bool:
 def _try_patch_loaded() -> bool:
     patched = False
     for name, module in list(sys.modules.items()):
-        if isinstance(module, ModuleType) and (name in {"bot.nija_core_loop", "nija_core_loop"} or hasattr(module, "NijaCoreLoop")):
+        if name in _CORE_LOOP_MODULES and isinstance(module, ModuleType):
             patched = _install_on_module(module) or patched
     return patched
 
@@ -151,7 +197,7 @@ def install_import_hook() -> None:
 
         def _wrapped_import_module(name: str, package: str | None = None):
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
-            if name in {"bot.nija_core_loop", "nija_core_loop"} or hasattr(module, "NijaCoreLoop"):
+            if name in _CORE_LOOP_MODULES:
                 _install_on_module(module)
             _try_patch_loaded()
             return module
