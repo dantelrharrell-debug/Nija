@@ -1,4 +1,10 @@
-"""Publish a TradingStrategy object after startup components are ready."""
+"""Publish a TradingStrategy object after startup components are ready.
+
+This module is intentionally conservative: it does not submit orders, bypass risk
+controls, or alter exchange constraints.  It only guarantees that the strategy
+object published into the live runtime is the same object wired to hydrated,
+connected broker adapters.
+"""
 
 from __future__ import annotations
 
@@ -111,6 +117,17 @@ def _broker_ready(broker: Any) -> bool:
     return getattr(broker, "_last_known_balance", None) is not None
 
 
+def _entry_ready_broker(broker: Any) -> bool:
+    """True only for broker objects suitable for entry routing."""
+    if broker is None:
+        return False
+    if not bool(getattr(broker, "connected", False)):
+        return False
+    if bool(getattr(broker, "exit_only_mode", False)):
+        return False
+    return True
+
+
 def _normal_key(key: Any, broker: Any, prefix: str = "") -> str:
     raw = getattr(key, "value", key)
     if raw is None or str(raw).strip() in {"", "None"}:
@@ -128,14 +145,15 @@ def _add_broker(results: dict[Any, dict[str, Any]], key: Any, broker: Any, sourc
     if broker is None or not _broker_ready(broker):
         return
     norm = _normal_key(key, broker)
-    # Keep the first object for a key; duplicate module aliases can expose the same
-    # singleton under bot.* and top-level names.
     if norm in results:
-        return
+        existing = results[norm].get("broker")
+        if _entry_ready_broker(existing) or not _entry_ready_broker(broker):
+            return
     results[norm] = {
         "broker": broker,
         "connected": bool(getattr(broker, "connected", False)),
         "ready_for_capital": True,
+        "entry_ready": _entry_ready_broker(broker),
         "source": source,
     }
 
@@ -153,7 +171,6 @@ def _collect_from_manager(results: dict[Any, dict[str, Any]], manager: Any, sour
     if manager is None:
         return
 
-    # Canonical platform maps used by MultiAccountBrokerManager.
     for attr in ("platform_brokers", "_platform_brokers", "brokers", "broker_map"):
         try:
             mapping = getattr(manager, attr, None)
@@ -162,7 +179,6 @@ def _collect_from_manager(results: dict[Any, dict[str, Any]], manager: Any, sour
         except Exception:
             continue
 
-    # Some paths expose a fully merged broker map through get_all_brokers().
     try:
         get_all = getattr(manager, "get_all_brokers", None)
         if callable(get_all):
@@ -172,7 +188,6 @@ def _collect_from_manager(results: dict[Any, dict[str, Any]], manager: Any, sour
     except Exception:
         pass
 
-    # Platform init results have the same shape TradingStrategy expects.
     try:
         init_results = getattr(manager, "_platform_init_results", None)
         for key, meta in _items(init_results):
@@ -181,7 +196,6 @@ def _collect_from_manager(results: dict[Any, dict[str, Any]], manager: Any, sour
     except Exception:
         pass
 
-    # Connected user brokers are nested by user/account.
     for attr in ("user_brokers", "_all_user_brokers"):
         try:
             mapping = getattr(manager, attr, None)
@@ -268,6 +282,107 @@ def _broker_results() -> tuple[dict[Any, dict[str, Any]], int]:
     return results, len(results)
 
 
+def _attach_manager(strategy: Any) -> None:
+    if getattr(strategy, "multi_account_manager", None) is not None:
+        return
+    for module_name in ("bot.multi_account_broker_manager", "multi_account_broker_manager"):
+        try:
+            module = importlib.import_module(module_name)
+            manager = getattr(module, "multi_account_broker_manager", None)
+            if manager is not None:
+                setattr(strategy, "multi_account_manager", manager)
+                logger.warning("STRATEGY_PUBLICATION_MANAGER_ATTACHED source=%s", module_name)
+                return
+        except Exception:
+            continue
+
+
+def _sync_broker_into_strategy(strategy: Any, broker: Any) -> None:
+    setattr(strategy, "broker", broker)
+    apex = getattr(strategy, "apex", None)
+    if apex is not None:
+        for attr in ("broker", "broker_client", "primary_broker", "broker_client_override"):
+            try:
+                if hasattr(apex, attr):
+                    setattr(apex, attr, broker)
+            except Exception:
+                pass
+        try:
+            engine = getattr(apex, "execution_engine", None)
+            if engine is not None and getattr(strategy, "execution_engine", None) is None:
+                setattr(strategy, "execution_engine", engine)
+        except Exception:
+            pass
+    loop = getattr(strategy, "nija_core_loop", None)
+    if loop is not None:
+        try:
+            if apex is not None and getattr(loop, "apex", None) is not apex:
+                setattr(loop, "apex", apex)
+        except Exception:
+            pass
+
+
+def _best_broker_from_results(brokers: dict[Any, dict[str, Any]]) -> Any:
+    for preferred in ("kraken", "coinbase", "okx", "alpaca"):
+        meta = brokers.get(preferred)
+        broker = meta.get("broker") if isinstance(meta, dict) else None
+        if _entry_ready_broker(broker):
+            return broker
+    for meta in brokers.values():
+        broker = meta.get("broker") if isinstance(meta, dict) else None
+        if _entry_ready_broker(broker):
+            return broker
+    for meta in brokers.values():
+        broker = meta.get("broker") if isinstance(meta, dict) else None
+        if _broker_ready(broker):
+            return broker
+    return None
+
+
+def _strategy_has_entry_broker(strategy: Any) -> bool:
+    return _entry_ready_broker(getattr(strategy, "broker", None))
+
+
+def _hydrate_existing_strategy(strategy: Any, brokers: dict[Any, dict[str, Any]]) -> bool:
+    """Repair an early-created strategy that missed bootstrap broker wiring."""
+    if strategy is None:
+        return False
+    _attach_manager(strategy)
+    before = type(getattr(strategy, "broker", None)).__name__ if getattr(strategy, "broker", None) is not None else "none"
+
+    try:
+        resolver = getattr(strategy, "_resolve_primary_broker", None)
+        if callable(resolver):
+            resolver(brokers)
+    except Exception as exc:
+        logger.warning("STRATEGY_PUBLICATION_EXISTING_RESOLVE_FAILED err=%s", exc)
+
+    broker = getattr(strategy, "broker", None)
+    if not _entry_ready_broker(broker):
+        broker = _best_broker_from_results(brokers)
+        if broker is not None:
+            _sync_broker_into_strategy(strategy, broker)
+
+    try:
+        populator = getattr(strategy, "_populate_symbols", None)
+        if callable(populator):
+            populator()
+    except Exception as exc:
+        logger.warning("STRATEGY_PUBLICATION_SYMBOL_REFRESH_FAILED err=%s", exc)
+
+    after = type(getattr(strategy, "broker", None)).__name__ if getattr(strategy, "broker", None) is not None else "none"
+    ok = _strategy_has_entry_broker(strategy)
+    logger.warning(
+        "STRATEGY_PUBLICATION_EXISTING_HYDRATED ok=%s broker_before=%s broker_after=%s symbols=%s broker_keys=%s",
+        ok,
+        before,
+        after,
+        len(getattr(strategy, "symbols", []) or []),
+        sorted(str(key) for key in brokers.keys()),
+    )
+    return ok
+
+
 def _publish(strategy: Any) -> None:
     global _PUBLISHED
     _PUBLISHED = strategy
@@ -284,12 +399,22 @@ def _publish(strategy: Any) -> None:
         except Exception:
             continue
     logger.critical(
-        "STRATEGY_PUBLICATION_READY type=%s broker=%s core_loop=%s symbols=%s",
+        "STRATEGY_PUBLICATION_READY type=%s broker=%s broker_connected=%s core_loop=%s symbols=%s",
         type(strategy).__name__,
         type(getattr(strategy, "broker", None)).__name__ if getattr(strategy, "broker", None) is not None else "none",
+        bool(getattr(getattr(strategy, "broker", None), "connected", False)),
         bool(getattr(strategy, "nija_core_loop", None)),
         len(getattr(strategy, "symbols", []) or []),
     )
+
+
+def _build_strategy(cls: type, brokers: dict[Any, dict[str, Any]]) -> Any:
+    try:
+        return cls(broker_results=brokers)
+    except TypeError:
+        strategy = cls()
+        _hydrate_existing_strategy(strategy, brokers)
+        return strategy
 
 
 def _monitor() -> None:
@@ -305,42 +430,52 @@ def _monitor() -> None:
                 last_log = now
             time.sleep(interval)
             continue
+
         cls = _strategy_class()
-        existing = _existing(cls)
-        if existing is not None:
-            _publish(existing)
-            return
         if cls is None:
             if now - last_log >= 15.0:
                 logger.warning("STRATEGY_PUBLICATION_WAITING reason=class_unavailable")
                 last_log = now
             time.sleep(interval)
             continue
+
         with _LOCK:
             existing = _existing(cls)
-            if existing is not None:
-                _publish(existing)
-                return
             brokers, count = _broker_results()
             if count <= 0:
                 if now - last_log >= 15.0:
                     logger.warning(
-                        "STRATEGY_PUBLICATION_WAITING reason=no_connected_brokers scan=%s modules=%s",
+                        "STRATEGY_PUBLICATION_WAITING reason=no_connected_brokers scan=%s modules=%s existing=%s existing_broker=%s",
                         _LAST_SCAN_DETAIL,
                         sorted(name for name in sys.modules if name.endswith("multi_account_broker_manager") or name.endswith("broker_manager"))[:20],
+                        type(existing).__name__ if existing is not None else "none",
+                        type(getattr(existing, "broker", None)).__name__ if existing is not None and getattr(existing, "broker", None) is not None else "none",
                     )
                     last_log = now
                 time.sleep(interval)
                 continue
+
             logger.warning(
-                "STRATEGY_PUBLICATION_BROKERS_READY count=%d keys=%s",
+                "STRATEGY_PUBLICATION_BROKERS_READY count=%d keys=%s entry_ready=%s",
                 count,
                 sorted(str(key) for key in brokers.keys()),
+                sorted(str(key) for key, meta in brokers.items() if isinstance(meta, dict) and meta.get("entry_ready")),
             )
+
+            if existing is not None:
+                if _hydrate_existing_strategy(existing, brokers):
+                    _publish(existing)
+                    return
+                logger.warning("STRATEGY_PUBLICATION_EXISTING_UNUSABLE rebuilding_with_live_brokers")
+
             try:
-                strategy = cls(broker_results=brokers)
-            except TypeError:
-                strategy = cls()
+                strategy = _build_strategy(cls, brokers)
+                if not _strategy_has_entry_broker(strategy):
+                    _hydrate_existing_strategy(strategy, brokers)
+                if not _strategy_has_entry_broker(strategy):
+                    logger.warning("STRATEGY_PUBLICATION_BUILD_UNUSABLE retrying broker_keys=%s", sorted(str(key) for key in brokers.keys()))
+                    time.sleep(interval)
+                    continue
             except Exception as exc:
                 logger.exception("STRATEGY_PUBLICATION_BUILD_ERROR err=%s", exc)
                 time.sleep(interval)
