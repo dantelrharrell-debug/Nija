@@ -16,11 +16,14 @@ logger = logging.getLogger("nija.phase3_fallback_hold_skip")
 
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED_CLASSES: set[str] = set()
+_REAPPLIED_CLASSES: set[str] = set()
+_REAPPLY_FAILURES_LOGGED: set[str] = set()
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
+
 _PHASE3_WRAP_ATTR = "_nija_phase3_fallback_hold_skip_phase3_wrapped_v20260703z"
 _MARKER = "PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703z"
-_CORE_LOOP_MODULES = {"bot.nija_core_loop", "nija_core_loop"}
+_CANONICAL_CORE_LOOP_MODULE = "bot.nija_core_loop"
 _TRUTHY_ENV_VALUES = {"1", "true", "t", "yes", "y", "enabled", "on"}
 
 _SKIP_BLOCK = """
@@ -61,8 +64,15 @@ def _env_truthy(name: str, default: bool = False) -> bool:
 
 
 def _is_core_loop_module(module: ModuleType) -> bool:
+    """Only patch the package-qualified core loop.
+
+    Loading the same file as both ``bot.nija_core_loop`` and ``nija_core_loop``
+    created duplicate wrapper chains and repeated Railway warnings. The runtime
+    canonical path is the package module; top-level aliases are intentionally
+    ignored.
+    """
     module_name = str(getattr(module, "__name__", ""))
-    if module_name not in _CORE_LOOP_MODULES:
+    if module_name != _CANONICAL_CORE_LOOP_MODULE:
         return False
     module_file = str(getattr(module, "__file__", "") or "")
     if module_file and Path(module_file).name != "nija_core_loop.py":
@@ -90,14 +100,74 @@ def _function_source_from_file(module: ModuleType, func_name: str) -> tuple[str,
     raise RuntimeError(f"function {func_name} not found in {path}")
 
 
-def _reapply_phase3_scan_budget(module: ModuleType, *, label: str) -> None:
-    """Re-wrap Phase 3 with the broker-aware scan-budget patch after source replacement.
+def _import_patch_module(module_name: str) -> ModuleType | None:
+    existing = sys.modules.get(module_name)
+    if isinstance(existing, ModuleType):
+        return existing
+    try:
+        return importlib.import_module(module_name)
+    except Exception as exc:
+        key = f"{module_name}:import"
+        if key not in _REAPPLY_FAILURES_LOGGED:
+            _REAPPLY_FAILURES_LOGGED.add(key)
+            logger.warning(
+                "PHASE3_PATCH_REAPPLY_IMPORT_FAILED marker=20260703z module=%s err=%s",
+                module_name,
+                exc,
+            )
+        else:
+            logger.debug(
+                "PHASE3_PATCH_REAPPLY_IMPORT_FAILED_REPEAT marker=20260703z module=%s err=%s",
+                module_name,
+                exc,
+            )
+        return None
 
-    This fallback patch intentionally recompiles _phase3_scan_and_enter from
-    nija_core_loop.py. That source replacement can erase wrapper-based patches
-    that were installed earlier, including the broker-specific OKX symbol filter.
-    Re-applying phase3_scan_budget_patch here preserves the hold-skip safety fix
-    while keeping OKX scans constrained to listed OKX instruments.
+
+def _run_reapply_installer(module: ModuleType, patch_module_name: str, installer_name: str, *, label: str) -> bool:
+    patch_mod = _import_patch_module(patch_module_name)
+    if patch_mod is None:
+        return False
+    installer = getattr(patch_mod, installer_name, None)
+    if not callable(installer):
+        key = f"{patch_module_name}:{installer_name}"
+        if key not in _REAPPLY_FAILURES_LOGGED:
+            _REAPPLY_FAILURES_LOGGED.add(key)
+            logger.warning(
+                "PHASE3_PATCH_REAPPLY_FAILED marker=20260703z class=%s module=%s reason=no_supported_installer",
+                label,
+                patch_module_name,
+            )
+        return False
+    try:
+        return bool(installer(module))
+    except Exception as exc:
+        key = f"{patch_module_name}:{type(exc).__name__}"
+        if key not in _REAPPLY_FAILURES_LOGGED:
+            _REAPPLY_FAILURES_LOGGED.add(key)
+            logger.warning(
+                "PHASE3_PATCH_REAPPLY_FAILED marker=20260703z class=%s module=%s err=%s",
+                label,
+                patch_module_name,
+                exc,
+            )
+        else:
+            logger.debug(
+                "PHASE3_PATCH_REAPPLY_FAILED_REPEAT marker=20260703z class=%s module=%s err=%s",
+                label,
+                patch_module_name,
+                exc,
+            )
+        return False
+
+
+def _reapply_phase3_wrappers(module: ModuleType, *, label: str) -> None:
+    """Restore wrapper-based Phase 3 patches after source replacement.
+
+    This patch recompiles ``_phase3_scan_and_enter`` from file source. That is
+    the right place to inject the hold-skip guard, but it replaces any wrapper
+    already installed on the method. Re-apply wrappers in deterministic order:
+    scan-budget/terminal-blocker first, force-next-preserve second.
     """
     if not _env_truthy("NIJA_REAPPLY_PHASE3_SCAN_BUDGET_AFTER_HOLD_SKIP", True):
         logger.warning(
@@ -106,44 +176,33 @@ def _reapply_phase3_scan_budget(module: ModuleType, *, label: str) -> None:
         )
         return
 
-    patch_mod = None
-    for mod_name in ("bot.phase3_scan_budget_patch", "phase3_scan_budget_patch"):
-        try:
-            patch_mod = importlib.import_module(mod_name)
-            break
-        except Exception as exc:
-            logger.debug("PHASE3_SCAN_BUDGET_REAPPLY_IMPORT_SKIPPED marker=20260703z module=%s err=%s", mod_name, exc)
-    if patch_mod is None:
-        logger.warning("PHASE3_SCAN_BUDGET_REAPPLY_FAILED marker=20260703z class=%s reason=module_unavailable", label)
-        return
+    scan_reapplied = _run_reapply_installer(
+        module,
+        "bot.phase3_scan_budget_patch",
+        "_install_on_module",
+        label=label,
+    )
+    force_reapplied = _run_reapply_installer(
+        module,
+        "bot.phase3_force_next_preserve_selection_patch",
+        "_install_on_module",
+        label=label,
+    )
 
-    try:
-        installer = getattr(patch_mod, "_install_on_module", None)
-        if callable(installer):
-            reapplied = bool(installer(module))
-            logger.warning(
-                "PHASE3_SCAN_BUDGET_REAPPLIED_AFTER_HOLD_SKIP marker=20260703z class=%s reapplied=%s method=_install_on_module",
-                label,
-                reapplied,
-            )
-            print(
-                f"[NIJA-PRINT] PHASE3_SCAN_BUDGET_REAPPLIED_AFTER_HOLD_SKIP marker=20260703z class={label} reapplied={reapplied}",
-                flush=True,
-            )
-            return
-
-        hook = getattr(patch_mod, "install_import_hook", None)
-        if callable(hook):
-            hook()
-            logger.warning(
-                "PHASE3_SCAN_BUDGET_REAPPLIED_AFTER_HOLD_SKIP marker=20260703z class=%s reapplied=unknown method=install_import_hook",
-                label,
-            )
-            return
-
-        logger.warning("PHASE3_SCAN_BUDGET_REAPPLY_FAILED marker=20260703z class=%s reason=no_supported_installer", label)
-    except Exception as exc:
-        logger.warning("PHASE3_SCAN_BUDGET_REAPPLY_FAILED marker=20260703z class=%s err=%s", label, exc)
+    key = f"{label}:scan={scan_reapplied}:force={force_reapplied}"
+    if key not in _REAPPLIED_CLASSES:
+        _REAPPLIED_CLASSES.add(key)
+        logger.warning(
+            "PHASE3_WRAPPERS_REAPPLIED_AFTER_HOLD_SKIP marker=20260703z class=%s scan_budget=%s force_next=%s canonical_module=%s",
+            label,
+            scan_reapplied,
+            force_reapplied,
+            _CANONICAL_CORE_LOOP_MODULE,
+        )
+        print(
+            f"[NIJA-PRINT] PHASE3_WRAPPERS_REAPPLIED_AFTER_HOLD_SKIP marker=20260703z class={label} scan_budget={scan_reapplied} force_next={force_reapplied}",
+            flush=True,
+        )
 
 
 def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> bool:
@@ -174,7 +233,6 @@ def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> boo
 
     patched_source = source.replace(needle, _SKIP_BLOCK + "                " + needle, 1)
 
-    # Compile the generated function with the real nija_core_loop module globals.
     namespace = dict(vars(module))
     for key, value in getattr(current, "__globals__", {}).items():
         namespace.setdefault(key, value)
@@ -193,11 +251,15 @@ def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> boo
     setattr(patched, _PHASE3_WRAP_ATTR, True)
     setattr(patched, "__wrapped__", current)
     setattr(cls, "_phase3_scan_and_enter", patched)
-    _PATCHED_CLASSES.add(f"{label}.{cls.__name__}._phase3_scan_and_enter")
-    logger.warning("%s class=%s source=file line=%s", _MARKER, f"{label}.{cls.__name__}", lineno)
-    print(f"[NIJA-PRINT] PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703z | class={label}.{cls.__name__} source=file line={lineno}", flush=True)
+    patch_key = f"{label}.{cls.__name__}._phase3_scan_and_enter"
+    _PATCHED_CLASSES.add(patch_key)
+    logger.warning("%s class=%s source=file line=%s canonical_module=%s", _MARKER, f"{label}.{cls.__name__}", lineno, _CANONICAL_CORE_LOOP_MODULE)
+    print(
+        f"[NIJA-PRINT] PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703z | class={label}.{cls.__name__} source=file line={lineno}",
+        flush=True,
+    )
 
-    _reapply_phase3_scan_budget(module, label=f"{label}.{cls.__name__}")
+    _reapply_phase3_wrappers(module, label=f"{label}.{cls.__name__}")
     return True
 
 
@@ -211,11 +273,10 @@ def _install_on_module(module: ModuleType) -> bool:
 
 
 def _try_patch_loaded() -> bool:
-    patched = False
-    for name, module in list(sys.modules.items()):
-        if name in _CORE_LOOP_MODULES and isinstance(module, ModuleType):
-            patched = _install_on_module(module) or patched
-    return patched
+    module = sys.modules.get(_CANONICAL_CORE_LOOP_MODULE)
+    if isinstance(module, ModuleType):
+        return _install_on_module(module)
+    return False
 
 
 def _start_monitor() -> None:
@@ -225,17 +286,22 @@ def _start_monitor() -> None:
     _MONITOR_STARTED = True
 
     def _monitor() -> None:
-        deadline = time.time() + 300.0
+        deadline = time.time() + float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "240") or "240")
         patched_any = False
         while time.time() < deadline:
             patched_any = _try_patch_loaded() or patched_any
             if patched_any:
                 break
             time.sleep(1.0)
-        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_MONITOR_COMPLETE marker=20260703z patched_any=%s patched_classes=%s", patched_any, sorted(_PATCHED_CLASSES))
+        logger.warning(
+            "PHASE3_FALLBACK_HOLD_SKIP_MONITOR_COMPLETE marker=20260703z patched_any=%s patched_classes=%s canonical_module=%s",
+            patched_any,
+            sorted(_PATCHED_CLASSES),
+            _CANONICAL_CORE_LOOP_MODULE,
+        )
 
     threading.Thread(target=_monitor, name="phase3-fallback-hold-skip-monitor", daemon=True).start()
-    logger.warning("PHASE3_FALLBACK_HOLD_SKIP_MONITOR_STARTED marker=20260703z")
+    logger.warning("PHASE3_FALLBACK_HOLD_SKIP_MONITOR_STARTED marker=20260703z canonical_module=%s", _CANONICAL_CORE_LOOP_MODULE)
 
 
 def install_import_hook() -> None:
@@ -244,16 +310,22 @@ def install_import_hook() -> None:
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
-            logger.warning("PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703z already_installed=True patched_classes=%s", sorted(_PATCHED_CLASSES))
+            logger.debug(
+                "PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703z already_installed=True patched_classes=%s",
+                sorted(_PATCHED_CLASSES),
+            )
             return
         _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
         def _wrapped_import_module(name: str, package: str | None = None):
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
-            if name in _CORE_LOOP_MODULES:
+            if name == _CANONICAL_CORE_LOOP_MODULE:
                 _install_on_module(module)
-            _try_patch_loaded()
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703z patched_classes=%s", sorted(_PATCHED_CLASSES))
+        logger.warning(
+            "PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703z patched_classes=%s canonical_module=%s",
+            sorted(_PATCHED_CLASSES),
+            _CANONICAL_CORE_LOOP_MODULE,
+        )
