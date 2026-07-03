@@ -124,8 +124,6 @@ def _normalize_micro_cap_floors() -> None:
     _set_max_floor("MIN_CASH_TO_BUY", _float_env("NIJA_MICRO_CAP_MIN_CASH_TO_BUY_USD", 5.0))
     _set_max_floor("KRAKEN_MIN_NOTIONAL_USD", _float_env("NIJA_KRAKEN_MICRO_MIN_NOTIONAL_USD", 10.0))
     _set_max_floor("COINBASE_MIN_ORDER_USD", _float_env("NIJA_COINBASE_MICRO_MIN_ORDER_USD", 1.0))
-    # OKX final exchange/compiler minimum remains protected downstream. This env
-    # value should not be used by the APEX early pre-filter anymore.
     _set_max_floor("OKX_MIN_ORDER_USD", _float_env("NIJA_OKX_MICRO_MIN_ORDER_USD", 10.0))
     os.environ.setdefault("NIJA_MIN_NOTIONAL_SPENDABLE_CAP", "true")
 
@@ -241,6 +239,10 @@ def _install_phase3_force_next_preserve_selection() -> None:
     _install_patch_module(filename="phase3_force_next_preserve_selection_patch.py", module_name="nija_phase3_force_next_preserve_selection_patch", success_log="PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_REQUESTED", error_prefix="Phase3 force-next preserve selection")
 
 
+def _install_phase3_selection_width() -> None:
+    _install_patch_module(filename="phase3_selection_width_patch.py", module_name="nija_phase3_selection_width_patch", success_log="PHASE3_SELECTION_WIDTH_INSTALL_REQUESTED", error_prefix="Phase3 selection width repair")
+
+
 def _install_execution_bootstrap_authority_repair() -> None:
     _install_patch_module(filename="execution_bootstrap_authority_repair_patch.py", module_name="nija_execution_bootstrap_authority_repair_patch", success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED", error_prefix="Execution bootstrap authority repair")
 
@@ -298,6 +300,7 @@ _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
 _install_phase3_overselect_import_repair()
 _install_phase3_force_next_preserve_selection()
+_install_phase3_selection_width()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
 _install_fallback_take_profit_geometry_repair()
