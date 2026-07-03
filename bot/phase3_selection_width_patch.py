@@ -1,11 +1,10 @@
-"""Phase 3 selection width repair.
+"""Phase 3 selection width repair with one-shot logging.
 
-The current runtime already overselects several ranked candidates, but the
-fallback-width constant inside NijaCoreLoop can trim that selected list to top-2.
-This patch raises that internal width to the configured execution-attempt budget
-so replacement candidates remain available after downstream rejections.
-
-All downstream validation stays unchanged.
+Raises the fallback-width constant inside NijaCoreLoop to the configured
+execution-attempt budget so replacement candidates remain available after
+downstream rejections. This version is idempotent and only emits operator logs
+when a module is first patched or the width actually changes, preventing Railway
+log-rate floods from repeated import-hook calls.
 """
 
 from __future__ import annotations
@@ -27,7 +26,8 @@ _ORIGINAL_BUILTINS_IMPORT: Optional[Callable[..., Any]] = None
 _PATCHED = False
 _MONITOR_STARTED = False
 _LOCK = threading.Lock()
-_MARKER = "PHASE3_SELECTION_WIDTH_PATCHED marker=20260703m"
+_MARKER = "PHASE3_SELECTION_WIDTH_PATCHED marker=20260703n"
+_ALREADY_PATCHED_MODULES: set[str] = set()
 
 
 def _int_env(name: str, default: int) -> int:
@@ -40,21 +40,27 @@ def _int_env(name: str, default: int) -> int:
 def _patch_module(module: ModuleType) -> bool:
     global _PATCHED
     width_name = "_SNIPER_TOP_N_DEFAULT"
+    module_name = getattr(module, "__name__", "<unknown>")
     if not hasattr(module, width_name):
         return False
     try:
         old_value = int(getattr(module, width_name) or 2)
     except Exception:
         old_value = 2
-    new_value = max(old_value, _int_env("NIJA_PHASE3_MAX_EXECUTION_ATTEMPTS", 8))
-    try:
-        setattr(module, width_name, new_value)
+    target_value = max(old_value, _int_env("NIJA_PHASE3_MAX_EXECUTION_ATTEMPTS", 8))
+    already_done = module_name in _ALREADY_PATCHED_MODULES and old_value >= target_value
+    if already_done:
         _PATCHED = True
-        logger.warning("%s module=%s old=%s new=%s", _MARKER, getattr(module, "__name__", "<unknown>"), old_value, new_value)
-        print(f"[NIJA-PRINT] PHASE3_SELECTION_WIDTH_PATCHED marker=20260703m old={old_value} new={new_value}", flush=True)
+        return True
+    try:
+        setattr(module, width_name, target_value)
+        _PATCHED = True
+        _ALREADY_PATCHED_MODULES.add(module_name)
+        logger.warning("%s module=%s old=%s new=%s", _MARKER, module_name, old_value, target_value)
+        print(f"[NIJA-PRINT] PHASE3_SELECTION_WIDTH_PATCHED marker=20260703n module={module_name} old={old_value} new={target_value}", flush=True)
         return True
     except Exception as exc:
-        logger.warning("PHASE3_SELECTION_WIDTH_PATCH_FAILED marker=20260703m module=%s err=%s", getattr(module, "__name__", "<unknown>"), exc)
+        logger.warning("PHASE3_SELECTION_WIDTH_PATCH_FAILED marker=20260703n module=%s err=%s", module_name, exc)
         return False
 
 
@@ -79,17 +85,17 @@ def _start_monitor() -> None:
             if _try_patch_loaded():
                 return
             time.sleep(1.0)
-        logger.warning("PHASE3_SELECTION_WIDTH_MONITOR_EXPIRED marker=20260703m patched=%s", _PATCHED)
+        logger.warning("PHASE3_SELECTION_WIDTH_MONITOR_EXPIRED marker=20260703n patched=%s", _PATCHED)
 
     threading.Thread(target=_monitor, name="phase3-selection-width", daemon=True).start()
-    logger.warning("PHASE3_SELECTION_WIDTH_MONITOR_STARTED marker=20260703m")
+    logger.warning("PHASE3_SELECTION_WIDTH_MONITOR_STARTED marker=20260703n")
 
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE, _ORIGINAL_BUILTINS_IMPORT
     with _LOCK:
-        logger.warning("PHASE3_SELECTION_WIDTH_INSTALL_START marker=20260703m")
-        print("[NIJA-PRINT] PHASE3_SELECTION_WIDTH_INSTALL_START marker=20260703m", flush=True)
+        logger.warning("PHASE3_SELECTION_WIDTH_INSTALL_START marker=20260703n")
+        print("[NIJA-PRINT] PHASE3_SELECTION_WIDTH_INSTALL_START marker=20260703n", flush=True)
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is None:
@@ -119,4 +125,4 @@ def install_import_hook() -> None:
                 return module
 
             builtins.__import__ = _wrapped_builtin_import
-        logger.warning("PHASE3_SELECTION_WIDTH_INSTALL_COMPLETE marker=20260703m patched=%s", _PATCHED)
+        logger.warning("PHASE3_SELECTION_WIDTH_INSTALL_COMPLETE marker=20260703n patched=%s", _PATCHED)
