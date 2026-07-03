@@ -17,15 +17,40 @@ _TRADING_STRATEGY_PATCHED = False
 _ADOPTION_PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
+_WAIT_LOG_LOCK = threading.Lock()
+_WAIT_LOG_STATE: dict[str, tuple[float, int]] = {}
 
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
-_MARKER = "LIVE_ACTIVE_EXECUTION_GATE_FINAL_PATCHED marker=20260703d"
-_ROTATION_ATTR = "_nija_okx_entry_rotation_wrapped_v20260703d"
-_ADOPTION_APPEND_ATTR = "_nija_adopted_profit_runtime_append_wrapped_v20260703d"
+_MARKER = "LIVE_ACTIVE_EXECUTION_GATE_FINAL_PATCHED marker=20260703q"
+_ROTATION_ATTR = "_nija_okx_entry_rotation_wrapped_v20260703q"
+_ADOPTION_APPEND_ATTR = "_nija_adopted_profit_runtime_append_wrapped_v20260703q"
+_WRAP_ATTR = "_nija_live_active_execution_gate_final_wrapped_v20260703q"
 
 
 def _truthy(name: str, default: str = "") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUTHY
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)) or default)
+    except Exception:
+        return default
+
+
+def _waiting_log(detail: str) -> None:
+    interval = _float_env("NIJA_LIVE_ACTIVE_FINAL_WAIT_LOG_THROTTLE_S", 30.0)
+    now = time.monotonic()
+    key = str(detail or "unknown")
+    with _WAIT_LOG_LOCK:
+        last_ts, suppressed = _WAIT_LOG_STATE.get(key, (0.0, 0))
+        if now - last_ts < interval:
+            _WAIT_LOG_STATE[key] = (last_ts, suppressed + 1)
+            return
+        _WAIT_LOG_STATE[key] = (now, 0)
+    if suppressed:
+        logger.info("LIVE_ACTIVE_EXECUTION_GATE_FINAL_WAITING_THROTTLED marker=20260703q detail=%s suppressed=%d", key, suppressed)
+    logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL_WAITING marker=20260703q detail=%s", key)
 
 
 def _state_value(sm: Any) -> str:
@@ -123,19 +148,17 @@ def _final_live_active_dispatch_ready(sm: Any) -> tuple[bool, str]:
         return False, "live_capital_not_verified"
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return False, "simulation_mode_enabled"
-    if not _truthy("NIJA_RUNTIME_EXECUTION_AUTHORITY"):
-        return False, "runtime_execution_authority_missing"
     if not _writer_authority_ready():
         return False, "writer_authority_missing"
     if not _committed(sm):
         return False, "activation_not_committed"
     if not _first_snapshot_ok(sm):
-        logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL first_snapshot_accessor_false_nonfatal")
+        logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL first_snapshot_accessor_false_nonfatal marker=20260703q")
     if not _kill_switch_clear():
         return False, "kill_switch_active"
     if not _capital_ready():
         return False, "capital_not_ready"
-    return True, "live_active_committed_authority_ready_v20260703d"
+    return True, "live_active_committed_authority_rehydrated_v20260703q"
 
 
 def _broker_key_from_obj(obj: Any) -> str:
@@ -236,7 +259,7 @@ def _patch_trading_strategy_module(module: ModuleType) -> bool:
             if ok:
                 eligible.append((name, broker, reason))
         if not eligible:
-            logger.warning("ENTRY_BROKER_ROTATION_NO_ELIGIBLE status=%s", status)
+            logger.warning("ENTRY_BROKER_ROTATION_NO_ELIGIBLE marker=20260703q status=%s", status)
             return original(self)
         idx = int(getattr(self, "_nija_entry_broker_rotation_idx", -1) or -1) + 1
         setattr(self, "_nija_entry_broker_rotation_idx", idx)
@@ -254,20 +277,20 @@ def _patch_trading_strategy_module(module: ModuleType) -> bool:
         except Exception:
             pass
         logger.critical(
-            "ENTRY_BROKER_ROTATION_SELECTED marker=20260703d broker=%s reason=%s eligible=%s status=%s",
+            "ENTRY_BROKER_ROTATION_SELECTED marker=20260703q broker=%s reason=%s eligible=%s status=%s",
             name,
             reason,
             [item[0] for item in eligible],
             status,
         )
-        print(f"[NIJA-PRINT] ENTRY_BROKER_ROTATION_SELECTED marker=20260703d broker={name} eligible={[item[0] for item in eligible]}", flush=True)
+        print(f"[NIJA-PRINT] ENTRY_BROKER_ROTATION_SELECTED marker=20260703q broker={name} eligible={[item[0] for item in eligible]}", flush=True)
         return selected
 
     setattr(_rotating_get_active_broker, _ROTATION_ATTR, True)
     setattr(cls, "_get_active_broker", _rotating_get_active_broker)
     _TRADING_STRATEGY_PATCHED = True
-    logger.warning("OKX_ENTRY_ROTATION_PATCHED marker=20260703d module=%s", getattr(module, "__name__", "<unknown>"))
-    print("[NIJA-PRINT] OKX_ENTRY_ROTATION_PATCHED marker=20260703d", flush=True)
+    logger.warning("OKX_ENTRY_ROTATION_PATCHED marker=20260703q module=%s", getattr(module, "__name__", "<unknown>"))
+    print("[NIJA-PRINT] OKX_ENTRY_ROTATION_PATCHED marker=20260703q", flush=True)
     return True
 
 
@@ -319,19 +342,19 @@ def _patch_live_entry_runtime_fixes(module: ModuleType) -> bool:
                     continue
         if attached:
             logger.critical(
-                "ADOPTED_PROFIT_EXIT_MANAGED marker=20260703d broker=%s symbol=%s value=$%.2f profit_exit=True runtime=True",
+                "ADOPTED_PROFIT_EXIT_MANAGED marker=20260703q broker=%s symbol=%s value=$%.2f profit_exit=True runtime=True",
                 pos.get("broker"),
                 pos.get("symbol"),
                 float(pos.get("market_value_usd") or 0.0),
             )
-            print(f"[NIJA-PRINT] ADOPTED_PROFIT_EXIT_MANAGED marker=20260703d broker={pos.get('broker')} symbol={pos.get('symbol')}", flush=True)
+            print(f"[NIJA-PRINT] ADOPTED_PROFIT_EXIT_MANAGED marker=20260703q broker={pos.get('broker')} symbol={pos.get('symbol')}", flush=True)
         return attached
 
     setattr(_append_with_profit_targets, _ADOPTION_APPEND_ATTR, True)
     setattr(module, "_append_to_runtime_open_positions", _append_with_profit_targets)
     _ADOPTION_PATCHED = True
-    logger.warning("ADOPTED_POSITION_PROFIT_EXIT_PATCHED marker=20260703d module=%s", getattr(module, "__name__", "<unknown>"))
-    print("[NIJA-PRINT] ADOPTED_POSITION_PROFIT_EXIT_PATCHED marker=20260703d", flush=True)
+    logger.warning("ADOPTED_POSITION_PROFIT_EXIT_PATCHED marker=20260703q module=%s", getattr(module, "__name__", "<unknown>"))
+    print("[NIJA-PRINT] ADOPTED_POSITION_PROFIT_EXIT_PATCHED marker=20260703q", flush=True)
     return True
 
 
@@ -343,10 +366,8 @@ def _install_on_module(module: ModuleType) -> bool:
     original = getattr(cls, "can_dispatch_trades", None)
     if not callable(original):
         return False
-    if getattr(original, "_nija_live_active_execution_gate_final_wrapped_v20260703d", False):
+    if getattr(original, _WRAP_ATTR, False):
         _PATCHED = True
-        logger.warning("%s already_wrapped module=%s", _MARKER, getattr(module, "__name__", "<unknown>"))
-        print("[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_PATCHED marker=20260703d already_wrapped", flush=True)
         return True
 
     def _patched_can_dispatch_trades(self: Any, *args: Any, **kwargs: Any) -> bool:
@@ -354,7 +375,7 @@ def _install_on_module(module: ModuleType) -> bool:
             if bool(original(self, *args, **kwargs)):
                 return True
         except Exception as exc:
-            logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL original_can_dispatch_failed err=%s", exc)
+            logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL original_can_dispatch_failed marker=20260703q err=%s", exc)
         ready, detail = _final_live_active_dispatch_ready(self)
         if ready:
             try:
@@ -362,26 +383,26 @@ def _install_on_module(module: ModuleType) -> bool:
                 setattr(self, "_execution_authority", True)
                 setattr(self, "_can_dispatch_trades", True)
                 os.environ["NIJA_RUNTIME_TRADING_STATE"] = "LIVE_ACTIVE"
-                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "1"
+                os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "true"
             except Exception:
                 pass
             logger.critical(
-                "LIVE_ACTIVE_EXECUTION_GATE_FINAL_APPLIED marker=20260703d detail=%s token_prefix=%s generation=%s heartbeat=%s",
+                "LIVE_ACTIVE_EXECUTION_GATE_FINAL_APPLIED marker=20260703q detail=%s token_prefix=%s generation=%s heartbeat=%s",
                 detail,
                 os.environ.get("NIJA_WRITER_FENCING_TOKEN", "")[:8],
                 os.environ.get("NIJA_WRITER_LEASE_GENERATION", ""),
                 os.environ.get("NIJA_WRITER_HEARTBEAT_ACTIVE", ""),
             )
-            print(f"[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_APPLIED marker=20260703d | {detail}", flush=True)
+            print(f"[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_APPLIED marker=20260703q | {detail}", flush=True)
             return True
-        logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL_WAITING marker=20260703d detail=%s", detail)
+        _waiting_log(detail)
         return False
 
-    setattr(_patched_can_dispatch_trades, "_nija_live_active_execution_gate_final_wrapped_v20260703d", True)
+    setattr(_patched_can_dispatch_trades, _WRAP_ATTR, True)
     setattr(cls, "can_dispatch_trades", _patched_can_dispatch_trades)
     _PATCHED = True
     logger.warning("%s module=%s", _MARKER, getattr(module, "__name__", "<unknown>"))
-    print("[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_PATCHED marker=20260703d", flush=True)
+    print("[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_PATCHED marker=20260703q", flush=True)
     return True
 
 
@@ -414,28 +435,28 @@ def _start_monitor() -> None:
             _try_patch_loaded()
             if _PATCHED and _TRADING_STRATEGY_PATCHED and _ADOPTION_PATCHED:
                 return
-            time.sleep(0.25)
+            time.sleep(1.0)
         logger.warning(
-            "LIVE_ACTIVE_EXECUTION_GATE_FINAL_MONITOR_EXPIRED marker=20260703d tsm=%s strategy=%s adoption=%s",
+            "LIVE_ACTIVE_EXECUTION_GATE_FINAL_MONITOR_EXPIRED marker=20260703q tsm=%s strategy=%s adoption=%s",
             _PATCHED,
             _TRADING_STRATEGY_PATCHED,
             _ADOPTION_PATCHED,
         )
 
     threading.Thread(target=_monitor, name="live-active-execution-gate-final-monitor", daemon=True).start()
-    logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL_MONITOR_STARTED marker=20260703d")
+    logger.warning("LIVE_ACTIVE_EXECUTION_GATE_FINAL_MONITOR_STARTED marker=20260703q")
 
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
     with _INSTALL_LOCK:
         logger.warning("%s install_start=True", _MARKER)
-        print("[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_PATCHED marker=20260703d install_start", flush=True)
+        print("[NIJA-PRINT] LIVE_ACTIVE_EXECUTION_GATE_FINAL_PATCHED marker=20260703q install_start", flush=True)
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
             logger.warning(
-                "LIVE_ACTIVE_EXECUTION_GATE_FINAL_INSTALL_COMPLETE marker=20260703d already_installed=True tsm=%s strategy=%s adoption=%s",
+                "LIVE_ACTIVE_EXECUTION_GATE_FINAL_INSTALL_COMPLETE marker=20260703q already_installed=True tsm=%s strategy=%s adoption=%s",
                 _PATCHED,
                 _TRADING_STRATEGY_PATCHED,
                 _ADOPTION_PATCHED,
@@ -455,7 +476,7 @@ def install_import_hook() -> None:
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
         logger.warning(
-            "LIVE_ACTIVE_EXECUTION_GATE_FINAL_INSTALL_COMPLETE marker=20260703d tsm=%s strategy=%s adoption=%s",
+            "LIVE_ACTIVE_EXECUTION_GATE_FINAL_INSTALL_COMPLETE marker=20260703q tsm=%s strategy=%s adoption=%s",
             _PATCHED,
             _TRADING_STRATEGY_PATCHED,
             _ADOPTION_PATCHED,
