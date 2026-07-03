@@ -451,6 +451,11 @@ def _install_on_core_loop(module: ModuleType) -> bool:
             setattr(loop_cls, "run_scan_phase", _patched_run_scan_phase)
             setattr(loop_cls, "_nija_loop_runtime_scan_patched", True)
 
+    print(
+        "LOOP_RUNTIME_REPAIR_APPLIED module=%s duplicate_start_guard=true scanner_telemetry=true "
+        "silent_path_watchdog=true stdout_info_routing=true" % getattr(module, "__name__", "<unknown>"),
+        flush=True,
+    )
     logger.warning(
         "LOOP_RUNTIME_REPAIR_APPLIED module=%s duplicate_start_guard=true scanner_telemetry=true silent_path_watchdog=true stdout_info_routing=true",
         getattr(module, "__name__", "<unknown>"),
@@ -504,6 +509,7 @@ def _install_core_loop_import_hook() -> None:
         return
     sys.meta_path.insert(0, _CoreLoopPatchFinder())
     _CORE_LOOP_HOOK_INSTALLED = True
+    print("LOOP_RUNTIME_REPAIR_IMPORT_HOOK_INSTALLED", flush=True)
     logger.warning("LOOP_RUNTIME_REPAIR_IMPORT_HOOK_INSTALLED")
 
 

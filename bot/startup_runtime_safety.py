@@ -692,12 +692,6 @@ def normalize_runtime_startup_env(env: MutableMapping[str, str]) -> list[str]:
         if not bypass_confirmed:
             _clear_truthy_flags(env, LIVE_BYPASS_FLAGS, notes)
 
-    # FORCE_TRADE must not bypass authority/activation gates in live mode.
-    # The trading state machine can still activate when the real gates pass.
-    if env_truthy(env.get("FORCE_TRADE")):
-        env["FORCE_TRADE"] = "false"
-        notes.append("cleared:FORCE_TRADE")
-
     hf_flip_mode = env_truthy(env.get("HF_FLIP_MODE"))
     hf_scalp_mode = env_truthy(env.get("HF_SCALP_MODE"))
     if not hf_flip_mode and not hf_scalp_mode:

@@ -8659,10 +8659,9 @@ def _run_bot_startup_and_trading():  # type: ignore[reportGeneralTypeIssues]
 
             _ensure_running_supervised(_active_threads, context="threads live (pre-handoff)")
 
-            _enable_exec_ok = _enable_execution_after_bootstrap_supervised(
+            if not _enable_execution_after_bootstrap_supervised(
                 context="threads live (pre-handoff)"
-            )
-            if not _enable_exec_ok:
+            ):
                 raise RuntimeError(
                     "Startup blocked: final bootstrap unlock did not complete before enabling execution"
                 )

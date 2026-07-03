@@ -1371,9 +1371,6 @@ class TradingStrategy:
 
         candidates: Dict[Any, Any] = {}
 
-
-        candidates: Dict[Any, Any] = {}
-
         # 2. Include all platform brokers from MultiAccountBrokerManager.
         if self.multi_account_manager is not None:
             try:

@@ -82,8 +82,24 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
             clear=False,
         )
         self._marker_patch.start()
+        # Mock submit_market_order_via_pipeline so the DistributedWriterFence does not
+        # interfere with tests that are only verifying market-discovery behaviour.
+        self._pipeline_mock = MagicMock(return_value={"status": "filled", "order_id": "hb-pipeline-ok"})
+        self._pipeline_patch = patch(
+            "bot.trading_strategy.submit_market_order_via_pipeline",
+            self._pipeline_mock,
+        )
+        self._pipeline_patch.start()
+        # Reset the module-level heartbeat log-rate-limiter so each test sees
+        # a fresh window and rate-limited log lines are not suppressed.
+        try:
+            import bot.trading_strategy as _ts
+            _ts._HEARTBEAT_LOG_LIMITER.reset_all()
+        except Exception:
+            pass
 
     def tearDown(self):
+        self._pipeline_patch.stop()
         self._marker_patch.stop()
         shutil.rmtree(self._hb_tmpdir, ignore_errors=True)
 
@@ -98,6 +114,11 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         strategy._heartbeat_trade_lock = threading.Lock()
         strategy._heartbeat_trade_completed = False
         strategy._heartbeat_trade_success = False
+        # Ensure MagicMock broker passes eligibility checks in _is_broker_eligible_for_entry
+        if not isinstance(getattr(broker, "exit_only_mode", None), bool):
+            broker.exit_only_mode = False
+        if not isinstance(getattr(broker, "_last_known_balance", None), (int, float)):
+            broker._last_known_balance = 100.0
         return strategy
 
     def test_heartbeat_proceeds_when_market_discovery_returns_empty(self):
@@ -109,10 +130,6 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         broker.get_available_markets = MagicMock(return_value=[])
         # Remove get_all_products so only get_available_markets path is exercised
         del broker.get_all_products
-
-        fake_buy = {'status': 'filled', 'order_id': 'hb-001'}
-        fake_sell = {'status': 'filled', 'order_id': 'hb-002'}
-        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
 
         strategy = self._make_strategy_with_broker(broker)
 
@@ -127,10 +144,6 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=['BTC-USD', 'ETH-USD', 'SOL-USD'])
-
-        fake_buy = {'status': 'filled', 'order_id': 'hb-003'}
-        fake_sell = {'status': 'filled', 'order_id': 'hb-004'}
-        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
 
         strategy = self._make_strategy_with_broker(broker)
 
@@ -161,10 +174,6 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
 
-        fake_buy = {'status': 'filled', 'order_id': 'hb-009'}
-        fake_sell = {'status': 'filled', 'order_id': 'hb-010'}
-        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
-
         strategy = self._make_strategy_with_broker(broker)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,7 +188,8 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
             self.assertIn(marker_payload.get("stage"), ("ORDER_VERIFY", "FILL_VERIFY"))
             self.assertIsNotNone(marker_payload.get("verified_at_epoch"))
 
-        buy_call = broker.execute_order.call_args_list[0]
+        # Verify the pipeline was called with a quantity >= $10 (safe minimum notional)
+        buy_call = self._pipeline_mock.call_args_list[0]
         self.assertGreaterEqual(
             float(buy_call.kwargs.get("quantity", 0.0)),
             10.0,
@@ -190,7 +200,8 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-        broker.execute_order = MagicMock(return_value={"status": "accepted", "order_id": "hb-order-only"})
+        # Pipeline returns 'accepted' (submitted but not filled) to exercise ORDER_VERIFY path
+        self._pipeline_mock.return_value = {"status": "accepted", "order_id": "hb-order-only"}
         strategy = self._make_strategy_with_broker(broker)
         with tempfile.TemporaryDirectory() as tmp:
             marker_path = f"{tmp}/heartbeat_verified.flag"
@@ -212,7 +223,8 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-        broker.execute_order = MagicMock(return_value={"status": "accepted", "order_id": "hb-order-only"})
+        # Pipeline returns 'accepted' (submitted but not filled) to exercise FILL_VERIFY path
+        self._pipeline_mock.return_value = {"status": "accepted", "order_id": "hb-order-only"}
         strategy = self._make_strategy_with_broker(broker)
         with tempfile.TemporaryDirectory() as tmp:
             marker_path = f"{tmp}/heartbeat_verified.flag"
@@ -232,9 +244,6 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-        fake_buy = {"status": "filled", "order_id": "hb-011"}
-        fake_sell = {"status": "filled", "order_id": "hb-012"}
-        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell, fake_buy, fake_sell])
         strategy = self._make_strategy_with_broker(broker)
         with tempfile.TemporaryDirectory() as tmp:
             marker_path = f"{tmp}/heartbeat_verified.flag"
@@ -256,9 +265,6 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         broker = MagicMock()
         broker.connected = True
         broker.get_available_markets = MagicMock(return_value=["BTC-USD"])
-        fake_buy = {"status": "filled", "order_id": "hb-013"}
-        fake_sell = {"status": "filled", "order_id": "hb-014"}
-        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
         strategy = self._make_strategy_with_broker(broker)
         reasons: list[str] = []
 
@@ -270,11 +276,14 @@ class TestHeartbeatEmptyMarketFallback(unittest.TestCase):
         with patch("bot.trading_strategy.startup_execution_probe_scope", side_effect=_capture_scope):
             self.assertTrue(strategy._execute_heartbeat_trade())
 
-        self.assertEqual(
-            reasons,
-            ["HEARTBEAT_TRADE", "HEARTBEAT_TRADE_CLOSE"],
-            "Heartbeat flow must tag startup probe scopes for buy/sell verification orders",
-        )
+        # The auth probe (AUTH_VERIFY stage) also uses HEARTBEAT_TRADE scope; the buy
+        # order and the sell-close order use HEARTBEAT_TRADE and HEARTBEAT_TRADE_CLOSE
+        # respectively.  Assert that both buy and close scopes are present in order.
+        self.assertIn("HEARTBEAT_TRADE", reasons, "Buy scope must be tagged HEARTBEAT_TRADE")
+        self.assertIn("HEARTBEAT_TRADE_CLOSE", reasons, "Close scope must be tagged HEARTBEAT_TRADE_CLOSE")
+        hb_idx = next(i for i, r in enumerate(reasons) if r == "HEARTBEAT_TRADE")
+        close_idx = next(i for i, r in enumerate(reasons) if r == "HEARTBEAT_TRADE_CLOSE")
+        self.assertLess(hb_idx, close_idx, "HEARTBEAT_TRADE scope must precede HEARTBEAT_TRADE_CLOSE scope")
 
 
 class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
@@ -288,8 +297,24 @@ class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
             clear=False,
         )
         self._marker_patch.start()
+        # Mock submit_market_order_via_pipeline so the DistributedWriterFence does not
+        # interfere with tests that are only verifying market-discovery behaviour.
+        self._pipeline_mock = MagicMock(return_value={"status": "filled", "order_id": "hb-pipeline-ok"})
+        self._pipeline_patch = patch(
+            "bot.trading_strategy.submit_market_order_via_pipeline",
+            self._pipeline_mock,
+        )
+        self._pipeline_patch.start()
+        # Reset the module-level heartbeat log-rate-limiter so each test sees
+        # a fresh window and rate-limited log lines are not suppressed.
+        try:
+            import bot.trading_strategy as _ts
+            _ts._HEARTBEAT_LOG_LIMITER.reset_all()
+        except Exception:
+            pass
 
     def tearDown(self):
+        self._pipeline_patch.stop()
         self._marker_patch.stop()
         shutil.rmtree(self._hb_tmpdir, ignore_errors=True)
 
@@ -303,6 +328,11 @@ class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
         strategy._heartbeat_trade_lock = threading.Lock()
         strategy._heartbeat_trade_completed = False
         strategy._heartbeat_trade_success = False
+        # Ensure MagicMock broker passes eligibility checks in _is_broker_eligible_for_entry
+        if not isinstance(getattr(broker, "exit_only_mode", None), bool):
+            broker.exit_only_mode = False
+        if not isinstance(getattr(broker, "_last_known_balance", None), (int, float)):
+            broker._last_known_balance = 100.0
         return strategy
 
     def test_heartbeat_executes_when_market_discovery_raises(self):
@@ -312,10 +342,6 @@ class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
         broker.get_available_markets = MagicMock(
             side_effect=ConnectionError("Exchange unreachable")
         )
-
-        fake_buy = {'status': 'filled', 'order_id': 'hb-005'}
-        fake_sell = {'status': 'filled', 'order_id': 'hb-006'}
-        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
 
         strategy = self._make_strategy_with_broker(broker)
 
@@ -328,13 +354,9 @@ class TestHeartbeatExecutesOnDiscoveryFailure(unittest.TestCase):
     def test_heartbeat_executes_when_broker_lacks_market_discovery(self):
         """If broker has no get_available_markets() or get_all_products(), heartbeat uses default symbol."""
         broker = MagicMock(spec=[])  # spec=[] means no attributes
-        broker.connected = True
-
-        fake_buy = {'status': 'filled', 'order_id': 'hb-007'}
-        fake_sell = {'status': 'filled', 'order_id': 'hb-008'}
-        broker.execute_order = MagicMock(side_effect=[fake_buy, fake_sell])
-        # Replicate what _get_active_broker does when self.broker is connected
+        # Force-set the minimal attributes the heartbeat path needs to function
         object.__setattr__(broker, 'connected', True)
+        object.__setattr__(broker, 'execute_order', MagicMock(return_value={"status": "filled", "order_id": "hb-007"}))
 
         strategy = self._make_strategy_with_broker(broker)
 

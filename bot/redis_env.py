@@ -14,8 +14,8 @@ except ImportError:
 
 _REDIS_URL_ENV_NAMES = (
     "NIJA_REDIS_URL",
-    "REDIS_PUBLIC_URL",
     "REDIS_PRIVATE_URL",
+    "REDIS_PUBLIC_URL",
     # Legacy compatibility only. Production Railway configs should prefer the
     # explicit private/public variables above, with NIJA_REDIS_URL set to the
     # runtime primary endpoint.

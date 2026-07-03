@@ -31,7 +31,7 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
             result = engine.execute_entry(
                 symbol="ADA-USD",
                 side="long",
-                position_size=10.0,
+                position_size=12.0,
                 entry_price=1.0,
                 stop_loss=0.9,
                 take_profit_levels={"tp1": 1.1, "tp2": 1.2, "tp3": 1.3},
@@ -48,7 +48,7 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
         engine.can_execute_trade = MagicMock(return_value=True)
         engine._is_expectancy_bucket_blocked = MagicMock(return_value=False)
         engine._optimize_execution_with_intelligence = MagicMock(return_value=None)
-        engine._apply_minimum_notional_gate = MagicMock(return_value=(10.0, None))
+        engine._apply_minimum_notional_gate = MagicMock(return_value=(12.0, None))
         engine._compute_kelly_fraction = MagicMock(return_value=1.0)
         engine._submit_market_order_via_pipeline = MagicMock(return_value={"status": "filled"})
         engine._emit_execution_result = MagicMock()
@@ -74,9 +74,9 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
             result = engine.execute_entry(
                 symbol="ADA-USDC",
                 side="long",
-                position_size=10.0,
+                position_size=12.0,
                 entry_price=1.0,
-                stop_loss=0.99,
+                stop_loss=0.998,
                 take_profit_levels={"tp1": 1.05, "tp2": 1.1, "tp3": 1.15},
             )
 
@@ -91,7 +91,7 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
         engine.can_execute_trade = MagicMock(return_value=True)
         engine._is_expectancy_bucket_blocked = MagicMock(return_value=False)
         engine._optimize_execution_with_intelligence = MagicMock(return_value=None)
-        engine._apply_minimum_notional_gate = MagicMock(return_value=(10.0, None))
+        engine._apply_minimum_notional_gate = MagicMock(return_value=(12.0, None))
         engine._compute_kelly_fraction = MagicMock(return_value=1.0)
         engine._submit_market_order_via_pipeline = MagicMock(
             return_value={"status": "filled", "order_id": "ord-123"}
@@ -121,9 +121,9 @@ class TestExecuteEntryRejectionLogging(unittest.TestCase):
             result = engine.execute_entry(
                 symbol="AERO-USD",
                 side="long",
-                position_size=10.0,
+                position_size=12.0,
                 entry_price=1.0,
-                stop_loss=0.99,
+                stop_loss=0.998,
                 take_profit_levels={"tp1": 1.05, "tp2": 1.1, "tp3": 1.15},
             )
 
