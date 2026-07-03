@@ -169,6 +169,33 @@ class ExchangeOrderCompiler:
                 precision_decimals=1,
             ),
         },
+        "okx": {
+            # OKX: $1 minimum per order, 0.1% taker fee (maker 0.08%)
+            "_default": ExchangeConstraints(
+                exchange="okx",
+                min_order_usd=1.0,
+                min_notional_usd=1.0,
+                fee_rate_one_way=0.001,
+                step_size=0.00000001,
+                precision_decimals=8,
+            ),
+            "BTC": ExchangeConstraints(
+                exchange="okx",
+                min_order_usd=1.0,
+                min_notional_usd=1.0,
+                fee_rate_one_way=0.001,
+                step_size=0.00000001,
+                precision_decimals=8,
+            ),
+            "ETH": ExchangeConstraints(
+                exchange="okx",
+                min_order_usd=1.0,
+                min_notional_usd=1.0,
+                fee_rate_one_way=0.001,
+                step_size=0.00000001,
+                precision_decimals=8,
+            ),
+        },
     }
 
     def __init__(self):
@@ -276,8 +303,9 @@ class ExchangeOrderCompiler:
         # Calculate fees
         simulated_fee_usd = size_usd * constraints.fee_rate_one_way * fee_multiplier
 
-        # Check balance
-        if pricing.available_balance_usd < (size_usd + simulated_fee_usd):
+        # Check balance — buys require available cash; sells draw from held inventory
+        # (not cash), so the cash-balance check is skipped to avoid rejecting valid exits.
+        if side == "buy" and pricing.available_balance_usd < (size_usd + simulated_fee_usd):
             raise OrderCompileError(
                 f"Insufficient balance: need ${size_usd + simulated_fee_usd:.2f}, "
                 f"have ${pricing.available_balance_usd:.2f}"
@@ -347,7 +375,8 @@ class ExchangeOrderCompiler:
 
         # Gate 4: Final approval
         is_exchange_valid = clamped_size >= constraints.min_order_usd
-        is_fillable = pricing.available_balance_usd >= (clamped_size + fee_usd)
+        # Sells draw from held inventory, not cash — always considered fillable at gate level.
+        is_fillable = side == "sell" or pricing.available_balance_usd >= (clamped_size + fee_usd)
         is_precision_valid = quantity > 0
         is_profitable = clamped_size >= min_profit_threshold_usd
 

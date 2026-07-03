@@ -12607,7 +12607,9 @@ class OKXBroker(BaseBroker):
             logger.warning(
                 "⚠️ OKX position tracker unavailable (degraded optional broker): %s", e
             )
-            self._is_available = False
+            # Do NOT disable the broker here — position tracker is non-critical.
+            # The broker will still be marked available and connect() will be called
+            # immediately after, which sets _is_available based on credential validation.
 
     def connect(self) -> bool:
         """Connect to OKX through direct REST v5 without importing okx/candlelite.
@@ -12891,7 +12893,10 @@ class OKXBroker(BaseBroker):
         Args:
             symbol: Trading pair (e.g., 'BTC-USDT')
             side: 'buy' or 'sell'
-            quantity: Order size in USDT (for buys) or base currency (for sells)
+            quantity: Order size — in USDT when size_type='quote', in base currency
+                      when size_type='base'.  The multi-broker router always passes
+                      size_type='quote' (USD/USDT notional).
+            size_type: 'quote' (default from router) or 'base'.
 
         Returns:
             dict: Order result with status, order_id, etc.
@@ -12924,6 +12929,34 @@ class OKXBroker(BaseBroker):
             if okx_submit is None:
                 return {"status": "error", "error": "OKX trade API missing place_order"}
 
+            # Resolve the order size to submit.
+            # OKX spot: buys accept quote (USDT) via tgtCcy='quote_ccy'.
+            #           sells require base currency quantity.
+            # When the caller passes size_type='quote' (USD notional) for a sell,
+            # we must convert to base currency using the current ticker price.
+            sz_to_submit = quantity
+            fill_price_hint: float = 0.0
+            if okx_side == "sell" and size_type == "quote":
+                try:
+                    ticker_resp = self.market_api.get_ticker(instId=okx_symbol)
+                    ticker_data = (ticker_resp or {}).get("data", [])
+                    last_price = float((ticker_data[0].get("last") or 0) if ticker_data else 0)
+                    if last_price > 0:
+                        fill_price_hint = last_price
+                        sz_to_submit = quantity / last_price  # convert USD → base qty
+                    else:
+                        logging.warning(
+                            "OKX sell size conversion failed: ticker returned no price for %s; "
+                            "submitting raw quantity as base currency (may be incorrect)",
+                            okx_symbol,
+                        )
+                except Exception as _tick_err:
+                    logging.warning(
+                        "OKX sell size conversion error for %s: %s; "
+                        "submitting raw quantity as base currency (may be incorrect)",
+                        okx_symbol, _tick_err,
+                    )
+
             # Place market order
             # For spot trading: tdMode = 'cash'
             # For margin/futures: tdMode = 'cross' or 'isolated'
@@ -12932,7 +12965,7 @@ class OKXBroker(BaseBroker):
                 "tdMode": "cash",  # Spot trading mode
                 "side": okx_side,
                 "ordType": "market",
-                "sz": str(quantity),
+                "sz": str(sz_to_submit),
             }
             if okx_side == "buy":
                 # NIJA passes quote/notional USD(T) for entry buys.  OKX spot
@@ -12950,7 +12983,12 @@ class OKXBroker(BaseBroker):
                         "order_id": order_id,
                         "symbol": okx_symbol,
                         "side": okx_side,
-                        "quantity": quantity
+                        "quantity": sz_to_submit,
+                        # Provide fill_price hint so pipeline fill-price waterfall
+                        # (multi_broker_execution_router lines ~1164-1185) does not
+                        # fail with "acknowledged without fill price" when the broker
+                        # response doesn't include a fill price directly.
+                        "filled_price": fill_price_hint or 0.0,
                     }
 
             error_msg = result.get('msg', 'Unknown error') if result else 'No response'

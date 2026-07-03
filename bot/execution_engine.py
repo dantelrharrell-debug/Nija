@@ -4394,9 +4394,26 @@ class ExecutionEngine:
 
         position = self.positions[symbol]
         old_stop = position['stop_loss']
-        position['stop_loss'] = new_stop
+        side = position.get('side', 'long')
 
-        logger.info(f"Updated stop: {symbol} {old_stop:.2f} -> {new_stop:.2f}")
+        # Enforce monotonic trailing: only accept stops that improve protection.
+        # Longs: stop must move up (higher is better).
+        # Shorts: stop must move down (lower is better).
+        if side == 'long' and new_stop <= old_stop:
+            logger.debug(
+                f"Trailing stop not updated for {symbol} (long): "
+                f"new={new_stop:.6f} <= old={old_stop:.6f} — stop would loosen"
+            )
+            return False
+        if side == 'short' and new_stop >= old_stop:
+            logger.debug(
+                f"Trailing stop not updated for {symbol} (short): "
+                f"new={new_stop:.6f} >= old={old_stop:.6f} — stop would loosen"
+            )
+            return False
+
+        position['stop_loss'] = new_stop
+        logger.info(f"Updated stop: {symbol} {old_stop:.6f} -> {new_stop:.6f}")
         return True
 
     def check_stop_loss_hit(self, symbol: str, current_price: float) -> bool:
@@ -4446,29 +4463,32 @@ class ExecutionEngine:
         else:
             pnl_pct = (entry_price - current_price) / entry_price if entry_price > 0 else 0
 
-        # Check TP3 first (highest level)
-        if not position.get('tp3_hit', False):
-            if (side == 'long' and current_price >= position['tp3']) or \
-               (side == 'short' and current_price <= position['tp3']):
-                position['tp3_hit'] = True
-                logger.info(f"🎯 TAKE PROFIT TP3 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
-                return 'tp3'
-
-        # Check TP2
-        if not position.get('tp2_hit', False):
-            if (side == 'long' and current_price >= position['tp2']) or \
-               (side == 'short' and current_price <= position['tp2']):
-                position['tp2_hit'] = True
-                logger.info(f"🎯 TAKE PROFIT TP2 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
-                return 'tp2'
-
-        # Check TP1
+        # Check TP1 first (lowest / closest level)
         if not position.get('tp1_hit', False):
             if (side == 'long' and current_price >= position['tp1']) or \
                (side == 'short' and current_price <= position['tp1']):
                 position['tp1_hit'] = True
                 logger.info(f"🎯 TAKE PROFIT TP1 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
                 return 'tp1'
+
+        # Check TP2
+        if not position.get('tp2_hit', False):
+            if (side == 'long' and current_price >= position['tp2']) or \
+               (side == 'short' and current_price <= position['tp2']):
+                position['tp2_hit'] = True
+                position['tp1_hit'] = True  # implicitly hit at this price
+                logger.info(f"🎯 TAKE PROFIT TP2 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
+                return 'tp2'
+
+        # Check TP3 (highest level)
+        if not position.get('tp3_hit', False):
+            if (side == 'long' and current_price >= position['tp3']) or \
+               (side == 'short' and current_price <= position['tp3']):
+                position['tp3_hit'] = True
+                position['tp2_hit'] = True  # implicitly hit at this price
+                position['tp1_hit'] = True  # implicitly hit at this price
+                logger.info(f"🎯 TAKE PROFIT TP3 HIT: {symbol} at ${current_price:.2f} (PnL: {pnl_pct*100:+.1f}%)")
+                return 'tp3'
 
         return None
 
