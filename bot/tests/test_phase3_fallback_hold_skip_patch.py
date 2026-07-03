@@ -14,6 +14,7 @@ def test_try_patch_loaded_only_targets_core_loop_modules(monkeypatch):
     core_module = ModuleType("bot.nija_core_loop")
     core_module.NijaCoreLoop = type("NijaCoreLoop", (), {})
 
+    monkeypatch.delitem(sys.modules, "nija_core_loop", raising=False)
     monkeypatch.setitem(sys.modules, "bot.nija_apex_strategy_v71", apex_module)
     monkeypatch.setitem(sys.modules, "bot.nija_core_loop", core_module)
     monkeypatch.setattr(patch, "_install_on_module", lambda module: calls.append(module.__name__) or True)
