@@ -237,6 +237,10 @@ def _install_phase3_overselect_import_repair() -> None:
     _install_patch_module(filename="phase3_overselect_import_repair_patch.py", module_name="nija_phase3_overselect_import_repair_patch", success_log="PHASE3_OVERSELECT_IMPORT_REPAIR_INSTALL_REQUESTED", error_prefix="Phase3 overselect import repair")
 
 
+def _install_phase3_force_next_preserve_selection() -> None:
+    _install_patch_module(filename="phase3_force_next_preserve_selection_patch.py", module_name="nija_phase3_force_next_preserve_selection_patch", success_log="PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_REQUESTED", error_prefix="Phase3 force-next preserve selection")
+
+
 def _install_execution_bootstrap_authority_repair() -> None:
     _install_patch_module(filename="execution_bootstrap_authority_repair_patch.py", module_name="nija_execution_bootstrap_authority_repair_patch", success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED", error_prefix="Execution bootstrap authority repair")
 
@@ -293,6 +297,7 @@ _install_okx_min_notional_prefilter_repair()
 _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
 _install_phase3_overselect_import_repair()
+_install_phase3_force_next_preserve_selection()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
 _install_fallback_take_profit_geometry_repair()
