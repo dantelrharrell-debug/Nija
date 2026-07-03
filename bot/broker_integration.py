@@ -3250,14 +3250,41 @@ class OKXBrokerAdapter(BrokerInterface):
             # Convert symbol format
             okx_symbol = symbol.replace('-USD', '-USDT') if '-USD' in symbol else symbol
 
-            # Place order
+            # Resolve order size.
+            # OKX spot buys accept quote (USDT) via tgtCcy='quote_ccy'.
+            # OKX spot sells require base currency quantity.
+            # The multi-broker router passes size_type='quote' (USD notional) for
+            # both buys and sells.  Convert to base currency for sells.
             okx_side = side.lower()
+            sz_to_submit = size
+            fill_price_hint: float = 0.0
+            if okx_side == "sell" and size_type == "quote":
+                try:
+                    ticker_resp = self.market_api.get_ticker(instId=okx_symbol)
+                    ticker_data = (ticker_resp or {}).get("data", [])
+                    last_price = float((ticker_data[0].get("last") or 0) if ticker_data else 0)
+                    if last_price > 0:
+                        fill_price_hint = last_price
+                        sz_to_submit = size / last_price  # USD → base currency qty
+                    else:
+                        logger.warning(
+                            "OKX sell size conversion: no ticker price for %s; "
+                            "submitting raw size as base currency (may be incorrect)",
+                            okx_symbol,
+                        )
+                except Exception as _tick_err:
+                    logger.warning(
+                        "OKX sell size conversion error for %s: %s",
+                        okx_symbol, _tick_err,
+                    )
+
+            # Place order
             order_payload = {
                 "instId": okx_symbol,
                 "tdMode": "cash",  # Spot trading
                 "side": okx_side,
                 "ordType": "market",
-                "sz": str(size),
+                "sz": str(sz_to_submit),
             }
             if okx_side == "buy":
                 order_payload["tgtCcy"] = "quote_ccy"
@@ -3273,8 +3300,8 @@ class OKXBrokerAdapter(BrokerInterface):
                         'order_id': order_id,
                         'symbol': okx_symbol,
                         'side': side,
-                        'size': size,
-                        'filled_price': 0.0,  # Would need to fetch order details
+                        'size': sz_to_submit,
+                        'filled_price': fill_price_hint or 0.0,
                         'status': 'filled',
                         'timestamp': datetime.now()
                     }

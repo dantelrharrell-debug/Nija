@@ -3229,9 +3229,20 @@ class NIJAApexStrategyV71:
                         'position': position
                     }
 
-                # Update trailing stop
+                # Update trailing stop whenever a stepped exit or traditional TP1
+                # has fired.  Stepped exits always fire before traditional TP1 (they
+                # use lower thresholds), so gating solely on tp1_hit meant the
+                # trailing stop NEVER activated for the runner portion of the position.
                 atr = scalar(indicators['atr'].iloc[-1])
-                if position.get('tp1_hit', False):
+                _stepped_exit_flags = (
+                    'tp_exit_1.0pct', 'tp_exit_1.5pct',
+                    'tp_exit_2.0pct', 'tp_exit_2.5pct',
+                    'tp_exit_3.5pct', 'tp_exit_4.0pct', 'tp_exit_5.0pct',
+                )
+                _any_profit_exit = position.get('tp1_hit', False) or any(
+                    position.get(f, False) for f in _stepped_exit_flags
+                )
+                if _any_profit_exit:
                     new_stop = self.risk_manager.calculate_trailing_stop(
                         current_price, position['entry_price'],
                         position['side'], atr, breakeven_mode=True
