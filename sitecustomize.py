@@ -124,6 +124,8 @@ def _normalize_micro_cap_floors() -> None:
     _set_max_floor("MIN_CASH_TO_BUY", _float_env("NIJA_MICRO_CAP_MIN_CASH_TO_BUY_USD", 5.0))
     _set_max_floor("KRAKEN_MIN_NOTIONAL_USD", _float_env("NIJA_KRAKEN_MICRO_MIN_NOTIONAL_USD", 10.0))
     _set_max_floor("COINBASE_MIN_ORDER_USD", _float_env("NIJA_COINBASE_MICRO_MIN_ORDER_USD", 1.0))
+    # OKX final exchange/compiler minimum remains protected downstream. This env
+    # value should not be used by the APEX early pre-filter anymore.
     _set_max_floor("OKX_MIN_ORDER_USD", _float_env("NIJA_OKX_MICRO_MIN_ORDER_USD", 10.0))
     os.environ.setdefault("NIJA_MIN_NOTIONAL_SPENDABLE_CAP", "true")
 
@@ -240,7 +242,7 @@ def _install_forced_fallback_payload_repair() -> None:
 
 
 def _install_fallback_take_profit_geometry_repair() -> None:
-    _install_patch_module(filename="fallback_take_profit_geometry_repair_patch.py", module_name="nija_fallback_take_profit_geometry_repair_patch", success_log="FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_REQUESTED", error_prefix="Fallback take-profit geometry repair")
+    _install_patch_module(filename="fallback_take_profit_geometry_repair_patch.py", module_name="nija_fallback_take_profit_geometry_patch", success_log="FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_REQUESTED", error_prefix="Fallback take-profit geometry repair")
 
 
 def _install_execution_pipeline_gate_repair() -> None:
@@ -275,10 +277,15 @@ def _install_risk_gate_execution_bridge() -> None:
     _install_patch_module(filename="risk_gate_execution_bridge_patch.py", module_name="nija_risk_gate_execution_bridge_patch", success_log="RISK_GATE_EXECUTION_BRIDGE_INSTALL_REQUESTED", error_prefix="Risk gate execution bridge")
 
 
+def _install_okx_min_notional_prefilter_repair() -> None:
+    _install_patch_module(filename="okx_min_notional_prefilter_repair_patch.py", module_name="nija_okx_min_notional_prefilter_repair_patch", success_log="OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_REQUESTED", error_prefix="OKX min-notional prefilter repair")
+
+
 _install_logging_format_guard()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
+_install_okx_min_notional_prefilter_repair()
 _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
 _install_execution_bootstrap_authority_repair()
