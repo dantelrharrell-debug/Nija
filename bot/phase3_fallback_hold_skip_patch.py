@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import ast
 import importlib
-import inspect
 import logging
 import sys
 import textwrap
 import threading
 import time
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
 
@@ -16,8 +17,8 @@ _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED_CLASSES: set[str] = set()
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
-_PHASE3_WRAP_ATTR = "_nija_phase3_fallback_hold_skip_phase3_wrapped_v20260703x"
-_MARKER = "PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703x"
+_PHASE3_WRAP_ATTR = "_nija_phase3_fallback_hold_skip_phase3_wrapped_v20260703y"
+_MARKER = "PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703y"
 
 _SKIP_BLOCK = '''
                 if isinstance(analysis, dict):
@@ -36,43 +37,35 @@ _SKIP_BLOCK = '''
                         _skip_stage = str(analysis.get("filter_stage") or "fallback_prefilter")
                         _funnel["profitability"] = ("FAIL", _skip_reason)
                         logger.critical(
-                            "PHASE3_FALLBACK_HOLD_SKIP_APPLIED marker=20260703x symbol=%s stage=%s reason=%s action=hold core_loop_skip=true",
+                            "PHASE3_FALLBACK_HOLD_SKIP_APPLIED marker=20260703y symbol=%s stage=%s reason=%s action=hold core_loop_skip=true",
                             sig.symbol,
                             _skip_stage,
                             _skip_reason,
                         )
                         print(
-                            f"[NIJA-PRINT] PHASE3_FALLBACK_HOLD_SKIP_APPLIED marker=20260703x symbol={sig.symbol} stage={_skip_stage} reason={_skip_reason} core_loop_skip=true",
+                            f"[NIJA-PRINT] PHASE3_FALLBACK_HOLD_SKIP_APPLIED marker=20260703y symbol={sig.symbol} stage={_skip_stage} reason={_skip_reason} core_loop_skip=true",
                             flush=True,
                         )
                         continue
 '''
 
 
-def _iter_chain(fn: Any):
-    seen: set[int] = set()
-    cur = fn
-    depth = 0
-    while callable(cur) and id(cur) not in seen:
-        seen.add(id(cur))
-        yield depth, cur
-        cur = getattr(cur, "__wrapped__", None)
-        depth += 1
+def _function_source_from_file(module: ModuleType, func_name: str) -> tuple[str, int]:
+    path = Path(str(getattr(module, "__file__", "")))
+    if not path.exists():
+        raise FileNotFoundError(f"module file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+            segment = ast.get_source_segment(text, node)
+            if not segment:
+                raise RuntimeError(f"source segment missing for {func_name}")
+            return textwrap.dedent(segment), int(getattr(node, "lineno", 0) or 0)
+    raise RuntimeError(f"function {func_name} not found in {path}")
 
 
-def _find_source_with_submit(fn: Any):
-    for depth, candidate in _iter_chain(fn):
-        try:
-            source = textwrap.dedent(inspect.getsource(candidate))
-        except Exception:
-            continue
-        needle = "success = self.apex.execute_action(analysis, sig.symbol)"
-        if needle in source:
-            return depth, candidate, source, needle
-    return -1, None, "", ""
-
-
-def _patch_core_loop_phase3(cls: type, *, label: str) -> bool:
+def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> bool:
     current = getattr(cls, "_phase3_scan_and_enter", None)
     if not callable(current):
         return False
@@ -80,35 +73,41 @@ def _patch_core_loop_phase3(cls: type, *, label: str) -> bool:
         _PATCHED_CLASSES.add(f"{label}.{cls.__name__}._phase3_scan_and_enter")
         return True
 
-    depth, target, source, needle = _find_source_with_submit(current)
-    if target is None:
-        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_PHASE3_NEEDLE_MISSING marker=20260703x chain_checked=true")
+    try:
+        source, lineno = _function_source_from_file(module, "_phase3_scan_and_enter")
+    except Exception as exc:
+        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_FILE_SOURCE_FAILED marker=20260703y err=%s", exc)
+        return False
+
+    needle = "success = self.apex.execute_action(analysis, sig.symbol)"
+    if needle not in source:
+        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_PHASE3_NEEDLE_MISSING marker=20260703y file_source=true")
         return False
 
     patched_source = source.replace(needle, _SKIP_BLOCK + "                " + needle, 1)
-    namespace = dict(getattr(target, "__globals__", getattr(current, "__globals__", {})))
+    namespace = dict(getattr(current, "__globals__", vars(module)))
     try:
-        exec(compile(patched_source, "<phase3_fallback_hold_skip_guard>", "exec"), namespace)
+        exec(compile(patched_source, "<phase3_fallback_hold_skip_file_source>", "exec"), namespace)
         patched = namespace.get("_phase3_scan_and_enter")
         if not callable(patched):
             raise RuntimeError("patched function not produced")
     except Exception as exc:
-        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_PHASE3_COMPILE_FAILED marker=20260703x err=%s", exc)
+        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_PHASE3_COMPILE_FAILED marker=20260703y err=%s", exc)
         return False
 
     setattr(patched, _PHASE3_WRAP_ATTR, True)
     setattr(patched, "__wrapped__", current)
     setattr(cls, "_phase3_scan_and_enter", patched)
     _PATCHED_CLASSES.add(f"{label}.{cls.__name__}._phase3_scan_and_enter")
-    logger.warning("%s class=%s source_depth=%s", _MARKER, f"{label}.{cls.__name__}", depth)
-    print(f"[NIJA-PRINT] PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703x | class={label}.{cls.__name__} source_depth={depth}", flush=True)
+    logger.warning("%s class=%s source=file line=%s", _MARKER, f"{label}.{cls.__name__}", lineno)
+    print(f"[NIJA-PRINT] PHASE3_FALLBACK_HOLD_SKIP_PATCHED marker=20260703y | class={label}.{cls.__name__} source=file line={lineno}", flush=True)
     return True
 
 
 def _install_on_module(module: ModuleType) -> bool:
     cls = getattr(module, "NijaCoreLoop", None)
     if isinstance(cls, type):
-        return _patch_core_loop_phase3(cls, label=getattr(module, "__name__", "<unknown>"))
+        return _patch_core_loop_phase3(module, cls, label=getattr(module, "__name__", "<unknown>"))
     return False
 
 
@@ -134,10 +133,10 @@ def _start_monitor() -> None:
             if patched_any:
                 break
             time.sleep(1.0)
-        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_MONITOR_COMPLETE marker=20260703x patched_any=%s patched_classes=%s", patched_any, sorted(_PATCHED_CLASSES))
+        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_MONITOR_COMPLETE marker=20260703y patched_any=%s patched_classes=%s", patched_any, sorted(_PATCHED_CLASSES))
 
     threading.Thread(target=_monitor, name="phase3-fallback-hold-skip-monitor", daemon=True).start()
-    logger.warning("PHASE3_FALLBACK_HOLD_SKIP_MONITOR_STARTED marker=20260703x")
+    logger.warning("PHASE3_FALLBACK_HOLD_SKIP_MONITOR_STARTED marker=20260703y")
 
 
 def install_import_hook() -> None:
@@ -146,7 +145,7 @@ def install_import_hook() -> None:
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
-            logger.warning("PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703x already_installed=True patched_classes=%s", sorted(_PATCHED_CLASSES))
+            logger.warning("PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703y already_installed=True patched_classes=%s", sorted(_PATCHED_CLASSES))
             return
         _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
@@ -158,4 +157,4 @@ def install_import_hook() -> None:
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703x patched_classes=%s", sorted(_PATCHED_CLASSES))
+        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_INSTALL_COMPLETE marker=20260703y patched_classes=%s", sorted(_PATCHED_CLASSES))
