@@ -155,6 +155,7 @@ class BrokerCapabilityRegistry:
         leverage = int(getattr(request, "leverage", 1) or 1)
         margin_mode = getattr(request, "margin_mode", None)
         reduce_only = getattr(request, "reduce_only", None)
+        intent_type = str(getattr(request, "intent_type", "") or "").lower().strip()
         side = str(getattr(request, "side", "") or "").lower().strip()
         symbol = str(getattr(request, "symbol", "") or "").strip()
 
@@ -167,7 +168,10 @@ class BrokerCapabilityRegistry:
 
         # Gate short orders on brokers/pairs that don't support them.
         # This prevents silent failures and repeated rejected attempts.
-        if side in ("sell", "short") and not self.broker_supports_short(broker, symbol):
+        # Reduce/exit orders (closing an existing long position via a sell)
+        # are exempt: they are not new short positions.
+        is_closing_order = intent_type in ("reduce", "exit") or reduce_only is True
+        if side in ("sell", "short") and not is_closing_order and not self.broker_supports_short(broker, symbol):
             logger.warning(
                 "BrokerCapabilityRegistry: SHORT blocked for broker=%s symbol=%s "
                 "— broker does not support shorting on this pair (spot market). "
