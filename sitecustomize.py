@@ -233,6 +233,10 @@ def _install_phase3_scan_budget() -> None:
     _install_patch_module(filename="phase3_scan_budget_patch.py", module_name="nija_phase3_scan_budget_patch", success_log="PHASE3_SCAN_BUDGET_INSTALL_REQUESTED", error_prefix="Phase3 scan budget patch")
 
 
+def _install_phase3_overselect_import_repair() -> None:
+    _install_patch_module(filename="phase3_overselect_import_repair_patch.py", module_name="nija_phase3_overselect_import_repair_patch", success_log="PHASE3_OVERSELECT_IMPORT_REPAIR_INSTALL_REQUESTED", error_prefix="Phase3 overselect import repair")
+
+
 def _install_execution_bootstrap_authority_repair() -> None:
     _install_patch_module(filename="execution_bootstrap_authority_repair_patch.py", module_name="nija_execution_bootstrap_authority_repair_patch", success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED", error_prefix="Execution bootstrap authority repair")
 
@@ -288,6 +292,7 @@ _runtime_defaults()
 _install_okx_min_notional_prefilter_repair()
 _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
+_install_phase3_overselect_import_repair()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
 _install_fallback_take_profit_geometry_repair()
