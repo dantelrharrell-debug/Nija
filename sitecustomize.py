@@ -243,6 +243,10 @@ def _install_phase3_selection_width() -> None:
     _install_patch_module(filename="phase3_selection_width_patch.py", module_name="nija_phase3_selection_width_patch", success_log="PHASE3_SELECTION_WIDTH_INSTALL_REQUESTED", error_prefix="Phase3 selection width repair")
 
 
+def _install_phase3_fallback_hold_skip() -> None:
+    _install_patch_module(filename="phase3_fallback_hold_skip_patch.py", module_name="nija_phase3_fallback_hold_skip_patch", success_log="PHASE3_FALLBACK_HOLD_SKIP_INSTALL_REQUESTED", error_prefix="Phase3 fallback hold-skip bridge")
+
+
 def _install_execution_bootstrap_authority_repair() -> None:
     _install_patch_module(filename="execution_bootstrap_authority_repair_patch.py", module_name="nija_execution_bootstrap_authority_repair_patch", success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED", error_prefix="Execution bootstrap authority repair")
 
@@ -301,6 +305,7 @@ _install_phase3_scan_budget()
 _install_phase3_overselect_import_repair()
 _install_phase3_force_next_preserve_selection()
 _install_phase3_selection_width()
+_install_phase3_fallback_hold_skip()
 _install_execution_bootstrap_authority_repair()
 _install_forced_fallback_payload_repair()
 _install_fallback_take_profit_geometry_repair()
