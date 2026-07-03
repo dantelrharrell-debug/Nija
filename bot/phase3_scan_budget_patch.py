@@ -8,6 +8,11 @@ then rotates through the rest of the universe across cycles.
 It also repairs the operator-facing telemetry for the case where a pair is
 ranked/selected but no order is submitted. In that case NIJA now emits a
 PHASE3_TERMINAL_BLOCKER line instead of reporting top_veto=none/top_reject=none.
+
+2026-07-03f: add broker-aware scan filtering. When OKX is selected, do not feed
+it the merged Kraken/Coinbase universe. Convert USD-style majors to OKX USDT
+pairs and keep only symbols known to be listed on OKX, preventing repeated
+51001/data_insufficient cycles on non-OKX markets.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -26,7 +32,7 @@ _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
 _COUNTER = 0
 _COUNTER_LOCK = threading.Lock()
-_DEPLOY_MARKER = "PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703b"
+_DEPLOY_MARKER = "PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703f"
 
 _PRIORITY_BASES = (
     "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "LINK", "LTC", "BCH",
@@ -38,6 +44,14 @@ _PRIORITY_SYMBOLS = tuple(
     for base in _PRIORITY_BASES
     for quote in ("USD", "USDT", "USDC")
 )
+_OKX_CORE_USDT = {
+    "BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT", "ADA-USDT",
+    "LINK-USDT", "LTC-USDT", "BCH-USDT", "AVAX-USDT", "DOT-USDT", "ATOM-USDT",
+    "HBAR-USDT", "NEAR-USDT", "AAVE-USDT", "UNI-USDT", "ETC-USDT", "XLM-USDT",
+    "FIL-USDT", "ICP-USDT", "INJ-USDT", "OP-USDT", "ARB-USDT", "SUI-USDT",
+    "APT-USDT", "PEPE-USDT", "SHIB-USDT", "TRX-USDT", "TON-USDT", "BNB-USDT",
+    "MKR-USDT", "COMP-USDT", "CRV-USDT", "SAND-USDT", "MANA-USDT", "GALA-USDT",
+}
 
 
 def _int_env(name: str, default: int) -> int:
@@ -57,7 +71,102 @@ def _budget_for(symbol_count: int, available_slots: int) -> int:
 
 
 def _normalize_symbol(symbol: str) -> str:
-    return str(symbol or "").upper().replace("/", "-").replace(":", "-")
+    return str(symbol or "").upper().replace("/", "-").replace(":", "-").replace("_", "-")
+
+
+def _okx_inst_id(symbol: Any) -> str:
+    raw = _normalize_symbol(str(symbol or ""))
+    raw = re.sub(r"[^A-Z0-9\-]", "", raw)
+    while "--" in raw:
+        raw = raw.replace("--", "-")
+    if raw.endswith("-USDTT"):
+        raw = raw[:-6] + "-USDT"
+    if "-" in raw:
+        base, quote = raw.rsplit("-", 1)
+        if quote == "USD":
+            return f"{base}-USDT"
+        if quote in {"USDT", "USDC"}:
+            return f"{base}-{quote}"
+        return raw
+    for quote in ("USDT", "USDC", "USD"):
+        if raw.endswith(quote) and len(raw) > len(quote):
+            base = raw[: -len(quote)]
+            return f"{base}-USDT" if quote == "USD" else f"{base}-{quote}"
+    return raw
+
+
+def _broker_name(broker: Any) -> str:
+    try:
+        text = " ".join(
+            str(getattr(broker, attr, "") or "")
+            for attr in ("broker_type", "broker_name", "name", "exchange", "exchange_name")
+        ).lower()
+        cls = type(broker).__name__.lower()
+        text = f"{text} {cls}"
+        for name in ("okx", "kraken", "coinbase", "alpaca", "binance"):
+            if name in text:
+                return name
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _load_okx_products(broker: Any) -> set[str]:
+    products: set[str] = set()
+    for attr in ("_nija_okx_listed_symbols", "_okx_listed_symbols", "listed_symbols", "symbols", "available_symbols", "markets", "products"):
+        try:
+            value = getattr(broker, attr, None)
+            if callable(value):
+                continue
+            if isinstance(value, dict):
+                iterable = value.keys()
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                iterable = value
+            else:
+                continue
+            for item in iterable:
+                inst = _okx_inst_id(item)
+                if inst.endswith("-USDT") or inst.endswith("-USDC"):
+                    products.add(inst)
+        except Exception:
+            continue
+    for method_name in ("get_all_products", "get_products", "get_available_markets", "get_tradeable_pairs", "get_tradable_pairs"):
+        try:
+            method = getattr(broker, method_name, None)
+            if not callable(method):
+                continue
+            value = method()
+            iterable = value.keys() if isinstance(value, dict) else value
+            if isinstance(iterable, (list, tuple, set, frozenset)):
+                for item in iterable:
+                    inst = _okx_inst_id(item)
+                    if inst.endswith("-USDT") or inst.endswith("-USDC"):
+                        products.add(inst)
+        except Exception as exc:
+            logger.debug("OKX product lookup via %s failed: %s", method_name, exc)
+    products.update(_OKX_CORE_USDT)
+    return products
+
+
+def _filter_symbols_for_broker(broker: Any, symbols: list[str]) -> tuple[list[str], int, str]:
+    if _broker_name(broker) != "okx":
+        return symbols, 0, "not_okx"
+    products = _load_okx_products(broker)
+    seen: set[str] = set()
+    filtered: list[str] = []
+    for symbol in symbols or []:
+        inst = _okx_inst_id(symbol)
+        if inst in seen:
+            continue
+        if products and inst not in products:
+            continue
+        seen.add(inst)
+        filtered.append(inst)
+    if not filtered:
+        # Fail open to liquid OKX majors instead of starving the scan loop.
+        filtered = [s for s in ("BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT") if not products or s in products]
+    dropped = max(0, len(symbols or []) - len(filtered))
+    return filtered, dropped, "okx_listed_only"
 
 
 def _priority_rank(symbol: str) -> int:
@@ -65,7 +174,10 @@ def _priority_rank(symbol: str) -> int:
     try:
         return _PRIORITY_SYMBOLS.index(norm)
     except ValueError:
-        return len(_PRIORITY_SYMBOLS) + 1
+        try:
+            return _PRIORITY_SYMBOLS.index(norm.replace("-USDT", "-USD"))
+        except ValueError:
+            return len(_PRIORITY_SYMBOLS) + 1
 
 
 def _prioritize_symbols(symbols: list[str]) -> tuple[list[str], int]:
@@ -157,20 +269,9 @@ def _emit_terminal_blocker(self: Any, result: Any, elapsed_ms: float) -> None:
             pass
         logger.critical(
             "PHASE3_TERMINAL_BLOCKER status=ENTRY_BLOCKED scored=%d entered=%d blocked=%d terminal_reason=%s detail=%s gate_top=%s top_reject=%s top_veto=%s elapsed_ms=%.0f",
-            scored_i,
-            entries_i,
-            blocked_i,
-            terminal,
-            detail,
-            gate_top,
-            reject_top,
-            veto_top,
-            elapsed_ms,
+            scored_i, entries_i, blocked_i, terminal, detail, gate_top, reject_top, veto_top, elapsed_ms,
         )
-        print(
-            f"[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER | scored={scored_i} entered={entries_i} blocked={blocked_i} reason={terminal} detail={detail}",
-            flush=True,
-        )
+        print(f"[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER | scored={scored_i} entered={entries_i} blocked={blocked_i} reason={terminal} detail={detail}", flush=True)
     except Exception as exc:
         logger.warning("PHASE3_TERMINAL_BLOCKER_FAILED err=%s", exc)
 
@@ -183,10 +284,10 @@ def _install_on_module(module: ModuleType) -> bool:
     original = getattr(cls, "_phase3_scan_and_enter", None)
     if not callable(original):
         return False
-    if getattr(original, "_nija_phase3_scan_budget_wrapped", False):
+    if getattr(original, "_nija_phase3_scan_budget_wrapped_v20260703f", False):
         _PATCHED = True
-        logger.warning("PHASE3_TERMINAL_BLOCKER_TRACE_ALREADY_WRAPPED module=%s", getattr(module, "__name__", "<unknown>"))
-        print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_ALREADY_WRAPPED", flush=True)
+        logger.warning("PHASE3_TERMINAL_BLOCKER_TRACE_ALREADY_WRAPPED marker=20260703f module=%s", getattr(module, "__name__", "<unknown>"))
+        print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_ALREADY_WRAPPED marker=20260703f", flush=True)
         return True
 
     def _patched_phase3_scan_and_enter(
@@ -198,45 +299,36 @@ def _install_on_module(module: ModuleType) -> bool:
         zero_signal_streak: int = 0,
     ):
         original_count = len(symbols or [])
-        budget = _budget_for(original_count, int(available_slots or 0))
+        symbols, dropped, filter_reason = _filter_symbols_for_broker(broker, list(symbols or []))
+        filtered_count = len(symbols or [])
+        if dropped:
+            logger.critical(
+                "BROKER_AWARE_SCAN_FILTER_APPLIED marker=20260703f broker=%s original_symbols=%d filtered_symbols=%d dropped=%d reason=%s sample=%s",
+                _broker_name(broker), original_count, filtered_count, dropped, filter_reason, ",".join(str(s) for s in symbols[:12]),
+            )
+            print(f"[NIJA-PRINT] BROKER_AWARE_SCAN_FILTER_APPLIED marker=20260703f broker={_broker_name(broker)} original={original_count} filtered={filtered_count} dropped={dropped}", flush=True)
+        budget = _budget_for(filtered_count, int(available_slots or 0))
         offset = 0
         priority_count = 0
-        if original_count > budget:
+        if filtered_count > budget:
             symbols, offset, priority_count = _rotate_symbols(list(symbols), budget)
             logger.critical(
-                "PHASE3_SCAN_BUDGET_APPLIED original_symbols=%d budget=%d slots=%d offset=%d priority_matches=%d symbols=%s cycle_id=%s",
-                original_count,
-                budget,
-                available_slots,
-                offset,
-                priority_count,
-                ",".join(str(s) for s in symbols),
-                getattr(snapshot, "cycle_id", ""),
+                "PHASE3_SCAN_BUDGET_APPLIED original_symbols=%d filtered_symbols=%d budget=%d slots=%d offset=%d priority_matches=%d symbols=%s cycle_id=%s",
+                original_count, filtered_count, budget, available_slots, offset, priority_count, ",".join(str(s) for s in symbols), getattr(snapshot, "cycle_id", ""),
             )
-            print(
-                f"[NIJA-PRINT] PHASE3_SCAN_BUDGET_APPLIED | original={original_count} "
-                f"budget={budget} slots={available_slots} offset={offset} "
-                f"priority_matches={priority_count} symbols={','.join(str(s) for s in symbols)}",
-                flush=True,
-            )
+            print(f"[NIJA-PRINT] PHASE3_SCAN_BUDGET_APPLIED | original={original_count} filtered={filtered_count} budget={budget} slots={available_slots} offset={offset} priority_matches={priority_count} symbols={','.join(str(s) for s in symbols)}", flush=True)
         started = time.monotonic()
-        result = original(
-            self,
-            broker=broker,
-            snapshot=snapshot,
-            symbols=symbols,
-            available_slots=available_slots,
-            zero_signal_streak=zero_signal_streak,
-        )
+        result = original(self, broker=broker, snapshot=snapshot, symbols=symbols, available_slots=available_slots, zero_signal_streak=zero_signal_streak)
         _emit_terminal_blocker(self, result, (time.monotonic() - started) * 1000.0)
         return result
 
     setattr(_patched_phase3_scan_and_enter, "_nija_phase3_scan_budget_wrapped", True)
+    setattr(_patched_phase3_scan_and_enter, "_nija_phase3_scan_budget_wrapped_v20260703f", True)
     setattr(cls, "_phase3_scan_and_enter", _patched_phase3_scan_and_enter)
     _PATCHED = True
-    logger.warning("PHASE3_SCAN_BUDGET_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
+    logger.warning("PHASE3_SCAN_BUDGET_PATCHED marker=20260703f module=%s", getattr(module, "__name__", "<unknown>"))
     logger.warning("%s module=%s", _DEPLOY_MARKER, getattr(module, "__name__", "<unknown>"))
-    print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703b", flush=True)
+    print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703f", flush=True)
     return True
 
 
@@ -252,10 +344,10 @@ def _try_patch_loaded() -> bool:
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
     logger.warning("%s install_start=True", _DEPLOY_MARKER)
-    print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703b install_start", flush=True)
+    print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703f install_start", flush=True)
     _try_patch_loaded()
     if _ORIGINAL_IMPORT_MODULE is not None:
-        logger.warning("PHASE3_SCAN_BUDGET_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+        logger.warning("PHASE3_SCAN_BUDGET_INSTALL_COMPLETE marker=20260703f already_installed=True patched=%s", _PATCHED)
         return
     _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
@@ -266,4 +358,4 @@ def install_import_hook() -> None:
         return module
 
     importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-    logger.warning("PHASE3_SCAN_BUDGET_INSTALL_COMPLETE patched=%s", _PATCHED)
+    logger.warning("PHASE3_SCAN_BUDGET_INSTALL_COMPLETE marker=20260703f patched=%s", _PATCHED)
