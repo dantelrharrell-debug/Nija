@@ -1,33 +1,29 @@
-"""Preserve multiple Phase 3 candidates when FORCE_NEXT_CYCLE is active.
+"""Preserve multiple Phase 3 candidates without source-text rewriting.
 
-Observed runtime behavior after the 20260703j overselect repair:
-- rank_and_select correctly returns 8 candidates.
-- NijaCoreLoop then hits its FORCE_NEXT_CYCLE block and replaces the selected
-  list with only [top_candidate].
-- The cycle attempts one order, receives a safety rejection, and ends without
-  trying the remaining ranked candidates.
+The first 20260703k implementation tried to rewrite NijaCoreLoop source text at
+runtime. That failed after other runtime wrappers were already installed, causing
+SOURCE_MISS spam and Railway log rate limiting.
 
-This patch keeps the intent of FORCE_NEXT_CYCLE—make the cycle executable and
-force fallback_active=True—but prevents it from collapsing an already ranked
-multi-candidate list down to a singleton.
+This replacement is intentionally simple and robust:
+- no inspect.getsource()
+- no source-text matching
+- no repeated source-miss logs
 
-Safety contract:
-- Does not bypass expectancy, risk, kill switch, writer authority, TPE, ECEL, or
-  exchange constraints.
-- Does not increase max successful entries. The original execution loop still
-  stops at MAX_ENTRIES_PER_CYCLE / available slots.
-- Only changes selection preservation: multiple already-ranked candidates remain
-  available as replacement attempts after prior downstream rejections.
+When FORCE_NEXT_CYCLE is armed, this wrapper atomically consumes that flag before
+NijaCoreLoop sees it, then calls the original Phase 3 scanner with a boosted
+fallback streak. That preserves multi-candidate selection while keeping the
+intended fallback/forced-entry behavior active. All downstream safety gates
+(TPE, expectancy, ECEL, risk, writer authority, exchange constraints) remain
+unchanged.
 """
 
 from __future__ import annotations
 
 import builtins
 import importlib
-import inspect
 import logging
+import os
 import sys
-import textwrap
 import threading
 import time
 from types import ModuleType
@@ -40,74 +36,44 @@ _ORIGINAL_BUILTINS_IMPORT: Optional[Callable[..., Any]] = None
 _PATCHED = False
 _MONITOR_STARTED = False
 _LOCK = threading.Lock()
-_MARKER = "PHASE3_FORCE_NEXT_PRESERVE_SELECTION_PATCHED marker=20260703k"
-_ATTR = "_nija_force_next_preserve_selection_v20260703k"
+_LAST_MISS_LOG = 0.0
+_MARKER = "PHASE3_FORCE_NEXT_PRESERVE_SELECTION_PATCHED marker=20260703l"
+_ATTR = "_nija_force_next_preserve_selection_v20260703l"
 
-_OLD_BLOCK = '''        if _force_this_cycle and candidates:
-            top_candidate = max(candidates, key=lambda s: s.composite_score)
-            top_candidate.metadata["bypass_quality_filter"] = True
-            top_candidate.metadata["hard_bypass_streak"] = zero_signal_streak
-            for c in candidates:
-                logger.info(
-                    "🔹 Candidate: %s | Score: %.1f",
-                    getattr(c, "symbol", "UNKNOWN"),
-                    c.composite_score,
-                )
-            logger.warning(
-                "🚀 FORCE_NEXT_CYCLE active — forcing entry on top candidate "
-                "%s (score=%.1f, streak=%d)",
-                top_candidate.symbol,
-                top_candidate.composite_score,
-                zero_signal_streak,
-            )
-            selected = [top_candidate]
-            fallback_active = True  # ensure the execution block forces the action
-'''
 
-_NEW_BLOCK = '''        if _force_this_cycle and candidates:
-            top_candidate = max(candidates, key=lambda s: s.composite_score)
-            top_candidate.metadata["bypass_quality_filter"] = True
-            top_candidate.metadata["hard_bypass_streak"] = zero_signal_streak
-            for c in candidates:
-                logger.info(
-                    "🔹 Candidate: %s | Score: %.1f",
-                    getattr(c, "symbol", "UNKNOWN"),
-                    c.composite_score,
-                )
-            if len(selected) > 1:
-                for _sig in selected:
-                    try:
-                        _sig.metadata["bypass_quality_filter"] = True
-                        _sig.metadata["hard_bypass_streak"] = zero_signal_streak
-                        _sig.metadata["force_next_preserved_selection"] = True
-                    except Exception:
-                        pass
-                logger.warning(
-                    "🚀 FORCE_NEXT_CYCLE active — preserving %d ranked candidates instead of collapsing to top candidate %s (score=%.1f, streak=%d)",
-                    len(selected),
-                    top_candidate.symbol,
-                    top_candidate.composite_score,
-                    zero_signal_streak,
-                )
-                print(
-                    f"[NIJA-PRINT] PHASE3_FORCE_NEXT_PRESERVED_SELECTION marker=20260703k selected={len(selected)} top={top_candidate.symbol}",
-                    flush=True,
-                )
-            else:
-                logger.warning(
-                    "🚀 FORCE_NEXT_CYCLE active — forcing entry on top candidate "
-                    "%s (score=%.1f, streak=%d)",
-                    top_candidate.symbol,
-                    top_candidate.composite_score,
-                    zero_signal_streak,
-                )
-                selected = [top_candidate]
-            fallback_active = True  # ensure the execution block forces the action
-'''
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(float(os.environ.get(name, str(default)) or default)))
+    except Exception:
+        return int(default)
+
+
+def _truthy(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _consume_force_next(module: ModuleType) -> bool:
+    """Consume FORCE_NEXT_CYCLE without letting core collapse selected to [top]."""
+    if not bool(getattr(module, "FORCE_NEXT_CYCLE", False)):
+        return False
+    lock = getattr(module, "_FORCE_LOCK", None)
+    try:
+        if lock is not None:
+            with lock:
+                armed = bool(getattr(module, "FORCE_NEXT_CYCLE", False))
+                if armed:
+                    setattr(module, "FORCE_NEXT_CYCLE", False)
+                return armed
+        armed = bool(getattr(module, "FORCE_NEXT_CYCLE", False))
+        if armed:
+            setattr(module, "FORCE_NEXT_CYCLE", False)
+        return armed
+    except Exception:
+        return False
 
 
 def _patch_core_loop_module(module: ModuleType) -> bool:
-    global _PATCHED
+    global _PATCHED, _LAST_MISS_LOG
     cls = getattr(module, "NijaCoreLoop", None)
     if not isinstance(cls, type):
         return False
@@ -117,30 +83,59 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
     if getattr(original, _ATTR, False):
         _PATCHED = True
         return True
-    try:
-        source = inspect.getsource(original)
-        dedented = textwrap.dedent(source)
-        if _OLD_BLOCK not in source and textwrap.dedent(_OLD_BLOCK) not in dedented:
-            logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_SOURCE_MISS marker=20260703k module=%s", getattr(module, "__name__", "<unknown>"))
-            return False
-        if _OLD_BLOCK in source:
-            patched_source = source.replace(_OLD_BLOCK, _NEW_BLOCK)
-        else:
-            patched_source = dedented.replace(textwrap.dedent(_OLD_BLOCK), textwrap.dedent(_NEW_BLOCK))
-        namespace = dict(original.__globals__)
-        exec(compile(patched_source, getattr(original, "__code__", None).co_filename if getattr(original, "__code__", None) else "<phase3_force_next_patch>", "exec"), namespace)
-        replacement = namespace.get(original.__name__)
-        if not callable(replacement):
-            raise RuntimeError("patched function was not created")
-        setattr(replacement, _ATTR, True)
-        setattr(cls, "_phase3_scan_and_enter", replacement)
-        _PATCHED = True
-        logger.warning("%s module=%s", _MARKER, getattr(module, "__name__", "<unknown>"))
-        print("[NIJA-PRINT] PHASE3_FORCE_NEXT_PRESERVE_SELECTION_PATCHED marker=20260703k", flush=True)
-        return True
-    except Exception as exc:
-        logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_FAILED marker=20260703k module=%s err=%s", getattr(module, "__name__", "<unknown>"), exc)
-        return False
+
+    def _patched_phase3_scan_and_enter(
+        self: Any,
+        broker: Any,
+        snapshot: Any,
+        symbols: list[str],
+        available_slots: int,
+        zero_signal_streak: int = 0,
+    ):
+        force_next_was_armed = _consume_force_next(module)
+        if force_next_was_armed:
+            # Preserve the one-cycle forced-entry intent without letting the core
+            # FORCE_NEXT_CYCLE block replace an already over-selected list with
+            # a singleton. A high streak activates existing fallback paths; it
+            # does not bypass downstream execution safety gates.
+            boosted_streak = max(
+                int(zero_signal_streak or 0),
+                _int_env("NIJA_FORCE_NEXT_PRESERVE_STREAK", 999),
+            )
+            logger.warning(
+                "PHASE3_FORCE_NEXT_PRESERVE_SELECTION_ACTIVE marker=20260703l original_streak=%s boosted_streak=%s available_slots=%s symbols=%s",
+                zero_signal_streak,
+                boosted_streak,
+                available_slots,
+                len(symbols or []),
+            )
+            print(
+                f"[NIJA-PRINT] PHASE3_FORCE_NEXT_PRESERVE_SELECTION_ACTIVE marker=20260703l slots={available_slots} symbols={len(symbols or [])}",
+                flush=True,
+            )
+            return original(
+                self,
+                broker=broker,
+                snapshot=snapshot,
+                symbols=symbols,
+                available_slots=available_slots,
+                zero_signal_streak=boosted_streak,
+            )
+        return original(
+            self,
+            broker=broker,
+            snapshot=snapshot,
+            symbols=symbols,
+            available_slots=available_slots,
+            zero_signal_streak=zero_signal_streak,
+        )
+
+    setattr(_patched_phase3_scan_and_enter, _ATTR, True)
+    setattr(cls, "_phase3_scan_and_enter", _patched_phase3_scan_and_enter)
+    _PATCHED = True
+    logger.warning("%s module=%s", _MARKER, getattr(module, "__name__", "<unknown>"))
+    print("[NIJA-PRINT] PHASE3_FORCE_NEXT_PRESERVE_SELECTION_PATCHED marker=20260703l", flush=True)
+    return True
 
 
 def _try_patch_loaded() -> bool:
@@ -159,22 +154,22 @@ def _start_monitor() -> None:
     _MONITOR_STARTED = True
 
     def _monitor() -> None:
-        deadline = time.time() + 240.0
+        deadline = time.time() + float(os.environ.get("NIJA_PATCH_MONITOR_SECONDS", "240") or "240")
         while time.time() < deadline:
             if _try_patch_loaded():
                 return
-            time.sleep(0.25)
-        logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_MONITOR_EXPIRED patched=%s", _PATCHED)
+            time.sleep(1.0)
+        logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_MONITOR_EXPIRED marker=20260703l patched=%s", _PATCHED)
 
     threading.Thread(target=_monitor, name="phase3-force-next-preserve-selection", daemon=True).start()
-    logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_MONITOR_STARTED marker=20260703k")
+    logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_MONITOR_STARTED marker=20260703l")
 
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE, _ORIGINAL_BUILTINS_IMPORT
     with _LOCK:
-        logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_START marker=20260703k")
-        print("[NIJA-PRINT] PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_START marker=20260703k", flush=True)
+        logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_START marker=20260703l")
+        print("[NIJA-PRINT] PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_START marker=20260703l", flush=True)
         _try_patch_loaded()
         _start_monitor()
 
@@ -207,4 +202,4 @@ def install_import_hook() -> None:
 
             builtins.__import__ = _wrapped_builtin_import
 
-        logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_COMPLETE marker=20260703k patched=%s", _PATCHED)
+        logger.warning("PHASE3_FORCE_NEXT_PRESERVE_SELECTION_INSTALL_COMPLETE marker=20260703l patched=%s", _PATCHED)
