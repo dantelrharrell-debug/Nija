@@ -26,6 +26,7 @@ _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
 _COUNTER = 0
 _COUNTER_LOCK = threading.Lock()
+_DEPLOY_MARKER = "PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703b"
 
 _PRIORITY_BASES = (
     "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "LINK", "LTC", "BCH",
@@ -184,6 +185,8 @@ def _install_on_module(module: ModuleType) -> bool:
         return False
     if getattr(original, "_nija_phase3_scan_budget_wrapped", False):
         _PATCHED = True
+        logger.warning("PHASE3_TERMINAL_BLOCKER_TRACE_ALREADY_WRAPPED module=%s", getattr(module, "__name__", "<unknown>"))
+        print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_ALREADY_WRAPPED", flush=True)
         return True
 
     def _patched_phase3_scan_and_enter(
@@ -232,8 +235,8 @@ def _install_on_module(module: ModuleType) -> bool:
     setattr(cls, "_phase3_scan_and_enter", _patched_phase3_scan_and_enter)
     _PATCHED = True
     logger.warning("PHASE3_SCAN_BUDGET_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
-    logger.warning("PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
-    print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED", flush=True)
+    logger.warning("%s module=%s", _DEPLOY_MARKER, getattr(module, "__name__", "<unknown>"))
+    print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703b", flush=True)
     return True
 
 
@@ -248,6 +251,8 @@ def _try_patch_loaded() -> bool:
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
+    logger.warning("%s install_start=True", _DEPLOY_MARKER)
+    print("[NIJA-PRINT] PHASE3_TERMINAL_BLOCKER_TRACE_PATCHED marker=20260703b install_start", flush=True)
     _try_patch_loaded()
     if _ORIGINAL_IMPORT_MODULE is not None:
         logger.warning("PHASE3_SCAN_BUDGET_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
