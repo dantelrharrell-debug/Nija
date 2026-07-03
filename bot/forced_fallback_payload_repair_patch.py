@@ -15,7 +15,7 @@ _PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
-_WRAP_ATTR = "_nija_forced_fallback_payload_repair_wrapped_v20260703r"
+_WRAP_ATTR = "_nija_forced_fallback_payload_repair_wrapped_v20260703s"
 
 # ExecutionEngine's target-geometry gate currently rejects stop losses wider
 # than MAX_SL_PCT=0.003 (0.300%). Keep fallback repairs below that hard gate;
@@ -58,6 +58,30 @@ def _coerce_probability(value: Any) -> float:
     if p > 1.0:
         p = p / 100.0
     return max(0.0, min(p, 1.0))
+
+
+def _coerce_price(value: Any) -> float:
+    """Extract a numeric price from raw, dict, tuple, or list values."""
+    if isinstance(value, dict):
+        for key in ("tp1", "target", "price", "take_profit", "value", "level"):
+            try:
+                p = float(value.get(key) or 0.0)
+                if p > 0.0:
+                    return p
+            except Exception:
+                pass
+        return 0.0
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            p = _coerce_price(item)
+            if p > 0.0:
+                return p
+        return 0.0
+    try:
+        p = float(value or 0.0)
+        return p if p > 0.0 else 0.0
+    except Exception:
+        return 0.0
 
 
 def _signal_expected_win_rate(sig: Any) -> float:
@@ -265,12 +289,17 @@ def _payload_ev(payload: Any) -> tuple[bool, str, float, float, float]:
         entry = float(payload.get("entry_price") or 0.0)
         stop = float(payload.get("stop_loss") or 0.0)
         take_profit = payload.get("take_profit")
+        expected_wr = 0.0
         if isinstance(take_profit, dict):
-            tp1 = float(take_profit.get("tp1") or take_profit.get("target") or 0.0)
+            tp1 = _coerce_price(take_profit.get("tp1") or take_profit.get("target") or take_profit.get("price") or take_profit.get("levels"))
             expected_wr = _coerce_probability(take_profit.get("expected_win_rate"))
+        elif isinstance(take_profit, (list, tuple)):
+            tp1 = _coerce_price(take_profit)
+            for item in take_profit:
+                if isinstance(item, dict):
+                    expected_wr = max(expected_wr, _coerce_probability(item.get("expected_win_rate") or item.get("win_rate") or item.get("probability")))
         else:
-            tp1 = float(take_profit or 0.0)
-            expected_wr = 0.0
+            tp1 = _coerce_price(take_profit)
     except Exception as exc:
         return False, f"fallback_ev_unavailable:{exc}", 0.0, 0.0, 0.0
     if entry <= 0.0 or stop <= 0.0 or tp1 <= 0.0:
@@ -296,20 +325,24 @@ def _enforce_fallback_positive_ev(payload: Any, *, sig: Any, symbol: str) -> Any
     if not isinstance(payload, dict):
         return payload
     tp = payload.get("take_profit")
-    if isinstance(tp, dict):
-        explicit_wr = _signal_expected_win_rate(sig)
-        if explicit_wr > 0.0:
+    explicit_wr = _signal_expected_win_rate(sig)
+    if explicit_wr > 0.0:
+        if isinstance(tp, dict):
             tp["expected_win_rate"] = explicit_wr
+        elif isinstance(tp, list):
+            for item in tp:
+                if isinstance(item, dict):
+                    item["expected_win_rate"] = explicit_wr
     ok, detail, expected_wr, breakeven, expectancy_pct = _payload_ev(payload)
     if ok:
         return payload
     logger.warning(
-        "FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703r symbol=%s detail=%s action=skip_before_execute",
+        "FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703s symbol=%s detail=%s action=skip_before_execute",
         symbol,
         detail,
     )
     print(
-        f"[NIJA-PRINT] FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703r symbol={symbol} "
+        f"[NIJA-PRINT] FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703s symbol={symbol} "
         f"expected_wr={expected_wr:.4f} breakeven_wr={breakeven:.4f} expectancy_pct={expectancy_pct:.4f}",
         flush=True,
     )
@@ -343,6 +376,11 @@ def _cap_payload_geometry(payload: Any) -> tuple[Any, bool, float, float]:
     if isinstance(tp, dict):
         tp["fallback_sl_pct"] = capped_pct
         tp["fallback_max_sl_pct"] = _FALLBACK_HARD_MAX_SL_PCT
+    elif isinstance(tp, list):
+        for item in tp:
+            if isinstance(item, dict):
+                item["fallback_sl_pct"] = capped_pct
+                item["fallback_max_sl_pct"] = _FALLBACK_HARD_MAX_SL_PCT
     payload["fallback_target_geometry_capped"] = True
     payload["fallback_edge_geometry_repaired"] = True
     payload["reason"] = str(payload.get("reason") or "fallback_entry") + " [fallback_target_geometry_capped]"
@@ -437,13 +475,13 @@ def _install_on_module(module: ModuleType) -> bool:
             payload, changed, old_pct, new_pct = _cap_payload_geometry(payload)
             if changed:
                 logger.critical(
-                    "FORCED_FALLBACK_PAYLOAD_GEOMETRY_NORMALIZED marker=20260703r symbol=%s old_sl_pct=%.4f new_sl_pct=%.4f",
+                    "FORCED_FALLBACK_PAYLOAD_GEOMETRY_NORMALIZED marker=20260703s symbol=%s old_sl_pct=%.4f new_sl_pct=%.4f",
                     symbol,
                     old_pct,
                     new_pct,
                 )
                 print(
-                    f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_GEOMETRY_NORMALIZED marker=20260703r | symbol={symbol} "
+                    f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_GEOMETRY_NORMALIZED marker=20260703s | symbol={symbol} "
                     f"old_sl_pct={old_pct * 100.0:.3f}% new_sl_pct={new_pct * 100.0:.3f}%",
                     flush=True,
                 )
@@ -452,12 +490,12 @@ def _install_on_module(module: ModuleType) -> bool:
             message = str(exc)
             if _ILLQUID_POLICY_TEXT in message:
                 logger.warning(
-                    "FORCED_FALLBACK_PAYLOAD_REPAIR_SKIPPED marker=20260703r symbol=%s reason=%s action=preserve_competitive_profitability_policy",
+                    "FORCED_FALLBACK_PAYLOAD_REPAIR_SKIPPED marker=20260703s symbol=%s reason=%s action=preserve_competitive_profitability_policy",
                     symbol,
                     message,
                 )
                 print(
-                    f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_SKIPPED marker=20260703r symbol={symbol} reason=illiquid_policy_block",
+                    f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_SKIPPED marker=20260703s symbol={symbol} reason=illiquid_policy_block",
                     flush=True,
                 )
                 raise
@@ -465,15 +503,15 @@ def _install_on_module(module: ModuleType) -> bool:
                 raise
             if "competitive profitability policy" in message:
                 logger.warning(
-                    "FORCED_FALLBACK_POLICY_SKIP marker=20260703r symbol=%s reason=%s action=skip_before_execute",
+                    "FORCED_FALLBACK_POLICY_SKIP marker=20260703s symbol=%s reason=%s action=skip_before_execute",
                     symbol,
                     message,
                 )
                 raise
             authorized, auth_detail = _live_runtime_authorized()
             if not authorized:
-                logger.critical("FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING marker=20260703r detail=%s err=%s", auth_detail, message)
-                print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING marker=20260703r | detail={auth_detail} err={message}", flush=True)
+                logger.critical("FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING marker=20260703s detail=%s err=%s", auth_detail, message)
+                print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING marker=20260703s | detail={auth_detail} err={message}", flush=True)
                 raise
             df = kwargs.get("df") if "df" in kwargs else (args[0] if len(args) > 0 else None)
             snapshot = kwargs.get("snapshot") if "snapshot" in kwargs else (args[2] if len(args) > 2 else None)
@@ -495,7 +533,7 @@ def _install_on_module(module: ModuleType) -> bool:
             tp = payload.get("take_profit") if isinstance(payload.get("take_profit"), dict) else {}
             sl_pct = float(tp.get("fallback_sl_pct", 0.0) or 0.0)
             logger.critical(
-                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED marker=20260703r symbol=%s action=%s size=%.2f tp1=%s sl_pct=%.4f auth=%s reason=%s",
+                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED marker=20260703s symbol=%s action=%s size=%.2f tp1=%s sl_pct=%.4f auth=%s reason=%s",
                 symbol,
                 payload.get("action"),
                 float(payload.get("position_size", 0.0) or 0.0),
@@ -505,7 +543,7 @@ def _install_on_module(module: ModuleType) -> bool:
                 message,
             )
             print(
-                f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED marker=20260703r | symbol={symbol} "
+                f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED marker=20260703s | symbol={symbol} "
                 f"action={payload.get('action')} size=${float(payload.get('position_size', 0.0) or 0.0):.2f} "
                 f"edge_geometry=true sl_pct={sl_pct * 100.0:.3f}%",
                 flush=True,
@@ -516,8 +554,8 @@ def _install_on_module(module: ModuleType) -> bool:
     setattr(_patched_build_forced_fallback_entry_analysis, "__wrapped__", original)
     setattr(cls, "_build_forced_fallback_entry_analysis", _patched_build_forced_fallback_entry_analysis)
     _PATCHED = True
-    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED marker=20260703r module=%s", getattr(module, "__name__", "<unknown>"))
-    print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED marker=20260703r | module={getattr(module, '__name__', '<unknown>')}", flush=True)
+    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED marker=20260703s module=%s", getattr(module, "__name__", "<unknown>"))
+    print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED marker=20260703s | module={getattr(module, '__name__', '<unknown>')}", flush=True)
     return True
 
 
@@ -543,11 +581,11 @@ def _start_module_monitor() -> None:
         while time.time() < deadline:
             patched_any = _try_patch_loaded() or patched_any
             time.sleep(1.0)
-        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_COMPLETE marker=20260703r patched=%s patched_any=%s", _PATCHED, patched_any)
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_COMPLETE marker=20260703s patched=%s patched_any=%s", _PATCHED, patched_any)
 
     thread = threading.Thread(target=_monitor, name="forced-fallback-payload-repair-monitor", daemon=True)
     thread.start()
-    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_STARTED marker=20260703r")
+    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_STARTED marker=20260703s")
 
 
 def install_import_hook() -> None:
@@ -556,7 +594,7 @@ def install_import_hook() -> None:
         _try_patch_loaded()
         _start_module_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
-            logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=20260703r already_installed=True patched=%s", _PATCHED)
+            logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=20260703s already_installed=True patched=%s", _PATCHED)
             return
 
         _ORIGINAL_IMPORT_MODULE = importlib.import_module
@@ -569,4 +607,4 @@ def install_import_hook() -> None:
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=20260703r patched=%s", _PATCHED)
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=20260703s patched=%s", _PATCHED)
