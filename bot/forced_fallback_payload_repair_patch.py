@@ -23,6 +23,7 @@ _WRAP_ATTR = "_nija_forced_fallback_payload_repair_wrapped"
 _FALLBACK_HARD_MAX_SL_PCT = 0.0028
 _FALLBACK_DEFAULT_SL_PCT = 0.0025
 _FALLBACK_MIN_SL_PCT = 0.0015
+_ILLQUID_POLICY_TEXT = "competitive profitability policy blocked illiquid fallback entry"
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -207,13 +208,7 @@ def _fallback_sl_pct() -> float:
 
 
 def _cap_payload_geometry(payload: Any) -> tuple[Any, bool, float, float]:
-    """Normalize any successful fallback payload so it also obeys execution geometry.
-
-    Returns (payload, changed, old_sl_pct, new_sl_pct). This is intentionally
-    applied even when the native fallback builder succeeds, because the latest
-    live logs show it can return a stop-loss wider than ExecutionEngine.MAX_SL_PCT.
-    """
-
+    """Normalize any successful fallback payload so it also obeys execution geometry."""
     if not isinstance(payload, dict):
         return payload, False, 0.0, 0.0
     try:
@@ -344,56 +339,31 @@ def _install_on_module(module: ModuleType) -> bool:
             return payload
         except ValueError as exc:
             message = str(exc)
-            if "competitive profitability policy blocked illiquid fallback entry" not in message:
+            if _ILLQUID_POLICY_TEXT in message:
+                symbol = "UNKNOWN"
+                try:
+                    sig = kwargs.get("sig") if "sig" in kwargs else (args[1] if len(args) > 1 else None)
+                    symbol = str(getattr(sig, "symbol", symbol) or symbol)
+                except Exception:
+                    pass
+                logger.warning(
+                    "FORCED_FALLBACK_PAYLOAD_REPAIR_SKIPPED marker=20260703p symbol=%s reason=%s action=preserve_competitive_profitability_policy",
+                    symbol,
+                    message,
+                )
+                print(
+                    f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_SKIPPED marker=20260703p symbol={symbol} reason=illiquid_policy_block",
+                    flush=True,
+                )
                 raise
-            authorized, auth_detail = _live_runtime_authorized()
-            if not authorized:
-                logger.critical("FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING detail=%s err=%s", auth_detail, message)
-                print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_WAITING | detail={auth_detail} err={message}", flush=True)
-                raise
-            df = kwargs.get("df") if "df" in kwargs else (args[0] if len(args) > 0 else None)
-            sig = kwargs.get("sig") if "sig" in kwargs else (args[1] if len(args) > 1 else None)
-            snapshot = kwargs.get("snapshot") if "snapshot" in kwargs else (args[2] if len(args) > 2 else None)
-            action = kwargs.get("action") if "action" in kwargs else (args[3] if len(args) > 3 else "enter_long")
-            existing_reason = kwargs.get("existing_reason", "")
-            payload = _build_conservative_payload(
-                self,
-                df=df,
-                sig=sig,
-                snapshot=snapshot,
-                action=str(action or "enter_long"),
-                existing_reason=str(existing_reason or message),
-            )
-            try:
-                setattr(sig, "position_multiplier", 1.0)
-            except Exception:
-                pass
-            tp = payload.get("take_profit") if isinstance(payload.get("take_profit"), dict) else {}
-            sl_pct = float(tp.get("fallback_sl_pct", 0.0) or 0.0)
-            logger.critical(
-                "FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED symbol=%s action=%s size=%.2f tp1=%s sl_pct=%.4f auth=%s reason=%s",
-                getattr(sig, "symbol", "UNKNOWN"),
-                payload.get("action"),
-                float(payload.get("position_size", 0.0) or 0.0),
-                tp.get("tp1"),
-                sl_pct,
-                auth_detail,
-                message,
-            )
-            print(
-                f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_APPLIED | symbol={getattr(sig, 'symbol', 'UNKNOWN')} "
-                f"action={payload.get('action')} size=${float(payload.get('position_size', 0.0) or 0.0):.2f} "
-                f"edge_geometry=true sl_pct={sl_pct * 100.0:.3f}%",
-                flush=True,
-            )
-            return payload
+            raise
 
     setattr(_patched_build_forced_fallback_entry_analysis, _WRAP_ATTR, True)
     setattr(_patched_build_forced_fallback_entry_analysis, "__wrapped__", original)
     setattr(cls, "_build_forced_fallback_entry_analysis", _patched_build_forced_fallback_entry_analysis)
     _PATCHED = True
-    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
-    print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED | module={getattr(module, '__name__', '<unknown>')}", flush=True)
+    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED marker=20260703p module=%s", getattr(module, "__name__", "<unknown>"))
+    print(f"[NIJA-PRINT] FORCED_FALLBACK_PAYLOAD_REPAIR_PATCHED marker=20260703p | module={getattr(module, '__name__', '<unknown>')}", flush=True)
     return True
 
 
@@ -422,12 +392,12 @@ def _start_module_monitor() -> None:
         patched_any = False
         while time.time() < deadline:
             patched_any = _try_patch_loaded() or patched_any
-            time.sleep(0.25)
-        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_COMPLETE patched=%s patched_any=%s", _PATCHED, patched_any)
+            time.sleep(1.0)
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_COMPLETE marker=20260703p patched=%s patched_any=%s", _PATCHED, patched_any)
 
     thread = threading.Thread(target=_monitor, name="forced-fallback-payload-repair-monitor", daemon=True)
     thread.start()
-    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_STARTED")
+    logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_MONITOR_STARTED marker=20260703p")
 
 
 def install_import_hook() -> None:
@@ -436,7 +406,7 @@ def install_import_hook() -> None:
         _try_patch_loaded()
         _start_module_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
-            logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+            logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=20260703p already_installed=True patched=%s", _PATCHED)
             return
 
         _ORIGINAL_IMPORT_MODULE = importlib.import_module
@@ -445,11 +415,8 @@ def install_import_hook() -> None:
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
             if name in {"bot.nija_core_loop", "nija_core_loop"} or hasattr(module, "NijaCoreLoop"):
                 _install_on_module(module)
-            # Also rescan all loaded modules after imports because normal import
-            # statements can populate sys.modules without calling this wrapper for
-            # the target name directly.
             _try_patch_loaded()
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE patched=%s", _PATCHED)
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_COMPLETE marker=20260703p patched=%s", _PATCHED)
