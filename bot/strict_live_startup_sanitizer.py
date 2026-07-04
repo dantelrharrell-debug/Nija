@@ -27,6 +27,7 @@ _FORBIDDEN_LIVE_FLAGS = (
     "NIJA_ALLOW_REDIS_DEGRADED",
     "NIJA_EMERGENCY_LOCAL_FALLBACK_ACTIVE",
 )
+_FALLBACK_SCORE_FLOOR_NORMALIZED = False
 
 
 def _truthy(name: str) -> bool:
@@ -44,6 +45,36 @@ def _redis_configured() -> bool:
 
 def _live_mode() -> bool:
     return not _truthy("DRY_RUN_MODE") and not _truthy("PAPER_MODE")
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default) or default)
+    except Exception:
+        return default
+
+
+def _normalize_fallback_score_floor() -> None:
+    """Keep dead-zone fallback tradable without weakening liquidity safety.
+
+    The forced-fallback payload repair still performs hard geometry,
+    positive-expectancy, and competitive-liquidity checks. This only prevents a
+    stale fixed 60.0 score floor from vetoing otherwise selected micro-cap
+    candidates during live dead-zone/Always-Trade cycles.
+    """
+    global _FALLBACK_SCORE_FLOOR_NORMALIZED
+    floor_name = "NIJA_FALLBACK_STRICT_SCORE_FLOOR"
+    target = _float_env("NIJA_FALLBACK_LIVE_ACTIVE_STRICT_SCORE_FLOOR", 40.0)
+    target = max(35.0, min(target, 60.0))
+    current = _float_env(floor_name, 60.0)
+    if floor_name not in os.environ or current > target:
+        os.environ[floor_name] = f"{target:.1f}"
+        if not _FALLBACK_SCORE_FLOOR_NORMALIZED:
+            _FALLBACK_SCORE_FLOOR_NORMALIZED = True
+            logger.warning(
+                "FALLBACK_STRICT_SCORE_FLOOR_NORMALIZED marker=20260704f floor=%.1f preserve_illiquid_policy=true preserve_positive_ev=true",
+                target,
+            )
 
 
 def sanitize(reason: str = "package_import") -> None:
@@ -66,6 +97,7 @@ def sanitize(reason: str = "package_import") -> None:
     if attempts <= 0:
         os.environ["NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS"] = "12"
     os.environ["NIJA_RUNTIME_DEGRADED_MODE"] = "false"
+    _normalize_fallback_score_floor()
     if cleared:
         logger.warning("STRICT_LIVE_STARTUP_SANITIZED reason=%s cleared=%s", reason, ",".join(cleared))
 
