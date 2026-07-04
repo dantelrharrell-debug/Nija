@@ -107,6 +107,14 @@ def _set_float_floor(key: str, value: str) -> None:
         os.environ[key] = value
 
 
+def _set_float_ceiling(key: str, value: str) -> None:
+    try:
+        if float(os.environ.get(key, value) or value) > float(value):
+            os.environ[key] = value
+    except Exception:
+        os.environ[key] = value
+
+
 _normalize_credential_aliases("bot_init_first")
 try:
     _strict_sanitizer = importlib.import_module(".strict_live_startup_sanitizer", __name__)
@@ -132,14 +140,19 @@ for _key, _value in {
     "NIJA_CAPITAL_BALANCE_PROPAGATION": "true",
     "NIJA_LIVE_ENTRY_RUNTIME_FIXES": "true",
     "NIJA_EXECUTABLE_TRADE_RUNTIME_PATCH": "true",
+    "NIJA_LIVE_EXECUTION_HARDENING_ENABLED": "true",
+    "NIJA_KRAKEN_PAIR_AWARE_MINIMUMS": "true",
+    "NIJA_PLATFORM_EXECUTION_CAPITAL_ONLY": "true",
+    "NIJA_AGGREGATE_USER_CAPITAL_IN_AUTHORITY": "false",
     "NIJA_GENERATION_MISMATCH_RECOVERY_COOLDOWN_S": "0",
     "NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD": "23.00",
     "NIJA_KRAKEN_FINAL_MIN_NOTIONAL_USD": "23.00",
     "NIJA_KRAKEN_MIN_QUOTE_BUFFER_PCT": "0.10",
+    "NIJA_KRAKEN_PAIR_MIN_BASE_BUFFER_PCT": "0.03",
     "KRAKEN_MIN_QUOTE_BUFFER_PCT": "0.10",
     "KRAKEN_EFFECTIVE_NOTIONAL_EXTRA_BUFFER_PCT": "0.05",
     "NIJA_KRAKEN_EFFECTIVE_NOTIONAL_EXTRA_BUFFER_PCT": "0.05",
-    "NIJA_APPLY_GLOBAL_EXECUTABLE_MIN_TRADE": "true",
+    "NIJA_APPLY_GLOBAL_EXECUTABLE_MIN_TRADE": "false",
     "HF_TAKE_PROFIT_PCT": "1.0",
     "NIJA_MICROCAP_TP1_PERCENT": "1.0",
     "NIJA_MICROCAP_STOP_LOSS_PERCENT": "0.30",
@@ -162,10 +175,14 @@ _normalize_credential_aliases("bot_init_after_sitecustomize")
 _strict_live_cleanup("bot_init_after_sitecustomize")
 
 for _key, _value in (
-    ("MIN_TRADE_USD", "23.00"),
-    ("MIN_POSITION_USD", "23.00"),
-    ("MIN_NOTIONAL_OVERRIDE", "23.00"),
+    ("MIN_TRADE_USD", "10.00"),
+    ("MIN_POSITION_USD", "10.00"),
+    ("MIN_NOTIONAL_OVERRIDE", "10.00"),
     ("MIN_CASH_TO_BUY", "5"),
+):
+    _set_float_ceiling(_key, _value)
+
+for _key, _value in (
     ("KRAKEN_MIN_NOTIONAL_USD", "23.00"),
     ("NIJA_KRAKEN_MIN_NOTIONAL_USD", "23.00"),
     ("NIJA_KRAKEN_MICRO_MIN_NOTIONAL_USD", "23.00"),
@@ -202,6 +219,7 @@ _PATCH_HOOKS = (
     ("okx_runtime_patch", "OKX runtime patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
     ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
+    ("live_execution_runtime_hardening_patch", "Live execution runtime hardening"),
 )
 
 for _module_name, _label in _PATCH_HOOKS:
@@ -211,5 +229,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.3"
+__version__ = "7.2.4"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
