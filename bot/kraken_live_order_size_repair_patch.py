@@ -2,8 +2,8 @@
 
 Fixes the 2026-07-04 live failure where Kraken rejected a compiled order
 because final post-conversion notional landed at $20.51 while Kraken's buffered
-minimum was $20.60.  The patch raises Kraken's effective live floor and repairs
-all runtime modules that can size, validate, or compile Kraken orders.
+minimum was $20.60. The patch raises Kraken's effective live floor and repairs
+all runtime modules that can size, validate, or compile Kraken entry orders.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def _raw_min_usd() -> float:
 
 def _buffer_pct() -> float:
     # The old 3% buffer produced $20.60, but fee/headroom/8dp conversion reduced
-    # the order to $20.51. Use at least 10% for Kraken live sizing.
+    # the order to $20.51. Use at least 10% for Kraken live ENTRY sizing.
     return min(
         0.25,
         max(
@@ -103,6 +103,8 @@ def _patch_kraken_order_validator(module: ModuleType) -> None:
     if key in _PATCHED or getattr(module, "_nija_kraken_live_order_size_patched", False):
         return
 
+    original_validate_and_adjust = getattr(module, "validate_and_adjust_order", None)
+
     try:
         module.KRAKEN_MINIMUM_ORDER_USD = max(float(getattr(module, "KRAKEN_MINIMUM_ORDER_USD", 20.0) or 20.0), _raw_min_usd())
     except Exception:
@@ -118,6 +120,8 @@ def _patch_kraken_order_validator(module: ModuleType) -> None:
 
     def get_pair_safe_minimums(pair: str) -> dict[str, float]:
         minimums = original_get_pair_minimums(pair) if callable(original_get_pair_minimums) else {}
+        if not isinstance(minimums, dict):
+            minimums = {}
         raw_min = max(float(minimums.get("min_quote", 0.0) or 0.0), _raw_min_usd())
         return {
             "min_base": float(minimums.get("min_base", 0.0) or 0.0),
@@ -130,8 +134,21 @@ def _patch_kraken_order_validator(module: ModuleType) -> None:
         if price <= 0:
             return False, volume, f"Invalid price {price} for {pair}"
         side_l = str(side or "").strip().lower()
+
+        # Never increase SELL volume. Exits must not sell more inventory than NIJA
+        # actually holds; below-min sells should be rejected or handled as dust by
+        # the existing reconciliation/exit logic.
+        if side_l != "buy":
+            if callable(original_validate_and_adjust):
+                return original_validate_and_adjust(pair, volume, price, side, ordertype)
+            validator = getattr(module, "validate_order_size", None)
+            if callable(validator):
+                ok, error = validator(pair, volume, price, side)
+                return ok, volume, error
+            return True, volume, None
+
         safe = get_pair_safe_minimums(pair)
-        target_quote = _target_min_usd() if side_l == "buy" else safe["min_quote"]
+        target_quote = _target_min_usd()
         step = _volume_step(module)
         required_quote_volume = _round_volume_up(Decimal(str(target_quote)) / Decimal(str(price)), step)
         adjusted_volume = max(float(volume or 0.0), required_quote_volume, float(safe.get("min_base", 0.0) or 0.0))
@@ -139,7 +156,7 @@ def _patch_kraken_order_validator(module: ModuleType) -> None:
         validator = getattr(module, "validate_order_size", None)
         if callable(validator):
             ok, error = validator(pair, adjusted_volume, price, side)
-            if not ok and side_l == "buy":
+            if not ok:
                 adjusted_volume = _round_volume_up(Decimal(str(target_quote + 0.50)) / Decimal(str(price)), step)
                 ok, error = validator(pair, adjusted_volume, price, side)
             if not ok:
@@ -223,7 +240,10 @@ def _patch_tier_config(module: ModuleType) -> None:
         def get_tier_config(tier: Any):
             try:
                 if isinstance(tier, str):
-                    tier = getattr(TradingTier, tier, TradingTier(tier))
+                    try:
+                        tier = TradingTier[tier]
+                    except Exception:
+                        tier = TradingTier(tier)
             except Exception:
                 pass
             if tier == nano and nano in configs:
