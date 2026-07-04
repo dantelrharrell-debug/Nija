@@ -25,6 +25,7 @@ from types import ModuleType
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.kraken_execution_floor_guard")
+_LAST_ENV_NORMALIZED_LOG_TS = 0.0
 
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _PATCHED_MODULES: set[tuple[str, int]] = set()
@@ -114,11 +115,15 @@ def _normalize_env() -> None:
         if current < _SAFE_BUFFER_PCT:
             os.environ[key] = "0.10"
 
-    logger.info(
-        "KRAKEN_EXECUTION_FLOOR_ENV_NORMALIZED final_floor=$%.2f target_quote=$%.2f",
-        float(final_floor),
-        float(target_quote),
-    )
+    global _LAST_ENV_NORMALIZED_LOG_TS
+    now = time.monotonic()
+    if now - _LAST_ENV_NORMALIZED_LOG_TS >= 60.0:
+        _LAST_ENV_NORMALIZED_LOG_TS = now
+        logger.info(
+            "KRAKEN_EXECUTION_FLOOR_ENV_NORMALIZED final_floor=$%.2f target_quote=$%.2f",
+            float(final_floor),
+            float(target_quote),
+        )
 
 
 class _PatchNoiseFilter(logging.Filter):
@@ -411,6 +416,9 @@ def _patch_kraken_order_validator(module: ModuleType) -> None:
 
 
 def _patch_broker_integration(module: ModuleType) -> None:
+    if getattr(module, "_nija_kraken_final_floor_rebound", False):
+        return
+
     for name in ("bot.tier_config", "tier_config"):
         tier_mod = sys.modules.get(name)
         if isinstance(tier_mod, ModuleType):
