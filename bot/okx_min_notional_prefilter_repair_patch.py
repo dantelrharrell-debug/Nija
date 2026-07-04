@@ -10,6 +10,10 @@ This patch lowers only the APEX early pre-filter floor for OKX so the signal can
 reach the execution compiler. It does NOT lower the exchange compiler's final
 minimum notional, and it does NOT bypass risk, kill-switch, writer authority,
 or exchange validation.
+
+2026-07-04g: also installs notional_floor_repair_patch so shared global floors
+remain aligned with Kraken's executable live floor while OKX/Coinbase retain
+broker-specific floors.
 """
 
 from __future__ import annotations
@@ -29,7 +33,8 @@ _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
 _MONITOR_STARTED = False
 _LOCK = threading.Lock()
-_MARKER = "OKX_MIN_NOTIONAL_PREFILTER_REPAIR_PATCHED marker=20260703h"
+_MARKER = "OKX_MIN_NOTIONAL_PREFILTER_REPAIR_PATCHED marker=20260704g"
+_NOTIONAL_INSTALLED = False
 
 
 def _float_env(name: str, default: float) -> float:
@@ -39,8 +44,27 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _install_notional_floor_repair() -> None:
+    global _NOTIONAL_INSTALLED
+    if _NOTIONAL_INSTALLED:
+        return
+    try:
+        try:
+            mod = importlib.import_module("bot.notional_floor_repair_patch")
+        except Exception:
+            mod = importlib.import_module("notional_floor_repair_patch")
+        installer = getattr(mod, "install_import_hook", None)
+        if callable(installer):
+            installer()
+        _NOTIONAL_INSTALLED = True
+        logger.warning("NOTIONAL_FLOOR_REPAIR_CHAINED_FROM_OKX_PREFILTER marker=20260704g")
+    except Exception as exc:
+        logger.warning("NOTIONAL_FLOOR_REPAIR_CHAIN_FAILED err=%s", exc)
+
+
 def _patch_module(module: ModuleType) -> bool:
     global _PATCHED
+    _install_notional_floor_repair()
     changed = False
     try:
         broker_mins = getattr(module, "BROKER_MIN_ORDER_USD", None)
@@ -58,7 +82,7 @@ def _patch_module(module: ModuleType) -> bool:
             if "coinbase" in broker_mins:
                 broker_mins["coinbase"] = min(float(broker_mins.get("coinbase", 1.0) or 1.0), 1.0)
             logger.critical("%s module=%s okx_prefilter_old=%.2f okx_prefilter_new=%.2f final_exchange_min_unchanged=True", _MARKER, getattr(module, "__name__", "<unknown>"), old, broker_mins.get("okx", new))
-            print(f"[NIJA-PRINT] OKX_MIN_NOTIONAL_PREFILTER_REPAIR_PATCHED marker=20260703h okx_prefilter=${broker_mins.get('okx', new):.2f}", flush=True)
+            print(f"[NIJA-PRINT] OKX_MIN_NOTIONAL_PREFILTER_REPAIR_PATCHED marker=20260704g okx_prefilter=${broker_mins.get('okx', new):.2f}", flush=True)
             _PATCHED = True
             return True
     except Exception as exc:
@@ -67,6 +91,7 @@ def _patch_module(module: ModuleType) -> bool:
 
 
 def _try_patch_loaded() -> bool:
+    _install_notional_floor_repair()
     patched = False
     for name in ("bot.nija_apex_strategy_v71", "nija_apex_strategy_v71"):
         module = sys.modules.get(name)
@@ -96,8 +121,9 @@ def _start_monitor() -> None:
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
     with _LOCK:
-        logger.warning("OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_START marker=20260703h")
-        print("[NIJA-PRINT] OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_START marker=20260703h", flush=True)
+        logger.warning("OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_START marker=20260704g")
+        print("[NIJA-PRINT] OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_START marker=20260704g", flush=True)
+        _install_notional_floor_repair()
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
@@ -108,6 +134,8 @@ def install_import_hook() -> None:
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
             if name in {"bot.nija_apex_strategy_v71", "nija_apex_strategy_v71"}:
                 _patch_module(module)
+            if name in {"bot.live_execution_runtime_hardening_patch", "live_execution_runtime_hardening_patch"}:
+                _install_notional_floor_repair()
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
