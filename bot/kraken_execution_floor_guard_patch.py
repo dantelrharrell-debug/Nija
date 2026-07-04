@@ -1,15 +1,14 @@
 """Final Kraken execution-floor guard.
 
-This overlay is loaded after the earlier Kraken repair hook.  It keeps the
-existing validator/compiler repairs, but closes the remaining live gap observed
-on 2026-07-04:
+This guard is loaded by bot.__init__ after the earlier live order-size repair.
+It makes Kraken entry sizing and Kraken final validation use the same source of
+truth so Phase 3 cannot select a candidate with a $10 intent while ECEL requires
+$23+ for a live Kraken BUY.
 
-* all Kraken BUY notional paths use a $23+ final target, not a value that can
-  round back under the live floor;
-* low-balance platform accounts are classified by real balance instead of being
-  forced into BALLER;
-* Decimal comparisons prevent "$22.00 below $22.00" false rejects;
-* noisy patch banners are throttled so Railway does not drop actionable logs.
+The patch does not bypass risk controls or exchange validation. It only raises
+Kraken BUY intent/notional to the executable target before validation, preserves
+low-balance tier normalization, and emits a terminal Phase 3 summary for every
+scan cycle.
 """
 
 from __future__ import annotations
@@ -26,9 +25,9 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.kraken_execution_floor_guard")
 _LAST_ENV_NORMALIZED_LOG_TS = 0.0
-
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _PATCHED_MODULES: set[tuple[str, int]] = set()
+
 _CENT = Decimal("0.01")
 _RAW_FLOOR = Decimal("20.00")
 _SAFE_BUFFER_PCT = Decimal("0.10")
@@ -49,8 +48,7 @@ def _decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
 
 
 def _round_usd_up(value: Any) -> Decimal:
-    d = _decimal(value)
-    return (d / _CENT).to_integral_value(rounding=ROUND_UP) * _CENT
+    return (_decimal(value) / _CENT).to_integral_value(rounding=ROUND_UP) * _CENT
 
 
 def _raw_floor_usd() -> Decimal:
@@ -69,7 +67,7 @@ def _safe_floor_usd() -> Decimal:
 
 def _final_floor_usd() -> Decimal:
     configured = _decimal(os.environ.get("NIJA_KRAKEN_FINAL_MIN_NOTIONAL_USD"), _HARD_FINAL_FLOOR)
-    return _round_usd_up(max(_HARD_FINAL_FLOOR, configured))
+    return _round_usd_up(max(_HARD_FINAL_FLOOR, configured, _safe_floor_usd()))
 
 
 def _target_quote_usd() -> Decimal:
@@ -91,10 +89,23 @@ def _set_env_floor(name: str, value: Decimal) -> None:
 def _normalize_env() -> None:
     final_floor = _final_floor_usd()
     target_quote = _target_quote_usd()
+
+    # Entry intent must be executable. These were previously capped to $10 by
+    # micro-cap startup defaults, while Kraken final validation required $23+.
     for key in (
         "MIN_TRADE_USD",
         "MIN_POSITION_USD",
         "MIN_NOTIONAL_OVERRIDE",
+        "NIJA_MIN_ENTRY_POSITION_USD",
+        "NIJA_TARGET_ENTRY_NOTIONAL_USD",
+        "KRAKEN_TARGET_ORDER_USD",
+        "NIJA_KRAKEN_TARGET_ORDER_USD",
+    ):
+        _set_env_floor(key, target_quote)
+
+    # Contract/exchange floors remain the final minimum; requested BUY notional
+    # uses the slightly higher target_quote to survive rounding/fee drift.
+    for key in (
         "KRAKEN_MIN_NOTIONAL_USD",
         "NIJA_KRAKEN_MIN_NOTIONAL_USD",
         "NIJA_KRAKEN_MICRO_MIN_NOTIONAL_USD",
@@ -103,8 +114,6 @@ def _normalize_env() -> None:
     ):
         _set_env_floor(key, final_floor)
 
-    # Keep the earlier repair hook's target calculation at or above the final
-    # floor.  The old 0.015 value produced a $22.33 target; 0.05 yields $23.10.
     for key in ("KRAKEN_EFFECTIVE_NOTIONAL_EXTRA_BUFFER_PCT", "NIJA_KRAKEN_EFFECTIVE_NOTIONAL_EXTRA_BUFFER_PCT"):
         current = _decimal(os.environ.get(key), Decimal("0"))
         if current < _DRIFT_BUFFER_PCT:
@@ -115,14 +124,28 @@ def _normalize_env() -> None:
         if current < _SAFE_BUFFER_PCT:
             os.environ[key] = "0.10"
 
+    # Prevent stale HF_MIN_ADX=10 from hard-starving micro-cap/HF scalp mode.
+    # ADX remains available as a score/rank weight; risk and exchange gates remain intact.
+    try:
+        if _decimal(os.environ.get("HF_MIN_ADX"), Decimal("1.5")) > Decimal("1.5"):
+            os.environ["HF_MIN_ADX"] = "1.5"
+    except Exception:
+        os.environ["HF_MIN_ADX"] = "1.5"
+    os.environ.setdefault("NIJA_EFFECTIVE_MIN_ADX", "1.5")
+    os.environ["NIJA_ADX_HARD_BLOCK"] = "false"
+    os.environ["NIJA_ADX_SCORE_WEIGHTED"] = "true"
+
     global _LAST_ENV_NORMALIZED_LOG_TS
     now = time.monotonic()
     if now - _LAST_ENV_NORMALIZED_LOG_TS >= 60.0:
         _LAST_ENV_NORMALIZED_LOG_TS = now
-        logger.info(
-            "KRAKEN_EXECUTION_FLOOR_ENV_NORMALIZED final_floor=$%.2f target_quote=$%.2f",
+        logger.warning(
+            "KRAKEN_EXECUTION_FLOOR_ENV_NORMALIZED final_floor=$%.2f target_quote=$%.2f min_trade=%s hf_min_adx=%s adx_hard_block=%s",
             float(final_floor),
             float(target_quote),
+            os.environ.get("MIN_TRADE_USD"),
+            os.environ.get("HF_MIN_ADX"),
+            os.environ.get("NIJA_ADX_HARD_BLOCK"),
         )
 
 
@@ -169,7 +192,8 @@ def _module_key(module: ModuleType) -> tuple[str, int]:
 
 
 def _is_kraken(exchange: Any) -> bool:
-    return str(exchange or "").strip().lower() == "kraken"
+    text = str(exchange or "").strip().lower()
+    return text == "kraken" or text.endswith(":kraken") or "kraken" in text
 
 
 def _enum_member(module: ModuleType, name: str) -> Any:
@@ -243,33 +267,16 @@ def _patch_tier_config(module: ModuleType) -> None:
             balance_tier = _balance_based_tier(module, bal)
 
             if is_platform and bal < Decimal("25000") and not allow_underfunded:
-                logger.warning(
-                    "PLATFORM_LOW_BALANCE_BALLER_BLOCKED balance=$%.2f resolved_tier=%s",
-                    float(bal),
-                    _tier_name(balance_tier),
-                )
+                logger.warning("PLATFORM_LOW_BALANCE_BALLER_BLOCKED balance=$%.2f resolved_tier=%s", float(bal), _tier_name(balance_tier))
                 return balance_tier
-
             if requested in {"BALLER", "PLATFORM"} and bal < Decimal("25000") and not allow_underfunded:
-                logger.warning(
-                    "LOW_BALANCE_BALLER_OVERRIDE_BLOCKED requested=%s balance=$%.2f resolved_tier=%s",
-                    requested,
-                    float(bal),
-                    _tier_name(balance_tier),
-                )
+                logger.warning("LOW_BALANCE_BALLER_OVERRIDE_BLOCKED requested=%s balance=$%.2f resolved_tier=%s", requested, float(bal), _tier_name(balance_tier))
                 return balance_tier
-
             if requested and not allow_underfunded:
                 requested_tier = _enum_member(module, requested)
                 if requested_tier is not None and _tier_capital_min(module, requested_tier) > bal:
-                    logger.warning(
-                        "UNDERFUNDED_TIER_OVERRIDE_BLOCKED requested=%s balance=$%.2f resolved_tier=%s",
-                        requested,
-                        float(bal),
-                        _tier_name(balance_tier),
-                    )
+                    logger.warning("UNDERFUNDED_TIER_OVERRIDE_BLOCKED requested=%s balance=$%.2f resolved_tier=%s", requested, float(bal), _tier_name(balance_tier))
                     return balance_tier
-
             try:
                 return original_get_tier(balance, override_tier=override_tier, is_platform=is_platform)
             except TypeError:
@@ -279,7 +286,7 @@ def _patch_tier_config(module: ModuleType) -> None:
         module.get_tier_from_balance = get_tier_from_balance
 
     original_get_min = getattr(module, "get_min_trade_size", None)
-    if callable(original_get_min) and not getattr(original_get_min, "_nija_kraken_final_floor", False):
+    if callable(original_get_min) and not getattr(original_get_min, "_nija_kraken_entry_target_floor", False):
         def get_min_trade_size(tier: Any, balance: float, is_platform: bool = False, exchange: str = "coinbase") -> float:
             tier = _normalize_runtime_tier(module, tier, balance, is_platform)
             try:
@@ -287,105 +294,78 @@ def _patch_tier_config(module: ModuleType) -> None:
             except TypeError:
                 value = original_get_min(tier, balance, is_platform, exchange)
             if _is_kraken(exchange):
-                return float(max(_round_usd_up(value), _final_floor_usd()))
+                return float(max(_round_usd_up(value), _target_quote_usd()))
             return float(value)
 
-        get_min_trade_size._nija_kraken_final_floor = True  # type: ignore[attr-defined]
+        get_min_trade_size._nija_kraken_entry_target_floor = True  # type: ignore[attr-defined]
         module.get_min_trade_size = get_min_trade_size
 
     original_auto_resize = getattr(module, "auto_resize_trade", None)
-    if callable(original_auto_resize) and not getattr(original_auto_resize, "_nija_kraken_final_floor", False):
-        def auto_resize_trade(
-            trade_size: float,
-            tier: Any,
-            balance: float,
-            is_platform: bool = False,
-            exchange: str = "coinbase",
-        ):
+    if callable(original_auto_resize) and not getattr(original_auto_resize, "_nija_kraken_entry_target_floor", False):
+        def auto_resize_trade(trade_size: float, tier: Any, balance: float, is_platform: bool = False, exchange: str = "coinbase"):
             tier = _normalize_runtime_tier(module, tier, balance, is_platform)
             if not _is_kraken(exchange):
                 return original_auto_resize(trade_size, tier, balance, is_platform=is_platform, exchange=exchange)
-
-            floor = _target_quote_usd()
+            target = _target_quote_usd()
             size = _round_usd_up(trade_size)
             bal = _decimal(balance)
-            if bal < floor:
-                return (0.0, f"Balance ${float(bal):.2f} below Kraken final target ${float(floor):.2f}")
-
-            if size < floor:
-                return (float(floor), f"Auto-raised to Kraken final target ${float(floor):.2f}")
-
-            resized, reason = original_auto_resize(float(size), tier, balance, is_platform=is_platform, exchange=exchange)
+            if bal < target:
+                return (0.0, f"Balance ${float(bal):.2f} below Kraken target ${float(target):.2f}")
+            raised = float(max(size, target))
+            try:
+                resized, reason = original_auto_resize(raised, tier, balance, is_platform=is_platform, exchange=exchange)
+            except TypeError:
+                resized, reason = original_auto_resize(raised, tier, balance, is_platform, exchange)
             resized_d = _round_usd_up(resized)
+            if Decimal("0") < resized_d < target:
+                logger.warning("KRAKEN_TIER_RESIZE_DOWN_BLOCKED original=$%.2f resized=$%.2f target=$%.2f", float(raised), float(resized_d), float(target))
+                return (float(target), f"Prevented resize below Kraken target ${float(target):.2f}")
+            if resized_d == 0 and _decimal(raised) >= target:
+                return (raised, "valid after Kraken entry target guard")
+            return (float(max(resized_d, target)), reason)
 
-            if resized_d == 0 and size >= floor:
-                return (float(size), "valid after Kraken Decimal floor guard")
-
-            if Decimal("0") < resized_d < floor:
-                logger.warning(
-                    "KRAKEN_TIER_RESIZE_DOWN_BLOCKED original=$%.2f resized=$%.2f floor=$%.2f",
-                    float(size),
-                    float(resized_d),
-                    float(floor),
-                )
-                return (float(floor), f"Prevented resize below Kraken final target ${float(floor):.2f}")
-
-            return (float(resized_d), reason)
-
-        auto_resize_trade._nija_kraken_final_floor = True  # type: ignore[attr-defined]
+        auto_resize_trade._nija_kraken_entry_target_floor = True  # type: ignore[attr-defined]
         module.auto_resize_trade = auto_resize_trade
 
     original_validate = getattr(module, "validate_trade_size", None)
-    if callable(original_validate) and not getattr(original_validate, "_nija_kraken_decimal_compare", False):
-        def validate_trade_size(
-            trade_size: float,
-            tier: Any,
-            balance: float,
-            is_platform: bool = False,
-            exchange: str = "coinbase",
-        ):
+    if callable(original_validate) and not getattr(original_validate, "_nija_kraken_entry_decimal_compare", False):
+        def validate_trade_size(trade_size: float, tier: Any, balance: float, is_platform: bool = False, exchange: str = "coinbase"):
             tier = _normalize_runtime_tier(module, tier, balance, is_platform)
             if _is_kraken(exchange):
                 size = _round_usd_up(trade_size)
-                floor = _target_quote_usd()
-                if size >= floor and _decimal(balance) >= size:
-                    return (True, f"Trade size valid after Kraken Decimal floor guard (${float(size):.2f} >= ${float(floor):.2f})")
-
+                target = _target_quote_usd()
+                if size >= target and _decimal(balance) >= size:
+                    return (True, f"Trade size valid after Kraken entry target guard (${float(size):.2f} >= ${float(target):.2f})")
             try:
                 ok, reason = original_validate(trade_size, tier, balance, is_platform=is_platform, exchange=exchange)
             except TypeError:
                 ok, reason = original_validate(trade_size, tier, balance, is_platform, exchange)
-
             if not ok and _is_kraken(exchange):
                 size = _round_usd_up(trade_size)
-                floor = _target_quote_usd()
-                if size >= floor and _decimal(balance) >= size:
-                    return (True, "valid after Kraken Decimal equality guard")
+                target = _target_quote_usd()
+                if size >= target and _decimal(balance) >= size:
+                    return (True, "valid after Kraken entry target equality guard")
             return (ok, reason)
 
-        validate_trade_size._nija_kraken_decimal_compare = True  # type: ignore[attr-defined]
+        validate_trade_size._nija_kraken_entry_decimal_compare = True  # type: ignore[attr-defined]
         module.validate_trade_size = validate_trade_size
 
-    logger.info(
-        "TIER_CONFIG_LOW_BALANCE_KRAKEN_GUARD_PATCHED final_floor=$%.2f target=$%.2f",
-        float(_final_floor_usd()),
-        float(_target_quote_usd()),
-    )
+    logger.info("TIER_CONFIG_LOW_BALANCE_KRAKEN_GUARD_PATCHED final_floor=$%.2f target=$%.2f", float(_final_floor_usd()), float(_target_quote_usd()))
 
 
 def _patch_position_sizer(module: ModuleType) -> None:
     original = getattr(module, "get_exchange_min_trade_size", None)
-    if not callable(original) or getattr(original, "_nija_kraken_final_floor", False):
+    if not callable(original) or getattr(original, "_nija_kraken_entry_target_floor", False):
         return
 
     def get_exchange_min_trade_size(exchange: str, *args: Any, **kwargs: Any) -> float:
         if _is_kraken(exchange):
-            return float(_final_floor_usd())
+            return float(_target_quote_usd())
         return float(original(exchange, *args, **kwargs))
 
-    get_exchange_min_trade_size._nija_kraken_final_floor = True  # type: ignore[attr-defined]
+    get_exchange_min_trade_size._nija_kraken_entry_target_floor = True  # type: ignore[attr-defined]
     module.get_exchange_min_trade_size = get_exchange_min_trade_size
-    logger.info("POSITION_SIZER_KRAKEN_FINAL_FLOOR_PATCHED floor=$%.2f", float(_final_floor_usd()))
+    logger.info("POSITION_SIZER_KRAKEN_ENTRY_TARGET_PATCHED target=$%.2f", float(_target_quote_usd()))
 
 
 def _volume_step(module: ModuleType) -> Decimal:
@@ -398,7 +378,7 @@ def _round_volume_up(value: Decimal, step: Decimal) -> float:
 
 def _patch_kraken_order_validator(module: ModuleType) -> None:
     original = getattr(module, "validate_and_adjust_order", None)
-    if not callable(original) or getattr(original, "_nija_kraken_final_target", False):
+    if not callable(original) or getattr(original, "_nija_kraken_entry_target", False):
         return
 
     def validate_and_adjust_order(pair: str, volume: float, price: float, side: str, ordertype: str = "market"):
@@ -407,18 +387,16 @@ def _patch_kraken_order_validator(module: ModuleType) -> None:
             step = _volume_step(module)
             required_volume = _round_volume_up(target / _decimal(price), step)
             volume = max(float(volume or 0.0), required_volume)
-
         return original(pair, volume, price, side, ordertype)
 
-    validate_and_adjust_order._nija_kraken_final_target = True  # type: ignore[attr-defined]
+    validate_and_adjust_order._nija_kraken_entry_target = True  # type: ignore[attr-defined]
     module.validate_and_adjust_order = validate_and_adjust_order
-    logger.info("KRAKEN_ORDER_VALIDATOR_FINAL_TARGET_PATCHED target=$%.2f", float(_target_quote_usd()))
+    logger.info("KRAKEN_ORDER_VALIDATOR_ENTRY_TARGET_PATCHED target=$%.2f", float(_target_quote_usd()))
 
 
 def _patch_broker_integration(module: ModuleType) -> None:
-    if getattr(module, "_nija_kraken_final_floor_rebound", False):
+    if getattr(module, "_nija_kraken_entry_target_rebound", False):
         return
-
     for name in ("bot.tier_config", "tier_config"):
         tier_mod = sys.modules.get(name)
         if isinstance(tier_mod, ModuleType):
@@ -427,7 +405,6 @@ def _patch_broker_integration(module: ModuleType) -> None:
                 if callable(fn):
                     setattr(module, attr, fn)
             break
-
     for name in ("bot.kraken_order_validator", "kraken_order_validator"):
         validator = sys.modules.get(name)
         if isinstance(validator, ModuleType):
@@ -435,42 +412,40 @@ def _patch_broker_integration(module: ModuleType) -> None:
             if callable(fn):
                 module.validate_and_adjust_order = fn
             break
-
-    module._nija_kraken_final_floor_rebound = True
-    logger.info("BROKER_INTEGRATION_KRAKEN_FINAL_FLOOR_REBOUND module=%s", getattr(module, "__name__", "<unknown>"))
+    module._nija_kraken_entry_target_rebound = True
+    logger.info("BROKER_INTEGRATION_KRAKEN_ENTRY_TARGET_REBOUND module=%s", getattr(module, "__name__", "<unknown>"))
 
 
 def _patch_exchange_order_compiler(module: ModuleType) -> None:
     cls = getattr(module, "ExchangeOrderCompiler", None)
-    constraints_cls = getattr(module, "ExchangeConstraints", None)
-    if not isinstance(cls, type) or constraints_cls is None:
+    if not isinstance(cls, type):
         return
 
     original_safe = getattr(cls, "_safe_min_notional_usd", None)
-    if callable(original_safe) and not getattr(original_safe, "_nija_kraken_final_floor", False):
+    if callable(original_safe) and not getattr(original_safe, "_nija_kraken_entry_final_floor", False):
         def safe_min_notional_usd(self: Any, constraints: Any) -> float:
             if _is_kraken(getattr(constraints, "exchange", "")):
                 return float(_final_floor_usd())
             return float(original_safe(self, constraints))
 
-        safe_min_notional_usd._nija_kraken_final_floor = True  # type: ignore[attr-defined]
+        safe_min_notional_usd._nija_kraken_entry_final_floor = True  # type: ignore[attr-defined]
         cls._safe_min_notional_usd = safe_min_notional_usd
 
     original_compile = getattr(cls, "compile", None)
-    if callable(original_compile) and not getattr(original_compile, "_nija_kraken_final_target", False):
+    if callable(original_compile) and not getattr(original_compile, "_nija_kraken_entry_target", False):
         def compile(self: Any, symbol: str, side: str, size_usd: float, pricing: Any, exchange: str = "coinbase", min_profit_threshold_usd: float = 0.50):
             if _is_kraken(exchange) and str(side or "").strip().lower() == "buy":
                 size_usd = float(max(_round_usd_up(size_usd), _target_quote_usd()))
             return original_compile(self, symbol, side, size_usd, pricing, exchange, min_profit_threshold_usd)
 
-        compile._nija_kraken_final_target = True  # type: ignore[attr-defined]
+        compile._nija_kraken_entry_target = True  # type: ignore[attr-defined]
         cls.compile = compile
 
     try:
         schemas = getattr(cls, "SCHEMAS", {})
         kraken = schemas.get("kraken") or {}
         for key, rule in list(kraken.items()):
-            if getattr(rule, "exchange", "").lower() == "kraken":
+            if _is_kraken(getattr(rule, "exchange", "kraken")):
                 kraken[key] = replace(
                     rule,
                     min_order_usd=max(float(getattr(rule, "min_order_usd", 0.0) or 0.0), float(_final_floor_usd())),
@@ -479,7 +454,7 @@ def _patch_exchange_order_compiler(module: ModuleType) -> None:
     except Exception as exc:
         logger.warning("EOC_KRAKEN_FINAL_SCHEMA_PATCH_SKIPPED err=%s", exc)
 
-    logger.info("EXCHANGE_ORDER_COMPILER_KRAKEN_FINAL_FLOOR_PATCHED floor=$%.2f", float(_final_floor_usd()))
+    logger.info("EXCHANGE_ORDER_COMPILER_KRAKEN_ENTRY_TARGET_PATCHED floor=$%.2f target=$%.2f", float(_final_floor_usd()), float(_target_quote_usd()))
 
 
 def _patch_ecel(module: ModuleType) -> None:
@@ -490,23 +465,20 @@ def _patch_ecel(module: ModuleType) -> None:
         return
 
     original_upsert = getattr(schema_cls, "upsert_rule", None)
-    if callable(original_upsert) and not getattr(original_upsert, "_nija_kraken_final_floor", False):
+    if callable(original_upsert) and not getattr(original_upsert, "_nija_kraken_entry_final_floor", False):
         def upsert_rule(self: Any, rule: Any) -> None:
             try:
                 if _is_kraken(getattr(rule, "broker", "")):
-                    rule = replace(
-                        rule,
-                        min_notional_usd=max(float(getattr(rule, "min_notional_usd", 0.0) or 0.0), float(_final_floor_usd())),
-                    )
+                    rule = replace(rule, min_notional_usd=max(float(getattr(rule, "min_notional_usd", 0.0) or 0.0), float(_final_floor_usd())))
             except Exception:
                 pass
             return original_upsert(self, rule)
 
-        upsert_rule._nija_kraken_final_floor = True  # type: ignore[attr-defined]
+        upsert_rule._nija_kraken_entry_final_floor = True  # type: ignore[attr-defined]
         schema_cls.upsert_rule = upsert_rule
 
     original_get = getattr(schema_cls, "get_rule", None)
-    if callable(original_get) and not getattr(original_get, "_nija_kraken_final_floor", False):
+    if callable(original_get) and not getattr(original_get, "_nija_kraken_entry_final_floor", False):
         def get_rule(self: Any, broker: str, symbol: str):
             rule = original_get(self, broker, symbol)
             if not _is_kraken(broker):
@@ -539,11 +511,11 @@ def _patch_ecel(module: ModuleType) -> None:
                     pass
             return rule
 
-        get_rule._nija_kraken_final_floor = True  # type: ignore[attr-defined]
+        get_rule._nija_kraken_entry_final_floor = True  # type: ignore[attr-defined]
         schema_cls.get_rule = get_rule
 
     original_compile = getattr(compiler_cls, "compile", None)
-    if callable(original_compile) and not getattr(original_compile, "_nija_kraken_final_target", False):
+    if callable(original_compile) and not getattr(original_compile, "_nija_kraken_entry_target", False):
         def compile(self: Any, req: Any):
             broker = str(getattr(req, "broker", "") or "").strip().lower()
             side = str(getattr(req, "side", "") or "").strip().lower()
@@ -558,8 +530,7 @@ def _patch_ecel(module: ModuleType) -> None:
                             setattr(req, "desired_notional_usd", float(target))
                         except Exception:
                             pass
-                    logger.info("ECEL_KRAKEN_FINAL_NOTIONAL_LIFT_APPLIED requested=$%.2f target=$%.2f", float(requested), float(target))
-
+                    logger.info("ECEL_KRAKEN_ENTRY_NOTIONAL_LIFT_APPLIED requested=$%.2f target=$%.2f", float(requested), float(target))
             result = original_compile(self, req)
             if broker == "kraken" and side == "buy":
                 compiled = _round_usd_up(getattr(result, "compiled_notional_usd", 0.0))
@@ -584,10 +555,85 @@ def _patch_ecel(module: ModuleType) -> None:
                     result = original_compile(self, retry_req)
             return result
 
-        compile._nija_kraken_final_target = True  # type: ignore[attr-defined]
+        compile._nija_kraken_entry_target = True  # type: ignore[attr-defined]
         compiler_cls.compile = compile
 
-    logger.info("ECEL_KRAKEN_FINAL_FLOOR_PATCHED floor=$%.2f target=$%.2f", float(_final_floor_usd()), float(_target_quote_usd()))
+    logger.info("ECEL_KRAKEN_ENTRY_TARGET_PATCHED floor=$%.2f target=$%.2f", float(_final_floor_usd()), float(_target_quote_usd()))
+
+
+def _top_reason(mapping: Any) -> str:
+    if not isinstance(mapping, dict) or not mapping:
+        return "none"
+    best_key = "none"
+    best_count = 0
+    for key, value in mapping.items():
+        try:
+            count = int(value or 0)
+        except Exception:
+            count = 0
+        if count > best_count:
+            best_key = str(key)
+            best_count = count
+    return best_key if best_count > 0 else "none"
+
+
+def _patch_core_loop(module: ModuleType) -> None:
+    cls = getattr(module, "NijaCoreLoop", None)
+    if not isinstance(cls, type):
+        return
+    original = getattr(cls, "_phase3_scan_and_enter", None)
+    if not callable(original) or getattr(original, "_nija_phase3_terminal_summary_every_cycle", False):
+        return
+
+    def _phase3_scan_and_enter_with_summary(self: Any, broker: Any, snapshot: Any, symbols: list[str], available_slots: int, zero_signal_streak: int = 0):
+        started = time.monotonic()
+        result: Any = None
+        try:
+            result = original(self, broker, snapshot, symbols, available_slots, zero_signal_streak)
+            return result
+        finally:
+            elapsed_ms = (time.monotonic() - started) * 1000.0
+            entries = blocked = scored = 0
+            gate_rejections: Any = {}
+            if isinstance(result, tuple):
+                try:
+                    entries = int(result[0] or 0) if len(result) > 0 else 0
+                    blocked = int(result[1] or 0) if len(result) > 1 else 0
+                    scored = int(result[2] or 0) if len(result) > 2 else 0
+                    gate_rejections = result[3] if len(result) > 3 else {}
+                except Exception:
+                    pass
+            if result is None:
+                final_reason = "phase3_exception_or_no_result"
+            elif entries > 0:
+                final_reason = "entry_submitted"
+            elif scored <= 0:
+                final_reason = "no_symbols_scored"
+            elif blocked > 0:
+                final_reason = _top_reason(gate_rejections) if _top_reason(gate_rejections) != "none" else "entry_blocked"
+            else:
+                final_reason = "scan_complete_no_entry"
+            logger.warning(
+                "PHASE3_TERMINAL_SUMMARY marker=20260704a cycle_id=%s broker=%s symbols_in=%d slots=%d scored=%d entered=%d blocked=%d final_reason=%s top_gate=%s top_reject=%s top_veto=%s elapsed_ms=%.0f",
+                getattr(snapshot, "cycle_id", ""),
+                getattr(broker, "broker_name", getattr(broker, "name", type(broker).__name__)),
+                len(symbols or []),
+                int(available_slots or 0),
+                scored,
+                entries,
+                blocked,
+                final_reason,
+                _top_reason(gate_rejections),
+                _top_reason(getattr(self, "reject_reason_counts", {})),
+                _top_reason(getattr(self, "veto_reason_counts", {})),
+                elapsed_ms,
+            )
+            print(f"[NIJA-PRINT] PHASE3_TERMINAL_SUMMARY marker=20260704a scored={scored} entered={entries} blocked={blocked} reason={final_reason}", flush=True)
+
+    _phase3_scan_and_enter_with_summary._nija_phase3_terminal_summary_every_cycle = True  # type: ignore[attr-defined]
+    _phase3_scan_and_enter_with_summary.__wrapped__ = original  # type: ignore[attr-defined]
+    cls._phase3_scan_and_enter = _phase3_scan_and_enter_with_summary
+    logger.warning("PHASE3_TERMINAL_SUMMARY_PATCHED marker=20260704a module=%s", getattr(module, "__name__", "<unknown>"))
 
 
 def _patch_module(module: ModuleType) -> None:
@@ -595,7 +641,6 @@ def _patch_module(module: ModuleType) -> None:
     name = key[0]
     if key in _PATCHED_MODULES and name not in {"bot.broker_integration", "broker_integration"}:
         return
-
     if name in {"bot.tier_config", "tier_config"}:
         _patch_tier_config(module)
     elif name in {"bot.position_sizer", "position_sizer"}:
@@ -608,7 +653,8 @@ def _patch_module(module: ModuleType) -> None:
         _patch_exchange_order_compiler(module)
     elif name in {"bot.ecel_execution_compiler", "ecel_execution_compiler"}:
         _patch_ecel(module)
-
+    elif name in {"bot.nija_core_loop", "nija_core_loop"}:
+        _patch_core_loop(module)
     _PATCHED_MODULES.add(key)
 
 
@@ -620,11 +666,7 @@ def _patch_loaded_modules() -> None:
             try:
                 _patch_module(module)
             except Exception as exc:
-                logger.warning(
-                    "KRAKEN_EXECUTION_FLOOR_MODULE_PATCH_FAILED module=%s err=%s",
-                    getattr(module, "__name__", "<unknown>"),
-                    exc,
-                )
+                logger.warning("KRAKEN_EXECUTION_FLOOR_MODULE_PATCH_FAILED module=%s err=%s", getattr(module, "__name__", "<unknown>"), exc)
 
 
 def install_import_hook() -> None:
@@ -634,7 +676,6 @@ def install_import_hook() -> None:
     if _ORIGINAL_IMPORT is not None:
         _patch_loaded_modules()
         return
-
     _ORIGINAL_IMPORT = builtins.__import__
 
     def import_hook(name: str, globals: Any = None, locals: Any = None, fromlist: tuple = (), level: int = 0):
@@ -647,11 +688,7 @@ def install_import_hook() -> None:
 
     builtins.__import__ = import_hook  # type: ignore[assignment]
     _patch_loaded_modules()
-    logger.warning(
-        "KRAKEN_EXECUTION_FLOOR_GUARD_INSTALLED final_floor=$%.2f target_quote=$%.2f",
-        float(_final_floor_usd()),
-        float(_target_quote_usd()),
-    )
+    logger.warning("KRAKEN_EXECUTION_FLOOR_GUARD_INSTALLED final_floor=$%.2f target_quote=$%.2f", float(_final_floor_usd()), float(_target_quote_usd()))
 
 
 __all__ = ["install_import_hook"]
