@@ -10,6 +10,12 @@ fallback payload can still return a tp1 that is below ExecutionEngine's hard
 minimum take-profit geometry. This patch wraps NijaCoreLoop's fallback payload
 builder after the existing payload repair and raises fallback tp targets above
 the hard minimum without loosening the execution gate.
+
+2026-07-04 runtime repair: RegimeDetector.adjust_take_profit_levels() accepted
+only dict TP ladders and called .items(). Native strategy analysis can pass a
+list returned by RiskManager.calculate_take_profit_levels(), causing
+"'list' object has no attribute 'items'" after a valid size/SL is produced.
+This patch preserves dict behavior and adds list/tuple/scalar compatibility.
 """
 
 from __future__ import annotations
@@ -26,9 +32,11 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger("nija.fallback_take_profit_geometry_repair")
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
+_REGIME_TP_PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
 _WRAP_ATTR = "_nija_fallback_take_profit_geometry_repair_wrapped"
+_REGIME_TP_WRAP_ATTR = "_nija_regime_take_profit_levels_list_safe_wrapped_v20260704a"
 
 # ExecutionEngine requires tp_pct >= 1.000%. Use a small buffer so float/rounding
 # cannot put fallback tp1 right back on the rejection boundary.
@@ -164,6 +172,79 @@ def _install_on_module(module: ModuleType) -> bool:
     return True
 
 
+def _adjust_tp_value(value: Any, multiplier: float) -> Any:
+    if isinstance(value, (int, float)):
+        return value * multiplier
+    try:
+        # Preserve numeric strings if any legacy caller emits them.
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return float(stripped) * multiplier
+    except Exception:
+        pass
+    return value
+
+
+def _install_regime_tp_on_module(module: ModuleType) -> bool:
+    global _REGIME_TP_PATCHED
+    cls = getattr(module, "RegimeDetector", None)
+    if not isinstance(cls, type):
+        return False
+    original = getattr(cls, "adjust_take_profit_levels", None)
+    if not callable(original):
+        return False
+    if _wrapper_chain_has_attr(original, _REGIME_TP_WRAP_ATTR):
+        _REGIME_TP_PATCHED = True
+        return True
+
+    def _patched_adjust_take_profit_levels(self: Any, regime: Any, base_tp_levels: Any) -> Any:
+        params = self.get_regime_parameters(regime)
+        multiplier = params.get("take_profit_multiplier", 1.0) if isinstance(params, dict) else 1.0
+        try:
+            multiplier = float(multiplier or 1.0)
+        except Exception:
+            multiplier = 1.0
+
+        if isinstance(base_tp_levels, dict):
+            return {level: _adjust_tp_value(price, multiplier) for level, price in base_tp_levels.items()}
+        if isinstance(base_tp_levels, list):
+            adjusted = [_adjust_tp_value(price, multiplier) for price in base_tp_levels]
+            logger.info(
+                "REGIME_TP_LIST_NORMALIZED marker=20260704a regime=%s count=%d multiplier=%.4f",
+                getattr(regime, "value", regime),
+                len(adjusted),
+                multiplier,
+            )
+            return adjusted
+        if isinstance(base_tp_levels, tuple):
+            adjusted_tuple = tuple(_adjust_tp_value(price, multiplier) for price in base_tp_levels)
+            logger.info(
+                "REGIME_TP_TUPLE_NORMALIZED marker=20260704a regime=%s count=%d multiplier=%.4f",
+                getattr(regime, "value", regime),
+                len(adjusted_tuple),
+                multiplier,
+            )
+            return adjusted_tuple
+
+        adjusted_scalar = _adjust_tp_value(base_tp_levels, multiplier)
+        logger.info(
+            "REGIME_TP_SCALAR_NORMALIZED marker=20260704a regime=%s input_type=%s multiplier=%.4f",
+            getattr(regime, "value", regime),
+            type(base_tp_levels).__name__,
+            multiplier,
+        )
+        return adjusted_scalar
+
+    setattr(_patched_adjust_take_profit_levels, _REGIME_TP_WRAP_ATTR, True)
+    setattr(_patched_adjust_take_profit_levels, "__wrapped__", original)
+    setattr(cls, "adjust_take_profit_levels", _patched_adjust_take_profit_levels)
+    _REGIME_TP_PATCHED = True
+    logger.warning("REGIME_TP_LEVELS_LIST_SAFE_PATCHED marker=20260704a module=%s", getattr(module, "__name__", "<unknown>"))
+    print(f"[NIJA-PRINT] REGIME_TP_LEVELS_LIST_SAFE_PATCHED marker=20260704a | module={getattr(module, '__name__', '<unknown>')}", flush=True)
+    return True
+
+
 def _try_patch_loaded() -> bool:
     patched = False
     for name, module in list(sys.modules.items()):
@@ -171,6 +252,8 @@ def _try_patch_loaded() -> bool:
             continue
         if name in {"bot.nija_core_loop", "nija_core_loop"} or hasattr(module, "NijaCoreLoop"):
             patched = _install_on_module(module) or patched
+        if name in {"bot.market_regime_detector", "market_regime_detector"} or hasattr(module, "RegimeDetector"):
+            patched = _install_regime_tp_on_module(module) or patched
     return patched
 
 
@@ -186,29 +269,57 @@ def _start_monitor() -> None:
         while time.time() < deadline:
             patched_any = _try_patch_loaded() or patched_any
             time.sleep(0.25)
-        logger.warning("FORCED_FALLBACK_TP_GEOMETRY_REPAIR_MONITOR_COMPLETE patched=%s patched_any=%s", _PATCHED, patched_any)
+        logger.warning(
+            "FORCED_FALLBACK_TP_GEOMETRY_REPAIR_MONITOR_COMPLETE patched=%s regime_tp_patched=%s patched_any=%s",
+            _PATCHED,
+            _REGIME_TP_PATCHED,
+            patched_any,
+        )
 
     threading.Thread(target=_monitor, name="fallback-take-profit-geometry-repair-monitor", daemon=True).start()
     logger.warning("FORCED_FALLBACK_TP_GEOMETRY_REPAIR_MONITOR_STARTED")
+
+
+def _eager_import_regime_detector() -> None:
+    importer = _ORIGINAL_IMPORT_MODULE or importlib.import_module
+    for name in ("bot.market_regime_detector", "market_regime_detector"):
+        try:
+            module = importer(name)
+            _install_regime_tp_on_module(module)
+            return
+        except Exception:
+            continue
 
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
     with _INSTALL_LOCK:
         _try_patch_loaded()
+        if _ORIGINAL_IMPORT_MODULE is None:
+            _ORIGINAL_IMPORT_MODULE = importlib.import_module
+        _eager_import_regime_detector()
         _start_monitor()
-        if _ORIGINAL_IMPORT_MODULE is not None:
-            logger.warning("FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+        if getattr(importlib.import_module, "_nija_fallback_tp_import_hook_v20260704a", False):
+            logger.warning(
+                "FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_COMPLETE already_installed=True patched=%s regime_tp_patched=%s",
+                _PATCHED,
+                _REGIME_TP_PATCHED,
+            )
             return
-
-        _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
         def _wrapped_import_module(name: str, package: str | None = None):
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
             if name in {"bot.nija_core_loop", "nija_core_loop"} or hasattr(module, "NijaCoreLoop"):
                 _install_on_module(module)
+            if name in {"bot.market_regime_detector", "market_regime_detector"} or hasattr(module, "RegimeDetector"):
+                _install_regime_tp_on_module(module)
             _try_patch_loaded()
             return module
 
+        setattr(_wrapped_import_module, "_nija_fallback_tp_import_hook_v20260704a", True)
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_COMPLETE patched=%s", _PATCHED)
+        logger.warning(
+            "FORCED_FALLBACK_TP_GEOMETRY_REPAIR_INSTALL_COMPLETE patched=%s regime_tp_patched=%s",
+            _PATCHED,
+            _REGIME_TP_PATCHED,
+        )
