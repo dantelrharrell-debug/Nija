@@ -11,11 +11,12 @@ protection. It only lets the existing execution pipeline continue past a stale
 state-machine dispatch boolean when the canonical runtime state is already
 LIVE_ACTIVE and writer/capital authority is present.
 
-2026-07-04: also normalize blank broker results into soft rejects. Live logs
-showed the pipeline reaching ORDER ACCEPTED ATTEMPT, then returning an empty
-status/error pair. That is a broker/adapter empty-response failure, not proof
-that an invalid ECEL-compiled order escaped. The order still fails, but the
-scanner must not crash execute_entry with SystemError for an empty result.
+2026-07-04: also normalize blank broker results and broker-layer authority
+scope misses into soft/non-exchange rejects. Live logs showed an internal
+``dispatch.enabled``/``dispatch_scope_missing`` authority block being counted as
+an exchange hard reject, tripping the exchange kill-switch after 1/1 fake
+rejection and raising ``ECEL FAILURE — INVALID ORDER ESCAPED``. That is not a
+broker market reject and must not crash the scanner or halt the exchange.
 """
 
 from __future__ import annotations
@@ -35,8 +36,9 @@ _PATCHED = False
 _MONITOR_STARTED = False
 _INSTALL_LOCK = threading.Lock()
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
-_GATE_WRAP_ATTR = "_nija_execution_pipeline_gate_repair_wrapped_v20260704c"
-_REJECT_WRAP_ATTR = "_nija_execution_pipeline_empty_broker_reject_wrapped_v20260704c"
+_MARKER = "20260704d"
+_GATE_WRAP_ATTR = "_nija_execution_pipeline_gate_repair_wrapped_v20260704d"
+_REJECT_WRAP_ATTR = "_nija_execution_pipeline_non_exchange_reject_wrapped_v20260704d"
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -135,6 +137,23 @@ def _blank_broker_error(error: Any) -> bool:
     }
 
 
+def _non_exchange_authority_error(error: Any) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    markers = (
+        "execution authority violation",
+        "executionauthority reject",
+        "execution_authority_blocked",
+        "dispatch.enabled",
+        "dispatch_scope_missing",
+        "broker order submission blocked",
+        "order submission blocked (reason=dispatch.enabled)",
+        "fatal: execution authority violation",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _install_on_module(module: ModuleType) -> bool:
     global _PATCHED
     cls = getattr(module, "ExecutionPipeline", None)
@@ -166,7 +185,8 @@ def _install_on_module(module: ModuleType) -> bool:
                             setattr(sm, "can_dispatch_trades", _dispatch_true)
                         patched_dispatch = True
                         logger.critical(
-                            "EXECUTION_PIPELINE_GATE_REPAIR_APPLIED marker=20260704c symbol=%s side=%s state=%s token_prefix=%s generation=%s",
+                            "EXECUTION_PIPELINE_GATE_REPAIR_APPLIED marker=%s symbol=%s side=%s state=%s token_prefix=%s generation=%s",
+                            _MARKER,
                             getattr(request, "symbol", "UNKNOWN"),
                             getattr(request, "side", "UNKNOWN"),
                             state,
@@ -177,7 +197,8 @@ def _install_on_module(module: ModuleType) -> bool:
                     logger.warning("EXECUTION_PIPELINE_GATE_REPAIR dispatch_probe_failed err=%s", exc)
             elif state == "LIVE_ACTIVE":
                 logger.critical(
-                    "EXECUTION_PIPELINE_GATE_REPAIR_WAITING marker=20260704c detail=%s symbol=%s side=%s",
+                    "EXECUTION_PIPELINE_GATE_REPAIR_WAITING marker=%s detail=%s symbol=%s side=%s",
+                    _MARKER,
                     detail,
                     getattr(request, "symbol", "UNKNOWN"),
                     getattr(request, "side", "UNKNOWN"),
@@ -200,27 +221,50 @@ def _install_on_module(module: ModuleType) -> bool:
     original_reject = getattr(cls, "_on_order_rejected", None)
     if callable(original_reject) and not _wrapper_chain_has_attr(original_reject, _REJECT_WRAP_ATTR):
         def _patched_on_order_rejected(self: Any, request: Any, error: Any, *args: Any, **kwargs: Any) -> Any:
+            symbol = getattr(request, "symbol", "unknown")
+            side = getattr(request, "side", "unknown")
             if _blank_broker_error(error):
-                symbol = getattr(request, "symbol", "unknown")
-                side = getattr(request, "side", "unknown")
                 logger.warning(
-                    "EXECUTION_PIPELINE_EMPTY_BROKER_RESULT_SOFT_REJECT marker=20260704c symbol=%s side=%s error=%r returning_without_system_error=true",
+                    "EXECUTION_PIPELINE_EMPTY_BROKER_RESULT_SOFT_REJECT marker=%s symbol=%s side=%s error=%r returning_without_system_error=true",
+                    _MARKER,
                     symbol,
                     side,
                     error,
                 )
                 print(
-                    f"[NIJA-PRINT] EXECUTION_PIPELINE_EMPTY_BROKER_RESULT_SOFT_REJECT marker=20260704c | "
+                    f"[NIJA-PRINT] EXECUTION_PIPELINE_EMPTY_BROKER_RESULT_SOFT_REJECT marker={_MARKER} | "
                     f"symbol={symbol} side={side} returning_without_system_error=true",
                     flush=True,
                 )
                 try:
                     emit = getattr(self, "_emit_execution_rejection_telemetry", None)
                     if callable(emit):
-                        emit(symbol=symbol, side=side, reason="broker_empty_response")
+                        emit(symbol=symbol, side=side, reason="execution_authority_blocked:broker_empty_response")
                 except Exception:
                     pass
                 return None
+
+            if _non_exchange_authority_error(error):
+                logger.warning(
+                    "EXECUTION_PIPELINE_AUTHORITY_SCOPE_SOFT_REJECT marker=%s symbol=%s side=%s error=%r returning_without_system_error=true exchange_telemetry=false",
+                    _MARKER,
+                    symbol,
+                    side,
+                    error,
+                )
+                print(
+                    f"[NIJA-PRINT] EXECUTION_PIPELINE_AUTHORITY_SCOPE_SOFT_REJECT marker={_MARKER} | "
+                    f"symbol={symbol} side={side} returning_without_system_error=true exchange_telemetry=false",
+                    flush=True,
+                )
+                try:
+                    emit = getattr(self, "_emit_execution_rejection_telemetry", None)
+                    if callable(emit):
+                        emit(symbol=symbol, side=side, reason="execution_authority_blocked:dispatch_scope_missing")
+                except Exception:
+                    pass
+                return None
+
             return original_reject(self, request, error, *args, **kwargs)
 
         setattr(_patched_on_order_rejected, _REJECT_WRAP_ATTR, True)
@@ -230,8 +274,8 @@ def _install_on_module(module: ModuleType) -> bool:
 
     if patched_any:
         _PATCHED = True
-        logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_PATCHED marker=20260704c module=%s", getattr(module, "__name__", "<unknown>"))
-        print(f"[NIJA-PRINT] EXECUTION_PIPELINE_GATE_REPAIR_PATCHED marker=20260704c | module={getattr(module, '__name__', '<unknown>')}", flush=True)
+        logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_PATCHED marker=%s module=%s", _MARKER, getattr(module, "__name__", "<unknown>"))
+        print(f"[NIJA-PRINT] EXECUTION_PIPELINE_GATE_REPAIR_PATCHED marker={_MARKER} | module={getattr(module, '__name__', '<unknown>')}", flush=True)
     elif _wrapper_chain_has_attr(getattr(cls, "_enforce_execution_gate", None), _GATE_WRAP_ATTR) or _wrapper_chain_has_attr(getattr(cls, "_on_order_rejected", None), _REJECT_WRAP_ATTR):
         _PATCHED = True
     return _PATCHED
@@ -258,11 +302,11 @@ def _start_module_monitor() -> None:
             if _try_patch_loaded():
                 return
             time.sleep(0.25)
-        logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_MONITOR_EXPIRED marker=20260704c patched=%s", _PATCHED)
+        logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_MONITOR_EXPIRED marker=%s patched=%s", _MARKER, _PATCHED)
 
     thread = threading.Thread(target=_monitor, name="execution-pipeline-gate-repair-monitor", daemon=True)
     thread.start()
-    logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_MONITOR_STARTED marker=20260704c")
+    logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_MONITOR_STARTED marker=%s", _MARKER)
 
 
 def install_import_hook() -> None:
@@ -271,7 +315,7 @@ def install_import_hook() -> None:
         _try_patch_loaded()
         _start_module_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
-            logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_COMPLETE marker=20260704c already_installed=True patched=%s", _PATCHED)
+            logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_COMPLETE marker=%s already_installed=True patched=%s", _MARKER, _PATCHED)
             return
 
         _ORIGINAL_IMPORT_MODULE = importlib.import_module
@@ -283,4 +327,4 @@ def install_import_hook() -> None:
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_COMPLETE marker=20260704c patched=%s", _PATCHED)
+        logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_COMPLETE marker=%s patched=%s", _MARKER, _PATCHED)
