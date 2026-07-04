@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -47,6 +48,39 @@ _TRANSIENT_ERROR_SUBSTRINGS: FrozenSet[str] = frozenset({
     "429",
 })
 
+# Internal/non-exchange blockers must never poison the strategy-wide
+# deterministic counter.  These failures mean the order did not reach the
+# exchange boundary, or the observer is seeing its own suppression message.
+# Counting them as deterministic caused live runs to enter a self-reinforcing
+# 300-second strategy cooldown even after the original dispatch/authority bug
+# had been repaired.
+_NEUTRAL_ERROR_SUBSTRINGS: FrozenSet[str] = frozenset({
+    "orderfeasibility deny: [deterministic] strategy suppressed",
+    "strategy suppressed for",
+    "dispatch.enabled",
+    "dispatch_scope_missing",
+    "dispatch scope missing",
+    "dispatch_scope_bridged",
+    "execution authority violation",
+    "executionauthority reject",
+    "execution_authority_blocked",
+    "execution_authority_runtime",
+    "broker order submission blocked",
+    "order submission blocked (reason=dispatch.enabled)",
+    "fatal: execution authority violation",
+    "runtime authority convergence lost",
+    "seak halted",
+    "state_machine=emergency_stop",
+    "blocked by state_machine",
+    "trading blocked",
+    "broker_empty_response",
+    "empty broker response",
+    "empty broker result",
+    "unknown exchange rejection",
+    "ecel failure — invalid order escaped",
+    "ecel failure - invalid order escaped",
+})
+
 # Deterministic errors indicate a logic or geometry problem that will not
 # resolve by itself.  The strategy is suppressed for a longer window
 # (DETERMINISTIC_SUPPRESS_S) after repeated failures.
@@ -82,17 +116,27 @@ _DETERMINISTIC_ERROR_SUBSTRINGS: FrozenSet[str] = frozenset({
     "order_compilation",
 })
 
-# Suppression durations
-TRANSIENT_SUPPRESS_S: float = 5.0    # skip symbol for 5 s, then retry
-DETERMINISTIC_SUPPRESS_S: float = 300.0  # suppress strategy for 5 min
+# Suppression durations.  Keep defaults conservative but configurable so live
+# ops can tune without a code change.
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+TRANSIENT_SUPPRESS_S: float = max(0.0, _float_env("NIJA_OBSERVER_TRANSIENT_SUPPRESS_S", 5.0))
+DETERMINISTIC_SUPPRESS_S: float = max(5.0, _float_env("NIJA_OBSERVER_DETERMINISTIC_SUPPRESS_S", 300.0))
 
 
 def classify_error(error: str) -> str:
-    """Return ``'transient'``, ``'deterministic'``, or ``'unknown'`` for *error*.
+    """Return ``'transient'``, ``'neutral'``, ``'deterministic'``, or ``'unknown'``.
 
     Classification is case-insensitive substring matching.  Transient patterns
     are checked first so that a generic "timeout" in an ACK-timeout message is
-    not accidentally promoted to deterministic.
+    not accidentally promoted to deterministic.  Neutral internal blockers are
+    checked before deterministic patterns so repaired authority/dispatch issues
+    cannot trigger strategy-wide deterministic cooldowns.
     """
     if not error:
         return "unknown"
@@ -100,6 +144,9 @@ def classify_error(error: str) -> str:
     for substr in _TRANSIENT_ERROR_SUBSTRINGS:
         if substr in low:
             return "transient"
+    for substr in _NEUTRAL_ERROR_SUBSTRINGS:
+        if substr in low:
+            return "neutral"
     for substr in _DETERMINISTIC_ERROR_SUBSTRINGS:
         if substr in low:
             return "deterministic"
@@ -114,10 +161,13 @@ def classify_error(error: str) -> str:
 class StrategyExecutionStats:
     successes: int = 0
     failures: int = 0
-    # Only deterministic (or unknown) failures count toward consecutive_failures.
-    # Transient failures are tracked separately and never trigger long suppression.
+    # Only deterministic failures count toward consecutive_failures.
+    # Transient, neutral, and unknown failures are tracked separately and never
+    # trigger long strategy suppression.
     consecutive_failures: int = 0
     consecutive_transient_failures: int = 0
+    consecutive_neutral_failures: int = 0
+    consecutive_unknown_failures: int = 0
     allocation_multiplier: float = 1.0
     suppressed_until: float = 0.0
     # Per-symbol transient suppression: symbol -> suppressed_until timestamp
@@ -141,6 +191,10 @@ class ExecutionObserver:
     retry.  Transient failures do **not** increment the consecutive-failure
     counter that drives long-term strategy suppression.
 
+    **Neutral/internal errors** (dispatch-scope misses, authority convergence,
+    observer self-suppression messages, blank broker results that never reached
+    a real exchange boundary) do not trigger strategy suppression.
+
     **Deterministic errors** (``order_compilation_failed``,
     ``target_geometry_tp_too_small``, ``quantity_rounds_to_zero``,
     ``no_contract_rule``, ``below_min_notional``, etc.) indicate a logic or
@@ -148,13 +202,12 @@ class ExecutionObserver:
     ``DETERMINISTIC_CONSECUTIVE_THRESHOLD`` (default 3) consecutive
     deterministic failures the strategy is suppressed for
     :data:`DETERMINISTIC_SUPPRESS_S` seconds (default 300 s).
-
-    This distinction prevents Nija from losing the entire strategy due to a
-    temporary broker timeout or Redis sync delay.
     """
 
     # Number of consecutive deterministic failures before long suppression.
-    DETERMINISTIC_CONSECUTIVE_THRESHOLD: int = 3
+    DETERMINISTIC_CONSECUTIVE_THRESHOLD: int = int(
+        _float_env("NIJA_OBSERVER_DETERMINISTIC_THRESHOLD", 3.0)
+    )
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -163,7 +216,6 @@ class ExecutionObserver:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     def is_strategy_suppressed(self, strategy: str) -> Tuple[bool, str]:
         """Return ``(suppressed, reason)`` for the given strategy name."""
         if not strategy:
@@ -179,6 +231,25 @@ class ExecutionObserver:
                     "after repeated deterministic failures"
                 )
             return False, ""
+
+    def reset_strategy_suppression(self, strategy: str, *, reason: str = "manual_reset") -> bool:
+        """Clear strategy-wide suppression without touching broker/risk gates."""
+        if not strategy:
+            return False
+        with self._lock:
+            stats = self._stats.get(strategy)
+            if stats is None:
+                return False
+            if stats.suppressed_until <= 0 and stats.consecutive_failures <= 0:
+                return False
+            stats.suppressed_until = 0.0
+            stats.consecutive_failures = 0
+            logger.warning(
+                "ExecutionObserver: reset strategy suppression strategy=%s reason=%s",
+                strategy,
+                reason,
+            )
+            return True
 
     def is_symbol_transient_suppressed(self, strategy: str, symbol: str) -> Tuple[bool, str]:
         """Return ``(suppressed, reason)`` for a per-symbol transient window.
@@ -233,7 +304,7 @@ class ExecutionObserver:
             ``True`` when the order was filled, ``False`` on any rejection.
         error:
             Raw error string from the broker or pipeline.  Used to classify
-            the failure as transient or deterministic.
+            the failure as transient, neutral, deterministic, or unknown.
         """
         if not strategy:
             return
@@ -247,6 +318,8 @@ class ExecutionObserver:
                 stats.successes += 1
                 stats.consecutive_failures = 0
                 stats.consecutive_transient_failures = 0
+                stats.consecutive_neutral_failures = 0
+                stats.consecutive_unknown_failures = 0
                 stats.suppressed_until = 0.0
                 # Clear any per-symbol transient suppression on success.
                 stats.transient_symbol_suppressed_until.pop(symbol, None)
@@ -270,8 +343,48 @@ class ExecutionObserver:
                     stats.consecutive_transient_failures,
                 )
 
+            elif error_class == "neutral":
+                # Internal/non-exchange failure: do not suppress strategy or symbol.
+                # Clear deterministic streak because this failure cannot prove the
+                # strategy itself is invalid.
+                stats.consecutive_neutral_failures += 1
+                if stats.consecutive_failures:
+                    logger.warning(
+                        "🟦 [NEUTRAL] ExecutionObserver: clearing deterministic streak for strategy=%s "
+                        "after non-exchange/internal error=%r previous_det_failures=%d",
+                        strategy,
+                        error,
+                        stats.consecutive_failures,
+                    )
+                stats.consecutive_failures = 0
+                logger.info(
+                    "🟦 [NEUTRAL] ExecutionObserver: strategy=%s symbol=%s side=%s "
+                    "internal/non-exchange error=%r — no strategy suppression",
+                    strategy,
+                    symbol,
+                    side,
+                    error,
+                )
+
+            elif error_class == "unknown":
+                # Unknown is not proof of deterministic strategy failure. Apply a
+                # short symbol-only pause to avoid a hot loop, but never trip the
+                # strategy-wide deterministic cooldown.
+                stats.consecutive_unknown_failures += 1
+                until = time.time() + TRANSIENT_SUPPRESS_S
+                stats.transient_symbol_suppressed_until[symbol] = until
+                logger.warning(
+                    "🟨 [UNKNOWN] ExecutionObserver: strategy=%s symbol=%s side=%s error=%r — "
+                    "symbol-only %.0fs pause, strategy suppression NOT triggered",
+                    strategy,
+                    symbol,
+                    side,
+                    error,
+                    TRANSIENT_SUPPRESS_S,
+                )
+
             else:
-                # Deterministic (or unknown) failure: count toward long suppression.
+                # Deterministic failure: count toward long suppression.
                 stats.failures += 1
                 stats.consecutive_failures += 1
                 if stats.consecutive_failures >= self.DETERMINISTIC_CONSECUTIVE_THRESHOLD:
@@ -299,8 +412,8 @@ class ExecutionObserver:
                     )
 
             # Recompute allocation multiplier from overall success rate.
-            # Transient failures are excluded from the success-rate denominator
-            # so that infrastructure blips do not erode the allocation weight.
+            # Transient/neutral/unknown failures are excluded from the success-rate
+            # denominator so infrastructure/internal blips do not erode allocation.
             total = stats.successes + stats.failures  # failures = deterministic only
             success_rate = (stats.successes / total) if total > 0 else 0.5
             stats.allocation_multiplier = max(0.5, min(1.5, 0.5 + success_rate))
@@ -308,7 +421,7 @@ class ExecutionObserver:
             logger.info(
                 "ExecutionObserver: strategy=%s symbol=%s side=%s success=%s "
                 "size=$%.2f alloc_mult=%.2f det_failures=%d transient_failures=%d "
-                "error_class=%s error=%s",
+                "neutral_failures=%d unknown_failures=%d error_class=%s error=%s",
                 strategy,
                 symbol,
                 side,
@@ -317,6 +430,8 @@ class ExecutionObserver:
                 stats.allocation_multiplier,
                 stats.consecutive_failures,
                 stats.consecutive_transient_failures,
+                stats.consecutive_neutral_failures,
+                stats.consecutive_unknown_failures,
                 error_class,
                 error or "none",
             )
