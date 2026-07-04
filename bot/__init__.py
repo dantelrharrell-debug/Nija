@@ -249,6 +249,7 @@ _PATCH_HOOKS = (
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
     ("executable_trade_runtime_patch", "Executable trade runtime repair"),
+    ("execution_route_integrity_patch", "Execution route integrity guard"),
     ("okx_runtime_patch", "OKX runtime patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
     ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
