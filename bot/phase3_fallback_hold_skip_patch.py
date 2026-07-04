@@ -226,10 +226,16 @@ def _patch_core_loop_phase3(module: ModuleType, cls: type, *, label: str) -> boo
         logger.warning("PHASE3_FALLBACK_HOLD_SKIP_FILE_SOURCE_FAILED marker=20260703z err=%s", exc)
         return False
 
-    needle = "success = self.apex.execute_action(analysis, sig.symbol)"
+    # Prefer to inject the hold-skip guard before the SUBMITTING ORDER log so
+    # that blocked fallback payloads never produce fake order-attempt log lines.
+    needle = "logger.critical(\n                    \"🚀 [CoreLoop] SUBMITTING ORDER | symbol=%s side=%s action=%s \""
     if needle not in source:
-        logger.warning("PHASE3_FALLBACK_HOLD_SKIP_PHASE3_NEEDLE_MISSING marker=20260703z file_source=true")
-        return False
+        # Fallback: inject immediately before execute_action if the submit log
+        # line is not found (e.g. after a future refactor).
+        needle = "success = self.apex.execute_action(analysis, sig.symbol)"
+        if needle not in source:
+            logger.warning("PHASE3_FALLBACK_HOLD_SKIP_PHASE3_NEEDLE_MISSING marker=20260703z file_source=true")
+            return False
 
     patched_source = source.replace(needle, _SKIP_BLOCK + "                " + needle, 1)
 

@@ -2969,17 +2969,6 @@ class NijaCoreLoop:
                 if fallback_active and action in ("enter_long", "enter_short"):
                     missing = {"position_size", "entry_price", "stop_loss", "take_profit"} - set(analysis.keys())
                     if missing:
-                        fallback_payload = self._build_forced_fallback_entry_analysis(
-                            df=df,
-                            sig=sig,
-                            snapshot=snapshot,
-                            action=action,
-                            existing_reason=analysis.get("reason", ""),
-                        )
-                        analysis.update(fallback_payload)
-                        # The fallback payload is already sized conservatively;
-                        # avoid multiplying it below broker minimum notional.
-                        sig.position_multiplier = 1.0
                         logger.info(
                             "⚡ [CoreLoop] Building fallback entry payload for %s "
                             "(missing fields: %s, force_trade=%s)",
@@ -3006,6 +2995,31 @@ class NijaCoreLoop:
                             # build a minimal hardcoded payload directly so that
                             # execute_action() is still called rather than silently
                             # skipping this signal.
+                            #
+                            # SAFETY: Never bypass a live-capital illiquid policy
+                            # block via the emergency payload path.  If the error
+                            # message indicates an illiquid policy rejection, treat
+                            # it as a hard block regardless of FORCE_TRADE mode.
+                            _fallback_err_msg = str(_fallback_err).lower()
+                            _is_illiquid_block = (
+                                "illiquid" in _fallback_err_msg
+                                or "competitive profitability policy" in _fallback_err_msg
+                                or "liquidity" in _fallback_err_msg
+                                or "fallback_illiquid_policy_blocked" in _fallback_err_msg
+                            )
+                            if _is_illiquid_block:
+                                logger.warning(
+                                    "🚫 [CoreLoop] Illiquid policy hard block for %s (%s) — "
+                                    "emergency payload bypass suppressed (live-capital safety).",
+                                    sig.symbol,
+                                    _fallback_err,
+                                )
+                                blocked += 1
+                                _funnel["profitability"] = (
+                                    "FAIL",
+                                    f"ILLIQUID_POLICY_HARD_BLOCK:{_fallback_err}",
+                                )
+                                continue
                             if _force_trade_bypass:
                                 logger.warning(
                                     "⚡ [FORCE_TRADE] _build_forced_fallback_entry_analysis "

@@ -703,6 +703,17 @@ class NijaAIEngine:
                 except Exception:
                     pass
 
+            # Propagate expected_win_rate into metadata so downstream
+            # fallback payload repair can read it without re-estimating.
+            # Estimate: floor=0.52, cap=0.68, scaled linearly from score.
+            _score_norm = float(np.clip(composite / 100.0, 0.0, 1.0))
+            _wr_floor = float(os.getenv("NIJA_FALLBACK_ESTIMATED_WIN_RATE_FLOOR", "0.52"))
+            _wr_cap   = float(os.getenv("NIJA_FALLBACK_ESTIMATED_WIN_RATE_CAP",   "0.68"))
+            breakdown["expected_win_rate"] = round(
+                max(_wr_floor, min(_wr_cap, 0.45 + 0.30 * _score_norm)), 6
+            )
+            breakdown["expected_win_rate_source"] = "ai_engine_score_estimate"
+
             return AIEngineSignal(
                 symbol=symbol,
                 side=side,
