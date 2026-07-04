@@ -6,12 +6,14 @@ Prevents order rejections due to:
 - Pair minimums
 - Quote currency minimums
 - Fee-adjusted sizing
+- Post-conversion / post-rounding notional drift
 
 Also provides utilities for verifying per-API key execution.
 """
 
 import logging
 import os
+from decimal import Decimal, ROUND_UP
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger("nija.kraken_validator")
@@ -24,10 +26,15 @@ SEPARATOR = "=" * 70
 # Note: These minimums are subject to change. Verify against current Kraken documentation.
 #
 # Kraken minimum notional enforcement.
-# Kraken rejects orders below ~$15-20 USD on most pairs (ECEL reject: BELOW_MIN_NOTIONAL).
-# ADA-USD and similar altcoin pairs require at least $15; $20 provides a safe buffer
-# that covers all pairs and absorbs minor price fluctuations at order time.
-KRAKEN_MINIMUM_ORDER_USD = 20.00  # Kraken minimum notional ($20 — above exchange hard floor)
+# Kraken rejects orders below ~$15-20 USD on many pairs (ECEL reject: BELOW_MIN_NOTIONAL).
+# $20 is treated as the raw operational floor; a small configurable quote buffer is
+# applied on top of this before final validation so NIJA never submits an order
+# exactly on the minimum where fee/headroom/rounding can push it below the floor.
+KRAKEN_MINIMUM_ORDER_USD = 20.00
+
+# Round quote amounts upward to the nearest cent when computing safe minimums.
+_QUOTE_STEP_USD = Decimal("0.01")
+_VOLUME_STEP = Decimal("0.000000000001")
 
 KRAKEN_MINIMUMS = {
     # Major pairs
@@ -65,6 +72,57 @@ def _resolve_buy_buffer_pct() -> float:
         value = 0.004
     return min(max(value, 0.0), 0.05)
 
+
+def _resolve_min_quote_buffer_pct() -> float:
+    """Return the exchange-minimum quote buffer used before final Kraken validation."""
+    raw = os.getenv("KRAKEN_MIN_QUOTE_BUFFER_PCT", os.getenv("NIJA_KRAKEN_MIN_QUOTE_BUFFER_PCT", "0.03"))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0.03
+    # Keep operator overrides bounded: enough room for rounding/slippage, not enough
+    # to accidentally oversize small accounts.
+    return min(max(value, 0.0), 0.10)
+
+
+def _decimal(value: float) -> Decimal:
+    return Decimal(str(value))
+
+
+def _round_up(value: Decimal, step: Decimal) -> Decimal:
+    if step <= 0:
+        return value
+    return (value / step).to_integral_value(rounding=ROUND_UP) * step
+
+
+def get_safe_min_quote(raw_min_quote: float) -> float:
+    """Return the safe quote minimum with the configured buffer applied.
+
+    Example: raw $20.00 with the default 3% buffer -> $20.60.
+    """
+    raw = _decimal(raw_min_quote)
+    multiplier = Decimal("1") + _decimal(_resolve_min_quote_buffer_pct())
+    return float(_round_up(raw * multiplier, _QUOTE_STEP_USD))
+
+
+def get_pair_safe_minimums(pair: str) -> Dict[str, float]:
+    """Return Kraken pair minimums with the quote side buffered for live orders."""
+    minimums = get_pair_minimums(pair)
+    return {
+        'min_base': float(minimums['min_base']),
+        'min_quote': get_safe_min_quote(float(minimums['min_quote'])),
+        'raw_min_quote': float(minimums['min_quote']),
+        'quote_buffer_pct': _resolve_min_quote_buffer_pct(),
+    }
+
+
+def _volume_for_quote(quote_value: float, price: float) -> float:
+    if price <= 0:
+        return 0.0
+    volume = _decimal(quote_value) / _decimal(price)
+    return float(_round_up(volume, _VOLUME_STEP))
+
+
 # Exchange-specific minimum order values (USD)
 # Operational floors — above exchange hard minimums to ensure fee-positive trades.
 # Aligned with BROKER_MIN_ORDER_USD in nija_apex_strategy_v71.py.
@@ -99,7 +157,7 @@ def get_pair_minimums(pair: str) -> Dict[str, float]:
         min_cost = market_data.get_minimum_cost(pair)
 
         if min_base is not None:
-            # Use Kraken's actual minimum, but enforce our $10 USD floor for profitability
+            # Use Kraken's actual minimum, but enforce our $20 USD operational floor.
             return {
                 'min_base': min_base,
                 'min_quote': max(min_cost or 0.0, KRAKEN_MINIMUM_ORDER_USD)
@@ -116,7 +174,7 @@ def get_pair_minimums(pair: str) -> Dict[str, float]:
 def validate_order_size(pair: str, volume: float, price: float,
                        side: str = 'buy') -> Tuple[bool, Optional[str]]:
     """
-    Validate order size meets Kraken minimums.
+    Validate order size meets Kraken minimums after conversion and rounding.
 
     Args:
         pair: Kraken pair symbol (e.g., 'XXBTZUSD')
@@ -127,12 +185,17 @@ def validate_order_size(pair: str, volume: float, price: float,
     Returns:
         tuple: (is_valid: bool, error_message: Optional[str])
     """
-    minimums = get_pair_minimums(pair)
-    min_base = minimums['min_base']
-    min_quote = minimums['min_quote']
+    if price <= 0:
+        return False, f"Invalid price {price} for {pair}"
 
-    # Calculate quote currency value
-    quote_value = volume * price
+    minimums = get_pair_minimums(pair)
+    safe_minimums = get_pair_safe_minimums(pair)
+    min_base = float(minimums['min_base'])
+    raw_min_quote = float(minimums['min_quote'])
+    safe_min_quote = float(safe_minimums['min_quote'])
+
+    # Calculate quote currency value after all size conversion/rounding.
+    quote_value = float(volume) * float(price)
 
     # Check base currency minimum
     if volume < min_base:
@@ -141,11 +204,14 @@ def validate_order_size(pair: str, volume: float, price: float,
             f"(minimum base currency)"
         )
 
-    # Check quote currency minimum
-    if quote_value < min_quote:
+    # Check buffered quote currency minimum. This intentionally validates against
+    # a value above the raw exchange floor so an order can never land exactly on
+    # Kraken's minimum after fee/headroom adjustments.
+    if quote_value + 1e-9 < safe_min_quote:
         return False, (
-            f"Order value ${quote_value:.2f} below minimum ${min_quote:.2f} for {pair} "
-            f"(minimum quote currency)"
+            f"Order value ${quote_value:.2f} below safe minimum ${safe_min_quote:.2f} "
+            f"for {pair} (raw minimum ${raw_min_quote:.2f}, "
+            f"buffer {safe_minimums['quote_buffer_pct'] * 100:.2f}%)"
         )
 
     return True, None
@@ -157,6 +223,8 @@ def adjust_size_for_fees(volume: float, price: float, side: str,
     Adjust order size to account for Kraken fees.
 
     IMPORTANT: This returns the effective tradeable volume after accounting for fees.
+    validate_and_adjust_order() may lift this value again if the fee-adjusted volume
+    would otherwise fall below the buffered Kraken notional minimum.
 
     For buys: Reduces volume to ensure we can afford fees with available funds
               (e.g., 1.0 BTC requested → ~0.9984 BTC after 0.16% fee deduction)
@@ -174,9 +242,9 @@ def adjust_size_for_fees(volume: float, price: float, side: str,
     fee_rate = KRAKEN_MAKER_FEE if use_maker_fee else KRAKEN_TAKER_FEE
 
     if side.lower() == 'buy':
-        # For buys, we need to ensure we can afford the fee
-        # Reserve extra quote headroom to absorb fee + minor slippage/rounding
-        # and reduce insufficient-funds rejections on small accounts.
+        # For buys, we need to ensure we can afford the fee. Reserve extra quote
+        # headroom to absorb fee + minor slippage/rounding and reduce
+        # insufficient-funds rejections on small accounts.
         buy_buffer_pct = _resolve_buy_buffer_pct()
         reserve_pct = fee_rate + buy_buffer_pct
         return volume * max(0.0, 1 - reserve_pct)
@@ -188,7 +256,7 @@ def adjust_size_for_fees(volume: float, price: float, side: str,
 def validate_and_adjust_order(pair: str, volume: float, price: float,
                               side: str, ordertype: str = 'market') -> Tuple[bool, float, Optional[str]]:
     """
-    Validate order and adjust for fees if needed.
+    Validate order and adjust for fees / buffered Kraken minimums if needed.
 
     Args:
         pair: Kraken pair symbol
@@ -200,11 +268,32 @@ def validate_and_adjust_order(pair: str, volume: float, price: float,
     Returns:
         tuple: (is_valid: bool, adjusted_volume: float, error_message: Optional[str])
     """
+    if price <= 0:
+        return False, volume, f"Invalid price {price} for {pair}"
+
     # Adjust for fees
     use_maker_fee = (ordertype == 'limit')
     adjusted_volume = adjust_size_for_fees(volume, price, side, use_maker_fee)
 
-    # Validate adjusted size
+    if side.lower() == 'buy':
+        safe_minimums = get_pair_safe_minimums(pair)
+        required_quote_volume = _volume_for_quote(safe_minimums['min_quote'], price)
+        required_base_volume = float(safe_minimums['min_base'])
+        required_volume = max(adjusted_volume, required_quote_volume, required_base_volume)
+
+        if required_volume > adjusted_volume:
+            logger.info(
+                "[KrakenMinNotionalBuffer] lifted BUY volume %.12f → %.12f "
+                "to keep post-conversion notional above $%.2f (raw=$%.2f buffer=%.2f%%)",
+                adjusted_volume,
+                required_volume,
+                safe_minimums['min_quote'],
+                safe_minimums['raw_min_quote'],
+                safe_minimums['quote_buffer_pct'] * 100.0,
+            )
+            adjusted_volume = required_volume
+
+    # Validate adjusted size after all conversion and minimum-lift logic.
     is_valid, error = validate_order_size(pair, adjusted_volume, price, side)
 
     if not is_valid:
@@ -227,6 +316,7 @@ def log_order_validation(pair: str, volume: float, price: float,
         error: Error message if validation failed
     """
     minimums = get_pair_minimums(pair)
+    safe_minimums = get_pair_safe_minimums(pair)
     quote_value = volume * price
 
     if is_valid:
@@ -236,7 +326,10 @@ def log_order_validation(pair: str, volume: float, price: float,
         logger.info(f"   Pair: {pair}")
         logger.info(f"   Side: {side.upper()}")
         logger.info(f"   Volume: {volume:.8f} (min: {minimums['min_base']:.8f})")
-        logger.info(f"   Quote Value: ${quote_value:.2f} (min: ${minimums['min_quote']:.2f})")
+        logger.info(
+            f"   Quote Value: ${quote_value:.2f} "
+            f"(safe min: ${safe_minimums['min_quote']:.2f}, raw min: ${minimums['min_quote']:.2f})"
+        )
         logger.info(SEPARATOR)
     else:
         logger.error(SEPARATOR)
@@ -245,7 +338,10 @@ def log_order_validation(pair: str, volume: float, price: float,
         logger.error(f"   Pair: {pair}")
         logger.error(f"   Side: {side.upper()}")
         logger.error(f"   Volume: {volume:.8f} (min: {minimums['min_base']:.8f})")
-        logger.error(f"   Quote Value: ${quote_value:.2f} (min: ${minimums['min_quote']:.2f})")
+        logger.error(
+            f"   Quote Value: ${quote_value:.2f} "
+            f"(safe min: ${safe_minimums['min_quote']:.2f}, raw min: ${minimums['min_quote']:.2f})"
+        )
         logger.error(f"   Error: {error}")
         logger.error(SEPARATOR)
 
@@ -362,12 +458,12 @@ def validate_exchange_minimum(exchange: str, order_value_usd: float) -> Tuple[bo
     exchange = exchange.lower()
 
     if exchange == "kraken":
-        # Kraken rejects orders below ~$15-20 USD (ECEL reject: BELOW_MIN_NOTIONAL).
-        # $20 floor covers all pairs including ADA-USD and other altcoin pairs.
-        if order_value_usd < KRAKEN_MINIMUM_ORDER_USD:
+        safe_min_quote = get_safe_min_quote(KRAKEN_MINIMUM_ORDER_USD)
+        if order_value_usd < safe_min_quote:
             return False, (
-                f"Kraken order ${order_value_usd:.2f} below ${KRAKEN_MINIMUM_ORDER_USD:.2f} "
-                f"safety buffer (fees + market conditions require buffer above official minimums)"
+                f"Kraken order ${order_value_usd:.2f} below ${safe_min_quote:.2f} "
+                f"safe minimum (raw ${KRAKEN_MINIMUM_ORDER_USD:.2f}, "
+                f"buffer {_resolve_min_quote_buffer_pct() * 100:.2f}%)"
             )
     elif exchange == "coinbase":
         if order_value_usd < COINBASE_MINIMUM_ORDER_USD:
@@ -386,6 +482,8 @@ def validate_exchange_minimum(exchange: str, order_value_usd: float) -> Tuple[bo
 # Export public API
 __all__ = [
     'get_pair_minimums',
+    'get_pair_safe_minimums',
+    'get_safe_min_quote',
     'validate_order_size',
     'adjust_size_for_fees',
     'validate_and_adjust_order',
