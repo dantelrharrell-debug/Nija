@@ -9,6 +9,7 @@ position/risk/exit layers.
 from __future__ import annotations
 
 import builtins
+import importlib
 import logging
 from functools import wraps
 from typing import Any, Dict, Iterable
@@ -184,8 +185,28 @@ def _patch_module(module: Any) -> bool:
     return patched
 
 
+def _install_live_execution_boundary_repair() -> None:
+    try:
+        repair = importlib.import_module("bot.live_execution_boundary_repair_patch")
+    except Exception:
+        try:
+            repair = importlib.import_module("live_execution_boundary_repair_patch")
+        except Exception as exc:
+            logger.warning("LIVE_EXECUTION_BOUNDARY_REPAIR_CHAIN_LOAD_FAILED err=%s", exc)
+            return
+    try:
+        install = getattr(repair, "install_import_hook", None)
+        if callable(install):
+            install()
+            logger.warning("LIVE_EXECUTION_BOUNDARY_REPAIR_CHAIN_INSTALL_REQUESTED")
+    except Exception as exc:
+        logger.warning("LIVE_EXECUTION_BOUNDARY_REPAIR_CHAIN_INSTALL_FAILED err=%s", exc)
+
+
 def install_import_hook() -> None:
     import sys
+
+    _install_live_execution_boundary_repair()
 
     for name, module in list(sys.modules.items()):
         if name.endswith(("broker_manager", "coinbase_broker", "execution_engine")):
