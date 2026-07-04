@@ -45,86 +45,17 @@ def _copy_first_present_env(canonical: str, aliases: tuple[str, ...]) -> str:
 def _normalize_credential_aliases(label: str) -> None:
     """Accept common Railway/user secret aliases and map them to NIJA canonical names."""
     alias_map: dict[str, tuple[str, ...]] = {
-        "KRAKEN_PLATFORM_API_KEY": (
-            "KRAKEN_API_KEY",
-            "KRAKEN_MASTER_API_KEY",
-            "KRAKEN_MASTER_KEY",
-            "KRAKEN_PLATFORM_KEY",
-        ),
-        "KRAKEN_PLATFORM_API_SECRET": (
-            "KRAKEN_API_SECRET",
-            "KRAKEN_PRIVATE_KEY",
-            "KRAKEN_SECRET_KEY",
-            "KRAKEN_MASTER_API_SECRET",
-            "KRAKEN_MASTER_SECRET",
-            "KRAKEN_PLATFORM_SECRET",
-        ),
-        "KRAKEN_USER_DAIVON_API_KEY": (
-            "KRAKEN_USER_DAIVON_FRAZIER_API_KEY",
-            "KRAKEN_DAIVON_API_KEY",
-            "DAIVON_KRAKEN_API_KEY",
-            "KRAKEN_USER_1_API_KEY",
-            "KRAKEN_USER1_API_KEY",
-        ),
-        "KRAKEN_USER_DAIVON_API_SECRET": (
-            "KRAKEN_USER_DAIVON_FRAZIER_API_SECRET",
-            "KRAKEN_DAIVON_API_SECRET",
-            "DAIVON_KRAKEN_API_SECRET",
-            "KRAKEN_USER_1_API_SECRET",
-            "KRAKEN_USER1_API_SECRET",
-            "KRAKEN_DAIVON_SECRET",
-            "DAIVON_KRAKEN_SECRET",
-        ),
-        "KRAKEN_USER_TANIA_API_KEY": (
-            "KRAKEN_USER_TANIA_GILBERT_API_KEY",
-            "KRAKEN_TANIA_API_KEY",
-            "TANIA_KRAKEN_API_KEY",
-            "KRAKEN_USER_2_API_KEY",
-            "KRAKEN_USER2_API_KEY",
-            "KRAKEN_USER_TANIA_KEY",
-        ),
-        "KRAKEN_USER_TANIA_API_SECRET": (
-            "KRAKEN_USER_TANIA_GILBERT_API_SECRET",
-            "KRAKEN_TANIA_API_SECRET",
-            "TANIA_KRAKEN_API_SECRET",
-            "KRAKEN_USER_2_API_SECRET",
-            "KRAKEN_USER2_API_SECRET",
-            "KRAKEN_USER_TANIA_SECRET",
-            "KRAKEN_TANIA_SECRET",
-            "TANIA_KRAKEN_SECRET",
-        ),
-        "OKX_API_KEY": (
-            "OKX_PLATFORM_API_KEY",
-            "OKX_MASTER_API_KEY",
-            "OKX_KEY",
-        ),
-        "OKX_API_SECRET": (
-            "OKX_SECRET_KEY",
-            "OKX_PLATFORM_API_SECRET",
-            "OKX_MASTER_API_SECRET",
-            "OKX_SECRET",
-        ),
-        "OKX_PASSPHRASE": (
-            "OKX_API_PASSPHRASE",
-            "OKX_PASS_PHRASE",
-            "OKX_PLATFORM_PASSPHRASE",
-            "OKX_MASTER_PASSPHRASE",
-            "OKX_PASSWORD",
-        ),
-        "ALPACA_USER_TANIA_API_KEY": (
-            "ALPACA_USER_TANIA_GILBERT_API_KEY",
-            "ALPACA_TANIA_API_KEY",
-            "TANIA_ALPACA_API_KEY",
-            "ALPACA_USER_2_API_KEY",
-            "ALPACA_USER2_API_KEY",
-        ),
-        "ALPACA_USER_TANIA_API_SECRET": (
-            "ALPACA_USER_TANIA_GILBERT_API_SECRET",
-            "ALPACA_TANIA_API_SECRET",
-            "TANIA_ALPACA_API_SECRET",
-            "ALPACA_USER_2_API_SECRET",
-            "ALPACA_USER2_API_SECRET",
-        ),
+        "KRAKEN_PLATFORM_API_KEY": ("KRAKEN_API_KEY", "KRAKEN_MASTER_API_KEY", "KRAKEN_MASTER_KEY", "KRAKEN_PLATFORM_KEY"),
+        "KRAKEN_PLATFORM_API_SECRET": ("KRAKEN_API_SECRET", "KRAKEN_PRIVATE_KEY", "KRAKEN_SECRET_KEY", "KRAKEN_MASTER_API_SECRET", "KRAKEN_MASTER_SECRET", "KRAKEN_PLATFORM_SECRET"),
+        "KRAKEN_USER_DAIVON_API_KEY": ("KRAKEN_USER_DAIVON_FRAZIER_API_KEY", "KRAKEN_DAIVON_API_KEY", "DAIVON_KRAKEN_API_KEY", "KRAKEN_USER_1_API_KEY", "KRAKEN_USER1_API_KEY"),
+        "KRAKEN_USER_DAIVON_API_SECRET": ("KRAKEN_USER_DAIVON_FRAZIER_API_SECRET", "KRAKEN_DAIVON_API_SECRET", "DAIVON_KRAKEN_API_SECRET", "KRAKEN_USER_1_API_SECRET", "KRAKEN_USER1_API_SECRET", "KRAKEN_DAIVON_SECRET", "DAIVON_KRAKEN_SECRET"),
+        "KRAKEN_USER_TANIA_API_KEY": ("KRAKEN_USER_TANIA_GILBERT_API_KEY", "KRAKEN_TANIA_API_KEY", "TANIA_KRAKEN_API_KEY", "KRAKEN_USER_2_API_KEY", "KRAKEN_USER2_API_KEY", "KRAKEN_USER_TANIA_KEY"),
+        "KRAKEN_USER_TANIA_API_SECRET": ("KRAKEN_USER_TANIA_GILBERT_API_SECRET", "KRAKEN_TANIA_API_SECRET", "TANIA_KRAKEN_API_SECRET", "KRAKEN_USER_2_API_SECRET", "KRAKEN_USER2_API_SECRET", "KRAKEN_USER_TANIA_SECRET", "KRAKEN_TANIA_SECRET", "TANIA_KRAKEN_SECRET"),
+        "OKX_API_KEY": ("OKX_PLATFORM_API_KEY", "OKX_MASTER_API_KEY", "OKX_KEY"),
+        "OKX_API_SECRET": ("OKX_SECRET_KEY", "OKX_PLATFORM_API_SECRET", "OKX_MASTER_API_SECRET", "OKX_SECRET"),
+        "OKX_PASSPHRASE": ("OKX_API_PASSPHRASE", "OKX_PASS_PHRASE", "OKX_PLATFORM_PASSPHRASE", "OKX_MASTER_PASSPHRASE", "OKX_PASSWORD"),
+        "ALPACA_USER_TANIA_API_KEY": ("ALPACA_USER_TANIA_GILBERT_API_KEY", "ALPACA_TANIA_API_KEY", "TANIA_ALPACA_API_KEY", "ALPACA_USER_2_API_KEY", "ALPACA_USER2_API_KEY"),
+        "ALPACA_USER_TANIA_API_SECRET": ("ALPACA_USER_TANIA_GILBERT_API_SECRET", "ALPACA_TANIA_API_SECRET", "TANIA_ALPACA_API_SECRET", "ALPACA_USER_2_API_SECRET", "ALPACA_USER2_API_SECRET"),
     }
     used: list[str] = []
     for canonical, aliases in alias_map.items():
@@ -138,7 +69,6 @@ def _normalize_credential_aliases(label: str) -> None:
 def _strict_live_cleanup(label: str) -> None:
     if not _redis_configured():
         return
-    prefixes = ["NIJA"]
     tails = [
         ("UNSAFE", "BYPASS", "DISTRIBUTED", "LOCK"),
         ("DISABLE", "WRITER", "LOCK"),
@@ -151,7 +81,7 @@ def _strict_live_cleanup(label: str) -> None:
     ]
     cleared: list[str] = []
     for tail in tails:
-        key = _env_name(prefixes[0], *tail)
+        key = _env_name("NIJA", *tail)
         if _truthy(key):
             os.environ[key] = "false"
             cleared.append(key)
@@ -167,6 +97,14 @@ def _strict_live_cleanup(label: str) -> None:
         os.environ[_env_name("NIJA", "FAIL", "CLOSED", "MAX", "RETRY", "ATTEMPTS")] = "12"
     if cleared:
         logger.warning("STRICT_LIVE_STARTUP_CLEANUP label=%s cleared=%s", label, ",".join(cleared))
+
+
+def _set_float_floor(key: str, value: str) -> None:
+    try:
+        if float(os.environ.get(key, value) or value) < float(value):
+            os.environ[key] = value
+    except Exception:
+        os.environ[key] = value
 
 
 _normalize_credential_aliases("bot_init_first")
@@ -195,7 +133,10 @@ for _key, _value in {
     "NIJA_LIVE_ENTRY_RUNTIME_FIXES": "true",
     "NIJA_EXECUTABLE_TRADE_RUNTIME_PATCH": "true",
     "NIJA_GENERATION_MISMATCH_RECOVERY_COOLDOWN_S": "0",
-    "NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD": "10.50",
+    "NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD": "22.00",
+    "NIJA_KRAKEN_MIN_QUOTE_BUFFER_PCT": "0.10",
+    "KRAKEN_MIN_QUOTE_BUFFER_PCT": "0.10",
+    "KRAKEN_EFFECTIVE_NOTIONAL_EXTRA_BUFFER_PCT": "0.015",
     "NIJA_APPLY_GLOBAL_EXECUTABLE_MIN_TRADE": "true",
     "HF_TAKE_PROFIT_PCT": "1.0",
     "NIJA_MICROCAP_TP1_PERCENT": "1.0",
@@ -219,19 +160,20 @@ _normalize_credential_aliases("bot_init_after_sitecustomize")
 _strict_live_cleanup("bot_init_after_sitecustomize")
 
 for _key, _value in (
-    ("MIN_TRADE_USD", "10.50"),
-    ("MIN_POSITION_USD", "10.50"),
-    ("MIN_NOTIONAL_OVERRIDE", "10.50"),
+    ("MIN_TRADE_USD", "22.00"),
+    ("MIN_POSITION_USD", "22.00"),
+    ("MIN_NOTIONAL_OVERRIDE", "22.00"),
     ("MIN_CASH_TO_BUY", "5"),
-    ("KRAKEN_MIN_NOTIONAL_USD", "10.50"),
+    ("KRAKEN_MIN_NOTIONAL_USD", "22.00"),
+    ("NIJA_KRAKEN_MIN_NOTIONAL_USD", "22.00"),
+    ("NIJA_KRAKEN_MICRO_MIN_NOTIONAL_USD", "22.00"),
+    ("NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD", "22.00"),
+    ("KRAKEN_MIN_QUOTE_BUFFER_PCT", "0.10"),
+    ("NIJA_KRAKEN_MIN_QUOTE_BUFFER_PCT", "0.10"),
     ("COINBASE_MIN_ORDER_USD", "1"),
     ("OKX_MIN_ORDER_USD", "2"),
 ):
-    try:
-        if float(os.environ.get(_key, _value) or _value) < float(_value):
-            os.environ[_key] = _value
-    except Exception:
-        os.environ[_key] = _value
+    _set_float_floor(_key, _value)
 
 _PATCH_HOOKS = (
     ("strict_live_startup_sanitizer", "Strict live startup sanitizer"),
@@ -249,6 +191,7 @@ _PATCH_HOOKS = (
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
     ("executable_trade_runtime_patch", "Executable trade runtime repair"),
+    ("kraken_live_order_size_repair_patch", "Kraken live order-size repair"),
     ("execution_route_integrity_patch", "Execution route integrity guard"),
     ("okx_runtime_patch", "OKX runtime patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
@@ -262,5 +205,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.2"
+__version__ = "7.2.3"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
