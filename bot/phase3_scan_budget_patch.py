@@ -266,6 +266,109 @@ def _count(value: Any) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Broker liquidity prefilter — runs before candidate admission
+# ---------------------------------------------------------------------------
+# Thresholds (all env-var overridable):
+#   NIJA_LIQUIDITY_MIN_QUOTE_VOLUME_USD  — 24h quote volume floor (default $100k)
+#   NIJA_LIQUIDITY_MAX_SPREAD_PCT        — max bid/ask spread (default 0.5%)
+#   NIJA_LIQUIDITY_MIN_CANDLE_VOLUME     — last candle base volume floor (default 0)
+#   NIJA_LIQUIDITY_ENABLED               — set "false" to disable (default enabled)
+
+def _float_env_liq(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)) or default)
+    except Exception:
+        return default
+
+
+def _liquidity_proof(broker: Any, symbol: str) -> tuple[bool, str]:
+    """Return (passes, reason) for a single symbol's liquidity check.
+
+    Uses only cached/in-memory broker data — never makes a live API call.
+    Returns (True, "ok") when data is unavailable so the prefilter fails open
+    (safe: the downstream gates will catch illiquid symbols later).
+    """
+    if not _env_truthy_liq("NIJA_LIQUIDITY_PREFILTER_ENABLED", True):
+        return True, "prefilter_disabled"
+
+    min_quote_vol = _float_env_liq("NIJA_LIQUIDITY_MIN_QUOTE_VOLUME_USD", 100_000.0)
+    max_spread_pct = _float_env_liq("NIJA_LIQUIDITY_MAX_SPREAD_PCT", 0.005)
+
+    # ── 24h quote volume check ────────────────────────────────────────────
+    try:
+        ticker = None
+        for attr in ("_ticker_cache", "ticker_cache", "_tickers", "tickers"):
+            cache = getattr(broker, attr, None)
+            if isinstance(cache, dict):
+                ticker = cache.get(symbol) or cache.get(_normalize_symbol(symbol))
+                if ticker:
+                    break
+        if ticker and isinstance(ticker, dict):
+            quote_vol = 0.0
+            for key in ("quoteVolume", "quote_volume", "volume_usd", "usd_volume", "volumeUsd"):
+                try:
+                    quote_vol = float(ticker.get(key) or 0.0)
+                    if quote_vol > 0.0:
+                        break
+                except Exception:
+                    pass
+            if quote_vol > 0.0 and quote_vol < min_quote_vol:
+                return False, f"quote_volume_too_low vol_usd={quote_vol:.0f} min={min_quote_vol:.0f}"
+
+            # ── Spread check ──────────────────────────────────────────────
+            try:
+                bid = float(ticker.get("bid") or ticker.get("bidPrice") or 0.0)
+                ask = float(ticker.get("ask") or ticker.get("askPrice") or 0.0)
+                if bid > 0.0 and ask > 0.0:
+                    spread_pct = (ask - bid) / bid
+                    if spread_pct > max_spread_pct:
+                        return False, f"spread_too_wide spread_pct={spread_pct:.4f} max={max_spread_pct:.4f}"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return True, "ok"
+
+
+def _env_truthy_liq(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "enabled", "on", "y"}
+
+
+def _apply_liquidity_prefilter(
+    broker: Any, symbols: list[str]
+) -> tuple[list[str], list[str]]:
+    """Filter symbols list to only those passing the liquidity proof.
+
+    Returns (admitted, rejected) where rejected symbols should be logged as
+    ENTRY_BLOCKED reason=illiquidity_prefilter.
+    """
+    if not _env_truthy_liq("NIJA_LIQUIDITY_PREFILTER_ENABLED", True):
+        return symbols, []
+    admitted: list[str] = []
+    rejected: list[str] = []
+    for sym in symbols:
+        ok, reason = _liquidity_proof(broker, sym)
+        if ok:
+            admitted.append(sym)
+        else:
+            rejected.append(sym)
+            logger.critical(
+                "ENTRY_BLOCKED reason=illiquidity_prefilter symbol=%s detail=%s",
+                sym,
+                reason,
+            )
+            print(
+                f"[NIJA-PRINT] ENTRY_BLOCKED reason=illiquidity_prefilter symbol={sym} detail={reason}",
+                flush=True,
+            )
+    return admitted, rejected
+
+
 def _top_reason(mapping: Any) -> str:
     if not isinstance(mapping, dict) or not mapping:
         return "none"
@@ -466,6 +569,32 @@ def _install_on_module(module: ModuleType) -> bool:
                 f"[NIJA-PRINT] PHASE3_SCAN_BUDGET_APPLIED marker=20260703i | original={original_count} filtered={filtered_count} budget={budget} slots={available_slots} offset={offset} priority_matches={priority_count} symbols={','.join(str(s) for s in symbols)}",
                 flush=True,
             )
+        # ── Broker liquidity prefilter ────────────────────────────────────
+        # Reject symbols that fail liquidity proof before they reach fallback
+        # entry construction.  This prevents illiquid symbols from being scored
+        # and selected, then blocked late with a confusing illiquid_policy log.
+        symbols, _liq_rejected = _apply_liquidity_prefilter(broker, list(symbols))
+        if _liq_rejected:
+            logger.critical(
+                "LIQUIDITY_PREFILTER_APPLIED marker=20260703i broker=%s admitted=%d rejected=%d rejected_symbols=%s",
+                _broker_name(broker),
+                len(symbols),
+                len(_liq_rejected),
+                ",".join(_liq_rejected[:12]),
+            )
+            print(
+                f"[NIJA-PRINT] LIQUIDITY_PREFILTER_APPLIED marker=20260703i broker={_broker_name(broker)} "
+                f"admitted={len(symbols)} rejected={len(_liq_rejected)}",
+                flush=True,
+            )
+        if not symbols:
+            # All symbols were rejected by liquidity prefilter — return empty result
+            logger.critical(
+                "LIQUIDITY_PREFILTER_ALL_REJECTED marker=20260703i broker=%s — no symbols admitted; skipping scan",
+                _broker_name(broker),
+            )
+            return (0, 0, 0, {})
+
         started = time.monotonic()
         result = original(
             self,

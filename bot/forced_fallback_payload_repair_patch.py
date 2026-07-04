@@ -375,9 +375,113 @@ def _payload_ev(payload: Any) -> tuple[bool, str, float, float, float]:
     return ok, detail, expected_wr, breakeven, expectancy_pct
 
 
+_STRICT_SCORE_FLOOR = float(os.environ.get("NIJA_FALLBACK_STRICT_SCORE_FLOOR", "60.0"))
+
+
 def _enforce_fallback_positive_ev(payload: Any, *, sig: Any, symbol: str) -> Any:
     if not isinstance(payload, dict):
         return payload
+
+    # ── Strict geometry pre-check ─────────────────────────────────────────
+    # Only allow positive-EV pass-through when ALL real geometry conditions
+    # are satisfied.  Missing or zero values mean the payload is not ready
+    # for execution and must be blocked before any submit log is emitted.
+    try:
+        _entry = float(payload.get("entry_price") or 0.0)
+        _size  = float(
+            payload.get("position_size")
+            or payload.get("usd_size")
+            or payload.get("notional")
+            or 0.0
+        )
+        _stop  = float(payload.get("stop_loss") or 0.0)
+        _tp_raw = payload.get("take_profit")
+        _tp1   = _coerce_price(
+            (_tp_raw or {}).get("tp1") if isinstance(_tp_raw, dict) else _tp_raw
+        )
+        _action = str(payload.get("action") or "enter_long").strip().lower()
+        # Score from sig (AIEngineSignal.composite_score) or payload fallback
+        _score = 0.0
+        for _sname in ("composite_score", "entry_score", "score", "confidence"):
+            try:
+                _score = float(getattr(sig, _sname, 0.0) or 0.0)
+                if _score > 0.0:
+                    break
+            except Exception:
+                continue
+        if _score <= 0.0:
+            for _sname in ("composite_score", "entry_score", "score", "confidence"):
+                try:
+                    _score = float(payload.get(_sname) or 0.0)
+                    if _score > 0.0:
+                        break
+                except Exception:
+                    continue
+    except Exception as _geo_exc:
+        _geo_fail_detail = f"geometry_read_error:{_geo_exc}"
+        logger.warning(
+            "FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703u symbol=%s detail=%s action=hold_skip_before_execute",
+            symbol,
+            _geo_fail_detail,
+        )
+        return _hold_skip(
+            symbol,
+            reason="fallback_positive_ev_prefilter_blocked",
+            stage="fallback_positive_ev_prefilter",
+            detail=_geo_fail_detail,
+        )
+
+    _strict_floor = float(os.environ.get("NIJA_FALLBACK_STRICT_SCORE_FLOOR", "60.0"))
+    _geo_ok = True
+    _geo_fail_reason = ""
+
+    if _entry <= 0.0:
+        _geo_ok = False
+        _geo_fail_reason = f"entry_price_zero_or_missing entry={_entry}"
+    elif _size <= 0.0:
+        _geo_ok = False
+        _geo_fail_reason = f"position_size_zero_or_missing size={_size}"
+    elif _stop <= 0.0:
+        _geo_ok = False
+        _geo_fail_reason = f"stop_loss_zero_or_missing stop={_stop}"
+    elif _tp1 <= 0.0:
+        _geo_ok = False
+        _geo_fail_reason = f"take_profit_zero_or_missing tp1={_tp1}"
+    elif _action == "enter_long" and not (_tp1 > _entry):
+        _geo_ok = False
+        _geo_fail_reason = f"tp_not_above_entry_for_long entry={_entry:.8f} tp1={_tp1:.8f}"
+    elif _action == "enter_short" and not (_tp1 < _entry):
+        _geo_ok = False
+        _geo_fail_reason = f"tp_not_below_entry_for_short entry={_entry:.8f} tp1={_tp1:.8f}"
+    elif _action == "enter_long" and not (_stop < _entry):
+        _geo_ok = False
+        _geo_fail_reason = f"sl_not_below_entry_for_long entry={_entry:.8f} stop={_stop:.8f}"
+    elif _action == "enter_short" and not (_stop > _entry):
+        _geo_ok = False
+        _geo_fail_reason = f"sl_not_above_entry_for_short entry={_entry:.8f} stop={_stop:.8f}"
+    elif _score < _strict_floor:
+        _geo_ok = False
+        _geo_fail_reason = f"score_below_strict_floor score={_score:.1f} floor={_strict_floor:.1f}"
+
+    if not _geo_ok:
+        logger.warning(
+            "FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703u symbol=%s detail=%s action=hold_skip_before_execute",
+            symbol,
+            _geo_fail_reason,
+        )
+        print(
+            f"[NIJA-PRINT] FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703u symbol={symbol} "
+            f"detail={_geo_fail_reason}",
+            flush=True,
+        )
+        return _hold_skip(
+            symbol,
+            reason="fallback_positive_ev_prefilter_blocked",
+            stage="fallback_positive_ev_prefilter",
+            detail=_geo_fail_reason,
+        )
+
+    # ── Geometry is valid — normalise TP and propagate win rate ───────────
     payload, tp_changed, tp_reason = _normalize_take_profit_geometry(payload)
     if tp_changed:
         logger.critical("FORCED_FALLBACK_TP_GEOMETRY_NORMALIZED marker=20260703u symbol=%s reason=%s", symbol, tp_reason)
@@ -392,6 +496,19 @@ def _enforce_fallback_positive_ev(payload: Any, *, sig: Any, symbol: str) -> Any
             )
     ok, detail, expected_wr, breakeven, expectancy_pct = _payload_ev(payload)
     if ok:
+        logger.critical(
+            "FORCED_FALLBACK_POSITIVE_EV_ACCEPTED marker=20260703u symbol=%s expected_wr=%.4f breakeven_wr=%.4f expectancy_pct=%.4f score=%.1f",
+            symbol,
+            expected_wr,
+            breakeven,
+            expectancy_pct,
+            _score,
+        )
+        print(
+            f"[NIJA-PRINT] FORCED_FALLBACK_POSITIVE_EV_ACCEPTED marker=20260703u symbol={symbol} "
+            f"expected_wr={expected_wr:.4f} breakeven_wr={breakeven:.4f} expectancy_pct={expectancy_pct:.4f} score={_score:.1f}",
+            flush=True,
+        )
         return payload
     logger.warning(
         "FORCED_FALLBACK_POSITIVE_EV_PREFILTER_SKIPPED marker=20260703u symbol=%s detail=%s action=hold_skip_before_execute",
