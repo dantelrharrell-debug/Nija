@@ -217,7 +217,9 @@ _install_usdt_kraken_ecel_routing_repair()
 _install_live_entry_completion_repair()
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
-normalize_runtime_startup_env()
+startup_notes = normalize_runtime_startup_env(os.environ)
+if startup_notes:
+    logger.warning("STARTUP_RUNTIME_SAFETY_NORMALIZED notes=%s", ",".join(startup_notes))
 
 # Re-apply strict sanitizer after runtime startup normalization so unsafe flags
 # cannot be reintroduced by startup defaults.
