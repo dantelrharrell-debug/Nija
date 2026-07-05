@@ -2265,6 +2265,27 @@ class ExecutionPipeline:
             )
             assert request.validated is True, "FATAL: Order bypassed ECEL"
 
+        dispatch_snapshot = runtime_authority_snapshot()
+        dispatch_enabled = getattr(dispatch_snapshot, "dispatch_enabled", True)
+        if dispatch_enabled is False:
+            logger.error(
+                "🚫 [Pipeline._dispatch] dispatch.enabled=false | symbol=%s side=%s "
+                "lifecycle_phase=%s coordinator_state=%s reason=%s",
+                getattr(request, "symbol", "?"),
+                getattr(request, "side", "?"),
+                getattr(dispatch_snapshot, "lifecycle_phase", "unknown"),
+                getattr(dispatch_snapshot, "coordinator_state", "unknown"),
+                getattr(dispatch_snapshot, "reason", "unknown"),
+            )
+            return PipelineResult(
+                success=False,
+                symbol=request.symbol,
+                side=request.side,
+                size_usd=request.size_usd,
+                error="dispatch_disabled: dispatch.enabled=false",
+                latency_ms=(time.monotonic() - t_start) * 1000,
+            )
+
         logger.info(
             "🚀 [Pipeline._dispatch] DISPATCHING ORDER TO BROKER | symbol=%s side=%s size_usd=%.2f "
             "broker=%s multi_router=%s single_router=%s",
@@ -2280,24 +2301,20 @@ class ExecutionPipeline:
 
         def _run_with_ack_timeout(fn, *args, **kwargs) -> PipelineResult:
             """Execute *fn* in a thread, returning a timeout PipelineResult on expiry."""
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(fn, *args, **kwargs)
-                try:
-                    return future.result(timeout=timeout_s)
-                except concurrent.futures.TimeoutError:
-                    logger.error(
-                        "ExecutionPipeline: ACK timeout after %.0fs | symbol=%s",
-                        timeout_s,
-                        request.symbol,
-                    )
-                    return PipelineResult(
-                        success=False,
-                        symbol=request.symbol,
-                        side=request.side,
-                        size_usd=request.size_usd,
-                        error=f"ack_timeout: broker did not respond within {timeout_s:.0f}s",
-                        latency_ms=(time.monotonic() - t_start) * 1000,
-                    )
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = pool.submit(fn, *args, **kwargs)
+            try:
+                return future.result(timeout=timeout_s)
+            except concurrent.futures.TimeoutError:
+                logger.error(
+                    "ExecutionPipeline: ACK timeout after %.0fs | symbol=%s",
+                    timeout_s,
+                    request.symbol,
+                )
+                future.cancel()
+                return self._reconcile_ack_timeout(request, t_start, timeout_s=timeout_s)
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
 
         # --- MultiBrokerExecutionRouter (preferred for multi-venue) ---
         if self._multi_router is not None:
@@ -2463,6 +2480,126 @@ class ExecutionPipeline:
             side=request.side,
             size_usd=request.size_usd,
             error=error,
+            latency_ms=(time.monotonic() - t_start) * 1000,
+        )
+
+    @staticmethod
+    def _extract_order_id_hint(request: PipelineRequest) -> str:
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        candidates = (
+            metadata.get("order_id"),
+            metadata.get("exchange_order_id"),
+            metadata.get("client_order_id"),
+            getattr(request, "request_id", None),
+            getattr(request, "intent_id", None),
+        )
+        for candidate in candidates:
+            oid = str(candidate or "").strip()
+            if oid:
+                return oid
+        return ""
+
+    def _resolve_reconciliation_broker(self, request: PipelineRequest) -> Optional[Any]:
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        broker = metadata.get("broker_client")
+        if broker is not None:
+            return broker
+
+        preferred = str(getattr(request, "preferred_broker", "") or "").strip().lower()
+        if not preferred:
+            preferred = str(metadata.get("broker_name") or "").strip().lower()
+        if not preferred:
+            return None
+
+        router = getattr(self, "_multi_router", None)
+        resolve = getattr(router, "_resolve_live_broker", None)
+        if callable(resolve):
+            try:
+                return resolve(preferred)
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _response_fill_details(response: Any, fallback_size_usd: float) -> tuple[float, float]:
+        if not isinstance(response, dict):
+            return 0.0, float(fallback_size_usd or 0.0)
+        fill_price = float(
+            response.get("filled_price")
+            or response.get("average_filled_price")
+            or response.get("average_fill_price")
+            or response.get("avg_price")
+            or response.get("price")
+            or 0.0
+        )
+        filled_usd = float(
+            response.get("filled_size_usd")
+            or response.get("filled_value")
+            or response.get("notional_usd")
+            or response.get("size_usd")
+            or fallback_size_usd
+            or 0.0
+        )
+        return fill_price, filled_usd
+
+    @staticmethod
+    def _response_status(response: Any) -> str:
+        if not isinstance(response, dict):
+            return ""
+        return str(response.get("status") or response.get("state") or "").strip().lower()
+
+    def _reconcile_ack_timeout(
+        self,
+        request: PipelineRequest,
+        t_start: float,
+        *,
+        timeout_s: float,
+    ) -> PipelineResult:
+        broker = self._resolve_reconciliation_broker(request)
+        order_id = self._extract_order_id_hint(request)
+        if broker is not None and order_id:
+            get_status = getattr(broker, "get_order_status", None)
+            if callable(get_status):
+                try:
+                    status_resp = get_status(order_id)
+                except Exception as exc:
+                    status_resp = {"status": "error", "error": str(exc)}
+
+                status = self._response_status(status_resp)
+                fill_price, filled_usd = self._response_fill_details(status_resp, request.size_usd)
+                if status in {"filled", "closed", "complete", "done"}:
+                    return PipelineResult(
+                        success=True,
+                        symbol=request.symbol,
+                        side=request.side,
+                        size_usd=request.size_usd,
+                        fill_price=fill_price,
+                        filled_size_usd=filled_usd,
+                        broker=request.preferred_broker or "",
+                        error="",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+                if status in {"rejected", "canceled", "cancelled", "expired", "failed", "error"}:
+                    return PipelineResult(
+                        success=False,
+                        symbol=request.symbol,
+                        side=request.side,
+                        size_usd=request.size_usd,
+                        broker=request.preferred_broker or "",
+                        error=f"confirmed_order_rejected:{status}",
+                        latency_ms=(time.monotonic() - t_start) * 1000,
+                    )
+
+        return PipelineResult(
+            success=False,
+            symbol=request.symbol,
+            side=request.side,
+            size_usd=request.size_usd,
+            broker=request.preferred_broker or "",
+            error=(
+                "confirmed_order_rejected:"
+                f"ack_timeout_no_confirmed_fill_within_{timeout_s:.0f}s"
+            ),
             latency_ms=(time.monotonic() - t_start) * 1000,
         )
 

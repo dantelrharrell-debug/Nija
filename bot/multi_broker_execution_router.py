@@ -628,18 +628,25 @@ class MultiBrokerExecutionRouter:
     ) -> Optional[BrokerProfile]:
         """Return a broker profile when request metadata carries a live adapter."""
         meta = dict(getattr(request, "metadata", {}) or {})
-        if meta.get("broker_client") is None:
+        broker_obj = meta.get("broker_client")
+        if broker_obj is None:
             return None
 
-        preferred = str(request.preferred_broker or meta.get("broker_name") or "").strip().lower()
-        if not preferred:
-            broker_obj = meta.get("broker_client")
-            btype = getattr(broker_obj, "broker_type", None)
-            preferred = str(getattr(btype, "value", btype) or "").strip().lower()
+        preferred = self._normalize_broker_label(
+            request.preferred_broker
+            or meta.get("broker_name")
+            or self._infer_broker_name_from_client(broker_obj)
+        )
 
         with self._lock:
             profile = self._brokers.get(preferred)
-            if profile is None:
+            if profile is None and preferred:
+                logger.warning(
+                    "Direct broker metadata requested unknown broker '%s'; "
+                    "falling back to scored selection",
+                    preferred,
+                )
+            if profile is None and not preferred:
                 for candidate in self._brokers.values():
                     if candidate.available and asset_class in candidate.asset_classes:
                         profile = candidate
@@ -679,6 +686,44 @@ class MultiBrokerExecutionRouter:
             float(request.size_usd or 0.0),
         )
         return profile
+
+    @staticmethod
+    def _normalize_broker_label(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        alias_map = {
+            "coinbasebrokeradapter": "coinbase",
+            "coinbase": "coinbase",
+            "krakenbrokeradapter": "kraken",
+            "kraken": "kraken",
+            "okxbrokeradapter": "okx",
+            "okx": "okx",
+            "binancebrokeradapter": "binance",
+            "binance": "binance",
+            "alpacabrokeradapter": "alpaca",
+            "alpaca": "alpaca",
+        }
+        compact = text.replace("-", "").replace("_", "").replace(" ", "")
+        for alias, canonical in alias_map.items():
+            if compact == alias:
+                return canonical
+        return text
+
+    def _infer_broker_name_from_client(self, broker_obj: Any) -> str:
+        candidates = (
+            getattr(getattr(broker_obj, "broker_type", None), "value", None),
+            getattr(broker_obj, "broker_type", None),
+            getattr(broker_obj, "NAME", None),
+            getattr(broker_obj, "name", None),
+            broker_obj.__class__.__name__,
+            broker_obj.__class__.__module__,
+        )
+        for candidate in candidates:
+            normalized = self._normalize_broker_label(candidate)
+            if normalized in self._brokers:
+                return normalized
+        return ""
 
     def _get_scorer(self):
         """Return the BrokerPerformanceScorer singleton (lazy init)."""

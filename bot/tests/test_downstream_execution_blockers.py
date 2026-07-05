@@ -404,7 +404,6 @@ class TestExecutionPipelineSoftReject(unittest.TestCase):
 
 class TestExecutionPipelineACKTimeout(unittest.TestCase):
     def test_dispatch_returns_failure_on_timeout(self):
-        import concurrent.futures
         from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
 
         pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
@@ -413,7 +412,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         def _slow_router_factory():
             mock_router = MagicMock()
-            mock_router.execute.side_effect = lambda _: (time.sleep(10), None)[1]  # hangs
+            mock_router.execute.side_effect = lambda _: (time.sleep(1), None)[1]  # hangs
             return mock_router
 
         pipeline._multi_router = None
@@ -429,7 +428,99 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
         # _dispatch should return a failure PipelineResult rather than hanging
         result = pipeline._dispatch(request, time.monotonic())
         self.assertFalse(result.success)
-        self.assertIn("ack_timeout", result.error.lower())
+        self.assertIn("confirmed_order_rejected", result.error.lower())
+
+    def test_dispatch_timeout_reconciles_to_confirmed_fill(self):
+        from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
+
+        class _SlowRouter:
+            def route(self, _request):
+                time.sleep(1)
+
+        class _ReconBroker:
+            def get_order_status(self, _order_id):
+                return {
+                    "status": "filled",
+                    "filled_price": 2100.0,
+                    "filled_size_usd": 200.0,
+                }
+
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._ecel_required = False
+        pipeline._ack_timeout_s = 0.05
+        pipeline._multi_router = _SlowRouter()
+        pipeline._router = None
+
+        request = PipelineRequest(
+            symbol="ETH-USD",
+            side="buy",
+            size_usd=200.0,
+            preferred_broker="kraken",
+            request_id="ord-timeout-fill",
+            validated=True,
+            metadata={"broker_client": _ReconBroker()},
+        )
+
+        result = pipeline._dispatch(request, time.monotonic())
+        self.assertTrue(result.success)
+        self.assertEqual(result.fill_price, 2100.0)
+        self.assertEqual(result.filled_size_usd, 200.0)
+
+    def test_dispatch_timeout_reconciles_to_confirmed_reject(self):
+        from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
+
+        class _SlowRouter:
+            def route(self, _request):
+                time.sleep(1)
+
+        class _ReconBroker:
+            def get_order_status(self, _order_id):
+                return {"status": "rejected"}
+
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._ecel_required = False
+        pipeline._ack_timeout_s = 0.05
+        pipeline._multi_router = _SlowRouter()
+        pipeline._router = None
+
+        request = PipelineRequest(
+            symbol="ETH-USD",
+            side="buy",
+            size_usd=200.0,
+            preferred_broker="kraken",
+            request_id="ord-timeout-reject",
+            validated=True,
+            metadata={"broker_client": _ReconBroker()},
+        )
+
+        result = pipeline._dispatch(request, time.monotonic())
+        self.assertFalse(result.success)
+        self.assertIn("confirmed_order_rejected:rejected", result.error.lower())
+
+    def test_dispatch_blocks_when_dispatch_enabled_false(self):
+        from bot.execution_pipeline import ExecutionPipeline, PipelineRequest
+
+        pipeline = ExecutionPipeline.__new__(ExecutionPipeline)
+        pipeline._ecel_required = False
+        pipeline._ack_timeout_s = 0.05
+        pipeline._multi_router = None
+        pipeline._router = None
+
+        request = PipelineRequest(
+            symbol="ETH-USD",
+            side="buy",
+            size_usd=200.0,
+            validated=True,
+        )
+
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=MagicMock(dispatch_enabled=False, lifecycle_phase="WARM"),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
+
+        self.assertFalse(result.success)
+        self.assertIn("dispatch_disabled", result.error)
 
 
 # ---------------------------------------------------------------------------
