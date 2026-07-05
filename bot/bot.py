@@ -25,6 +25,13 @@ try:
 except Exception as exc:
     logger.warning("STARTUP_AUTHORITY_PREREQ_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
+try:
+    from bot.bootstrap_i12_capital_authority_repair_patch import install_import_hook as _install_bootstrap_i12_ca_repair
+    _install_bootstrap_i12_ca_repair()
+    logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
 from bot.bot_main import main
 
 
