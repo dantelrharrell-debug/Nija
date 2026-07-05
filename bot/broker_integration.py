@@ -3234,6 +3234,29 @@ class OKXBrokerAdapter(BrokerInterface):
     def place_market_order(self, symbol: str, side: str, size: float,
                           size_type: str = 'quote') -> Optional[Dict]:
         """Place market order on OKX."""
+        # Defense-in-depth guard: block live OKX orders until the adapter
+        # dispatch path is repaired.
+        _okx_exec_vars = (
+            "NIJA_OKX_EXECUTION_ENABLED",
+            "NIJA_OKX_LIVE_TRADING_ENABLED",
+            "OKX_LIVE_TRADING_ENABLED",
+            "NIJA_ENABLE_OKX_EXECUTION",
+        )
+        _okx_live_enabled = any(
+            os.environ.get(v, "").lower() in ("1", "true", "yes")
+            for v in _okx_exec_vars
+        )
+        if not _okx_live_enabled:
+            logger.warning(
+                "OKX_ORDER_BLOCKED symbol=%s side=%s size=%s — OKX live execution "
+                "is disabled (set one of %s to enable)",
+                symbol, side, size, ", ".join(_okx_exec_vars),
+            )
+            return {
+                "status": "error",
+                "error": "OKX live execution is disabled — adapter dispatch path not yet repaired",
+                "blocked_by": "okx_live_execution_guard",
+            }
         _auth_block = _reject_if_unauthorized_order_submit('okx', symbol, side, size)
         if _auth_block is not None:
             return _auth_block

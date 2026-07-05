@@ -1247,11 +1247,15 @@ class KrakenStartupFSM:
 
         This is a single atomic ``Event.set()`` call.  There is no window in
         which ``is_connected`` can be True while other guards are still False.
+
+        Note: ``_capital_ready`` is intentionally NOT set here.  Capital
+        readiness is only set by an explicit ``mark_capital_ready()`` call
+        once the capital authority bootstrap has completed, preventing the FSM
+        from falsely reporting capital-ready before balances are validated.
         """
         with self._lock:
             self._connecting = False
             self._nonce_ready.set()
-            self._capital_ready.set()
         self._connected.set()
 
     def mark_failed(self) -> None:
@@ -1311,16 +1315,20 @@ class KrakenStartupFSM:
             return self._capital_ready.is_set() and not self._failed.is_set()
 
     def mark_capital_ready(self) -> None:
-        """Signal that capital authority has been refreshed and validated."""
+        """Signal that capital authority has been refreshed and validated.
+
+        May be called after ``mark_connected()`` — the guard only rejects
+        calls when the FSM is in a FAILED state, so that the explicit
+        capital-authority callback at the end of the bootstrap pipeline
+        (which runs after ``mark_connected()``) is never silently ignored.
+        """
         with self._lock:
-            if self._connecting and not self._failed.is_set() and not self._connected.is_set():
+            if not self._failed.is_set():
                 self._capital_ready.set()
             else:
                 logger.debug(
-                    "KrakenStartupFSM.mark_capital_ready: ignored (connecting=%s failed=%s connected=%s)",
-                    self._connecting,
+                    "KrakenStartupFSM.mark_capital_ready: ignored (failed=%s)",
                     self._failed.is_set(),
-                    self._connected.is_set(),
                 )
 
     # ── Blocking wait (called by USER accounts) ────────────────────────────────
@@ -12901,6 +12909,32 @@ class OKXBroker(BaseBroker):
         Returns:
             dict: Order result with status, order_id, etc.
         """
+        # Defense-in-depth: block live OKX order submission unless the operator
+        # has explicitly opted in.  The dispatch path still has an unfixed
+        # generic fallback that omits size_type, which would submit the wrong
+        # denomination.  This guard prevents silent mis-sized orders.
+        _okx_exec_vars = (
+            "NIJA_OKX_EXECUTION_ENABLED",
+            "NIJA_OKX_LIVE_TRADING_ENABLED",
+            "OKX_LIVE_TRADING_ENABLED",
+            "NIJA_ENABLE_OKX_EXECUTION",
+        )
+        _okx_live_enabled = any(
+            os.environ.get(v, "").lower() in ("1", "true", "yes")
+            for v in _okx_exec_vars
+        )
+        if not _okx_live_enabled:
+            logger.warning(
+                "OKX_ORDER_BLOCKED symbol=%s side=%s qty=%s — OKX live execution "
+                "is disabled (set one of %s to enable)",
+                symbol, side, quantity, ", ".join(_okx_exec_vars),
+            )
+            return {
+                "status": "error",
+                "error": "OKX live execution is disabled — adapter dispatch path not yet repaired",
+                "blocked_by": "okx_live_execution_guard",
+            }
+
         _auth_block = _reject_if_unauthorized_order_submit(
             broker_name=self.broker_type.value,
             symbol=symbol,

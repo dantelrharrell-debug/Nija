@@ -157,13 +157,24 @@ BROKER_PROFILES: dict = {
     },
 
     # ------------------------------------------------------------------
-    # OKX — active, $5 floor
+    # OKX — disabled for live execution until dispatch path is repaired.
+    # Execution mode is passive unless the operator explicitly enables OKX via
+    # one of the NIJA_OKX_EXECUTION_ENABLED / NIJA_OKX_LIVE_TRADING_ENABLED /
+    # OKX_LIVE_TRADING_ENABLED / NIJA_ENABLE_OKX_EXECUTION env vars.
     # ------------------------------------------------------------------
     "okx": {
         "min_capital_usd": float(os.getenv("OKX_MIN_CAPITAL", "5.0")),
         "min_order_usd": float(os.getenv("OKX_MIN_ORDER", "5.0")),
         "micro_cap_enabled": False,
-        "execution_mode": "active",
+        "execution_mode": "active" if any(
+            os.getenv(v, "").lower() in ("1", "true", "yes")
+            for v in (
+                "NIJA_OKX_EXECUTION_ENABLED",
+                "NIJA_OKX_LIVE_TRADING_ENABLED",
+                "OKX_LIVE_TRADING_ENABLED",
+                "NIJA_ENABLE_OKX_EXECUTION",
+            )
+        ) else "passive",
         "risk_mode": "active",
         "include_in_execution_capital": True,
         "base_execution_weight": float(os.getenv("OKX_EXECUTION_WEIGHT", "0.8")),
