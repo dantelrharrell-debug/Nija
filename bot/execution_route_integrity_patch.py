@@ -59,29 +59,21 @@ def _ensure_csv_contains_env(name: str, values: list[str]) -> None:
 
 
 def _apply_safe_defaults() -> None:
-    """Install fail-closed route defaults without silently disabling OKX.
+    """Install fail-closed route defaults.
 
-    Earlier incident guard defaults disabled OKX and omitted it from the allowed
-    broker list.  Current production logs prove the execution stack now repairs
-    USDT routes to OKX and has OKX ECEL/min-notional protection installed.  The
-    old default caused a false final rejection:
-
-        BrokerRouteGuard deny ... selected=okx disabled=[]
-
-    Keep the route guard fail-closed for unknown/explicitly disabled brokers,
-    but make OKX an allowed platform venue unless the operator explicitly sets
-    NIJA_DISABLED_BROKERS=okx or a false OKX env override.
+    OKX live execution is disabled by default until the adapter dispatch path
+    is fully repaired.  The router still uses a generic direct-broker call
+    pattern whose third fallback omits ``size_type`` — passing the wrong
+    denomination to OKX.  OKX must be opted-in explicitly via an env var
+    (e.g. ``NIJA_OKX_EXECUTION_ENABLED=true``) once the dispatch path is
+    verified.  The default broker priority therefore excludes OKX.
     """
-    os.environ.setdefault("NIJA_OKX_EXECUTION_ENABLED", "true")
-    os.environ.setdefault("NIJA_OKX_LIVE_TRADING_ENABLED", "true")
-    os.environ.setdefault("OKX_LIVE_TRADING_ENABLED", "true")
-    os.environ.setdefault("NIJA_ENABLE_OKX_EXECUTION", "true")
     os.environ.setdefault("NIJA_COPY_TRADE_ENABLED", "false")
     os.environ.setdefault("NIJA_INDEPENDENT_USER_TRADING", "true")
     os.environ.setdefault("NIJA_MASTER_SIGNAL_ONLY", "true")
-    os.environ.setdefault("NIJA_ENTRY_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
-    os.environ.setdefault("NIJA_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
-    os.environ.setdefault("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,kraken,coinbase,alpaca")
+    os.environ.setdefault("NIJA_ENTRY_BROKER_PRIORITY", "kraken,coinbase,alpaca")
+    os.environ.setdefault("NIJA_BROKER_PRIORITY", "kraken,coinbase,alpaca")
+    os.environ.setdefault("NIJA_ALLOWED_EXECUTION_BROKERS", "kraken,coinbase,alpaca")
     os.environ.setdefault("NIJA_ROUTE_INTEGRITY_FAIL_CLOSED", "true")
     if _okx_execution_enabled() and "okx" not in _disabled_brokers(explicit_only=True):
         _ensure_csv_contains_env("NIJA_ALLOWED_EXECUTION_BROKERS", ["okx"])
@@ -90,7 +82,11 @@ def _apply_safe_defaults() -> None:
 
 
 def _okx_execution_enabled() -> bool:
-    """OKX live execution is enabled unless explicitly disabled."""
+    """OKX live execution is enabled only when explicitly opted in.
+
+    Returns False by default — OKX remains disabled until the adapter dispatch
+    path is repaired and the operator sets one of the OKX enable env vars.
+    """
     explicit_values = [
         os.environ.get("NIJA_OKX_EXECUTION_ENABLED"),
         os.environ.get("NIJA_OKX_LIVE_TRADING_ENABLED"),
@@ -101,7 +97,7 @@ def _okx_execution_enabled() -> bool:
         return True
     if any(_falsey_value(value) for value in explicit_values if value is not None):
         return False
-    return True
+    return False
 
 
 def _disabled_brokers(*, explicit_only: bool = False) -> set[str]:

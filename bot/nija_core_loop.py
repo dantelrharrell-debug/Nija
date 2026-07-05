@@ -2194,24 +2194,50 @@ class NijaCoreLoop:
                     )
                     if sig is not None:
                         _diag_confidence = sig.composite_score
-                        _funnel["signal"] = ("PASS", "")
-                        logger.critical(
-                            "✅ [Phase3] SIGNAL_PASSED — %s score=%.1f threshold=%.1f "
-                            "side=%s entry_type=%s",
-                            symbol, sig.composite_score, sig.threshold_used,
-                            side, entry_type,
-                        )
-                        # ── Per-pair evaluation log (PASS) ────────────────
-                        logger.info(
-                            "🔬 [PAIR_EVAL] pair=%s | side=%s | confidence=%.2f | "
-                            "adx=%.1f | vol_pct=%.1f%% | momentum=%s | "
-                            "gate=PASS | entry_score=%.1f | threshold=%.1f",
-                            symbol, side, sig.composite_score,
-                            _diag_adx, _diag_vol_pct,
-                            "pass",
-                            sig.composite_score, sig.threshold_used,
-                        )
-                        candidates.append(sig)
+                        # Check whether the selected venue is actually live-executable
+                        # before logging SIGNAL_PASSED.  A signal routed to a disabled
+                        # broker (e.g. OKX when live execution is off) cannot be
+                        # executed and must not appear as a tradeable candidate.
+                        _venue_blocked = False
+                        if str(broker_name or "").lower() == "okx":
+                            _okx_exec_vars = (
+                                "NIJA_OKX_EXECUTION_ENABLED",
+                                "NIJA_OKX_LIVE_TRADING_ENABLED",
+                                "OKX_LIVE_TRADING_ENABLED",
+                                "NIJA_ENABLE_OKX_EXECUTION",
+                            )
+                            _okx_enabled = any(
+                                os.environ.get(v, "").lower() in ("1", "true", "yes")
+                                for v in _okx_exec_vars
+                            )
+                            if not _okx_enabled:
+                                _venue_blocked = True
+                        if _venue_blocked:
+                            _funnel["signal"] = ("FAIL", "VENUE_DISABLED")
+                            logger.warning(
+                                "🚫 [Phase3] SIGNAL_BLOCKED_VENUE_DISABLED — %s score=%.1f "
+                                "broker=%s (venue disabled for live execution)",
+                                symbol, sig.composite_score, broker_name,
+                            )
+                        else:
+                            _funnel["signal"] = ("PASS", "")
+                            logger.critical(
+                                "✅ [Phase3] SIGNAL_PASSED — %s score=%.1f threshold=%.1f "
+                                "side=%s entry_type=%s",
+                                symbol, sig.composite_score, sig.threshold_used,
+                                side, entry_type,
+                            )
+                            # ── Per-pair evaluation log (PASS) ────────────────
+                            logger.info(
+                                "🔬 [PAIR_EVAL] pair=%s | side=%s | confidence=%.2f | "
+                                "adx=%.1f | vol_pct=%.1f%% | momentum=%s | "
+                                "gate=PASS | entry_score=%.1f | threshold=%.1f",
+                                symbol, side, sig.composite_score,
+                                _diag_adx, _diag_vol_pct,
+                                "pass",
+                                sig.composite_score, sig.threshold_used,
+                            )
+                            candidates.append(sig)
                     else:
                         _funnel["signal"] = ("FAIL", "RSI_BELOW_THRESHOLD")
                         # Determine which sub-gate caused the rejection by

@@ -122,6 +122,26 @@ def _patch_loaded() -> None:
 
 
 def install_import_hook() -> None:
+    # Skip the synthetic contract hook entirely when OKX live execution is
+    # disabled.  Installing the hook while OKX is passive lets order paths
+    # that should be blocked pass through ECEL validation unchallenged.
+    _okx_exec_vars = (
+        "NIJA_OKX_EXECUTION_ENABLED",
+        "NIJA_OKX_LIVE_TRADING_ENABLED",
+        "OKX_LIVE_TRADING_ENABLED",
+        "NIJA_ENABLE_OKX_EXECUTION",
+    )
+    _okx_enabled = any(
+        os.environ.get(v, "").lower() in ("1", "true", "yes")
+        for v in _okx_exec_vars
+    )
+    if not _okx_enabled:
+        logger.info(
+            "ECEL_OKX_SYNTHETIC_CONTRACT_HOOK_SKIPPED "
+            "(OKX live execution is disabled — set one of %s to enable)",
+            ", ".join(_okx_exec_vars),
+        )
+        return
     _patch_loaded()
     if getattr(builtins, "_NIJA_ECEL_OKX_SYNTHETIC_CONTRACT_IMPORT_HOOK_INSTALLED", False):
         return

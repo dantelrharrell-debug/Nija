@@ -1110,8 +1110,32 @@ class MultiBrokerExecutionRouter:
 
 
     def _resolve_live_broker(self, broker_name: str) -> Optional[Any]:
-        """Return a live broker adapter for *broker_name* when the manager has one."""
+        """Return a live broker adapter for *broker_name* when the manager has one.
+
+        Returns ``None`` for OKX when OKX live execution is disabled, preventing
+        OKX order attempts from falling through to Kraken and creating error
+        misclassification in logs.
+        """
         broker_name = str(broker_name or "").strip().lower()
+        # Block OKX resolution when live execution is not explicitly enabled.
+        # This prevents the router from attempting OKX orders (and then falling
+        # back to Kraken), which causes OKX errors to appear as Kraken errors.
+        if broker_name == "okx":
+            _okx_env_vars = (
+                "NIJA_OKX_EXECUTION_ENABLED",
+                "NIJA_OKX_LIVE_TRADING_ENABLED",
+                "OKX_LIVE_TRADING_ENABLED",
+                "NIJA_ENABLE_OKX_EXECUTION",
+            )
+            _okx_enabled = any(
+                os.environ.get(v, "").lower() in ("1", "true", "yes")
+                for v in _okx_env_vars
+            )
+            if not _okx_enabled:
+                logger.debug(
+                    "OKX live broker resolution blocked — OKX live execution is disabled"
+                )
+                return None
         manager = self._get_broker_manager()
         if manager is None:
             return None
