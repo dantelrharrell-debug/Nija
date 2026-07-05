@@ -14,8 +14,8 @@ Exchange             Symbol format     Size field  Notes
 Coinbase             BTC-USD           quote USD   no conversion needed
 Kraken               XXBTZUSD          quote USD   symbol map required
 Alpaca               BTC/USD           qty shares  USD → base-qty via price
-Binance              BTCUSDT           quoteQty    replace -USD with USDT
-OKX                  BTC-USDT          sz (base)   replace -USD with -USDT
+Binance              BTCUSDT           quoteQty    BTC-USD → BTCUSDT; BTC-USDT stays BTCUSDT
+OKX                  BTC-USDT          sz (base)   BTC-USD → BTC-USDT; BTC-USDT unchanged
 ===================  ================  ==========  =======================
 
 Usage
@@ -39,6 +39,32 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 logger = logging.getLogger("nija.order_normalizer")
+
+
+def _clean_symbol(symbol: str) -> str:
+    text = str(symbol or "").strip().upper().replace("/", "-").replace("_", "-")
+    while text.endswith("-USDTT"):
+        text = text[:-1]
+    return text
+
+
+def _okx_symbol(symbol: str) -> str:
+    text = _clean_symbol(symbol)
+    if text.endswith("-USDT"):
+        return text
+    if text.endswith("-USD"):
+        return text[:-4] + "-USDT"
+    return text
+
+
+def _binance_symbol(symbol: str) -> str:
+    text = _clean_symbol(symbol)
+    if text.endswith("-USDT"):
+        return text.replace("-", "")
+    if text.endswith("-USD"):
+        return text[:-4] + "USDT"
+    return text.replace("-", "")
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -126,7 +152,7 @@ class CoinbaseNormalizer(_BaseNormalizer):
 
     def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
         return ExchangeOrder(
-            symbol=order.symbol.upper(),
+            symbol=_clean_symbol(order.symbol),
             side=order.side.lower(),
             size=order.usd_size,
             size_type="quote",
@@ -145,7 +171,8 @@ class KrakenNormalizer(_BaseNormalizer):
         except ImportError:
             from exchange_plugin import get_plugin_registry  # type: ignore
         plugin = get_plugin_registry().get("kraken")
-        native_sym = plugin.format_symbol(order.symbol) if plugin else order.symbol
+        clean = _clean_symbol(order.symbol)
+        native_sym = plugin.format_symbol(clean) if plugin else clean
         return ExchangeOrder(
             symbol=native_sym,
             side=order.side.lower(),
@@ -161,13 +188,13 @@ class AlpacaNormalizer(_BaseNormalizer):
     """Alpaca: BTC-USD → BTC/USD; size in base currency (shares/coins)."""
 
     def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
-        native_sym = order.symbol.replace("-", "/").upper()
+        native_sym = _clean_symbol(order.symbol).replace("-", "/")
         qty = order.shares if order.quantity_mode == "shares" and order.shares > 0 else self._base_qty(order)
         try:
             from bot.exchange_plugin import get_plugin_registry
             plugin = get_plugin_registry().get("alpaca")
             if plugin:
-                qty = plugin.round_base_qty(qty, order.symbol)
+                qty = plugin.round_base_qty(qty, _clean_symbol(order.symbol))
         except Exception:
             pass
         return ExchangeOrder(
@@ -182,10 +209,10 @@ class AlpacaNormalizer(_BaseNormalizer):
 
 
 class BinanceNormalizer(_BaseNormalizer):
-    """Binance: BTC-USD → BTCUSDT; buys use quoteOrderQty (USD), sells use qty (base)."""
+    """Binance: BTC-USD/BTC-USDT → BTCUSDT; buys use quoteOrderQty, sells use qty."""
 
     def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
-        native_sym = order.symbol.replace("-USD", "USDT").replace("-", "").upper()
+        native_sym = _binance_symbol(order.symbol)
         if order.side.lower() == "buy":
             size = order.usd_size
             size_type = "quote"
@@ -204,16 +231,16 @@ class BinanceNormalizer(_BaseNormalizer):
 
 
 class OKXNormalizer(_BaseNormalizer):
-    """OKX: BTC-USD → BTC-USDT; size in base currency."""
+    """OKX: BTC-USD → BTC-USDT; BTC-USDT remains BTC-USDT; size in base currency."""
 
     def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
-        native_sym = order.symbol.replace("-USD", "-USDT").upper()
+        native_sym = _okx_symbol(order.symbol)
         size = self._base_qty(order)
         try:
             from bot.exchange_plugin import get_plugin_registry
             plugin = get_plugin_registry().get("okx")
             if plugin:
-                size = plugin.round_base_qty(size, order.symbol)
+                size = plugin.round_base_qty(size, native_sym)
         except Exception:
             pass
         return ExchangeOrder(
@@ -239,7 +266,7 @@ class EquityNormalizer(_BaseNormalizer):
 
         if order.quantity_mode == "shares" and order.shares > 0:
             return ExchangeOrder(
-                symbol=order.symbol.upper(),
+                symbol=_clean_symbol(order.symbol),
                 side=order.side.lower(),
                 size=float(order.shares),
                 size_type="base",
@@ -252,7 +279,7 @@ class EquityNormalizer(_BaseNormalizer):
         if broker_name.lower() in {"alpaca", "alpaca_equity", "interactive_brokers_equity"}:
             params["quantity_mode"] = "notional"
             return ExchangeOrder(
-                symbol=order.symbol.upper(),
+                symbol=_clean_symbol(order.symbol),
                 side=order.side.lower(),
                 size=float(order.usd_size),
                 size_type="quote",
@@ -264,7 +291,7 @@ class EquityNormalizer(_BaseNormalizer):
         qty = self._base_qty(order)
         params["quantity_mode"] = "shares"
         return ExchangeOrder(
-            symbol=order.symbol.upper(),
+            symbol=_clean_symbol(order.symbol),
             side=order.side.lower(),
             size=qty,
             size_type="base",
@@ -279,7 +306,7 @@ class PassthroughNormalizer(_BaseNormalizer):
 
     def normalize(self, order: NormalizedOrder, broker_name: str) -> ExchangeOrder:
         return ExchangeOrder(
-            symbol=order.symbol,
+            symbol=_clean_symbol(order.symbol),
             side=order.side.lower(),
             size=order.usd_size,
             size_type=order.size_type,
@@ -315,8 +342,10 @@ class OrderNormalizer:
         broker_name: str,
         order: NormalizedOrder,
     ) -> ExchangeOrder:
+        order.symbol = _clean_symbol(order.symbol)
         normalizer = _NORMALIZERS.get(broker_name.lower(), PassthroughNormalizer())
         result = normalizer.normalize(order, broker_name)
+        result.symbol = _clean_symbol(result.symbol)
         logger.debug(
             "OrderNormalizer[%s]: %s %s $%.2f → symbol=%s size=%s (%s)",
             broker_name, order.side.upper(), order.symbol, order.usd_size,
@@ -338,7 +367,7 @@ class OrderNormalizer:
         and normalise it in one step.
         """
         raw = NormalizedOrder(
-            symbol=symbol,
+            symbol=_clean_symbol(symbol),
             side=side,
             usd_size=quantity if size_type == "quote" else 0.0,
             base_qty=quantity if size_type == "base" else 0.0,
