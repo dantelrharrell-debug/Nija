@@ -13,8 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 import re
 from typing import Iterable, Pattern
+
+logger = logging.getLogger("nija.kraken_error_taxonomy")
 
 
 class KrakenErrorCategory(str, Enum):
@@ -206,6 +209,7 @@ def classify_kraken_error(error_text: object) -> KrakenErrorTaxonomy:
     raw = "" if error_text is None else str(error_text)
     text = raw.strip()
     if not text:
+        logger.warning("KRAKEN_RAW_ERROR_EMPTY_BEFORE_CLASSIFICATION raw=%r", error_text)
         return _UNKNOWN
 
     matches: list[_Rule] = []
@@ -214,9 +218,17 @@ def classify_kraken_error(error_text: object) -> KrakenErrorTaxonomy:
             matches.append(rule)
 
     if not matches:
+        logger.error("KRAKEN_RAW_ERROR_UNCLASSIFIED raw=%r", raw)
         return KrakenErrorTaxonomy(**{**_UNKNOWN.__dict__, "raw_error": raw})
 
     selected = min(matches, key=lambda rule: _ESC_PRIORITY.get(rule.category, 99))
+    logger.warning(
+        "KRAKEN_RAW_ERROR_CLASSIFIED code=%s category=%s policy=%s raw=%r",
+        selected.canonical_code,
+        selected.category.value,
+        selected.policy.value,
+        raw,
+    )
     return KrakenErrorTaxonomy(
         category=selected.category,
         policy=selected.policy,
