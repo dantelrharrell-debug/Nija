@@ -32,6 +32,13 @@ try:
 except Exception as exc:
     logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
+try:
+    from bot.trading_engine_strategy_wrapper_patch import install_import_hook as _install_strategy_wrapper
+    _install_strategy_wrapper()
+    logger.warning("TRADING_ENGINE_STRATEGY_WRAPPER_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("TRADING_ENGINE_STRATEGY_WRAPPER_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
 from bot.bot_main import main
 
 
