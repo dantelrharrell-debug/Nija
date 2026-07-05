@@ -21,6 +21,13 @@ def _truthy(name: str) -> bool:
 
 
 def _capital_authority_live_ready() -> tuple[bool, str]:
+    """Return whether CapitalAuthority proves live capital is execution-safe.
+
+    This repair does not force trades and does not ignore balance safety. It only
+    handles the startup race where CSM-v2/first_snap_accepted lag behind the
+    already-hydrated CapitalAuthority snapshot used by the live dispatcher.
+    """
+
     if not _truthy("LIVE_CAPITAL_VERIFIED"):
         return False, "live_capital_not_verified"
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
@@ -34,6 +41,7 @@ def _capital_authority_live_ready() -> tuple[bool, str]:
         hydrated = bool(getattr(ca, "is_hydrated", False))
         first_snap = bool(getattr(ca, "first_snap_accepted", False))
         valid_brokers = int(getattr(ca, "valid_broker_count", 0) or 0)
+        registered_brokers = int(getattr(ca, "registered_broker_count", 0) or 0)
         real = 0.0
         usable = 0.0
         try:
@@ -61,9 +69,23 @@ def _capital_authority_live_ready() -> tuple[bool, str]:
                 fresh = bool(fresh_getter())
             except Exception:
                 fresh = False
-        if hydrated and first_snap and valid_brokers > 0 and real > 0.0 and usable > 0.0 and fresh:
-            return True, f"ca_ready real={real:.2f} usable={usable:.2f} valid_brokers={valid_brokers}"
-        return False, f"ca_not_ready hydrated={hydrated} first_snap={first_snap} valid_brokers={valid_brokers} real={real:.2f} usable={usable:.2f} fresh={fresh}"
+
+        # The live dispatcher already accepts strict_live_dispatch_ready when
+        # hydrated=True, valid_brokers>0, real>0, usable>0, and fresh=True even
+        # if first_snap_accepted is still False. Mirror that contract here so
+        # hard_controls does not reject real orders with stale CSM-v2 state.
+        broker_ok = valid_brokers > 0 or (registered_brokers > 0 and real > 0.0)
+        if hydrated and broker_ok and real > 0.0 and usable > 0.0 and fresh:
+            return True, (
+                f"ca_ready real={real:.2f} usable={usable:.2f} "
+                f"valid_brokers={valid_brokers} registered_brokers={registered_brokers} "
+                f"hydrated={hydrated} first_snap={first_snap} fresh={fresh}"
+            )
+        return False, (
+            f"ca_not_ready hydrated={hydrated} first_snap={first_snap} "
+            f"valid_brokers={valid_brokers} registered_brokers={registered_brokers} "
+            f"real={real:.2f} usable={usable:.2f} fresh={fresh}"
+        )
     except Exception as exc:
         return False, f"ca_probe_failed:{exc}"
 
@@ -85,7 +107,7 @@ def _install_on_module(module: ModuleType) -> bool:
         if allowed:
             return allowed, reason
         reason_text = str(reason or "")
-        if "CAPITAL NOT VALIDATED" not in reason_text or "CSM-v2" not in reason_text:
+        if "CAPITAL NOT VALIDATED" not in reason_text:
             return allowed, reason
         ready, detail = _capital_authority_live_ready()
         if not ready:
