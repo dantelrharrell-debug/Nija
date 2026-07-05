@@ -36,11 +36,42 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _writer_authority_ok() -> tuple[bool, str]:
-    """Require live writer authority markers when accepting a freshness-latched snapshot."""
+    """Require live writer authority markers when accepting a freshness-latched snapshot.
+
+    When FORCE_TRADE / FORCE_TRADE_MODE is active the execution authority
+    gates are already bypassed by can_execute() in execution_authority_context.
+    Requiring exec_auth=1 and fencing tokens in that path causes a
+    writer_not_ready dead-lock: the CapitalAuthority repair patch cannot clear
+    the CAPITAL_NOT_VALIDATED block because the writer gate fails, even though
+    CapitalAuthority already has real capital and valid brokers.
+
+    Fix: if FORCE_TRADE is active, treat writer authority as satisfied so the
+    repair patch can use CapitalAuthority to unblock hard controls.  Real
+    execution authority is still enforced downstream by can_execute().
+    """
     state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "")
     execution_authority = os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "")
     token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
     generation = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+
+    # FORCE_TRADE bypass: can_execute() already skips all authority gates when
+    # FORCE_TRADE=true, so requiring writer tokens here would only prevent the
+    # capital repair path from running.  Allow the check to pass so hard controls
+    # can use CapitalAuthority data to unblock themselves.
+    force_trade = (
+        _truthy("FORCE_TRADE")
+        or _truthy("FORCE_TRADE_MODE")
+        or _truthy("NIJA_FORCE_ACTIVATION")
+        or _truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
+    )
+    if force_trade:
+        detail = (
+            f"force_trade_bypass state={state or 'unknown'} "
+            f"exec_auth={execution_authority or '0'} "
+            f"token={bool(token)} generation={generation or 'missing'}"
+        )
+        return True, detail
+
     live_state_ok = state in {"LIVE_ACTIVE", "RUNNING", "RUN_READY"} or execution_authority == "1"
     ok = bool(live_state_ok and execution_authority == "1" and token and generation)
     return ok, f"state={state or 'unknown'} exec_auth={execution_authority or '0'} token={bool(token)} generation={generation or 'missing'}"

@@ -42,6 +42,10 @@ COINBASE_MIN_ORDER_USD = float(
 )
 COINBASE_FEE_BUFFER = 0.02  # 2% conservative fee buffer
 
+# OKX minimums — typically $5 notional; add buffer for fees (~0.1% taker)
+OKX_MIN_ORDER_USD = float(os.getenv("OKX_MIN_ORDER_USD", "5.0"))
+OKX_FEE_BUFFER = float(os.getenv("OKX_FEE_BUFFER_USD", "0.50"))
+
 # Universal soft minimum (policy floor, not exchange constraint)
 GLOBAL_MIN_ORDER_USD = float(os.getenv("MIN_NOTIONAL_USD", "11.00"))
 
@@ -98,6 +102,8 @@ def get_exchange_min_order_usd(broker_type: str) -> float:
         return KRAKEN_MIN_ORDER_USD + KRAKEN_FEE_BUFFER
     elif "coinbase" in broker_lower:
         return COINBASE_MIN_ORDER_USD
+    elif "okx" in broker_lower:
+        return OKX_MIN_ORDER_USD + OKX_FEE_BUFFER
     else:
         # Conservative default for unknown exchanges
         return GLOBAL_MIN_ORDER_USD
