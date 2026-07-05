@@ -20,12 +20,14 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger("nija.venue_route_guard")
 
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
+_ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED_USDT_MODULES: set[int] = set()
 _PATCHED_PIPELINES: set[int] = set()
 _PATCHED_ECEL: set[int] = set()
 _MONITOR_STARTED = False
 _LOCK = threading.Lock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+_TARGETS = {"bot.usdt_kraken_ecel_routing_repair_patch", "usdt_kraken_ecel_routing_repair_patch"}
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -74,7 +76,6 @@ def _configured_kraken_floor() -> float:
 def _notional_from(obj: Any) -> float:
     for name in ("notional_usd", "size_usd", "quote_amount", "amount_usd"):
         if hasattr(obj, name):
-            value = _float_env("__missing__", 0.0)
             try:
                 value = float(getattr(obj, name) or 0.0)
             except Exception:
@@ -213,7 +214,7 @@ def _patch_usdt_repair_module(module: ModuleType) -> bool:
 
 def _try_patch_loaded() -> bool:
     patched = False
-    for name in ("bot.usdt_kraken_ecel_routing_repair_patch", "usdt_kraken_ecel_routing_repair_patch"):
+    for name in _TARGETS:
         module = sys.modules.get(name)
         if isinstance(module, ModuleType):
             patched = _patch_usdt_repair_module(module) or patched
@@ -238,24 +239,40 @@ def _start_monitor() -> None:
     logger.warning("VENUE_ROUTE_GUARD_MONITOR_STARTED")
 
 
+def _patch_import_result(module: Any) -> Any:
+    try:
+        _try_patch_loaded()
+        if isinstance(module, ModuleType) and str(getattr(module, "__name__", "")) in _TARGETS:
+            _patch_usdt_repair_module(module)
+    except Exception as exc:
+        logger.debug("Venue route guard import check skipped: %s", exc)
+    return module
+
+
 def install_import_hook() -> None:
-    global _ORIGINAL_IMPORT
+    global _ORIGINAL_IMPORT, _ORIGINAL_IMPORT_MODULE
     with _LOCK:
         _try_patch_loaded()
         _start_monitor()
-        if _ORIGINAL_IMPORT is not None:
-            return
-        _ORIGINAL_IMPORT = builtins.__import__
 
-        def importing(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0):
-            module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
-            try:
-                _try_patch_loaded()
-                if str(getattr(module, "__name__", "")) in {"bot.usdt_kraken_ecel_routing_repair_patch", "usdt_kraken_ecel_routing_repair_patch"}:
-                    _patch_usdt_repair_module(module)
-            except Exception as exc:
-                logger.debug("Venue route guard import check skipped: %s", exc)
-            return module
+        if _ORIGINAL_IMPORT_MODULE is None:
+            _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
-        builtins.__import__ = importing
-        logger.warning("VENUE_ROUTE_GUARD_INSTALLED marker=20260704h")
+            def import_module(name: str, package: str | None = None):
+                module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
+                return _patch_import_result(module)
+
+            importlib.import_module = import_module  # type: ignore[assignment]
+            logger.warning("VENUE_ROUTE_GUARD_IMPORTLIB_HOOK_INSTALLED marker=20260704i")
+
+        if _ORIGINAL_IMPORT is None:
+            _ORIGINAL_IMPORT = builtins.__import__
+
+            def importing(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0):
+                module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
+                return _patch_import_result(module)
+
+            builtins.__import__ = importing
+            logger.warning("VENUE_ROUTE_GUARD_BUILTINS_HOOK_INSTALLED marker=20260704i")
+
+        logger.warning("VENUE_ROUTE_GUARD_INSTALLED marker=20260704i")
