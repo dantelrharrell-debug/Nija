@@ -9,6 +9,13 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("nija.exchange_normalizer")
 
 
+def _clean_symbol(symbol: Any) -> str:
+    text = str(symbol or "").strip().upper().replace("/", "-").replace("_", "-")
+    while text.endswith("-USDTT"):
+        text = text[:-1]
+    return text
+
+
 @dataclass
 class ExchangeNormalizationResult:
     accepted: bool
@@ -52,6 +59,7 @@ class ExchangeNormalizer:
         time_in_force: Optional[str] = None,
         extended_hours: Optional[bool] = None,
     ) -> ExchangeNormalizationResult:
+        symbol = _clean_symbol(symbol)
         broker_name = (broker or "coinbase").lower()
         normalized_notional = round(float(size_usd), 2)
         adjustments: List[str] = []
@@ -81,7 +89,6 @@ class ExchangeNormalizer:
                             if key in accepted_params
                         }
                     elif "asset_class" not in validator_kwargs:
-                        # Kept for clarity; VAR_KEYWORD accepts all optional keys.
                         pass
                     if "asset_class" in accepted_params or any(
                         p.kind == inspect.Parameter.VAR_KEYWORD
@@ -89,15 +96,11 @@ class ExchangeNormalizer:
                     ):
                         validator_kwargs["asset_class"] = asset_class
                 except (TypeError, ValueError):
-                    # Some callables do not expose a signature; keep the legacy shape
-                    # but retry without optional keys if it raises below.
                     validator_kwargs["asset_class"] = asset_class
 
                 try:
                     outcome = validator_fn(**validator_kwargs)
                 except TypeError as exc:
-                    # Backward-compatible retry for older validators that do not accept
-                    # asset_class / quantity_mode / session-specific kwargs.
                     if "unexpected keyword argument" not in str(exc):
                         raise
                     fallback_kwargs = {
@@ -153,13 +156,18 @@ class ExchangeNormalizer:
                     time_in_force=time_in_force,
                     extended_hours=extended_hours,
                 )
-                native_symbol = native.symbol
+                native_symbol = _clean_symbol(native.symbol)
                 native_size = float(native.size)
                 native_size_type = native.size_type
                 if native.raw.extra:
                     adjustments.extend([f"native:{k}" for k in sorted(native.raw.extra.keys())])
             except Exception as exc:
                 logger.warning("ExchangeNormalizer: order normalization failed for %s: %s", symbol, exc)
+
+        if native_symbol != _clean_symbol(native_symbol):
+            native_symbol = _clean_symbol(native_symbol)
+        if native_symbol != symbol and str(native_symbol).endswith("-USDTT"):
+            native_symbol = _clean_symbol(native_symbol)
 
         return ExchangeNormalizationResult(
             accepted=True,
