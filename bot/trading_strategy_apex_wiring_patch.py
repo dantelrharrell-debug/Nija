@@ -1,10 +1,5 @@
 """Repair TradingStrategy APEX/CoreLoop wiring before live cycles.
 
-Latest Railway logs proved TradingLoop and TradingStrategy.run_cycle() are now
-entered, but the cycle returns immediately when TradingStrategy was imported
-without NIJAApexStrategyV71 available. In that state both ``self.apex`` and
-``self.nija_core_loop`` are None, so no scan, signal, or order path can run.
-
 This patch is wiring-only: it adds the bot package directory to sys.path early,
 resolves NIJAApexStrategyV71, and hydrates missing TradingStrategy.apex and
 nija_core_loop references before run_cycle delegates to the existing scanner.
@@ -16,7 +11,10 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import queue
 import sys
+import threading
+import time
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Optional
@@ -24,6 +22,13 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger("nija.trading_strategy_apex_wiring")
 _ORIGINAL_IMPORT_MODULE: Optional[Callable[..., Any]] = None
 _PATCHED = False
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default) or default)
+    except Exception:
+        return default
 
 
 def _ensure_bot_dir_on_path() -> None:
@@ -175,6 +180,44 @@ def _hydrate_strategy_wiring(strategy: Any, broker: Any | None = None, reason: s
     return bool(getattr(strategy, "apex", None) is not None and getattr(strategy, "nija_core_loop", None) is not None) or hydrated
 
 
+def _needs_hydration(strategy: Any) -> bool:
+    return getattr(strategy, "apex", None) is None or getattr(strategy, "nija_core_loop", None) is None
+
+
+def _bounded_hydrate_strategy_wiring(strategy: Any, broker: Any | None = None, reason: str = "runtime") -> bool:
+    if not _needs_hydration(strategy):
+        return True
+    timeout_s = max(0.25, _float_env("NIJA_TRADING_STRATEGY_WIRING_TIMEOUT_S", 2.5))
+    q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+    def _runner() -> None:
+        try:
+            q.put(("result", _hydrate_strategy_wiring(strategy, broker=broker, reason=reason)))
+        except BaseException as exc:
+            q.put(("error", exc))
+
+    threading.Thread(target=_runner, name="trading-strategy-wiring-hydration", daemon=True).start()
+    try:
+        kind, payload = q.get(timeout=timeout_s)
+    except queue.Empty:
+        logger.critical(
+            "TRADING_STRATEGY_APEX_WIRING_HYDRATION_TIMEOUT marker=20260705b reason=%s timeout_s=%.2f apex=%s core_loop=%s continuing_to_existing_run_cycle=True",
+            reason,
+            timeout_s,
+            type(getattr(strategy, "apex", None)).__name__ if getattr(strategy, "apex", None) is not None else "None",
+            type(getattr(strategy, "nija_core_loop", None)).__name__ if getattr(strategy, "nija_core_loop", None) is not None else "None",
+        )
+        print(
+            f"[NIJA-PRINT] TRADING_STRATEGY_APEX_WIRING_HYDRATION_TIMEOUT marker=20260705b reason={reason} timeout_s={timeout_s:.2f}",
+            flush=True,
+        )
+        return False
+    if kind == "error":
+        logger.warning("TRADING_STRATEGY_APEX_WIRING_HYDRATION_ERROR marker=20260705b reason=%s err=%s", reason, payload)
+        return False
+    return bool(payload)
+
+
 def _install_on_module(module: ModuleType) -> bool:
     global _PATCHED
     cls = getattr(module, "TradingStrategy", None)
@@ -185,7 +228,8 @@ def _install_on_module(module: ModuleType) -> bool:
     if callable(original_init) and not getattr(original_init, "_nija_apex_wiring_wrapped", False):
         def _patched_init(self, *args: Any, **kwargs: Any) -> None:
             original_init(self, *args, **kwargs)
-            _hydrate_strategy_wiring(self, reason="post_init")
+            if _needs_hydration(self):
+                _bounded_hydrate_strategy_wiring(self, reason="post_init")
 
         setattr(_patched_init, "_nija_apex_wiring_wrapped", True)
         setattr(cls, "__init__", _patched_init)
@@ -193,10 +237,11 @@ def _install_on_module(module: ModuleType) -> bool:
     original_run_cycle = getattr(cls, "run_cycle", None)
     if callable(original_run_cycle) and not getattr(original_run_cycle, "_nija_apex_wiring_wrapped", False):
         def _patched_run_cycle(self, broker: Any = None, user_mode: bool = False) -> int:
-            _hydrate_strategy_wiring(self, broker=broker, reason="pre_run_cycle")
+            if _needs_hydration(self):
+                _bounded_hydrate_strategy_wiring(self, broker=broker, reason="pre_run_cycle")
             if getattr(self, "apex", None) is None or getattr(self, "nija_core_loop", None) is None:
                 logger.critical(
-                    "TRADING_STRATEGY_APEX_WIRING_RUN_CYCLE_STILL_DEGRADED apex=%s core_loop=%s",
+                    "TRADING_STRATEGY_APEX_WIRING_RUN_CYCLE_DEGRADED_AFTER_TIMEOUT marker=20260705b apex=%s core_loop=%s",
                     type(getattr(self, "apex", None)).__name__ if getattr(self, "apex", None) is not None else "None",
                     type(getattr(self, "nija_core_loop", None)).__name__ if getattr(self, "nija_core_loop", None) is not None else "None",
                 )
@@ -205,14 +250,14 @@ def _install_on_module(module: ModuleType) -> bool:
         setattr(_patched_run_cycle, "_nija_apex_wiring_wrapped", True)
         setattr(cls, "run_cycle", _patched_run_cycle)
 
-    # If a singleton/object was already published, hydrate it now.
     for attr in ("TRADING_STRATEGY", "strategy", "trading_strategy", "_published_strategy"):
         obj = getattr(module, attr, None)
         if obj is not None and type(obj).__name__ == "TradingStrategy":
-            _hydrate_strategy_wiring(obj, reason=f"module_attr:{attr}")
+            if _needs_hydration(obj):
+                _bounded_hydrate_strategy_wiring(obj, reason=f"module_attr:{attr}")
 
     _PATCHED = True
-    logger.warning("TRADING_STRATEGY_APEX_WIRING_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
+    logger.warning("TRADING_STRATEGY_APEX_WIRING_PATCHED module=%s marker=20260705b", getattr(module, "__name__", "<unknown>"))
     return True
 
 
@@ -230,7 +275,7 @@ def install_import_hook() -> None:
     _ensure_bot_dir_on_path()
     _try_patch_loaded()
     if _ORIGINAL_IMPORT_MODULE is not None:
-        logger.warning("TRADING_STRATEGY_APEX_WIRING_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+        logger.warning("TRADING_STRATEGY_APEX_WIRING_INSTALL_COMPLETE already_installed=True patched=%s marker=20260705b", _PATCHED)
         return
 
     _ORIGINAL_IMPORT_MODULE = importlib.import_module
@@ -242,4 +287,8 @@ def install_import_hook() -> None:
         return module
 
     importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-    logger.warning("TRADING_STRATEGY_APEX_WIRING_INSTALL_COMPLETE patched=%s", _PATCHED)
+    logger.warning("TRADING_STRATEGY_APEX_WIRING_INSTALL_COMPLETE patched=%s marker=20260705b", _PATCHED)
+
+
+def install() -> None:
+    install_import_hook()
