@@ -8,6 +8,13 @@ import sys
 logger = logging.getLogger("nija.bot_entrypoint")
 
 try:
+    from bot.live_capital_first_snapshot_latch_patch import install_import_hook as _install_live_capital_first_snapshot_latch
+    _install_live_capital_first_snapshot_latch()
+    logger.warning("LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
+try:
     from bot.startup_authority_prereq_repair_patch import install_import_hook as _install_startup_authority_repair
     _install_startup_authority_repair()
     logger.warning("STARTUP_AUTHORITY_PREREQ_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
