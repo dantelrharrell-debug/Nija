@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.execution_route_integrity_patch")
 
-_MARKER = "EXECUTION_ROUTE_INTEGRITY_PATCHED marker=20260704a"
+_MARKER = "EXECUTION_ROUTE_INTEGRITY_PATCHED marker=20260705c"
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
 _FALSEY = {"0", "false", "no", "disabled", "off", "n"}
 _IMPORT_LOCK = threading.Lock()
@@ -23,12 +23,12 @@ _PIPELINE_PATCHED = False
 _ROUTER_PATCHED = False
 _INDEPENDENT_PATCHED = False
 
-_STRATEGY_WRAP_ATTR = "_nija_execution_route_integrity_strategy_v20260704a"
-_PIPELINE_DISPATCH_WRAP_ATTR = "_nija_execution_route_integrity_dispatch_v20260704a"
-_PIPELINE_REJECT_WRAP_ATTR = "_nija_execution_route_integrity_reject_v20260704a"
-_ROUTER_ROUTE_WRAP_ATTR = "_nija_execution_route_integrity_route_v20260704a"
-_INDEPENDENT_INIT_WRAP_ATTR = "_nija_execution_route_integrity_independent_init_v20260704a"
-_INDEPENDENT_THREAD_WRAP_ATTR = "_nija_execution_route_integrity_independent_thread_v20260704a"
+_STRATEGY_WRAP_ATTR = "_nija_execution_route_integrity_strategy_v20260705c"
+_PIPELINE_DISPATCH_WRAP_ATTR = "_nija_execution_route_integrity_dispatch_v20260705c"
+_PIPELINE_REJECT_WRAP_ATTR = "_nija_execution_route_integrity_reject_v20260705c"
+_ROUTER_ROUTE_WRAP_ATTR = "_nija_execution_route_integrity_route_v20260705c"
+_INDEPENDENT_INIT_WRAP_ATTR = "_nija_execution_route_integrity_independent_init_v20260705c"
+_INDEPENDENT_THREAD_WRAP_ATTR = "_nija_execution_route_integrity_independent_thread_v20260705c"
 
 
 def _truthy_value(value: Any) -> bool:
@@ -48,34 +48,66 @@ def _csv_env(name: str, default: str = "") -> list[str]:
     return [item.strip().lower() for item in raw.split(",") if item.strip()]
 
 
+def _ensure_csv_contains_env(name: str, values: list[str]) -> None:
+    current = _csv_env(name, "")
+    merged = []
+    for item in current + values:
+        item = _normalise_broker_name(item)
+        if item and item not in merged:
+            merged.append(item)
+    os.environ[name] = ",".join(merged)
+
+
 def _apply_safe_defaults() -> None:
-    """Default to the safe route found in production logs unless explicitly overridden."""
-    os.environ.setdefault("NIJA_OKX_EXECUTION_ENABLED", "false")
-    os.environ.setdefault("NIJA_OKX_LIVE_TRADING_ENABLED", "false")
-    os.environ.setdefault("OKX_LIVE_TRADING_ENABLED", "false")
-    os.environ.setdefault("NIJA_ENABLE_OKX_EXECUTION", "false")
+    """Install fail-closed route defaults without silently disabling OKX.
+
+    Earlier incident guard defaults disabled OKX and omitted it from the allowed
+    broker list.  Current production logs prove the execution stack now repairs
+    USDT routes to OKX and has OKX ECEL/min-notional protection installed.  The
+    old default caused a false final rejection:
+
+        BrokerRouteGuard deny ... selected=okx disabled=[]
+
+    Keep the route guard fail-closed for unknown/explicitly disabled brokers,
+    but make OKX an allowed platform venue unless the operator explicitly sets
+    NIJA_DISABLED_BROKERS=okx or a false OKX env override.
+    """
+    os.environ.setdefault("NIJA_OKX_EXECUTION_ENABLED", "true")
+    os.environ.setdefault("NIJA_OKX_LIVE_TRADING_ENABLED", "true")
+    os.environ.setdefault("OKX_LIVE_TRADING_ENABLED", "true")
+    os.environ.setdefault("NIJA_ENABLE_OKX_EXECUTION", "true")
     os.environ.setdefault("NIJA_COPY_TRADE_ENABLED", "false")
     os.environ.setdefault("NIJA_INDEPENDENT_USER_TRADING", "true")
     os.environ.setdefault("NIJA_MASTER_SIGNAL_ONLY", "true")
-    os.environ.setdefault("NIJA_ENTRY_BROKER_PRIORITY", "kraken,coinbase,alpaca")
-    os.environ.setdefault("NIJA_BROKER_PRIORITY", "kraken,coinbase,alpaca")
-    os.environ.setdefault("NIJA_ALLOWED_EXECUTION_BROKERS", "kraken,coinbase,alpaca")
+    os.environ.setdefault("NIJA_ENTRY_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
+    os.environ.setdefault("NIJA_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
+    os.environ.setdefault("NIJA_ALLOWED_EXECUTION_BROKERS", "okx,kraken,coinbase,alpaca")
     os.environ.setdefault("NIJA_ROUTE_INTEGRITY_FAIL_CLOSED", "true")
+    if _okx_execution_enabled() and "okx" not in _disabled_brokers(explicit_only=True):
+        _ensure_csv_contains_env("NIJA_ALLOWED_EXECUTION_BROKERS", ["okx"])
+        _ensure_csv_contains_env("NIJA_ENTRY_BROKER_PRIORITY", ["okx"])
+        _ensure_csv_contains_env("NIJA_BROKER_PRIORITY", ["okx"])
 
 
 def _okx_execution_enabled() -> bool:
-    """OKX live execution is opt-in until its adapter returns valid ACKs/errors."""
+    """OKX live execution is enabled unless explicitly disabled."""
     explicit_values = [
         os.environ.get("NIJA_OKX_EXECUTION_ENABLED"),
         os.environ.get("NIJA_OKX_LIVE_TRADING_ENABLED"),
         os.environ.get("OKX_LIVE_TRADING_ENABLED"),
         os.environ.get("NIJA_ENABLE_OKX_EXECUTION"),
     ]
-    return any(_truthy_value(value) for value in explicit_values)
+    if any(_truthy_value(value) for value in explicit_values):
+        return True
+    if any(_falsey_value(value) for value in explicit_values if value is not None):
+        return False
+    return True
 
 
-def _disabled_brokers() -> set[str]:
+def _disabled_brokers(*, explicit_only: bool = False) -> set[str]:
     disabled = set(_csv_env("NIJA_DISABLED_BROKERS", ""))
+    if explicit_only:
+        return disabled
     if not _okx_execution_enabled():
         disabled.add("okx")
     return disabled
@@ -84,7 +116,9 @@ def _disabled_brokers() -> set[str]:
 def _allowed_brokers() -> list[str]:
     allowed = _csv_env("NIJA_ALLOWED_EXECUTION_BROKERS", "")
     if not allowed:
-        allowed = _csv_env("NIJA_ENTRY_BROKER_PRIORITY", "kraken,coinbase,alpaca")
+        allowed = _csv_env("NIJA_ENTRY_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
+    if _okx_execution_enabled() and "okx" not in _disabled_brokers(explicit_only=True) and "okx" not in allowed:
+        allowed = ["okx"] + allowed
     return [name for name in allowed if _broker_enabled(name)]
 
 
@@ -95,6 +129,8 @@ def _broker_enabled(name: Any) -> bool:
     if key in _disabled_brokers():
         return False
     allowed = _csv_env("NIJA_ALLOWED_EXECUTION_BROKERS", "")
+    if key == "okx" and _okx_execution_enabled() and key not in _disabled_brokers(explicit_only=True):
+        return True
     if allowed and key not in allowed:
         return False
     return True
@@ -187,7 +223,7 @@ def _set_strategy_broker(strategy: Any, name: str, broker: Any) -> None:
 
 def _choose_enabled_candidate(strategy: Any) -> tuple[str, Any, str]:
     candidates = _collect_candidate_brokers(strategy)
-    priority = _csv_env("NIJA_ENTRY_BROKER_PRIORITY", "kraken,coinbase,alpaca")
+    priority = _csv_env("NIJA_ENTRY_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
     names = [name for name in priority if name in candidates] + sorted(set(candidates) - set(priority))
     for name in names:
         if not _broker_enabled(name):
@@ -222,7 +258,7 @@ def _patch_trading_strategy_module(module: ModuleType) -> bool:
     try:
         priority = getattr(module, "ENTRY_BROKER_PRIORITY", None)
         if isinstance(priority, list):
-            desired = _csv_env("NIJA_ENTRY_BROKER_PRIORITY", "kraken,coinbase,alpaca")
+            desired = _csv_env("NIJA_ENTRY_BROKER_PRIORITY", "okx,kraken,coinbase,alpaca")
             priority[:] = desired + [p for p in priority if _normalise_broker_name(p) not in set(desired)]
         mins = getattr(module, "BROKER_MIN_BALANCE", None)
         if isinstance(mins, dict) and not _okx_execution_enabled():
@@ -241,22 +277,24 @@ def _patch_trading_strategy_module(module: ModuleType) -> bool:
         if fallback_broker is not None and fallback_name:
             _set_strategy_broker(self, fallback_name, fallback_broker)
             logger.critical(
-                "ENTRY_BROKER_DISABLED_REROUTED marker=20260704a from=%s to=%s reason=%s disabled=%s",
+                "ENTRY_BROKER_DISABLED_REROUTED marker=20260705c from=%s to=%s reason=%s disabled=%s allowed=%s",
                 selected_name,
                 fallback_name,
                 reason,
                 sorted(_disabled_brokers()),
+                _allowed_brokers(),
             )
             print(
-                f"[NIJA-PRINT] ENTRY_BROKER_DISABLED_REROUTED marker=20260704a from={selected_name} to={fallback_name}",
+                f"[NIJA-PRINT] ENTRY_BROKER_DISABLED_REROUTED marker=20260705c from={selected_name} to={fallback_name}",
                 flush=True,
             )
             return fallback_broker
 
         logger.critical(
-            "ENTRY_BROKER_DISABLED_NO_FALLBACK marker=20260704a selected=%s disabled=%s",
+            "ENTRY_BROKER_DISABLED_NO_FALLBACK marker=20260705c selected=%s disabled=%s allowed=%s",
             selected_name,
             sorted(_disabled_brokers()),
+            _allowed_brokers(),
         )
         return selected
 
@@ -336,7 +374,7 @@ def _stamp_request_route(request: Any, broker: str) -> Any:
         "symbol_broker": broker,
         "balance_broker": broker,
         "dispatch_broker": broker,
-        "route_guard_marker": "20260704a",
+        "route_guard_marker": "20260705c",
     })
     if hasattr(request, "metadata"):
         updates["metadata"] = meta
@@ -369,11 +407,21 @@ def _patch_execution_pipeline_module(module: ModuleType) -> bool:
         def _route_guard_dispatch(self: Any, request: Any, t_start: float) -> Any:
             selected = _resolve_selected_broker(request)
             if not _broker_enabled(selected):
-                error = f"BrokerRouteGuard deny: broker disabled for live execution selected={selected} disabled={sorted(_disabled_brokers())}"
-                logger.critical("EXECUTION_ROUTE_GUARD_DENY marker=20260704a %s symbol=%s", error, getattr(request, "symbol", ""))
+                error = (
+                    f"BrokerRouteGuard deny: broker disabled for live execution selected={selected} "
+                    f"disabled={sorted(_disabled_brokers())} allowed={_allowed_brokers()}"
+                )
+                logger.critical("EXECUTION_ROUTE_GUARD_DENY marker=20260705c %s symbol=%s", error, getattr(request, "symbol", ""))
                 return _make_pipeline_result(module, request, t_start, selected, error)
 
             guarded_request = _stamp_request_route(request, selected)
+            logger.critical(
+                "EXECUTION_ROUTE_GUARD_ALLOW marker=20260705c selected=%s symbol=%s allowed=%s disabled=%s",
+                selected,
+                getattr(guarded_request, "symbol", ""),
+                _allowed_brokers(),
+                sorted(_disabled_brokers()),
+            )
             result = original_dispatch(self, guarded_request, t_start)
             if result is None:
                 error = f"broker_dispatch_failed:{selected}:none_result"
@@ -386,14 +434,14 @@ def _patch_execution_pipeline_module(module: ModuleType) -> bool:
                     result = _safe_replace(result, broker=selected, error=error)
                 elif result_broker != selected:
                     mismatch = f"execution_route_mismatch:selected={selected}:actual={result_broker}:symbol={getattr(guarded_request, 'symbol', '')}"
-                    logger.critical("EXECUTION_ROUTE_MISMATCH marker=20260704a %s", mismatch)
+                    logger.critical("EXECUTION_ROUTE_MISMATCH marker=20260705c %s", mismatch)
                     result = _safe_replace(result, broker=selected, error=mismatch)
                 elif not str(getattr(result, "error", "") or "").strip():
                     result = _safe_replace(result, error=error)
             else:
                 if result_broker and result_broker != selected:
                     mismatch = f"execution_route_mismatch:selected={selected}:actual={result_broker}:ack_success=True"
-                    logger.critical("EXECUTION_ROUTE_MISMATCH_SUCCESS marker=20260704a %s", mismatch)
+                    logger.critical("EXECUTION_ROUTE_MISMATCH_SUCCESS marker=20260705c %s", mismatch)
                     result = _safe_replace(result, success=False, broker=selected, error=mismatch)
             return result
 
@@ -413,7 +461,7 @@ def _patch_execution_pipeline_module(module: ModuleType) -> bool:
                 except Exception:
                     pass
                 logger.warning(
-                    "🟡 EXCHANGE SOFT-REJECT [broker_dispatch] marker=20260704a symbol=%s broker=%s error=%s",
+                    "🟡 EXCHANGE SOFT-REJECT [broker_dispatch] marker=20260705c symbol=%s broker=%s error=%s",
                     getattr(request, "symbol", "unknown"),
                     _resolve_selected_broker(request),
                     error or "broker_dispatch_failed:unknown:empty_order_result",
@@ -466,11 +514,21 @@ def _patch_multi_router_module(module: ModuleType) -> bool:
     def _route_guard_route(self: Any, request: Any) -> Any:
         selected = _resolve_selected_broker(request)
         if not _broker_enabled(selected):
-            error = f"BrokerRouteGuard deny: broker disabled for live execution selected={selected} disabled={sorted(_disabled_brokers())}"
-            logger.critical("ROUTER_ROUTE_GUARD_DENY marker=20260704a %s symbol=%s", error, getattr(request, "symbol", ""))
+            error = (
+                f"BrokerRouteGuard deny: broker disabled for live execution selected={selected} "
+                f"disabled={sorted(_disabled_brokers())} allowed={_allowed_brokers()}"
+            )
+            logger.critical("ROUTER_ROUTE_GUARD_DENY marker=20260705c %s symbol=%s", error, getattr(request, "symbol", ""))
             return _make_route_result(module, request, selected, error)
 
         guarded_request = _stamp_request_route(request, selected)
+        logger.critical(
+            "ROUTER_ROUTE_GUARD_ALLOW marker=20260705c selected=%s symbol=%s allowed=%s disabled=%s",
+            selected,
+            getattr(guarded_request, "symbol", ""),
+            _allowed_brokers(),
+            sorted(_disabled_brokers()),
+        )
         result = original_route(self, guarded_request)
         if result is None:
             return _make_route_result(module, guarded_request, selected, f"broker_dispatch_failed:{selected}:none_route_result")
@@ -482,13 +540,13 @@ def _patch_multi_router_module(module: ModuleType) -> bool:
                 result = _safe_replace(result, broker=selected, error=error)
             elif result_broker != selected:
                 mismatch = f"execution_route_mismatch:selected={selected}:actual={result_broker}:symbol={getattr(guarded_request, 'symbol', '')}"
-                logger.critical("ROUTER_ROUTE_MISMATCH marker=20260704a %s", mismatch)
+                logger.critical("ROUTER_ROUTE_MISMATCH marker=20260705c %s", mismatch)
                 result = _safe_replace(result, broker=selected, error=mismatch)
             elif not str(getattr(result, "error", "") or "").strip():
                 result = _safe_replace(result, error=error)
         elif result_broker and result_broker != selected:
             mismatch = f"execution_route_mismatch:selected={selected}:actual={result_broker}:ack_success=True"
-            logger.critical("ROUTER_ROUTE_MISMATCH_SUCCESS marker=20260704a %s", mismatch)
+            logger.critical("ROUTER_ROUTE_MISMATCH_SUCCESS marker=20260705c %s", mismatch)
             result = _safe_replace(result, success=False, broker=selected, error=mismatch)
         return result
 
@@ -526,7 +584,7 @@ def _patch_independent_trader_module(module: ModuleType) -> bool:
                 except Exception:
                     pass
                 logger.warning(
-                    "COPY_TRADE_ENGINE_DISABLED marker=20260704a mode=independent_user_trading master_signal_only=%s",
+                    "COPY_TRADE_ENGINE_DISABLED marker=20260705c mode=independent_user_trading master_signal_only=%s",
                     os.environ.get("NIJA_MASTER_SIGNAL_ONLY", "true"),
                 )
 
@@ -593,7 +651,7 @@ def _start_monitor() -> None:
                 return
             time.sleep(1.0)
         logger.warning(
-            "EXECUTION_ROUTE_INTEGRITY_MONITOR_EXPIRED marker=20260704a strategy=%s pipeline=%s router=%s independent=%s",
+            "EXECUTION_ROUTE_INTEGRITY_MONITOR_EXPIRED marker=20260705c strategy=%s pipeline=%s router=%s independent=%s",
             _STRATEGY_PATCHED,
             _PIPELINE_PATCHED,
             _ROUTER_PATCHED,
@@ -601,7 +659,7 @@ def _start_monitor() -> None:
         )
 
     threading.Thread(target=_monitor, name="execution-route-integrity-monitor", daemon=True).start()
-    logger.warning("EXECUTION_ROUTE_INTEGRITY_MONITOR_STARTED marker=20260704a")
+    logger.warning("EXECUTION_ROUTE_INTEGRITY_MONITOR_STARTED marker=20260705c")
 
 
 def install_import_hook() -> None:
@@ -609,18 +667,18 @@ def install_import_hook() -> None:
     with _IMPORT_LOCK:
         _apply_safe_defaults()
         logger.warning(
-            "%s install_start=True allowed=%s disabled=%s copy_trade_enabled=%s",
+            "%s install_start=True allowed=%s disabled=%s copy_trade_enabled=%s okx_enabled=%s",
             _MARKER,
             _allowed_brokers(),
             sorted(_disabled_brokers()),
             _copy_trading_enabled(),
+            _okx_execution_enabled(),
         )
-        print("[NIJA-PRINT] EXECUTION_ROUTE_INTEGRITY_PATCHED marker=20260704a install_start", flush=True)
+        print("[NIJA-PRINT] EXECUTION_ROUTE_INTEGRITY_PATCHED marker=20260705c install_start", flush=True)
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
             return
-
         _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
         def _wrapped_import_module(name: str, package: str | None = None):
@@ -639,17 +697,7 @@ def install_import_hook() -> None:
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning(
-            "EXECUTION_ROUTE_INTEGRITY_INSTALL_COMPLETE marker=20260704a strategy=%s pipeline=%s router=%s independent=%s",
-            _STRATEGY_PATCHED,
-            _PIPELINE_PATCHED,
-            _ROUTER_PATCHED,
-            _INDEPENDENT_PATCHED,
-        )
 
 
-# Allow direct `import bot.execution_route_integrity_patch` to be effective.
-try:
-    _apply_safe_defaults()
-except Exception:
-    pass
+def install() -> None:
+    install_import_hook()
