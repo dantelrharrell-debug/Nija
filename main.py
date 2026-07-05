@@ -103,9 +103,9 @@ def _install_forced_fallback_payload_repair() -> None:
             print("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_REQUESTED", flush=True)
             logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_REQUESTED")
         else:
-            logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_SKIPPED installer_missing")
+            logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_SKIPPED installer_missing")
     except Exception as exc:
-        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_FAILED err=%s", exc)
+        logger.warning("FORCED_FALLBACK_PAYLOAD_REPAIR_FAILED err=%s", exc)
 
 
 def _install_execution_pipeline_gate_repair() -> None:
@@ -119,7 +119,7 @@ def _install_execution_pipeline_gate_repair() -> None:
             print("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_REQUESTED", flush=True)
             logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_REQUESTED")
         else:
-            logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_INSTALL_SKIPPED installer_missing")
+            logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_SKIPPED installer_missing")
     except Exception as exc:
         logger.warning("EXECUTION_PIPELINE_GATE_REPAIR_FAILED err=%s", exc)
 
@@ -135,9 +135,9 @@ def _install_hard_controls_csm_repair() -> None:
             print("HARD_CONTROLS_CSM_REPAIR_INSTALL_REQUESTED", flush=True)
             logger.warning("HARD_CONTROLS_CSM_REPAIR_INSTALL_REQUESTED")
         else:
-            logger.warning("HARD_CONTROLS_CSM_REPAIR_INSTALL_SKIPPED installer_missing")
+            logger.warning("HARD_CONTROLS_CSM_REPAIR_SKIPPED installer_missing")
     except Exception as exc:
-        logger.warning("HARD_CONTROLS_CSM_REPAIR_INSTALL_FAILED err=%s", exc)
+        logger.warning("HARD_CONTROLS_CSM_REPAIR_FAILED err=%s", exc)
 
 
 def _install_trading_state_dispatch_latch_repair() -> None:
@@ -173,19 +173,18 @@ def _install_downstream_risk_governor_equity_repair() -> None:
 
 
 def _install_usdt_kraken_ecel_routing_repair() -> None:
-    """Install Kraken routing and ECEL rule repair for *-USDT spot pairs."""
+    """Legacy installer intentionally disabled.
 
-    try:
-        repair = importlib.import_module("bot.usdt_kraken_ecel_routing_repair_patch")
-        installer = getattr(repair, "install_import_hook", None)
-        if callable(installer):
-            installer()
-            print("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED", flush=True)
-            logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED")
-        else:
-            logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_SKIPPED installer_missing")
-    except Exception as exc:
-        logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_FAILED err=%s", exc)
+    The old module blindly rewrote coinbase/auto *-USDT orders to Kraken.  That
+    caused OKX-selected USDT entries to route to Kraken and fail after the venue
+    guard had already selected the correct broker.  Venue preservation is now
+    handled by bot.venue_route_guard_patch, bot.execution_pipeline_runtime_patch,
+    bot.ecel_contract_route_repair_patch, order_normalizer, and
+    exchange_normalizer.
+    """
+
+    logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_SKIPPED reason=legacy_blind_reroute_disabled")
+    print("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_SKIPPED reason=legacy_blind_reroute_disabled", flush=True)
 
 
 def _install_live_entry_completion_repair() -> None:
@@ -218,91 +217,36 @@ _install_usdt_kraken_ecel_routing_repair()
 _install_live_entry_completion_repair()
 from bot.startup_runtime_safety import normalize_runtime_startup_env
 
-# ── MODULE-LEVEL STARTUP DIAGNOSTICS ─────────────────────────────────────────
-# Emitted at import time so we can confirm main.py is being loaded and identify
-# the Python version, PID, and thread context before any bot code runs.
-import sys as _sys_diag
-print(
-    f"DIAG_MAIN_MODULE_IMPORT: main.py imported "
-    f"pid={os.getpid()} "
-    f"python={_sys_diag.version.split()[0]} "
-    f"thread={threading.current_thread().name} "
-    f"thread_id={threading.get_ident()} "
-    f"__name__={__name__!r} "
-    f"__file__={__file__!r}",
-    flush=True,
-)
-for _note in normalize_runtime_startup_env(os.environ):
-    print(f"STARTUP_ENV_SAFETY: {_note}", flush=True)
-print(
-    f"DIAG_MAIN_ENV_STARTUP: "
-    f"RAILWAY_DEPLOYMENT_ID={os.environ.get('RAILWAY_DEPLOYMENT_ID', '<unset>')} "
-    f"RAILWAY_SERVICE_ID={os.environ.get('RAILWAY_SERVICE_ID', '<unset>')} "
-    f"RAILWAY_REPLICA_ID={os.environ.get('RAILWAY_REPLICA_ID', '<unset>')} "
-    f"LIVE_CAPITAL_VERIFIED={os.environ.get('LIVE_CAPITAL_VERIFIED', '<unset>')} "
-    f"DRY_RUN_MODE={os.environ.get('DRY_RUN_MODE', '<unset>')} "
-    f"FORCE_TRADE={os.environ.get('FORCE_TRADE', '<unset>')} "
-    f"HF_SCALP_MODE={os.environ.get('HF_SCALP_MODE', '<unset')}",
-    flush=True,
-)
+normalize_runtime_startup_env()
 
+# Re-apply strict sanitizer after runtime startup normalization so unsafe flags
+# cannot be reintroduced by startup defaults.
+_run_pre_startup_sanitization()
 
-def hard_exit(msg: str) -> None:
-    """Print a highly visible error with a stack trace then exit with code 1.
+try:
+    from bot.generation_sync_timing_patch import install_import_hook as _install_generation_sync_timing_patch
+    _install_generation_sync_timing_patch()
+    print("GENERATION_SYNC_TIMING_PATCH_INSTALL_REQUESTED", flush=True)
+    logger.warning("GENERATION_SYNC_TIMING_PATCH_INSTALL_REQUESTED")
+except Exception as _gen_sync_exc:
+    logger.warning("GENERATION_SYNC_TIMING_PATCH_INSTALL_FAILED err=%s", _gen_sync_exc)
 
-    Use this instead of bare exit(0) / sys.exit(0) for any *unexpected* early
-    exit so the line that triggered the stop is always visible in Railway logs.
-    """
-    print(f"❌ HARD EXIT: {msg}", flush=True)
-    _sys.stderr.write(f"❌ HARD EXIT: {msg}\n")
-    _sys.stderr.flush()
-    traceback.print_stack()
-    _sys.exit(1)
+# Ensure the live execution authority blocker patch is loaded before bot.py creates
+# or checks the TradingStateMachine.  It removes stale heartbeat-stage assumptions
+# and makes dispatch authority depend on the live writer-lock generation.
+try:
+    from bot.live_execution_authority_blocker_patch import install_import_hook as _install_live_execution_authority_blocker_patch
+    _install_live_execution_authority_blocker_patch()
+    print("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_REQUESTED", flush=True)
+    logger.warning("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_REQUESTED")
+except Exception as _live_auth_exc:
+    logger.warning("LIVE_EXECUTION_AUTHORITY_BLOCKER_INSTALL_FAILED err=%s", _live_auth_exc)
 
-
-def main() -> None:
-    """Delegate execution to bot.py while preserving visible startup logs."""
-    print("🔥 BOOT START", flush=True)
-    print(
-        f"DIAG_MAIN_FUNC_ENTRY: main() called in main.py "
-        f"pid={os.getpid()} "
-        f"thread={threading.current_thread().name} "
-        f"thread_id={threading.get_ident()}",
-        flush=True,
-    )
-
-    print("STEP 1: imports done", flush=True)
-
-    # Ensure project root is importable so bot.py's relative imports work.
-    if _ROOT not in _sys.path:
-        _sys.path.insert(0, _ROOT)
-
-    print("STEP 2: loading bot.py...", flush=True)
-    print(
-        f"DIAG_RUNPY_BEFORE: about to call runpy.run_path('bot.py', run_name='__main__') "
-        f"pid={os.getpid()} "
-        f"thread={threading.current_thread().name}",
-        flush=True,
-    )
-    runpy.run_path(os.path.join(_ROOT, "bot.py"), run_name="__main__")
-    print("STEP 3: bot.py returned (process will exit normally)", flush=True)
-    print(
-        f"DIAG_RUNPY_AFTER: runpy.run_path('bot.py') returned normally "
-        f"pid={os.getpid()} "
-        f"thread={threading.current_thread().name}",
-        flush=True,
-    )
-
-
-if __name__ == "__main__":
-    print(
-        f"DIAG_MAIN_PY_DUNDER_MAIN: __name__=='__main__' block executing in main.py "
-        f"pid={os.getpid()} "
-        f"thread={threading.current_thread().name}",
-        flush=True,
-    )
-    try:
-        main()
-    except Exception:
-        traceback.print_exc()
-        raise
+# Execute the real bot module as if it were run directly.  This preserves the
+# normal __main__ startup path while allowing Railway to use ``python main.py``.
+try:
+    runpy.run_module("bot.bot", run_name="__main__")
+except Exception:
+    print("🔥 MAIN WRAPPER CAUGHT EXCEPTION", flush=True)
+    traceback.print_exc()
+    raise
