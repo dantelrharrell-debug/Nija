@@ -13,7 +13,17 @@ and NijaCoreLoop startup.
 
 from __future__ import annotations
 
+import logging
 import sys
+
+logger = logging.getLogger("nija.bot_entrypoint")
+
+try:
+    from bot.startup_authority_prereq_repair_patch import install_import_hook as _install_startup_authority_repair
+    _install_startup_authority_repair()
+    logger.warning("STARTUP_AUTHORITY_PREREQ_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("STARTUP_AUTHORITY_PREREQ_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
 from bot.bot_main import main
 
