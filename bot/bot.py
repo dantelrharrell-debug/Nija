@@ -56,6 +56,13 @@ try:
 except Exception as exc:
     logger.warning("FALLBACK_FLOOR_CALIBRATION_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
+try:
+    from bot.okx_execution_min_notional_lift_patch import install_import_hook as _install_okx_execution_min_lift
+    _install_okx_execution_min_lift()
+    logger.warning("OKX_EXECUTION_MIN_NOTIONAL_LIFT_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("OKX_EXECUTION_MIN_NOTIONAL_LIFT_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
 from bot.bot_main import main
 
 if __name__ == "__main__":
