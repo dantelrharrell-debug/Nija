@@ -1,19 +1,14 @@
 """Adaptive minimum-notional runtime patch for NIJA micro-cap live accounts.
 
-The execution path previously forced live minimums to $50 through startup env
-normalization.  That is too high for small accounts where the exchange-spendable
-balance can be ~$15, causing valid entries to die at:
+Keeps micro-cap sizing available for venues that support small orders while never
+letting Kraken/global shared notional keys fall below Kraken's live safety floor.
 
-    stage=minimum_notional_gate reason=below_min_notional_spendable
-
-This module restores venue-aware micro-cap floors without disabling safety:
+Venue policy:
 - Coinbase: configurable floor, default $1
-- Kraken: configurable floor, default $10
 - OKX: configurable floor, default $10
-- Global MIN_TRADE_USD/MIN_NOTIONAL_OVERRIDE: default $10
-
-The gate still rejects orders below the applicable venue floor, but it no longer
-uses an artificial $50 platform policy floor for micro-cap accounts.
+- Kraken: hard protected floor, default/minimum $23
+- Shared MIN_TRADE_USD/MIN_NOTIONAL_OVERRIDE: protected to Kraken floor when
+  Kraken is configured/enabled so a later Kraken route cannot inherit a $10 floor.
 """
 
 from __future__ import annotations
@@ -26,6 +21,14 @@ from typing import Any
 
 logger = logging.getLogger("nija.min_notional_runtime_patch")
 _PATCHED_ATTR = "__nija_adaptive_min_notional_patch__"
+_KRAKEN_PROTECTED_KEYS = (
+    "KRAKEN_MIN_NOTIONAL_USD",
+    "NIJA_KRAKEN_MIN_NOTIONAL_USD",
+    "NIJA_KRAKEN_MICRO_MIN_NOTIONAL_USD",
+    "NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD",
+    "NIJA_KRAKEN_FINAL_MIN_NOTIONAL_USD",
+)
+_SHARED_PROTECTED_KEYS = ("MIN_NOTIONAL_OVERRIDE", "MIN_TRADE_USD")
 
 
 def _truthy(name: str, default: bool = False) -> bool:
@@ -42,6 +45,23 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
+def _kraken_configured() -> bool:
+    return bool(
+        os.environ.get("KRAKEN_API_KEY")
+        or os.environ.get("KRAKEN_API_SECRET")
+        or os.environ.get("KRAKEN_USER_DAIVON_API_KEY")
+        or os.environ.get("KRAKEN_USER_TANIA_API_KEY")
+        or _truthy("NIJA_KRAKEN_ENABLED", True)
+    )
+
+
+def _kraken_live_floor() -> float:
+    values = [23.0]
+    for key in _KRAKEN_PROTECTED_KEYS:
+        values.append(_float_env(key, 0.0))
+    return max(values)
+
+
 def _set_if_too_high(name: str, target: float) -> None:
     current = _float_env(name, target)
     if current > target:
@@ -51,18 +71,44 @@ def _set_if_too_high(name: str, target: float) -> None:
         os.environ[name] = str(target)
 
 
+def _set_if_below(name: str, floor: float) -> None:
+    current = _float_env(name, floor)
+    if current < floor:
+        os.environ[name] = str(floor)
+        logger.warning("ADAPTIVE_MIN_NOTIONAL_ENV_PROTECTED %s %.2f -> %.2f", name, current, floor)
+    elif name not in os.environ:
+        os.environ[name] = str(floor)
+
+
+def _protect_kraken_floor() -> None:
+    if not _kraken_configured():
+        return
+    floor = _kraken_live_floor()
+    for key in _KRAKEN_PROTECTED_KEYS:
+        _set_if_below(key, floor)
+    # These shared keys are read by legacy/global execution paths before broker
+    # context is available.  Keep them at Kraken floor when Kraken is configured
+    # so no later Kraken route inherits a $10 micro-cap floor.
+    for key in _SHARED_PROTECTED_KEYS:
+        _set_if_below(key, floor)
+
+
 def normalize_min_notional_env() -> None:
     if not _truthy("NIJA_ADAPTIVE_MIN_NOTIONAL_ENABLED", True):
         return
+
+    _protect_kraken_floor()
+
     # Do not permit the previous $50 startup guard to dominate micro-cap live
-    # execution. These are policy floors; exchange hard-min validation remains
-    # in the compiler/adapter layer.
-    _set_if_too_high("MIN_NOTIONAL_OVERRIDE", _float_env("NIJA_MICRO_CAP_MIN_NOTIONAL_USD", 10.0))
-    _set_if_too_high("MIN_TRADE_USD", _float_env("NIJA_MICRO_CAP_MIN_TRADE_USD", 10.0))
+    # execution for non-Kraken venues.  Shared/Kraken keys are re-protected after
+    # these downshifts so Kraken can never be lowered below its live floor.
+    if not _kraken_configured():
+        _set_if_too_high("MIN_NOTIONAL_OVERRIDE", _float_env("NIJA_MICRO_CAP_MIN_NOTIONAL_USD", 10.0))
+        _set_if_too_high("MIN_TRADE_USD", _float_env("NIJA_MICRO_CAP_MIN_TRADE_USD", 10.0))
     _set_if_too_high("MIN_CASH_TO_BUY", _float_env("NIJA_MICRO_CAP_MIN_CASH_TO_BUY_USD", 5.0))
-    _set_if_too_high("KRAKEN_MIN_NOTIONAL_USD", _float_env("NIJA_KRAKEN_MICRO_MIN_NOTIONAL_USD", 10.0))
     _set_if_too_high("COINBASE_MIN_ORDER_USD", _float_env("NIJA_COINBASE_MICRO_MIN_ORDER_USD", 1.0))
     _set_if_too_high("OKX_MIN_ORDER_USD", _float_env("NIJA_OKX_MICRO_MIN_ORDER_USD", 10.0))
+    _protect_kraken_floor()
     os.environ.setdefault("NIJA_MIN_NOTIONAL_SPENDABLE_CAP", "true")
 
 
@@ -73,7 +119,7 @@ def _broker_floor(broker_name: str, legacy: float) -> float:
     if "okx" in broker:
         return _float_env("OKX_MIN_ORDER_USD", 10.0)
     if "kraken" in broker:
-        return _float_env("KRAKEN_MIN_NOTIONAL_USD", 10.0)
+        return _kraken_live_floor()
     return min(float(legacy or 10.0), _float_env("MIN_TRADE_USD", 10.0))
 
 
@@ -95,7 +141,7 @@ def _patch_minimum_notional_gate(module: Any) -> bool:
         self.min_entry_notional_usd = min(float(getattr(self, "min_entry_notional_usd", env_floor) or env_floor), env_floor)
         self.broker_specific_limits = {
             "coinbase": _float_env("COINBASE_MIN_ORDER_USD", 1.0),
-            "kraken": _float_env("KRAKEN_MIN_NOTIONAL_USD", 10.0),
+            "kraken": _kraken_live_floor(),
             "binance": min(10.0, env_floor),
             "okx": _float_env("OKX_MIN_ORDER_USD", 10.0),
             "alpaca": min(1.0, env_floor),
@@ -105,10 +151,11 @@ def _patch_minimum_notional_gate(module: Any) -> bool:
         normalize_min_notional_env()
         legacy = float(getattr(self, "min_entry_notional_usd", _float_env("MIN_TRADE_USD", 10.0)) or 10.0)
         floor = _broker_floor(broker_name, legacy)
-        # If the only available spendable capital is below an artificial policy
-        # floor, cap to available capital so the execution engine can attempt the
-        # largest safe order instead of returning below_min_notional_spendable.
-        if _truthy("NIJA_MIN_NOTIONAL_SPENDABLE_CAP", True) and balance and balance > 0:
+        broker = str(broker_name or "").lower()
+        # Never cap Kraken below its exchange/live floor.  Failing before submit is
+        # safer than submitting a known-underfloor Kraken order and receiving an
+        # exchange-side reject.
+        if "kraken" not in broker and _truthy("NIJA_MIN_NOTIONAL_SPENDABLE_CAP", True) and balance and balance > 0:
             floor = min(floor, float(balance))
         return max(1.0, float(floor))
 
@@ -129,8 +176,6 @@ def _patch_minimum_notional_gate(module: Any) -> bool:
     setattr(config_cls, "get_min_notional_for_broker", get_min_notional_for_broker)
     setattr(gate_cls, "validate_entry_size", validate_entry_size)
 
-    # Reset singleton so the patched config is used even if the module was
-    # imported before this patch.
     try:
         setattr(module, "_default_gate", None)
     except Exception:
@@ -153,7 +198,7 @@ def _patch_execution_engine(module: Any) -> bool:
         if hasattr(module, attr):
             try:
                 current = float(getattr(module, attr) or 0.0)
-                if current > target:
+                if current != target:
                     setattr(module, attr, target)
                     changed = True
             except Exception:
