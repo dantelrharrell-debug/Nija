@@ -276,7 +276,7 @@ def _install_downstream_risk_governor_equity_repair() -> None:
 
 
 def _install_usdt_kraken_ecel_routing_repair() -> None:
-    _install_patch_module(filename="usdt_kraken_ecel_routing_repair_patch.py", module_name="nija_usdt_kraken_ecel_routing_repair_patch", success_log="USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_REQUESTED", error_prefix="USDT Kraken ECEL routing repair")
+    logger.warning("USDT_KRAKEN_ECEL_ROUTING_REPAIR_INSTALL_SKIPPED reason=legacy_blind_reroute_disabled source=sitecustomize")
 
 
 def _install_coinbase_execution_failover() -> None:
