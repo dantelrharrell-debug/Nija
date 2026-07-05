@@ -53,6 +53,13 @@ try:
 except Exception as exc:
     logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
+try:
+    from bot.ecel_okx_synthetic_contract_patch import install_import_hook as _install_ecel_okx_contract_repair
+    _install_ecel_okx_contract_repair()
+    logger.warning("ECEL_OKX_SYNTHETIC_CONTRACT_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("ECEL_OKX_SYNTHETIC_CONTRACT_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
 from bot.bot_main import main
 
 
