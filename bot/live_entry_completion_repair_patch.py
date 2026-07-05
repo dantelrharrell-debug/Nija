@@ -1,32 +1,26 @@
 """Runtime repairs for live-entry completion and startup activation noise.
 
-This patch is intentionally narrow and import-hook based because the production
-failure is startup/runtime ordering-sensitive:
+This module is intentionally import-hook based. It must never rewrite
+NijaCoreLoop source with ``exec()`` during live startup: source-string rewriting
+previously produced ``unexpected indent (<string>, line 1620)`` and created a
+false crash signal before the real trading loop could be evaluated.
 
-* nonce lease stability should defer activation while the same lease matures,
-  not emit false HARD FAIL noise during the last few seconds of the stability
-  window;
-* a scored/passed signal must always produce deterministic signal->execution
-  telemetry, including the exact reason when it does not reach execute_action();
-* the execution refetch candle gate must use the same minimum candle window as
-  the scoring gate unless explicitly overridden;
-* invalid volume sentinel values such as -99%/-100% must not be treated as real
-  market-volume telemetry;
-* successful OKX diagnostics should not pollute WARNING/ERROR logs.
+The safe implementation below uses direct monkey-patching only:
+* nonce lease stability still waits/defer instead of hard-failing early;
+* execute_action is wrapped for deterministic signal-to-execution telemetry;
+* OKX successful diagnostic chatter is demoted from warning level;
+* NijaCoreLoop is marked patched without source recompilation.
 """
 
 from __future__ import annotations
 
 import builtins
-import importlib
-import inspect
 import logging
 import os
 import sys
-import textwrap
 import time
 from types import ModuleType
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger("nija.live_entry_completion_repair")
 _TRUTHY = {"1", "true", "yes", "y", "on", "enabled"}
@@ -53,10 +47,6 @@ def _safe_int(value: Any, default: int) -> int:
 def _nija_execution_min_candles() -> int:
     """Minimum candles required when a selected signal is re-fetched for execution."""
 
-    # Scoring already accepts 50 candles in nija_core_loop. The previous hardcoded
-    # execution refetch requirement of 100 could silently drop a SIGNAL_PASSED
-    # candidate before execute_action(). Keep 50 as the default and allow operators
-    # to raise it explicitly if they want stricter analysis.
     return max(10, _safe_int(os.getenv("NIJA_EXECUTION_MIN_CANDLES", "50"), 50))
 
 
@@ -79,8 +69,6 @@ class _SmartOKXLogger:
     def warning(self, msg: Any, *args: Any, **kwargs: Any) -> None:
         text = str(msg or "")
         if text.startswith(self._DIAG_PREFIXES):
-            # Keep 200/account-balance diagnostics available for debugging but
-            # stop labeling successful REST activity as a warning.
             self._base.debug(msg, *args, **kwargs)
             return
         self._base.warning(msg, *args, **kwargs)
@@ -123,7 +111,6 @@ def _patch_trading_state_machine(module: ModuleType) -> bool:
                 )
                 return True, ""
         except Exception:
-            # Preserve strict legacy behavior when topology inspection fails.
             pass
 
         retries = max(1, _safe_int(os.environ.get("NIJA_NONCE_LEASE_RETRIES", "5"), 5))
@@ -197,7 +184,7 @@ def _patch_trading_state_machine(module: ModuleType) -> bool:
                         last_err = unstable_err
                         break
                 return True, ""
-            except Exception as exc:  # noqa: BLE001 - strict activation gate
+            except Exception as exc:
                 last_err = str(exc)
                 if attempt < retries:
                     time.sleep(retry_delay_s)
@@ -250,12 +237,7 @@ def _wrap_execute_action(apex: Any) -> None:
             size,
             price,
         )
-        logger.critical(
-            "ORDER_COMPILER_STARTED symbol=%s action=%s size=$%.2f",
-            symbol,
-            action or "unknown",
-            size,
-        )
+        logger.critical("ORDER_COMPILER_STARTED symbol=%s action=%s size=$%.2f", symbol, action or "unknown", size)
         logger.critical(
             "BROKER_ORDER_ATTEMPT symbol=%s action=%s size=$%.2f price=%.8f",
             symbol,
@@ -265,7 +247,7 @@ def _wrap_execute_action(apex: Any) -> None:
         )
         try:
             result = original(analysis, symbol, *args, **kwargs)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.critical(
                 "BROKER_ORDER_ACK_OR_REJECT symbol=%s action=%s accepted=False exception=%r",
                 symbol,
@@ -294,140 +276,20 @@ def _wrap_execute_action(apex: Any) -> None:
 
 
 def _patch_core_loop_source(module: ModuleType) -> bool:
+    """Patch NijaCoreLoop without source-string recompilation.
+
+    The previous version rebuilt ``_phase3_scan_and_enter`` from text and could
+    generate malformed indentation. This version only wraps stable Python
+    callables, so importing the patch cannot produce ``unexpected indent``.
+    """
+
     cls = getattr(module, "NijaCoreLoop", None)
-    if cls is None or getattr(module, "_NIJA_LIVE_ENTRY_COMPLETION_PATCHED", False):
-        return bool(getattr(module, "_NIJA_LIVE_ENTRY_COMPLETION_PATCHED", False))
+    if cls is None:
+        return False
+    if getattr(module, "_NIJA_LIVE_ENTRY_COMPLETION_PATCHED", False):
+        return True
 
     setattr(module, "_nija_execution_min_candles", _nija_execution_min_candles)
-    original_method = getattr(cls, "_phase3_scan_and_enter", None)
-    if callable(original_method):
-        try:
-            src = textwrap.dedent(inspect.getsource(original_method))
-            replacements = 0
-
-            old_exec_fetch = (
-                "            if df is None or len(df) < 100:\n"
-                "                _funnel[\"market_data\"] = (\"FAIL\", \"DATA_INSUFFICIENT\")\n"
-                "                continue"
-            )
-            new_exec_fetch = (
-                "            _execution_min_candles = _nija_execution_min_candles()\n"
-                "            _df_exec_len = len(df) if df is not None else 0\n"
-                "            if df is None or _df_exec_len < _execution_min_candles:\n"
-                "                _funnel[\"market_data\"] = (\"FAIL\", \"DATA_INSUFFICIENT\")\n"
-                "                blocked += 1\n"
-                "                _gate_rejections[\"data_insufficient\"] = _gate_rejections.get(\"data_insufficient\", 0) + 1\n"
-                "                logger.critical(\n"
-                "                    \"SIGNAL_PASSED_BUT_NOT_EXECUTED reason=execution_data_insufficient \"\n"
-                "                    \"symbol=%s df_len=%d required=%d cycle_id=%s\",\n"
-                "                    sig.symbol,\n"
-                "                    _df_exec_len,\n"
-                "                    _execution_min_candles,\n"
-                "                    getattr(snapshot, \"cycle_id\", \"n/a\"),\n"
-                "                )\n"
-                "                continue"
-            )
-            if old_exec_fetch in src:
-                src = src.replace(old_exec_fetch, new_exec_fetch, 1)
-                replacements += 1
-
-            old_volume = (
-                "                            _diag_vol_pct = (_cur_vol / _avg_vol - 1.0) * 100.0\n"
-                "                            _volume_pct_sum += _diag_vol_pct\n"
-                "                            _volume_pct_count += 1"
-            )
-            new_volume = (
-                "                            _raw_diag_vol_pct = (_cur_vol / _avg_vol - 1.0) * 100.0\n"
-                "                            if _raw_diag_vol_pct <= -90.0:\n"
-                "                                logger.warning(\n"
-                "                                    \"VOLUME_SENTINEL_NORMALIZED symbol=%s raw_vol_pct=%.1f using=0.0 \"\n"
-                "                                    \"reason=invalid_or_missing_volume_baseline\",\n"
-                "                                    symbol,\n"
-                "                                    _raw_diag_vol_pct,\n"
-                "                                )\n"
-                "                                _diag_vol_pct = 0.0\n"
-                "                            else:\n"
-                "                                _diag_vol_pct = _raw_diag_vol_pct\n"
-                "                                _volume_pct_sum += _diag_vol_pct\n"
-                "                                _volume_pct_count += 1"
-            )
-            if old_volume in src:
-                src = src.replace(old_volume, new_volume, 1)
-                replacements += 1
-
-            old_submit = "            success = self.apex.execute_action(analysis, sig.symbol)"
-            new_submit = (
-                "            logger.critical(\n"
-                "                \"SIGNAL_TO_EXECUTION_DISPATCH_ATTEMPT symbol=%s side=%s action=%s \"\n"
-                "                \"score=%.1f cycle_id=%s\",\n"
-                "                sig.symbol, sig.side, action, sig.composite_score, getattr(snapshot, \"cycle_id\", \"n/a\"),\n"
-                "            )\n"
-                "            logger.critical(\n"
-                "                \"ORDER_SIZING_STARTED symbol=%s action=%s position_size=$%.2f entry_price=%.8f\",\n"
-                "                sig.symbol, action,\n"
-                "                float(analysis.get(\"position_size\", 0.0) or 0.0),\n"
-                "                float(analysis.get(\"entry_price\", 0.0) or 0.0),\n"
-                "            )\n"
-                "            logger.critical(\"ORDER_COMPILER_STARTED symbol=%s action=%s\", sig.symbol, action)\n"
-                "            logger.critical(\n"
-                "                \"BROKER_ORDER_ATTEMPT symbol=%s side=%s action=%s size=$%.2f price=%.8f\",\n"
-                "                sig.symbol, sig.side, action,\n"
-                "                float(analysis.get(\"position_size\", 0.0) or 0.0),\n"
-                "                float(analysis.get(\"entry_price\", 0.0) or 0.0),\n"
-                "            )\n"
-                "            success = self.apex.execute_action(analysis, sig.symbol)\n"
-                "            logger.critical(\n"
-                "                \"ORDER_COMPILER_RESULT symbol=%s action=%s accepted=%s\",\n"
-                "                sig.symbol, action, bool(success),\n"
-                "            )\n"
-                "            logger.critical(\n"
-                "                \"BROKER_ORDER_ACK_OR_REJECT symbol=%s side=%s action=%s accepted=%s\",\n"
-                "                sig.symbol, sig.side, action, bool(success),\n"
-                "            )"
-            )
-            if old_submit in src:
-                src = src.replace(old_submit, new_submit, 1)
-                replacements += 1
-
-            old_force_submit = "_ft_success = self.apex.execute_action(_ft_analysis, _best_volume_symbol)"
-            new_force_submit = (
-                "logger.critical(\n"
-                "                            \"SIGNAL_TO_EXECUTION_DISPATCH_ATTEMPT symbol=%s action=%s \"\n"
-                "                            \"reason=force_trade_direct cycle_id=%s\",\n"
-                "                            _best_volume_symbol, _ft_action, snapshot.cycle_id or \"n/a\",\n"
-                "                        )\n"
-                "                        logger.critical(\n"
-                "                            \"BROKER_ORDER_ATTEMPT symbol=%s action=%s size=$%.2f price=%.8f reason=force_trade_direct\",\n"
-                "                            _best_volume_symbol, _ft_action, _ft_size, _ft_price,\n"
-                "                        )\n"
-                "                        _ft_success = self.apex.execute_action(_ft_analysis, _best_volume_symbol)\n"
-                "                        logger.critical(\n"
-                "                            \"BROKER_ORDER_ACK_OR_REJECT symbol=%s action=%s accepted=%s reason=force_trade_direct\",\n"
-                "                            _best_volume_symbol, _ft_action, bool(_ft_success),\n"
-                "                        )"
-            )
-            if old_force_submit in src:
-                src = src.replace(old_force_submit, new_force_submit, 1)
-                replacements += 1
-
-            if replacements:
-                exec(src, module.__dict__)
-                patched = module.__dict__.get("_phase3_scan_and_enter")
-                if callable(patched):
-                    setattr(cls, "_phase3_scan_and_enter", patched)
-                    logger.warning(
-                        "LIVE_ENTRY_COMPLETION_SOURCE_PATCHED module=%s replacements=%d execution_min_candles=%d",
-                        module.__name__,
-                        replacements,
-                        _nija_execution_min_candles(),
-                    )
-            else:
-                logger.warning(
-                    "LIVE_ENTRY_COMPLETION_SOURCE_PATCH_SKIPPED module=%s reason=no_source_patterns_matched",
-                    module.__name__,
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("LIVE_ENTRY_COMPLETION_SOURCE_PATCH_FAILED module=%s err=%s", module.__name__, exc)
 
     original_init = getattr(cls, "__init__", None)
     if callable(original_init) and not getattr(cls, "_NIJA_INIT_EXEC_TELEMETRY_PATCHED", False):
@@ -438,8 +300,23 @@ def _patch_core_loop_source(module: ModuleType) -> bool:
         setattr(cls, "__init__", _patched_init)
         setattr(cls, "_NIJA_INIT_EXEC_TELEMETRY_PATCHED", True)
 
+    original_phase3 = getattr(cls, "_phase3_scan_and_enter", None)
+    if callable(original_phase3) and not getattr(cls, "_NIJA_PHASE3_COMPLETION_WRAPPED", False):
+        def _patched_phase3(self: Any, *args: Any, **kwargs: Any) -> Any:
+            logger.critical(
+                "LIVE_ENTRY_COMPLETION_PHASE3_ENTER module=%s execution_min_candles=%d",
+                module.__name__,
+                _nija_execution_min_candles(),
+            )
+            result = original_phase3(self, *args, **kwargs)
+            logger.critical("LIVE_ENTRY_COMPLETION_PHASE3_EXIT module=%s result=%r", module.__name__, result)
+            return result
+
+        setattr(cls, "_phase3_scan_and_enter", _patched_phase3)
+        setattr(cls, "_NIJA_PHASE3_COMPLETION_WRAPPED", True)
+
     setattr(module, "_NIJA_LIVE_ENTRY_COMPLETION_PATCHED", True)
-    logger.warning("LIVE_ENTRY_COMPLETION_REPAIR_PATCHED module=%s", module.__name__)
+    logger.warning("LIVE_ENTRY_COMPLETION_REPAIR_PATCHED module=%s source_rewrite=false", module.__name__)
     return True
 
 
@@ -450,17 +327,17 @@ def _apply_to_loaded_modules() -> None:
         if name in {"bot.trading_state_machine", "trading_state_machine"}:
             try:
                 _patch_trading_state_machine(module)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("NONCE_LEASE_WAIT_REPAIR_FAILED module=%s err=%s", name, exc)
         elif name in {"bot.nija_core_loop", "nija_core_loop"}:
             try:
                 _patch_core_loop_source(module)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("LIVE_ENTRY_COMPLETION_REPAIR_FAILED module=%s err=%s", name, exc)
         elif name in {"bot.okx_runtime_patch", "okx_runtime_patch"}:
             try:
                 _patch_okx_runtime_patch(module)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("OKX_DIAGNOSTIC_LOG_LEVEL_REPAIR_FAILED module=%s err=%s", name, exc)
 
 
@@ -492,3 +369,7 @@ def install_import_hook() -> None:
     setattr(builtins, "_NIJA_LIVE_ENTRY_COMPLETION_IMPORT_HOOK_INSTALLED", True)
     _apply_to_loaded_modules()
     logger.warning("LIVE_ENTRY_COMPLETION_REPAIR_INSTALL_REQUESTED")
+
+
+def install() -> None:
+    install_import_hook()
