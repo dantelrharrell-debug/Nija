@@ -212,6 +212,35 @@ def _advance_bootstrap_fsm_to_running_supervised() -> bool:
         return False
 
 
+def _keep_process_alive_after_loop_return() -> None:
+    """Keep Railway process alive when the trading loop is already running.
+
+    Some runtime patches correctly avoid spawning a duplicate trading loop and
+    return immediately from ``start_trading_engine`` with a log line such as
+    "Trading loop already active; skipping duplicate thread spawn".  The main
+    process must not treat that successful no-op as shutdown, otherwise atexit
+    releases the writer lock and Railway restarts the container.
+    """
+
+    logger.critical(
+        "BOT_MAIN_KEEPALIVE_ENTERED reason=start_trading_engine_returned startup_complete=%s",
+        _startup_complete,
+    )
+    last_heartbeat = 0.0
+    while not _shutdown_event.is_set():
+        now = time.monotonic()
+        if now - last_heartbeat >= 60.0:
+            active_threads = [t.name for t in threading.enumerate() if t.is_alive()]
+            logger.info(
+                "BOT_MAIN_KEEPALIVE_HEARTBEAT startup_complete=%s active_threads=%s",
+                _startup_complete,
+                active_threads,
+            )
+            last_heartbeat = now
+        _shutdown_event.wait(timeout=max(1.0, SUPERVISOR_POLL_INTERVAL_S))
+    logger.info("BOT_MAIN_KEEPALIVE_EXIT reason=shutdown_event_set")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +289,12 @@ def main() -> int:
 
         logger.info("🎯 Entering trading loop...")
         start_trading_engine(broker)
+
+        # If start_trading_engine returns without an explicit shutdown signal, the
+        # trading loop is usually already active in a background thread. Keep the
+        # main process alive so atexit does not release writer authority.
+        if not _shutdown_event.is_set():
+            _keep_process_alive_after_loop_return()
 
     except KeyboardInterrupt:
         logger.info("⏸️  Keyboard interrupt received")
