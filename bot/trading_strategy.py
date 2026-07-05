@@ -282,15 +282,18 @@ _HEARTBEAT_SYMBOL_CANDIDATES: List[str] = [
 GLOBAL_MIN_TRADE: float = float(os.environ.get("MIN_TRADE_USD", os.environ.get("MIN_NOTIONAL_USD", "10.0")))
 
 # Backward-compatibility constants retained for legacy test/import paths.
-# Lowered to $50 to allow trading with ~$174 balance in HF scalp mode (Apr 2026).
-# All enabled brokerages are included so the entry router considers every venue.
+# Venue-specific account balance floors: the entry router skips a broker
+# if its last-known balance is below the floor.  These are intentionally
+# LOW (account balance is not the same as order size) — the exchange
+# minimum notional is enforced later by exchange_constraints_enforcer.
+# Operators can override individual venues via environment variables.
 ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase", "okx", "alpaca"]
 BROKER_MIN_BALANCE: Dict[str, float] = {
-    "default": 50.0,
-    "kraken": 50.0,
-    "coinbase": 50.0,
-    "okx": 50.0,
-    "alpaca": 25.0,
+    "default": float(os.environ.get("NIJA_DEFAULT_MIN_BALANCE", "10.0")),
+    "kraken": float(os.environ.get("KRAKEN_MIN_BALANCE_USD", "10.50")),   # ~$10 exchange min + $0.50 fee buffer
+    "coinbase": float(os.environ.get("COINBASE_MIN_BALANCE_USD", "2.0")),  # Coinbase min is ~$1
+    "okx": float(os.environ.get("OKX_MIN_BALANCE_USD", "10.0")),          # OKX exchange min ~$5 + fee buffer
+    "alpaca": float(os.environ.get("ALPACA_MIN_BALANCE_USD", "2.0")),
 }
 
 _HEARTBEAT_STAGE_ORDER: Dict[str, int] = {

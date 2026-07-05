@@ -684,10 +684,32 @@ def _supervisor_step_state_machine() -> None:
                                 "FORCE_TRADE+LIVE_CAPITAL_VERIFIED: supervisor hard-activation bypass"
                             )
                             if _force_ok:
-                                logger.critical(
-                                    "⚡ [SUPERVISOR] FORCE_TRADE hard-activation SUCCESS — "
-                                    "FSM is now LIVE_ACTIVE. Orders will be submitted this cycle."
-                                )
+                                # Check that hard controls also agree before claiming orders will
+                                # be submitted — hard controls (EMERGENCY_STOP, INITIALIZING,
+                                # writer_not_ready) may still block even if the FSM reached
+                                # LIVE_ACTIVE.  A False here is informational; the order attempt
+                                # will happen and get a clear rejection log from execute_entry().
+                                _hc_ok = True
+                                _hc_reason = ""
+                                try:
+                                    from controls import get_hard_controls
+                                    _hc = get_hard_controls() if callable(get_hard_controls) else None
+                                    if _hc is not None:
+                                        _hc_ok, _hc_reason = _hc.can_trade(None)  # type: ignore[arg-type]
+                                except Exception:
+                                    _hc_ok = True  # unknown → optimistic
+                                if _hc_ok:
+                                    logger.critical(
+                                        "⚡ [SUPERVISOR] FORCE_TRADE hard-activation SUCCESS — "
+                                        "FSM is now LIVE_ACTIVE. Orders will be submitted this cycle."
+                                    )
+                                else:
+                                    logger.critical(
+                                        "⚡ [SUPERVISOR] FORCE_TRADE hard-activation SUCCESS — "
+                                        "FSM is now LIVE_ACTIVE, but hard controls still report: %s — "
+                                        "orders will be attempted; execution engine will log rejections.",
+                                        _hc_reason or "BLOCKED",
+                                    )
                             else:
                                 logger.warning(
                                     "⚡ [SUPERVISOR] FORCE_TRADE hard-activation returned False — "
@@ -3237,11 +3259,21 @@ class NijaCoreLoop:
                 blocked += 1
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
                 _funnel["profitability"] = ("FAIL", f"EXECUTION_EXCEPTION:{exec_err}")
-                try:
-                    from bot.trading_state_machine import report_execution_anomaly
-                    report_execution_anomaly("rejected_orders", f"execute_exception:{exec_err}")
-                except Exception:
-                    pass
+                # Authority-gate denials (ExecutionBlocked) must NOT be recorded
+                # as rejected_orders: they create a feedback loop where denials →
+                # high rejection rate → circuit breaker tripped → EMERGENCY_STOP
+                # → more authority denials.  Only real exchange rejections count.
+                _is_authority_denial = (
+                    "execution authority violation" in str(exec_err).lower()
+                    or "executionblocked" in type(exec_err).__name__.lower()
+                    or "fatal: execution authority" in str(exec_err).lower()
+                )
+                if not _is_authority_denial:
+                    try:
+                        from bot.trading_state_machine import report_execution_anomaly
+                        report_execution_anomaly("rejected_orders", f"execute_exception:{exec_err}")
+                    except Exception:
+                        pass
 
         for symbol in symbols:
             stages = funnel_traces.get(symbol)

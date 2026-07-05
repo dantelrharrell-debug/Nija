@@ -77,6 +77,34 @@ class KillSwitch:
         # Load persisted state
         self._load_state()
         
+        # Auto-clear stale EMERGENCY_STOP file when operator flag is set.
+        # NIJA_AUTO_CLEAR_EMERGENCY_STOP=true removes the persistent kill-switch
+        # file on every startup so a prior EMERGENCY_STOP (e.g. from a test or
+        # accidental trigger) does not permanently block trade execution.
+        # FORCE_TRADE=true implies the same auto-clear intent.
+        _auto_clear = (
+            os.environ.get("NIJA_AUTO_CLEAR_EMERGENCY_STOP", "").strip().lower()
+            in ("1", "true", "yes", "enabled", "on")
+            or os.environ.get("FORCE_TRADE", "").strip().lower()
+            in ("1", "true", "yes", "enabled", "on")
+            or os.environ.get("FORCE_TRADE_MODE", "").strip().lower()
+            in ("1", "true", "yes", "enabled", "on")
+        )
+        if _auto_clear and os.path.exists(self._kill_file):
+            try:
+                os.remove(self._kill_file)
+                logger.warning(
+                    "⚡ EMERGENCY_STOP file auto-cleared on startup "
+                    "(NIJA_AUTO_CLEAR_EMERGENCY_STOP/FORCE_TRADE active): %s",
+                    self._kill_file,
+                )
+            except Exception as _rm_err:
+                logger.error(
+                    "❌ Failed to auto-clear EMERGENCY_STOP file %s: %s",
+                    self._kill_file,
+                    _rm_err,
+                )
+
         # Check for file-based activation
         self._check_file_activation()
         

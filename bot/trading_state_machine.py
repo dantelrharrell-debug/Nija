@@ -1608,6 +1608,25 @@ class TradingStateMachine:
         except Exception as exc:
             logger.error("Failed to auto-clear stale EMERGENCY_STOP: %s", exc)
 
+        # Also reset the execution circuit breaker so the order-rejection
+        # counters accumulated during the stale EMERGENCY_STOP period do not
+        # permanently block new order attempts.  This is only done here — after
+        # the EMERGENCY_STOP is confirmed cleared — so the reset is ordered
+        # correctly (root cause fixed first, circuit breaker second).
+        try:
+            global _EXECUTION_CIRCUIT_BREAKER_TRIPPED
+            global _EXECUTION_CIRCUIT_BREAKER_REASON
+            with _EXECUTION_CIRCUIT_BREAKER_LOCK:
+                if _EXECUTION_CIRCUIT_BREAKER_TRIPPED:
+                    _EXECUTION_CIRCUIT_BREAKER_COUNTS.clear()
+                    _EXECUTION_CIRCUIT_BREAKER_TRIPPED = False
+                    _EXECUTION_CIRCUIT_BREAKER_REASON = ""
+                    logger.critical(
+                        "[EXECUTION CIRCUIT BREAKER] reset after stale EMERGENCY_STOP clearance"
+                    )
+        except Exception as _cb_err:
+            logger.error("Failed to reset execution circuit breaker after EMERGENCY_STOP clear: %s", _cb_err)
+
     def get_current_state(self) -> TradingState:
         """Get current trading state (thread-safe)"""
         self._validate_state_consistency()
