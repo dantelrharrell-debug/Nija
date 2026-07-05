@@ -1,15 +1,4 @@
-"""Compatibility entrypoint for Railway/main.py.
-
-Historically this file contained a small Coinbase REST sample loop.  main.py
-runs ``bot.bot`` as ``__main__``, so that sample loop caused startup to enter a
-Coinbase-only balance poller instead of NIJA's real APEX runtime.  It also threw
-``'NoneType' object is not subscriptable`` when Coinbase account hydration
-returned no account payload.
-
-Keep this module as the stable import target, but delegate immediately to
-``bot.bot_main``, which owns self-healing bootstrap, BootstrapFSM advancement,
-and NijaCoreLoop startup.
-"""
+"""Compatibility entrypoint for Railway/main.py."""
 
 from __future__ import annotations
 
@@ -60,8 +49,14 @@ try:
 except Exception as exc:
     logger.warning("ECEL_OKX_SYNTHETIC_CONTRACT_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
-from bot.bot_main import main
+try:
+    from bot.fallback_strict_score_floor_adaptive_patch import install_import_hook as _install_fallback_floor_calibration
+    _install_fallback_floor_calibration()
+    logger.warning("FALLBACK_FLOOR_CALIBRATION_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("FALLBACK_FLOOR_CALIBRATION_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
+from bot.bot_main import main
 
 if __name__ == "__main__":
     sys.exit(main())
