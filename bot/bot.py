@@ -61,7 +61,14 @@ try:
     _install_okx_execution_min_lift()
     logger.warning("OKX_EXECUTION_MIN_NOTIONAL_LIFT_INSTALL_REQUESTED source=bot_entrypoint")
 except Exception as exc:
-    logger.warning("OKX_EXECUTION_MIN_NOTIONAL_LIFT_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+    logger.warning("OKX_EXECUTION_MIN_NOTIONAL_LIFT_FAILED source=bot_entrypoint err=%s", exc)
+
+try:
+    from bot.okx_order_instid_payload_repair_patch import install_import_hook as _install_okx_order_instid_payload_repair
+    _install_okx_order_instid_payload_repair()
+    logger.warning("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
 from bot.bot_main import main
 
