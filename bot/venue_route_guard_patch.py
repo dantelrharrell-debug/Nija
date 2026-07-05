@@ -137,127 +137,126 @@ def _with_ecel_broker(obj: Any, broker: str) -> Any:
         return obj
 
 
-def _patch_usdt_repair_module(module: ModuleType) -> bool:
-    module_id = id(module)
-
-    def _safe_install_on_pipeline(pipeline_module: ModuleType) -> bool:
-        cls = getattr(pipeline_module, "ExecutionPipeline", None)
-        result_cls = getattr(pipeline_module, "PipelineResult", None)
-        if not isinstance(cls, type):
-            return False
-        original = getattr(cls, "execute", None)
-        if not callable(original) or getattr(original, "_venue_route_guard", False):
-            return True
-        if id(cls) in _PATCHED_PIPELINES:
-            return True
-
-        def execute(self: Any, request: Any, *args: Any, **kwargs: Any):
-            try:
-                symbol = getattr(request, "symbol", "")
-                broker = _broker(getattr(request, "preferred_broker", ""))
-                notional = _notional_from(request)
-                if _is_usdt(symbol):
-                    if broker == "okx":
-                        logger.critical("USDT_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx notional=$%.2f", symbol, notional)
-                    elif broker == "kraken":
-                        ok, pair, floor, reason = _kraken_pair_validation(symbol, notional)
-                        if not ok:
-                            logger.critical(
-                                "USDT_ROUTE_GUARD_BLOCK_KRAKEN symbol=%s broker=kraken pair=%s notional=$%.2f floor=$%.2f reason=%s",
-                                symbol,
-                                pair,
-                                notional,
-                                floor,
-                                reason,
-                            )
-                            if isinstance(result_cls, type):
-                                return result_cls(
-                                    success=False,
-                                    symbol=str(symbol),
-                                    side=str(getattr(request, "side", "buy")),
-                                    size_usd=float(notional or getattr(request, "size_usd", 0.0) or 0.0),
-                                    broker="kraken",
-                                    error=f"KRAKEN_USDT_ROUTE_BLOCKED:{reason}",
-                                )
-                        else:
-                            logger.critical("USDT_ROUTE_GUARD_ALLOW_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f", symbol, pair, notional, floor)
-                    elif broker in {"", "auto", "coinbase"}:
-                        # The legacy inner wrapper reroutes exactly these broker values
-                        # to Kraken.  Change the broker before calling the inner wrapper
-                        # so OKX-sized USDT orders remain on a USDT venue instead of
-                        # being submitted to Kraken below Kraken's live floor.
-                        request = _with_broker(request, "okx")
-                        logger.critical(
-                            "USDT_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx original_broker=%s notional=$%.2f",
-                            symbol,
-                            broker or "unset",
-                            notional,
-                        )
-            except Exception as exc:
-                logger.warning("USDT_ROUTE_GUARD_PIPELINE_CHECK_FAILED err=%s", exc)
-            return original(self, request, *args, **kwargs)
-
-        setattr(execute, "_venue_route_guard", True)
-        setattr(execute, "__wrapped__", original)
-        setattr(cls, "execute", execute)
-        _PATCHED_PIPELINES.add(id(cls))
-        logger.warning("VENUE_ROUTE_GUARD_PIPELINE_PATCHED module=%s", getattr(pipeline_module, "__name__", "?"))
+def _install_on_pipeline(pipeline_module: ModuleType) -> bool:
+    cls = getattr(pipeline_module, "ExecutionPipeline", None)
+    result_cls = getattr(pipeline_module, "PipelineResult", None)
+    if not isinstance(cls, type):
+        return False
+    original = getattr(cls, "execute", None)
+    if not callable(original) or getattr(original, "_venue_route_guard", False):
+        return True
+    if id(cls) in _PATCHED_PIPELINES:
         return True
 
-    def _safe_install_on_ecel(ecel_module: ModuleType) -> bool:
-        schema_cls = getattr(ecel_module, "ContractSchemaMap", None)
-        compiler_cls = getattr(ecel_module, "ECELExecutionCompiler", None)
-        if not isinstance(compiler_cls, type):
-            return False
-        original_compile = getattr(compiler_cls, "compile", None)
-        if not callable(original_compile) or getattr(original_compile, "_venue_route_guard", False):
-            return True
-        if id(compiler_cls) in _PATCHED_ECEL:
-            return True
-
-        def compile(self: Any, req: Any):
-            broker = _broker(getattr(req, "broker", ""))
-            symbol = getattr(req, "symbol", "")
-            notional = _notional_from(req)
+    def execute(self: Any, request: Any, *args: Any, **kwargs: Any):
+        try:
+            symbol = getattr(request, "symbol", "")
+            broker = _broker(getattr(request, "preferred_broker", ""))
+            notional = _notional_from(request)
             if _is_usdt(symbol):
                 if broker == "okx":
-                    logger.critical("USDT_ECEL_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx notional=$%.2f", symbol, notional)
+                    logger.critical("USDT_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx notional=$%.2f", symbol, notional)
                 elif broker == "kraken":
                     ok, pair, floor, reason = _kraken_pair_validation(symbol, notional)
                     if not ok:
-                        logger.critical("USDT_ECEL_ROUTE_GUARD_BLOCK_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f reason=%s", symbol, pair, notional, floor, reason)
-                        raise ValueError(f"KRAKEN_USDT_ROUTE_BLOCKED:{reason}")
-                    logger.critical("USDT_ECEL_ROUTE_GUARD_ALLOW_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f", symbol, pair, notional, floor)
+                        logger.critical(
+                            "USDT_ROUTE_GUARD_BLOCK_KRAKEN symbol=%s broker=kraken pair=%s notional=$%.2f floor=$%.2f reason=%s",
+                            symbol,
+                            pair,
+                            notional,
+                            floor,
+                            reason,
+                        )
+                        if isinstance(result_cls, type):
+                            return result_cls(
+                                success=False,
+                                symbol=str(symbol),
+                                side=str(getattr(request, "side", "buy")),
+                                size_usd=float(notional or getattr(request, "size_usd", 0.0) or 0.0),
+                                broker="kraken",
+                                error=f"KRAKEN_USDT_ROUTE_BLOCKED:{reason}",
+                            )
+                    else:
+                        logger.critical("USDT_ROUTE_GUARD_ALLOW_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f", symbol, pair, notional, floor)
                 elif broker in {"", "auto", "coinbase"}:
-                    req = _with_ecel_broker(req, "okx")
-                    logger.critical("USDT_ECEL_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx original_broker=%s notional=$%.2f", symbol, broker or "unset", notional)
-            return original_compile(self, req)
+                    request = _with_broker(request, "okx")
+                    logger.critical(
+                        "USDT_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx original_broker=%s notional=$%.2f",
+                        symbol,
+                        broker or "unset",
+                        notional,
+                    )
+        except Exception as exc:
+            logger.warning("USDT_ROUTE_GUARD_PIPELINE_CHECK_FAILED err=%s", exc)
+        return original(self, request, *args, **kwargs)
 
-        setattr(compile, "_venue_route_guard", True)
-        setattr(compile, "__wrapped__", original_compile)
-        setattr(compiler_cls, "compile", compile)
-        _PATCHED_ECEL.add(id(compiler_cls))
-        logger.warning("VENUE_ROUTE_GUARD_ECEL_PATCHED module=%s schema_present=%s", getattr(ecel_module, "__name__", "?"), isinstance(schema_cls, type))
+    setattr(execute, "_venue_route_guard", True)
+    setattr(execute, "__wrapped__", original)
+    setattr(cls, "execute", execute)
+    _PATCHED_PIPELINES.add(id(cls))
+    logger.warning("VENUE_ROUTE_GUARD_PIPELINE_PATCHED module=%s", getattr(pipeline_module, "__name__", "?"))
+    return True
+
+
+def _install_on_ecel(ecel_module: ModuleType) -> bool:
+    schema_cls = getattr(ecel_module, "ContractSchemaMap", None)
+    compiler_cls = getattr(ecel_module, "ECELExecutionCompiler", None)
+    if not isinstance(compiler_cls, type):
+        return False
+    original_compile = getattr(compiler_cls, "compile", None)
+    if not callable(original_compile) or getattr(original_compile, "_venue_route_guard", False):
+        return True
+    if id(compiler_cls) in _PATCHED_ECEL:
         return True
 
-    setattr(module, "_install_on_pipeline", _safe_install_on_pipeline)
-    setattr(module, "_install_on_ecel", _safe_install_on_ecel)
-    _PATCHED_USDT_MODULES.add(module_id)
+    def compile(self: Any, req: Any):
+        broker = _broker(getattr(req, "broker", ""))
+        symbol = getattr(req, "symbol", "")
+        notional = _notional_from(req)
+        if _is_usdt(symbol):
+            if broker == "okx":
+                logger.critical("USDT_ECEL_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx notional=$%.2f", symbol, notional)
+            elif broker == "kraken":
+                ok, pair, floor, reason = _kraken_pair_validation(symbol, notional)
+                if not ok:
+                    logger.critical("USDT_ECEL_ROUTE_GUARD_BLOCK_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f reason=%s", symbol, pair, notional, floor, reason)
+                    raise ValueError(f"KRAKEN_USDT_ROUTE_BLOCKED:{reason}")
+                logger.critical("USDT_ECEL_ROUTE_GUARD_ALLOW_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f", symbol, pair, notional, floor)
+            elif broker in {"", "auto", "coinbase"}:
+                req = _with_ecel_broker(req, "okx")
+                logger.critical("USDT_ECEL_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx original_broker=%s notional=$%.2f", symbol, broker or "unset", notional)
+        return original_compile(self, req)
 
-    # Critical: if the legacy module already patched ExecutionPipeline before this
-    # sidecar saw it, wrap the already-loaded pipeline now.  The outer wrapper sets
-    # low-notional USDT requests to OKX before the inner legacy wrapper can rewrite
-    # coinbase/auto to Kraken.
+    setattr(compile, "_venue_route_guard", True)
+    setattr(compile, "__wrapped__", original_compile)
+    setattr(compiler_cls, "compile", compile)
+    _PATCHED_ECEL.add(id(compiler_cls))
+    logger.warning("VENUE_ROUTE_GUARD_ECEL_PATCHED module=%s schema_present=%s", getattr(ecel_module, "__name__", "?"), isinstance(schema_cls, type))
+    return True
+
+
+def _patch_loaded_surfaces() -> bool:
+    patched = False
     for name in ("bot.execution_pipeline", "execution_pipeline"):
         loaded = sys.modules.get(name)
         if isinstance(loaded, ModuleType):
-            _safe_install_on_pipeline(loaded)
+            patched = _install_on_pipeline(loaded) or patched
     for name in ("bot.ecel_execution_compiler", "ecel_execution_compiler"):
         loaded = sys.modules.get(name)
         if isinstance(loaded, ModuleType):
-            _safe_install_on_ecel(loaded)
+            patched = _install_on_ecel(loaded) or patched
+    return patched
 
-    logger.warning("VENUE_ROUTE_GUARD_PATCHED_USDT_REPAIR module=%s", getattr(module, "__name__", "?"))
+
+def _patch_usdt_repair_module(module: ModuleType) -> bool:
+    module_id = id(module)
+    first_patch = module_id not in _PATCHED_USDT_MODULES
+    setattr(module, "_install_on_pipeline", _install_on_pipeline)
+    setattr(module, "_install_on_ecel", _install_on_ecel)
+    _PATCHED_USDT_MODULES.add(module_id)
+    _patch_loaded_surfaces()
+    if first_patch:
+        logger.warning("VENUE_ROUTE_GUARD_PATCHED_USDT_REPAIR module=%s", getattr(module, "__name__", "?"))
     return True
 
 
@@ -312,7 +311,7 @@ def install_import_hook() -> None:
                 return _patch_import_result(module)
 
             importlib.import_module = import_module  # type: ignore[assignment]
-            logger.warning("VENUE_ROUTE_GUARD_IMPORTLIB_HOOK_INSTALLED marker=20260704j")
+            logger.warning("VENUE_ROUTE_GUARD_IMPORTLIB_HOOK_INSTALLED marker=20260704k")
 
         if _ORIGINAL_IMPORT is None:
             _ORIGINAL_IMPORT = builtins.__import__
@@ -322,6 +321,6 @@ def install_import_hook() -> None:
                 return _patch_import_result(module)
 
             builtins.__import__ = importing
-            logger.warning("VENUE_ROUTE_GUARD_BUILTINS_HOOK_INSTALLED marker=20260704j")
+            logger.warning("VENUE_ROUTE_GUARD_BUILTINS_HOOK_INSTALLED marker=20260704k")
 
-        logger.warning("VENUE_ROUTE_GUARD_INSTALLED marker=20260704j")
+        logger.warning("VENUE_ROUTE_GUARD_INSTALLED marker=20260704k")
