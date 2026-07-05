@@ -412,7 +412,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         def _slow_router_factory():
             mock_router = MagicMock()
-            mock_router.execute.side_effect = lambda _: (time.sleep(1), None)[1]  # hangs
+            mock_router.execute.side_effect = lambda _: (time.sleep(2), None)[1]  # hangs
             return mock_router
 
         pipeline._multi_router = None
@@ -426,7 +426,11 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
         )
 
         # _dispatch should return a failure PipelineResult rather than hanging
-        result = pipeline._dispatch(request, time.monotonic())
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=MagicMock(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected", result.error.lower())
 
@@ -435,7 +439,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         class _SlowRouter:
             def route(self, _request):
-                time.sleep(1)
+                time.sleep(2)
 
         class _ReconBroker:
             def get_order_status(self, _order_id):
@@ -461,7 +465,11 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             metadata={"broker_client": _ReconBroker()},
         )
 
-        result = pipeline._dispatch(request, time.monotonic())
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=MagicMock(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
         self.assertTrue(result.success)
         self.assertEqual(result.fill_price, 2100.0)
         self.assertEqual(result.filled_size_usd, 200.0)
@@ -471,7 +479,7 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
 
         class _SlowRouter:
             def route(self, _request):
-                time.sleep(1)
+                time.sleep(2)
 
         class _ReconBroker:
             def get_order_status(self, _order_id):
@@ -493,7 +501,11 @@ class TestExecutionPipelineACKTimeout(unittest.TestCase):
             metadata={"broker_client": _ReconBroker()},
         )
 
-        result = pipeline._dispatch(request, time.monotonic())
+        with patch(
+            "bot.execution_pipeline.runtime_authority_snapshot",
+            return_value=MagicMock(dispatch_enabled=True),
+        ):
+            result = pipeline._dispatch(request, time.monotonic())
         self.assertFalse(result.success)
         self.assertIn("confirmed_order_rejected:rejected", result.error.lower())
 
