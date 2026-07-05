@@ -110,11 +110,30 @@ def _transition_if_current_allows(fsm, BootstrapState, target, reason: str) -> b
     return bool(ok)
 
 
+def _apply_bootstrap_i12_repair_direct(bootstrap_module) -> None:
+    """Directly patch BootstrapFSM I12 after the module is imported.
+
+    The entrypoint also installs an import hook, but Railway startup loads many
+    runtime hooks that may replace ``builtins.__import__``.  Calling the repair
+    directly from bot_main removes that dependency and guarantees the class used
+    by Step 2 is patched before ``advance_to_capital_ready()`` runs.
+    """
+
+    try:
+        from bot.bootstrap_i12_capital_authority_repair_patch import _patch_bootstrap_fsm as _patch_i12
+        if _patch_i12(bootstrap_module):
+            logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_DIRECT_APPLIED source=bot_main")
+    except Exception as exc:
+        logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_DIRECT_FAILED source=bot_main err=%s", exc)
+
+
 def _advance_bootstrap_fsm_to_running_supervised() -> bool:
     """Advance BootstrapFSM to RUNNING_SUPERVISED using only legal FSM transitions."""
     logger.info("🚀 Advancing bootstrap FSM to RUNNING_SUPERVISED...")
 
     try:
+        import bot.bootstrap_state_machine as _bootstrap_state_machine_module
+        _apply_bootstrap_i12_repair_direct(_bootstrap_state_machine_module)
         from bot.bootstrap_state_machine import get_bootstrap_fsm, BootstrapState
 
         fsm = get_bootstrap_fsm()
