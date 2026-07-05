@@ -215,6 +215,7 @@ _PATCH_HOOKS = (
     ("executable_trade_runtime_patch", "Executable trade runtime repair"),
     ("kraken_live_order_size_repair_patch", "Kraken live order-size repair"),
     ("kraken_execution_floor_guard_patch", "Kraken final execution-floor guard"),
+    ("broker_independent_live_execution_patch", "Independent broker live execution routing"),
     ("execution_route_integrity_patch", "Execution route integrity guard"),
     ("okx_runtime_patch", "OKX runtime patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
@@ -229,5 +230,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.4"
+__version__ = "7.2.5"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
