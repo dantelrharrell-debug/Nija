@@ -1,32 +1,22 @@
+"""Compatibility entrypoint for Railway/main.py.
 
-import os
-import logging
-from coinbase.rest import RESTClient
-import time
+Historically this file contained a small Coinbase REST sample loop.  main.py
+runs ``bot.bot`` as ``__main__``, so that sample loop caused startup to enter a
+Coinbase-only balance poller instead of NIJA's real APEX runtime.  It also threw
+``'NoneType' object is not subscriptable`` when Coinbase account hydration
+returned no account payload.
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(name)s | %(message)s')
+Keep this module as the stable import target, but delegate immediately to
+``bot.bot_main``, which owns self-healing bootstrap, BootstrapFSM advancement,
+and NijaCoreLoop startup.
+"""
 
+from __future__ import annotations
 
-# Load environment variables
-API_KEY = os.environ.get("COINBASE_API_KEY")
-API_SECRET = os.environ.get("COINBASE_API_SECRET")
-API_PASSPHRASE = os.environ.get("COINBASE_API_PASSPHRASE")
-ACCOUNT_ID = os.environ.get("COINBASE_ACCOUNT_ID")
+import sys
 
-client = RESTClient(api_key=API_KEY, api_secret=API_SECRET)
-logging.info("✅ Coinbase RESTClient initialized")
+from bot.bot_main import main
 
-def main_loop():
-    logging.info("⚡ Bot is now running live!")
-    while True:
-        try:
-            # Example: fetch account balance
-            account = next(a for a in client.get_accounts() if a["id"] == ACCOUNT_ID)
-            logging.info(f"Current balance: {account['balance']['amount']} {account['currency']}")
-            # Add trading logic here
-        except Exception as e:
-            logging.error(f"Error in bot loop: {e}")
-        time.sleep(10)  # adjust frequency as needed
 
 if __name__ == "__main__":
-    main_loop()
+    sys.exit(main())
