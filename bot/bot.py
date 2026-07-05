@@ -46,6 +46,13 @@ try:
 except Exception as exc:
     logger.warning("SCAN_POSITION_ADOPTION_TIMEOUT_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
+try:
+    from bot.writer_heartbeat_stale_repair_patch import install_import_hook as _install_writer_heartbeat_stale_repair
+    _install_writer_heartbeat_stale_repair()
+    logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
 from bot.bot_main import main
 
 
