@@ -99,44 +99,113 @@ def _run_self_healing_startup() -> tuple[bool, Optional[object], str]:
         return False, None, ""
 
 
+def _transition_if_current_allows(fsm, BootstrapState, target, reason: str) -> bool:
+    """Apply one legal transition when the current FSM state is directly before target."""
+
+    if fsm.state == target:
+        return True
+    ok = fsm.transition(target, reason=reason)
+    if ok:
+        logger.info("✅ FSM → %s", target.value)
+    return bool(ok)
+
+
 def _advance_bootstrap_fsm_to_running_supervised() -> bool:
-    """Advance bootstrap FSM from CAPITAL_READY to RUNNING_SUPERVISED."""
+    """Advance BootstrapFSM to RUNNING_SUPERVISED using only legal FSM transitions."""
     logger.info("🚀 Advancing bootstrap FSM to RUNNING_SUPERVISED...")
 
     try:
         from bot.bootstrap_state_machine import get_bootstrap_fsm, BootstrapState
 
         fsm = get_bootstrap_fsm()
-        current = fsm.state
 
-        # Already running
-        if current == BootstrapState.RUNNING_SUPERVISED:
+        if fsm.state == BootstrapState.RUNNING_SUPERVISED:
             logger.info("✅ FSM already RUNNING_SUPERVISED")
             return True
 
-        # Claim ownership
         fsm.claim_bootstrap_ownership()
+        logger.info("BootstrapFSM pre-handoff state=%s", fsm.state.value)
 
-        # Drive through remaining states
-        states_to_reach = [
+        # SelfHealingStartup may leave the composite BootstrapFSM at an earlier
+        # legal state such as LOCK_ACQUIRED after broker/capital startup has
+        # already succeeded. Do not jump directly to INIT_COMPLETE: the FSM
+        # explicitly requires LOCK_ACQUIRED -> HEALTH_BOUND -> ... ->
+        # CAPITAL_READY -> INIT_COMPLETE. Use its own happy-path helper first.
+        if fsm.state not in {
+            BootstrapState.CAPITAL_READY,
             BootstrapState.INIT_COMPLETE,
+            BootstrapState.DEGRADED_READY,
             BootstrapState.THREADS_STARTING,
             BootstrapState.RUNNING_SUPERVISED,
-        ]
-
-        for target in states_to_reach:
-            if fsm.state == target:
-                continue  # Already there
-            if fsm.state == BootstrapState.RUNNING_SUPERVISED:
-                break  # Done
-
-            ok = fsm.transition(target, reason="bot_main_fsm_advancement")
-            if not ok:
-                logger.error(f"❌ FSM transition to {target.value} failed")
+        }:
+            advance_to_capital_ready = getattr(fsm, "advance_to_capital_ready", None)
+            if callable(advance_to_capital_ready):
+                if not advance_to_capital_ready(reason="bot_main_post_self_healing_startup"):
+                    logger.error(
+                        "❌ FSM advance_to_capital_ready failed; current_state=%s",
+                        fsm.state.value,
+                    )
+                    return False
+            else:
+                logger.error(
+                    "❌ FSM cannot advance legally from %s; advance_to_capital_ready unavailable",
+                    fsm.state.value,
+                )
                 return False
-            logger.info(f"✅ FSM → {target.value}")
 
-        return fsm.state == BootstrapState.RUNNING_SUPERVISED
+        # Complete final handoff using the legal tail of the FSM.
+        if fsm.state == BootstrapState.CAPITAL_READY:
+            if not _transition_if_current_allows(
+                fsm,
+                BootstrapState,
+                BootstrapState.INIT_COMPLETE,
+                "bot_main_fsm_advancement",
+            ):
+                logger.error("❌ FSM transition to INIT_COMPLETE failed from %s", fsm.state.value)
+                return False
+
+        if fsm.state == BootstrapState.DEGRADED_READY:
+            if not _transition_if_current_allows(
+                fsm,
+                BootstrapState,
+                BootstrapState.THREADS_STARTING,
+                "bot_main_degraded_handoff",
+            ):
+                logger.error("❌ FSM transition from DEGRADED_READY to THREADS_STARTING failed")
+                return False
+
+        if fsm.state == BootstrapState.INIT_COMPLETE:
+            if not _transition_if_current_allows(
+                fsm,
+                BootstrapState,
+                BootstrapState.THREADS_STARTING,
+                "bot_main_fsm_advancement",
+            ):
+                logger.error("❌ FSM transition to THREADS_STARTING failed from %s", fsm.state.value)
+                return False
+
+        if fsm.state == BootstrapState.THREADS_STARTING:
+            finalize_boot = getattr(fsm, "finalize_boot", None)
+            if callable(finalize_boot):
+                if not finalize_boot(reason="bot_main_runtime_handoff"):
+                    logger.error("❌ FSM finalize_boot failed from THREADS_STARTING")
+                    return False
+            else:
+                if not _transition_if_current_allows(
+                    fsm,
+                    BootstrapState,
+                    BootstrapState.RUNNING_SUPERVISED,
+                    "bot_main_fsm_advancement",
+                ):
+                    logger.error("❌ FSM transition to RUNNING_SUPERVISED failed")
+                    return False
+
+        if fsm.state == BootstrapState.RUNNING_SUPERVISED:
+            logger.info("✅ FSM is RUNNING_SUPERVISED")
+            return True
+
+        logger.error("❌ FSM advancement ended at %s, expected RUNNING_SUPERVISED", fsm.state.value)
+        return False
 
     except Exception as e:
         logger.error(f"❌ FSM advancement failed: {e}", exc_info=True)
