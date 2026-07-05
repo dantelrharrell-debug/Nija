@@ -146,3 +146,37 @@ def test_route_uses_direct_broker_client_even_when_global_registry_empty():
     assert result.success
     assert result.broker == "kraken"
     assert broker.calls == [("BTC-USD", "buy", 25.0, "quote")]
+
+
+def test_route_infers_kraken_profile_from_direct_client_without_preferred_broker():
+    from bot.multi_broker_execution_router import RouteRequest
+
+    class KrakenBrokerAdapter:
+        def __init__(self):
+            self.calls = []
+
+        def place_market_order(self, symbol, side, quantity, size_type="quote"):
+            self.calls.append((symbol, side, quantity, size_type))
+            return {
+                "status": "filled",
+                "order_id": "ord-kraken",
+                "filled_price": 101.5,
+                "filled_size_usd": quantity,
+            }
+
+    router = MultiBrokerExecutionRouter()
+    broker = KrakenBrokerAdapter()
+
+    result = router.route(
+        RouteRequest(
+            strategy="force_trade_probe",
+            symbol="BTC-USD",
+            side="buy",
+            size_usd=25.0,
+            metadata={"broker_client": broker, "price_hint_usd": 100.0},
+        )
+    )
+
+    assert result.success
+    assert result.broker == "kraken"
+    assert broker.calls == [("BTC-USD", "buy", 25.0, "quote")]
