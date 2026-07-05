@@ -1,8 +1,7 @@
 """Venue route guard for USDT spot execution.
 
-Prevents the legacy USDT repair from blindly rewriting USDT orders to Kraken.
-Kraken is allowed only when the request is already targeting Kraken, the pair is
-known by the Kraken validator, and the notional is above the effective live floor.
+Prevents legacy USDT routing repair from blindly rewriting small USDT spot
+orders to Kraken after OKX/Coinbase-compatible sizing has already been compiled.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import replace
 from types import ModuleType
 from typing import Any, Callable, Optional
 
@@ -115,10 +115,30 @@ def _kraken_pair_validation(symbol: Any, notional: float) -> tuple[bool, str, fl
     return True, pair, floor, "ok"
 
 
+def _with_broker(obj: Any, broker: str) -> Any:
+    try:
+        return replace(obj, preferred_broker=broker)
+    except Exception:
+        try:
+            setattr(obj, "preferred_broker", broker)
+        except Exception:
+            pass
+        return obj
+
+
+def _with_ecel_broker(obj: Any, broker: str) -> Any:
+    try:
+        return replace(obj, broker=broker)
+    except Exception:
+        try:
+            setattr(obj, "broker", broker)
+        except Exception:
+            pass
+        return obj
+
+
 def _patch_usdt_repair_module(module: ModuleType) -> bool:
     module_id = id(module)
-    if module_id in _PATCHED_USDT_MODULES:
-        return True
 
     def _safe_install_on_pipeline(pipeline_module: ModuleType) -> bool:
         cls = getattr(pipeline_module, "ExecutionPipeline", None)
@@ -144,7 +164,11 @@ def _patch_usdt_repair_module(module: ModuleType) -> bool:
                         if not ok:
                             logger.critical(
                                 "USDT_ROUTE_GUARD_BLOCK_KRAKEN symbol=%s broker=kraken pair=%s notional=$%.2f floor=$%.2f reason=%s",
-                                symbol, pair, notional, floor, reason,
+                                symbol,
+                                pair,
+                                notional,
+                                floor,
+                                reason,
                             )
                             if isinstance(result_cls, type):
                                 return result_cls(
@@ -158,7 +182,17 @@ def _patch_usdt_repair_module(module: ModuleType) -> bool:
                         else:
                             logger.critical("USDT_ROUTE_GUARD_ALLOW_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f", symbol, pair, notional, floor)
                     elif broker in {"", "auto", "coinbase"}:
-                        logger.critical("USDT_ROUTE_GUARD_NO_BLIND_KRAKEN_ROUTE symbol=%s selected_broker=%s notional=$%.2f", symbol, broker or "unset", notional)
+                        # The legacy inner wrapper reroutes exactly these broker values
+                        # to Kraken.  Change the broker before calling the inner wrapper
+                        # so OKX-sized USDT orders remain on a USDT venue instead of
+                        # being submitted to Kraken below Kraken's live floor.
+                        request = _with_broker(request, "okx")
+                        logger.critical(
+                            "USDT_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx original_broker=%s notional=$%.2f",
+                            symbol,
+                            broker or "unset",
+                            notional,
+                        )
             except Exception as exc:
                 logger.warning("USDT_ROUTE_GUARD_PIPELINE_CHECK_FAILED err=%s", exc)
             return original(self, request, *args, **kwargs)
@@ -195,7 +229,8 @@ def _patch_usdt_repair_module(module: ModuleType) -> bool:
                         raise ValueError(f"KRAKEN_USDT_ROUTE_BLOCKED:{reason}")
                     logger.critical("USDT_ECEL_ROUTE_GUARD_ALLOW_KRAKEN symbol=%s pair=%s notional=$%.2f floor=$%.2f", symbol, pair, notional, floor)
                 elif broker in {"", "auto", "coinbase"}:
-                    logger.critical("USDT_ECEL_ROUTE_GUARD_NO_BLIND_KRAKEN_ROUTE symbol=%s broker=%s notional=$%.2f", symbol, broker or "unset", notional)
+                    req = _with_ecel_broker(req, "okx")
+                    logger.critical("USDT_ECEL_ROUTE_GUARD_KEEP_SELECTED symbol=%s broker=okx original_broker=%s notional=$%.2f", symbol, broker or "unset", notional)
             return original_compile(self, req)
 
         setattr(compile, "_venue_route_guard", True)
@@ -208,6 +243,20 @@ def _patch_usdt_repair_module(module: ModuleType) -> bool:
     setattr(module, "_install_on_pipeline", _safe_install_on_pipeline)
     setattr(module, "_install_on_ecel", _safe_install_on_ecel)
     _PATCHED_USDT_MODULES.add(module_id)
+
+    # Critical: if the legacy module already patched ExecutionPipeline before this
+    # sidecar saw it, wrap the already-loaded pipeline now.  The outer wrapper sets
+    # low-notional USDT requests to OKX before the inner legacy wrapper can rewrite
+    # coinbase/auto to Kraken.
+    for name in ("bot.execution_pipeline", "execution_pipeline"):
+        loaded = sys.modules.get(name)
+        if isinstance(loaded, ModuleType):
+            _safe_install_on_pipeline(loaded)
+    for name in ("bot.ecel_execution_compiler", "ecel_execution_compiler"):
+        loaded = sys.modules.get(name)
+        if isinstance(loaded, ModuleType):
+            _safe_install_on_ecel(loaded)
+
     logger.warning("VENUE_ROUTE_GUARD_PATCHED_USDT_REPAIR module=%s", getattr(module, "__name__", "?"))
     return True
 
@@ -263,7 +312,7 @@ def install_import_hook() -> None:
                 return _patch_import_result(module)
 
             importlib.import_module = import_module  # type: ignore[assignment]
-            logger.warning("VENUE_ROUTE_GUARD_IMPORTLIB_HOOK_INSTALLED marker=20260704i")
+            logger.warning("VENUE_ROUTE_GUARD_IMPORTLIB_HOOK_INSTALLED marker=20260704j")
 
         if _ORIGINAL_IMPORT is None:
             _ORIGINAL_IMPORT = builtins.__import__
@@ -273,6 +322,6 @@ def install_import_hook() -> None:
                 return _patch_import_result(module)
 
             builtins.__import__ = importing
-            logger.warning("VENUE_ROUTE_GUARD_BUILTINS_HOOK_INSTALLED marker=20260704i")
+            logger.warning("VENUE_ROUTE_GUARD_BUILTINS_HOOK_INSTALLED marker=20260704j")
 
-        logger.warning("VENUE_ROUTE_GUARD_INSTALLED marker=20260704i")
+        logger.warning("VENUE_ROUTE_GUARD_INSTALLED marker=20260704j")
