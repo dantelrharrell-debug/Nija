@@ -25,6 +25,22 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _install_held_trade_cap_guard() -> None:
+    os.environ.setdefault("NIJA_HELD_TRADE_CAP_GUARD_ENABLED", "true")
+    os.environ.setdefault("NIJA_MAX_HELD_TRADES_PER_ACCOUNT", "8")
+    try:
+        try:
+            from bot import held_trade_cap_guard_patch as _cap_guard  # type: ignore
+        except Exception:
+            import held_trade_cap_guard_patch as _cap_guard  # type: ignore
+        installer = getattr(_cap_guard, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            logger.warning("HELD_TRADE_CAP_GUARD_CHAINED_FROM_MIRROR marker=20260706a cap=%s", os.environ.get("NIJA_MAX_HELD_TRADES_PER_ACCOUNT", "8"))
+    except Exception as exc:
+        logger.warning("HELD_TRADE_CAP_GUARD_CHAIN_FAILED marker=20260706a error=%s", exc)
+
+
 def _normalize_positions(raw_positions: Any) -> list[Dict[str, Any]]:
     if raw_positions is None:
         return []
@@ -147,15 +163,7 @@ def _position_maps(strategy: Any) -> list[Tuple[str, Dict[str, Any]]]:
     seen_maps: set[int] = set()
     for container in _candidate_containers(strategy):
         candidates = [("self", container)]
-        for attr in (
-            "execution_engine",
-            "exit_engine",
-            "trade_engine",
-            "engine",
-            "unified_execution_engine",
-            "position_manager",
-            "portfolio_manager",
-        ):
+        for attr in ("execution_engine", "exit_engine", "trade_engine", "engine", "unified_execution_engine", "position_manager", "portfolio_manager"):
             try:
                 candidates.append((attr, getattr(container, attr, None)))
             except Exception:
@@ -257,21 +265,10 @@ def _mirror(strategy: Any, sync_module: ModuleType) -> int:
                 mirrored += 1
                 logger.critical(
                     "HELD_POSITION_EXECUTION_MIRRORED marker=20260705h engine=%s broker=%s key=%s symbol=%s qty=%.8f entry=$%.6f size=$%.2f",
-                    map_label,
-                    broker_name,
-                    key,
-                    symbol,
-                    _float(built.get("quantity"), 0.0),
-                    _float(built.get("entry_price"), 0.0),
-                    _float(built.get("size_usd"), 0.0),
+                    map_label, broker_name, key, symbol,
+                    _float(built.get("quantity"), 0.0), _float(built.get("entry_price"), 0.0), _float(built.get("size_usd"), 0.0),
                 )
-    logger.warning(
-        "HELD_POSITION_EXECUTION_MIRROR_COMPLETE marker=20260705h scanned=%d mirrored=%d maps=%d brokers=%d",
-        scanned,
-        mirrored,
-        len(maps),
-        len(brokers),
-    )
+    logger.warning("HELD_POSITION_EXECUTION_MIRROR_COMPLETE marker=20260705h scanned=%d mirrored=%d maps=%d brokers=%d", scanned, mirrored, len(maps), len(brokers))
     return mirrored
 
 
@@ -288,11 +285,7 @@ def _patch_startup_sync(module: ModuleType) -> bool:
         except Exception as exc:
             mirrored = 0
             logger.warning("HELD_POSITION_EXECUTION_MIRROR_FAILED marker=20260705h error=%s", exc)
-        logger.warning(
-            "HELD_POSITION_EXIT_BRIDGE_RECHECK marker=20260705h adopted_total=%s mirrored_to_execution_engine=%d",
-            adopted,
-            mirrored,
-        )
+        logger.warning("HELD_POSITION_EXIT_BRIDGE_RECHECK marker=20260705h adopted_total=%s mirrored_to_execution_engine=%d", adopted, mirrored)
         return adopted
 
     setattr(sync_exchange_positions_on_startup, _PATCHED_ATTR, True)
@@ -311,6 +304,7 @@ def _try_patch_loaded() -> bool:
 
 
 def install_import_hook() -> None:
+    _install_held_trade_cap_guard()
     if not _truthy("NIJA_HELD_POSITION_EXECUTION_MIRROR_ENABLED", "true"):
         logger.warning("HELD_POSITION_EXECUTION_MIRROR_DISABLED marker=20260705h")
         return
