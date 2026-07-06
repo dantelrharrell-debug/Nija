@@ -20,6 +20,7 @@ _LOCK = threading.Lock()
 _MARKER = "OKX_MIN_NOTIONAL_PREFILTER_REPAIR_PATCHED marker=20260704h"
 _NOTIONAL_INSTALLED = False
 _SIDECAR_INSTALLED = False
+_SPENDABLE_QUOTE_ROUTING_INSTALLED = False
 
 
 def _float_env(name: str, default: float) -> float:
@@ -65,10 +66,35 @@ def _install_sidecar() -> None:
         logger.warning("VENUE_ROUTE_GUARD_CHAIN_FAILED err=%s", exc)
 
 
+def _install_spendable_quote_routing() -> None:
+    """Install the July 2026 quote-cash routing guard.
+
+    This guard makes entry broker selection use free quote cash after buffer,
+    not total portfolio equity. It is chained here because this module is
+    already imported early from sitecustomize.
+    """
+    global _SPENDABLE_QUOTE_ROUTING_INSTALLED
+    if _SPENDABLE_QUOTE_ROUTING_INSTALLED:
+        return
+    try:
+        try:
+            mod = importlib.import_module("bot.spendable_quote_routing_patch")
+        except Exception:
+            mod = importlib.import_module("spendable_quote_routing_patch")
+        installer = getattr(mod, "install_import_hook", None)
+        if callable(installer):
+            installer()
+        _SPENDABLE_QUOTE_ROUTING_INSTALLED = True
+        logger.warning("SPENDABLE_QUOTE_ROUTING_CHAINED_FROM_OKX_PREFILTER marker=20260706a")
+    except Exception as exc:
+        logger.warning("SPENDABLE_QUOTE_ROUTING_CHAIN_FAILED err=%s", exc)
+
+
 def _patch_module(module: ModuleType) -> bool:
     global _PATCHED
     _install_notional_floor_repair()
     _install_sidecar()
+    _install_spendable_quote_routing()
     changed = False
     try:
         broker_mins = getattr(module, "BROKER_MIN_ORDER_USD", None)
@@ -92,6 +118,7 @@ def _patch_module(module: ModuleType) -> bool:
 def _try_patch_loaded() -> bool:
     _install_notional_floor_repair()
     _install_sidecar()
+    _install_spendable_quote_routing()
     patched = False
     for name in ("bot.nija_apex_strategy_v71", "nija_apex_strategy_v71"):
         module = sys.modules.get(name)
@@ -112,7 +139,7 @@ def _start_monitor() -> None:
             if _try_patch_loaded():
                 return
             time.sleep(0.25)
-        logger.warning("OKX_MIN_NOTIONAL_PREFILTER_REPAIR_MONITOR_EXPIRED patched=%s", _PATCHED)
+        logger.warning("OKX_MIN_NOTIONAL_PREFILTER_REPAIR_MONITOR_EXPIRED patched=%s spendable_quote_routing=%s", _PATCHED, _SPENDABLE_QUOTE_ROUTING_INSTALLED)
 
     threading.Thread(target=_monitor, name="okx-min-notional-prefilter-repair", daemon=True).start()
     logger.warning("OKX_MIN_NOTIONAL_PREFILTER_REPAIR_MONITOR_STARTED")
@@ -125,6 +152,7 @@ def install_import_hook() -> None:
         print("[NIJA-PRINT] OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_START marker=20260704h", flush=True)
         _install_notional_floor_repair()
         _install_sidecar()
+        _install_spendable_quote_routing()
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
@@ -135,6 +163,15 @@ def install_import_hook() -> None:
             module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
             if name in {"bot.nija_apex_strategy_v71", "nija_apex_strategy_v71"}:
                 _patch_module(module)
+            if name in {
+                "bot.trading_strategy",
+                "trading_strategy",
+                "bot.execution_engine",
+                "execution_engine",
+                "bot.signal_funnel_diagnostics",
+                "signal_funnel_diagnostics",
+            }:
+                _install_spendable_quote_routing()
             if name in {"bot.live_execution_runtime_hardening_patch", "live_execution_runtime_hardening_patch"}:
                 _install_notional_floor_repair()
             if name in {"bot.usdt_kraken_ecel_routing_repair_patch", "usdt_kraken_ecel_routing_repair_patch"}:
@@ -142,4 +179,8 @@ def install_import_hook() -> None:
             return module
 
         importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_COMPLETE patched=%s sidecar=%s", _PATCHED, _SIDECAR_INSTALLED)
+        logger.warning("OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_COMPLETE patched=%s sidecar=%s spendable_quote_routing=%s", _PATCHED, _SIDECAR_INSTALLED, _SPENDABLE_QUOTE_ROUTING_INSTALLED)
+
+
+def install() -> None:
+    install_import_hook()
