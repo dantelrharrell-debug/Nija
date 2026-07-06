@@ -1,18 +1,11 @@
 """Runtime hardening for NIJA's optional OKX broker.
 
-This module deliberately avoids changing Kraken/Coinbase execution. It patches
-only the optional OKX direct REST client/broker so OKX can be enabled without
-SDK/candlelite dependency issues and without invalid USD/USDT/USDC instrument
-requests.
+This module patches only OKX-specific REST/client behavior. It does not lower
+execution authority, capital, risk, minimum-notional, or exchange-compiler gates.
 
-2026-07-03z: fixes the observed OKX Phase 3 blocker where merged-symbol scans
-created malformed instruments such as ADA-USDTC and kept retrying OKX 51001
-"instrument does not exist" responses. The patch now:
-- repairs USDTT -> USDT and USDTC -> USDC deterministically,
-- exposes OKX listed symbols to the Phase 3 broker-aware scanner,
-- caches 51001 invalid instruments for the session, and
-- bypasses legacy OKX market-data methods that blindly replace "-USD" inside
-  "-USDC".
+Markers:
+- 20260703z: OKX symbol/candle/listing normalization.
+- 20260705e: OKX order-submit signature compatibility.
 """
 
 from __future__ import annotations
@@ -62,8 +55,6 @@ def _normalize_okx_inst_id(symbol: Any) -> str:
     raw = _clean_symbol(symbol)
     if not raw:
         return raw
-
-    # Explicit repairs for prior bad normalizers.
     if raw.endswith("-USDTT"):
         raw = raw[:-6] + "-USDT"
     elif raw.endswith("-USDTC"):
@@ -72,10 +63,8 @@ def _normalize_okx_inst_id(symbol: Any) -> str:
         raw = raw[:-5] + "USDT"
     elif raw.endswith("USDTC") and "-" not in raw:
         raw = raw[:-5] + "USDC"
-
     if raw in _SYNTHETIC_CASH_PAIRS:
         return raw
-
     if "-" in raw:
         base, quote = raw.rsplit("-", 1)
         if not base:
@@ -85,7 +74,6 @@ def _normalize_okx_inst_id(symbol: Any) -> str:
         if quote in {"USDT", "USDC"}:
             return f"{base}-{quote}"
         return raw
-
     for quote in sorted(_VALID_STABLE_QUOTES, key=len, reverse=True):
         if raw.endswith(quote) and len(raw) > len(quote):
             base = raw[: -len(quote)]
@@ -124,7 +112,6 @@ def _load_okx_products_from_rest(rest_client: Any) -> set[str]:
     cached = _PRODUCT_CACHE.get("symbols")
     if isinstance(cached, set) and cached and now - float(_PRODUCT_CACHE.get("loaded_at", 0.0) or 0.0) < 1800:
         return set(cached)
-
     products: set[str] = set()
     try:
         result = rest_client._request("GET", "/api/v5/public/instruments", params={"instType": "SPOT"})
@@ -132,7 +119,6 @@ def _load_okx_products_from_rest(rest_client: Any) -> set[str]:
             products.update(_extract_inst_ids(result.get("data", [])))
     except Exception as exc:
         logger.debug("OKX product cache load failed: %s", exc)
-
     if products:
         _PRODUCT_CACHE["loaded_at"] = now
         _PRODUCT_CACHE["symbols"] = set(products)
@@ -201,7 +187,7 @@ def apply_okx_runtime_patches() -> bool:
     bm = sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
     if bm is None:
         return False
-    if getattr(bm, "_NIJA_OKX_RUNTIME_PATCHED_V20260703Z", False):
+    if getattr(bm, "_NIJA_OKX_RUNTIME_PATCHED_V20260705E", False):
         return True
 
     rest_cls = getattr(bm, "_OKXRestClient", None)
@@ -236,28 +222,22 @@ def apply_okx_runtime_patches() -> bool:
         clean_params = _normalize_okx_params(path, params)
         inst = str(clean_params.get("instId", "")).upper()
         is_market_data = path in {"/api/v5/market/candles", "/api/v5/market/ticker"}
-
         if is_market_data and _is_invalid_or_synthetic(inst):
             logger.warning("OKX_INVALID_INSTRUMENT_CACHE_SKIP marker=20260703z instId=%s path=%s", inst, path)
             return {"code": "0", "msg": "invalid_or_synthetic_instrument_cached_skip", "data": []}
-
         query = "?" + urlencode(clean_params) if clean_params else ""
         request_path = f"{path}{query}"
         body = "" if method == "GET" or not payload else json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         ts = self._timestamp()
         simulated = bool(getattr(self, "simulated", False)) or _env_truthy("OKX_SIMULATED_TRADING") or _env_truthy("OKX_USE_TESTNET")
-
         logger.warning("OKX_REQUEST_DIAG method=%s path=%s base_url=%s simulated_instance=%s simulated_active=%s key_present=%s passphrase_present=%s timestamp=%s body_empty=%s", method, request_path, self.BASE_URL, bool(getattr(self, "simulated", False)), simulated, bool(getattr(self, "api_key", "")), bool(getattr(self, "passphrase", "")), ts, body == "")
-
         request_headers = self._headers(ts, method, request_path, body, private=private)
         response = self.session.request(method, f"{self.BASE_URL}{request_path}", data=body if body else None, headers=request_headers, timeout=self.timeout)
         logger.warning("OKX_RESPONSE_DIAG status=%s method=%s path=%s response_body=%s", response.status_code, method, request_path, response.text)
-
         try:
             parsed = response.json()
         except ValueError:
             parsed = {"code": f"HTTP_{response.status_code}", "msg": response.text or "Non-JSON OKX response"}
-
         okx_code = str(parsed.get("code", "0"))
         if (not response.ok) or okx_code not in {"0", ""}:
             okx_msg = str(parsed.get("msg", ""))
@@ -279,6 +259,38 @@ def apply_okx_runtime_patches() -> bool:
             logger.warning("OKX_CASH_OR_INVALID_TICKER_SKIPPED marker=20260703z instId=%s", normalized)
             return {"code": "0", "msg": "cash_or_invalid_ticker_skipped", "data": []}
         return self._request("GET", "/api/v5/market/ticker", params={"instId": normalized})
+
+    def place_order(self: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Accept both OKX payload kwargs and legacy positional submit calls."""
+        payload: Dict[str, Any] = dict(kwargs)
+        if args:
+            if len(args) >= 1:
+                payload.setdefault("instId", args[0])
+            if len(args) >= 2:
+                payload.setdefault("side", args[1])
+            if len(args) >= 3:
+                payload.setdefault("sz", args[2])
+        if "symbol" in payload and "instId" not in payload:
+            payload["instId"] = payload.pop("symbol")
+        if "quantity" in payload and "sz" not in payload:
+            payload["sz"] = payload.pop("quantity")
+        if "size" in payload and "sz" not in payload:
+            payload["sz"] = payload.pop("size")
+        if "instId" in payload:
+            payload["instId"] = _normalize_okx_inst_id(payload.get("instId"))
+        payload.setdefault("tdMode", "cash")
+        payload.setdefault("ordType", "market")
+        side = str(payload.get("side") or "").lower()
+        if side:
+            payload["side"] = side
+        if side == "buy":
+            payload.setdefault("tgtCcy", "quote_ccy")
+        logger.warning(
+            "OKX_PLACE_ORDER_SIGNATURE_COMPAT marker=20260705e instId=%s side=%s sz=%s keys=%s",
+            payload.get("instId"), payload.get("side"), payload.get("sz"), sorted(payload.keys())
+        )
+        print(f"[NIJA-PRINT] OKX_PLACE_ORDER_SIGNATURE_COMPAT marker=20260705e instId={payload.get('instId')} side={payload.get('side')}", flush=True)
+        return self._request("POST", "/api/v5/trade/order", payload=payload, private=True)
 
     original_get_account_balance = getattr(okx_cls, "get_account_balance")
     original_get_positions = getattr(okx_cls, "get_positions")
@@ -378,17 +390,14 @@ def apply_okx_runtime_patches() -> bool:
         if _is_invalid_or_synthetic(normalized):
             logger.warning("OKX_CANDLE_SYMBOL_SKIPPED marker=20260703z instId=%s reason=invalid_or_synthetic", normalized)
             return None
-
         rest = getattr(self, "market_api", None) or getattr(self, "account_api", None)
         if rest is None:
             return None
-
         products = _load_okx_products_from_rest(rest)
         if products and normalized not in products:
             _INVALID_OKX_INST_IDS.add(normalized)
             logger.warning("OKX_CANDLE_SYMBOL_SKIPPED marker=20260703z instId=%s reason=not_listed products=%d", normalized, len(products))
             return None
-
         timeframe = kwargs.get("timeframe") or kwargs.get("bar") or (args[0] if args else "1m")
         if isinstance(timeframe, (int, float)):
             timeframe = "1m"
@@ -400,7 +409,6 @@ def apply_okx_runtime_patches() -> bool:
             limit = max(1, min(int(float(limit_raw)), 300))
         except Exception:
             limit = 100
-
         result = rest.get_candles(instId=normalized, bar=bar, limit=str(limit))
         if not result or result.get("code") != "0":
             if str((result or {}).get("code", "")) == "51001":
@@ -444,6 +452,7 @@ def apply_okx_runtime_patches() -> bool:
     rest_cls._headers = _headers
     rest_cls._request = _request
     rest_cls.get_ticker = get_ticker
+    rest_cls.place_order = place_order
     okx_cls.get_positions = get_positions
     okx_cls.get_account_balance = get_account_balance
     okx_cls.get_candles = get_candles
@@ -456,8 +465,9 @@ def apply_okx_runtime_patches() -> bool:
     bm._NIJA_OKX_RUNTIME_PATCHED = True
     bm._NIJA_OKX_RUNTIME_PATCHED_V20260703E = True
     bm._NIJA_OKX_RUNTIME_PATCHED_V20260703Z = True
-    logger.warning("✅ OKX runtime patch applied marker=20260703z: USDTC repair, listed-symbol cache, 51001 invalid-instrument quarantine")
-    print("[NIJA-PRINT] OKX_RUNTIME_PATCHED marker=20260703z", flush=True)
+    bm._NIJA_OKX_RUNTIME_PATCHED_V20260705E = True
+    logger.warning("✅ OKX runtime patch applied marker=20260705e: symbol/listing repair plus place_order signature compatibility")
+    print("[NIJA-PRINT] OKX_RUNTIME_PATCHED marker=20260705e", flush=True)
     return True
 
 
@@ -467,13 +477,11 @@ def install_import_hook() -> None:
     import sys
 
     bm = sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
-    if bm is not None and getattr(bm, "_NIJA_OKX_RUNTIME_PATCHED_V20260703Z", False):
+    if bm is not None and getattr(bm, "_NIJA_OKX_RUNTIME_PATCHED_V20260705E", False):
         return
-
     if getattr(builtins, "_NIJA_OKX_IMPORT_HOOK_INSTALLED", False):
         apply_okx_runtime_patches()
         return
-
     original_import = builtins.__import__
 
     def guarded_import(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0) -> Any:
