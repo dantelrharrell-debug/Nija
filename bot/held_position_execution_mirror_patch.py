@@ -25,20 +25,33 @@ def _float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _install_runtime_guard(module_name: str, marker: str) -> None:
+    try:
+        try:
+            module = __import__(f"bot.{module_name}", fromlist=["*"])
+        except Exception:
+            module = __import__(module_name, fromlist=["*"])
+        installer = getattr(module, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            logger.warning("%s marker=20260706a", marker)
+    except Exception as exc:
+        logger.warning("%s_FAILED marker=20260706a error=%s", marker, exc)
+
+
 def _install_held_trade_cap_guard() -> None:
     os.environ.setdefault("NIJA_HELD_TRADE_CAP_GUARD_ENABLED", "true")
     os.environ.setdefault("NIJA_MAX_HELD_TRADES_PER_ACCOUNT", "8")
-    try:
-        try:
-            from bot import held_trade_cap_guard_patch as _cap_guard  # type: ignore
-        except Exception:
-            import held_trade_cap_guard_patch as _cap_guard  # type: ignore
-        installer = getattr(_cap_guard, "install_import_hook", None)
-        if callable(installer):
-            installer()
-            logger.warning("HELD_TRADE_CAP_GUARD_CHAINED_FROM_MIRROR marker=20260706a cap=%s", os.environ.get("NIJA_MAX_HELD_TRADES_PER_ACCOUNT", "8"))
-    except Exception as exc:
-        logger.warning("HELD_TRADE_CAP_GUARD_CHAIN_FAILED marker=20260706a error=%s", exc)
+    _install_runtime_guard("held_trade_cap_guard_patch", "HELD_TRADE_CAP_GUARD_CHAINED_FROM_MIRROR")
+
+
+def _install_global_trailing_protection() -> None:
+    os.environ.setdefault("NIJA_GLOBAL_TRAILING_PROTECTION_ENABLED", "true")
+    os.environ.setdefault("NIJA_GLOBAL_STOP_LOSS_ENABLED", "true")
+    os.environ.setdefault("NIJA_GLOBAL_TAKE_PROFIT_ENABLED", "true")
+    os.environ.setdefault("NIJA_GLOBAL_TRAILING_STOP_ENABLED", "true")
+    os.environ.setdefault("NIJA_GLOBAL_TRAILING_TAKE_PROFIT_ENABLED", "true")
+    _install_runtime_guard("global_trailing_protection_patch", "GLOBAL_TRAILING_PROTECTION_CHAINED_FROM_MIRROR")
 
 
 def _normalize_positions(raw_positions: Any) -> list[Dict[str, Any]]:
@@ -305,6 +318,7 @@ def _try_patch_loaded() -> bool:
 
 def install_import_hook() -> None:
     _install_held_trade_cap_guard()
+    _install_global_trailing_protection()
     if not _truthy("NIJA_HELD_POSITION_EXECUTION_MIRROR_ENABLED", "true"):
         logger.warning("HELD_POSITION_EXECUTION_MIRROR_DISABLED marker=20260705h")
         return
