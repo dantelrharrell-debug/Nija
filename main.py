@@ -5,6 +5,7 @@ import sys as _sys
 print("🔥 PYTHON ENTRYPOINT HIT", flush=True)
 
 import importlib
+import importlib.util
 import logging
 import os
 import runpy
@@ -16,6 +17,36 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 
 logger = logging.getLogger(__name__)
+
+
+def _load_repo_module_by_path(module_name: str, relative_path: str):
+    """Load a startup helper directly from disk without importing bot.__init__."""
+    path = os.path.join(_ROOT, relative_path)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load spec for {relative_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _install_global_runtime_startup_guards() -> None:
+    """Install global position protection/cap guards before the bot package starts."""
+
+    try:
+        guards = _load_repo_module_by_path(
+            "nija_global_runtime_startup_guards_prebot",
+            os.path.join("bot", "global_runtime_startup_guards.py"),
+        )
+        installer = getattr(guards, "install_import_hook", None) or getattr(guards, "install", None)
+        if callable(installer):
+            installer()
+            print("GLOBAL_RUNTIME_STARTUP_GUARDS_PREBOT_INSTALL_REQUESTED", flush=True)
+            logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_PREBOT_INSTALL_REQUESTED")
+        else:
+            logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_PREBOT_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_PREBOT_FAILED err=%s", exc)
 
 
 def _install_logging_format_guard() -> None:
@@ -32,22 +63,6 @@ def _install_logging_format_guard() -> None:
             logger.warning("LOGGING_FORMAT_GUARD_INSTALL_SKIPPED installer_missing")
     except Exception as exc:
         logger.warning("LOGGING_FORMAT_GUARD_INSTALL_FAILED err=%s", exc)
-
-
-def _install_global_runtime_startup_guards() -> None:
-    """Install global position protection/cap guards before the bot starts."""
-
-    try:
-        guards = importlib.import_module("bot.global_runtime_startup_guards")
-        installer = getattr(guards, "install_import_hook", None) or getattr(guards, "install", None)
-        if callable(installer):
-            installer()
-            print("GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALL_REQUESTED", flush=True)
-            logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALL_REQUESTED")
-        else:
-            logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_SKIPPED installer_missing")
-    except Exception as exc:
-        logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_FAILED err=%s", exc)
 
 
 def _run_pre_startup_sanitization() -> None:
@@ -219,8 +234,8 @@ def _install_live_entry_completion_repair() -> None:
         logger.warning("LIVE_ENTRY_COMPLETION_REPAIR_FAILED err=%s", exc)
 
 
-_install_logging_format_guard()
 _install_global_runtime_startup_guards()
+_install_logging_format_guard()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
 _install_authority_readiness_repair()
