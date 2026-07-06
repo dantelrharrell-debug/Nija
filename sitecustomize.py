@@ -175,6 +175,7 @@ def _runtime_defaults() -> None:
         "NIJA_RUNTIME_EXECUTION_AUTHORITY": "true",
         "NIJA_RISK_GATE_EXECUTION_BRIDGE_ENABLED": "true",
         "NIJA_STALE_EXCHANGE_KILL_SWITCH_RECOVERY_ENABLED": "true",
+        "NIJA_EXCHANGE_KILL_SWITCH_IGNORE_INTERNAL_ROUTING_REJECTS": "true",
         "NIJA_FALLBACK_REPAIR_MIN_TP1_PCT": "0.012",
         "NIJA_FALLBACK_REPAIR_MIN_TP2_PCT": "0.018",
         "NIJA_FALLBACK_REPAIR_MIN_TP3_PCT": "0.026",
@@ -214,6 +215,10 @@ def _install_logging_format_guard() -> None:
 
 def _install_stale_exchange_kill_switch_recovery() -> None:
     _install_patch_module(filename="stale_exchange_kill_switch_recovery_patch.py", module_name="nija_stale_exchange_kill_switch_recovery_patch", success_log="STALE_EXCHANGE_KILL_SWITCH_RECOVERY_INSTALL_REQUESTED", error_prefix="Stale exchange kill-switch recovery")
+
+
+def _install_exchange_kill_switch_internal_reject_guard() -> None:
+    _install_patch_module(filename="exchange_kill_switch_internal_reject_guard_patch.py", module_name="nija_exchange_kill_switch_internal_reject_guard_patch", success_log="EXCHANGE_KILL_SWITCH_INTERNAL_REJECT_GUARD_INSTALL_REQUESTED", error_prefix="Exchange kill-switch internal reject guard")
 
 
 def _install_activation_snapshot_bridge() -> None:
@@ -309,6 +314,7 @@ _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
 _install_stale_exchange_kill_switch_recovery()
+_install_exchange_kill_switch_internal_reject_guard()
 _install_okx_min_notional_prefilter_repair()
 _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
