@@ -34,6 +34,22 @@ def _install_logging_format_guard() -> None:
         logger.warning("LOGGING_FORMAT_GUARD_INSTALL_FAILED err=%s", exc)
 
 
+def _install_global_runtime_startup_guards() -> None:
+    """Install global position protection/cap guards before the bot starts."""
+
+    try:
+        guards = importlib.import_module("bot.global_runtime_startup_guards")
+        installer = getattr(guards, "install_import_hook", None) or getattr(guards, "install", None)
+        if callable(installer):
+            installer()
+            print("GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALL_REQUESTED", flush=True)
+            logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALL_REQUESTED")
+        else:
+            logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_SKIPPED installer_missing")
+    except Exception as exc:
+        logger.warning("GLOBAL_RUNTIME_STARTUP_GUARDS_FAILED err=%s", exc)
+
+
 def _run_pre_startup_sanitization() -> None:
     """Sanitize live Redis bypass flags before startup safety initializes."""
 
@@ -87,9 +103,9 @@ def _install_execution_bootstrap_authority_repair() -> None:
             print("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED", flush=True)
             logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED")
         else:
-            logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_SKIPPED installer_missing")
+            logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_SKIPPED installer_missing")
     except Exception as exc:
-        logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_FAILED err=%s", exc)
+        logger.warning("EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_FAILED err=%s", exc)
 
 
 def _install_forced_fallback_payload_repair() -> None:
@@ -204,6 +220,7 @@ def _install_live_entry_completion_repair() -> None:
 
 
 _install_logging_format_guard()
+_install_global_runtime_startup_guards()
 _run_pre_startup_sanitization()
 _install_strategy_publication()
 _install_authority_readiness_repair()
