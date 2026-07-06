@@ -1,31 +1,25 @@
 from __future__ import annotations
 
-import builtins
+import importlib
 import logging
-import sys
-from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.broker_bool_guard_patch")
-_MARKER = "BROKER_BOOL_GUARD_PATCHED marker=20260705b"
-_PATCHED = False
-
+_MARKER = "BROKER_BOOL_GUARD_PATCHED marker=20260705c"
 _METHODS = (
     "get_candles",
     "fetch_ohlcv",
     "get_ohlcv",
     "get_historical_data",
     "get_market_data",
-    "get_balance",
     "get_account_balance",
-    "fetch_balance",
+    "get_balance",
     "place_order",
     "submit_order",
-    "create_order",
 )
 
 
-def _normalise_broker_name(value: Any) -> str:
+def _name(value: Any) -> str:
     raw = getattr(value, "value", value)
     text = str(raw or "").strip().lower()
     for key in ("okx", "coinbase", "kraken", "alpaca", "binance"):
@@ -34,111 +28,95 @@ def _normalise_broker_name(value: Any) -> str:
     return text
 
 
-def _is_real_broker_adapter(obj: Any) -> bool:
+def _broker_key(obj: Any) -> str:
     if obj is None or isinstance(obj, (bool, int, float, str, bytes, bytearray)):
-        return False
-    if any(callable(getattr(obj, name, None)) for name in _METHODS):
-        return True
-    for attr in ("broker_type", "name", "broker_name", "exchange", "exchange_name"):
-        if _normalise_broker_name(getattr(obj, attr, None)):
-            return True
-    for attr in ("market_api", "account_api", "client", "session", "api_client"):
-        if getattr(obj, attr, None) is not None:
-            return True
-    return False
-
-
-def _broker_key_from_obj(obj: Any) -> str:
-    if not _is_real_broker_adapter(obj):
         return "unknown"
-    for attr in ("broker_type", "name", "broker_name", "exchange", "exchange_name", "id"):
-        key = _normalise_broker_name(getattr(obj, attr, None))
-        if key:
-            return key
-    cls_name = type(obj).__name__.lower()
+    for attr in ("broker_type", "name", "broker_name", "exchange", "exchange_name"):
+        found = _name(getattr(obj, attr, None))
+        if found:
+            return found
+    class_name = type(obj).__name__.lower()
     for key in ("okx", "coinbase", "kraken", "alpaca", "binance"):
-        if key in cls_name:
+        if key in class_name:
             return key
     return "unknown"
 
 
-def _patch_independent_module(module: ModuleType) -> bool:
-    global _PATCHED
-    if getattr(module, "_NIJA_BROKER_BOOL_GUARD_PATCHED", False):
-        _PATCHED = True
+def _is_adapter(obj: Any) -> bool:
+    if obj is None or isinstance(obj, (bool, int, float, str, bytes, bytearray)):
+        return False
+    if any(callable(getattr(obj, method, None)) for method in _METHODS):
+        return True
+    return _broker_key(obj) != "unknown" and any(getattr(obj, attr, None) is not None for attr in ("market_api", "account_api", "client", "session"))
+
+
+def _install_collector_override(module: Any) -> bool:
+    if getattr(module, "_NIJA_BROKER_BOOL_GUARD_PATCHED_V20260705C", False):
         return True
 
-    def guarded_is_real_broker_adapter(obj: Any) -> bool:
-        return _is_real_broker_adapter(obj)
+    enabled = getattr(module, "_broker_enabled", lambda broker_name: True)
 
-    def guarded_broker_key_from_obj(obj: Any) -> str:
-        return _broker_key_from_obj(obj)
+    def collect(apex: Any, explicit_broker: Any = None) -> dict[str, Any]:
+        candidates: dict[str, Any] = {}
 
-    def guarded_maybe_add_candidate(candidates: dict[str, Any], raw_key: Any, broker: Any, source: str) -> None:
-        key = _broker_key_from_obj(broker)
-        if key == "unknown":
-            key = _normalise_broker_name(raw_key)
-        if not key or key == "unknown":
-            return
-        enabled = getattr(module, "_broker_enabled", lambda name: True)
-        if not enabled(key):
-            return
-        if not _is_real_broker_adapter(broker):
-            logger.warning(
-                "BROKER_BOOL_GUARD_REJECTED marker=20260705b key=%s source=%s object_type=%s",
-                key,
-                source,
-                type(broker).__name__,
-            )
-            return
-        previous = candidates.get(key)
-        if previous is None or not _is_real_broker_adapter(previous):
+        def add(raw_key: Any, broker: Any, source: str) -> None:
+            key = _broker_key(broker)
+            if key == "unknown":
+                key = _name(raw_key)
+            if not key or key == "unknown" or not enabled(key):
+                return
+            if not _is_adapter(broker):
+                logger.warning(
+                    "BROKER_BOOL_GUARD_REJECTED marker=20260705c key=%s source=%s object_type=%s",
+                    key,
+                    source,
+                    type(broker).__name__,
+                )
+                return
             candidates[key] = broker
             logger.info(
-                "BROKER_BOOL_GUARD_ACCEPTED marker=20260705b key=%s source=%s object_type=%s",
+                "BROKER_BOOL_GUARD_ACCEPTED marker=20260705c key=%s source=%s object_type=%s",
                 key,
                 source,
                 type(broker).__name__,
             )
 
-    module._is_real_broker_adapter = guarded_is_real_broker_adapter
-    module._broker_key_from_obj = guarded_broker_key_from_obj
-    module._maybe_add_candidate = guarded_maybe_add_candidate
-    module._NIJA_BROKER_BOOL_GUARD_PATCHED = True
-    _PATCHED = True
-    logger.warning("%s independent_module=%s", _MARKER, getattr(module, "__name__", "unknown"))
-    print("[NIJA-PRINT] BROKER_BOOL_GUARD_PATCHED marker=20260705b", flush=True)
+        add("explicit", explicit_broker, "explicit")
+        owners = [item for item in (apex, getattr(apex, "strategy", None), getattr(apex, "trading_strategy", None)) if item is not None]
+        for owner in owners:
+            for attr in ("broker_client", "broker", "active_broker"):
+                add(attr, getattr(owner, attr, None), f"owner.{attr}")
+            for manager_attr in ("broker_manager", "multi_account_manager", "multi_account_broker_manager"):
+                manager = getattr(owner, manager_attr, None)
+                if manager is None:
+                    continue
+                for mapping_attr in ("platform_brokers", "_platform_brokers", "brokers", "_brokers"):
+                    mapping = getattr(manager, mapping_attr, {}) or {}
+                    if isinstance(mapping, dict):
+                        for raw_key, broker in mapping.items():
+                            add(raw_key, broker, f"{manager_attr}.{mapping_attr}")
+                for attr in ("active_broker", "broker", "broker_client"):
+                    add(attr, getattr(manager, attr, None), f"{manager_attr}.{attr}")
+        return candidates
+
+    module._collect_candidate_brokers = collect
+    module._broker_key_from_obj = _broker_key
+    module._NIJA_BROKER_BOOL_GUARD_PATCHED_V20260705C = True
+    logger.warning("%s collector_overridden=True", _MARKER)
+    print("[NIJA-PRINT] BROKER_BOOL_GUARD_PATCHED marker=20260705c collector_overridden", flush=True)
     return True
 
 
-def _try_patch_loaded() -> bool:
-    patched = False
-    for name in ("bot.broker_independent_live_execution_patch", "broker_independent_live_execution_patch"):
-        module = sys.modules.get(name)
-        if isinstance(module, ModuleType):
-            patched = _patch_independent_module(module) or patched
-    return patched
-
-
 def install_import_hook() -> None:
-    if _try_patch_loaded():
-        return
-    if getattr(builtins, "_NIJA_BROKER_BOOL_GUARD_HOOK_INSTALLED", False):
-        return
-    original_import = builtins.__import__
-
-    def guarded_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
-        module = original_import(name, globals, locals, fromlist, level)
+    try:
+        module = importlib.import_module("bot.broker_independent_live_execution_patch")
+    except Exception:
         try:
-            if name.endswith("broker_independent_live_execution_patch"):
-                _try_patch_loaded()
+            module = importlib.import_module("broker_independent_live_execution_patch")
         except Exception as exc:
-            logger.warning("BROKER_BOOL_GUARD hook failed: %s", exc)
-        return module
-
-    builtins.__import__ = guarded_import
-    setattr(builtins, "_NIJA_BROKER_BOOL_GUARD_HOOK_INSTALLED", True)
-    logger.warning("BROKER_BOOL_GUARD_IMPORT_HOOK_INSTALLED marker=20260705b")
+            logger.warning("BROKER_BOOL_GUARD_IMPORT_WAIT marker=20260705c error=%s", exc)
+            return
+    _install_collector_override(module)
 
 
 def install() -> None:
