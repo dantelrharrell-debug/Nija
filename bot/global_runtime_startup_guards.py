@@ -83,11 +83,13 @@ def install() -> None:
     _install_kraken_patch_log_dedupe()
     held_ok = _install_module("held_trade_cap_guard_patch", "HELD_TRADE_CAP_GUARD_GLOBAL_STARTUP_INSTALL_REQUESTED")
     trailing_ok = _install_module("global_trailing_protection_patch", "GLOBAL_TRAILING_PROTECTION_GLOBAL_STARTUP_INSTALL_REQUESTED")
+    profit_position_ok = _install_module("profit_position_protection_patch", "PROFIT_POSITION_PROTECTION_GLOBAL_STARTUP_INSTALL_REQUESTED")
     setattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", True)
     logger.warning(
-        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b held_cap=%s global_trailing=%s cap=%s",
+        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b held_cap=%s global_trailing=%s profit_position=%s cap=%s",
         held_ok,
         trailing_ok,
+        profit_position_ok,
         os.environ.get("NIJA_MAX_HELD_TRADES_PER_ACCOUNT", "8"),
     )
 
