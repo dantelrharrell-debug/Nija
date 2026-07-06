@@ -115,13 +115,17 @@ _RULES: tuple[_Rule, ...] = (
     _Rule(
         category=KrakenErrorCategory.FUNDS,
         policy=KrakenRetryPolicy.STOP,
-        canonical_code="KRAKEN_INSUFFICIENT_FUNDS",
+        canonical_code="EXCHANGE_INSUFFICIENT_FUNDS",
         retry_delay_s=0.0,
         max_retries=0,
-        remediation="Hydrate or rebalance account capital before attempting new entries.",
+        remediation="Hydrate or rebalance quote currency before attempting new entries, or route the symbol to a broker with available quote cash.",
         patterns=_compile((
             r"\beorder\s*:\s*insufficient\s+funds",
             r"\binsufficient\s+(funds|balance|margin)\b",
+            r"\bavailable\s+(usd|usdt|usdc)\s+balance\s+is\s+insufficient\b",
+            r"\ball\s+operations\s+failed\b.*\binsufficient\b",
+            r"\bsCode['\"]?\s*[:=]\s*['\"]?51008\b",
+            r"\b51008\b.*\binsufficient\b",
         )),
     ),
     _Rule(
@@ -198,13 +202,18 @@ _UNKNOWN = KrakenErrorTaxonomy(
     canonical_code="KRAKEN_UNKNOWN_ERROR",
     retry_delay_s=0.0,
     max_retries=0,
-    remediation="Inspect the raw Kraken error and add a taxonomy rule if it is actionable.",
+    remediation="Inspect the raw exchange error and add a taxonomy rule if it is actionable.",
     raw_error="",
 )
 
 
 def classify_kraken_error(error_text: object) -> KrakenErrorTaxonomy:
-    """Classify *error_text* into a deterministic Kraken taxonomy record."""
+    """Classify *error_text* into a deterministic exchange taxonomy record.
+
+    Historical callers still use this function name even for non-Kraken broker
+    errors. Keep the public API stable, but classify cross-exchange insufficient
+    funds responses such as OKX code 51008 so they are not reported as unknown.
+    """
 
     raw = "" if error_text is None else str(error_text)
     text = raw.strip()
