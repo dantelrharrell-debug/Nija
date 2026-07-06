@@ -234,6 +234,7 @@ _PATCH_HOOKS = (
     ("core_loop_broker_argument_guard_patch", "Core loop broker argument guard"),
     ("execution_route_integrity_patch", "Execution route integrity guard"),
     ("okx_runtime_patch", "OKX runtime patch"),
+    ("okx_final_submit_callshape_patch", "OKX final submit callshape patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
     ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
     ("live_execution_runtime_hardening_patch", "Live execution runtime hardening"),
@@ -246,5 +247,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.8"
+__version__ = "7.2.9"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
