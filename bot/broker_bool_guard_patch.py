@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 logger = logging.getLogger("nija.broker_bool_guard_patch")
-_MARKER = "BROKER_BOOL_GUARD_PATCHED marker=20260705c"
+_MARKER = "BROKER_BOOL_GUARD_PATCHED marker=20260705d"
 _METHODS = (
     "get_candles",
     "fetch_ohlcv",
@@ -51,7 +51,7 @@ def _is_adapter(obj: Any) -> bool:
 
 
 def _install_collector_override(module: Any) -> bool:
-    if getattr(module, "_NIJA_BROKER_BOOL_GUARD_PATCHED_V20260705C", False):
+    if getattr(module, "_NIJA_BROKER_BOOL_GUARD_PATCHED_V20260705D", False):
         return True
 
     enabled = getattr(module, "_broker_enabled", lambda broker_name: True)
@@ -67,7 +67,7 @@ def _install_collector_override(module: Any) -> bool:
                 return
             if not _is_adapter(broker):
                 logger.warning(
-                    "BROKER_BOOL_GUARD_REJECTED marker=20260705c key=%s source=%s object_type=%s",
+                    "BROKER_BOOL_GUARD_REJECTED marker=20260705d key=%s source=%s object_type=%s",
                     key,
                     source,
                     type(broker).__name__,
@@ -75,7 +75,7 @@ def _install_collector_override(module: Any) -> bool:
                 return
             candidates[key] = broker
             logger.info(
-                "BROKER_BOOL_GUARD_ACCEPTED marker=20260705c key=%s source=%s object_type=%s",
+                "BROKER_BOOL_GUARD_ACCEPTED marker=20260705d key=%s source=%s object_type=%s",
                 key,
                 source,
                 type(broker).__name__,
@@ -101,20 +101,36 @@ def _install_collector_override(module: Any) -> bool:
 
     module._collect_candidate_brokers = collect
     module._broker_key_from_obj = _broker_key
-    module._NIJA_BROKER_BOOL_GUARD_PATCHED_V20260705C = True
+    module._NIJA_BROKER_BOOL_GUARD_PATCHED_V20260705D = True
     logger.warning("%s collector_overridden=True", _MARKER)
-    print("[NIJA-PRINT] BROKER_BOOL_GUARD_PATCHED marker=20260705c collector_overridden", flush=True)
+    print("[NIJA-PRINT] BROKER_BOOL_GUARD_PATCHED marker=20260705d collector_overridden", flush=True)
     return True
 
 
+def _install_strategy_backrefs() -> None:
+    try:
+        mod = importlib.import_module("bot.strategy_broker_backref_patch")
+    except Exception:
+        try:
+            mod = importlib.import_module("strategy_broker_backref_patch")
+        except Exception as exc:
+            logger.warning("BROKER_BOOL_GUARD_STRATEGY_BACKREF_WAIT marker=20260705d error=%s", exc)
+            return
+    try:
+        mod.install_import_hook()
+    except Exception as exc:
+        logger.warning("BROKER_BOOL_GUARD_STRATEGY_BACKREF_INSTALL_FAILED marker=20260705d error=%s", exc)
+
+
 def install_import_hook() -> None:
+    _install_strategy_backrefs()
     try:
         module = importlib.import_module("bot.broker_independent_live_execution_patch")
     except Exception:
         try:
             module = importlib.import_module("broker_independent_live_execution_patch")
         except Exception as exc:
-            logger.warning("BROKER_BOOL_GUARD_IMPORT_WAIT marker=20260705c error=%s", exc)
+            logger.warning("BROKER_BOOL_GUARD_IMPORT_WAIT marker=20260705d error=%s", exc)
             return
     _install_collector_override(module)
 
