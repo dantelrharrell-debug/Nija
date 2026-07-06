@@ -291,6 +291,10 @@ def _install_risk_gate_execution_bridge() -> None:
     _install_patch_module(filename="risk_gate_execution_bridge_patch.py", module_name="nija_risk_gate_execution_bridge_patch", success_log="RISK_GATE_EXECUTION_BRIDGE_INSTALL_REQUESTED", error_prefix="Risk gate execution bridge")
 
 
+def _install_direct_broker_metadata_guard() -> None:
+    _install_patch_module(filename="direct_broker_metadata_guard_patch.py", module_name="nija_direct_broker_metadata_guard_patch", success_log="DIRECT_BROKER_METADATA_GUARD_INSTALL_REQUESTED", error_prefix="Direct broker metadata guard")
+
+
 def _install_okx_min_notional_prefilter_repair() -> None:
     _install_patch_module(filename="okx_min_notional_prefilter_repair_patch.py", module_name="nija_okx_min_notional_prefilter_repair_patch", success_log="OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_REQUESTED", error_prefix="OKX min-notional prefilter repair")
 
@@ -315,6 +319,7 @@ _install_trading_state_dispatch_latch_repair()
 _install_downstream_risk_governor_equity_repair()
 _install_usdt_kraken_ecel_routing_repair()
 _install_coinbase_execution_failover()
+_install_direct_broker_metadata_guard()
 _install_execution_entry_safe_logger()
 _install_risk_gate_execution_bridge()
 _install_activation_snapshot_bridge()
