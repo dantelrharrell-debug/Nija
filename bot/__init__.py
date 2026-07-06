@@ -127,6 +127,8 @@ for _key, _value in {
     "NIJA_RECONCILE_BROKER_OPEN_ORDERS": "true",
     "NIJA_PENDING_ORDER_TIMEOUT_S": "90",
     "NIJA_STARTUP_POSITION_SYNC_ENABLED": "true",
+    "NIJA_HELD_POSITION_EXECUTION_MIRROR_ENABLED": "true",
+    "NIJA_HELD_POSITION_CREATE_POSITION_MAP": "true",
     "NIJA_BROKER_INDEPENDENT_LIVE_EXECUTION": "true",
     "NIJA_INDEPENDENT_BROKER_TRADING": "true",
     "NIJA_INDEPENDENT_USER_TRADING": "true",
@@ -223,6 +225,8 @@ _PATCH_HOOKS = (
     ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
     ("generation_sync_timing_patch", "Generation sync timing patch"),
     ("execution_entry_tp_geometry_patch", "Execution entry TP geometry patch"),
+    ("risk_gate_execution_bridge_patch", "Risk gate and held-position exit bridge"),
+    ("held_position_execution_mirror_patch", "Held-position execution mirror"),
     ("live_execution_authority_blocker_patch", "Live execution authority blocker patch"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
@@ -247,5 +251,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.9"
+__version__ = "7.2.10"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
