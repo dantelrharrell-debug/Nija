@@ -25,10 +25,28 @@ def _install_sector_tier_hydration_repair() -> None:
         )
 
 
+def _install_exposure_hard_block_runtime_patch() -> None:
+    try:
+        try:
+            from bot.exposure_hard_block_runtime_patch import install_import_hook
+        except ImportError:
+            from exposure_hard_block_runtime_patch import install_import_hook  # type: ignore[import]
+        install_import_hook()
+        logging.getLogger("nija.logging_format_guard").warning(
+            "EXPOSURE_HARD_BLOCK_RUNTIME_INSTALL_REQUESTED marker=20260706g"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").warning(
+            "Exposure hard-block runtime patch unavailable: %s",
+            exc,
+        )
+
+
 def install() -> None:
     global _ORIGINAL_GET_MESSAGE, _INSTALLED
     if _INSTALLED:
         _install_sector_tier_hydration_repair()
+        _install_exposure_hard_block_runtime_patch()
         return
     _ORIGINAL_GET_MESSAGE = logging.LogRecord.getMessage
 
@@ -44,6 +62,7 @@ def install() -> None:
     _INSTALLED = True
     logging.getLogger("nija.logging_format_guard").warning("LOGGING_FORMAT_GUARD_INSTALLED")
     _install_sector_tier_hydration_repair()
+    _install_exposure_hard_block_runtime_patch()
 
 
 def install_import_hook() -> None:
