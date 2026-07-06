@@ -127,7 +127,21 @@ for _key, _value in {
     "NIJA_RECONCILE_BROKER_OPEN_ORDERS": "true",
     "NIJA_PENDING_ORDER_TIMEOUT_S": "90",
     "NIJA_STARTUP_POSITION_SYNC_ENABLED": "true",
+    "NIJA_BROKER_INDEPENDENT_LIVE_EXECUTION": "true",
+    "NIJA_INDEPENDENT_BROKER_TRADING": "true",
+    "NIJA_INDEPENDENT_USER_TRADING": "true",
+    "NIJA_COPY_TRADE_ENABLED": "false",
+    "NIJA_MASTER_SIGNAL_ONLY": "true",
+    "NIJA_ALLOWED_EXECUTION_BROKERS": "okx,coinbase,kraken",
+    "NIJA_ENTRY_BROKER_PRIORITY": "okx,coinbase,kraken",
+    "NIJA_BROKER_PRIORITY": "okx,coinbase,kraken",
     "NIJA_BROKER_SCOPED_POSITION_CAP": "true",
+    "NIJA_BROKER_SCOPED_ZERO_SIGNAL_STREAK": "true",
+    "NIJA_BROKER_SCOPED_EXIT_MANAGEMENT": "true",
+    "NIJA_BROKER_SCOPED_TAKE_PROFIT": "true",
+    "NIJA_EXIT_ENGINE_ENABLED": "true",
+    "NIJA_ADOPTED_POSITION_PROFIT_EXIT_ENABLED": "true",
+    "NIJA_PROFIT_TAKE_ENABLED": "true",
     "NIJA_PROFITABILITY_GUARD_ENABLED": "true",
     "NIJA_LOG_TRADE_DECISIONS": "true",
     "NIJA_NONCE_REBUILD_WAIT_FOR_LINEAGE_S": "15",
@@ -232,5 +246,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.7"
+__version__ = "7.2.8"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
