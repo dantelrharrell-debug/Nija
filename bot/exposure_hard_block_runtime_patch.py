@@ -150,6 +150,9 @@ def _pretrade_global_exposure_block(
         return False, "", {}
     size = _float(size_usd, 0.0)
     if size <= 0:
+        # Zero-size entry: the early zero-size guard in execute_entry catches this
+        # path cleanly.  Return not-blocked so the original function can log the
+        # proper breadcrumb rather than silently swallowing it here.
         return False, "", {}
     try:
         decision = engine.assess(
@@ -217,6 +220,19 @@ def _patch_execution_engine(module: ModuleType) -> bool:
                     _float(details.get("cap_usd"), 0.0),
                     _float(details.get("current_total_exposure_usd"), 0.0),
                 )
+                # Emit a flushed breadcrumb so operators can distinguish a
+                # terminal risk hard block from a broker/exchange rejection.
+                # This must NOT be recorded as an exchange order rejection
+                # (doing so would create an EMERGENCY_STOP feedback loop).
+                print(
+                    f"[NIJA-PRINT] TERMINAL_RISK_HARD_BLOCK marker=20260706g "
+                    f"surface=ExecutionEngine.execute_entry "
+                    f"account={account_id} symbol={_norm_symbol(symbol)} side={side} "
+                    f"reason={reason} "
+                    f"headroom_usd={_float(details.get('headroom_usd'), 0.0):.2f} "
+                    f"cap_usd={_float(details.get('cap_usd'), 0.0):.2f}",
+                    flush=True,
+                )
                 return None
         return original(self, *args, **kwargs)
 
@@ -267,6 +283,14 @@ def _patch_execution_pipeline(module: ModuleType) -> bool:
                             _float(getattr(request, "size_usd", 0.0), 0.0),
                             reason,
                             _float(details.get("headroom_usd"), 0.0),
+                        )
+                        print(
+                            f"[NIJA-PRINT] TERMINAL_RISK_HARD_BLOCK marker=20260706g "
+                            f"surface=ExecutionPipeline.execute "
+                            f"symbol={_norm_symbol(getattr(request, 'symbol', ''))} side={side} "
+                            f"reason={reason} "
+                            f"headroom_usd={_float(details.get('headroom_usd'), 0.0):.2f}",
+                            flush=True,
                         )
                         return PipelineResult(
                             success=False,

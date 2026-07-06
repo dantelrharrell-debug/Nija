@@ -290,7 +290,11 @@ GLOBAL_MIN_TRADE: float = float(os.environ.get("MIN_TRADE_USD", os.environ.get("
 ENTRY_BROKER_PRIORITY: List[str] = ["kraken", "coinbase", "okx", "alpaca"]
 BROKER_MIN_BALANCE: Dict[str, float] = {
     "default": float(os.environ.get("NIJA_DEFAULT_MIN_BALANCE", "10.0")),
-    "kraken": float(os.environ.get("KRAKEN_MIN_BALANCE_USD", "10.50")),   # ~$10 exchange min + $0.50 fee buffer
+    # Kraken floor: the kraken_execution_floor_guard_patch enforces a final BUY
+    # minimum of $23.00–$23.10.  Set the routing floor to match so Kraken is
+    # only selected when there is enough FREE cash to actually clear that floor.
+    # Operators can lower this via KRAKEN_MIN_BALANCE_USD if needed.
+    "kraken": float(os.environ.get("KRAKEN_MIN_BALANCE_USD", "23.10")),
     "coinbase": float(os.environ.get("COINBASE_MIN_BALANCE_USD", "2.0")),  # Coinbase min is ~$1
     "okx": float(os.environ.get("OKX_MIN_BALANCE_USD", "10.0")),          # OKX exchange min ~$5 + fee buffer
     "alpaca": float(os.environ.get("ALPACA_MIN_BALANCE_USD", "2.0")),
@@ -680,18 +684,28 @@ class TradingStrategy:
 
     @staticmethod
     def _balance_from_payload(payload: Any) -> float:
-        """Extract a USD scalar from common broker balance payload shapes."""
+        """Extract a USD scalar from common broker balance payload shapes.
+
+        Key order prioritises free/spendable cash (``available_balance``,
+        ``available_usd``, ``available``) over total equity (``total_balance``,
+        ``balance``, etc.) so broker-eligibility routing uses the cash that can
+        actually be spent on a new order, not capital that is already locked in
+        open positions.
+        """
         if isinstance(payload, (int, float)):
             return float(payload)
         if isinstance(payload, dict):
             for key in (
-                "total_balance",
+                "available_balance",   # free/spendable cash — broker adapters set this
+                "available_usd",
+                "available",
+                "free",
+                "free_usd",
+                "total_balance",       # fallback: total equity including locked positions
                 "balance",
                 "usd_balance",
                 "equity",
                 "total_usd",
-                "available_usd",
-                "available",
             ):
                 if key in payload:
                     try:

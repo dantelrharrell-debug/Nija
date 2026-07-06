@@ -2136,6 +2136,24 @@ class ExecutionEngine:
             Position dictionary or None if failed
         """
         try:
+            # ─── FIX 0: EARLY ZERO-SIZE GUARD ───────────────────────────────────────
+            # Reject zero-dollar entries immediately before any gate processing.
+            # A zero-size order can never satisfy any min-notional requirement and
+            # would waste API quota or trigger broker-error feedback loops.
+            _initial_size = float(position_size or 0.0)
+            if _initial_size <= 0.0:
+                logger.warning(
+                    "⛔ ZERO-SIZE GUARD: %s %s rejected — position_size=$%.4f at execute_entry entry "
+                    "(zero-size orders cannot be routed to any broker)",
+                    symbol, side, _initial_size,
+                )
+                print(
+                    f"[NIJA-PRINT] execute_entry REJECTED zero_size | "
+                    f"symbol={symbol} side={side} size=${_initial_size:.4f}",
+                    flush=True,
+                )
+                return None
+
             def _trace(
                 stage: str,
                 outcome: str,
@@ -3047,6 +3065,49 @@ class ExecutionEngine:
                         reason="kelly_gate_zero_size",
                     )
                     return None
+
+                # ─── FIX 5: POST-KELLY MIN-NOTIONAL RE-CHECK ─────────────────────────
+                # Kelly can shrink position_size below the hard minimum.  Re-verify
+                # here — BEFORE hitting the broker — so the rejection is caught and
+                # logged cleanly without wasting an API call.
+                if _min_notional_floor is not None and position_size < _min_notional_floor:
+                    if _spendable_usd is not None and _min_notional_floor <= _spendable_usd:
+                        logger.info(
+                            "📈 Post-Kelly min-notional bump: $%.2f → $%.2f (min notional floor)",
+                            position_size, _min_notional_floor,
+                        )
+                        position_size = _min_notional_floor
+                    else:
+                        logger.warning(
+                            "⛔ POST-KELLY MIN-NOTIONAL GATE: %s rejected — post-kelly size $%.2f < "
+                            "min $%.2f (spendable=$%.2f)",
+                            symbol, position_size, _min_notional_floor,
+                            float(_spendable_usd or 0.0),
+                        )
+                        print(
+                            f"[NIJA-PRINT] execute_entry REJECTED post_kelly_min_notional | "
+                            f"symbol={symbol} side={side} "
+                            f"post_kelly_size=${position_size:.2f} "
+                            f"min_notional=${_min_notional_floor:.2f} "
+                            f"spendable=${float(_spendable_usd or 0.0):.2f}",
+                            flush=True,
+                        )
+                        _trace("ecel", "rejected", f"post_kelly_min_notional:{position_size:.2f}", terminal=True)
+                        self._log_execute_entry_rejection(
+                            symbol=symbol,
+                            side=side,
+                            position_size=position_size,
+                            entry_price=entry_price,
+                            stop_loss=stop_loss,
+                            stage="post_kelly_min_notional",
+                            reason="post_kelly_min_notional",
+                            detail=(
+                                f"post_kelly_size={position_size:.2f} "
+                                f"min_notional={_min_notional_floor:.2f} "
+                                f"spendable={float(_spendable_usd or 0.0):.2f}"
+                            ),
+                        )
+                        return None
 
                 logger.info(
                     "✅ Expectancy/Edge Gate passed: E=$%.2f (%.4f%%), edge_score=%.6f, p_win=%.2f%%, breakeven=%.2f%%, kelly=%.3f, size $%.2f->$%.2f",
