@@ -9,6 +9,7 @@ const API_BASE_URL = window.location.origin;
 // State management
 let authToken = null;
 let userProfile = null;
+let latestCombinedTrailingSizePlan = null;
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -47,6 +48,7 @@ function showDashboard() {
     hideElement('settings-content');
     showElement('dashboard-content');
     updateNavLinks('dashboard');
+    ensureCombinedTrailingExecutionPanel();
 }
 
 function showBrokers() {
@@ -381,6 +383,18 @@ function formatPercent(value) {
     return `${(value * 100).toFixed(1)}%`;
 }
 
+function numberValue(id, fallback = 0) {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    const value = Number.parseFloat(el.value);
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function setValueIfPresent(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+}
+
 // Auto-refresh dashboard data every 30 seconds
 setInterval(() => {
     if (authToken && !document.getElementById('dashboard-screen').classList.contains('hidden')) {
@@ -446,4 +460,145 @@ async function loadTradingStatus() {
     } catch (error) {
         console.error('Failed to load trading status:', error);
     }
+}
+
+// ========================================
+// Combined Trailing Execution Panel
+// ========================================
+
+function ensureCombinedTrailingExecutionPanel() {
+    if (document.getElementById('combined-trailing-execution-panel')) return;
+    const dashboardContent = document.getElementById('dashboard-content');
+    if (!dashboardContent) return;
+
+    const tradingControl = dashboardContent.querySelector('.section');
+    const panel = document.createElement('div');
+    panel.className = 'section';
+    panel.id = 'combined-trailing-execution-panel';
+    panel.innerHTML = `
+        <h3>Trade Execution Panel</h3>
+        <div class="status-card">
+            <p class="idle-message"><strong>Combined trailing protection sizing.</strong> Calculate risk-based size, then one-click fill notional and quantity before execution.</p>
+            <div class="settings-grid">
+                <div class="setting-item"><label>Symbol</label><input id="ctp-symbol" value="BTC-USD" placeholder="BTC-USD"></div>
+                <div class="setting-item"><label>Side</label><select id="ctp-side"><option value="buy">Buy / Long</option><option value="sell">Sell / Short</option></select></div>
+                <div class="setting-item"><label>Entry Price</label><input id="ctp-entry-price" type="number" step="0.00000001" placeholder="Market or limit price"></div>
+                <div class="setting-item"><label>Equity USD</label><input id="ctp-equity-usd" type="number" step="0.01" placeholder="Account equity"></div>
+                <div class="setting-item"><label>Available Cash USD</label><input id="ctp-cash-usd" type="number" step="0.01" placeholder="Available cash"></div>
+                <div class="setting-item"><label>Risk %</label><input id="ctp-risk-pct" type="number" step="0.0001" value="0.005"></div>
+                <div class="setting-item"><label>Trailing SL Distance %</label><input id="ctp-stop-distance-pct" type="number" step="0.0001" value="0.006"></div>
+                <div class="setting-item"><label>Min Notional USD</label><input id="ctp-min-notional" type="number" step="0.01" value="10"></div>
+                <div class="setting-item"><label>Max Notional USD</label><input id="ctp-max-notional" type="number" step="0.01" placeholder="Optional cap"></div>
+            </div>
+            <div class="banner-actions" style="margin-top: 1rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                <button class="btn btn-secondary" onclick="calculateCombinedTrailingSizeFromPanel()">Calculate Size</button>
+                <button class="btn btn-primary" onclick="oneClickFillCombinedTrailingTrade()">One-Click Fill</button>
+            </div>
+            <div class="settings-grid" style="margin-top: 1rem;">
+                <div class="setting-item"><label>Calculated Notional</label><input id="trade-notional-usd" readonly placeholder="$0.00"></div>
+                <div class="setting-item"><label>Calculated Quantity</label><input id="trade-quantity" readonly placeholder="0.00000000"></div>
+                <div class="setting-item"><label>Protection Stop Price</label><input id="trade-stop-price" readonly placeholder="0.00000000"></div>
+                <div class="setting-item"><label>Risk Budget</label><input id="trade-risk-budget" readonly placeholder="$0.00"></div>
+            </div>
+            <pre id="ctp-size-result" class="empty-state" style="white-space: pre-wrap; margin-top: 1rem; text-align: left;">No size calculated yet.</pre>
+        </div>
+    `;
+    if (tradingControl && tradingControl.nextSibling) {
+        dashboardContent.insertBefore(panel, tradingControl.nextSibling);
+    } else {
+        dashboardContent.appendChild(panel);
+    }
+}
+
+function calculateCombinedTrailingSizeFromPanel() {
+    const symbol = (document.getElementById('ctp-symbol')?.value || '').trim().toUpperCase().replace('/', '-').replace('_', '-');
+    const side = document.getElementById('ctp-side')?.value || 'buy';
+    const entryPrice = numberValue('ctp-entry-price');
+    const equityUsd = numberValue('ctp-equity-usd');
+    const availableCashUsd = numberValue('ctp-cash-usd', equityUsd);
+    const riskPct = numberValue('ctp-risk-pct', 0.005);
+    const stopDistancePct = numberValue('ctp-stop-distance-pct', 0.006);
+    const minNotionalUsd = numberValue('ctp-min-notional', 10);
+    const maxNotionalInput = numberValue('ctp-max-notional', availableCashUsd || equityUsd);
+    const maxNotionalUsd = Math.max(0, Math.min(maxNotionalInput || availableCashUsd || equityUsd, availableCashUsd || equityUsd));
+    let reason = 'ok';
+    let valid = true;
+
+    if (!symbol) { valid = false; reason = 'missing_symbol'; }
+    else if (!(entryPrice > 0)) { valid = false; reason = 'invalid_entry_price'; }
+    else if (!(equityUsd > 0) || !(availableCashUsd > 0)) { valid = false; reason = 'no_equity_or_cash'; }
+    else if (!(maxNotionalUsd > 0)) { valid = false; reason = 'max_notional_zero'; }
+
+    const riskBudgetUsd = equityUsd * riskPct;
+    const rawNotionalUsd = stopDistancePct > 0 ? riskBudgetUsd / stopDistancePct : 0;
+    let finalNotionalUsd = Math.min(rawNotionalUsd, availableCashUsd, maxNotionalUsd);
+    const clampedByCash = rawNotionalUsd > availableCashUsd;
+    const clampedByMaxNotional = rawNotionalUsd > maxNotionalUsd;
+    let liftedToMinNotional = false;
+
+    if (valid && minNotionalUsd > 0 && finalNotionalUsd > 0 && finalNotionalUsd < minNotionalUsd && minNotionalUsd <= maxNotionalUsd) {
+        finalNotionalUsd = minNotionalUsd;
+        liftedToMinNotional = true;
+    }
+    if (valid && finalNotionalUsd < minNotionalUsd) {
+        valid = false;
+        reason = 'below_min_notional_after_clamps';
+    }
+
+    const quantity = valid ? finalNotionalUsd / entryPrice : 0;
+    const stopPrice = side === 'buy' || side === 'long'
+        ? entryPrice * (1 - stopDistancePct)
+        : entryPrice * (1 + stopDistancePct);
+
+    latestCombinedTrailingSizePlan = {
+        symbol,
+        side,
+        entry_price: entryPrice,
+        equity_usd: equityUsd,
+        available_cash_usd: availableCashUsd,
+        risk_pct: riskPct,
+        risk_budget_usd: riskBudgetUsd,
+        stop_distance_pct: stopDistancePct,
+        stop_price: stopPrice,
+        raw_notional_usd: rawNotionalUsd,
+        max_notional_usd: maxNotionalUsd,
+        min_notional_usd: minNotionalUsd,
+        final_notional_usd: valid ? finalNotionalUsd : 0,
+        quantity,
+        clamped_by_cash: clampedByCash,
+        clamped_by_max_notional: clampedByMaxNotional,
+        lifted_to_min_notional: liftedToMinNotional,
+        valid,
+        reason
+    };
+
+    const resultEl = document.getElementById('ctp-size-result');
+    if (resultEl) {
+        resultEl.textContent = JSON.stringify(latestCombinedTrailingSizePlan, null, 2);
+    }
+    return latestCombinedTrailingSizePlan;
+}
+
+function oneClickFillCombinedTrailingTrade() {
+    const plan = calculateCombinedTrailingSizeFromPanel();
+    if (!plan.valid) {
+        alert(`Cannot fill trade size: ${plan.reason}`);
+        return;
+    }
+
+    setValueIfPresent('trade-notional-usd', plan.final_notional_usd.toFixed(2));
+    setValueIfPresent('trade-quantity', plan.quantity.toFixed(8));
+    setValueIfPresent('trade-stop-price', plan.stop_price.toFixed(8));
+    setValueIfPresent('trade-risk-budget', plan.risk_budget_usd.toFixed(2));
+
+    // Also fill common execution-form field ids if another panel exists.
+    setValueIfPresent('order-symbol', plan.symbol);
+    setValueIfPresent('order-side', plan.side);
+    setValueIfPresent('order-notional-usd', plan.final_notional_usd.toFixed(2));
+    setValueIfPresent('order-quantity', plan.quantity.toFixed(8));
+    setValueIfPresent('order-stop-loss', plan.stop_price.toFixed(8));
+    setValueIfPresent('position-size-usd', plan.final_notional_usd.toFixed(2));
+    setValueIfPresent('position-quantity', plan.quantity.toFixed(8));
+
+    console.log('COMBINED_TRAILING_PANEL_ONE_CLICK_FILL', plan);
 }
