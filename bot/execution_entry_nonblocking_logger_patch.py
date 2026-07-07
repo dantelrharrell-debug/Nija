@@ -1,17 +1,13 @@
 """Prevent execute_entry from stalling on synchronous logger handlers.
 
-Latest live Railway logs showed ExecutionEngine.execute_entry() printing
-`execute_entry CALLED`, but never emitting the immediately following
-`ENTRY GATE STARTED` logger line and never reaching any downstream gate or broker
-pipeline marker. In execution_engine.py the print occurs immediately before a
-logger.critical() call, so this is consistent with a logging handler/stream
-boundary stalling the live entry path before the real gates run.
-
 This patch wraps ExecutionEngine.execute_entry() and temporarily swaps that
 module's logger for a print-only logger while the original method runs. It does
 not bypass any trading gate. It only makes logging non-blocking for this critical
 entry section so bootstrap/capital/edge/ECEL/risk/broker checks can proceed and
 remain visible through `[NIJA-PRINT] EXECUTION_ENTRY_LOG ...` markers.
+
+It also requests the execution entry timeout guard so a non-returning downstream
+entry call is reported and the live loop can continue safely.
 """
 
 from __future__ import annotations
@@ -33,10 +29,28 @@ _INSTALL_LOCK = threading.Lock()
 _TRUTHY = {"1", "true", "yes", "enabled", "on", "y"}
 _PATCHED_CLASS_IDS: set[int] = set()
 _PATCHED_MODULE_NAMES: set[str] = set()
+_TIMEOUT_CHAIN_REQUESTED = False
 
 
 def _truthy(name: str, default: str = "true") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUTHY
+
+
+def _request_timeout_guard() -> None:
+    global _TIMEOUT_CHAIN_REQUESTED
+    if _TIMEOUT_CHAIN_REQUESTED:
+        return
+    os.environ.setdefault("NIJA_EXECUTION_ENTRY_TIMEOUT_GUARD_ENABLED", "true")
+    os.environ.setdefault("NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS", "25")
+    try:
+        mod = importlib.import_module("bot.execution_entry_timeout_guard_patch")
+        installer = getattr(mod, "install_import_hook", None)
+        if callable(installer):
+            installer()
+            _TIMEOUT_CHAIN_REQUESTED = True
+            logger.warning("EXECUTION_ENTRY_TIMEOUT_GUARD_CHAIN_REQUESTED")
+    except Exception as exc:
+        logger.warning("EXECUTION_ENTRY_TIMEOUT_GUARD_CHAIN_UNAVAILABLE err=%s", exc)
 
 
 class _SafeExecutionEntryLogger:
@@ -57,7 +71,6 @@ class _SafeExecutionEntryLogger:
                 text = str(msg)
             print(f"[NIJA-PRINT] EXECUTION_ENTRY_LOG | level={level} message={text}", flush=True)
         except Exception:
-            # Logging must never be able to block or fail the order path.
             pass
 
     def critical(self, msg: Any, *args: Any, **kwargs: Any) -> None:
@@ -80,18 +93,18 @@ class _SafeExecutionEntryLogger:
         self._emit("EXCEPTION", msg, *args, **kwargs)
 
     def log(self, level: int, msg: Any, *args: Any, **kwargs: Any) -> None:
-        name = logging.getLevelName(level)
-        self._emit(str(name), msg, *args, **kwargs)
+        self._emit(str(logging.getLevelName(level)), msg, *args, **kwargs)
 
-    def isEnabledFor(self, level: int) -> bool:  # noqa: N802 - logger API
+    def isEnabledFor(self, level: int) -> bool:
         return True
 
-    def getEffectiveLevel(self) -> int:  # noqa: N802 - logger API
+    def getEffectiveLevel(self) -> int:
         return logging.DEBUG
 
 
 def _install_on_module(module: ModuleType) -> bool:
     global _PATCHED
+    _request_timeout_guard()
     cls = getattr(module, "ExecutionEngine", None)
     if not isinstance(cls, type):
         return False
@@ -129,6 +142,7 @@ def _install_on_module(module: ModuleType) -> bool:
 
 
 def _try_patch_loaded() -> bool:
+    _request_timeout_guard()
     patched = False
     for name, module in list(sys.modules.items()):
         if not isinstance(module, ModuleType):
@@ -151,10 +165,11 @@ def _start_monitor() -> None:
             patched_any = _try_patch_loaded() or patched_any
             time.sleep(0.25)
         logger.warning(
-            "EXECUTION_ENTRY_SAFE_LOGGER_MONITOR_COMPLETE patched=%s patched_any=%s modules=%s",
+            "EXECUTION_ENTRY_SAFE_LOGGER_MONITOR_COMPLETE patched=%s patched_any=%s modules=%s timeout_guard=%s",
             _PATCHED,
             patched_any,
             sorted(_PATCHED_MODULE_NAMES),
+            _TIMEOUT_CHAIN_REQUESTED,
         )
 
     threading.Thread(target=_monitor, name="execution-entry-safe-logger-monitor", daemon=True).start()
@@ -164,20 +179,29 @@ def _start_monitor() -> None:
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT_MODULE
     with _INSTALL_LOCK:
+        _request_timeout_guard()
         _try_patch_loaded()
         _start_monitor()
         if _ORIGINAL_IMPORT_MODULE is not None:
-            logger.warning("EXECUTION_ENTRY_SAFE_LOGGER_INSTALL_COMPLETE already_installed=True patched=%s", _PATCHED)
+            logger.warning(
+                "EXECUTION_ENTRY_SAFE_LOGGER_INSTALL_COMPLETE already_installed=True patched=%s timeout_guard=%s",
+                _PATCHED,
+                _TIMEOUT_CHAIN_REQUESTED,
+            )
             return
 
         _ORIGINAL_IMPORT_MODULE = importlib.import_module
 
         def _wrapped_import_module(name: str, package: str | None = None):
-            module = _ORIGINAL_IMPORT_MODULE(name, package)  # type: ignore[misc]
+            module = _ORIGINAL_IMPORT_MODULE(name, package)
             if name in {"bot.execution_engine", "execution_engine"} or hasattr(module, "ExecutionEngine"):
                 _install_on_module(module)
             _try_patch_loaded()
             return module
 
-        importlib.import_module = _wrapped_import_module  # type: ignore[assignment]
-        logger.warning("EXECUTION_ENTRY_SAFE_LOGGER_INSTALL_COMPLETE patched=%s", _PATCHED)
+        importlib.import_module = _wrapped_import_module
+        logger.warning(
+            "EXECUTION_ENTRY_SAFE_LOGGER_INSTALL_COMPLETE patched=%s timeout_guard=%s",
+            _PATCHED,
+            _TIMEOUT_CHAIN_REQUESTED,
+        )
