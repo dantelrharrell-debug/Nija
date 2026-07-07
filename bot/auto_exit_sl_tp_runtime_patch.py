@@ -4,8 +4,8 @@ Polls open_positions, reads current market prices from the active broker, and
 submits a close when a stored stop_loss or take_profit_1/2/3 level is hit. After
 an exit fill is confirmed, it calls the position close P&L runtime helper.
 
-Also installs trailing and breakeven stop-loss runtime patches without rewriting
-the large package startup file.
+Also installs trailing, breakeven, and combo breakeven->trailing stop-loss
+runtime patches without rewriting the large package startup file.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ _ENGINE_PATCHED_ATTR = "__nija_auto_exit_sl_tp_engine_patch__"
 _MONITOR_STARTED_ATTR = "__nija_auto_exit_sl_tp_started__"
 _TRAILING_INSTALLED_ATTR = "_NIJA_TRAILING_STOP_LOSS_BRIDGE_INSTALLED"
 _BREAKEVEN_INSTALLED_ATTR = "_NIJA_BREAKEVEN_STOP_LOSS_BRIDGE_INSTALLED"
+_COMBO_INSTALLED_ATTR = "_NIJA_COMBO_BE_TRAILING_BRIDGE_INSTALLED"
 
 
 def _truthy(name: str, default: str = "true") -> bool:
@@ -317,10 +318,36 @@ def _install_breakeven_stop_bridge() -> None:
         logger.warning("BREAKEVEN_STOP_BRIDGE_INSTALL_FAILED err=%s", exc)
 
 
+def _install_combo_be_trailing_bridge() -> None:
+    if getattr(builtins, _COMBO_INSTALLED_ATTR, False):
+        return
+    os.environ.setdefault("NIJA_COMBO_BE_TRAILING_ENABLED", "true")
+    os.environ.setdefault("NIJA_COMBO_BE_TRAILING_POLL_SECONDS", "5")
+    os.environ.setdefault("NIJA_COMBO_BREAKEVEN_THRESHOLD_PCT", "0.004")
+    os.environ.setdefault("NIJA_COMBO_BREAKEVEN_OFFSET_PCT", "0.0002")
+    os.environ.setdefault("NIJA_COMBO_TRAILING_SWITCH_PCT", "0.007")
+    os.environ.setdefault("NIJA_COMBO_TRAILING_STOP_PCT", "0.005")
+    try:
+        from bot.combo_breakeven_trailing_runtime_patch import install_import_hook as _install
+    except Exception:
+        try:
+            from combo_breakeven_trailing_runtime_patch import install_import_hook as _install  # type: ignore
+        except Exception as exc:
+            logger.warning("COMBO_BE_TRAILING_BRIDGE_IMPORT_FAILED err=%s", exc)
+            return
+    try:
+        _install()
+        setattr(builtins, _COMBO_INSTALLED_ATTR, True)
+        logger.warning("COMBO_BE_TRAILING_BRIDGE_INSTALLED")
+    except Exception as exc:
+        logger.warning("COMBO_BE_TRAILING_BRIDGE_INSTALL_FAILED err=%s", exc)
+
+
 def install_import_hook() -> None:
     import sys
     _install_trailing_stop_bridge()
     _install_breakeven_stop_bridge()
+    _install_combo_be_trailing_bridge()
     for name in ("bot.execution_engine", "execution_engine"):
         mod = sys.modules.get(name)
         if mod is not None:
