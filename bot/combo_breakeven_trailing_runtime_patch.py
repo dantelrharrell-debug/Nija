@@ -23,6 +23,11 @@ logger = logging.getLogger("nija.combo_be_trailing")
 _ENGINE_PATCHED_ATTR = "__nija_combo_be_trailing_engine_patch__"
 _MONITOR_STARTED_ATTR = "__nija_combo_be_trailing_started__"
 
+# Process-level singleton guard
+_PROCESS_WORKER_NAME = "nija-combo-be-trailing"
+_PROCESS_STARTED = False
+_PROCESS_LOCK = threading.Lock()
+
 
 def _truthy(name: str, default: str = "true") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in {"1", "true", "yes", "on", "enabled"}
@@ -262,12 +267,24 @@ def _scan_once(engine: Any) -> int:
 
 
 def _start_monitor(engine: Any) -> None:
+    global _PROCESS_STARTED
     if not _truthy("NIJA_COMBO_BE_TRAILING_ENABLED", "true"):
         return
-    if getattr(engine, _MONITOR_STARTED_ATTR, False):
-        return
-    interval = max(2.0, _f(os.environ.get("NIJA_COMBO_BE_TRAILING_POLL_SECONDS"), 5.0))
+    # Process-level guard (prevents duplicates across multiple engine instances)
+    with _PROCESS_LOCK:
+        if _PROCESS_STARTED:
+            logger.warning(
+                "WORKER_ALREADY_RUNNING worker=%s action=skip_duplicate_start",
+                _PROCESS_WORKER_NAME,
+            )
+            print(
+                f"[NIJA-PRINT] WORKER_ALREADY_RUNNING worker={_PROCESS_WORKER_NAME}",
+                flush=True,
+            )
+            return
+        _PROCESS_STARTED = True
     setattr(engine, _MONITOR_STARTED_ATTR, True)
+    interval = max(2.0, _f(os.environ.get("NIJA_COMBO_BE_TRAILING_POLL_SECONDS"), 5.0))
 
     def loop() -> None:
         logger.warning(
@@ -285,7 +302,7 @@ def _start_monitor(engine: Any) -> None:
                 logger.warning("COMBO_BE_TRAILING_SCAN_FAILED err=%s", exc)
             time.sleep(interval)
 
-    threading.Thread(target=loop, name="nija-combo-be-trailing", daemon=True).start()
+    threading.Thread(target=loop, name=_PROCESS_WORKER_NAME, daemon=True).start()
 
 
 def _patch_engine(module: Any) -> bool:

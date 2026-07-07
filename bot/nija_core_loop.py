@@ -1243,6 +1243,20 @@ class NijaCoreLoop:
         result = CoreLoopResult()
         cycle_start = time.time()
 
+        # ── Scan-size throttling ──────────────────────────────────────────
+        # Cap the symbol universe to NIJA_MAX_SCAN_SYMBOLS (default 100) to
+        # prevent excessive OHLC fan-out.  The caller's ordering is preserved
+        # so pre-ranked/liquid-first lists still produce the best candidates.
+        try:
+            from bot.ohlc_worker_pool import throttle_symbol_list  # type: ignore
+        except ImportError:
+            try:
+                from ohlc_worker_pool import throttle_symbol_list  # type: ignore
+            except ImportError:
+                throttle_symbol_list = None  # type: ignore
+        if throttle_symbol_list is not None:
+            symbols = throttle_symbol_list(symbols)
+
         # ── Snapshot: capture volatile apex state ONCE for the entire cycle ──
         # All phases and gates receive this frozen reference so every check
         # sees a consistent view of the world even if background threads mutate
@@ -1506,14 +1520,72 @@ class NijaCoreLoop:
                 logger.debug("Always Trade Mode pre-cycle check skipped: %s", _atm_err)
 
         # ── Phase 3: Scan & ranked entry ──────────────────────────────────
-        if not user_mode:
+        # ── Market-data health gate ───────────────────────────────────────
+        # Before allowing new entries, verify the OHLC worker pool is healthy.
+        # This prevents order submission when the data path is saturated,
+        # stale, or returning high timeout rates — LIVE_ACTIVE is preserved;
+        # only the per-cycle entry decision is gated.
+        _md_healthy = True
+        _md_new_entry_allowed = not user_mode
+        _md_pool = None
+        try:
+            from bot.ohlc_worker_pool import get_pool as _get_ohlc_pool  # type: ignore
+        except ImportError:
+            try:
+                from ohlc_worker_pool import get_pool as _get_ohlc_pool  # type: ignore
+            except ImportError:
+                _get_ohlc_pool = None  # type: ignore
+        if _get_ohlc_pool is not None:
+            try:
+                _md_pool = _get_ohlc_pool()
+                _md_healthy, _md_detail = _md_pool.compute_market_data_healthy()
+                if not _md_healthy:
+                    _md_new_entry_allowed = False
+                    logger.warning(
+                        "MARKET_DATA_HEALTHY=false detail=%s — new entries paused this cycle",
+                        _md_detail,
+                    )
+                    print(
+                        f"[NIJA-PRINT] MARKET_DATA_HEALTHY=false "
+                        f"active_workers={_md_detail.get('active_ohlc_workers')} "
+                        f"timeout_rate={_md_detail.get('timeout_rate')}",
+                        flush=True,
+                    )
+                else:
+                    logger.info("MARKET_DATA_HEALTHY=true new_entry_allowed=%s", _md_new_entry_allowed)
+                    print(
+                        f"[NIJA-PRINT] MARKET_DATA_HEALTHY=true new_entry_allowed={_md_new_entry_allowed}",
+                        flush=True,
+                    )
+                # Purge stale dedupe entries every cycle
+                _md_pool.purge_stale_dedupe()
+            except Exception as _mde:
+                logger.warning("MARKET_DATA_HEALTH_CHECK_FAILED err=%s", _mde)
+
+        # Determine runtime context for telemetry (best-effort)
+        _rt_state = "LIVE_ACTIVE"
+        _rt_authority = int(
+            str(os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")).strip() or "1"
+        )
+        try:
+            from bot.trading_state_machine import TradingStateMachine  # type: ignore
+            _tsm = getattr(self.apex, "state_machine", None) or getattr(self.apex, "_tsm", None)
+            if _tsm is not None:
+                _rt_state = str(_tsm.get_current_state().name if hasattr(_tsm.get_current_state(), "name") else _tsm.get_current_state())
+        except Exception:
+            pass
+
+        # Gate entries: user_mode OR not healthy
+        _effective_user_mode = user_mode or not _md_new_entry_allowed
+
+        if not _effective_user_mode:
             available_slots = max(0, self.max_positions - effective_open)
             if available_slots > 0:
                 logger.critical(
                     "🔍 [Phase3] SCAN_ENTRY — scanning markets | "
-                    "symbols=%d slots=%d open=%d user_mode=%s safety_blocked=%s",
+                    "symbols=%d slots=%d open=%d user_mode=%s safety_blocked=%s md_healthy=%s",
                     len(symbols), available_slots, effective_open,
-                    user_mode, not can_enter,
+                    user_mode, not can_enter, _md_healthy,
                 )
                 entries, blocked, scored, _gate_rejections = self._phase3_scan_and_enter(
                     broker=broker,
@@ -1616,20 +1688,36 @@ class NijaCoreLoop:
                 self._record_veto(_cap_reason)
         else:
             _gate_rejections = {}
-            logger.info("🔒 Core loop: entries blocked (user_mode)")
+            _block_reason = (
+                "market_data_unhealthy" if not _md_healthy
+                else ("user_mode" if user_mode else "entries_blocked")
+            )
+            logger.info("🔒 Core loop: entries blocked (%s)", _block_reason)
             # ── Entry-to-Order Trace: pre-scan veto ──────────────────────
             # user_mode can be True for two distinct reasons:
             #   1. Safety gate fired (can_enter=False) → report the specific safety reason.
             #   2. Caller explicitly passed user_mode=True (can_enter still True) → report "user_mode".
             # These are mutually exclusive: the safety gate sets user_mode=True only when
             # can_enter is False, so the inner check is not redundant.
-            _prescan_reason = safety_reason if not can_enter else "user_mode"
+            _prescan_reason = safety_reason if not can_enter else _block_reason
             emit_cycle_trace(
                 CycleOutcome.ENTRY_VETOED,
                 reason=_prescan_reason,
             )
             self._n_vetoed += 1
             self._record_veto(_prescan_reason)
+
+        # ── Cycle telemetry (OHLC pool health) ───────────────────────────
+        try:
+            if _md_pool is not None:
+                _md_pool.emit_cycle_telemetry(
+                    runtime_state=_rt_state,
+                    execution_authority=_rt_authority,
+                    scan_symbols=len(symbols),
+                    new_entry_allowed=not _effective_user_mode,
+                )
+        except Exception as _tel_err:
+            logger.debug("CYCLE_TELEMETRY_EMIT_FAILED err=%s", _tel_err)
 
         # ── Increment summary cycle counter and maybe emit histogram ─────
         self._summary_cycle_count += 1
