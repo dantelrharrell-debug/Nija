@@ -1741,12 +1741,14 @@ class KrakenBrokerAdapter(BrokerInterface):
                        limit: int = 100) -> Optional[Dict]:
         """Get market data from Kraken.
 
-        CRITICAL: pykrakenapi retries indefinitely on RemoteDisconnected errors,
-        which causes the signal loop to hang for hours on a single symbol.
-        Wraps get_ohlc_data() in a daemon thread with a hard 15-second timeout
-        so a broken Kraken connection never blocks the entire trading loop.
-        On timeout, returns None so the signal loop skips this symbol and
-        continues scanning the remaining symbols.
+        Uses the bounded OHLCWorkerPool (see bot/ohlc_worker_pool.py) to
+        prevent unlimited thread spawning.  Each symbol is dispatched via
+        ThreadPoolExecutor; duplicates within the dedupe TTL are dropped with
+        OHLC_DUPLICATE_DROPPED telemetry, and queue overflow triggers
+        OHLC_BACKPRESSURE_DROP.
+
+        The old per-symbol ``threading.Thread`` pattern has been removed to
+        eliminate the "can't start new thread" errors observed in live operation.
         """
         try:
             if not self.kraken_api:
@@ -1760,43 +1762,45 @@ class KrakenBrokerAdapter(BrokerInterface):
                 "1m": 1, "5m": 5, "15m": 15, "30m": 30,
                 "1h": 60, "4h": 240, "1d": 1440
             }
-
             kraken_interval = interval_map.get(timeframe.lower(), 5)
 
-            # CRITICAL FIX: pykrakenapi 0.3.2 retries indefinitely on RemoteDisconnected.
-            # Wrap in a 15-second thread timeout so a broken connection never hangs the
-            # signal loop for hours (root cause of 49+ minute stalls at idx=11/911).
-            _ohlc_result_holder: List[Any] = [None]
-            _ohlc_err_holder: List[Any] = [None]
-            _kraken_symbol_cap = kraken_symbol
-            _kraken_interval_cap = kraken_interval
+            # ── Bounded worker pool (no unbounded thread creation) ────────
+            try:
+                from bot.ohlc_worker_pool import get_pool  # type: ignore
+            except ImportError:
+                from ohlc_worker_pool import get_pool  # type: ignore
 
-            def _fetch_ohlc() -> None:
-                try:
-                    _ohlc_result_holder[0] = self.kraken_api.get_ohlc_data(
-                        _kraken_symbol_cap,
-                        interval=_kraken_interval_cap,
-                        ascending=True,
-                    )
-                except Exception as _oe:
-                    _ohlc_err_holder[0] = _oe
+            pool = get_pool()
+            _ohlc_timeout = float(os.getenv("NIJA_OHLC_TIMEOUT_SECONDS",
+                                            os.getenv("NIJA_KRAKEN_OHLC_TIMEOUT", "8")))
 
-            _ohlc_timeout = float(os.getenv("NIJA_KRAKEN_OHLC_TIMEOUT", "15"))
-            _ohlc_thread = threading.Thread(target=_fetch_ohlc, daemon=True)
-            _ohlc_thread.start()
-            _ohlc_thread.join(_ohlc_timeout)
-            if _ohlc_thread.is_alive():
+            def _do_fetch():
+                return self.kraken_api.get_ohlc_data(
+                    kraken_symbol,
+                    interval=kraken_interval,
+                    ascending=True,
+                )
+
+            future = pool.submit(symbol, _do_fetch)
+            if future is None:
+                # Dropped by dedupe or backpressure — skip symbol this cycle
+                return None
+
+            try:
+                result = future.result(timeout=_ohlc_timeout)
+            except Exception as _te:
+                pool.counters().incr_timeout()
                 logger.warning(
-                    "⏱️ get_ohlc_data for %s timed out after %.0fs — "
-                    "skipping symbol (NIJA_KRAKEN_OHLC_TIMEOUT=%.0f). "
-                    "Signal loop will continue with next symbol.",
-                    symbol, _ohlc_timeout, _ohlc_timeout,
+                    "⏱️ get_ohlc_data for %s timed out/errored after %.0fs — "
+                    "skipping symbol. Signal loop will continue.",
+                    symbol, _ohlc_timeout,
                 )
                 return None
-            if _ohlc_err_holder[0] is not None:
-                raise _ohlc_err_holder[0]
 
-            ohlc, last = _ohlc_result_holder[0]
+            if result is None:
+                return None
+
+            ohlc, _last = result
 
             # Convert to standard format (vectorised – avoids iterrows overhead)
             tail = ohlc.tail(limit)

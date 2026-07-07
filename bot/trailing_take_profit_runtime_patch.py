@@ -14,6 +14,10 @@ logger = logging.getLogger("nija.trailing_take_profit")
 _PATCHED = "__nija_trailing_tp_engine_patch__"
 _STARTED = "__nija_trailing_tp_started__"
 
+# Process-level singleton guard
+_PROCESS_WORKER_NAME = "nija-trailing-take-profit"
+_PROCESS_STARTED = False
+_PROCESS_LOCK = threading.Lock()
 
 def _truthy(name: str, default: str = "true") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in {"1", "true", "yes", "on", "enabled"}
@@ -219,17 +223,31 @@ def _scan_once(engine: Any) -> int:
 
 
 def _start_monitor(engine: Any) -> None:
-    if not _truthy("NIJA_TRAILING_TP_ENABLED", "true") or getattr(engine, _STARTED, False):
+    global _PROCESS_STARTED
+    if not _truthy("NIJA_TRAILING_TP_ENABLED", "true"):
         return
-    interval = max(2.0, _f(os.environ.get("NIJA_TRAILING_TP_POLL_SECONDS"), 5.0))
+    # Process-level guard (prevents duplicates across multiple engine instances)
+    with _PROCESS_LOCK:
+        if _PROCESS_STARTED:
+            logger.warning(
+                "WORKER_ALREADY_RUNNING worker=%s action=skip_duplicate_start",
+                _PROCESS_WORKER_NAME,
+            )
+            print(
+                f"[NIJA-PRINT] WORKER_ALREADY_RUNNING worker={_PROCESS_WORKER_NAME}",
+                flush=True,
+            )
+            return
+        _PROCESS_STARTED = True
     setattr(engine, _STARTED, True)
+    interval = max(2.0, _f(os.environ.get("NIJA_TRAILING_TP_POLL_SECONDS"), 5.0))
     def loop() -> None:
         logger.warning("TRAILING_TP_MONITOR_STARTED interval_s=%.2f activation_pct=%.4f callback_pct=%.4f", interval, _activation(), _callback())
         while _truthy("NIJA_TRAILING_TP_ENABLED", "true"):
             try: _scan_once(engine)
             except Exception as exc: logger.warning("TRAILING_TP_SCAN_FAILED err=%s", exc)
             time.sleep(interval)
-    threading.Thread(target=loop, name="nija-trailing-take-profit", daemon=True).start()
+    threading.Thread(target=loop, name=_PROCESS_WORKER_NAME, daemon=True).start()
 
 
 def _patch_engine(module: Any) -> bool:
