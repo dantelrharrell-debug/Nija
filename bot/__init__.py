@@ -185,6 +185,14 @@ for _key, _value in {
     "NIJA_BROKER_VENUE_CASH_FEE_BUFFER_PCT": "0.02",
     "NIJA_AUTO_EXIT_SL_TP_ENABLED": "true",
     "NIJA_AUTO_EXIT_POLL_SECONDS": "5",
+    "NIJA_MARKET_DATA_STABILITY_PATCH": "true",
+    "NIJA_MARKET_DATA_MAX_CONCURRENCY": "3",
+    "NIJA_MARKET_DATA_CACHE_TTL_S": "20",
+    "NIJA_MARKET_DATA_MAP_USDC_TO_USD": "true",
+    "NIJA_MARKET_DATA_ALLOW_PYKRAKEN_FALLBACK": "false",
+    "NIJA_KRAKEN_OHLC_TIMEOUT": "6",
+    "NIJA_CANDLE_FETCH_TIMEOUT": "6",
+    "NIJA_MARKET_DATA_SKIP_SYMBOLS": "AUSD-USD,AUSD-EUR,AUD-USD,ETH-USDC",
 }.items():
     os.environ.setdefault(_key, _value)
 
@@ -234,6 +242,7 @@ _PATCH_HOOKS = (
     ("held_position_execution_mirror_patch", "Held-position execution mirror"),
     ("live_execution_authority_blocker_patch", "Live execution authority blocker patch"),
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
+    ("market_data_stability_runtime_patch", "Market data stability runtime patch"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
     ("executable_trade_runtime_patch", "Executable trade runtime repair"),
     ("kraken_live_order_size_repair_patch", "Kraken live order-size repair"),
@@ -260,5 +269,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.14"
+__version__ = "7.2.15"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
