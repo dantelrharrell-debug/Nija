@@ -194,6 +194,7 @@ def _try_patch_loaded() -> bool:
 def _install_live_terminal_guards() -> None:
     """Install chained runtime guards alongside the broker guard."""
     for module_name in (
+        "bot.capital_authority_live_total_patch",
         "bot.market_data_stability_import_guard_patch",
         "bot.live_execution_terminal_guard_patch",
         "bot.phase3_force_override_terminal_guard_patch",
