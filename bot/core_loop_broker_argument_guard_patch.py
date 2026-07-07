@@ -192,8 +192,9 @@ def _try_patch_loaded() -> bool:
 
 
 def _install_live_terminal_guards() -> None:
-    """Install non-bypassable terminal-risk guards alongside the broker guard."""
+    """Install chained runtime guards alongside the broker guard."""
     for module_name in (
+        "bot.market_data_stability_import_guard_patch",
         "bot.live_execution_terminal_guard_patch",
         "bot.phase3_force_override_terminal_guard_patch",
     ):
