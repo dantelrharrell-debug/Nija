@@ -89,7 +89,8 @@ def _install_on_downstream_blocker_guard(module: ModuleType) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# July 6 live-execution fix: exposure-headroom gate before ECEL/broker dispatch
+# July 6/7 live-execution fix: broker-aware exposure-headroom sizing before
+# ECEL/broker dispatch.
 # ---------------------------------------------------------------------------
 
 def _truthy(name: str, default: bool = True) -> bool:
@@ -126,7 +127,50 @@ def _float_env(*names: str, default: float = 0.0) -> float:
     return default
 
 
-def _minimum_live_notional_usd() -> float:
+def _request_symbol(request: Any = None, fallback: str = "") -> str:
+    try:
+        return str(getattr(request, "symbol", fallback) or fallback).strip().upper()
+    except Exception:
+        return str(fallback or "").strip().upper()
+
+
+def _request_broker(request: Any = None) -> str:
+    for attr in ("broker", "broker_name", "selected_broker", "venue", "exchange"):
+        try:
+            value = getattr(request, attr, None)
+            raw = getattr(value, "value", value)
+            text = str(raw or "").strip().lower()
+            if text:
+                return text
+        except Exception:
+            pass
+    return ""
+
+
+def _infer_broker_for_min_notional(request: Any = None, *, symbol: str = "") -> str:
+    broker = _request_broker(request)
+    if any(key in broker for key in ("okx", "coinbase", "kraken")):
+        return "okx" if "okx" in broker else "coinbase" if "coinbase" in broker else "kraken"
+    sym = _request_symbol(request, symbol)
+    # When the active route selected OKX, USDT pairs are usually OKX-native. This
+    # avoids applying the global Kraken $23.10 floor to OKX entries that can fill
+    # at the OKX $10 floor.
+    if sym.endswith("-USDT") and str(os.environ.get("NIJA_LAST_ENTRY_BROKER", "")).lower() != "coinbase":
+        return "okx"
+    if sym.endswith("-USD") or sym.endswith("-USDC"):
+        if _float_env("COINBASE_MIN_ORDER_USD", default=0.0) > 0:
+            return "coinbase"
+    return broker or "auto"
+
+
+def _minimum_live_notional_usd(request: Any = None, *, symbol: str = "") -> float:
+    broker = _infer_broker_for_min_notional(request, symbol=symbol)
+    if broker == "okx":
+        return max(0.01, _float_env("OKX_MIN_ORDER_USD", "NIJA_OKX_MIN_ORDER_USD", default=10.0))
+    if broker == "coinbase":
+        return max(0.01, _float_env("COINBASE_MIN_ORDER_USD", "NIJA_COINBASE_MIN_ORDER_USD", default=1.0))
+    if broker == "kraken":
+        return max(0.01, _float_env("KRAKEN_MIN_NOTIONAL_USD", "NIJA_KRAKEN_MIN_NOTIONAL_USD", "MIN_TRADE_USD", default=23.0))
     return max(
         0.01,
         _float_env(
@@ -202,7 +246,7 @@ def _install_on_execution_pipeline(module: ModuleType) -> bool:
     original = getattr(cls, "execute", None)
     if not callable(original):
         return False
-    if getattr(original, "_nija_pre_dispatch_exposure_headroom_wrapped", False):
+    if getattr(original, "_nija_pre_dispatch_exposure_headroom_wrapped_20260707a", False):
         _PIPELINE_PATCHED = True
         return True
 
@@ -226,7 +270,9 @@ def _install_on_execution_pipeline(module: ModuleType) -> bool:
             account_id = str(getattr(working_request, "account_id", "default") or "default")
             available_balance = _resolve_available_balance_usd(working_request)
             headroom = max(0.0, _coerce_float(get_headroom(account_id, available_balance), 0.0))
-            min_notional = _minimum_live_notional_usd()
+            symbol = _request_symbol(working_request)
+            min_notional = _minimum_live_notional_usd(working_request, symbol=symbol)
+            inferred_broker = _infer_broker_for_min_notional(working_request, symbol=symbol)
 
             # If there is no reliable capital signal yet, preserve the legacy path;
             # the regular pre-trade risk engine and capital gates still run next.
@@ -234,19 +280,20 @@ def _install_on_execution_pipeline(module: ModuleType) -> bool:
                 logger.warning(
                     "PRE_DISPATCH_EXPOSURE_HEADROOM_CHECK_SKIPPED account=%s symbol=%s reason=no_available_balance_or_headroom_signal requested_size_usd=%.2f",
                     account_id,
-                    getattr(working_request, "symbol", ""),
+                    symbol,
                     requested_size,
                 )
                 return original(self, request, *args, **kwargs)
 
             logger.info(
-                "PRE_DISPATCH_EXPOSURE_HEADROOM_CHECK account=%s symbol=%s side=%s requested_size_usd=%.2f headroom_usd=%.2f min_notional_usd=%.2f available_balance_usd=%.2f",
+                "PRE_DISPATCH_EXPOSURE_HEADROOM_CHECK account=%s symbol=%s side=%s requested_size_usd=%.2f headroom_usd=%.2f min_notional_usd=%.2f inferred_broker=%s available_balance_usd=%.2f",
                 account_id,
-                getattr(working_request, "symbol", ""),
+                symbol,
                 getattr(working_request, "side", ""),
                 requested_size,
                 headroom,
                 min_notional,
+                inferred_broker,
                 available_balance,
             )
 
@@ -258,15 +305,16 @@ def _install_on_execution_pipeline(module: ModuleType) -> bool:
                 reason = (
                     "PreTradeRiskEngine reject: GLOBAL_EXPOSURE_CAP_HEADROOM_EXHAUSTED "
                     f"requested_size_usd={requested_size:.2f} headroom_usd={headroom:.2f} "
-                    f"min_notional_usd={min_notional:.2f}"
+                    f"min_notional_usd={min_notional:.2f} broker={inferred_broker}"
                 )
                 logger.warning(
-                    "PRE_DISPATCH_EXPOSURE_HEADROOM_REJECT account=%s symbol=%s requested_size_usd=%.2f headroom_usd=%.2f min_notional_usd=%.2f action=skip_before_ecel",
+                    "PRE_DISPATCH_EXPOSURE_HEADROOM_REJECT account=%s symbol=%s requested_size_usd=%.2f headroom_usd=%.2f min_notional_usd=%.2f inferred_broker=%s action=skip_before_ecel",
                     account_id,
-                    getattr(working_request, "symbol", ""),
+                    symbol,
                     requested_size,
                     headroom,
                     min_notional,
+                    inferred_broker,
                 )
                 denied = _pipeline_deny(module, working_request, t_start, reason, size_usd=requested_size)
                 if denied is not None:
@@ -275,22 +323,24 @@ def _install_on_execution_pipeline(module: ModuleType) -> bool:
 
             resized_request = _replace_request_size(working_request, safe_size)
             logger.warning(
-                "PRE_DISPATCH_EXPOSURE_HEADROOM_CLIP account=%s symbol=%s requested_size_usd=%.2f clipped_size_usd=%.2f headroom_usd=%.2f action=resize_before_ecel",
+                "PRE_DISPATCH_EXPOSURE_HEADROOM_CLIP_BROKER_AWARE marker=20260707a account=%s symbol=%s requested_size_usd=%.2f clipped_size_usd=%.2f headroom_usd=%.2f min_notional_usd=%.2f inferred_broker=%s action=resize_before_ecel",
                 account_id,
-                getattr(working_request, "symbol", ""),
+                symbol,
                 requested_size,
                 safe_size,
                 headroom,
+                min_notional,
+                inferred_broker,
             )
             return original(self, resized_request, *args, **kwargs)
         except Exception as exc:
             logger.warning("PRE_DISPATCH_RISK_SIZING_PATCH_FAIL_OPEN error=%s", exc)
             return original(self, request, *args, **kwargs)
 
-    setattr(_patched_execute, "_nija_pre_dispatch_exposure_headroom_wrapped", True)
+    setattr(_patched_execute, "_nija_pre_dispatch_exposure_headroom_wrapped_20260707a", True)
     setattr(cls, "execute", _patched_execute)
     _PIPELINE_PATCHED = True
-    logger.warning("PRE_DISPATCH_RISK_SIZING_PIPELINE_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
+    logger.warning("PRE_DISPATCH_RISK_SIZING_PIPELINE_PATCHED marker=20260707a module=%s", getattr(module, "__name__", "<unknown>"))
     return True
 
 
@@ -303,7 +353,7 @@ def _install_on_pre_trade_risk_engine(module: ModuleType) -> bool:
     original = getattr(cls, "assess", None)
     if not callable(original):
         return False
-    if getattr(original, "_nija_strict_headroom_assess_wrapped", False):
+    if getattr(original, "_nija_strict_headroom_assess_wrapped_20260707a", False):
         _PRE_TRADE_RISK_PATCHED = True
         return True
 
@@ -325,15 +375,34 @@ def _install_on_pre_trade_risk_engine(module: ModuleType) -> bool:
             if requested > 0.0 and requested > headroom_f + 0.01:
                 account_id = str(kwargs.get("account_id") or details.get("account_id") or "default")
                 symbol = str(kwargs.get("symbol") or "")
+                min_notional = _minimum_live_notional_usd(symbol=symbol)
+                # If headroom can still support the active broker's executable
+                # minimum, allow the pipeline wrapper to clip before broker dispatch
+                # instead of hard rejecting a near-headroom order.
+                if headroom_f >= min_notional:
+                    details["requested_size_usd"] = requested
+                    details["max_approved_size_usd"] = headroom_f
+                    details["action_required"] = "clip_before_execution_pipeline_dispatch"
+                    details["broker_aware_min_notional_usd"] = min_notional
+                    logger.warning(
+                        "PRE_TRADE_RISK_STRICT_HEADROOM_ALLOW_FOR_CLIP marker=20260707a account=%s symbol=%s requested_size_usd=%.2f headroom_usd=%.2f min_notional_usd=%.2f",
+                        account_id,
+                        symbol,
+                        requested,
+                        headroom_f,
+                        min_notional,
+                    )
+                    return decision_cls(approved=True, reason="approved_headroom_clip_required", details=details)
                 details["requested_size_usd"] = requested
                 details["max_approved_size_usd"] = headroom_f
                 details["action_required"] = "downsize_before_execution_pipeline_dispatch"
                 logger.warning(
-                    "PRE_TRADE_RISK_STRICT_HEADROOM_REJECT account=%s symbol=%s requested_size_usd=%.2f headroom_usd=%.2f action=reject_direct_caller",
+                    "PRE_TRADE_RISK_STRICT_HEADROOM_REJECT account=%s symbol=%s requested_size_usd=%.2f headroom_usd=%.2f min_notional_usd=%.2f action=reject_direct_caller",
                     account_id,
                     symbol,
                     requested,
                     headroom_f,
+                    min_notional,
                 )
                 return decision_cls(
                     approved=False,
@@ -344,10 +413,10 @@ def _install_on_pre_trade_risk_engine(module: ModuleType) -> bool:
             logger.debug("PreTradeRisk strict-headroom wrapper skipped: %s", exc)
         return decision
 
-    setattr(_patched_assess, "_nija_strict_headroom_assess_wrapped", True)
+    setattr(_patched_assess, "_nija_strict_headroom_assess_wrapped_20260707a", True)
     setattr(cls, "assess", _patched_assess)
     _PRE_TRADE_RISK_PATCHED = True
-    logger.warning("PRE_DISPATCH_RISK_SIZING_PRE_TRADE_ENGINE_PATCHED module=%s", getattr(module, "__name__", "<unknown>"))
+    logger.warning("PRE_DISPATCH_RISK_SIZING_PRE_TRADE_ENGINE_PATCHED marker=20260707a module=%s", getattr(module, "__name__", "<unknown>"))
     return True
 
 
