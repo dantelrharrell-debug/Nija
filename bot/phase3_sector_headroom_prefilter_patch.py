@@ -10,9 +10,9 @@ from typing import Any
 
 logger = logging.getLogger("nija.phase3_sector_headroom_prefilter")
 
-_MARKER = "PHASE3_SECTOR_HEADROOM_PREFILTER_PATCHED marker=20260707a"
-_IMPORT_FLAG = "_NIJA_PHASE3_SECTOR_HEADROOM_PREFILTER_IMPORT_HOOK_20260707A"
-_WRAP_ATTR = "_nija_phase3_sector_headroom_prefilter_wrapped_20260707a"
+_MARKER = "PHASE3_SECTOR_HEADROOM_PREFILTER_PATCHED marker=20260707b signature_safe=true"
+_IMPORT_FLAG = "_NIJA_PHASE3_SECTOR_HEADROOM_PREFILTER_IMPORT_HOOK_20260707B"
+_WRAP_ATTR = "_nija_phase3_sector_headroom_prefilter_wrapped_20260707b"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -131,23 +131,47 @@ def _filter_signals(loop: Any, signals: Any) -> Any:
         if blocked:
             skipped += 1
             logger.warning(
-                "PHASE3_SECTOR_HEADROOM_PREFILTER_SKIP marker=20260707a reason=%s",
+                "PHASE3_SECTOR_HEADROOM_PREFILTER_SKIP marker=20260707b reason=%s",
                 reason,
             )
             print(
-                f"[NIJA-PRINT] PHASE3_SECTOR_HEADROOM_PREFILTER_SKIP marker=20260707a {reason}",
+                f"[NIJA-PRINT] PHASE3_SECTOR_HEADROOM_PREFILTER_SKIP marker=20260707b {reason}",
                 flush=True,
             )
             continue
         kept.append(sig)
     if skipped:
         logger.warning(
-            "PHASE3_SECTOR_HEADROOM_PREFILTER_SUMMARY marker=20260707a input=%d kept=%d skipped=%d",
+            "PHASE3_SECTOR_HEADROOM_PREFILTER_SUMMARY marker=20260707b input=%d kept=%d skipped=%d",
             len(signals),
             len(kept),
             skipped,
         )
     return kept
+
+
+def _looks_like_signal_list(value: Any) -> bool:
+    """Return True only for ranked signal objects, never for symbol lists.
+
+    ``NijaCoreLoop._phase3_scan_and_enter`` has the canonical signature
+    ``(broker, snapshot, symbols, available_slots, ...)``.  The prior patch used
+    ``signals=None`` as the first wrapper argument and always forwarded it as a
+    positional value.  When the core loop called ``broker=...`` by keyword, that
+    injected positional ``None`` became a duplicate broker argument and crashed
+    the live loop.  This predicate keeps the sector prefilter on true signal
+    lists only and leaves broker/snapshot/symbol calls untouched.
+    """
+    if not isinstance(value, list) or not value:
+        return False
+    # A list[str] at this layer is a symbol universe, not signal objects.
+    if all(isinstance(item, str) for item in value):
+        return False
+    for item in value:
+        if isinstance(item, dict) and ("symbol" in item or "pair" in item):
+            return True
+        if hasattr(item, "symbol") or hasattr(item, "pair"):
+            return True
+    return False
 
 
 def _patch_core_loop_module(module: ModuleType) -> bool:
@@ -160,12 +184,36 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
         original = getattr(cls, method_name, None)
         if callable(original) and not getattr(original, _WRAP_ATTR, False):
             @wraps(original)
-            def wrapper(self: Any, signals: Any = None, *args: Any, __original=original, **kwargs: Any):
-                if signals is not None:
-                    signals = _filter_signals(self, signals)
-                    if isinstance(signals, list) and not signals:
-                        logger.warning("PHASE3_SECTOR_HEADROOM_PREFILTER_ALL_SKIPPED marker=20260707a method=%s", method_name)
-                return __original(self, signals, *args, **kwargs)
+            def wrapper(self: Any, *args: Any, __original=original, __method_name=method_name, **kwargs: Any):
+                try:
+                    # Keyword legacy path: filter only an explicit signal list.
+                    if _looks_like_signal_list(kwargs.get("signals")):
+                        filtered = _filter_signals(self, kwargs.get("signals"))
+                        kwargs = dict(kwargs)
+                        kwargs["signals"] = filtered
+                        if isinstance(filtered, list) and not filtered:
+                            logger.warning(
+                                "PHASE3_SECTOR_HEADROOM_PREFILTER_ALL_SKIPPED marker=20260707b method=%s source=kwargs",
+                                __method_name,
+                            )
+                    # Positional legacy path: filter only if the first positional
+                    # argument is a signal list.  Do not touch broker/snapshot/
+                    # symbols calls.
+                    elif args and _looks_like_signal_list(args[0]):
+                        filtered = _filter_signals(self, args[0])
+                        args = (filtered, *args[1:])
+                        if isinstance(filtered, list) and not filtered:
+                            logger.warning(
+                                "PHASE3_SECTOR_HEADROOM_PREFILTER_ALL_SKIPPED marker=20260707b method=%s source=args",
+                                __method_name,
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "PHASE3_SECTOR_HEADROOM_PREFILTER_SIGNATURE_SAFE_SKIP marker=20260707b method=%s err=%s",
+                        __method_name,
+                        exc,
+                    )
+                return __original(self, *args, **kwargs)
 
             setattr(wrapper, _WRAP_ATTR, True)
             setattr(cls, method_name, wrapper)
@@ -173,7 +221,7 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
 
     if patched:
         logger.warning("%s class=bot.nija_core_loop.NijaCoreLoop", _MARKER)
-        print("[NIJA-PRINT] PHASE3_SECTOR_HEADROOM_PREFILTER_PATCHED marker=20260707a", flush=True)
+        print("[NIJA-PRINT] PHASE3_SECTOR_HEADROOM_PREFILTER_PATCHED marker=20260707b signature_safe=true", flush=True)
     return patched
 
 
@@ -200,12 +248,12 @@ def install_import_hook() -> None:
             if name.endswith("nija_core_loop") or "nija_core_loop" in str(name):
                 _try_patch_loaded()
         except Exception as exc:
-            logger.warning("PHASE3_SECTOR_HEADROOM_PREFILTER_IMPORT_FAILED marker=20260707a name=%s err=%s", name, exc)
+            logger.warning("PHASE3_SECTOR_HEADROOM_PREFILTER_IMPORT_FAILED marker=20260707b name=%s err=%s", name, exc)
         return module
 
     builtins.__import__ = guarded_import
     setattr(builtins, _IMPORT_FLAG, True)
-    logger.warning("PHASE3_SECTOR_HEADROOM_PREFILTER_IMPORT_HOOK marker=20260707a installed=true")
+    logger.warning("PHASE3_SECTOR_HEADROOM_PREFILTER_IMPORT_HOOK marker=20260707b installed=true")
 
 
 def install() -> None:
