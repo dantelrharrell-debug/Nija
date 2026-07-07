@@ -9,11 +9,13 @@ from types import ModuleType
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.market_data_stability_import_guard")
-_MARKER = "MARKET_DATA_STABILITY_IMPORT_GUARD marker=20260707a"
-_HOOK_FLAG = "_NIJA_MARKET_DATA_STABILITY_IMPORT_GUARD_20260707A"
+_MARKER = "MARKET_DATA_STABILITY_IMPORT_GUARD marker=20260707b"
+_HOOK_FLAG = "_NIJA_MARKET_DATA_STABILITY_IMPORT_GUARD_20260707B"
 _LOCK = threading.Lock()
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _INSTALLING = False
+_APPLIED = False
+_APPLY_LOGGED = False
 
 
 def _broker_loaded() -> bool:
@@ -25,9 +27,9 @@ def _broker_loaded() -> bool:
 
 
 def _force_install_market_data_patch(reason: str) -> bool:
-    global _INSTALLING
-    if _INSTALLING:
-        return False
+    global _INSTALLING, _APPLIED, _APPLY_LOGGED
+    if _APPLIED or _INSTALLING:
+        return _APPLIED
     if not _broker_loaded():
         logger.debug("%s waiting_for_broker_integration reason=%s", _MARKER, reason)
         return False
@@ -39,20 +41,23 @@ def _force_install_market_data_patch(reason: str) -> bool:
             try:
                 patch = importlib.import_module("market_data_stability_runtime_patch")
             except Exception as exc:
-                logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_IMPORT_FAILED marker=20260707a reason=%s err=%s", reason, exc)
+                logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_IMPORT_FAILED marker=20260707b reason=%s err=%s", reason, exc)
                 return False
 
         installer = getattr(patch, "_install_kraken_market_data_patch", None)
         if not callable(installer):
-            logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_NO_INSTALLER marker=20260707a module=%s", getattr(patch, "__name__", "unknown"))
+            logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_NO_INSTALLER marker=20260707b module=%s", getattr(patch, "__name__", "unknown"))
             return False
         try:
             installer()
-            logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_APPLIED marker=20260707a reason=%s", reason)
-            print(f"[NIJA-PRINT] MARKET_DATA_STABILITY_IMPORT_GUARD_APPLIED marker=20260707a reason={reason}", flush=True)
+            _APPLIED = True
+            if not _APPLY_LOGGED:
+                _APPLY_LOGGED = True
+                logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_APPLIED marker=20260707b reason=%s mode=one_shot", reason)
+                print(f"[NIJA-PRINT] MARKET_DATA_STABILITY_IMPORT_GUARD_APPLIED marker=20260707b reason={reason} mode=one_shot", flush=True)
             return True
         except Exception as exc:
-            logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_APPLY_FAILED marker=20260707a reason=%s err=%s", reason, exc)
+            logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_APPLY_FAILED marker=20260707b reason=%s err=%s", reason, exc)
             return False
     finally:
         _INSTALLING = False
@@ -69,17 +74,15 @@ def install_import_hook() -> None:
         def guarded_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
             module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)  # type: ignore[misc]
             try:
-                if "broker_integration" in str(name):
+                if not _APPLIED and "broker_integration" in str(name):
                     _force_install_market_data_patch(f"import:{name}")
-                else:
-                    _force_install_market_data_patch("import_poll")
             except Exception as exc:
-                logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_HOOK_FAILED marker=20260707a name=%s err=%s", name, exc)
+                logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_HOOK_FAILED marker=20260707b name=%s err=%s", name, exc)
             return module
 
         builtins.__import__ = guarded_import
         setattr(builtins, _HOOK_FLAG, True)
-        logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_HOOK_INSTALLED marker=20260707a")
+        logger.warning("MARKET_DATA_STABILITY_IMPORT_GUARD_HOOK_INSTALLED marker=20260707b mode=broker_import_only")
 
 
 def install() -> None:
