@@ -183,6 +183,8 @@ for _key, _value in {
     "NIJA_BROKER_VENUE_CASH_GUARD": "true",
     "NIJA_BROKER_VENUE_CASH_GUARD_CLAMP": "true",
     "NIJA_BROKER_VENUE_CASH_FEE_BUFFER_PCT": "0.02",
+    "NIJA_AUTO_EXIT_SL_TP_ENABLED": "true",
+    "NIJA_AUTO_EXIT_POLL_SECONDS": "5",
 }.items():
     os.environ.setdefault(_key, _value)
 
@@ -246,6 +248,7 @@ _PATCH_HOOKS = (
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
     ("broker_venue_cash_guard_patch", "Broker venue cash guard"),
     ("position_close_pnl_runtime_patch", "Position close P&L runtime patch"),
+    ("auto_exit_sl_tp_runtime_patch", "Automatic stop-loss/take-profit exit monitor"),
     ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
     ("live_execution_runtime_hardening_patch", "Live execution runtime hardening"),
 )
@@ -257,5 +260,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.13"
+__version__ = "7.2.14"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
