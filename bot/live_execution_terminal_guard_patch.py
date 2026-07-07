@@ -25,7 +25,6 @@ _TARGETS = {
     "ai_intelligence_hub",
 }
 
-
 _TERMINAL_MARKERS = (
     "terminal_risk_hard_block",
     "hard_sector_limit_block",
@@ -126,7 +125,7 @@ def _broker_from_tpe_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
 
 
 def _explicit_zero_allocation(value: Any) -> bool:
-    """Return true only when a request explicitly says the selected route has $0."""
+    """Return true only when a live route/request explicitly says $0 is allocated."""
     if value is None:
         return False
     try:
@@ -148,6 +147,11 @@ def _has_explicit_zero_route(*objects: Any) -> tuple[bool, str]:
     )
     for obj in objects:
         if obj is None:
+            continue
+        # TradeDecision.capital_allocated defaults to 0.0 and is only diagnostic.
+        # Do not treat that default as a live route allocation unless it was in
+        # request metadata or an execution request object.
+        if obj.__class__.__name__ == "TradeDecision":
             continue
         if isinstance(obj, dict):
             for key in keys:
@@ -185,22 +189,12 @@ def _request_size_usd(request: Any) -> float:
     return 0.0
 
 
-def _tpe_size_from_kwargs(kwargs: dict[str, Any], meta: dict[str, Any]) -> float:
-    for source in (kwargs, meta):
-        for key in ("position_size", "size_usd", "notional_usd", "usd_size", "amount_usd"):
-            if key in source:
-                size = _float(source.get(key), 0.0)
-                if size > 0.0:
-                    return size
-    return 0.0
-
-
 def _make_tpe_decision(module: ModuleType, *, symbol: str, side: str, score: float, threshold: float, balance: float, broker: str, reason: str):
     TradeDecision = getattr(module, "TradeDecision", None)
     if TradeDecision is None:
         return None
     try:
-        decision = TradeDecision(
+        return TradeDecision(
             symbol=symbol,
             side=side,
             signal="NO",
@@ -226,7 +220,6 @@ def _make_tpe_decision(module: ModuleType, *, symbol: str, side: str, score: flo
             market_regime="TERMINAL_RISK",
             strategy_name="live_execution_terminal_guard",
         )
-        return decision
     except Exception as exc:
         logger.warning("TERMINAL_GUARD_TPE_DECISION_BUILD_FAILED symbol=%s err=%s", symbol, exc)
         return None
@@ -283,7 +276,7 @@ def _patch_trade_permission_engine(module: ModuleType) -> bool:
             decision_text = _stringify(getattr(decision, "to_dict", lambda: vars(decision))())
         except Exception:
             decision_text = _stringify(decision)
-        zero_route, zero_key = _has_explicit_zero_route(meta, decision)
+        zero_route, zero_key = _has_explicit_zero_route(meta)
         if _contains_terminal_hard_block(meta) or _contains_terminal_hard_block(decision_text) or zero_route:
             block_reason = (
                 "NON_OVERRIDEABLE_TERMINAL_RISK_HARD_BLOCK"
