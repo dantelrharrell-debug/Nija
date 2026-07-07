@@ -180,6 +180,9 @@ for _key, _value in {
     "NIJA_RAILWAY_STALE_LOCK_HEARTBEAT_THRESHOLD_S": "90",
     "NIJA_STALE_LOCK_RESCUE_PTTL_MS": "10000",
     "NIJA_WRITER_LOCK_NEAR_EXPIRY_RESCUE_MS": "10000",
+    "NIJA_BROKER_VENUE_CASH_GUARD": "true",
+    "NIJA_BROKER_VENUE_CASH_GUARD_CLAMP": "true",
+    "NIJA_BROKER_VENUE_CASH_FEE_BUFFER_PCT": "0.02",
 }.items():
     os.environ.setdefault(_key, _value)
 
@@ -241,6 +244,7 @@ _PATCH_HOOKS = (
     ("okx_final_submit_callshape_patch", "OKX final submit callshape patch"),
     ("broker_native_quote_routing_patch", "Broker-native quote routing repair"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
+    ("broker_venue_cash_guard_patch", "Broker venue cash guard"),
     ("coinbase_position_runtime_patch", "Coinbase position runtime patch"),
     ("live_execution_runtime_hardening_patch", "Live execution runtime hardening"),
 )
@@ -252,5 +256,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.11"
+__version__ = "7.2.12"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
