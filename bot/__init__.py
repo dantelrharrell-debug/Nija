@@ -193,6 +193,7 @@ for _key, _value in {
     "NIJA_KRAKEN_OHLC_TIMEOUT": "6",
     "NIJA_CANDLE_FETCH_TIMEOUT": "6",
     "NIJA_MARKET_DATA_SKIP_SYMBOLS": "AUSD-USD,AUSD-EUR,AUD-USD,ETH-USDC",
+    "NIJA_PHASE3_SECTOR_HEADROOM_PREFILTER": "true",
 }.items():
     os.environ.setdefault(_key, _value)
 
@@ -244,6 +245,7 @@ _PATCH_HOOKS = (
     ("no_trade_watchdog_runtime_patch", "Runtime scan diagnostics"),
     ("market_data_stability_runtime_patch", "Market data stability runtime patch"),
     ("live_entry_runtime_fixes", "Live entry runtime fixes"),
+    ("phase3_sector_headroom_prefilter_patch", "Phase 3 sector headroom prefilter"),
     ("executable_trade_runtime_patch", "Executable trade runtime repair"),
     ("kraken_live_order_size_repair_patch", "Kraken live order-size repair"),
     ("kraken_execution_floor_guard_patch", "Kraken final execution-floor guard"),
@@ -269,5 +271,5 @@ for _module_name, _label in _PATCH_HOOKS:
     except Exception as _exc:
         logger.warning("%s unavailable: %s", _label, _exc)
 
-__version__ = "7.2.15"
+__version__ = "7.2.16"
 logger.debug("NIJA Bot package initialized (v%s)", __version__)
