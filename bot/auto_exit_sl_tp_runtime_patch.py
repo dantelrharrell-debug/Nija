@@ -3,6 +3,9 @@
 Polls open_positions, reads current market prices from the active broker, and
 submits a close when a stored stop_loss or take_profit_1/2/3 level is hit. After
 an exit fill is confirmed, it calls the position close P&L runtime helper.
+
+Also installs the trailing stop-loss runtime patch so trailing stops move with
+favorable price action without rewriting the large package startup file.
 """
 
 from __future__ import annotations
@@ -12,11 +15,13 @@ import logging
 import os
 import threading
 import time
+from functools import wraps
 from typing import Any, Optional
 
 logger = logging.getLogger("nija.auto_exit_sl_tp")
 _ENGINE_PATCHED_ATTR = "__nija_auto_exit_sl_tp_engine_patch__"
 _MONITOR_STARTED_ATTR = "__nija_auto_exit_sl_tp_started__"
+_TRAILING_INSTALLED_ATTR = "_NIJA_TRAILING_STOP_LOSS_BRIDGE_INSTALLED"
 
 
 def _truthy(name: str, default: str = "true") -> bool:
@@ -265,8 +270,32 @@ def _patch_engine(module: Any) -> bool:
     return True
 
 
+def _install_trailing_stop_bridge() -> None:
+    if getattr(builtins, _TRAILING_INSTALLED_ATTR, False):
+        return
+    os.environ.setdefault("NIJA_TRAILING_STOP_ENABLED", "true")
+    os.environ.setdefault("NIJA_TRAILING_STOP_POLL_SECONDS", "5")
+    os.environ.setdefault("NIJA_TRAILING_STOP_PCT", "0.006")
+    os.environ.setdefault("NIJA_TRAILING_STOP_ACTIVATION_PCT", "0.003")
+    try:
+        from bot.trailing_stop_loss_runtime_patch import install_import_hook as _install
+    except Exception:
+        try:
+            from trailing_stop_loss_runtime_patch import install_import_hook as _install  # type: ignore
+        except Exception as exc:
+            logger.warning("TRAILING_STOP_BRIDGE_IMPORT_FAILED err=%s", exc)
+            return
+    try:
+        _install()
+        setattr(builtins, _TRAILING_INSTALLED_ATTR, True)
+        logger.warning("TRAILING_STOP_BRIDGE_INSTALLED")
+    except Exception as exc:
+        logger.warning("TRAILING_STOP_BRIDGE_INSTALL_FAILED err=%s", exc)
+
+
 def install_import_hook() -> None:
     import sys
+    _install_trailing_stop_bridge()
     for name in ("bot.execution_engine", "execution_engine"):
         mod = sys.modules.get(name)
         if mod is not None:
