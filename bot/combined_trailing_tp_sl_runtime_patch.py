@@ -3,6 +3,7 @@
 One monitor manages both protections per position:
 - trailing stop-loss updates open_positions.stop_loss to protect downside.
 - trailing take-profit arms after a favorable move and closes on pullback.
+- position-size calculator is exposed on ExecutionEngine for pre-entry sizing.
 The existing close_position_with_pnl helper records the realized result.
 """
 from __future__ import annotations
@@ -205,6 +206,25 @@ def _scan_once(engine: Any) -> int:
     return closed + moved
 
 
+def _calculate_position_size(engine: Any, **kwargs: Any) -> dict[str, Any]:
+    try:
+        from bot.combined_trailing_position_size_calculator import calculate_combined_trailing_position_size
+    except Exception:
+        from combined_trailing_position_size_calculator import calculate_combined_trailing_position_size  # type: ignore
+    if "equity_usd" not in kwargs or kwargs.get("equity_usd") is None:
+        for attr in ("capital", "account_equity", "available_capital", "cash", "balance"):
+            val = getattr(engine, attr, None)
+            if val is not None:
+                kwargs["equity_usd"] = val; break
+    if "available_cash_usd" not in kwargs or kwargs.get("available_cash_usd") is None:
+        kwargs["available_cash_usd"] = kwargs.get("equity_usd")
+    if "stop_distance_pct" not in kwargs or kwargs.get("stop_distance_pct") is None:
+        kwargs["stop_distance_pct"] = _sl_distance()
+    result = calculate_combined_trailing_position_size(**kwargs)
+    logger.warning("COMBINED_TRAILING_SIZE_ENGINE_RESULT symbol=%s notional=%.2f qty=%.8f valid=%s reason=%s", result.get("symbol"), _f(result.get("final_notional_usd")), _f(result.get("quantity")), result.get("valid"), result.get("reason"))
+    return result
+
+
 def _start_monitor(engine: Any) -> None:
     if not _truthy("NIJA_COMBINED_TRAILING_TP_SL_ENABLED", "true") or getattr(engine, _STARTED, False): return
     interval = max(2.0, _f(os.environ.get("NIJA_COMBINED_TRAILING_POLL_SECONDS"), 5.0)); setattr(engine, _STARTED, True)
@@ -226,7 +246,13 @@ def _patch_engine(module: Any) -> bool:
         def init_with_combined_trailing(self: Any, *args: Any, **kwargs: Any):
             original_init(self, *args, **kwargs); _start_monitor(self)
         cls.__init__ = init_with_combined_trailing
-    cls.scan_combined_trailing_tp_sl_once = _scan_once; cls.start_combined_trailing_tp_sl_monitor = _start_monitor; setattr(cls, _PATCHED, True); logger.warning("COMBINED_TRAILING_ENGINE_PATCHED"); return True
+    cls.scan_combined_trailing_tp_sl_once = _scan_once
+    cls.start_combined_trailing_tp_sl_monitor = _start_monitor
+    cls.calculate_combined_trailing_position_size = _calculate_position_size
+    setattr(cls, _PATCHED, True)
+    logger.warning("COMBINED_TRAILING_ENGINE_PATCHED")
+    logger.warning("COMBINED_TRAILING_SIZE_ENGINE_PATCHED")
+    return True
 
 
 def install_import_hook() -> None:
