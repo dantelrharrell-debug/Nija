@@ -139,6 +139,40 @@ except ImportError:
         ) -> None:
             return None
 
+try:
+    from bot.capital_authority import get_capital_authority
+except ImportError:
+    try:
+        from capital_authority import get_capital_authority  # type: ignore[import]
+    except ImportError:
+        get_capital_authority = None  # type: ignore[assignment]
+
+try:
+    from bot.broker_identity import format_broker_identity, resolve_broker_label
+except ImportError:
+    try:
+        from broker_identity import format_broker_identity, resolve_broker_label  # type: ignore[import]
+    except ImportError:
+        def resolve_broker_label(broker: Any) -> str:  # type: ignore[no-redef]
+            broker_type = getattr(broker, "broker_type", None)
+            broker_value = getattr(broker_type, "value", None)
+            if broker_value is not None:
+                label = str(broker_value).strip().lower()
+                if label:
+                    return label
+            if isinstance(broker_type, str):
+                label = broker_type.strip().lower()
+                if label:
+                    return label
+            return type(broker).__name__.replace("Broker", "").strip().lower() or "unknown"
+
+        def format_broker_identity(broker: Any) -> str:  # type: ignore[no-redef]
+            broker_label = resolve_broker_label(broker)
+            raw = str(getattr(broker, "account_identifier", "") or "").strip().lower()
+            if not raw or raw in {"none", "platform", broker_label}:
+                return broker_label
+            return f"{broker_label}:{raw}"
+
 # Downstream blocker classifier — imported here for use in _on_order_rejected.
 try:
     from bot.downstream_blocker_guard import (
@@ -568,6 +602,87 @@ class ExecutionPipeline:
             error=reason,
             latency_ms=(time.monotonic() - t_start) * 1000,
         )
+
+    @staticmethod
+    def _extract_balance_amount(payload: Any) -> Optional[float]:
+        if isinstance(payload, (int, float)):
+            return float(payload)
+        if isinstance(payload, dict):
+            for key in (
+                "available_balance",
+                "available_usd",
+                "available",
+                "free",
+                "free_usd",
+                "trading_balance",
+                "total_balance",
+                "total_funds",
+                "balance",
+                "equity",
+                "usd_balance",
+                "total_usd",
+            ):
+                if key in payload:
+                    try:
+                        return float(payload.get(key) or 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
+        return None
+
+    def _request_broker_balance_keys(self, request: PipelineRequest) -> list[str]:
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        broker_client = metadata.get("broker_client")
+        preferred = str(getattr(request, "preferred_broker", "") or "").strip().lower()
+        resolved = preferred
+        if broker_client is not None:
+            resolved = resolved or resolve_broker_label(broker_client)
+        keys: list[str] = []
+        if broker_client is not None:
+            identity = str(format_broker_identity(broker_client) or "").strip().lower()
+            if identity:
+                keys.append(identity)
+        if resolved:
+            keys.append(resolved)
+        deduped: list[str] = []
+        for key in keys:
+            if key and key not in deduped:
+                deduped.append(key)
+        return deduped
+
+    def _resolve_request_available_balance_usd(self, request: PipelineRequest) -> Optional[float]:
+        explicit = getattr(request, "available_balance_usd", None)
+        if explicit is not None:
+            try:
+                return float(explicit)
+            except (TypeError, ValueError):
+                pass
+
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        broker_client = metadata.get("broker_client")
+        if broker_client is not None:
+            try:
+                cached_detail = getattr(broker_client, "_balance_cache", None)
+                cached_amount = self._extract_balance_amount(cached_detail)
+                if cached_amount is not None:
+                    return cached_amount
+                cached_scalar = getattr(broker_client, "_last_known_balance", None)
+                if isinstance(cached_scalar, (int, float)):
+                    return float(cached_scalar)
+            except Exception:
+                pass
+
+        if get_capital_authority is not None:
+            try:
+                authority = get_capital_authority()
+                is_registered = getattr(authority, "is_registered", None)
+                for broker_key in self._request_broker_balance_keys(request):
+                    broker_balance = float(authority.get_per_broker(broker_key) or 0.0)
+                    if broker_balance > 0.0 or (callable(is_registered) and is_registered(broker_key)):
+                        return broker_balance
+            except Exception as exc:
+                logger.debug("ExecutionPipeline: broker balance lookup failed: %s", exc)
+
+        return None
 
     def _enforce_execution_gate(
         self,
@@ -1147,6 +1262,16 @@ class ExecutionPipeline:
             logger.warning("📥 [Pipeline.execute] RequestContract DENY | reason=%s", reason)
             return self._deny(canonical_request, t_start, f"RequestContract deny: {reason}")
 
+        resolved_available_balance = self._resolve_request_available_balance_usd(canonical_request)
+        if (
+            resolved_available_balance is not None
+            and resolved_available_balance != getattr(canonical_request, "available_balance_usd", None)
+        ):
+            canonical_request = replace(
+                canonical_request,
+                available_balance_usd=resolved_available_balance,
+            )
+
         working_request = canonical_request
         effective_request = canonical_request
         order_validated = False
@@ -1412,46 +1537,7 @@ class ExecutionPipeline:
 
         if self._pre_trade_risk_engine is not None:
             try:
-                # Resolve the live available balance for the risk check.
-                # The PipelineRequest.available_balance_usd field is populated by
-                # callers that know the balance at call time (e.g. ExecutionEngine).
-                # However, some call paths (e.g. submit_market_order_via_pipeline,
-                # SignalBroadcaster) do not set it, leaving it None.  When it is
-                # absent or zero, fall back to the CapitalAuthority singleton so
-                # the risk engine always receives the actual live account balance
-                # rather than a stale cached value or None (which would cause the
-                # cap check to be skipped entirely via the fail-open path).
-                _risk_balance: Optional[float] = working_request.available_balance_usd
-                if not _risk_balance:
-                    try:
-                        _ca_mod = None
-                        for _ca_mod_name in ("bot.capital_authority", "capital_authority"):
-                            try:
-                                import importlib as _il
-                                _ca_mod = _il.import_module(_ca_mod_name)
-                                break
-                            except ImportError:
-                                continue
-                        if _ca_mod is not None:
-                            _get_ca = getattr(_ca_mod, "get_capital_authority", None)
-                            if callable(_get_ca):
-                                _ca = _get_ca()
-                                _ca_balance = float(_ca.get_usable_capital() or 0.0)
-                                if _ca_balance > 0.0:
-                                    _risk_balance = _ca_balance
-                                    logger.info(
-                                        "📊 [Pipeline] PreTradeRisk: resolved live balance "
-                                        "from CapitalAuthority | account=%s balance_usd=%.2f "
-                                        "(request had available_balance_usd=%s)",
-                                        working_request.account_id,
-                                        _ca_balance,
-                                        working_request.available_balance_usd,
-                                    )
-                    except Exception as _ca_exc:
-                        logger.debug(
-                            "Pipeline: capital authority balance lookup failed (non-fatal): %s",
-                            _ca_exc,
-                        )
+                _risk_balance: Optional[float] = self._resolve_request_available_balance_usd(working_request)
                 risk_decision = self._pre_trade_risk_engine.assess(
                     account_id=working_request.account_id,
                     symbol=working_request.symbol,

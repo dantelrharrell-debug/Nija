@@ -27,6 +27,32 @@ except ImportError:
             return
 
 
+def _balance_from_payload(payload: Any) -> Optional[float]:
+    if isinstance(payload, (int, float)):
+        return float(payload)
+    if isinstance(payload, dict):
+        for key in (
+            "available_balance",
+            "available_usd",
+            "available",
+            "free",
+            "free_usd",
+            "trading_balance",
+            "total_balance",
+            "total_funds",
+            "balance",
+            "equity",
+            "usd_balance",
+            "total_usd",
+        ):
+            if key in payload:
+                try:
+                    return float(payload.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+    return None
+
+
 def _resolve_preferred_broker(broker: Any) -> str:
     preferred_broker = "coinbase"
     try:
@@ -53,6 +79,23 @@ def _resolve_preferred_broker(broker: Any) -> str:
     except Exception:
         pass
     return preferred_broker
+
+
+def _resolve_broker_balance_keys(broker: Any, preferred_broker: str) -> list[str]:
+    keys: list[str] = []
+    try:
+        account_identifier = str(getattr(broker, "account_identifier", "") or "").strip().lower()
+        if account_identifier and account_identifier not in {"none", "platform", preferred_broker}:
+            keys.append(f"{preferred_broker}:{account_identifier}")
+    except Exception:
+        pass
+    if preferred_broker:
+        keys.append(preferred_broker)
+    deduped: list[str] = []
+    for key in keys:
+        if key and key not in deduped:
+            deduped.append(key)
+    return deduped
 
 
 def submit_market_order_via_pipeline(
@@ -130,13 +173,18 @@ def submit_market_order_via_pipeline(
             }
 
     preferred_broker = _resolve_preferred_broker(broker)
+    broker_balance_keys = _resolve_broker_balance_keys(broker, preferred_broker)
 
-    # Resolve the live available balance from the CapitalAuthority so the
-    # PreTradeRiskEngine receives the correct account balance for the exposure
-    # cap check.  Without this, available_balance_usd is None and the risk
-    # engine either skips the cap (fail-open) or uses a stale cached value
-    # that may be far smaller than the real balance, causing false rejections.
     _available_balance_usd: Optional[float] = None
+    try:
+        cached_detail = getattr(broker, "_balance_cache", None)
+        _available_balance_usd = _balance_from_payload(cached_detail)
+        if _available_balance_usd is None:
+            cached_scalar = getattr(broker, "_last_known_balance", None)
+            if isinstance(cached_scalar, (int, float)):
+                _available_balance_usd = float(cached_scalar)
+    except Exception:
+        _available_balance_usd = None
     try:
         for _ca_mod_name in ("bot.capital_authority", "capital_authority"):
             try:
@@ -145,14 +193,17 @@ def submit_market_order_via_pipeline(
                 _get_ca = getattr(_ca_mod, "get_capital_authority", None)
                 if callable(_get_ca):
                     _ca = _get_ca()
-                    _ca_balance = float(_ca.get_usable_capital() or 0.0)
-                    if _ca_balance > 0.0:
-                        _available_balance_usd = _ca_balance
-                        logger.info(
-                            "[PipelineOrderSubmitter] resolved live balance from "
-                            "CapitalAuthority: $%.2f for symbol=%s side=%s",
-                            _ca_balance, symbol, side_norm,
-                        )
+                    _is_registered = getattr(_ca, "is_registered", None)
+                    for _broker_key in broker_balance_keys:
+                        _ca_balance = float(_ca.get_per_broker(_broker_key) or 0.0)
+                        if _ca_balance > 0.0 or (callable(_is_registered) and _is_registered(_broker_key)):
+                            _available_balance_usd = _ca_balance
+                            logger.info(
+                                "[PipelineOrderSubmitter] resolved broker balance from "
+                                "CapitalAuthority: broker=%s balance=$%.2f symbol=%s side=%s",
+                                _broker_key, _ca_balance, symbol, side_norm,
+                            )
+                            break
                 break
             except ImportError:
                 continue
@@ -168,14 +219,8 @@ def submit_market_order_via_pipeline(
         try:
             if broker is not None and hasattr(broker, "get_account_balance"):
                 _raw = broker.get_account_balance()
-                if isinstance(_raw, dict):
-                    _available_balance_usd = float(
-                        _raw.get("trading_balance")
-                        or _raw.get("available_balance")
-                        or _raw.get("balance")
-                        or 0.0
-                    )
-                else:
+                _available_balance_usd = _balance_from_payload(_raw)
+                if _available_balance_usd is None:
                     _available_balance_usd = float(_raw or 0.0)
         except Exception:
             pass
