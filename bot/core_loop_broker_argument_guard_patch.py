@@ -191,7 +191,31 @@ def _try_patch_loaded() -> bool:
     return patched
 
 
+def _install_live_terminal_guards() -> None:
+    """Install non-bypassable terminal-risk guards alongside the broker guard."""
+    for module_name in (
+        "bot.live_execution_terminal_guard_patch",
+        "bot.phase3_force_override_terminal_guard_patch",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+            installer = getattr(module, "install_import_hook", None) or getattr(module, "install", None)
+            if callable(installer):
+                installer()
+                logger.warning(
+                    "CORE_LOOP_BROKER_ARGUMENT_GUARD_CHAINED_INSTALL marker=20260705d downstream=%s",
+                    module_name,
+                )
+        except Exception as exc:
+            logger.warning(
+                "CORE_LOOP_BROKER_ARGUMENT_GUARD_CHAINED_INSTALL_FAILED marker=20260705d downstream=%s err=%s",
+                module_name,
+                exc,
+            )
+
+
 def install_import_hook() -> None:
+    _install_live_terminal_guards()
     _try_patch_loaded()
     if getattr(builtins, "_NIJA_CORE_LOOP_BROKER_ARGUMENT_GUARD_HOOK_INSTALLED", False):
         return
