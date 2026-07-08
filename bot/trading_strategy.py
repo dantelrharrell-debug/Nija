@@ -1644,13 +1644,13 @@ class TradingStrategy:
         """
         next_interval_s = 150
         logger.critical(
-            "🔄 [RUN_CYCLE] TradingStrategy.run_cycle() ENTERED | "
+            "🔄 [RUN_CYCLE_ENTER] TradingStrategy.run_cycle() ENTERED | "
             "apex=%s nija_core_loop=%s",
             type(self.apex).__name__ if self.apex is not None else "None",
             type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else "None",
         )
         print(
-            f"[NIJA-PRINT] run_cycle ENTERED | "
+            f"[NIJA-PRINT] RUN_CYCLE_ENTER | "
             f"apex={type(self.apex).__name__ if self.apex is not None else 'None'} "
             f"nija_core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'}",
             flush=True,
@@ -1673,6 +1673,20 @@ class TradingStrategy:
                         hasattr(self.apex, "run_cycle"),
                         hasattr(self.apex, "analyze_market"),
                     )
+
+                logger.critical(
+                    "✅ [RUN_CYCLE_PREFLIGHT_OK] wiring verified | "
+                    "apex=%s core_loop=%s broker=%s",
+                    type(self.apex).__name__,
+                    type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else "None",
+                    type(getattr(self, "broker", None)).__name__ if getattr(self, "broker", None) is not None else "None",
+                )
+                print(
+                    f"[NIJA-PRINT] RUN_CYCLE_PREFLIGHT_OK | "
+                    f"apex={type(self.apex).__name__} "
+                    f"core_loop={type(self.nija_core_loop).__name__ if self.nija_core_loop is not None else 'None'}",
+                    flush=True,
+                )
 
                 # Delegate to the caller-selected venue when provided.  This is
                 # required for per-broker platform loops and independent user
@@ -1758,13 +1772,23 @@ class TradingStrategy:
                         self._maybe_refresh_symbols(force=True)
                         _symbols_to_scan = self.symbols or []
                     if not _symbols_to_scan:
-                        logger.warning("run_cycle: symbol universe is empty — skipping scan")
+                        logger.warning(
+                            "⚠️ [RUN_CYCLE_EXIT] symbol universe empty — "
+                            "skipping scan. RUN_CYCLE_PHASE3_START will not be reached."
+                        )
+                        print("[NIJA-PRINT] RUN_CYCLE_EXIT reason=symbols_empty", flush=True)
                         return next_interval_s
 
                     logger.critical(
-                        "🔄 [RUN_CYCLE] calling nija_core_loop.run_scan_phase() | "
+                        "🔬 [RUN_CYCLE_PHASE3_START] entering Phase 3 scan | "
                         "symbols=%d balance=$%.2f open_positions=%d",
                         len(_symbols_to_scan), _account_balance, _open_positions_count,
+                    )
+                    print(
+                        f"[NIJA-PRINT] RUN_CYCLE_PHASE3_START | "
+                        f"symbols={len(_symbols_to_scan)} "
+                        f"balance={_account_balance:.2f}",
+                        flush=True,
                     )
                     _core_result = self.nija_core_loop.run_scan_phase(
                         broker=_broker,
@@ -1774,13 +1798,20 @@ class TradingStrategy:
                         user_mode=bool(user_mode),
                     )
                     logger.critical(
-                        "✅ [RUN_CYCLE] run_scan_phase() RETURNED | "
+                        "✅ [RUN_CYCLE_PHASE3_COMPLETE] Phase 3 scan complete | "
                         "scored=%d entered=%d blocked=%d exited=%d next=%ss",
                         _core_result.symbols_scored,
                         _core_result.entries_taken,
                         _core_result.entries_blocked,
                         _core_result.exits_taken,
                         _core_result.next_interval,
+                    )
+                    print(
+                        f"[NIJA-PRINT] RUN_CYCLE_PHASE3_COMPLETE | "
+                        f"scored={_core_result.symbols_scored} "
+                        f"entered={_core_result.entries_taken} "
+                        f"blocked={_core_result.entries_blocked}",
+                        flush=True,
                     )
 
                     logger.info(
@@ -1796,6 +1827,14 @@ class TradingStrategy:
                         next_interval_s = max(1, int(_core_result.next_interval))
                     except Exception:
                         next_interval_s = 150
+                    logger.critical(
+                        "✅ [RUN_CYCLE_EXIT] cycle complete | next_interval=%ds",
+                        next_interval_s,
+                    )
+                    print(
+                        f"[NIJA-PRINT] RUN_CYCLE_EXIT | next_interval={next_interval_s}",
+                        flush=True,
+                    )
                     return next_interval_s
 
 
@@ -1911,9 +1950,30 @@ class TradingStrategy:
                         except Exception as _sym_err:
                             logger.debug("Symbol %s cycle error: %s", symbol, _sym_err)
             except Exception as _cycle_err:
-                logger.error("❌ run_cycle error: %s", _cycle_err, exc_info=True)
+                logger.critical(
+                    "❌ [RUN_CYCLE_ERROR] run_cycle raised exception: %s",
+                    _cycle_err,
+                    exc_info=True,
+                )
+                print(
+                    f"[NIJA-PRINT] RUN_CYCLE_ERROR "
+                    f"error={type(_cycle_err).__name__}: {_cycle_err}",
+                    flush=True,
+                )
         else:
-            logger.debug("run_cycle: no APEX strategy available")
+            logger.critical(
+                "⛔ [RUN_CYCLE_ERROR] run_cycle: no APEX strategy available — "
+                "strategy.apex is None; cycle will be a no-op"
+            )
+            print("[NIJA-PRINT] RUN_CYCLE_ERROR reason=apex_is_None", flush=True)
+        logger.critical(
+            "✅ [RUN_CYCLE_EXIT] run_cycle returning | next_interval=%ds",
+            next_interval_s,
+        )
+        print(
+            f"[NIJA-PRINT] RUN_CYCLE_EXIT | next_interval={next_interval_s}",
+            flush=True,
+        )
         return next_interval_s
 
     def log_multi_broker_status(self) -> None:

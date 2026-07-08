@@ -4829,11 +4829,61 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             flush=True,
                         )
                 else:
-                    # INITIALIZING after timeout — treat as DEGRADED, let loop proceed.
+                    # INITIALIZING after timeout — try a verified repair before giving up.
+                    # Proceeding with INITIALIZING means no capital snapshot has been
+                    # ingested; this is more severe than DEGRADED (low confidence).
+                    # Attempt to inject a fresh CA snapshot to advance the CSM state.
                     logger.critical(
-                        "⚠️ CSM NOT READY (state=%s) — proceeding anyway after timeout",
+                        "⛔ [CSM_BLOCKED] CSM still INITIALIZING after %.0fs — "
+                        "attempting verified repair before proceeding. state=%s",
+                        _csm_timeout,
                         _csm_state_now.value,
                     )
+                    print(
+                        f"[INIT STEP 5/6] CSM_BLOCKED state=INITIALIZING after {_csm_timeout:.0f}s — "
+                        "attempting repair",
+                        flush=True,
+                    )
+                    _csm_repair_done = False
+                    try:
+                        try:
+                            from bot.capital_authority import get_capital_authority as _get_repair_ca
+                        except ImportError:
+                            from capital_authority import get_capital_authority as _get_repair_ca  # type: ignore[import]
+                        _repair_ca = _get_repair_ca()
+                        if _repair_ca is not None and getattr(_repair_ca, "is_hydrated", False):
+                            _repair_snap = None
+                            if callable(getattr(_repair_ca, "get_snapshot", None)):
+                                _repair_snap = _repair_ca.get_snapshot()
+                            if _repair_snap is not None:
+                                _csm.ingest_snapshot(_repair_snap)
+                                _csm_repair_done = True
+                                logger.critical(
+                                    "🔧 [CSM-BARRIER] Repair snapshot injected — csm_state=%s",
+                                    _csm.state,
+                                )
+                    except Exception as _csm_repair_err:
+                        logger.warning("[CSM-BARRIER] CSM repair probe failed: %s", _csm_repair_err)
+
+                    _csm_state_post_repair = _csm.state
+                    if _csm_state_post_repair == _CsmState.INITIALIZING:
+                        logger.critical(
+                            "⛔ [CSM_BLOCKED] CSM remains INITIALIZING after repair — "
+                            "proceeding with degraded capital confidence. "
+                            "Trades will be blocked by execution engine until CSM reaches READY. "
+                            "repair_attempted=%s",
+                            _csm_repair_done,
+                        )
+                        print(
+                            f"[INIT STEP 5/6] CSM_BLOCKED: still INITIALIZING after repair "
+                            f"(repair_attempted={_csm_repair_done}) — proceeding with caution",
+                            flush=True,
+                        )
+                    else:
+                        logger.critical(
+                            "✅ [CSM-BARRIER] CSM advanced past INITIALIZING via repair: %s",
+                            _csm_state_post_repair.value,
+                        )
             else:
                 logger.critical(
                     "✅ CAPITAL READY — STARTING TRADING LOOP"
@@ -4857,6 +4907,65 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
         logger.critical("[INIT STEP 5/6] ✅ CSM v2 ready barrier passed")
         print("[INIT STEP 5/6] ✅ CSM v2 ready barrier passed", flush=True)
         # ── End CSM v2 Ready Barrier ───────────────────────────────────────────
+
+        # ── STEP 5.5: Capital snapshot pre-validation ──────────────────────────
+        # Before entering the trading loop, verify that a nonzero CapitalAuthority
+        # snapshot is available.  If the snapshot shows total=0 or valid_brokers=0,
+        # wait briefly for the capital pipeline to deliver a valid value rather than
+        # silently entering a $0 first cycle.
+        # Timeout is intentionally short (10 s default) — we have already waited up
+        # to 30 s in the hydration barrier.  This step only catches the race where
+        # is_hydrated=True but the first capital value has not yet propagated.
+        _cap_precheck_timeout = float(os.getenv("NIJA_CAP_PRECHECK_TIMEOUT_S", "10"))
+        logger.critical(
+            "[INIT STEP 5.5] Capital snapshot pre-validation: timeout=%.0fs",
+            _cap_precheck_timeout,
+        )
+        print(f"[INIT STEP 5.5] Capital snapshot pre-validation timeout={_cap_precheck_timeout:.0f}s", flush=True)
+        _cap_precheck_t0 = time.monotonic()
+        _cap_precheck_ok = False
+        while time.monotonic() - _cap_precheck_t0 < _cap_precheck_timeout:
+            _precheck_snap = _capture_cycle_capital_state()
+            _precheck_total = float(_precheck_snap.get("ca_total_capital", 0.0) or 0.0)
+            _precheck_vb = int(_precheck_snap.get("ca_valid_brokers", 0) or 0)
+            if _precheck_total > 0.0 and _precheck_vb >= 1:
+                _cap_precheck_ok = True
+                logger.critical(
+                    "✅ [CAP_PRECHECK] Capital snapshot valid before first cycle: "
+                    "total=$%.2f valid_brokers=%d",
+                    _precheck_total,
+                    _precheck_vb,
+                )
+                break
+            logger.debug(
+                "[CAP_PRECHECK] Waiting for nonzero capital snapshot "
+                "(total=%.2f valid_brokers=%d elapsed=%.1fs/%.0fs)",
+                _precheck_total,
+                _precheck_vb,
+                time.monotonic() - _cap_precheck_t0,
+                _cap_precheck_timeout,
+            )
+            time.sleep(1.0)
+        if not _cap_precheck_ok:
+            _precheck_snap = _capture_cycle_capital_state()
+            _precheck_total = float(_precheck_snap.get("ca_total_capital", 0.0) or 0.0)
+            _precheck_vb = int(_precheck_snap.get("ca_valid_brokers", 0) or 0)
+            logger.critical(
+                "⚠️ [CAP_PRECHECK] Capital snapshot pre-validation timed out after %.0fs — "
+                "proceeding with total=$%.2f valid_brokers=%d. "
+                "First cycle may execute with degraded capital confidence.",
+                _cap_precheck_timeout,
+                _precheck_total,
+                _precheck_vb,
+            )
+            print(
+                f"[INIT STEP 5.5] CAP_PRECHECK timeout: total={_precheck_total:.2f} "
+                f"valid_brokers={_precheck_vb} — proceeding anyway",
+                flush=True,
+            )
+        logger.critical("[INIT STEP 5.5] ✅ Capital snapshot pre-validation complete")
+        print("[INIT STEP 5.5] ✅ Capital snapshot pre-validation complete", flush=True)
+        # ── End Capital snapshot pre-validation ───────────────────────────────
 
         # ── Trading Loop Entry Anchor (FIX 1) ─────────────────────────────────
         # Both hydration and CSM barriers have passed.  Arm the trading-active
@@ -5655,11 +5764,134 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     "cycle=%d capital=$%.2f cycle_id=%s",
                     cycle, _cycle_cap, _current_cycle_id,
                 )
+
+                # ── Fix 3: Pre-cycle wiring + symbol pre-warm ──────────────────
+                # Ensure strategy components are fully wired BEFORE entering
+                # run_cycle() so the cycle spends its time scanning, not
+                # re-initializing.  On cycle 1, do an eager symbol pre-load.
+                _pre_apex = getattr(strategy, "apex", None)
+                _pre_core = getattr(strategy, "nija_core_loop", None)
+                if _pre_apex is not None and _pre_core is None:
+                    try:
+                        if callable(getattr(strategy, "_ensure_nija_wiring", None)):
+                            strategy._ensure_nija_wiring()
+                            _pre_core = getattr(strategy, "nija_core_loop", None)
+                    except Exception as _pre_wire_err:
+                        logger.warning(
+                            "[PRE_CYCLE] _ensure_nija_wiring failed: %s", _pre_wire_err
+                        )
+                if cycle == 1:
+                    _pre_syms = getattr(strategy, "symbols", None) or []
+                    if not _pre_syms:
+                        try:
+                            if callable(getattr(strategy, "_maybe_refresh_symbols", None)):
+                                strategy._maybe_refresh_symbols(force=True)
+                                _pre_syms = getattr(strategy, "symbols", None) or []
+                                logger.critical(
+                                    "🔧 [PRE_CYCLE] Symbol universe pre-loaded: %d symbols",
+                                    len(_pre_syms),
+                                )
+                        except Exception as _pre_sym_err:
+                            logger.warning(
+                                "[PRE_CYCLE] Symbol pre-load failed: %s", _pre_sym_err
+                            )
+                # ── End Fix 3 ─────────────────────────────────────────────────
+
+                # ── Fix 4: Backref assertions ──────────────────────────────────
+                # Block the cycle with a clear reason if required strategy
+                # components are missing, instead of entering a silent no-op.
+                _pre_apex = getattr(strategy, "apex", None)
+                _pre_core = getattr(strategy, "nija_core_loop", None)
+                _pre_broker = getattr(strategy, "broker", None)
+                _backref_ok = True
+
+                if _pre_apex is None:
+                    _backref_ok = False
+                    logger.critical(
+                        "⛔ [RUN_CYCLE_BLOCKED_MISSING_REF] strategy.apex is None — "
+                        "cycle=%d skipped. Check NIJAApexStrategyV71 init logs.",
+                        cycle,
+                    )
+                    print(
+                        f"[NIJA-PRINT] RUN_CYCLE_BLOCKED_MISSING_REF "
+                        f"reason=apex_is_None cycle={cycle}",
+                        flush=True,
+                    )
+                else:
+                    if _pre_core is None:
+                        logger.critical(
+                            "⚠️ [PRE_CYCLE] strategy.nija_core_loop is None — "
+                            "will fall back to legacy analyze_market path. cycle=%d",
+                            cycle,
+                        )
+                    if _pre_broker is None:
+                        logger.critical(
+                            "⚠️ [PRE_CYCLE] strategy.broker is None — "
+                            "order submission will fail. cycle=%d",
+                            cycle,
+                        )
+                    # Verify phase3 scan is callable on core loop or strategy
+                    _phase3_target = _pre_core if _pre_core is not None else strategy
+                    if not callable(
+                        getattr(_phase3_target, "_phase3_scan_and_enter", None)
+                    ):
+                        logger.warning(
+                            "[PRE_CYCLE] _phase3_scan_and_enter not callable on %s — "
+                            "cycle=%d",
+                            type(_phase3_target).__name__,
+                            cycle,
+                        )
+
+                if not _backref_ok:
+                    _missing_ref_retry_s = float(
+                        os.getenv("NIJA_MISSING_REF_RETRY_S", "15") or 15
+                    )
+                    time.sleep(_missing_ref_retry_s)
+                    continue
+                # ── End Fix 4 ─────────────────────────────────────────────────
+
                 _cycle_start_ts = time.time()
                 _next_sleep_s = float(cycle_secs)
                 update_runtime_correlation(cycle_id=_current_cycle_id)
+
+                # ── Fix 6: Hard stall watchdog around run_cycle() ──────────────
+                # Fire RUN_CYCLE_STALLED if run_cycle() does not return (or does
+                # not emit RUN_CYCLE_PHASE3_START) within the configured timeout.
+                # The timer is cancelled immediately when run_cycle() returns.
+                _run_cycle_stall_s = float(
+                    os.getenv("NIJA_RUN_CYCLE_PHASE3_TIMEOUT_S", "30") or 30
+                )
+                _stall_fired = [False]
+
+                def _stall_watchdog_fn(
+                    _cy=cycle,
+                    _cid=_current_cycle_id,
+                    _tout=_run_cycle_stall_s,
+                ):
+                    _stall_fired[0] = True
+                    logger.critical(
+                        "⛔ [RUN_CYCLE_STALLED] strategy.run_cycle() still running "
+                        "after %.0fs — cycle=%d cycle_id=%s | "
+                        "strategy may be stuck before PHASE3_START",
+                        _tout,
+                        _cy,
+                        _cid,
+                    )
+                    print(
+                        f"[NIJA-PRINT] RUN_CYCLE_STALLED "
+                        f"stage=pre_phase3_or_unknown "
+                        f"elapsed={_tout:.0f}s cycle={_cy}",
+                        flush=True,
+                    )
+
+                _stall_timer = threading.Timer(_run_cycle_stall_s, _stall_watchdog_fn)
+                _stall_timer.daemon = True
+                _stall_timer.start()
+                # ── End Fix 6 setup ───────────────────────────────────────────
+
                 try:
                     _strategy_next_interval = strategy.run_cycle()
+                    _stall_timer.cancel()
                     logger.critical(
                         "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
                         "cycle=%d next_interval=%s",
@@ -5674,6 +5906,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     if isinstance(_strategy_next_interval, (int, float)):
                         _next_sleep_s = max(1.0, float(_strategy_next_interval))
                 except Exception as _run_cycle_err:
+                    _stall_timer.cancel()
                     logger.critical(
                         "❌ [CYCLE_INVOKE] strategy.run_cycle() RAISED EXCEPTION | "
                         "cycle=%d error=%s",
@@ -5682,6 +5915,7 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     )
                     raise
                 finally:
+                    _stall_timer.cancel()
                     clear_runtime_correlation()
                 _cycle_elapsed = time.time() - _cycle_start_ts
                 # Retrieve symbol count from strategy for heartbeat diagnostics
