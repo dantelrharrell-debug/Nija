@@ -798,6 +798,39 @@ class AuthorityHeartbeatMonitor:
                 ex=30,  # 30 second TTL
             )
 
+            # Refresh the writer lock key TTL so it does not expire between
+            # heartbeat cycles.  Use EXPIRE (not SET NX) so we only refresh an
+            # existing lock that this instance already holds — we never overwrite
+            # a lock that belongs to a different instance.
+            _lock_scope = os.environ.get("NIJA_WRITER_SCOPE", "platform")
+            _lock_key = (
+                os.environ.get("NIJA_WRITER_LOCK_KEY", "").strip()
+                or f"nija:writer_lock:{_lock_scope}"
+            )
+            _lock_ttl_s = max(
+                60,
+                int(os.environ.get("NIJA_WRITER_LOCK_TTL_S", "30") or 30) * 3,
+            )
+            try:
+                # Only refresh if the lock exists AND belongs to this instance.
+                _expected_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+                if _expected_token:
+                    _current_lock = self._redis_client.get(_lock_key)
+                    if _current_lock is not None:
+                        if isinstance(_current_lock, bytes):
+                            _current_lock = _current_lock.decode("utf-8", errors="replace")
+                        _current_prefix = str(_current_lock or "").split(":", 1)[0]
+                        if _current_prefix == _expected_token:
+                            self._redis_client.expire(_lock_key, _lock_ttl_s)
+                            logger.debug(
+                                "AuthorityHeartbeat: refreshed writer lock TTL "
+                                "lock_key=%s ttl_s=%d token_prefix=%s",
+                                _lock_key, _lock_ttl_s, _expected_token[:8],
+                            )
+                        # else: lock is held by a different token — do not touch it
+            except Exception as _lock_refresh_exc:
+                logger.debug("AuthorityHeartbeat: writer lock TTL refresh failed: %s", _lock_refresh_exc)
+
             logger.debug("AuthorityHeartbeat: wrote heartbeat with generation=%s", local_gen)
         except Exception as e:
             logger.error("AuthorityHeartbeat: failed to write heartbeat: %s", e)

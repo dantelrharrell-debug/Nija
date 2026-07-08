@@ -196,6 +196,24 @@ SYMBOL_TO_SECTOR: Dict[str, CryptoSector] = {
     "XMR-USD": CryptoSector.PRIVACY_COINS,
     "ZEC-USD": CryptoSector.PRIVACY_COINS,
     "DASH-USD": CryptoSector.PRIVACY_COINS,
+
+    # AI Tokens (extended)
+    "AI-USD": CryptoSector.AI_TOKENS,       # Sleepless AI / AI16Z
+    "AI-USDT": CryptoSector.AI_TOKENS,
+
+    # DeFi DEX (extended — Coinbase-tradable)
+    "AERO-USD": CryptoSector.DEFI_DEX,      # Aerodrome Finance (Base L2 DEX)
+    "AERO-USDT": CryptoSector.DEFI_DEX,
+    "ARX-USD": CryptoSector.DEFI_DEX,       # Arbitrex (ARX — Arbitrum-native DEX)
+    "ARX-USDT": CryptoSector.DEFI_DEX,
+
+    # Layer 2 (extended)
+    "AZTEC-USD": CryptoSector.LAYER_2,      # Aztec Network (ZK privacy L2)
+    "AZTEC-USDT": CryptoSector.LAYER_2,
+
+    # Miscellaneous (explicitly mapped to avoid unknown-bucket aggregation)
+    "2Z-USD": CryptoSector.MISC,
+    "2Z-USDT": CryptoSector.MISC,
 }
 
 

@@ -312,6 +312,19 @@ _current_cycle_capital: Mapping[str, Any] = {}
 _current_cycle_snapshot: Optional["CycleSnapshot"] = None
 
 # ---------------------------------------------------------------------------
+# Session-level data-failure quarantine.
+# Symbols that repeatedly fail OHLC fetches (data_insufficient + timeout) are
+# quarantined for the session so they do not waste scan time on every cycle.
+# Key: (broker_name, symbol)   Value: consecutive failure count
+# ---------------------------------------------------------------------------
+_DATA_FAILURE_QUARANTINE: Dict[str, int] = {}
+_DATA_FAILURE_QUARANTINE_LOCK = threading.Lock()
+# Quarantine a symbol after this many consecutive data failures in a session.
+_DATA_FAILURE_QUARANTINE_THRESHOLD = int(
+    os.environ.get("NIJA_DATA_FAILURE_QUARANTINE_THRESHOLD", "5")
+)
+
+# ---------------------------------------------------------------------------
 # Start-signal gate — defined here (before any function that references it)
 # so the name is always in module scope when _supervisor_step_state_machine()
 # runs, regardless of call order.
@@ -2142,6 +2155,18 @@ class NijaCoreLoop:
 
             try:
                 _data_attempts += 1
+                # Check session quarantine before fetching — symbols that have
+                # repeatedly failed data fetches are skipped for the rest of the
+                # session to avoid wasting cycle time.
+                _qkey = f"{str(getattr(getattr(broker, 'broker_type', None), 'value', '') or '').lower()}:{symbol}"
+                with _DATA_FAILURE_QUARANTINE_LOCK:
+                    _fail_count = _DATA_FAILURE_QUARANTINE.get(_qkey, 0)
+                if _fail_count >= _DATA_FAILURE_QUARANTINE_THRESHOLD:
+                    if _sdd is not None:
+                        _sdd.record_skip(symbol, "quarantine_data_failure")
+                    _funnel["market_data"] = ("FAIL", "QUARANTINE_DATA_FAILURE")
+                    _gate_rejections["data_insufficient"] += 1
+                    continue
                 df = self._fetch_df(broker, symbol)
                 _df_len = len(df) if df is not None else 0
                 # Minimum candle requirement: lowered from 100 → 50 so symbols
@@ -2151,6 +2176,10 @@ class NijaCoreLoop:
                 if df is None or _df_len < _MIN_CANDLES:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "data_insufficient")
+                    # Increment quarantine failure counter for this symbol
+                    with _DATA_FAILURE_QUARANTINE_LOCK:
+                        _DATA_FAILURE_QUARANTINE[_qkey] = _DATA_FAILURE_QUARANTINE.get(_qkey, 0) + 1
+                        _new_fail_count = _DATA_FAILURE_QUARANTINE[_qkey]
                     # df is None specifically indicates a timeout or connection
                     # error (broker returned nothing at all vs. too-short data).
                     if df is None:
@@ -2161,16 +2190,24 @@ class NijaCoreLoop:
                     _gate_rejections["data_insufficient"] += 1
                     # Log the first 3 data failures at critical level so the
                     # root cause is visible even when debug logging is off.
-                    if _gate_rejections["data_insufficient"] <= 3:
+                    # Log when a symbol gets quarantined.
+                    if _new_fail_count == _DATA_FAILURE_QUARANTINE_THRESHOLD:
+                        logger.warning(
+                            "🚫 [Phase3] DATA_FAILURE_QUARANTINE symbol=%s qkey=%s "
+                            "fail_count=%d — quarantined for this session",
+                            symbol, _qkey, _new_fail_count,
+                        )
+                    elif _gate_rejections["data_insufficient"] <= 3:
                         logger.critical(
                             "🚨 [DIAG] DATA_INSUFFICIENT symbol=%s df_len=%d "
                             "(need>=%d) df_is_none=%s — broker returned no/short data "
                             "(timeout_skipped_so_far=%d). "
                             "Signal loop skipping symbol and continuing. "
-                            "data_insufficient_count=%d/%d",
+                            "data_insufficient_count=%d/%d fail_count_for_symbol=%d",
                             symbol, _df_len, _MIN_CANDLES, df is None,
                             _data_skipped_timeout,
                             _gate_rejections["data_insufficient"], _data_attempts,
+                            _new_fail_count,
                         )
                     continue
                 _data_successes += 1
@@ -3245,6 +3282,28 @@ class NijaCoreLoop:
                         sig.position_multiplier, sig.symbol,
                         original, analysis["position_size"],
                     )
+
+                # Inject signal-level EV metadata so the expectancy gate in
+                # ExecutionEngine receives the real win rate instead of the
+                # global 50% default.  composite_score is mapped to a
+                # conservative win-rate estimate: score ≥ 75 → 0.65,
+                # score ≥ 60 → 0.58, score ≥ 50 → 0.54, below 50 → 0.50.
+                if "composite_score" not in analysis:
+                    analysis.setdefault("composite_score", float(sig.composite_score))
+                if "expected_win_rate" not in analysis:
+                    _score_for_wr = float(sig.composite_score or 0.0)
+                    if _score_for_wr >= 75.0:
+                        analysis["expected_win_rate"] = 0.65
+                    elif _score_for_wr >= 60.0:
+                        analysis["expected_win_rate"] = 0.58
+                    elif _score_for_wr >= 50.0:
+                        analysis["expected_win_rate"] = 0.54
+                    else:
+                        analysis["expected_win_rate"] = 0.50
+                if "regime" not in analysis:
+                    _sig_regime = getattr(sig, "regime", None) or getattr(sig, "market_regime", None)
+                    if _sig_regime:
+                        analysis["regime"] = _sig_regime
 
                 logger.critical(
                     "🚀 [CoreLoop] SUBMITTING ORDER | symbol=%s side=%s action=%s "

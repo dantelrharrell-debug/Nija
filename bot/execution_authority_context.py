@@ -651,10 +651,11 @@ def assert_distributed_writer_authority() -> None:
                 reacquired = client.set(lock_key, lock_value, ex=ttl_s, nx=True)
                 if reacquired:
                     current_token = token
-                    logger.warning(
+                    logger.debug(
                         "assert_distributed_writer_authority: lock key was missing; "
                         "re-acquired atomically with same fencing token "
-                        "(lock_key=%s token_prefix=%s ttl_s=%d)",
+                        "(lock_key=%s token_prefix=%s ttl_s=%d) — likely TTL expiry, "
+                        "heartbeat will refresh TTL on next cycle",
                         lock_key,
                         token[:8],
                         ttl_s,

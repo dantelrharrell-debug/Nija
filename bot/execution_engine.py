@@ -774,6 +774,7 @@ class ExecutionEngine:
         strategy_name: str = "ExecutionEngine",
         account_id: Optional[str] = None,
         account_type: Optional[str] = None,
+        preferred_broker: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Canonical market-order submit through ExecutionPipeline/ECEL."""
         # Resolve account context for audit trail — fall back to user_id when
@@ -834,28 +835,36 @@ class ExecutionEngine:
                 "side": side,
             }
 
-        preferred_broker = "coinbase"
-        try:
-            btype = getattr(broker_client, "broker_type", None)
-            if btype is not None:
-                if hasattr(btype, "value"):
-                    preferred_broker = str(btype.value).lower()
-                elif isinstance(btype, str) and btype.strip():
-                    preferred_broker = btype.strip().lower()
-            elif isinstance(getattr(broker_client, "NAME", None), str):
-                name = str(getattr(broker_client, "NAME")).strip().lower()
-                if "kraken" in name:
-                    preferred_broker = "kraken"
-                elif "coinbase" in name:
-                    preferred_broker = "coinbase"
-                elif "okx" in name:
-                    preferred_broker = "okx"
-                elif "binance" in name:
-                    preferred_broker = "binance"
-                elif "alpaca" in name:
-                    preferred_broker = "alpaca"
-        except Exception:
-            pass
+        # When the caller passes an explicit preferred_broker (derived from the
+        # approved broker at execute_entry time), use it directly so the same
+        # broker that was approved in TRADE APPROVED is used for submission.
+        # Only fall back to broker_client derivation when no explicit value is given.
+        _caller_preferred = str(preferred_broker or "").strip().lower()
+        if _caller_preferred:
+            preferred_broker = _caller_preferred
+        else:
+            preferred_broker = "coinbase"
+            try:
+                btype = getattr(broker_client, "broker_type", None)
+                if btype is not None:
+                    if hasattr(btype, "value"):
+                        preferred_broker = str(btype.value).lower()
+                    elif isinstance(btype, str) and btype.strip():
+                        preferred_broker = btype.strip().lower()
+                elif isinstance(getattr(broker_client, "NAME", None), str):
+                    name = str(getattr(broker_client, "NAME")).strip().lower()
+                    if "kraken" in name:
+                        preferred_broker = "kraken"
+                    elif "coinbase" in name:
+                        preferred_broker = "coinbase"
+                    elif "okx" in name:
+                        preferred_broker = "okx"
+                    elif "binance" in name:
+                        preferred_broker = "binance"
+                    elif "alpaca" in name:
+                        preferred_broker = "alpaca"
+            except Exception:
+                pass
 
         # Honor explicit execution-venue preference in live incidents.
         _preferred_env = (
@@ -1008,6 +1017,7 @@ class ExecutionEngine:
         available_balance_usd: Optional[float] = None,
         spendable_balance_usd: Optional[float] = None,
         strategy_name: str = "ExecutionEngine",
+        preferred_broker: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Place a limit order through the ECEL choke point.
 
@@ -1015,15 +1025,21 @@ class ExecutionEngine:
         applies balance-aware sizing, and performs pre-flight assertions.
         Only a ``CompiledOrder`` with ``valid=True`` reaches the broker.
         """
-        # Resolve broker label for ECEL
-        broker_label = "coinbase"
-        try:
-            btype = getattr(broker_client, "broker_type", None)
-            if btype is not None:
-                raw = btype.value if hasattr(btype, "value") else str(btype)
-                broker_label = raw.strip().lower()
-        except Exception:
-            pass
+        # Resolve broker label for ECEL — caller-supplied preferred_broker
+        # takes priority so the same broker approved at execute_entry time
+        # is used throughout.
+        _caller_pb = str(preferred_broker or "").strip().lower()
+        if _caller_pb:
+            broker_label = _caller_pb
+        else:
+            broker_label = "coinbase"
+            try:
+                btype = getattr(broker_client, "broker_type", None)
+                if btype is not None:
+                    raw = btype.value if hasattr(btype, "value") else str(btype)
+                    broker_label = raw.strip().lower()
+            except Exception:
+                pass
 
         # Fetch available balance for fee-aware sizing
         available_balance: Optional[float] = available_balance_usd
@@ -1733,25 +1749,44 @@ class ExecutionEngine:
 
         return broker_response
 
-    def _resolve_expected_win_rate(self, take_profit_levels: Dict[str, float]) -> float:
-        """Resolve expected win probability for expectancy gate."""
-        # 1) Explicit per-trade values (preferred)
+    def _resolve_expected_win_rate(self, take_profit_levels: Dict[str, float]) -> tuple:
+        """Resolve expected win probability and its source for the expectancy gate.
+
+        Returns (win_rate, source_label) so callers can log where the rate came from.
+        """
+        # 1) Explicit per-trade values from signal metadata (preferred)
         for key in ("expected_win_rate", "win_probability", "prob_win"):
             if key in take_profit_levels:
                 try:
                     p = float(take_profit_levels[key])
                     if p > 1.0:
                         p = p / 100.0
-                    return max(0.01, min(0.99, p))
+                    return max(0.01, min(0.99, p)), f"signal_field:{key}"
                 except (TypeError, ValueError):
                     pass
 
-        # 2) Environment default (percentage)
+        # 2) Derive from composite_score or signal_score if available
+        for key in ("composite_score", "signal_score", "score"):
+            if key in take_profit_levels:
+                try:
+                    raw_score = float(take_profit_levels[key])
+                    if raw_score >= 75.0:
+                        return 0.65, f"score_derived:{key}={raw_score:.1f}"
+                    elif raw_score >= 60.0:
+                        return 0.58, f"score_derived:{key}={raw_score:.1f}"
+                    elif raw_score >= 50.0:
+                        return 0.54, f"score_derived:{key}={raw_score:.1f}"
+                    elif raw_score > 0:
+                        return 0.50, f"score_derived_floor:{key}={raw_score:.1f}"
+                except (TypeError, ValueError):
+                    pass
+
+        # 3) Environment default (percentage)
         try:
             p_env = float(os.getenv("EXPECTED_WIN_RATE_PCT", str(DEFAULT_EXPECTED_WIN_RATE * 100.0))) / 100.0
-            return max(0.01, min(0.99, p_env))
+            return max(0.01, min(0.99, p_env)), "env_default:EXPECTED_WIN_RATE_PCT"
         except (TypeError, ValueError):
-            return DEFAULT_EXPECTED_WIN_RATE
+            return DEFAULT_EXPECTED_WIN_RATE, "hardcoded_default"
 
     def _normalize_regime(self, take_profit_levels: Dict[str, float]) -> str:
         """Best-effort regime extraction from trade context payload."""
@@ -2741,12 +2776,26 @@ class ExecutionEngine:
                 except Exception as _constraint_exc:
                     logger.debug("Exchange constraint validation skipped: %s", _constraint_exc)
 
+            # Capture selected_broker at approval time and carry it through
+            # to order submission so the same broker is used end-to-end.
+            _selected_broker = (_hard_broker_key or "").strip().lower() or (
+                resolve_broker_label(self.broker_client)
+                if self.broker_client and hasattr(self.broker_client, "broker_type")
+                else ""
+            )
             logger.info(
-                "✅ TRADE APPROVED: symbol=%s side=%s size=$%.2f broker=%s",
+                "✅ TRADE APPROVED: symbol=%s side=%s size=$%.2f broker=%s selected_broker=%s",
                 symbol,
                 side,
                 position_size,
                 (_hard_broker_key or 'unknown').upper(),
+                _selected_broker or 'unknown',
+            )
+            print(
+                f"[NIJA-PRINT] TRADE_APPROVED | "
+                f"symbol={symbol} side={side} size=${position_size:.2f} "
+                f"selected_broker={_selected_broker or 'unknown'}",
+                flush=True,
             )
 
             # ✅ ENHANCEMENT #1: MINIMUM NOTIONAL GATE
@@ -2959,7 +3008,7 @@ class ExecutionEngine:
                 #   E = p(win)*net_win - (1-p(win))*net_loss
                 # where net_win is TP1 net edge and net_loss includes stop-loss move
                 # plus round-trip execution costs.
-                _p_win = self._resolve_expected_win_rate(take_profit_levels)
+                _p_win, _win_rate_source = self._resolve_expected_win_rate(take_profit_levels)
                 _gross_loss_usd = position_size * _risk_move
                 _loss_costs_usd = position_size * ((_fee_rate * 2) + _slippage_rate + _spread_rate)
                 _net_loss_usd = _gross_loss_usd + _loss_costs_usd
@@ -3000,18 +3049,43 @@ class ExecutionEngine:
                     return None
 
                 if not FORCE_TRADE_MODE and _expectancy_pct <= _regime_expectancy_floor:
+                    _tp1_val = float((take_profit_levels or {}).get('tp1', 0.0) or 0.0)
+                    _reward_pct = _reward_move * 100.0
+                    _risk_pct = _risk_move * 100.0
+                    _fees_pct = (_fee_rate * 2) * 100.0
+                    _spread_pct_log = _spread_rate * 100.0
                     logger.warning("=" * 70)
                     logger.warning("🚫 EXPECTANCY GATE: Trade rejected — non-positive expectancy")
                     logger.warning("=" * 70)
                     logger.warning(f"   Symbol:                {symbol}")
+                    logger.warning(f"   Broker:                {(_hard_broker_key or 'unknown').upper()}")
+                    logger.warning(f"   Side:                  {side}")
+                    logger.warning(f"   Entry Price:           ${entry_price:.6f}")
+                    logger.warning(f"   Stop Loss:             ${stop_loss:.6f}")
+                    logger.warning(f"   Take Profit (TP1):     ${_tp1_val:.6f}")
                     logger.warning(f"   Regime:                {_regime or 'unspecified'}")
-                    logger.warning(f"   Expected Win Rate:     {_p_win*100:.2f}%")
+                    logger.warning(f"   Expected Win Rate:     {_p_win*100:.2f}%  [source={_win_rate_source}]")
                     logger.warning(f"   Breakeven Win Rate:    {_breakeven_win_rate*100:.2f}%")
+                    logger.warning(f"   Reward %:              {_reward_pct:.4f}%")
+                    logger.warning(f"   Risk %:                {_risk_pct:.4f}%")
+                    logger.warning(f"   Fees % (round-trip):   {_fees_pct:.4f}%")
+                    logger.warning(f"   Spread %:              {_spread_pct_log:.4f}%")
                     logger.warning(f"   Net Win (TP1):         ${_net_edge:.2f}")
                     logger.warning(f"   Net Loss (SL+costs):   ${_net_loss_usd:.2f}")
                     logger.warning(f"   Expectancy:            ${_expectancy_usd:.2f} ({_expectancy_pct*100:.4f}%)")
                     logger.warning(f"   Required Floor:        {_regime_expectancy_floor*100:.4f}%")
                     logger.warning("=" * 70)
+                    print(
+                        f"[NIJA-PRINT] EXPECTANCY_GATE_REJECTED | "
+                        f"symbol={symbol} broker={(_hard_broker_key or 'unknown').upper()} side={side} "
+                        f"entry={entry_price:.6f} sl={stop_loss:.6f} tp1={_tp1_val:.6f} "
+                        f"expected_win_rate={_p_win*100:.2f}pct win_rate_source={_win_rate_source} "
+                        f"breakeven_win_rate={_breakeven_win_rate*100:.2f}pct "
+                        f"fees_pct={_fees_pct:.4f} spread_pct={_spread_pct_log:.4f} "
+                        f"reward_pct={_reward_pct:.4f} risk_pct={_risk_pct:.4f} "
+                        f"expectancy_pct={_expectancy_pct*100:.4f} floor_pct={_regime_expectancy_floor*100:.4f}",
+                        flush=True,
+                    )
                     _trace("ecel", "rejected", f"expectancy_gate:{_expectancy_pct:.6f}", terminal=True)
                     self._log_execute_entry_rejection(
                         symbol=symbol,
@@ -3021,7 +3095,15 @@ class ExecutionEngine:
                         stop_loss=stop_loss,
                         stage="expectancy_gate",
                         reason="non_positive_expectancy",
-                        detail=f"expectancy_pct={_expectancy_pct * 100.0:.4f} floor_pct={_regime_expectancy_floor * 100.0:.4f}",
+                        detail=(
+                            f"expectancy_pct={_expectancy_pct * 100.0:.4f} "
+                            f"floor_pct={_regime_expectancy_floor * 100.0:.4f} "
+                            f"expected_win_rate={_p_win*100:.2f}pct "
+                            f"win_rate_source={_win_rate_source} "
+                            f"breakeven_win_rate={_breakeven_win_rate*100:.2f}pct "
+                            f"reward_pct={_reward_pct:.4f} risk_pct={_risk_pct:.4f} "
+                            f"fees_pct={_fees_pct:.4f} spread_pct={_spread_pct_log:.4f}"
+                        ),
                     )
                     return None
 
@@ -3228,6 +3310,7 @@ class ExecutionEngine:
                                 available_balance_usd=_available_usd,
                                 spendable_balance_usd=_spendable_usd,
                                 strategy_name=strategy_name if hasattr(self, "_strategy_name") else "ExecutionEngine",
+                                preferred_broker=_selected_broker,
                             )
                         except Exception as _limit_exc:
                             logger.warning(
@@ -3302,6 +3385,7 @@ class ExecutionEngine:
                                     price_hint_usd=entry_price,
                                     account_id=_exec_account_id,
                                     account_type=_exec_account_type,
+                                    preferred_broker=_selected_broker,
                                 )
                             except Exception as _fb_exc:
                                 _fallback_exc = _fb_exc
@@ -3471,6 +3555,7 @@ class ExecutionEngine:
                                 price_hint_usd=entry_price,
                                 account_id=_exec_account_id,
                                 account_type=_exec_account_type,
+                                preferred_broker=_selected_broker,
                             ),
                         )
                         result = _mkt_ctrl.last_broker_response
@@ -3489,6 +3574,7 @@ class ExecutionEngine:
                                 price_hint_usd=entry_price,
                                 account_id=_exec_account_id,
                                 account_type=_exec_account_type,
+                                preferred_broker=_selected_broker,
                             )
                         except Exception as _mk_exc:
                             _market_exc = _mk_exc

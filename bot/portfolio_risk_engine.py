@@ -453,12 +453,27 @@ class PortfolioRiskEngine:
             logger.warning(f"Could not determine sector for {symbol}: {e}")
             return True, position_size_usd, enforcement_info
         
-        # Calculate current sector exposure
+        # Calculate current sector exposure.
+        # For the MISC sector (unknown/uncategorized symbols), treat each
+        # symbol as its own isolated bucket rather than aggregating all unknown
+        # symbols together.  This prevents a large number of unclassified
+        # symbols from collectively blocking an otherwise valid trade that
+        # happens to land in MISC.
+        try:
+            from bot.crypto_sector_taxonomy import CryptoSector as _CryptoSector
+            _misc_sector = _CryptoSector.MISC
+        except Exception:
+            _misc_sector = None  # type: ignore[assignment]
+
+        _is_misc = _misc_sector is not None and sector == _misc_sector
         current_sector_exposure_usd = 0.0
         for pos_symbol, position in self.positions.items():
             try:
                 pos_sector = self.get_sector(pos_symbol)
                 if pos_sector == sector:
+                    # For MISC, only count exposure from the same symbol
+                    if _is_misc and pos_symbol.upper().split("-")[0] != symbol.upper().split("-")[0]:
+                        continue
                     current_sector_exposure_usd += position.size_usd
             except Exception:
                 continue
