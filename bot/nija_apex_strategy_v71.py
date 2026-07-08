@@ -2062,8 +2062,29 @@ class NIJAApexStrategyV71:
         volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
 
         if volume_ratio < self.volume_min_threshold:
-            logger.debug(f'   🔇 Smart filter (volume): {volume_ratio*100:.1f}% < {self.volume_min_threshold*100:.0f}% threshold')
-            return False, f'Volume too low ({volume_ratio*100:.1f}% of avg) - threshold: {self.volume_min_threshold*100:.0f}%'
+            _candle_count = len(df) if df is not None else 0
+            _avg_vol_window = 20
+            _threshold_is_zero = self.volume_min_threshold == 0.0
+            _volume_is_zero = avg_volume <= 0 or current_volume <= 0
+            logger.warning(
+                "VOLUME_TOO_LOW symbol=%s actual_volume_ratio=%.4f required_volume_ratio=%.4f "
+                "candle_count=%d average_volume_window=%d avg_volume=%.2f current_volume=%.2f "
+                "threshold_is_zero_by_design=%s volume_data_missing=%s",
+                symbol,
+                volume_ratio,
+                self.volume_min_threshold,
+                _candle_count,
+                _avg_vol_window,
+                avg_volume,
+                current_volume,
+                _threshold_is_zero,
+                _volume_is_zero,
+            )
+            return False, (
+                f"VOLUME_TOO_LOW symbol={symbol} actual_ratio={volume_ratio:.4f} "
+                f"required_ratio={self.volume_min_threshold:.4f} candles={_candle_count} "
+                f"window={_avg_vol_window} avg_vol={avg_volume:.2f} cur_vol={current_volume:.2f}"
+            )
 
         # Filter 3: Candle timing filter (DISABLED)
         # EMERGENCY RELAXATION (Jan 29, 2026 - FOURTH RELAXATION): DISABLED (set to 0) - was blocking too many opportunities
@@ -3905,6 +3926,9 @@ class NIJAApexStrategyV71:
                     #   2. Portfolio Risk Engine (correlation-adjusted sizing)
                     #   3. Capital Allocation AI (Sharpe-weighted capital routing)
                     if self.use_ai_hub and self.ai_hub is not None:
+                        # Save the risk-approved size before AI hub — final order
+                        # size must never exceed this value (Fix: sizing authority).
+                        _risk_approved_size_long = float(position_size)
                         base_pct = (
                             position_size / account_balance
                             if account_balance > 0 else 0.05
@@ -3918,24 +3942,69 @@ class NIJAApexStrategyV71:
                             portfolio_value=account_balance,
                         )
                         if not ai_eval.ai_approved:
-                            logger.info(
-                                "   ⚠️ AI Hub LONG advisory %s (proceeding): %s",
-                                symbol, ai_eval.ai_reason
+                            _ai_reason_text = str(ai_eval.ai_reason or "").lower()
+                            _is_terminal_long = any(
+                                tok in _ai_reason_text
+                                for tok in (
+                                    "terminal_risk_hard_block",
+                                    "hard_sector_limit_block",
+                                    "hard sector limit block",
+                                    "entry_blocked_terminal_risk_hard_block",
+                                    "sector_exposure_limit_exceeded",
+                                    "portfolio exposure limit reached",
+                                    "position blocked by risk engine",
+                                )
                             )
-                            logger.info(
-                                f"ADVISORY (AI Hub soft-fail, proceeding) → reason=AI Hub: {ai_eval.ai_reason}"
-                                f" score={score} conf={score}"
-                            )
-                        # Use AI-adjusted position size (correlation + regime)
-                        ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
-                        if ai_adjusted_size > 0 and ai_adjusted_size != position_size:
-                            logger.info(
-                                "   \U0001f916 AI Hub adjusted LONG size: $%.2f → $%.2f "
-                                "(regime=%s, score=%.2f)",
-                                position_size, ai_adjusted_size,
-                                ai_eval.regime, ai_eval.ai_score,
-                            )
-                            position_size = ai_adjusted_size
+                            if _is_terminal_long:
+                                # Hard block: must not proceed — stop here.
+                                _terminal_reason_long = (
+                                    "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK: "
+                                    + str(ai_eval.ai_reason or "hard risk block")
+                                )
+                                logger.critical(
+                                    "🚫 AI_HUB_LONG_TERMINAL_HARD_BLOCK symbol=%s "
+                                    "reason=%s — returning HOLD, not proceeding.",
+                                    symbol, ai_eval.ai_reason,
+                                )
+                                self._record_rejection(
+                                    "ai_hub_terminal_risk",
+                                    "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
+                                )
+                                print(
+                                    f"[NIJA-PRINT] TERMINAL_RISK_HARD_BLOCK symbol={symbol} "
+                                    f"side=long reason={ai_eval.ai_reason}",
+                                    flush=True,
+                                )
+                                return {
+                                    'action': 'hold',
+                                    'reason': _terminal_reason_long,
+                                    'filter_stage': 'terminal_risk_hard_block',
+                                    'allowed': False,
+                                    'final_status': 'BLOCKED',
+                                    'block_reason': 'ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK',
+                                    'symbol': symbol,
+                                    'decision': 'HOLD',
+                                }
+                            else:
+                                # Non-terminal soft advisory: log but do NOT inflate size.
+                                logger.warning(
+                                    "   ⚠️ AI Hub LONG soft-advisory %s: %s",
+                                    symbol, ai_eval.ai_reason,
+                                )
+                        else:
+                            # AI approved — allow adjustment but cap to risk-approved size.
+                            ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
+                            if ai_adjusted_size > 0:
+                                # Cap: final size must never exceed the risk-approved size.
+                                capped_size = min(_risk_approved_size_long, ai_adjusted_size)
+                                if abs(capped_size - position_size) > 1e-9:
+                                    logger.info(
+                                        "   \U0001f916 AI Hub adjusted LONG size: $%.2f → $%.2f "
+                                        "(capped_from=$%.2f regime=%s, score=%.2f)",
+                                        position_size, capped_size, ai_adjusted_size,
+                                        ai_eval.regime, ai_eval.ai_score,
+                                    )
+                                position_size = capped_size
                         metadata['ai_eval'] = ai_eval.to_dict()
                     # ──────────────────────────────────────────────────────
 
@@ -4905,6 +4974,9 @@ class NIJAApexStrategyV71:
                     #   2. Portfolio Risk Engine (correlation-adjusted sizing)
                     #   3. Capital Allocation AI (Sharpe-weighted capital routing)
                     if self.use_ai_hub and self.ai_hub is not None:
+                        # Save the risk-approved size before AI hub — final order
+                        # size must never exceed this value (Fix: sizing authority).
+                        _risk_approved_size_short = float(position_size)
                         base_pct = (
                             position_size / account_balance
                             if account_balance > 0 else 0.05
@@ -4918,24 +4990,69 @@ class NIJAApexStrategyV71:
                             portfolio_value=account_balance,
                         )
                         if not ai_eval.ai_approved:
-                            logger.info(
-                                "   ⚠️ AI Hub SHORT advisory %s (proceeding): %s",
-                                symbol, ai_eval.ai_reason
+                            _ai_reason_text = str(ai_eval.ai_reason or "").lower()
+                            _is_terminal_short = any(
+                                tok in _ai_reason_text
+                                for tok in (
+                                    "terminal_risk_hard_block",
+                                    "hard_sector_limit_block",
+                                    "hard sector limit block",
+                                    "entry_blocked_terminal_risk_hard_block",
+                                    "sector_exposure_limit_exceeded",
+                                    "portfolio exposure limit reached",
+                                    "position blocked by risk engine",
+                                )
                             )
-                            logger.info(
-                                f"ADVISORY (AI Hub soft-fail, proceeding) → reason=AI Hub: {ai_eval.ai_reason}"
-                                f" score={score} conf={score}"
-                            )
-                        # Use AI-adjusted position size (correlation + regime)
-                        ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
-                        if ai_adjusted_size > 0 and ai_adjusted_size != position_size:
-                            logger.info(
-                                "   \U0001f916 AI Hub adjusted SHORT size: $%.2f → $%.2f "
-                                "(regime=%s, score=%.2f)",
-                                position_size, ai_adjusted_size,
-                                ai_eval.regime, ai_eval.ai_score,
-                            )
-                            position_size = ai_adjusted_size
+                            if _is_terminal_short:
+                                # Hard block: must not proceed — stop here.
+                                _terminal_reason_short = (
+                                    "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK: "
+                                    + str(ai_eval.ai_reason or "hard risk block")
+                                )
+                                logger.critical(
+                                    "🚫 AI_HUB_SHORT_TERMINAL_HARD_BLOCK symbol=%s "
+                                    "reason=%s — returning HOLD, not proceeding.",
+                                    symbol, ai_eval.ai_reason,
+                                )
+                                self._record_rejection(
+                                    "ai_hub_terminal_risk",
+                                    "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
+                                )
+                                print(
+                                    f"[NIJA-PRINT] TERMINAL_RISK_HARD_BLOCK symbol={symbol} "
+                                    f"side=short reason={ai_eval.ai_reason}",
+                                    flush=True,
+                                )
+                                return {
+                                    'action': 'hold',
+                                    'reason': _terminal_reason_short,
+                                    'filter_stage': 'terminal_risk_hard_block',
+                                    'allowed': False,
+                                    'final_status': 'BLOCKED',
+                                    'block_reason': 'ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK',
+                                    'symbol': symbol,
+                                    'decision': 'HOLD',
+                                }
+                            else:
+                                # Non-terminal soft advisory: log but do NOT inflate size.
+                                logger.warning(
+                                    "   ⚠️ AI Hub SHORT soft-advisory %s: %s",
+                                    symbol, ai_eval.ai_reason,
+                                )
+                        else:
+                            # AI approved — allow adjustment but cap to risk-approved size.
+                            ai_adjusted_size = ai_eval.correlation_adjusted_size_pct * account_balance
+                            if ai_adjusted_size > 0:
+                                # Cap: final size must never exceed the risk-approved size.
+                                capped_size = min(_risk_approved_size_short, ai_adjusted_size)
+                                if abs(capped_size - position_size) > 1e-9:
+                                    logger.info(
+                                        "   \U0001f916 AI Hub adjusted SHORT size: $%.2f → $%.2f "
+                                        "(capped_from=$%.2f regime=%s, score=%.2f)",
+                                        position_size, capped_size, ai_adjusted_size,
+                                        ai_eval.regime, ai_eval.ai_score,
+                                    )
+                                position_size = capped_size
                         metadata['ai_eval'] = ai_eval.to_dict()
                     # ──────────────────────────────────────────────────────
 

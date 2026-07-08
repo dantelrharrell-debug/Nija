@@ -10,6 +10,8 @@ logger = logging.getLogger("nija.ai_hub_terminal_rejection_hard_gate")
 _PATCHED_ATTR = "_nija_ai_hub_terminal_rejection_hard_gate_20260708a"
 _TERMINAL_TOKENS = (
     "terminal_risk_hard_block",
+    "entry_blocked_terminal_risk_hard_block",
+    "sector_exposure_limit_exceeded",
     "portfolio exposure limit reached",
     "position blocked by risk engine",
     "hard_sector_limit_block",
@@ -51,10 +53,20 @@ def _patch_strategy_module(module: ModuleType) -> bool:
         blocked, reason = _terminal_ai_reject(result)
         if not blocked:
             return result
-        symbol = str(result.get("symbol") or kwargs.get("symbol") or "") if isinstance(result, dict) else ""
+        # Resolve symbol from result dict, kwargs, positional args, or strategy attr.
+        symbol = ""
+        if isinstance(result, dict):
+            symbol = str(result.get("symbol") or "").strip()
+        if not symbol:
+            symbol = str(kwargs.get("symbol") or "").strip()
         if not symbol and args:
-            # Most analyze_market call sites pass symbol separately or infer from logs;
-            # keep fallback empty rather than guessing from a DataFrame argument.
+            for _arg in args:
+                if isinstance(_arg, str) and len(_arg) > 0 and "-" in _arg:
+                    symbol = _arg
+                    break
+        if not symbol:
+            symbol = str(getattr(self, "symbol", None) or getattr(self, "_symbol", None) or "").strip()
+        if not symbol:
             symbol = "unknown"
         action = str(result.get("action") or "") if isinstance(result, dict) else ""
         logger.critical(
@@ -65,8 +77,13 @@ def _patch_strategy_module(module: ModuleType) -> bool:
         )
         return {
             "action": "hold",
-            "reason": f"AI Hub terminal risk hard block: {reason}",
-            "filter_stage": "ai_hub_terminal_rejection",
+            "reason": f"ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK: {reason}",
+            "filter_stage": "terminal_risk_hard_block",
+            "allowed": False,
+            "final_status": "BLOCKED",
+            "block_reason": "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
+            "symbol": symbol,
+            "decision": "HOLD",
             "metadata": dict(result.get("metadata", {}) or {}) if isinstance(result, dict) else {},
         }
 

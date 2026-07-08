@@ -360,6 +360,16 @@ def _patch_core_loop_class(cls) -> bool:
             reject_counts = getattr(self, "reject_reason_counts", {}) or {}
             top_veto = max(veto_counts.items(), key=lambda kv: kv[1])[0] if veto_counts else "none"
             top_reject = max(reject_counts.items(), key=lambda kv: kv[1])[0] if reject_counts else "none"
+            top_reject_count = reject_counts.get(top_reject, 0) if top_reject != "none" else 0
+            # Secondary reject: second-most-common reason
+            _secondary_reject = "none"
+            if len(reject_counts) > 1:
+                _sorted_rejects = sorted(reject_counts.items(), key=lambda kv: kv[1], reverse=True)
+                _secondary_reject = _sorted_rejects[1][0] if len(_sorted_rejects) > 1 else "none"
+            # Guard: if entries were blocked, top_reject must not be "none" — emit
+            # the best available reason rather than masking the real block cause.
+            if blocked > 0 and top_reject == "none":
+                top_reject = "blocked_no_reason_recorded"
             if entered > 0:
                 status = "ORDER_PATH_ACTIVE"
                 reason = "entries_taken"
@@ -390,7 +400,7 @@ def _patch_core_loop_class(cls) -> bool:
             )
             logger.critical(
                 "ORDER_ADMISSION_SUMMARY broker=%s status=%s scored=%d entered=%d blocked=%d exited=%d "
-                "top_veto=%s top_reject=%s duration_ms=%d",
+                "top_veto=%s top_reject=%s top_reject_count=%d secondary_reject=%s duration_ms=%d",
                 broker_name,
                 status,
                 scored,
@@ -399,11 +409,14 @@ def _patch_core_loop_class(cls) -> bool:
                 exited,
                 top_veto,
                 top_reject,
+                top_reject_count,
+                _secondary_reject,
                 duration_ms,
             )
             print(
                 f"[NIJA-PRINT] ORDER_ADMISSION_SUMMARY | broker={broker_name} "
-                f"status={status} reason={reason} scored={scored} entered={entered} blocked={blocked} exited={exited}",
+                f"status={status} reason={reason} scored={scored} entered={entered} blocked={blocked} exited={exited} "
+                f"top_reject={top_reject} top_reject_count={top_reject_count} secondary_reject={_secondary_reject}",
                 flush=True,
             )
         except Exception as exc:
