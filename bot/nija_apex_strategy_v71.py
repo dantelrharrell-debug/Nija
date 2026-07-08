@@ -5490,6 +5490,19 @@ class NIJAApexStrategyV71:
                 for key in ('forced_fallback', 'fallback_entry', 'force_next_cycle'):
                     if key in action_data:
                         levels[key] = action_data.get(key)
+                # Pass through EV-relevant signal metadata so the expectancy gate
+                # uses the real signal win rate, not the global 50% default.
+                # Keys searched by ExecutionEngine._resolve_expected_win_rate:
+                #   expected_win_rate, win_probability, prob_win
+                # Extra context preserved for diagnostics:
+                #   regime, composite_score, signal_score, score, fees_pct, spread_pct
+                for key in (
+                    'expected_win_rate', 'win_probability', 'prob_win',
+                    'regime', 'composite_score', 'signal_score', 'score',
+                    'fees_pct', 'spread_pct', 'market_regime',
+                ):
+                    if key in action_data and action_data[key] is not None:
+                        levels.setdefault(key, action_data[key])
                 return levels
 
             if action == 'enter_long':
