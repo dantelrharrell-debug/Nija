@@ -42,9 +42,42 @@ def _install_exposure_hard_block_runtime_patch() -> None:
         )
 
 
+def _install_live_capital_and_route_guards() -> None:
+    try:
+        try:
+            from bot.capital_authority_live_total_patch import install_import_hook as capital_install
+        except ImportError:
+            from capital_authority_live_total_patch import install_import_hook as capital_install  # type: ignore[import]
+        capital_install()
+        logging.getLogger("nija.logging_format_guard").warning(
+            "CAPITAL_AUTHORITY_LIVE_TOTAL_EARLY_INSTALL_REQUESTED marker=20260707b"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").warning(
+            "Capital authority live-total guard unavailable: %s",
+            exc,
+        )
+
+    try:
+        try:
+            from bot.execution_route_integrity_import_guard_patch import install_import_hook as route_install
+        except ImportError:
+            from execution_route_integrity_import_guard_patch import install_import_hook as route_install  # type: ignore[import]
+        route_install()
+        logging.getLogger("nija.logging_format_guard").warning(
+            "EXECUTION_ROUTE_INTEGRITY_IMPORT_GUARD_EARLY_INSTALL_REQUESTED marker=20260707a"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").warning(
+            "Execution route integrity import guard unavailable: %s",
+            exc,
+        )
+
+
 def install() -> None:
     global _ORIGINAL_GET_MESSAGE, _INSTALLED
     if _INSTALLED:
+        _install_live_capital_and_route_guards()
         _install_sector_tier_hydration_repair()
         _install_exposure_hard_block_runtime_patch()
         return
@@ -61,6 +94,7 @@ def install() -> None:
     logging.LogRecord.getMessage = _safe_get_message  # type: ignore[assignment]
     _INSTALLED = True
     logging.getLogger("nija.logging_format_guard").warning("LOGGING_FORMAT_GUARD_INSTALLED")
+    _install_live_capital_and_route_guards()
     _install_sector_tier_hydration_repair()
     _install_exposure_hard_block_runtime_patch()
 
