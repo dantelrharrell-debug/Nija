@@ -694,8 +694,19 @@ class ExecutionEngine:
         stage: str,
         reason: str,
         detail: Any = "",
+        expected_win_rate: Optional[float] = None,
+        breakeven_win_rate: Optional[float] = None,
+        expectancy_pct: Optional[float] = None,
+        net_win_pct: Optional[float] = None,
+        net_loss_pct: Optional[float] = None,
+        spendable_quote: Optional[float] = None,
+        broker: str = "",
     ) -> None:
-        """Emit an immediate, flushed rejection breadcrumb for execute_entry."""
+        """Emit an immediate, flushed rejection breadcrumb for execute_entry.
+
+        Also emits an ORDER_BLOCKED line with full expectancy math when the
+        relevant fields are provided, satisfying the diagnostic requirement.
+        """
         _detail = "" if detail is None else str(detail)
         print(
             f"[NIJA-PRINT] execute_entry REJECTED | "
@@ -719,6 +730,28 @@ class ExecutionEngine:
             stage,
             reason,
             _detail,
+        )
+        # ORDER_BLOCKED diagnostic — emitted for every rejection to allow
+        # post-hoc filtering and expectancy math verification.
+        _ewr = f"{expected_win_rate * 100.0:.4f}pct" if expected_win_rate is not None else "N/A"
+        _bwr = f"{breakeven_win_rate * 100.0:.4f}pct" if breakeven_win_rate is not None else "N/A"
+        _ep = f"{expectancy_pct * 100.0:.4f}pct" if expectancy_pct is not None else "N/A"
+        _nw = f"{net_win_pct * 100.0:.4f}pct" if net_win_pct is not None else "N/A"
+        _nl = f"{net_loss_pct * 100.0:.4f}pct" if net_loss_pct is not None else "N/A"
+        _sq = f"{float(spendable_quote):.2f}" if spendable_quote is not None else "N/A"
+        print(
+            f"[NIJA-PRINT] ORDER_BLOCKED "
+            f"stage={stage} symbol={symbol} "
+            f"broker={broker or 'unknown'} "
+            f"reason={reason} "
+            f"expected_win_rate={_ewr} "
+            f"breakeven_win_rate={_bwr} "
+            f"expectancy_pct={_ep} "
+            f"net_win_pct={_nw} "
+            f"net_loss_pct={_nl} "
+            f"order_size_usd={float(position_size or 0.0):.2f} "
+            f"spendable_quote={_sq}",
+            flush=True,
         )
 
     def _apply_minimum_notional_gate(
@@ -1752,9 +1785,12 @@ class ExecutionEngine:
     def _resolve_expected_win_rate(self, take_profit_levels: Dict[str, float]) -> tuple:
         """Resolve expected win probability and its source for the expectancy gate.
 
-        Returns (win_rate, source_label) so callers can log where the rate came from.
+        Returns (win_rate, source_label) or (None, "missing_win_rate_estimate").
+        A None win_rate means no trusted estimate exists — the caller MUST reject
+        the trade with reason "missing_win_rate_estimate" rather than silently
+        defaulting to 50 % (which is almost always below breakeven after fees).
         """
-        # 1) Explicit per-trade values from signal metadata (preferred)
+        # 1) Explicit per-trade values from signal metadata (most trusted)
         for key in ("expected_win_rate", "win_probability", "prob_win"):
             if key in take_profit_levels:
                 try:
@@ -1765,28 +1801,104 @@ class ExecutionEngine:
                 except (TypeError, ValueError):
                     pass
 
-        # 2) Derive from composite_score or signal_score if available
+        # 2) Derive a base win-rate from composite_score / signal_score
+        base_p: Optional[float] = None
+        score_source: str = ""
         for key in ("composite_score", "signal_score", "score"):
             if key in take_profit_levels:
                 try:
                     raw_score = float(take_profit_levels[key])
                     if raw_score >= 75.0:
-                        return 0.65, f"score_derived:{key}={raw_score:.1f}"
+                        base_p = 0.65
                     elif raw_score >= 60.0:
-                        return 0.58, f"score_derived:{key}={raw_score:.1f}"
+                        base_p = 0.58
                     elif raw_score >= 50.0:
-                        return 0.54, f"score_derived:{key}={raw_score:.1f}"
+                        base_p = 0.54
                     elif raw_score > 0:
-                        return 0.50, f"score_derived_floor:{key}={raw_score:.1f}"
+                        # Score below 50 is a weak signal; apply quality modifiers
+                        # below to see if other indicators rescue the estimate.
+                        base_p = 0.50
+                    # score == 0 → fall through (no estimate)
+                    if base_p is not None:
+                        score_source = f"{key}={raw_score:.1f}"
+                        break
                 except (TypeError, ValueError):
                     pass
 
-        # 3) Environment default (percentage)
+        if base_p is None:
+            # No score-based estimate at all — reject.
+            return None, "missing_win_rate_estimate"
+
+        # 3) Quality modifiers: ADX, regime, confidence, volume quality.
+        #    These can push a borderline score above or below the usable floor.
+        adjustment = 0.0
+
+        # ADX modifier — trend strength boosts conviction for trend-following entries
         try:
-            p_env = float(os.getenv("EXPECTED_WIN_RATE_PCT", str(DEFAULT_EXPECTED_WIN_RATE * 100.0))) / 100.0
-            return max(0.01, min(0.99, p_env)), "env_default:EXPECTED_WIN_RATE_PCT"
+            adx = float(take_profit_levels.get("adx", 0.0) or 0.0)
+            if adx >= 40:
+                adjustment += 0.04
+            elif adx >= 30:
+                adjustment += 0.02
+            elif adx >= 20:
+                adjustment += 0.01
+            elif 0 < adx < 15:
+                adjustment -= 0.02
         except (TypeError, ValueError):
-            return DEFAULT_EXPECTED_WIN_RATE, "hardcoded_default"
+            pass
+
+        # Regime modifier
+        regime_str = str(
+            take_profit_levels.get("regime")
+            or take_profit_levels.get("market_regime")
+            or ""
+        ).strip().lower()
+        if any(k in regime_str for k in ("bull", "uptrend", "strong_trend", "momentum_up")):
+            adjustment += 0.02
+        elif any(k in regime_str for k in ("high_vol", "high_volatility", "volatile")):
+            adjustment += 0.01
+        elif any(k in regime_str for k in ("chop", "ranging", "sideways", "low_vol", "low_volatility", "dead")):
+            adjustment -= 0.03
+        elif any(k in regime_str for k in ("bear", "downtrend")):
+            adjustment -= 0.01
+
+        # Confidence modifier (if provided by AI/signal layer)
+        try:
+            confidence = float(take_profit_levels.get("confidence", -1.0) or -1.0)
+            if confidence >= 0:
+                if confidence >= 0.80:
+                    adjustment += 0.02
+                elif confidence >= 0.65:
+                    adjustment += 0.01
+                elif confidence < 0.40:
+                    adjustment -= 0.02
+        except (TypeError, ValueError):
+            pass
+
+        # Volume quality modifier
+        try:
+            vq = float(take_profit_levels.get("volume_quality", -1.0) or -1.0)
+            if vq >= 0:
+                if vq >= 0.75:
+                    adjustment += 0.01
+                elif vq < 0.30:
+                    adjustment -= 0.02
+        except (TypeError, ValueError):
+            pass
+
+        adjusted = base_p + adjustment
+
+        # Minimum usable threshold: if the adjusted estimate is at or below 50 %
+        # it is indistinguishable from a coin flip and will virtually always be
+        # below the breakeven win-rate after fees — reject as untrusted.
+        _MIN_TRUSTED_WIN_RATE = max(
+            0.51,
+            float(os.getenv("NIJA_MIN_TRUSTED_WIN_RATE", "0.51")),
+        )
+        if adjusted <= _MIN_TRUSTED_WIN_RATE:
+            return None, "missing_win_rate_estimate"
+
+        return max(0.01, min(0.99, adjusted)), f"quality_adjusted:{score_source} adj={adjustment:+.3f}"
 
     def _normalize_regime(self, take_profit_levels: Dict[str, float]) -> str:
         """Best-effort regime extraction from trade context payload."""
@@ -2798,6 +2910,30 @@ class ExecutionEngine:
                 flush=True,
             )
 
+            # ── BROKER ROUTING CONSISTENCY CHECK ─────────────────────────────────
+            # Verify that the broker chosen at scan/signal-selection time matches
+            # the broker client wired into this execution engine instance.
+            # A mismatch means order sizing used the wrong venue's cash, so warn.
+            _intended_broker = str(
+                take_profit_levels.get("intended_broker", "") or ""
+            ).strip().lower()
+            if _intended_broker and _selected_broker and _intended_broker != _selected_broker:
+                logger.warning(
+                    "⚠️  BROKER_ROUTE_MISMATCH: symbol=%s intended_broker=%s "
+                    "execution_broker=%s — order will use execution broker. "
+                    "Verify that sizing used the correct venue's spendable cash.",
+                    symbol,
+                    _intended_broker,
+                    _selected_broker,
+                )
+                print(
+                    f"[NIJA-PRINT] BROKER_ROUTE_MISMATCH "
+                    f"symbol={symbol} intended_broker={_intended_broker} "
+                    f"execution_broker={_selected_broker} "
+                    f"action=proceeding_with_execution_broker",
+                    flush=True,
+                )
+
             # ✅ ENHANCEMENT #1: MINIMUM NOTIONAL GATE
             # Check if entry size meets minimum notional requirements
             broker_name = None
@@ -3003,12 +3139,86 @@ class ExecutionEngine:
                     )
                     return None
 
+                # ── FEE-AWARE TP MINIMUM ──────────────────────────────────────────
+                # TP must exceed SL + round-trip costs + a small edge buffer so the
+                # trade can clear fees even before considering win probability.
+                # minimum_tp_pct = sl_pct + round_trip_fee_pct + slippage_pct + buffer
+                _round_trip_fee_pct = (_fee_rate * 2) + _slippage_rate + _spread_rate
+                _min_edge_buffer_pct = max(
+                    0.0,
+                    float(os.getenv("NIJA_MIN_EDGE_BUFFER_PCT", "0.002")),
+                )
+                _fee_aware_min_tp = _risk_move + _round_trip_fee_pct + _min_edge_buffer_pct
+                if not FORCE_TRADE_MODE and _reward_move < _fee_aware_min_tp:
+                    _shortage_pct = (_fee_aware_min_tp - _reward_move) * 100.0
+                    logger.warning(
+                        "🚫 FEE-AWARE TP GATE: %s TP %.4f%% < fee-aware minimum %.4f%% "
+                        "(sl=%.4f%% round_trip_fees=%.4f%% buffer=%.4f%% shortage=%.4f%%)",
+                        symbol,
+                        _reward_move * 100.0,
+                        _fee_aware_min_tp * 100.0,
+                        _risk_move * 100.0,
+                        _round_trip_fee_pct * 100.0,
+                        _min_edge_buffer_pct * 100.0,
+                        _shortage_pct,
+                    )
+                    _trace("ecel", "rejected", "tp_too_small_after_fees", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="fee_aware_tp_gate",
+                        reason="tp_too_small_after_fees",
+                        detail=(
+                            f"tp_pct={_reward_move * 100.0:.4f} "
+                            f"min_tp_pct={_fee_aware_min_tp * 100.0:.4f} "
+                            f"sl_pct={_risk_move * 100.0:.4f} "
+                            f"round_trip_fees_pct={_round_trip_fee_pct * 100.0:.4f} "
+                            f"buffer_pct={_min_edge_buffer_pct * 100.0:.4f}"
+                        ),
+                    )
+                    return None
+
                 # ✅ POSITIVE EXPECTANCY GATE (E > 0)
                 # Expected value per trade must be positive after estimated costs:
                 #   E = p(win)*net_win - (1-p(win))*net_loss
                 # where net_win is TP1 net edge and net_loss includes stop-loss move
                 # plus round-trip execution costs.
                 _p_win, _win_rate_source = self._resolve_expected_win_rate(take_profit_levels)
+
+                # Guard: no trusted win-rate estimate → reject before arithmetic
+                if _p_win is None:
+                    logger.warning(
+                        "🚫 WIN-RATE GATE: %s rejected — no trusted expected_win_rate estimate "
+                        "(source=%s). Signal must carry an explicit win_probability or a "
+                        "composite_score >= 50 with positive quality indicators.",
+                        symbol,
+                        _win_rate_source,
+                    )
+                    print(
+                        f"[NIJA-PRINT] ORDER_BLOCKED stage=win_rate_gate "
+                        f"symbol={symbol} broker={(_hard_broker_key or 'unknown').upper()} "
+                        f"reason=missing_win_rate_estimate "
+                        f"expected_win_rate=None breakeven_win_rate=N/A "
+                        f"expectancy_pct=N/A net_win_pct=N/A net_loss_pct=N/A "
+                        f"order_size_usd={position_size:.2f} spendable_quote={float(_spendable_usd or 0.0):.2f}",
+                        flush=True,
+                    )
+                    _trace("ecel", "rejected", "win_rate_gate_no_trusted_estimate", terminal=True)
+                    self._log_execute_entry_rejection(
+                        symbol=symbol,
+                        side=side,
+                        position_size=position_size,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        stage="win_rate_gate",
+                        reason="missing_win_rate_estimate",
+                        detail=f"win_rate_source={_win_rate_source}",
+                    )
+                    return None
+
                 _gross_loss_usd = position_size * _risk_move
                 _loss_costs_usd = position_size * ((_fee_rate * 2) + _slippage_rate + _spread_rate)
                 _net_loss_usd = _gross_loss_usd + _loss_costs_usd
@@ -3104,6 +3314,13 @@ class ExecutionEngine:
                             f"reward_pct={_reward_pct:.4f} risk_pct={_risk_pct:.4f} "
                             f"fees_pct={_fees_pct:.4f} spread_pct={_spread_pct_log:.4f}"
                         ),
+                        expected_win_rate=_p_win,
+                        breakeven_win_rate=_breakeven_win_rate,
+                        expectancy_pct=_expectancy_pct,
+                        net_win_pct=_net_edge / position_size if position_size > 0 else None,
+                        net_loss_pct=_net_loss_usd / position_size if position_size > 0 else None,
+                        spendable_quote=_spendable_usd,
+                        broker=_hard_broker_key or "",
                     )
                     return None
 
@@ -3249,6 +3466,37 @@ class ExecutionEngine:
                     symbol, side, position_size, entry_price, broker_name_str.upper(),
                 )
                 logger.info(f"   Using broker: {broker_name_str.upper()}")
+
+                # ─── ORDER_READY DIAGNOSTIC ────────────────────────────────────────
+                # Emitted immediately before broker submission so any downstream
+                # log analysis can confirm the full pre-trade math.
+                _quote_ccy = (symbol.rsplit("-", 1)[-1] if "-" in symbol else "USD")
+                _ord_p_win = locals().get("_p_win")
+                _ord_bwr = locals().get("_breakeven_win_rate")
+                _ord_exp_pct = locals().get("_expectancy_pct")
+                _ord_tp_pct = locals().get("_reward_move")
+                _ord_sl_pct = locals().get("_risk_move")
+                _ord_fee_pct = locals().get("_fee_rate")
+                _ord_slip_pct = locals().get("_slippage_rate")
+                _ord_min_notional = _min_notional_floor or 0.0
+                print(
+                    f"[NIJA-PRINT] ORDER_READY "
+                    f"symbol={symbol} "
+                    f"broker={broker_name_str.upper()} "
+                    f"account_id={_exec_account_id} "
+                    f"quote_currency={_quote_ccy} "
+                    f"spendable_quote={float(_spendable_usd or 0.0):.2f} "
+                    f"order_size_usd={position_size:.2f} "
+                    f"min_notional={_ord_min_notional:.2f} "
+                    f"expected_win_rate={f'{_ord_p_win * 100.0:.4f}pct' if _ord_p_win is not None else 'N/A'} "
+                    f"breakeven_win_rate={f'{_ord_bwr * 100.0:.4f}pct' if _ord_bwr is not None else 'N/A'} "
+                    f"expectancy_pct={f'{_ord_exp_pct * 100.0:.4f}pct' if _ord_exp_pct is not None else 'N/A'} "
+                    f"tp_pct={f'{_ord_tp_pct * 100.0:.4f}pct' if _ord_tp_pct is not None else 'N/A'} "
+                    f"sl_pct={f'{_ord_sl_pct * 100.0:.4f}pct' if _ord_sl_pct is not None else 'N/A'} "
+                    f"round_trip_fee_pct={f'{_ord_fee_pct * 200.0:.4f}pct' if _ord_fee_pct is not None else 'N/A'} "
+                    f"slippage_pct={f'{_ord_slip_pct * 100.0:.4f}pct' if _ord_slip_pct is not None else 'N/A'}",
+                    flush=True,
+                )
 
                 # Dynamic order type: use limit when the execution plan recommends it
                 # and the broker supports place_limit_order.  Falls back to market on

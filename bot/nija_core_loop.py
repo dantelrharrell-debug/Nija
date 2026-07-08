@@ -320,8 +320,10 @@ _current_cycle_snapshot: Optional["CycleSnapshot"] = None
 _DATA_FAILURE_QUARANTINE: Dict[str, int] = {}
 _DATA_FAILURE_QUARANTINE_LOCK = threading.Lock()
 # Quarantine a symbol after this many consecutive data failures in a session.
+# Default lowered from 5 → 3 so unsupported/illiquid symbols are excluded
+# faster, reducing scan time wasted on dead pairs.
 _DATA_FAILURE_QUARANTINE_THRESHOLD = int(
-    os.environ.get("NIJA_DATA_FAILURE_QUARANTINE_THRESHOLD", "5")
+    os.environ.get("NIJA_DATA_FAILURE_QUARANTINE_THRESHOLD", "3")
 )
 
 # ---------------------------------------------------------------------------

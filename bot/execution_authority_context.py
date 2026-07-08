@@ -642,16 +642,19 @@ def assert_distributed_writer_authority() -> None:
         # different token and the subsequent comparison will still fail closed.
         if current is None and token:
             try:
+                # Use the same extended TTL as the heartbeat refresh (3× the base)
+                # so the lock stays alive until the next heartbeat cycle even if
+                # there is a brief gap between heartbeats.
                 ttl_s = max(
-                    30,
-                    int(os.getenv("NIJA_WRITER_LOCK_TTL_S", "30") or 30),
+                    60,
+                    int(os.getenv("NIJA_WRITER_LOCK_TTL_S", "30") or 30) * 3,
                 )
                 owner_id = os.getenv("NIJA_WRITER_OWNER_ID", "recovered")
                 lock_value = f"{token}:{owner_id}"
                 reacquired = client.set(lock_key, lock_value, ex=ttl_s, nx=True)
                 if reacquired:
                     current_token = token
-                    logger.debug(
+                    logger.info(
                         "assert_distributed_writer_authority: lock key was missing; "
                         "re-acquired atomically with same fencing token "
                         "(lock_key=%s token_prefix=%s ttl_s=%d) — likely TTL expiry, "
