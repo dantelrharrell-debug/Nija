@@ -3254,14 +3254,38 @@ class NijaCoreLoop:
 
                 if action not in ("enter_long", "enter_short"):
                     blocked += 1
-                    _funnel["profitability"] = ("FAIL", analysis.get("reason", "NO_PROFITABLE_ACTION"))
+                    _block_raw_reason = analysis.get("reason", "NO_PROFITABLE_ACTION") or "NO_PROFITABLE_ACTION"
+                    _funnel["profitability"] = ("FAIL", _block_raw_reason)
+                    # Normalize to a clean enum for reject_reason_counts so that
+                    # ORDER_ADMISSION_SUMMARY shows the real top_reject instead of "none".
+                    _block_reason_lower = _block_raw_reason.lower()
+                    if (
+                        "terminal_risk_hard_block" in _block_reason_lower
+                        or "hard_sector_limit" in _block_reason_lower
+                        or "sector_exposure_limit" in _block_reason_lower
+                        or "entry_blocked_terminal" in _block_reason_lower
+                        or "portfolio exposure limit" in _block_reason_lower
+                        or "position blocked by risk engine" in _block_reason_lower
+                    ):
+                        _reject_key = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
+                        if "sector" in _block_reason_lower:
+                            _reject_key = "SECTOR_EXPOSURE_LIMIT_EXCEEDED"
+                    elif "volume" in _block_reason_lower and "low" in _block_reason_lower:
+                        _reject_key = "VOLUME_TOO_LOW"
+                    elif "data" in _block_reason_lower and ("timeout" in _block_reason_lower or "empty" in _block_reason_lower):
+                        _reject_key = "DATA_TIMEOUT_OR_EMPTY"
+                    else:
+                        # Use first 64 chars of raw reason as the key (existing behaviour).
+                        _reject_key = _block_raw_reason[:64].strip()
+                    self._record_reject(_reject_key)
                     logger.critical(
                         "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
-                        "action=%s reason=%s fallback_active=%s force_trade=%s — "
+                        "action=%s reason=%s reject_key=%s fallback_active=%s force_trade=%s — "
                         "signal will NOT reach execute_action this cycle.",
                         sig.symbol,
                         action,
-                        analysis.get("reason", "NO_PROFITABLE_ACTION"),
+                        _block_raw_reason,
+                        _reject_key,
                         fallback_active,
                         _force_trade_bypass,
                     )

@@ -339,13 +339,32 @@ def _patch_ai_hub(module: ModuleType) -> bool:
                 ("trade_allowed", False),
                 ("ai_score", 0.0),
                 ("allocated_capital", 0.0),
+                ("correlation_adjusted_size_pct", 0.0),
             ):
                 try:
                     setattr(result, attr, value)
                 except Exception:
                     pass
             try:
-                setattr(result, "ai_reason", f"terminal_risk_hard_block:{reason or 'hard risk block'}")
+                # Normalize reason: strip duplicate terminal_risk_hard_block tokens
+                # so the stored ai_reason is a clean single-prefix string.
+                _raw_reason = str(reason or "hard risk block").strip()
+                _clean_tokens = []
+                _seen: set = set()
+                for _part in _raw_reason.split():
+                    _key = _part.lower().strip(",;:")
+                    if _key not in _seen:
+                        _clean_tokens.append(_part)
+                        _seen.add(_key)
+                _clean_reason = " ".join(_clean_tokens)
+                # Determine canonical enum tag.
+                if "sector" in _clean_reason or "hard_sector_limit" in _clean_reason:
+                    _canonical = "SECTOR_EXPOSURE_LIMIT_EXCEEDED"
+                elif "terminal_risk_hard_block" in _clean_reason or "entry_blocked" in _clean_reason:
+                    _canonical = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
+                else:
+                    _canonical = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
+                setattr(result, "ai_reason", f"{_canonical}: {_clean_reason}")
             except Exception:
                 pass
             logger.critical(

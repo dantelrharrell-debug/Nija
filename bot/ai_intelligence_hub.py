@@ -544,8 +544,14 @@ class AIIntelligenceHub:
             return result
 
         try:
-            # Ensure the target exists in the brain
-            if symbol not in self.capital_brain.targets:
+            # Only add a capital-brain target when the trade is still approved.
+            # Blocked symbols (sector/exposure/risk hard blocks) must NOT be
+            # registered as allocation targets before they pass all gates.
+            if (
+                result.ai_approved
+                and getattr(result, "exposure_allowed", True)
+                and symbol not in self.capital_brain.targets
+            ):
                 self.capital_brain.add_target(
                     target_id=symbol,
                     target_type="asset",

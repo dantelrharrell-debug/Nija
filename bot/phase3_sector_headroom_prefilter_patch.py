@@ -112,11 +112,57 @@ def _sector_prefilter_blocks(loop: Any, signal: Any) -> tuple[bool, str]:
         return False, "check_error"
     if allowed:
         return False, "allowed"
+
+    # Comprehensive sector exposure diagnostics (Fix: sector headroom math).
+    _sector_name = info.get("sector_name") or info.get("sector") or "unknown"
+    _hard_limit_pct = _float(getattr(engine, "hard_sector_limit_pct", 0.20), 0.20)
+    _current_exp_usd = _float(info.get("current_sector_exposure_usd") or info.get("sector_exposure_usd"), 0.0)
+    _current_exp_pct = _float(info.get("current_sector_exposure_pct") or info.get("sector_exposure_pct"), 0.0)
+    _projected_exp_usd = _float(info.get("projected_sector_exposure_usd"), _current_exp_usd + size_usd)
+    _projected_exp_pct = _float(info.get("projected_sector_exposure_pct"), 0.0)
+    if _projected_exp_pct == 0.0 and portfolio_value > 0:
+        _projected_exp_pct = _projected_exp_usd / portfolio_value
+    _headroom_usd = max(0.0, portfolio_value * _hard_limit_pct - _current_exp_usd)
+    _existing_positions = info.get("existing_positions_in_sector") or info.get("positions_in_sector") or []
+
+    # Log full sector block detail for observability.
+    logger.critical(
+        "SECTOR_EXPOSURE_LIMIT_EXCEEDED marker=20260707b "
+        "symbol=%s broker=%s sector=%s "
+        "current_sector_exposure_usd=%.2f current_sector_exposure_pct=%.1f%% "
+        "proposed_position_usd=%.2f "
+        "projected_sector_exposure_usd=%.2f projected_sector_exposure_pct=%.1f%% "
+        "hard_sector_limit_pct=%.1f%% sector_headroom_usd=%.2f "
+        "existing_positions_in_sector=%s total_equity_base=%.2f",
+        symbol,
+        getattr(loop, "_broker_name", None) or getattr(loop, "broker_name", None) or "unknown",
+        _sector_name,
+        _current_exp_usd,
+        _current_exp_pct * 100,
+        size_usd,
+        _projected_exp_usd,
+        _projected_exp_pct * 100,
+        _hard_limit_pct * 100,
+        _headroom_usd,
+        _existing_positions,
+        portfolio_value,
+    )
+    print(
+        f"[NIJA-PRINT] SECTOR_EXPOSURE_LIMIT_EXCEEDED marker=20260707b "
+        f"symbol={symbol} sector={_sector_name} "
+        f"current_pct={_current_exp_pct*100:.1f}% proposed_usd={size_usd:.2f} "
+        f"projected_pct={_projected_exp_pct*100:.1f}% hard_limit_pct={_hard_limit_pct*100:.1f}% "
+        f"headroom_usd={_headroom_usd:.2f} equity={portfolio_value:.2f}",
+        flush=True,
+    )
+
     reason = (
-        f"sector_hard_block symbol={symbol} sector={info.get('sector_name') or info.get('sector')} "
-        f"projected_pct={_float(info.get('projected_sector_exposure_pct'), 0.0)*100:.1f} "
-        f"hard_limit_pct={_float(getattr(engine, 'hard_sector_limit_pct', 0.20), 0.20)*100:.1f} "
-        f"portfolio_value=${portfolio_value:.2f} requested_usd=${size_usd:.2f}"
+        f"SECTOR_EXPOSURE_LIMIT_EXCEEDED symbol={symbol} sector={_sector_name} "
+        f"current_sector_exposure_pct={_current_exp_pct*100:.1f}% "
+        f"projected_sector_exposure_pct={_projected_exp_pct*100:.1f}% "
+        f"hard_sector_limit_pct={_hard_limit_pct*100:.1f}% "
+        f"sector_headroom_usd={_headroom_usd:.2f} "
+        f"proposed_usd={size_usd:.2f} equity={portfolio_value:.2f}"
     )
     return True, reason
 
@@ -138,6 +184,19 @@ def _filter_signals(loop: Any, signals: Any) -> Any:
                 f"[NIJA-PRINT] PHASE3_SECTOR_HEADROOM_PREFILTER_SKIP marker=20260707b {reason}",
                 flush=True,
             )
+            # Record rejection in the core loop's reject_reason_counts so that
+            # ORDER_ADMISSION_SUMMARY shows the real top_reject.
+            try:
+                _record_reject = getattr(loop, "_record_reject", None)
+                if callable(_record_reject):
+                    _reject_key = (
+                        "SECTOR_EXPOSURE_LIMIT_EXCEEDED"
+                        if "sector_exposure_limit_exceeded" in reason.lower() or "sector" in reason.lower()
+                        else "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
+                    )
+                    _record_reject(_reject_key)
+            except Exception:
+                pass
             continue
         kept.append(sig)
     if skipped:
