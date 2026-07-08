@@ -5494,15 +5494,28 @@ class NIJAApexStrategyV71:
                 # uses the real signal win rate, not the global 50% default.
                 # Keys searched by ExecutionEngine._resolve_expected_win_rate:
                 #   expected_win_rate, win_probability, prob_win
-                # Extra context preserved for diagnostics:
-                #   regime, composite_score, signal_score, score, fees_pct, spread_pct
+                # Quality modifiers used to adjust score-derived win rate:
+                #   adx, confidence, volume_quality, regime / market_regime
+                # Extra context preserved for diagnostics and broker routing:
+                #   composite_score, signal_score, score, fees_pct, spread_pct,
+                #   intended_broker (set below from broker_client)
                 for key in (
                     'expected_win_rate', 'win_probability', 'prob_win',
                     'regime', 'composite_score', 'signal_score', 'score',
                     'fees_pct', 'spread_pct', 'market_regime',
+                    'adx', 'confidence', 'volume_quality',
                 ):
                     if key in action_data and action_data[key] is not None:
                         levels.setdefault(key, action_data[key])
+                # Stamp the broker that selected this signal so ExecutionEngine
+                # can detect and warn on broker routing mismatches.
+                if 'intended_broker' not in levels:
+                    try:
+                        _ib = self._get_broker_name() if hasattr(self, '_get_broker_name') else ''
+                        if _ib and _ib != 'unknown':
+                            levels['intended_broker'] = _ib
+                    except Exception:
+                        pass
                 return levels
 
             if action == 'enter_long':

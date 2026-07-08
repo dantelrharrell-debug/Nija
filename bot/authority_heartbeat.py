@@ -813,6 +813,9 @@ class AuthorityHeartbeatMonitor:
             )
             try:
                 # Only refresh if the lock exists AND belongs to this instance.
+                # If the lock is MISSING (expired TTL gap), re-acquire it now
+                # rather than waiting for the next execute_entry path to do it,
+                # preventing repeated re-acquisition log noise.
                 _expected_token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
                 if _expected_token:
                     _current_lock = self._redis_client.get(_lock_key)
@@ -828,6 +831,27 @@ class AuthorityHeartbeatMonitor:
                                 _lock_key, _lock_ttl_s, _expected_token[:8],
                             )
                         # else: lock is held by a different token — do not touch it
+                    else:
+                        # Lock is MISSING — re-acquire it proactively before the
+                        # authority check path encounters the gap and logs warnings.
+                        _owner_id = os.environ.get("NIJA_WRITER_OWNER_ID", "heartbeat_recovered")
+                        _lock_value = f"{_expected_token}:{_owner_id}"
+                        _reacquired = self._redis_client.set(_lock_key, _lock_value, ex=_lock_ttl_s, nx=True)
+                        if _reacquired:
+                            logger.warning(
+                                "AuthorityHeartbeat: writer lock key was MISSING — proactively "
+                                "re-acquired (lock_key=%s ttl_s=%d token_prefix=%s). "
+                                "This is expected after a TTL expiry gap between heartbeat cycles.",
+                                _lock_key, _lock_ttl_s, _expected_token[:8],
+                            )
+                        else:
+                            logger.warning(
+                                "AuthorityHeartbeat: writer lock key was missing but NX SET "
+                                "failed — another process may now hold the lock "
+                                "(lock_key=%s token_prefix=%s). "
+                                "Single-writer safety may be compromised.",
+                                _lock_key, _expected_token[:8],
+                            )
             except Exception as _lock_refresh_exc:
                 logger.debug("AuthorityHeartbeat: writer lock TTL refresh failed: %s", _lock_refresh_exc)
 
