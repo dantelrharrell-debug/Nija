@@ -14,6 +14,8 @@ import os
 import threading
 import time as _time
 from collections import defaultdict, deque
+from dataclasses import dataclass as _dataclass
+import uuid as _uuid_mod
 
 logger = logging.getLogger("nija.execution")
 
@@ -591,6 +593,35 @@ except ImportError:
         logger.warning("⚠️ Performance Tracker not available — closed-trade stats disabled")
 
 
+@_dataclass(frozen=True)
+class ImmutableExecutionRoute:
+    """Immutable broker route created at ORDER_READY.
+
+    Carries the authoritative broker selection through every downstream layer
+    (ECEL → ExecutionPipeline → BrokerAdapter) so no intermediate step can
+    silently re-route the order to a different venue.
+
+    Fields
+    ------
+    route_id          Short UUID fragment for log correlation.
+    selected_broker   Canonical broker name (e.g. "coinbase", "kraken", "okx").
+    account_id        Account this order is charged against.
+    symbol            Trading pair as submitted (e.g. "AAVE-USD").
+    quote_currency    Quote side of the pair (e.g. "USD").
+    spendable_quote   Available spending power used for sizing.
+    order_size        Final notional order size in quote currency.
+    broker_client_type  Class name of the live broker adapter.
+    """
+    route_id: str
+    selected_broker: str
+    account_id: str
+    symbol: str
+    quote_currency: str
+    spendable_quote: float
+    order_size: float
+    broker_client_type: str
+
+
 class ExecutionEngine:
     """
     Manages order execution and position tracking
@@ -808,6 +839,7 @@ class ExecutionEngine:
         account_id: Optional[str] = None,
         account_type: Optional[str] = None,
         preferred_broker: Optional[str] = None,
+        execution_route: Optional["ImmutableExecutionRoute"] = None,
     ) -> Dict[str, Any]:
         """Canonical market-order submit through ExecutionPipeline/ECEL."""
         # Resolve account context for audit trail — fall back to user_id when
@@ -872,8 +904,12 @@ class ExecutionEngine:
         # approved broker at execute_entry time), use it directly so the same
         # broker that was approved in TRADE APPROVED is used for submission.
         # Only fall back to broker_client derivation when no explicit value is given.
+        # An ImmutableExecutionRoute takes highest priority — its selected_broker
+        # is the canonical, already-approved venue and must not be overridden.
         _caller_preferred = str(preferred_broker or "").strip().lower()
-        if _caller_preferred:
+        if execution_route is not None:
+            preferred_broker = execution_route.selected_broker
+        elif _caller_preferred:
             preferred_broker = _caller_preferred
         else:
             preferred_broker = "coinbase"
@@ -899,13 +935,15 @@ class ExecutionEngine:
             except Exception:
                 pass
 
-        # Honor explicit execution-venue preference in live incidents.
+        # Honor explicit execution-venue preference in live incidents only when
+        # the caller did NOT pin a specific broker via preferred_broker or
+        # execution_route.  An explicit route must never be overridden by env.
         _preferred_env = (
             get_preferred_execution_venue(os.environ)
             if get_preferred_execution_venue is not None
             else None
         )
-        if _preferred_env is not None:
+        if _preferred_env is not None and execution_route is None and not _caller_preferred:
             preferred_broker = _preferred_env
 
         bid_price_usd: Optional[float] = None
@@ -961,10 +999,42 @@ class ExecutionEngine:
                     "price_hint_usd": price_hint_usd,
                     "account_id": _account_id,
                     "account_type": _account_type,
+                    "execution_route": execution_route,
                 },
             )
         )
         _pipeline_elapsed_ms = (_time.monotonic() - _pipeline_t0) * 1000.0
+
+        # ── BROKER_ORDER_ACK ─────────────────────────────────────────────────
+        # Emitted immediately after the pipeline returns so every dispatch path
+        # has a searchable terminal breadcrumb confirming whether the broker
+        # accepted or rejected the order.
+        _ack_order_id = getattr(res, "order_id", None) or "pipeline"
+        _ack_broker = getattr(res, "broker", None) or preferred_broker
+        _ack_route_id = execution_route.route_id if execution_route is not None else "n/a"
+        print(
+            f"[NIJA-PRINT] BROKER_ORDER_ACK "
+            f"accepted={res.success} "
+            f"order_id={_ack_order_id!r} "
+            f"broker={_ack_broker} "
+            f"route_id={_ack_route_id} "
+            f"fill_price={float(getattr(res, 'fill_price', None) or 0.0):.6f} "
+            f"filled_size_usd={float(getattr(res, 'filled_size_usd', None) or 0.0):.2f} "
+            f"latency_ms={_pipeline_elapsed_ms:.0f}",
+            flush=True,
+        )
+        logger.critical(
+            "🔌 [BrokerAdapter] BROKER_ORDER_ACK | "
+            "accepted=%s order_id=%s broker=%s route_id=%s "
+            "fill_price=%.6f filled_size_usd=%.2f latency_ms=%.0f",
+            res.success,
+            _ack_order_id,
+            _ack_broker,
+            _ack_route_id,
+            float(getattr(res, "fill_price", None) or 0.0),
+            float(getattr(res, "filled_size_usd", None) or 0.0),
+            _pipeline_elapsed_ms,
+        )
 
         if not res.success:
             _pipeline_error = res.error or "unknown"
@@ -2918,21 +2988,38 @@ class ExecutionEngine:
                 take_profit_levels.get("intended_broker", "") or ""
             ).strip().lower()
             if _intended_broker and _selected_broker and _intended_broker != _selected_broker:
-                logger.warning(
-                    "⚠️  BROKER_ROUTE_MISMATCH: symbol=%s intended_broker=%s "
-                    "execution_broker=%s — order will use execution broker. "
-                    "Verify that sizing used the correct venue's spendable cash.",
+                # Hard block: the order was sized against one venue's cash
+                # but is about to submit to a different venue.  Proceeding
+                # silently would risk over-spend or incorrect fee/notional
+                # math.  The route must be rebuilt for the correct venue.
+                logger.critical(
+                    "🚫 ROUTE_MISMATCH_BLOCKED: symbol=%s intended_broker=%s "
+                    "execution_broker=%s — order blocked. "
+                    "Sizing used %s's spendable cash; must rebuild route for %s.",
                     symbol,
+                    _intended_broker,
+                    _selected_broker,
                     _intended_broker,
                     _selected_broker,
                 )
                 print(
-                    f"[NIJA-PRINT] BROKER_ROUTE_MISMATCH "
+                    f"[NIJA-PRINT] ROUTE_MISMATCH_BLOCKED "
                     f"symbol={symbol} intended_broker={_intended_broker} "
                     f"execution_broker={_selected_broker} "
-                    f"action=proceeding_with_execution_broker",
+                    f"action=order_blocked_rebuild_required",
                     flush=True,
                 )
+                self._log_execute_entry_rejection(
+                    symbol=symbol,
+                    side=side,
+                    position_size=position_size,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    stage="broker_route_mismatch",
+                    reason="ROUTE_MISMATCH_BLOCKED",
+                    detail=f"intended={_intended_broker} execution={_selected_broker}",
+                )
+                return None
 
             # ✅ ENHANCEMENT #1: MINIMUM NOTIONAL GATE
             # Check if entry size meets minimum notional requirements
@@ -3498,6 +3585,44 @@ class ExecutionEngine:
                     flush=True,
                 )
 
+                # ── Build ImmutableExecutionRoute ────────────────────────────
+                # Created once here at ORDER_READY and carried through every
+                # downstream dispatch call so no intermediate layer can silently
+                # re-route the order to a different venue.
+                _exec_route = ImmutableExecutionRoute(
+                    route_id=str(_uuid_mod.uuid4())[:8],
+                    selected_broker=broker_name_str.lower(),
+                    account_id=_exec_account_id,
+                    symbol=symbol,
+                    quote_currency=_quote_ccy,
+                    spendable_quote=float(_spendable_usd or 0.0),
+                    order_size=position_size,
+                    broker_client_type=(
+                        type(self.broker_client).__name__
+                        if self.broker_client is not None
+                        else "none"
+                    ),
+                )
+                logger.info(
+                    "📍 EXECUTION_ROUTE_SEALED route_id=%s broker=%s symbol=%s "
+                    "order_size=%.2f spendable=%.2f",
+                    _exec_route.route_id,
+                    _exec_route.selected_broker,
+                    symbol,
+                    position_size,
+                    float(_spendable_usd or 0.0),
+                )
+                print(
+                    f"[NIJA-PRINT] EXECUTION_ROUTE_SEALED "
+                    f"route_id={_exec_route.route_id} "
+                    f"broker={_exec_route.selected_broker} "
+                    f"symbol={symbol} "
+                    f"order_size={position_size:.2f} "
+                    f"broker_client_type={_exec_route.broker_client_type}",
+                    flush=True,
+                )
+
+
                 # Dynamic order type: use limit when the execution plan recommends it
                 # and the broker supports place_limit_order.  Falls back to market on
                 # any failure so entries are never silently skipped.
@@ -3634,6 +3759,7 @@ class ExecutionEngine:
                                     account_id=_exec_account_id,
                                     account_type=_exec_account_type,
                                     preferred_broker=_selected_broker,
+                                    execution_route=_exec_route,
                                 )
                             except Exception as _fb_exc:
                                 _fallback_exc = _fb_exc
@@ -3804,6 +3930,7 @@ class ExecutionEngine:
                                 account_id=_exec_account_id,
                                 account_type=_exec_account_type,
                                 preferred_broker=_selected_broker,
+                                execution_route=_exec_route,
                             ),
                         )
                         result = _mkt_ctrl.last_broker_response
@@ -3823,6 +3950,7 @@ class ExecutionEngine:
                                 account_id=_exec_account_id,
                                 account_type=_exec_account_type,
                                 preferred_broker=_selected_broker,
+                                execution_route=_exec_route,
                             )
                         except Exception as _mk_exc:
                             _market_exc = _mk_exc

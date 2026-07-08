@@ -489,6 +489,44 @@ class MultiBrokerExecutionRouter:
             return self._make_result(request, ac, "NONE", False, 0.0, 0.0,
                                      elapsed_ms, error)
 
+        # 2.5  Enforce preferred_broker: if the caller pinned a specific broker
+        # (set via ImmutableExecutionRoute or explicit preferred_broker), reject
+        # the order when the selected broker differs rather than silently rerouting
+        # to a different venue.  A silent reroute would submit order sized against
+        # one venue's spendable cash to a different venue with different fee
+        # schedules and minimum notionals.
+        if request.preferred_broker:
+            _norm_preferred = self._normalize_broker_label(request.preferred_broker)
+            _norm_selected = self._normalize_broker_label(broker.name)
+            if _norm_preferred and _norm_selected and _norm_preferred != _norm_selected:
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                error = (
+                    f"BROKER_ROUTE_ENFORCEMENT_BLOCKED: "
+                    f"preferred_broker={_norm_preferred} "
+                    f"selected_broker={_norm_selected} — "
+                    f"rebuild order for {_norm_selected} venue"
+                )
+                logger.error(
+                    "🚫 BROKER_ROUTE_ENFORCEMENT_BLOCKED | "
+                    "preferred=%s selected=%s symbol=%s side=%s size=$%.2f",
+                    _norm_preferred,
+                    _norm_selected,
+                    request.symbol,
+                    request.side,
+                    float(request.size_usd or 0.0),
+                )
+                print(
+                    f"[NIJA-PRINT] BROKER_ROUTE_ENFORCEMENT_BLOCKED "
+                    f"preferred={_norm_preferred} selected={_norm_selected} "
+                    f"symbol={request.symbol} side={request.side} "
+                    f"size_usd={float(request.size_usd or 0.0):.2f}",
+                    flush=True,
+                )
+                return self._make_result(
+                    request, ac, _norm_selected, False, 0.0, 0.0,
+                    elapsed_ms, error,
+                )
+
         # 3. Validate minimum notional
         if request.size_usd < broker.min_notional_usd:
             elapsed_ms = (time.monotonic() - t0) * 1000
