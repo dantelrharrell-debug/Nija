@@ -76,6 +76,23 @@ def _install_seak_stale_halt_recovery() -> None:
         )
 
 
+def _install_direct_broker_venue_cash_gate() -> None:
+    try:
+        try:
+            from bot.direct_broker_venue_cash_hard_gate_patch import install_import_hook
+        except ImportError:
+            from direct_broker_venue_cash_hard_gate_patch import install_import_hook  # type: ignore[import]
+        install_import_hook()
+        logging.getLogger("nija.logging_format_guard").warning(
+            "DIRECT_BROKER_VENUE_CASH_HARD_GATE_EARLY_INSTALL_REQUESTED marker=20260708a"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").warning(
+            "Direct broker venue cash hard gate unavailable: %s",
+            exc,
+        )
+
+
 def _install_live_capital_and_route_guards() -> None:
     try:
         try:
@@ -113,6 +130,7 @@ def install() -> None:
     if _INSTALLED:
         _install_ohlc_direct_rest_guard()
         _install_seak_stale_halt_recovery()
+        _install_direct_broker_venue_cash_gate()
         _install_live_capital_and_route_guards()
         _install_sector_tier_hydration_repair()
         _install_exposure_hard_block_runtime_patch()
@@ -132,6 +150,7 @@ def install() -> None:
     logging.getLogger("nija.logging_format_guard").warning("LOGGING_FORMAT_GUARD_INSTALLED")
     _install_ohlc_direct_rest_guard()
     _install_seak_stale_halt_recovery()
+    _install_direct_broker_venue_cash_gate()
     _install_live_capital_and_route_guards()
     _install_sector_tier_hydration_repair()
     _install_exposure_hard_block_runtime_patch()
