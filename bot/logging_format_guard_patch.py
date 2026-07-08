@@ -42,6 +42,23 @@ def _install_exposure_hard_block_runtime_patch() -> None:
         )
 
 
+def _install_ohlc_direct_rest_guard() -> None:
+    try:
+        try:
+            from bot.pykrakenapi_ohlc_direct_rest_patch import install_import_hook
+        except ImportError:
+            from pykrakenapi_ohlc_direct_rest_patch import install_import_hook  # type: ignore[import]
+        install_import_hook()
+        logging.getLogger("nija.logging_format_guard").warning(
+            "PYKRAKENAPI_OHLC_DIRECT_REST_EARLY_INSTALL_REQUESTED marker=20260708a"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").warning(
+            "PyKrakenAPI OHLC direct REST patch unavailable: %s",
+            exc,
+        )
+
+
 def _install_live_capital_and_route_guards() -> None:
     try:
         try:
@@ -65,7 +82,7 @@ def _install_live_capital_and_route_guards() -> None:
             from execution_route_integrity_import_guard_patch import install_import_hook as route_install  # type: ignore[import]
         route_install()
         logging.getLogger("nija.logging_format_guard").warning(
-            "EXECUTION_ROUTE_INTEGRITY_IMPORT_GUARD_EARLY_INSTALL_REQUESTED marker=20260707a"
+            "EXECUTION_ROUTE_INTEGRITY_IMPORT_GUARD_EARLY_INSTALL_REQUESTED marker=20260707b"
         )
     except Exception as exc:
         logging.getLogger("nija.logging_format_guard").warning(
@@ -77,6 +94,7 @@ def _install_live_capital_and_route_guards() -> None:
 def install() -> None:
     global _ORIGINAL_GET_MESSAGE, _INSTALLED
     if _INSTALLED:
+        _install_ohlc_direct_rest_guard()
         _install_live_capital_and_route_guards()
         _install_sector_tier_hydration_repair()
         _install_exposure_hard_block_runtime_patch()
@@ -94,6 +112,7 @@ def install() -> None:
     logging.LogRecord.getMessage = _safe_get_message  # type: ignore[assignment]
     _INSTALLED = True
     logging.getLogger("nija.logging_format_guard").warning("LOGGING_FORMAT_GUARD_INSTALLED")
+    _install_ohlc_direct_rest_guard()
     _install_live_capital_and_route_guards()
     _install_sector_tier_hydration_repair()
     _install_exposure_hard_block_runtime_patch()
