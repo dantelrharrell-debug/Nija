@@ -76,6 +76,23 @@ def _install_seak_stale_halt_recovery() -> None:
         )
 
 
+def _install_filesystem_emergency_stop_replay_recovery() -> None:
+    try:
+        try:
+            from bot.filesystem_emergency_stop_replay_recovery_patch import install_import_hook
+        except ImportError:
+            from filesystem_emergency_stop_replay_recovery_patch import install_import_hook  # type: ignore[import]
+        install_import_hook()
+        logging.getLogger("nija.logging_format_guard").warning(
+            "FILESYSTEM_EMERGENCY_STOP_REPLAY_RECOVERY_EARLY_INSTALL_REQUESTED marker=20260708b"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").warning(
+            "Filesystem emergency-stop replay recovery unavailable: %s",
+            exc,
+        )
+
+
 def _install_direct_broker_venue_cash_gate() -> None:
     try:
         try:
@@ -147,6 +164,7 @@ def install() -> None:
     if _INSTALLED:
         _install_ohlc_direct_rest_guard()
         _install_seak_stale_halt_recovery()
+        _install_filesystem_emergency_stop_replay_recovery()
         _install_direct_broker_venue_cash_gate()
         _install_ai_hub_terminal_rejection_gate()
         _install_live_capital_and_route_guards()
@@ -168,6 +186,7 @@ def install() -> None:
     logging.getLogger("nija.logging_format_guard").warning("LOGGING_FORMAT_GUARD_INSTALLED")
     _install_ohlc_direct_rest_guard()
     _install_seak_stale_halt_recovery()
+    _install_filesystem_emergency_stop_replay_recovery()
     _install_direct_broker_venue_cash_gate()
     _install_ai_hub_terminal_rejection_gate()
     _install_live_capital_and_route_guards()
