@@ -93,6 +93,23 @@ def _install_filesystem_emergency_stop_replay_recovery() -> None:
         )
 
 
+def _install_spot_long_signal_side_alignment() -> None:
+    try:
+        try:
+            from bot.spot_long_signal_side_alignment_patch import install_import_hook
+        except ImportError:
+            from spot_long_signal_side_alignment_patch import install_import_hook  # type: ignore[import]
+        install_import_hook()
+        logging.getLogger("nija.logging_format_guard").warning(
+            "SPOT_LONG_SIGNAL_SIDE_ALIGNMENT_EARLY_INSTALL_REQUESTED marker=20260708c"
+        )
+    except Exception as exc:
+        logging.getLogger("nija.logging_format_guard").warning(
+            "Spot long signal side-alignment patch unavailable: %s",
+            exc,
+        )
+
+
 def _install_direct_broker_venue_cash_gate() -> None:
     try:
         try:
@@ -165,6 +182,7 @@ def install() -> None:
         _install_ohlc_direct_rest_guard()
         _install_seak_stale_halt_recovery()
         _install_filesystem_emergency_stop_replay_recovery()
+        _install_spot_long_signal_side_alignment()
         _install_direct_broker_venue_cash_gate()
         _install_ai_hub_terminal_rejection_gate()
         _install_live_capital_and_route_guards()
@@ -187,6 +205,7 @@ def install() -> None:
     _install_ohlc_direct_rest_guard()
     _install_seak_stale_halt_recovery()
     _install_filesystem_emergency_stop_replay_recovery()
+    _install_spot_long_signal_side_alignment()
     _install_direct_broker_venue_cash_gate()
     _install_ai_hub_terminal_rejection_gate()
     _install_live_capital_and_route_guards()
