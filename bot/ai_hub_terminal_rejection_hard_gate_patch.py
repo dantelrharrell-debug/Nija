@@ -77,11 +77,12 @@ def _patch_strategy_module(module: ModuleType) -> bool:
         )
         return {
             "action": "hold",
-            "reason": f"ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK: {reason}",
+            "reason": "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
             "filter_stage": "terminal_risk_hard_block",
             "allowed": False,
             "final_status": "BLOCKED",
             "block_reason": "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
+            "terminal_risk_detail": reason,
             "symbol": symbol,
             "decision": "HOLD",
             "metadata": dict(result.get("metadata", {}) or {}) if isinstance(result, dict) else {},

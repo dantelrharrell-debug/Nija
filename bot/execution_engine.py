@@ -3565,15 +3565,23 @@ class ExecutionEngine:
                 _ord_sl_pct = locals().get("_risk_move")
                 _ord_fee_pct = locals().get("_fee_rate")
                 _ord_slip_pct = locals().get("_slippage_rate")
+                _ord_spread_pct = locals().get("_spread_rate")
                 _ord_min_notional = _min_notional_floor or 0.0
+                _ord_actual_volume_ratio = (take_profit_levels or {}).get("actual_volume_ratio")
+                _ord_required_volume_ratio = (take_profit_levels or {}).get("required_volume_ratio")
+                _order_route_id = str(_uuid_mod.uuid4())[:8]
                 print(
                     f"[NIJA-PRINT] ORDER_READY "
                     f"symbol={symbol} "
                     f"broker={broker_name_str.upper()} "
+                    f"side={side} "
+                    f"route_id={_order_route_id} "
                     f"account_id={_exec_account_id} "
                     f"quote_currency={_quote_ccy} "
                     f"spendable_quote={float(_spendable_usd or 0.0):.2f} "
                     f"order_size_usd={position_size:.2f} "
+                    f"actual_volume_ratio={f'{float(_ord_actual_volume_ratio):.4f}' if _ord_actual_volume_ratio is not None else 'N/A'} "
+                    f"required_volume_ratio={f'{float(_ord_required_volume_ratio):.4f}' if _ord_required_volume_ratio is not None else 'N/A'} "
                     f"min_notional={_ord_min_notional:.2f} "
                     f"expected_win_rate={f'{_ord_p_win * 100.0:.4f}pct' if _ord_p_win is not None else 'N/A'} "
                     f"breakeven_win_rate={f'{_ord_bwr * 100.0:.4f}pct' if _ord_bwr is not None else 'N/A'} "
@@ -3581,6 +3589,7 @@ class ExecutionEngine:
                     f"tp_pct={f'{_ord_tp_pct * 100.0:.4f}pct' if _ord_tp_pct is not None else 'N/A'} "
                     f"sl_pct={f'{_ord_sl_pct * 100.0:.4f}pct' if _ord_sl_pct is not None else 'N/A'} "
                     f"round_trip_fee_pct={f'{_ord_fee_pct * 200.0:.4f}pct' if _ord_fee_pct is not None else 'N/A'} "
+                    f"spread_pct={f'{_ord_spread_pct * 100.0:.4f}pct' if _ord_spread_pct is not None else 'N/A'} "
                     f"slippage_pct={f'{_ord_slip_pct * 100.0:.4f}pct' if _ord_slip_pct is not None else 'N/A'}",
                     flush=True,
                 )
@@ -3590,7 +3599,7 @@ class ExecutionEngine:
                 # downstream dispatch call so no intermediate layer can silently
                 # re-route the order to a different venue.
                 _exec_route = ImmutableExecutionRoute(
-                    route_id=str(_uuid_mod.uuid4())[:8],
+                    route_id=_order_route_id,
                     selected_broker=broker_name_str.lower(),
                     account_id=_exec_account_id,
                     symbol=symbol,
