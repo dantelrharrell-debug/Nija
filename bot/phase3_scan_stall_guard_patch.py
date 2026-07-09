@@ -10,10 +10,10 @@ from types import ModuleType
 from typing import Any, Iterable
 
 logger = logging.getLogger("nija.phase3_scan_stall_guard")
-_MARKER = "20260709al"
-_HOOK_FLAG = "_NIJA_PHASE3_SCAN_STALL_GUARD_HOOK_20260709AL"
-_PHASE3_PATCH_ATTR = "_nija_phase3_scan_stall_guard_20260709al"
-_FETCH_PATCH_ATTR = "_nija_phase3_fetch_deadline_guard_20260709al"
+_MARKER = "20260709am"
+_HOOK_FLAG = "_NIJA_PHASE3_SCAN_STALL_GUARD_HOOK_20260709AM"
+_PHASE3_PATCH_ATTR = "_nija_phase3_scan_stall_guard_20260709am"
+_FETCH_PATCH_ATTR = "_nija_phase3_fetch_deadline_guard_20260709am"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -63,7 +63,7 @@ def _window_symbols(owner: Any, symbols: Iterable[Any] | None, available_slots: 
         return original, {"original": total, "selected": total, "cursor": 0, "next_cursor": 0}
 
     try:
-        cursor = int(getattr(owner, "_nija_phase3_scan_cursor_20260709al", 0) or 0)
+        cursor = int(getattr(owner, "_nija_phase3_scan_cursor_20260709am", getattr(owner, "_nija_phase3_scan_cursor_20260709al", 0)) or 0)
     except Exception:
         cursor = 0
     cursor %= total
@@ -74,6 +74,7 @@ def _window_symbols(owner: Any, symbols: Iterable[Any] | None, available_slots: 
         selected = original[cursor:] + original[: end - total]
     next_cursor = end % total
     try:
+        setattr(owner, "_nija_phase3_scan_cursor_20260709am", next_cursor)
         setattr(owner, "_nija_phase3_scan_cursor_20260709al", next_cursor)
     except Exception:
         pass
@@ -90,26 +91,40 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
     if callable(original_fetch) and not getattr(original_fetch, _FETCH_PATCH_ATTR, False):
         @wraps(original_fetch)
         def fetch_df_with_phase3_deadline(self: Any, *args: Any, **kwargs: Any):
-            deadline = float(getattr(self, "_nija_phase3_deadline_ts_20260709al", 0.0) or 0.0)
-            if deadline > 0.0 and time.monotonic() > deadline:
-                symbol = args[1] if len(args) > 1 else kwargs.get("symbol", "unknown")
+            deadline = float(getattr(self, "_nija_phase3_deadline_ts_20260709am", getattr(self, "_nija_phase3_deadline_ts_20260709al", 0.0)) or 0.0)
+            symbol = args[1] if len(args) > 1 else kwargs.get("symbol", "unknown")
+            deadline_elapsed = deadline > 0.0 and time.monotonic() > deadline
+            if deadline_elapsed:
+                # The previous 20260709al guard returned None immediately once the
+                # scan deadline elapsed. The log then showed a real ranked signal
+                # (AAVE-USD) being removed by final selected-candidate sanitation:
+                # candidates=1 -> selected=1 -> _fetch_df deadline skip -> selected=0.
+                # Default now preserves already-ranked candidates by allowing the
+                # fetch to run and only logging the deadline overrun. Operators may
+                # restore hard skip with NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED=true.
+                if _truthy("NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED", False):
+                    logger.warning(
+                        "PHASE3_SCAN_STALL_GUARD_DEADLINE_SKIP marker=%s symbol=%s reason=phase3_deadline_elapsed hard_skip=true",
+                        _MARKER,
+                        symbol,
+                    )
+                    return None
                 logger.warning(
-                    "PHASE3_SCAN_STALL_GUARD_DEADLINE_SKIP marker=%s symbol=%s reason=phase3_deadline_elapsed",
+                    "PHASE3_SELECTED_CANDIDATE_PRESERVE_FETCH marker=%s symbol=%s reason=deadline_elapsed_allow_fetch hard_skip=false",
                     _MARKER,
                     symbol,
                 )
-                return None
             started = time.monotonic()
             result = original_fetch(self, *args, **kwargs)
             elapsed = time.monotonic() - started
             slow_s = max(0.25, _float_env("NIJA_PHASE3_SLOW_FETCH_LOG_S", 2.5))
             if elapsed >= slow_s:
-                symbol = args[1] if len(args) > 1 else kwargs.get("symbol", "unknown")
                 logger.warning(
-                    "PHASE3_SCAN_STALL_GUARD_SLOW_FETCH marker=%s symbol=%s elapsed_s=%.2f",
+                    "PHASE3_SCAN_STALL_GUARD_SLOW_FETCH marker=%s symbol=%s elapsed_s=%.2f deadline_elapsed=%s",
                     _MARKER,
                     symbol,
                     elapsed,
+                    deadline_elapsed,
                 )
             return result
 
@@ -123,10 +138,13 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
         def phase3_with_stall_guard(self: Any, broker: Any, snapshot: Any, symbols: Any, available_slots: int, *args: Any, **kwargs: Any):
             selected, meta = _window_symbols(self, symbols, int(available_slots or 0))
             timeout_s = max(5.0, _float_env("NIJA_PHASE3_SCAN_DEADLINE_S", 24.0))
-            previous_deadline = getattr(self, "_nija_phase3_deadline_ts_20260709al", 0.0)
-            setattr(self, "_nija_phase3_deadline_ts_20260709al", time.monotonic() + timeout_s)
+            previous_deadline_am = getattr(self, "_nija_phase3_deadline_ts_20260709am", 0.0)
+            previous_deadline_al = getattr(self, "_nija_phase3_deadline_ts_20260709al", 0.0)
+            deadline_ts = time.monotonic() + timeout_s
+            setattr(self, "_nija_phase3_deadline_ts_20260709am", deadline_ts)
+            setattr(self, "_nija_phase3_deadline_ts_20260709al", deadline_ts)
             logger.critical(
-                "PHASE3_SCAN_STALL_GUARD_WINDOW marker=%s original_symbols=%d selected_symbols=%d cursor=%d next_cursor=%d available_slots=%s deadline_s=%.1f",
+                "PHASE3_SCAN_STALL_GUARD_WINDOW marker=%s original_symbols=%d selected_symbols=%d cursor=%d next_cursor=%d available_slots=%s deadline_s=%.1f hard_deadline_skip=%s",
                 _MARKER,
                 int(meta.get("original", 0)),
                 int(meta.get("selected", 0)),
@@ -134,9 +152,10 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
                 int(meta.get("next_cursor", 0)),
                 available_slots,
                 timeout_s,
+                _truthy("NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED", False),
             )
             print(
-                f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_WINDOW marker={_MARKER} original={meta.get('original', 0)} selected={meta.get('selected', 0)} cursor={meta.get('cursor', 0)} next={meta.get('next_cursor', 0)}",
+                f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_WINDOW marker={_MARKER} original={meta.get('original', 0)} selected={meta.get('selected', 0)} cursor={meta.get('cursor', 0)} next={meta.get('next_cursor', 0)} hard_skip={_truthy('NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED', False)}",
                 flush=True,
             )
             started = time.monotonic()
@@ -144,13 +163,14 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
                 result = original_phase3(self, broker, snapshot, selected, available_slots, *args, **kwargs)
             finally:
                 try:
-                    setattr(self, "_nija_phase3_deadline_ts_20260709al", previous_deadline)
+                    setattr(self, "_nija_phase3_deadline_ts_20260709am", previous_deadline_am)
+                    setattr(self, "_nija_phase3_deadline_ts_20260709al", previous_deadline_al)
                 except Exception:
                     pass
             elapsed = time.monotonic() - started
             if elapsed >= timeout_s:
                 logger.warning(
-                    "PHASE3_SCAN_STALL_GUARD_OVER_DEADLINE marker=%s elapsed_s=%.2f deadline_s=%.2f selected_symbols=%d original_symbols=%d",
+                    "PHASE3_SCAN_STALL_GUARD_OVER_DEADLINE marker=%s elapsed_s=%.2f deadline_s=%.2f selected_symbols=%d original_symbols=%d action=preserved_ranked_candidates",
                     _MARKER,
                     elapsed,
                     timeout_s,
@@ -172,8 +192,8 @@ def _patch_core_loop_module(module: ModuleType) -> bool:
         patched = True
 
     if patched:
-        logger.warning("PHASE3_SCAN_STALL_GUARD_PATCHED marker=%s module=%s", _MARKER, getattr(module, "__name__", "unknown"))
-        print(f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_PATCHED marker={_MARKER}", flush=True)
+        logger.warning("PHASE3_SCAN_STALL_GUARD_PATCHED marker=%s module=%s preserve_selected_candidates=true", _MARKER, getattr(module, "__name__", "unknown"))
+        print(f"[NIJA-PRINT] PHASE3_SCAN_STALL_GUARD_PATCHED marker={_MARKER} preserve_selected_candidates=true", flush=True)
     return patched
 
 
@@ -202,7 +222,7 @@ def install_import_hook() -> None:
 
     builtins.__import__ = importing
     setattr(builtins, _HOOK_FLAG, True)
-    logger.warning("PHASE3_SCAN_STALL_GUARD_INSTALL_COMPLETE marker=%s", _MARKER)
+    logger.warning("PHASE3_SCAN_STALL_GUARD_INSTALL_COMPLETE marker=%s preserve_selected_candidates=true", _MARKER)
 
 
 def install() -> None:
