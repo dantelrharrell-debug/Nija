@@ -48,6 +48,11 @@ _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
         "HARD_CONTROLS_CA_BRIDGE_INSTALL_REQUESTED",
         "20260709t",
     ),
+    (
+        "runtime_authority_convergence_repair_patch",
+        "RUNTIME_AUTHORITY_CONVERGENCE_INSTALL_REQUESTED",
+        "20260709u",
+    ),
 )
 
 
