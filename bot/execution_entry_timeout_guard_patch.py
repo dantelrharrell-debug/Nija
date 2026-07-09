@@ -12,9 +12,9 @@ from typing import Any
 
 logger = logging.getLogger("nija.execution_entry_timeout_guard")
 
-_MARKER = "EXECUTION_ENTRY_TIMEOUT_GUARD_PATCHED marker=20260709ac"
-_IMPORT_FLAG = "_NIJA_EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_HOOK_20260709AC"
-_WRAP_ATTR = "_nija_execution_entry_timeout_guard_20260709ac"
+_MARKER = "EXECUTION_ENTRY_TIMEOUT_GUARD_PATCHED marker=20260709ae"
+_IMPORT_FLAG = "_NIJA_EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_HOOK_20260709AE"
+_WRAP_ATTR = "_nija_execution_entry_timeout_guard_20260709ae"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -35,13 +35,22 @@ def _derived_timeout_s() -> float:
 
 
 def _timeout_s() -> float:
+    floor = _derived_timeout_s()
     try:
         raw = os.environ.get("NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS")
         if raw not in (None, ""):
-            return max(5.0, float(raw or "0"))
-        return _derived_timeout_s()
+            requested = max(5.0, float(raw or "0"))
+            if requested < floor:
+                logger.warning(
+                    "EXECUTION_ENTRY_TIMEOUT_CLAMPED marker=20260709ae requested_s=%.1f floor_s=%.1f ack_timeout_s=%.1f reason=explicit_env_below_ack_safe_floor",
+                    requested,
+                    floor,
+                    _float_env("NIJA_ACK_TIMEOUT_S", 30.0),
+                )
+            return max(requested, floor)
+        return floor
     except Exception:
-        return _derived_timeout_s()
+        return floor
 
 
 def _symbol_from(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
@@ -107,7 +116,7 @@ def _patch_module(module: ModuleType) -> bool:
 
         if worker.is_alive():
             logger.critical(
-                "EXECUTION_ENTRY_TIMEOUT_GUARD_TIMEOUT marker=20260709ac symbol=%s side=%s size_usd=%.2f timeout_s=%.1f ack_timeout_s=%.1f action=return_false_loop_continue",
+                "EXECUTION_ENTRY_TIMEOUT_GUARD_TIMEOUT marker=20260709ae symbol=%s side=%s size_usd=%.2f timeout_s=%.1f ack_timeout_s=%.1f action=return_false_loop_continue",
                 symbol,
                 side,
                 size,
@@ -115,7 +124,7 @@ def _patch_module(module: ModuleType) -> bool:
                 _float_env("NIJA_ACK_TIMEOUT_S", 30.0),
             )
             print(
-                f"[NIJA-PRINT] EXECUTION_ENTRY_TIMEOUT_GUARD_TIMEOUT marker=20260709ac symbol={symbol} side={side} size=${size:.2f} timeout_s={timeout:.1f}",
+                f"[NIJA-PRINT] EXECUTION_ENTRY_TIMEOUT_GUARD_TIMEOUT marker=20260709ae symbol={symbol} side={side} size=${size:.2f} timeout_s={timeout:.1f}",
                 flush=True,
             )
             return None
@@ -124,7 +133,7 @@ def _patch_module(module: ModuleType) -> bool:
             kind, payload = result_queue.get_nowait()
         except queue.Empty:
             logger.warning(
-                "EXECUTION_ENTRY_TIMEOUT_GUARD_EMPTY_RESULT marker=20260709ac symbol=%s side=%s elapsed_ms=%.0f",
+                "EXECUTION_ENTRY_TIMEOUT_GUARD_EMPTY_RESULT marker=20260709ae symbol=%s side=%s elapsed_ms=%.0f",
                 symbol,
                 side,
                 (time.time() - started) * 1000,
@@ -138,7 +147,7 @@ def _patch_module(module: ModuleType) -> bool:
     setattr(execute_entry, _WRAP_ATTR, True)
     setattr(cls, "execute_entry", execute_entry)
     logger.warning("%s class=ExecutionEngine timeout_s=%.1f ack_timeout_s=%.1f", _MARKER, _timeout_s(), _float_env("NIJA_ACK_TIMEOUT_S", 30.0))
-    print("[NIJA-PRINT] EXECUTION_ENTRY_TIMEOUT_GUARD_PATCHED marker=20260709ac", flush=True)
+    print("[NIJA-PRINT] EXECUTION_ENTRY_TIMEOUT_GUARD_PATCHED marker=20260709ae", flush=True)
     return True
 
 
@@ -157,7 +166,9 @@ def _try_patch_loaded() -> bool:
 
 def install_import_hook() -> None:
     os.environ.setdefault("NIJA_EXECUTION_ENTRY_TIMEOUT_GUARD_ENABLED", "true")
-    os.environ.setdefault("NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS", str(int(_derived_timeout_s())))
+    # Do not set NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS here.  Railway may still
+    # carry an old explicit 25s value; _timeout_s() clamps any explicit value
+    # below the ACK-safe floor instead of trusting it.
     _try_patch_loaded()
     if getattr(builtins, _IMPORT_FLAG, False):
         return
@@ -169,12 +180,12 @@ def install_import_hook() -> None:
             if name.endswith("execution_engine") or "execution_engine" in str(name):
                 _try_patch_loaded()
         except Exception as exc:
-            logger.warning("EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_FAILED marker=20260709ac name=%s err=%s", name, exc)
+            logger.warning("EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_FAILED marker=20260709ae name=%s err=%s", name, exc)
         return module
 
     builtins.__import__ = guarded_import
     setattr(builtins, _IMPORT_FLAG, True)
-    logger.warning("EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_HOOK marker=20260709ac installed=true timeout_s=%s", os.environ.get("NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS"))
+    logger.warning("EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_HOOK marker=20260709ae installed=true timeout_s=%.1f", _timeout_s())
 
 
 def install() -> None:
