@@ -41,7 +41,6 @@ def test_capital_authority_snapshot_ready_when_live_ca_and_writer(monkeypatch):
     monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "1")
     monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "1")
     monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "2259")
-    monkeypatch.setattr(patch, "__import__", __import__)
 
     import bot.capital_authority as ca_mod
     monkeypatch.setattr(ca_mod, "get_capital_authority", lambda: FakeCapitalAuthority())
