@@ -174,6 +174,7 @@ def _runtime_defaults() -> None:
         "NIJA_EXECUTION_ENTRY_SAFE_LOGGER_ENABLED": "true",
         "NIJA_RUNTIME_EXECUTION_AUTHORITY": "true",
         "NIJA_RISK_GATE_EXECUTION_BRIDGE_ENABLED": "true",
+        "NIJA_TPE_MIN_NOTIONAL_REASON_SANITIZER_ENABLED": "true",
         "NIJA_STALE_EXCHANGE_KILL_SWITCH_RECOVERY_ENABLED": "true",
         "NIJA_EXCHANGE_KILL_SWITCH_IGNORE_INTERNAL_ROUTING_REJECTS": "true",
         "NIJA_KRAKEN_OHLC_THREAD_GUARD_ENABLED": "true",
@@ -214,6 +215,10 @@ def _install_patch_module(*, filename: str, module_name: str, success_log: str, 
 
 def _install_logging_format_guard() -> None:
     _install_patch_module(filename="logging_format_guard_patch.py", module_name="nija_logging_format_guard_patch", success_log="LOGGING_FORMAT_GUARD_INSTALL_REQUESTED", error_prefix="Logging format guard")
+
+
+def _install_operator_emergency_stop_clear() -> None:
+    _install_patch_module(filename="operator_emergency_stop_clear_patch.py", module_name="nija_operator_emergency_stop_clear_patch", success_log="OPERATOR_EMERGENCY_STOP_CLEAR_INSTALL_REQUESTED", error_prefix="Operator emergency stop clear")
 
 
 def _install_stale_exchange_kill_switch_recovery() -> None:
@@ -312,6 +317,10 @@ def _install_risk_gate_execution_bridge() -> None:
     _install_patch_module(filename="risk_gate_execution_bridge_patch.py", module_name="nija_risk_gate_execution_bridge_patch", success_log="RISK_GATE_EXECUTION_BRIDGE_INSTALL_REQUESTED", error_prefix="Risk gate execution bridge")
 
 
+def _install_tpe_min_notional_reason_sanitizer() -> None:
+    _install_patch_module(filename="tpe_min_notional_reason_sanitizer_patch.py", module_name="nija_tpe_min_notional_reason_sanitizer_patch", success_log="TPE_MIN_NOTIONAL_REASON_SANITIZER_INSTALL_REQUESTED", error_prefix="TPE min-notional reason sanitizer")
+
+
 def _install_direct_broker_metadata_guard() -> None:
     _install_patch_module(filename="direct_broker_metadata_guard_patch.py", module_name="nija_direct_broker_metadata_guard_patch", success_log="DIRECT_BROKER_METADATA_GUARD_INSTALL_REQUESTED", error_prefix="Direct broker metadata guard")
 
@@ -329,6 +338,7 @@ def _install_ecel_min_notional_rounding_repair() -> None:
 
 
 _install_logging_format_guard()
+_install_operator_emergency_stop_clear()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
 _runtime_defaults()
@@ -338,6 +348,7 @@ _install_kraken_ohlc_thread_guard()
 _install_okx_min_notional_prefilter_repair()
 _install_okx_final_order_submission_bridge()
 _install_ecel_min_notional_rounding_repair()
+_install_tpe_min_notional_reason_sanitizer()
 _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
 _install_phase3_overselect_import_repair()
