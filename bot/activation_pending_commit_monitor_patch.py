@@ -22,6 +22,28 @@ logger = logging.getLogger("nija.activation_pending_commit_monitor")
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _STARTED = False
 _LOCK = threading.Lock()
+_STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
+    (
+        "final_stage_venue_routing_repair_patch",
+        "FINAL_STAGE_VENUE_ROUTING_REPAIR_INSTALL_REQUESTED",
+        "20260709n",
+    ),
+    (
+        "final_stage_venue_resolution_cache_patch",
+        "FINAL_STAGE_BROKER_RESOLUTION_CACHE_INSTALL_REQUESTED",
+        "20260709r",
+    ),
+    (
+        "closed_candle_volume_repair_patch",
+        "CLOSED_CANDLE_VOLUME_REPAIR_INSTALL_REQUESTED",
+        "20260709q",
+    ),
+    (
+        "platform_tier_live_capital_patch",
+        "PLATFORM_TIER_LIVE_CAPITAL_INSTALL_REQUESTED",
+        "20260709s",
+    ),
+)
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -41,15 +63,22 @@ def _module(*names: str) -> Any:
     return None
 
 
+def _install_startup_execution_repairs() -> None:
+    for mod_name, log_marker, marker in _STARTUP_REPAIR_MODULES:
+        try:
+            mod = _module(f"bot.{mod_name}", mod_name)
+            installer = getattr(mod, "install_import_hook", None) if mod is not None else None
+            if callable(installer):
+                installer()
+                logger.warning("%s marker=%s source=activation_pending_monitor", log_marker, marker)
+        except Exception as exc:
+            logger.warning("%s_FAILED marker=%s source=activation_pending_monitor err=%s", log_marker, marker, exc)
+
+
 def _install_final_stage_venue_routing_repair() -> None:
-    try:
-        mod = _module("bot.final_stage_venue_routing_repair_patch", "final_stage_venue_routing_repair_patch")
-        installer = getattr(mod, "install_import_hook", None) if mod is not None else None
-        if callable(installer):
-            installer()
-            logger.warning("FINAL_STAGE_VENUE_ROUTING_REPAIR_INSTALL_REQUESTED marker=20260709n source=activation_pending_monitor")
-    except Exception as exc:
-        logger.warning("FINAL_STAGE_VENUE_ROUTING_REPAIR_INSTALL_FAILED source=activation_pending_monitor err=%s", exc)
+    # Backward-compatible function name used by older call sites; now installs
+    # all final execution repairs needed before broker dispatch.
+    _install_startup_execution_repairs()
 
 
 def _state_machine() -> Any:
@@ -211,12 +240,12 @@ def _monitor() -> None:
     logger.warning("ACTIVATION_PENDING_COMMIT_MONITOR_TIMEOUT timeout_s=%.1f", timeout_s)
 
 
-_install_final_stage_venue_routing_repair()
+_install_startup_execution_repairs()
 
 
 def install_import_hook() -> None:
     global _STARTED
-    _install_final_stage_venue_routing_repair()
+    _install_startup_execution_repairs()
     if _STARTED:
         return
     with _LOCK:
