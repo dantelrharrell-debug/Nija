@@ -364,7 +364,8 @@ def _patch_ai_hub(module: ModuleType) -> bool:
                     _canonical = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
                 else:
                     _canonical = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
-                setattr(result, "ai_reason", f"{_canonical}: {_clean_reason}")
+                setattr(result, "ai_reason", _canonical)
+                setattr(result, "terminal_risk_detail", _clean_reason)
             except Exception:
                 pass
             logger.critical(
@@ -417,8 +418,9 @@ def _patch_apex_strategy(module: ModuleType) -> bool:
                                 "signal": False,
                                 "position_size": 0.0,
                                 "score": 0.0,
-                                "reason": f"ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK: {reason}",
+                                "reason": "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
                                 "filter_stage": "terminal_risk_hard_block",
+                                "terminal_risk_detail": str(reason or ""),
                             }
                         )
                         logger.critical(

@@ -2066,17 +2066,27 @@ class NIJAApexStrategyV71:
             _avg_vol_window = 20
             _threshold_is_zero = self.volume_min_threshold == 0.0
             _volume_is_zero = avg_volume <= 0 or current_volume <= 0
+            _broker_name = self._get_broker_name() if hasattr(self, "_get_broker_name") else "unknown"
+            _spread_pct = 0.10
+            _slippage_estimate = 0.10
+            _fallback_active = os.getenv("FORCE_TRADE", "false").strip().lower() in {"1", "true", "yes", "on"}
             logger.warning(
-                "VOLUME_TOO_LOW symbol=%s actual_volume_ratio=%.4f required_volume_ratio=%.4f "
-                "candle_count=%d average_volume_window=%d avg_volume=%.2f current_volume=%.2f "
-                "threshold_is_zero_by_design=%s volume_data_missing=%s",
+                "VOLUME_TOO_LOW symbol=%s broker=%s actual_volume_ratio=%.4f required_volume_ratio=%.4f "
+                "current_candle_volume=%.2f average_volume_window=%d candle_count=%d spread_pct=%.4f "
+                "slippage_estimate=%.4f fallback_active=%s decision=%s "
+                "avg_volume=%.2f threshold_is_zero_by_design=%s volume_data_missing=%s",
                 symbol,
+                _broker_name,
                 volume_ratio,
                 self.volume_min_threshold,
-                _candle_count,
-                _avg_vol_window,
-                avg_volume,
                 current_volume,
+                _avg_vol_window,
+                _candle_count,
+                _spread_pct,
+                _slippage_estimate,
+                _fallback_active,
+                "BLOCK",
+                avg_volume,
                 _threshold_is_zero,
                 _volume_is_zero,
             )
@@ -3957,10 +3967,14 @@ class NIJAApexStrategyV71:
                             )
                             if _is_terminal_long:
                                 # Hard block: must not proceed — stop here.
-                                _terminal_reason_long = (
-                                    "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK: "
-                                    + str(ai_eval.ai_reason or "hard risk block")
-                                )
+                                _ai_reason_long_raw = str(ai_eval.ai_reason or "hard risk block")
+                                _ai_reason_long_lc = _ai_reason_long_raw.lower()
+                                if "sector" in _ai_reason_long_lc:
+                                    _terminal_reason_long = "SECTOR_EXPOSURE_LIMIT_EXCEEDED"
+                                elif "portfolio exposure limit" in _ai_reason_long_lc or "portfolio_exposure" in _ai_reason_long_lc:
+                                    _terminal_reason_long = "PORTFOLIO_EXPOSURE_LIMIT_EXCEEDED"
+                                else:
+                                    _terminal_reason_long = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
                                 logger.critical(
                                     "🚫 AI_HUB_LONG_TERMINAL_HARD_BLOCK symbol=%s "
                                     "reason=%s — returning HOLD, not proceeding.",
@@ -3981,7 +3995,8 @@ class NIJAApexStrategyV71:
                                     'filter_stage': 'terminal_risk_hard_block',
                                     'allowed': False,
                                     'final_status': 'BLOCKED',
-                                    'block_reason': 'ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK',
+                                    'block_reason': _terminal_reason_long,
+                                    'terminal_risk_detail': _ai_reason_long_raw,
                                     'symbol': symbol,
                                     'decision': 'HOLD',
                                 }
@@ -5005,10 +5020,14 @@ class NIJAApexStrategyV71:
                             )
                             if _is_terminal_short:
                                 # Hard block: must not proceed — stop here.
-                                _terminal_reason_short = (
-                                    "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK: "
-                                    + str(ai_eval.ai_reason or "hard risk block")
-                                )
+                                _ai_reason_short_raw = str(ai_eval.ai_reason or "hard risk block")
+                                _ai_reason_short_lc = _ai_reason_short_raw.lower()
+                                if "sector" in _ai_reason_short_lc:
+                                    _terminal_reason_short = "SECTOR_EXPOSURE_LIMIT_EXCEEDED"
+                                elif "portfolio exposure limit" in _ai_reason_short_lc or "portfolio_exposure" in _ai_reason_short_lc:
+                                    _terminal_reason_short = "PORTFOLIO_EXPOSURE_LIMIT_EXCEEDED"
+                                else:
+                                    _terminal_reason_short = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
                                 logger.critical(
                                     "🚫 AI_HUB_SHORT_TERMINAL_HARD_BLOCK symbol=%s "
                                     "reason=%s — returning HOLD, not proceeding.",
@@ -5029,7 +5048,8 @@ class NIJAApexStrategyV71:
                                     'filter_stage': 'terminal_risk_hard_block',
                                     'allowed': False,
                                     'final_status': 'BLOCKED',
-                                    'block_reason': 'ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK',
+                                    'block_reason': _terminal_reason_short,
+                                    'terminal_risk_detail': _ai_reason_short_raw,
                                     'symbol': symbol,
                                     'decision': 'HOLD',
                                 }
@@ -5621,6 +5641,7 @@ class NIJAApexStrategyV71:
                     'regime', 'composite_score', 'signal_score', 'score',
                     'fees_pct', 'spread_pct', 'market_regime',
                     'adx', 'confidence', 'volume_quality',
+                    'actual_volume_ratio', 'required_volume_ratio', 'slippage_pct',
                 ):
                     if key in action_data and action_data[key] is not None:
                         levels.setdefault(key, action_data[key])

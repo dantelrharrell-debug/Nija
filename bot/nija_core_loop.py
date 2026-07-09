@@ -1004,6 +1004,14 @@ class CoreLoopResult:
     entries_taken:    int = 0
     entries_blocked:  int = 0
     exits_taken:      int = 0
+    candidates_selected: int = 0
+    candidates_volume_blocked: int = 0
+    candidates_terminal_risk_blocked: int = 0
+    candidates_order_ready: int = 0
+    orders_submitted: int = 0
+    broker_acks: int = 0
+    fills: int = 0
+    execute_successes: int = 0
     errors:           List[str] = field(default_factory=list)
     next_interval:    int = 150    # recommended seconds before next cycle
 
@@ -1054,6 +1062,16 @@ class NijaCoreLoop:
         self.veto_reason_counts: Dict[str, int] = {}
         self.reject_reason_counts: Dict[str, int] = {}
         self._summary_cycle_count: int = 0
+        self._last_phase3_metrics: Dict[str, int] = {
+            "candidates_selected": 0,
+            "candidates_volume_blocked": 0,
+            "candidates_terminal_risk_blocked": 0,
+            "candidates_order_ready": 0,
+            "orders_submitted": 0,
+            "broker_acks": 0,
+            "fills": 0,
+            "execute_successes": 0,
+        }
 
         logger.info(
             "✅ NijaCoreLoop initialized (max_positions=%d, max_entries_per_cycle=%d)",
@@ -1108,6 +1126,19 @@ class NijaCoreLoop:
         """
         if not reason:
             return "unknown"
+        _known_enums = {
+            "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
+            "SECTOR_EXPOSURE_LIMIT_EXCEEDED",
+            "PORTFOLIO_EXPOSURE_LIMIT_EXCEEDED",
+            "VOLUME_TOO_LOW",
+            "DATA_TIMEOUT_OR_EMPTY",
+        }
+        _reason_str = str(reason or "").strip()
+        if not _reason_str:
+            return "unknown"
+        _prefix = _reason_str.split(":", 1)[0].strip().upper()
+        if _prefix in _known_enums:
+            return _prefix
         # Strip parenthetical detail: "position_cap_reached(3/5)" → "position_cap_reached"
         base = reason.split("(")[0].strip()
         # Drop trailing "_reached" suffix so "position_cap_reached" → "position_cap"
@@ -1116,6 +1147,41 @@ class NijaCoreLoop:
         # "latency_drift: some message" and similar safety-gate strings)
         base = base.split(":")[0].split(" ")[0].strip()
         return base or "unknown"
+
+    @staticmethod
+    def _canonical_reject_reason(reason: Any) -> str:
+        """Normalize reject reasons into stable, clean enums."""
+        text = str(reason or "").strip()
+        lower = text.lower()
+        if (
+            "sector_exposure_limit_exceeded" in lower
+            or "hard_sector_limit" in lower
+            or "hard sector limit" in lower
+            or "sector exposure limit" in lower
+        ):
+            return "SECTOR_EXPOSURE_LIMIT_EXCEEDED"
+        if (
+            "portfolio_exposure_limit_exceeded" in lower
+            or "portfolio exposure limit" in lower
+            or "portfolio limit reached" in lower
+        ):
+            return "PORTFOLIO_EXPOSURE_LIMIT_EXCEEDED"
+        if (
+            "terminal_risk_hard_block" in lower
+            or "entry_blocked_terminal" in lower
+            or "position blocked by risk engine" in lower
+        ):
+            return "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
+        if "volume" in lower and "low" in lower:
+            return "VOLUME_TOO_LOW"
+        if (
+            "data_timeout_or_empty" in lower
+            or ("data" in lower and "timeout" in lower)
+            or ("data" in lower and "empty" in lower)
+            or "quarantine_data_failure" in lower
+        ):
+            return "DATA_TIMEOUT_OR_EMPTY"
+        return text[:64].strip() or "unknown"
 
     def _record_veto(self, reason: str) -> None:
         """Increment the veto histogram counter for *reason*."""
@@ -1612,6 +1678,17 @@ class NijaCoreLoop:
                 result.entries_taken = entries
                 result.entries_blocked = blocked
                 result.symbols_scored = scored
+                _phase3_metrics = dict(getattr(self, "_last_phase3_metrics", {}) or {})
+                result.candidates_selected = int(_phase3_metrics.get("candidates_selected", 0) or 0)
+                result.candidates_volume_blocked = int(_phase3_metrics.get("candidates_volume_blocked", 0) or 0)
+                result.candidates_terminal_risk_blocked = int(
+                    _phase3_metrics.get("candidates_terminal_risk_blocked", 0) or 0
+                )
+                result.candidates_order_ready = int(_phase3_metrics.get("candidates_order_ready", 0) or 0)
+                result.orders_submitted = int(_phase3_metrics.get("orders_submitted", 0) or 0)
+                result.broker_acks = int(_phase3_metrics.get("broker_acks", 0) or 0)
+                result.fills = int(_phase3_metrics.get("fills", 0) or 0)
+                result.execute_successes = int(_phase3_metrics.get("execute_successes", 0) or 0)
 
                 # Update the zero-signal streak counter for the next cycle
                 if entries > 0:
@@ -1768,6 +1845,32 @@ class NijaCoreLoop:
             result.exits_taken,
             elapsed_ms,
             result.next_interval,
+        )
+        logger.critical(
+            "CYCLE_EXECUTION_ACCOUNTING cycle=%d candidates_selected=%d "
+            "candidates_volume_blocked=%d candidates_terminal_risk_blocked=%d "
+            "candidates_order_ready=%d orders_submitted=%d broker_acks=%d fills=%d "
+            "execute_successes=%d",
+            self._total_cycles,
+            result.candidates_selected,
+            result.candidates_volume_blocked,
+            result.candidates_terminal_risk_blocked,
+            result.candidates_order_ready,
+            result.orders_submitted,
+            result.broker_acks,
+            result.fills,
+            result.execute_successes,
+        )
+        print(
+            f"[NIJA-PRINT] CYCLE_EXECUTION_ACCOUNTING "
+            f"candidates_selected={result.candidates_selected} "
+            f"candidates_volume_blocked={result.candidates_volume_blocked} "
+            f"candidates_terminal_risk_blocked={result.candidates_terminal_risk_blocked} "
+            f"candidates_order_ready={result.candidates_order_ready} "
+            f"orders_submitted={result.orders_submitted} "
+            f"broker_acks={result.broker_acks} fills={result.fills} "
+            f"execute_successes={result.execute_successes}",
+            flush=True,
         )
 
         # ── Periodic execution KPI summary ───────────────────────────────
@@ -1994,6 +2097,12 @@ class NijaCoreLoop:
         # always active once zero_signal_streak reaches DEAD_ZONE_STREAK_THRESHOLD,
         # regardless of profit-mode level.
         _dead_zone = zero_signal_streak >= DEAD_ZONE_STREAK_THRESHOLD
+        _fallback_admission_active = (
+            _dead_zone
+            or _get_relaxation_factor_with_threshold(
+                zero_signal_streak, _effective_streak_threshold
+            ) > 0.0
+        )
         if _dead_zone:
             _volume_fallback_enabled = True
             logger.warning(
@@ -2056,6 +2165,16 @@ class NijaCoreLoop:
         momentum_candidates = []  # collected from relaxed momentum scan
         scored = 0
         blocked = 0
+        _phase3_metrics = {
+            "candidates_selected": 0,
+            "candidates_volume_blocked": 0,
+            "candidates_terminal_risk_blocked": 0,
+            "candidates_order_ready": 0,
+            "orders_submitted": 0,
+            "broker_acks": 0,
+            "fills": 0,
+            "execute_successes": 0,
+        }
 
         # ── Per-cycle gate rejection counters ─────────────────────────────
         # Incremented each time a symbol is rejected at a specific gate.
@@ -2096,6 +2215,8 @@ class NijaCoreLoop:
         _volume_pct_count = 0
         _market_filter_checks = 0
         _market_filter_passes = 0
+        _liquidity_qualified = 0
+        _liquidity_rejected = 0
 
         # Initialise the per-cycle score distribution debugger snapshot.
         _sdd = _get_sdd() if (_SDD_AVAILABLE and _get_sdd is not None) else None
@@ -2166,8 +2287,10 @@ class NijaCoreLoop:
                 if _fail_count >= _DATA_FAILURE_QUARANTINE_THRESHOLD:
                     if _sdd is not None:
                         _sdd.record_skip(symbol, "quarantine_data_failure")
-                    _funnel["market_data"] = ("FAIL", "QUARANTINE_DATA_FAILURE")
+                    _funnel["market_data"] = ("FAIL", "DATA_TIMEOUT_OR_EMPTY")
                     _gate_rejections["data_insufficient"] += 1
+                    _liquidity_rejected += 1
+                    self._record_reject("DATA_TIMEOUT_OR_EMPTY")
                     continue
                 df = self._fetch_df(broker, symbol)
                 _df_len = len(df) if df is not None else 0
@@ -2190,6 +2313,7 @@ class NijaCoreLoop:
                     else:
                         _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     _gate_rejections["data_insufficient"] += 1
+                    _liquidity_rejected += 1
                     # Log the first 3 data failures at critical level so the
                     # root cause is visible even when debug logging is off.
                     # Log when a symbol gets quarantined.
@@ -2222,6 +2346,138 @@ class NijaCoreLoop:
                 except Exception:
                     pass
                 _funnel["market_data"] = ("PASS", "")
+                _broker_name_for_symbol = (
+                    self.apex._get_broker_name()
+                    if hasattr(self.apex, "_get_broker_name")
+                    else "unknown"
+                )
+                _raw_required_ratio = float(
+                    getattr(self.apex, "volume_min_threshold", 0.0) or 0.0
+                )
+                _required_volume_ratio = max(
+                    0.0,
+                    _raw_required_ratio * (0.60 if _fallback_admission_active else 1.0),
+                )
+                _current_candle_volume = 0.0
+                _average_volume_window = 20
+                _actual_volume_ratio = 0.0
+                try:
+                    if "volume" in df.columns:
+                        _current_candle_volume = float(df["volume"].iloc[-1] or 0.0)
+                        _avg_series = df["volume"].tail(_average_volume_window)
+                        _avg_volume = float(_avg_series.mean() or 0.0) if len(_avg_series) > 0 else 0.0
+                        if _avg_volume > 0:
+                            _actual_volume_ratio = _current_candle_volume / _avg_volume
+                except Exception:
+                    pass
+                _spread_pct = 0.10
+                _slippage_estimate = 0.10
+                try:
+                    if {"bid", "ask"}.issubset(df.columns):
+                        _bid = float(df["bid"].iloc[-1] or 0.0)
+                        _ask = float(df["ask"].iloc[-1] or 0.0)
+                        _mid = (_bid + _ask) / 2.0 if (_bid > 0 and _ask > 0) else 0.0
+                        if _mid > 0:
+                            _spread_pct = ((_ask - _bid) / _mid) * 100.0
+                except Exception:
+                    pass
+                _total_liquidity_cost_pct = _spread_pct + _slippage_estimate
+                _max_liquidity_cost_pct = float(
+                    os.getenv("NIJA_LIQUIDITY_TOTAL_COST_MAX_PCT", "5.0") or "5.0"
+                )
+                _unsupported_route = (
+                    str(_broker_name_for_symbol).strip().lower() not in {"kraken", "coinbase", "okx", "binance", "alpaca"}
+                )
+                if str(_broker_name_for_symbol).strip().lower() == "okx":
+                    _okx_exec_vars = (
+                        "NIJA_OKX_EXECUTION_ENABLED",
+                        "NIJA_OKX_LIVE_TRADING_ENABLED",
+                        "OKX_LIVE_TRADING_ENABLED",
+                        "NIJA_ENABLE_OKX_EXECUTION",
+                    )
+                    _okx_enabled = any(
+                        os.environ.get(v, "").strip().lower() in {"1", "true", "yes", "on"}
+                        for v in _okx_exec_vars
+                    )
+                    if not _okx_enabled:
+                        _unsupported_route = True
+                _symbol_status_text = ""
+                for _status_method in (
+                    "get_symbol_status",
+                    "get_market_status",
+                    "get_symbol_info",
+                    "get_market_info",
+                ):
+                    _status_call = getattr(broker, _status_method, None)
+                    if not callable(_status_call):
+                        continue
+                    try:
+                        _status_value = _status_call(symbol)
+                    except TypeError:
+                        try:
+                            _status_value = _status_call(product_id=symbol)
+                        except Exception:
+                            continue
+                    except Exception:
+                        continue
+                    if isinstance(_status_value, dict):
+                        _symbol_status_text = str(
+                            _status_value.get("status")
+                            or _status_value.get("state")
+                            or _status_value.get("trading_status")
+                            or _status_value.get("symbol_status")
+                            or ""
+                        ).strip().lower()
+                    else:
+                        _symbol_status_text = str(_status_value or "").strip().lower()
+                    if _symbol_status_text:
+                        break
+                _symbol_inactive = any(
+                    token in _symbol_status_text
+                    for token in ("inactive", "delisted", "halted", "suspended", "disabled")
+                )
+                if (
+                    _current_candle_volume <= 0.0
+                    or _actual_volume_ratio < _required_volume_ratio
+                ):
+                    _liquidity_rejected += 1
+                    _phase3_metrics["candidates_volume_blocked"] += 1
+                    _funnel["market_data"] = ("FAIL", "VOLUME_TOO_LOW")
+                    self._record_reject("VOLUME_TOO_LOW")
+                    logger.warning(
+                        "VOLUME_TOO_LOW symbol=%s broker=%s actual_volume_ratio=%.4f "
+                        "required_volume_ratio=%.4f current_candle_volume=%.6f "
+                        "average_volume_window=%d candle_count=%d spread_pct=%.4f "
+                        "slippage_estimate=%.4f fallback_active=%s decision=%s",
+                        symbol,
+                        _broker_name_for_symbol,
+                        _actual_volume_ratio,
+                        _required_volume_ratio,
+                        _current_candle_volume,
+                        _average_volume_window,
+                        _df_len,
+                        _spread_pct,
+                        _slippage_estimate,
+                        _fallback_admission_active,
+                        "BLOCK",
+                    )
+                    continue
+                if _unsupported_route:
+                    _liquidity_rejected += 1
+                    _funnel["market_data"] = ("FAIL", "UNSUPPORTED_BROKER_ROUTE")
+                    self._record_reject("UNSUPPORTED_BROKER_ROUTE")
+                    continue
+                if _symbol_inactive:
+                    _liquidity_rejected += 1
+                    _funnel["market_data"] = ("FAIL", "INACTIVE_OR_DELISTED_SYMBOL")
+                    self._record_reject("INACTIVE_OR_DELISTED_SYMBOL")
+                    continue
+                if _total_liquidity_cost_pct > _max_liquidity_cost_pct:
+                    _liquidity_rejected += 1
+                    _funnel["market_data"] = ("FAIL", "SPREAD_SLIPPAGE_TOO_HIGH")
+                    self._record_reject("SPREAD_SLIPPAGE_TOO_HIGH")
+                    continue
+                _liquidity_qualified += 1
 
                 # Always track top-volume symbol (feeds volume fallback)
                 if "volume" in df.columns:
@@ -2526,7 +2782,8 @@ class NijaCoreLoop:
             "🔁 [Phase3] SIGNAL_LOOP_END — symbol scoring loop finished | "
             "symbols_total=%d scored=%d candidates=%d momentum_candidates=%d "
             "blocked=%d scoring_errors=%d data_insufficient=%d indicators_failed=%d "
-            "data_attempts=%d data_successes=%d timeout_skipped=%d",
+            "data_attempts=%d data_successes=%d timeout_skipped=%d "
+            "liquidity_qualified=%d liquidity_rejected=%d",
             len(symbols),
             scored,
             len(candidates),
@@ -2538,6 +2795,8 @@ class NijaCoreLoop:
             _data_attempts,
             _data_successes,
             _data_skipped_timeout,
+            _liquidity_qualified,
+            _liquidity_rejected,
         )
         print(
             f"[NIJA-PRINT] SIGNAL_LOOP_END | symbols={len(symbols)} scored={scored} "
@@ -2545,7 +2804,8 @@ class NijaCoreLoop:
             f"blocked={blocked} errors={_scoring_errors} "
             f"data_insufficient={_data_insuff_end} indicators_failed={_indic_fail_end} "
             f"data_attempts={_data_attempts} data_successes={_data_successes} "
-            f"timeout_skipped={_data_skipped_timeout}",
+            f"timeout_skipped={_data_skipped_timeout} "
+            f"liquidity_qualified={_liquidity_qualified} liquidity_rejected={_liquidity_rejected}",
             flush=True,
         )
         # Diagnose timeout-skipped symbols — visible even when some symbols scored OK
@@ -2800,6 +3060,7 @@ class NijaCoreLoop:
                 for s in selected
             ) or "none",
         )
+        _phase3_metrics["candidates_selected"] = int(len(selected))
 
         # ── FORCE_TRADE rescue: rank_and_select returned empty despite candidates ──
         # rank_and_select can return [] when all candidates score below the adaptive
@@ -2933,7 +3194,51 @@ class NijaCoreLoop:
                 ),
             )
 
+        # Final selected-candidate sanitation: remove symbols that still fail the
+        # strict volume admission gate so selected candidates remain realistically
+        # capable of reaching ORDER_READY.
+        if selected:
+            _selected_liquidity_safe = []
+            for _sel in selected:
+                try:
+                    _sel_df = self._fetch_df(broker, _sel.symbol)
+                    if _sel_df is None or len(_sel_df) < 10 or "volume" not in _sel_df.columns:
+                        self._record_reject("DATA_TIMEOUT_OR_EMPTY")
+                        _phase3_metrics["candidates_volume_blocked"] += 1
+                        continue
+                    _sel_avg_vol = float(_sel_df["volume"].tail(20).mean() or 0.0)
+                    _sel_cur_vol = float(_sel_df["volume"].iloc[-1] or 0.0)
+                    _sel_actual_ratio = _sel_cur_vol / _sel_avg_vol if _sel_avg_vol > 0 else 0.0
+                    _sel_required_ratio = float(getattr(self.apex, "volume_min_threshold", 0.0) or 0.0)
+                    _sel_required_ratio *= 0.60 if fallback_active else 1.0
+                    if _sel_cur_vol <= 0.0 or _sel_actual_ratio < _sel_required_ratio:
+                        _phase3_metrics["candidates_volume_blocked"] += 1
+                        self._record_reject("VOLUME_TOO_LOW")
+                        logger.warning(
+                            "VOLUME_TOO_LOW symbol=%s broker=%s actual_volume_ratio=%.4f "
+                            "required_volume_ratio=%.4f current_candle_volume=%.6f "
+                            "average_volume_window=%d candle_count=%d spread_pct=%.4f "
+                            "slippage_estimate=%.4f fallback_active=%s decision=%s",
+                            _sel.symbol,
+                            self.apex._get_broker_name() if hasattr(self.apex, "_get_broker_name") else "unknown",
+                            _sel_actual_ratio,
+                            _sel_required_ratio,
+                            _sel_cur_vol,
+                            20,
+                            len(_sel_df),
+                            0.10,
+                            0.10,
+                            fallback_active,
+                            "BLOCK",
+                        )
+                        continue
+                except Exception:
+                    pass
+                _selected_liquidity_safe.append(_sel)
+            selected = _selected_liquidity_safe
+
         # ── Execute selected entries ──────────────────────────────────────
+        _phase3_metrics["candidates_selected"] = int(len(selected))
         logger.critical(
             "🚦 [Phase3] Entering execution loop — selected=%d fallback_active=%s "
             "force_trade=%s zero_signal_streak=%d",
@@ -3122,6 +3427,24 @@ class NijaCoreLoop:
                 else:
                     analysis = _am_payload
                 action = analysis.get("action", "hold")
+                _analysis_reason = analysis.get("reason", "NO_PROFITABLE_ACTION") or "NO_PROFITABLE_ACTION"
+                _analysis_reject = self._canonical_reject_reason(_analysis_reason)
+                if _analysis_reject in {
+                    "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
+                    "SECTOR_EXPOSURE_LIMIT_EXCEEDED",
+                    "PORTFOLIO_EXPOSURE_LIMIT_EXCEEDED",
+                }:
+                    blocked += 1
+                    _phase3_metrics["candidates_terminal_risk_blocked"] += 1
+                    _funnel["profitability"] = ("FAIL", _analysis_reject)
+                    self._record_reject(_analysis_reject)
+                    logger.critical(
+                        "🚫 [Phase3] TERMINAL RISK HARD BLOCK | symbol=%s reason=%s raw_reason=%s",
+                        sig.symbol,
+                        _analysis_reject,
+                        _analysis_reason,
+                    )
+                    continue
 
                 # When fallback is active, force the action to enter if the
                 # signal side is known — the streak means we need a trade.
@@ -3256,27 +3579,51 @@ class NijaCoreLoop:
                     blocked += 1
                     _block_raw_reason = analysis.get("reason", "NO_PROFITABLE_ACTION") or "NO_PROFITABLE_ACTION"
                     _funnel["profitability"] = ("FAIL", _block_raw_reason)
-                    # Normalize to a clean enum for reject_reason_counts so that
-                    # ORDER_ADMISSION_SUMMARY shows the real top_reject instead of "none".
-                    _block_reason_lower = _block_raw_reason.lower()
-                    if (
-                        "terminal_risk_hard_block" in _block_reason_lower
-                        or "hard_sector_limit" in _block_reason_lower
-                        or "sector_exposure_limit" in _block_reason_lower
-                        or "entry_blocked_terminal" in _block_reason_lower
-                        or "portfolio exposure limit" in _block_reason_lower
-                        or "position blocked by risk engine" in _block_reason_lower
-                    ):
-                        _reject_key = "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK"
-                        if "sector" in _block_reason_lower:
-                            _reject_key = "SECTOR_EXPOSURE_LIMIT_EXCEEDED"
-                    elif "volume" in _block_reason_lower and "low" in _block_reason_lower:
-                        _reject_key = "VOLUME_TOO_LOW"
-                    elif "data" in _block_reason_lower and ("timeout" in _block_reason_lower or "empty" in _block_reason_lower):
-                        _reject_key = "DATA_TIMEOUT_OR_EMPTY"
-                    else:
-                        # Use first 64 chars of raw reason as the key (existing behaviour).
-                        _reject_key = _block_raw_reason[:64].strip()
+                    _reject_key = self._canonical_reject_reason(_block_raw_reason)
+                    if _reject_key == "VOLUME_TOO_LOW":
+                        _phase3_metrics["candidates_volume_blocked"] += 1
+                        try:
+                            _cur_vol = float(df["volume"].iloc[-1]) if "volume" in df.columns else 0.0
+                            _avg_window = 20
+                            _avg_vol = (
+                                float(df["volume"].tail(_avg_window).mean())
+                                if "volume" in df.columns and len(df) > 0
+                                else 0.0
+                            )
+                            _actual_ratio = (_cur_vol / _avg_vol) if _avg_vol > 0 else 0.0
+                            _required_ratio = float(
+                                getattr(self.apex, "volume_min_threshold", 0.0) or 0.0
+                            )
+                            _broker_name = (
+                                self.apex._get_broker_name()
+                                if hasattr(self.apex, "_get_broker_name")
+                                else "unknown"
+                            )
+                            logger.warning(
+                                "VOLUME_TOO_LOW symbol=%s broker=%s actual_volume_ratio=%.4f "
+                                "required_volume_ratio=%.4f current_candle_volume=%.6f "
+                                "average_volume_window=%d candle_count=%d spread_pct=%.4f "
+                                "slippage_estimate=%.4f fallback_active=%s decision=%s",
+                                sig.symbol,
+                                _broker_name,
+                                _actual_ratio,
+                                _required_ratio,
+                                _cur_vol,
+                                _avg_window,
+                                len(df),
+                                0.10,
+                                0.10,
+                                fallback_active,
+                                "BLOCK",
+                            )
+                        except Exception:
+                            pass
+                    elif _reject_key in {
+                        "ENTRY_BLOCKED_TERMINAL_RISK_HARD_BLOCK",
+                        "SECTOR_EXPOSURE_LIMIT_EXCEEDED",
+                        "PORTFOLIO_EXPOSURE_LIMIT_EXCEEDED",
+                    }:
+                        _phase3_metrics["candidates_terminal_risk_blocked"] += 1
                     self._record_reject(_reject_key)
                     logger.critical(
                         "🚫 [Phase3] SIGNAL BLOCKED before execute_action | symbol=%s "
@@ -3330,6 +3677,23 @@ class NijaCoreLoop:
                     _sig_regime = getattr(sig, "regime", None) or getattr(sig, "market_regime", None)
                     if _sig_regime:
                         analysis["regime"] = _sig_regime
+                if "actual_volume_ratio" not in analysis and "volume" in df.columns:
+                    try:
+                        _avg_vol_exec = float(df["volume"].tail(20).mean() or 0.0)
+                        _cur_vol_exec = float(df["volume"].iloc[-1] or 0.0)
+                        analysis["actual_volume_ratio"] = (
+                            _cur_vol_exec / _avg_vol_exec if _avg_vol_exec > 0 else 0.0
+                        )
+                    except Exception:
+                        analysis["actual_volume_ratio"] = 0.0
+                analysis.setdefault(
+                    "required_volume_ratio",
+                    float(getattr(self.apex, "volume_min_threshold", 0.0) or 0.0),
+                )
+                if "spread_pct" not in analysis:
+                    analysis["spread_pct"] = 0.001
+                if "slippage_pct" not in analysis:
+                    analysis["slippage_pct"] = 0.001
 
                 logger.critical(
                     "🚀 [CoreLoop] SUBMITTING ORDER | symbol=%s side=%s action=%s "
@@ -3342,6 +3706,8 @@ class NijaCoreLoop:
                     sig.composite_score,
                     sig.position_multiplier,
                 )
+                _phase3_metrics["candidates_order_ready"] += 1
+                _phase3_metrics["orders_submitted"] += 1
                 logger.critical(
                     "⚡ [CoreLoop] execute_action CALLED | symbol=%s action=%s "
                     "analysis_keys=%s",
@@ -3370,6 +3736,9 @@ class NijaCoreLoop:
                 )
                 if success:
                     entries += 1
+                    _phase3_metrics["broker_acks"] += 1
+                    _phase3_metrics["fills"] += 1
+                    _phase3_metrics["execute_successes"] += 1
                     logger.info(
                         "   ✅ Core loop entry: %s %s score=%.1f mult=×%.2f%s",
                         sig.symbol, sig.side.upper(),
@@ -3507,7 +3876,12 @@ class NijaCoreLoop:
             or _env_truthy("FORCE_TRADE_MODE")
             or _env_truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK")
         )
-        if _force_direct_bypass and entries == 0 and _best_volume_symbol:
+        if (
+            _force_direct_bypass
+            and entries == 0
+            and _best_volume_symbol
+            and _phase3_metrics.get("candidates_terminal_risk_blocked", 0) <= 0
+        ):
             logger.critical(
                 "⚡ [FORCE_TRADE_DIRECT] FINAL FALLBACK TRIGGERED — "
                 "entries=0 after full selection pipeline. "
@@ -3658,6 +4032,12 @@ class NijaCoreLoop:
                     _best_volume_symbol,
                     _ft_err,
                 )
+        elif _force_direct_bypass and entries == 0 and _phase3_metrics.get("candidates_terminal_risk_blocked", 0) > 0:
+            logger.critical(
+                "🚫 [FORCE_TRADE_DIRECT] skipped because terminal risk hard block fired this cycle "
+                "(terminal_blocks=%d).",
+                int(_phase3_metrics.get("candidates_terminal_risk_blocked", 0) or 0),
+            )
         elif _force_direct_bypass and entries == 0 and not _best_volume_symbol:
             logger.critical(
                 "❌ [FORCE_TRADE_DIRECT] FORCE_TRADE active but no best-volume symbol "
@@ -3666,6 +4046,7 @@ class NijaCoreLoop:
                 scored,
             )
 
+        self._last_phase3_metrics = dict(_phase3_metrics)
         return entries, blocked, scored, _gate_rejections
 
     # ------------------------------------------------------------------
