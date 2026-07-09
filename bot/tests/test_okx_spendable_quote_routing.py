@@ -64,3 +64,33 @@ def test_okx_usd_buy_uses_usdc_when_usdt_missing_but_usdc_available():
     assert symbol == "APT-USDC"
     assert repaired.symbol == "APT-USDC"
     assert repaired.preferred_broker == "okx"
+
+
+def test_okx_direct_usdt_buy_reroutes_before_submit_when_usdt_missing():
+    request = FakeRequest(
+        symbol="ADA-USDT",
+        size_usd=10.0,
+        metadata={"broker_client": FakeOkxBroker({"data": [{"details": [{"ccy": "USD", "availBal": "146.26"}]}]}), "broker_name": "okx"},
+    )
+
+    repaired, symbol = patch._maybe_route_okx_buy_by_spendable_quote(request, "ADA-USDT", "ADA-USDT", "buy")
+
+    assert symbol == "ADA-USDT"
+    assert repaired.preferred_broker is None
+    assert "broker_client" not in repaired.metadata
+    assert repaired.metadata["okx_quote_reroute_reason"] == "okx_usdt_quote_balance_unknown"
+
+
+def test_okx_direct_usdt_buy_allowed_when_usdt_spendable():
+    request = FakeRequest(
+        symbol="ADA-USDT",
+        size_usd=10.0,
+        metadata={"broker_client": FakeOkxBroker({"data": [{"details": [{"ccy": "USDT", "availBal": "25.00"}]}]}), "broker_name": "okx"},
+    )
+
+    repaired, symbol = patch._maybe_route_okx_buy_by_spendable_quote(request, "ADA-USDT", "ADA-USDT", "buy")
+
+    assert symbol == "ADA-USDT"
+    assert repaired.symbol == "ADA-USDT"
+    assert repaired.preferred_broker == "okx"
+    assert "broker_client" in repaired.metadata
