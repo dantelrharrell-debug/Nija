@@ -12,6 +12,7 @@ def _operator_env(monkeypatch, tmp_path):
     monkeypatch.setenv("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_ACK", "CLEAR_EMERGENCY_STOP_FOR_LIVE_TRADING")
     monkeypatch.setenv("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_REASON", "Operator reviewed current logs and approves clearing manual emergency stop.")
     monkeypatch.setenv("NIJA_EMERGENCY_STOP_QUARANTINE_DIR", str(tmp_path / "quarantine"))
+    monkeypatch.setenv("NIJA_AUTO_CLEAR_STALE_MANUAL_EMERGENCY_ENV", "true")
     for name in (
         "NIJA_FORCE_ACTIVATION",
         "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK",
@@ -69,3 +70,34 @@ def test_operator_clear_requires_exact_ack(monkeypatch, tmp_path):
 
     assert cleared == 0
     assert kill_file.exists()
+
+
+def test_stale_manual_env_only_stop_clears_without_files(monkeypatch, tmp_path):
+    _operator_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_FILES", str(tmp_path / "missing_EMERGENCY_STOP"))
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_STATE_FILES", str(tmp_path / "missing_state.json"))
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "EMERGENCY_STOP")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_REASON", "manual emergency stop active from removed file")
+
+    cleared = patch.run_once()
+
+    assert cleared == 1
+    assert patch.os.environ["NIJA_RUNTIME_TRADING_STATE"] == "OFF"
+    assert patch.os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+    assert "NIJA_EMERGENCY_STOP_REASON" not in patch.os.environ
+
+
+def test_stale_env_only_clear_refuses_terminal_risk(monkeypatch, tmp_path):
+    _operator_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_FILES", str(tmp_path / "missing_EMERGENCY_STOP"))
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_STATE_FILES", str(tmp_path / "missing_state.json"))
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "EMERGENCY_STOP")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_REASON", "daily loss limit reached")
+
+    cleared = patch.run_once()
+
+    assert cleared == 0
+    assert patch.os.environ["NIJA_RUNTIME_TRADING_STATE"] == "EMERGENCY_STOP"
+    assert patch.os.environ["NIJA_EMERGENCY_STOP_REASON"] == "daily loss limit reached"
