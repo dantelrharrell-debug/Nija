@@ -10,7 +10,7 @@ def test_entry_timeout_defaults_above_ack_timeout(monkeypatch):
     assert patch._timeout_s() >= 40.0
 
 
-def test_entry_timeout_explicit_env_is_respected(monkeypatch):
+def test_entry_timeout_explicit_env_above_floor_is_respected(monkeypatch):
     monkeypatch.setenv("NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("NIJA_ACK_TIMEOUT_S", "30")
 
@@ -22,3 +22,10 @@ def test_entry_timeout_tracks_larger_ack_timeout(monkeypatch):
     monkeypatch.setenv("NIJA_ACK_TIMEOUT_S", "55")
 
     assert patch._timeout_s() >= 65.0
+
+
+def test_entry_timeout_clamps_low_explicit_env(monkeypatch):
+    monkeypatch.setenv("NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS", "25")
+    monkeypatch.setenv("NIJA_ACK_TIMEOUT_S", "30")
+
+    assert patch._timeout_s() >= 40.0
