@@ -10,9 +10,9 @@ from types import ModuleType
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger("nija.okx_final_order_submission_bridge")
-_MARKER = "20260709b"
-_ORDER_WRAP_ATTR = "_nija_okx_final_order_submission_bridge_order_v20260709b"
-_ROUTER_PATCH_ATTR = "_nija_okx_final_order_submission_bridge_router_v20260709b"
+_MARKER = "20260709d"
+_ORDER_WRAP_ATTR = "_nija_okx_final_order_submission_bridge_order_v20260709d"
+_ROUTER_PATCH_ATTR = "_nija_okx_final_order_submission_bridge_router_v20260709d"
 _INSTALL_LOCK = threading.Lock()
 _PATCHED_ORDER_CLASSES: set[str] = set()
 _ROUTER_PATCHED = False
@@ -265,7 +265,6 @@ def _patch_router_module(module: ModuleType) -> bool:
         return False
     original = getattr(current, "__wrapped__", current)
 
-    @staticmethod
     @wraps(original)
     def _patched_dispatch_direct_broker_market_order(broker: Any, *, symbol: str, side: str, size_usd: float, metadata: dict[str, Any]) -> tuple[float, float]:
         if not _looks_like_okx_broker_obj(broker):
@@ -316,9 +315,10 @@ def _patch_router_module(module: ModuleType) -> bool:
 
     setattr(_patched_dispatch_direct_broker_market_order, _ROUTER_PATCH_ATTR, True)
     setattr(_patched_dispatch_direct_broker_market_order, "__wrapped__", original)
-    setattr(cls, "_dispatch_direct_broker_market_order", _patched_dispatch_direct_broker_market_order)
+    setattr(cls, "_dispatch_direct_broker_market_order", staticmethod(_patched_dispatch_direct_broker_market_order))
     _ROUTER_PATCHED = True
     logger.warning("OKX_FINAL_ORDER_ROUTER_PATCHED marker=%s module=%s", _MARKER, getattr(module, "__name__", "<unknown>"))
+    print(f"[NIJA-PRINT] OKX_FINAL_ORDER_ROUTER_PATCHED marker={_MARKER} module={getattr(module, '__name__', '<unknown>')}", flush=True)
     return True
 
 
@@ -341,10 +341,22 @@ def _patch_module(module: ModuleType) -> bool:
     return patched
 
 
+def _snapshot_modules() -> list[tuple[str, ModuleType]]:
+    for _ in range(3):
+        try:
+            return [(name, module) for name, module in list(sys.modules.items()) if isinstance(module, ModuleType)]
+        except RuntimeError:
+            time.sleep(0.01)
+    try:
+        return [(name, module) for name, module in list(dict(sys.modules).items()) if isinstance(module, ModuleType)]
+    except Exception:
+        return []
+
+
 def _try_patch_loaded() -> bool:
     patched = False
-    for name, module in list(sys.modules.items()):
-        if isinstance(module, ModuleType) and _interesting_module(name):
+    for name, module in _snapshot_modules():
+        if _interesting_module(name):
             patched = _patch_module(module) or patched
     return patched
 
@@ -371,7 +383,7 @@ def install_import_hook() -> None:
     with _INSTALL_LOCK:
         _try_patch_loaded()
         _start_monitor()
-        if getattr(builtins, "_NIJA_OKX_FINAL_ORDER_SUBMISSION_BRIDGE_HOOK_V20260709B", False):
+        if getattr(builtins, "_NIJA_OKX_FINAL_ORDER_SUBMISSION_BRIDGE_HOOK_V20260709D", False):
             logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_COMPLETE marker=%s already_installed=True router_patched=%s order_classes=%s", _MARKER, _ROUTER_PATCHED, sorted(_PATCHED_ORDER_CLASSES))
             return
         original_import = builtins.__import__
@@ -383,7 +395,7 @@ def install_import_hook() -> None:
             return module
 
         builtins.__import__ = guarded_import
-        setattr(builtins, "_NIJA_OKX_FINAL_ORDER_SUBMISSION_BRIDGE_HOOK_V20260709B", True)
+        setattr(builtins, "_NIJA_OKX_FINAL_ORDER_SUBMISSION_BRIDGE_HOOK_V20260709D", True)
         logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_COMPLETE marker=%s router_patched=%s order_classes=%s", _MARKER, _ROUTER_PATCHED, sorted(_PATCHED_ORDER_CLASSES))
 
 
