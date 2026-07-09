@@ -41,6 +41,17 @@ def _module(*names: str) -> Any:
     return None
 
 
+def _install_final_stage_venue_routing_repair() -> None:
+    try:
+        mod = _module("bot.final_stage_venue_routing_repair_patch", "final_stage_venue_routing_repair_patch")
+        installer = getattr(mod, "install_import_hook", None) if mod is not None else None
+        if callable(installer):
+            installer()
+            logger.warning("FINAL_STAGE_VENUE_ROUTING_REPAIR_INSTALL_REQUESTED marker=20260709n source=activation_pending_monitor")
+    except Exception as exc:
+        logger.warning("FINAL_STAGE_VENUE_ROUTING_REPAIR_INSTALL_FAILED source=activation_pending_monitor err=%s", exc)
+
+
 def _state_machine() -> Any:
     module = _module("bot.trading_state_machine", "trading_state_machine")
     if module is None:
@@ -202,6 +213,7 @@ def _monitor() -> None:
 
 def install_import_hook() -> None:
     global _STARTED
+    _install_final_stage_venue_routing_repair()
     if _STARTED:
         return
     with _LOCK:
