@@ -211,6 +211,9 @@ def _monitor() -> None:
     logger.warning("ACTIVATION_PENDING_COMMIT_MONITOR_TIMEOUT timeout_s=%.1f", timeout_s)
 
 
+_install_final_stage_venue_routing_repair()
+
+
 def install_import_hook() -> None:
     global _STARTED
     _install_final_stage_venue_routing_repair()
