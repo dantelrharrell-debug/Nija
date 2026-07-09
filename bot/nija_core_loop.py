@@ -1338,6 +1338,53 @@ class NijaCoreLoop:
         if throttle_symbol_list is not None:
             symbols = throttle_symbol_list(symbols)
 
+        # ── Broker-specific tradable universe filter ──────────────────────
+        # For OKX: loads the live instruments endpoint (30-min cached) and
+        # removes synthetic/invalid/not-listed/volume-dead symbols BEFORE any
+        # candle fetch is attempted.  This prevents wasting scan time on dead
+        # OKX pairs and stops VOLUME_TOO_LOW/DATA_INSUFFICIENT noise.
+        _universe_before = len(symbols)
+        _universe_stats: Dict[str, Any] = {
+            "total": _universe_before,
+            "tradeable": _universe_before,
+            "quarantined": 0,
+            "quarantine_reason_synthetic": 0,
+            "quarantine_reason_not_listed": 0,
+            "quarantine_reason_volume_fail": 0,
+            "universe_loaded": False,
+        }
+        try:
+            try:
+                from bot.okx_runtime_patch import filter_symbols_for_broker as _filter_tradable  # type: ignore
+            except ImportError:
+                from okx_runtime_patch import filter_symbols_for_broker as _filter_tradable  # type: ignore
+            symbols, _universe_stats = _filter_tradable(broker, symbols)
+        except Exception as _universe_err:
+            logger.debug("tradable_universe_filter skipped (non-fatal): %s", _universe_err)
+
+        _universe_tradeable = len(symbols)
+        _universe_quarantined = int(_universe_stats.get("quarantined", 0))
+        logger.info(
+            "TRADABLE_UNIVERSE_BUILT broker=%s symbols_total=%d "
+            "symbols_tradeable=%d symbols_quarantined=%d "
+            "(synthetic=%d not_listed=%d vol_fail=%d) universe_loaded=%s",
+            str(getattr(getattr(broker, "broker_type", None), "value", type(broker).__name__) or type(broker).__name__),
+            _universe_before,
+            _universe_tradeable,
+            _universe_quarantined,
+            int(_universe_stats.get("quarantine_reason_synthetic", 0)),
+            int(_universe_stats.get("quarantine_reason_not_listed", 0)),
+            int(_universe_stats.get("quarantine_reason_volume_fail", 0)),
+            bool(_universe_stats.get("universe_loaded", False)),
+        )
+        print(
+            f"[NIJA-PRINT] TRADABLE_UNIVERSE_BUILT "
+            f"symbols_total={_universe_before} "
+            f"symbols_tradeable={_universe_tradeable} "
+            f"symbols_quarantined={_universe_quarantined}",
+            flush=True,
+        )
+
         # ── Snapshot: capture volatile apex state ONCE for the entire cycle ──
         # All phases and gates receive this frozen reference so every check
         # sees a consistent view of the world even if background threads mutate
@@ -1870,6 +1917,43 @@ class NijaCoreLoop:
             f"orders_submitted={result.orders_submitted} "
             f"broker_acks={result.broker_acks} fills={result.fills} "
             f"execute_successes={result.execute_successes}",
+            flush=True,
+        )
+
+        # ── Final TRADABLE_UNIVERSE_BUILT summary (universe + liquidity + orders) ─
+        # Combines the pre-scan universe filter stats with the final per-cycle
+        # liquidity/order outcomes so a single log line shows the full funnel.
+        _final_liq_qualified = int(getattr(result, "symbols_scored", 0) or 0)
+        # _gate_rejections is set in the phase-3 branch; guard for early-exit paths
+        _gate_rej_for_final = locals().get("_gate_rejections") or {}
+        _final_liq_rejected = (
+            int(_universe_quarantined)
+            + int(_gate_rej_for_final.get("data_insufficient", 0))
+            + int(result.candidates_volume_blocked or 0)
+        )
+        logger.info(
+            "TRADABLE_UNIVERSE_FINAL cycle=%d "
+            "symbols_total=%d symbols_tradeable=%d symbols_quarantined=%d "
+            "liquidity_qualified=%d liquidity_rejected=%d "
+            "order_ready_count=%d orders_submitted=%d",
+            self._total_cycles,
+            _universe_before,
+            _universe_tradeable,
+            _universe_quarantined,
+            _final_liq_qualified,
+            _final_liq_rejected,
+            result.candidates_order_ready,
+            result.orders_submitted,
+        )
+        print(
+            f"[NIJA-PRINT] TRADABLE_UNIVERSE_FINAL "
+            f"symbols_total={_universe_before} "
+            f"symbols_tradeable={_universe_tradeable} "
+            f"symbols_quarantined={_universe_quarantined} "
+            f"liquidity_qualified={_final_liq_qualified} "
+            f"liquidity_rejected={_final_liq_rejected} "
+            f"order_ready_count={result.candidates_order_ready} "
+            f"orders_submitted={result.orders_submitted}",
             flush=True,
         )
 
@@ -2461,6 +2545,17 @@ class NijaCoreLoop:
                         _fallback_admission_active,
                         "BLOCK",
                     )
+                    # Record OKX volume failures so repeated dead symbols are
+                    # moved to the universe quarantine on the next cycle.
+                    if str(_broker_name_for_symbol).strip().lower() == "okx":
+                        try:
+                            try:
+                                from bot.okx_runtime_patch import record_okx_volume_fail as _rec_vol_fail  # type: ignore
+                            except ImportError:
+                                from okx_runtime_patch import record_okx_volume_fail as _rec_vol_fail  # type: ignore
+                            _rec_vol_fail(symbol)
+                        except Exception:
+                            pass
                     continue
                 if _unsupported_route:
                     _liquidity_rejected += 1

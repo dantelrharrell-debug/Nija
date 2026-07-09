@@ -30,6 +30,15 @@ _SYNTHETIC_CASH_PAIRS = {"USD-USDT", "USDT-USD", "USDC-USDT", "USDT-USDC", "USD-
 _INVALID_OKX_INST_IDS: set[str] = set()
 _PRODUCT_CACHE: dict[str, Any] = {"loaded_at": 0.0, "symbols": set()}
 
+# Session-level quarantine for OKX symbols confirmed invalid/synthetic/not_listed.
+# These are removed from the scan universe immediately so no candle fetch is attempted.
+_UNIVERSE_QUARANTINE: set[str] = set()
+# Quarantine OKX symbols that hit VOLUME_TOO_LOW this many times in a session.
+_VOLUME_FAIL_COUNTS: dict[str, int] = {}
+_VOLUME_FAIL_QUARANTINE_THRESHOLD = int(
+    os.environ.get("NIJA_OKX_VOLUME_FAIL_QUARANTINE_THRESHOLD", "3")
+)
+
 
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "false").strip().lower() in _TRUTHY
@@ -178,6 +187,173 @@ def _candles_payload_to_rows(result: Any) -> list[dict[str, float]]:
         except Exception:
             continue
     return rows
+
+
+def _is_okx_broker(broker: Any) -> bool:
+    """Return True when *broker* is an OKX broker instance."""
+    if broker is None:
+        return False
+    cls_name = type(broker).__name__.upper()
+    if "OKX" in cls_name:
+        return True
+    bt = getattr(broker, "broker_type", None)
+    if bt is not None:
+        val = str(getattr(bt, "value", bt) or "").upper()
+        if "OKX" in val:
+            return True
+    return False
+
+
+def _get_okx_rest_client(broker: Any) -> Any:
+    """Return the OKX REST client from an OKX broker, or None."""
+    for attr in ("market_api", "account_api", "rest_client", "_rest"):
+        client = getattr(broker, attr, None)
+        if client is not None:
+            return client
+    return None
+
+
+def filter_symbols_for_broker(
+    broker: Any,
+    symbols: list,
+) -> "tuple[list, dict]":
+    """Pre-scan tradable universe filter.
+
+    For OKX brokers: loads the live instruments endpoint (30-min cached),
+    removes synthetic cash pairs, not-listed instruments, and session-quarantined
+    symbols before any candle fetch is attempted.
+
+    For non-OKX brokers: returns the original list unchanged.
+
+    Returns
+    -------
+    (filtered_symbols, stats)
+        filtered_symbols  — list of symbols to scan
+        stats             — dict with keys: total, tradeable, quarantined,
+                           quarantine_reason_synthetic, quarantine_reason_not_listed,
+                           quarantine_reason_volume_fail, universe_loaded
+    """
+    stats: dict = {
+        "total": len(symbols),
+        "tradeable": len(symbols),
+        "quarantined": 0,
+        "quarantine_reason_synthetic": 0,
+        "quarantine_reason_not_listed": 0,
+        "quarantine_reason_volume_fail": 0,
+        "universe_loaded": False,
+    }
+
+    if not symbols:
+        return [], stats
+
+    if not _is_okx_broker(broker):
+        return list(symbols), stats
+
+    # Load or use cached OKX instruments list.
+    # Try REST client first; fall back to module-level cache if REST is unavailable.
+    rest = _get_okx_rest_client(broker)
+    products: set = set()
+    if rest is not None:
+        try:
+            products = _load_okx_products_from_rest(rest)
+        except Exception as exc:
+            logger.debug("OKX_UNIVERSE_FILTER product load failed (non-fatal): %s", exc)
+    if not products:
+        # Use module-level cache even when the REST client is unavailable
+        _cached = _PRODUCT_CACHE.get("symbols")
+        if isinstance(_cached, set) and _cached:
+            _now = time.time()
+            if _now - float(_PRODUCT_CACHE.get("loaded_at", 0.0) or 0.0) < 1800:
+                products = set(_cached)
+    stats["universe_loaded"] = bool(products)
+
+    filtered: list = []
+    for sym in symbols:
+        normalized = _normalize_okx_inst_id(sym)
+
+        # Check synthetic cash pairs first (always quarantine regardless of other state)
+        if _is_invalid_or_synthetic(normalized):
+            _UNIVERSE_QUARANTINE.add(normalized)
+            stats["quarantined"] += 1
+            stats["quarantine_reason_synthetic"] += 1
+            logger.debug(
+                "OKX_UNIVERSE_FILTER_QUARANTINE symbol=%s reason=synthetic_or_invalid",
+                normalized,
+            )
+            continue
+
+        # Check volume-failure quarantine (check before general quarantine so
+        # reason attribution is correct even when symbol is already in quarantine)
+        if _VOLUME_FAIL_COUNTS.get(normalized, 0) >= _VOLUME_FAIL_QUARANTINE_THRESHOLD:
+            _UNIVERSE_QUARANTINE.add(normalized)
+            stats["quarantined"] += 1
+            stats["quarantine_reason_volume_fail"] += 1
+            logger.debug(
+                "OKX_UNIVERSE_FILTER_QUARANTINE symbol=%s reason=repeated_volume_too_low count=%d",
+                normalized,
+                _VOLUME_FAIL_COUNTS.get(normalized, 0),
+            )
+            continue
+
+        # Skip already-quarantined symbols (from prior cycles or not_listed)
+        if normalized in _UNIVERSE_QUARANTINE:
+            stats["quarantined"] += 1
+            continue
+
+        # If the product list is loaded, skip symbols not present
+        if products and normalized not in products:
+            _INVALID_OKX_INST_IDS.add(normalized)
+            _UNIVERSE_QUARANTINE.add(normalized)
+            stats["quarantined"] += 1
+            stats["quarantine_reason_not_listed"] += 1
+            logger.debug(
+                "OKX_UNIVERSE_FILTER_QUARANTINE symbol=%s reason=not_listed",
+                normalized,
+            )
+            continue
+
+        filtered.append(sym)
+
+    stats["tradeable"] = len(filtered)
+    logger.info(
+        "OKX_UNIVERSE_FILTER_DONE total=%d tradeable=%d quarantined=%d "
+        "(synthetic=%d not_listed=%d vol_fail=%d) universe_loaded=%s",
+        stats["total"],
+        stats["tradeable"],
+        stats["quarantined"],
+        stats["quarantine_reason_synthetic"],
+        stats["quarantine_reason_not_listed"],
+        stats["quarantine_reason_volume_fail"],
+        stats["universe_loaded"],
+    )
+    return filtered, stats
+
+
+def record_okx_volume_fail(symbol: Any) -> None:
+    """Record a VOLUME_TOO_LOW failure for an OKX symbol.
+
+    After *_VOLUME_FAIL_QUARANTINE_THRESHOLD* calls the symbol is moved to
+    *_UNIVERSE_QUARANTINE* so it is skipped in future scan cycles.
+    """
+    normalized = _normalize_okx_inst_id(symbol)
+    if not normalized:
+        return
+    _VOLUME_FAIL_COUNTS[normalized] = _VOLUME_FAIL_COUNTS.get(normalized, 0) + 1
+    count = _VOLUME_FAIL_COUNTS[normalized]
+    if count >= _VOLUME_FAIL_QUARANTINE_THRESHOLD:
+        _UNIVERSE_QUARANTINE.add(normalized)
+        logger.warning(
+            "OKX_VOLUME_FAIL_QUARANTINE symbol=%s fail_count=%d threshold=%d — "
+            "quarantined for this session",
+            normalized,
+            count,
+            _VOLUME_FAIL_QUARANTINE_THRESHOLD,
+        )
+
+
+def get_okx_universe_quarantine() -> "set[str]":
+    """Return a snapshot of the current OKX universe quarantine."""
+    return set(_UNIVERSE_QUARANTINE)
 
 
 def apply_okx_runtime_patches() -> bool:
@@ -460,6 +636,7 @@ def apply_okx_runtime_patches() -> bool:
     okx_cls.get_current_price = get_current_price
     okx_cls.get_tradeable_pairs = get_tradeable_pairs
     okx_cls.get_available_markets = get_available_markets
+    okx_cls.get_all_products = get_tradeable_pairs  # alias used by symbol-universe builder
     okx_cls.is_listed_symbol = is_listed_symbol
     okx_cls.normalize_symbol = staticmethod(_normalize_okx_inst_id)
     bm._NIJA_OKX_RUNTIME_PATCHED = True
