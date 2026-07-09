@@ -9,14 +9,9 @@ class FakeTier:
     value = "SAVER"
 
 
-class FakeCapitalAuthority:
-    def get_real_capital(self):
-        return 579.50
-
-
 def test_kraken_tier_floor_repair_allows_exchange_floor_when_platform_capital_ready(monkeypatch):
     monkeypatch.setenv("KRAKEN_MIN_NOTIONAL_USD", "23")
-    monkeypatch.setenv("NIJA_PLATFORM_TOTAL_CAPITAL_USD", "579.50")
+    monkeypatch.setattr(patch, "_platform_total_capital", lambda: 579.50)
     module = SimpleNamespace(__name__="bot.tier_config")
 
     def validate_trade_size(trade_size, tier, balance, is_platform=False, exchange="coinbase"):
@@ -33,7 +28,7 @@ def test_kraken_tier_floor_repair_allows_exchange_floor_when_platform_capital_re
 
 def test_kraken_tier_floor_repair_refuses_below_exchange_floor(monkeypatch):
     monkeypatch.setenv("KRAKEN_MIN_NOTIONAL_USD", "23")
-    monkeypatch.setenv("NIJA_PLATFORM_TOTAL_CAPITAL_USD", "579.50")
+    monkeypatch.setattr(patch, "_platform_total_capital", lambda: 579.50)
     module = SimpleNamespace(__name__="bot.tier_config")
 
     def validate_trade_size(trade_size, tier, balance, is_platform=False, exchange="coinbase"):
@@ -50,7 +45,7 @@ def test_kraken_tier_floor_repair_refuses_below_exchange_floor(monkeypatch):
 
 def test_kraken_tier_floor_repair_refuses_when_platform_capital_not_ready(monkeypatch):
     monkeypatch.setenv("KRAKEN_MIN_NOTIONAL_USD", "23")
-    monkeypatch.setenv("NIJA_PLATFORM_TOTAL_CAPITAL_USD", "200.00")
+    monkeypatch.setattr(patch, "_platform_total_capital", lambda: 200.00)
     module = SimpleNamespace(__name__="bot.tier_config")
 
     def validate_trade_size(trade_size, tier, balance, is_platform=False, exchange="coinbase"):
@@ -67,7 +62,7 @@ def test_kraken_tier_floor_repair_refuses_when_platform_capital_not_ready(monkey
 
 def test_kraken_resize_repair_returns_original_size_when_valid(monkeypatch):
     monkeypatch.setenv("KRAKEN_MIN_NOTIONAL_USD", "23")
-    monkeypatch.setenv("NIJA_PLATFORM_TOTAL_CAPITAL_USD", "579.50")
+    monkeypatch.setattr(patch, "_platform_total_capital", lambda: 579.50)
     module = SimpleNamespace(__name__="bot.tier_config")
 
     def auto_resize_trade(trade_size, tier, balance, is_platform=False, exchange="coinbase"):
