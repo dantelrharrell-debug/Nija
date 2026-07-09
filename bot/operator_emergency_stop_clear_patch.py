@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 logger = logging.getLogger("nija.operator_emergency_stop_clear")
-_MARKER = "20260709w"
+_MARKER = "20260709z"
 _TRUTHY = {"1", "true", "yes", "on", "y", "enabled"}
 _APPROVAL_PHRASE = "CLEAR_EMERGENCY_STOP_FOR_LIVE_TRADING"
 _DEFAULT_KILL_FILES = (
@@ -21,6 +21,13 @@ _DEFAULT_STATE_FILES = (
     "/app/.nija_kill_switch_state.json",
     "./.nija_kill_switch_state.json",
     "./data/.nija_kill_switch_state.json",
+)
+_STOP_ENV_NAMES = (
+    "NIJA_EMERGENCY_STOP_REASON",
+    "NIJA_KILL_SWITCH_REASON",
+    "NIJA_PRE_HALT_REASON",
+    "NIJA_RUNTIME_STOP_REASON",
+    "NIJA_OPERATOR_EMERGENCY_STOP_REASON",
 )
 _MANUAL_CLEAR_ALLOWED_TOKENS = (
     "manual",
@@ -41,6 +48,14 @@ _TERMINAL_RISK_TOKENS = (
     "api instability",
     "unexpected balance",
     "balance delta",
+)
+_UNSAFE_BYPASS_ENVS = (
+    "NIJA_FORCE_ACTIVATION",
+    "NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK",
+    "NIJA_DISABLE_WRITER_LOCK",
+    "NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK",
+    "NIJA_CLEAR_TERMINAL_RISK_BLOCKS",
+    "NIJA_BYPASS_RISK_GATES",
 )
 
 
@@ -103,13 +118,7 @@ def _combined_stop_text(paths: Iterable[Path]) -> str:
                     chunks.append(json.dumps(parsed, sort_keys=True, default=str))
             except Exception:
                 pass
-    for env_name in (
-        "NIJA_EMERGENCY_STOP_REASON",
-        "NIJA_KILL_SWITCH_REASON",
-        "NIJA_PRE_HALT_REASON",
-        "NIJA_RUNTIME_STOP_REASON",
-        "NIJA_OPERATOR_EMERGENCY_STOP_REASON",
-    ):
+    for env_name in _STOP_ENV_NAMES:
         value = os.environ.get(env_name)
         if value:
             chunks.append(f"{env_name}={value}")
@@ -121,10 +130,15 @@ def _stop_reason_safe_to_clear(paths: Iterable[Path]) -> tuple[bool, str]:
     if any(token in text for token in _TERMINAL_RISK_TOKENS):
         return False, "terminal_risk_reason_present"
     if text and not any(token in text for token in _MANUAL_CLEAR_ALLOWED_TOKENS):
-        # Unknown stop source should not be auto-cleared. The operator clear path
-        # is explicit, but still refuses opaque terminal stop content.
         return False, "unknown_emergency_stop_reason"
     return True, "operator_manual_clear_allowed"
+
+
+def _unsafe_bypass_env_present() -> tuple[bool, str]:
+    for name in _UNSAFE_BYPASS_ENVS:
+        if _truthy(name, False):
+            return True, name
+    return False, ""
 
 
 def _safe_to_clear(all_paths: Iterable[Path]) -> tuple[bool, str]:
@@ -138,16 +152,46 @@ def _safe_to_clear(all_paths: Iterable[Path]) -> tuple[bool, str]:
         return False, "missing_operator_reason"
     if not _live_mode():
         return False, "not_live_mode"
-    if _truthy("NIJA_FORCE_ACTIVATION", False) or _truthy("NIJA_FORCE_LOCAL_WRITER_LOCK_FALLBACK", False):
-        return False, "unsafe_force_activation_or_local_fallback_present"
-    if _truthy("NIJA_DISABLE_WRITER_LOCK", False) or _truthy("NIJA_UNSAFE_BYPASS_DISTRIBUTED_LOCK", False):
-        return False, "unsafe_writer_lock_bypass_present"
-    if _truthy("NIJA_CLEAR_TERMINAL_RISK_BLOCKS", False) or _truthy("NIJA_BYPASS_RISK_GATES", False):
-        return False, "unsafe_risk_bypass_present"
+    unsafe, unsafe_name = _unsafe_bypass_env_present()
+    if unsafe:
+        return False, f"unsafe_bypass_env_present:{unsafe_name}"
     stop_ok, stop_reason = _stop_reason_safe_to_clear(all_paths)
     if not stop_ok:
         return False, stop_reason
     return True, "operator_approved"
+
+
+def _env_only_stop_present() -> tuple[bool, str]:
+    text = _combined_stop_text(())
+    env_state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper()
+    env_auth = os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "").strip()
+    if text.strip():
+        return True, text
+    if env_state == "EMERGENCY_STOP" or env_auth == "0":
+        return True, f"runtime_state={env_state or 'missing'} exec_auth={env_auth or 'missing'}"
+    return False, ""
+
+
+def _safe_to_clear_stale_env_only() -> tuple[bool, str]:
+    if not _truthy("NIJA_AUTO_CLEAR_STALE_MANUAL_EMERGENCY_ENV", True):
+        return False, "stale_env_auto_clear_disabled"
+    if not _live_mode():
+        return False, "not_live_mode"
+    unsafe, unsafe_name = _unsafe_bypass_env_present()
+    if unsafe:
+        return False, f"unsafe_bypass_env_present:{unsafe_name}"
+    present, text = _env_only_stop_present()
+    if not present:
+        return False, "no_stop_env_latch_present"
+    if any(token in text for token in _TERMINAL_RISK_TOKENS):
+        return False, "terminal_risk_reason_present"
+    if text and any(token in text for token in _MANUAL_CLEAR_ALLOWED_TOKENS):
+        return True, "stale_manual_env_latch_no_kill_file"
+    # Empty reason with only runtime_state=EMERGENCY_STOP is also a stale env
+    # latch in Railway after the filesystem stop has already been removed.
+    if "runtime_state=emergency_stop" in text or "exec_auth=0" in text:
+        return True, "stale_runtime_env_latch_no_kill_file"
+    return False, "unknown_emergency_stop_reason"
 
 
 def _quarantine(path: Path) -> Path:
@@ -167,14 +211,11 @@ def _quarantine(path: Path) -> Path:
 
 
 def _clear_runtime_env() -> None:
-    for env_name in (
-        "NIJA_EMERGENCY_STOP_REASON",
-        "NIJA_KILL_SWITCH_REASON",
-        "NIJA_PRE_HALT_REASON",
-        "NIJA_RUNTIME_STOP_REASON",
-        "NIJA_OPERATOR_EMERGENCY_STOP_REASON",
-    ):
+    for env_name in _STOP_ENV_NAMES:
         os.environ.pop(env_name, None)
+    os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP", None)
+    os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_ACK", None)
+    os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_REASON", None)
     # Do not force LIVE_ACTIVE here. Clearing an operator stop only returns the
     # system to a neutral non-emergency runtime; activation/convergence patches
     # still have to prove CapitalAuthority, writer authority and heartbeat.
@@ -189,7 +230,17 @@ def run_once() -> int:
     state_files = _state_files()
     all_paths = kill_files + [path for path in state_files if path not in kill_files]
     if not all_paths:
-        logger.info("OPERATOR_EMERGENCY_STOP_CLEAR_NOOP marker=%s reason=no_kill_or_state_file_found", _MARKER)
+        ok, reason = _safe_to_clear_stale_env_only()
+        if ok:
+            _clear_runtime_env()
+            logger.critical(
+                "OPERATOR_EMERGENCY_STOP_ENV_ONLY_CLEAR_APPLIED marker=%s reason=%s force_activation=false risk_bypass=false state_files_included=false",
+                _MARKER,
+                reason,
+            )
+            print(f"[NIJA-PRINT] OPERATOR_EMERGENCY_STOP_ENV_ONLY_CLEAR_APPLIED marker={_MARKER} reason={reason}", flush=True)
+            return 1
+        logger.info("OPERATOR_EMERGENCY_STOP_CLEAR_NOOP marker=%s reason=no_kill_or_state_file_found env_reason=%s", _MARKER, reason)
         return 0
     ok, reason = _safe_to_clear(all_paths)
     if not ok:
