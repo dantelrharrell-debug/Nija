@@ -43,6 +43,11 @@ _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
         "PLATFORM_TIER_LIVE_CAPITAL_INSTALL_REQUESTED",
         "20260709s",
     ),
+    (
+        "hard_controls_capital_authority_bridge_patch",
+        "HARD_CONTROLS_CA_BRIDGE_INSTALL_REQUESTED",
+        "20260709t",
+    ),
 )
 
 
