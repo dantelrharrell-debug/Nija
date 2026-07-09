@@ -23,46 +23,17 @@ _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _STARTED = False
 _LOCK = threading.Lock()
 _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
-    (
-        "final_stage_venue_routing_repair_patch",
-        "FINAL_STAGE_VENUE_ROUTING_REPAIR_INSTALL_REQUESTED",
-        "20260709n",
-    ),
-    (
-        "final_stage_venue_resolution_cache_patch",
-        "FINAL_STAGE_BROKER_RESOLUTION_CACHE_INSTALL_REQUESTED",
-        "20260709r",
-    ),
-    (
-        "closed_candle_volume_repair_patch",
-        "CLOSED_CANDLE_VOLUME_REPAIR_INSTALL_REQUESTED",
-        "20260709q",
-    ),
-    (
-        "platform_tier_live_capital_patch",
-        "PLATFORM_TIER_LIVE_CAPITAL_INSTALL_REQUESTED",
-        "20260709s",
-    ),
-    (
-        "hard_controls_capital_authority_bridge_patch",
-        "HARD_CONTROLS_CA_BRIDGE_INSTALL_REQUESTED",
-        "20260709t",
-    ),
-    (
-        "runtime_authority_convergence_repair_patch",
-        "RUNTIME_AUTHORITY_CONVERGENCE_INSTALL_REQUESTED",
-        "20260709u",
-    ),
-    (
-        "broker_native_quote_routing_patch",
-        "BROKER_NATIVE_QUOTE_ROUTING_INSTALL_REQUESTED",
-        "20260709y",
-    ),
-    (
-        "execution_minimum_position_micro_broker_repair_patch",
-        "EXECUTION_MICRO_BROKER_MINIMUM_REPAIR_INSTALL_REQUESTED",
-        "20260709aa",
-    ),
+    ("final_stage_venue_routing_repair_patch", "FINAL_STAGE_VENUE_ROUTING_REPAIR_INSTALL_REQUESTED", "20260709n"),
+    ("final_stage_venue_resolution_cache_patch", "FINAL_STAGE_BROKER_RESOLUTION_CACHE_INSTALL_REQUESTED", "20260709r"),
+    ("closed_candle_volume_repair_patch", "CLOSED_CANDLE_VOLUME_REPAIR_INSTALL_REQUESTED", "20260709q"),
+    ("platform_tier_live_capital_patch", "PLATFORM_TIER_LIVE_CAPITAL_INSTALL_REQUESTED", "20260709s"),
+    ("hard_controls_capital_authority_bridge_patch", "HARD_CONTROLS_CA_BRIDGE_INSTALL_REQUESTED", "20260709t"),
+    ("runtime_authority_convergence_repair_patch", "RUNTIME_AUTHORITY_CONVERGENCE_INSTALL_REQUESTED", "20260709u"),
+    ("broker_native_quote_routing_patch", "BROKER_NATIVE_QUOTE_ROUTING_INSTALL_REQUESTED", "20260709y"),
+    ("execution_minimum_position_micro_broker_repair_patch", "EXECUTION_MICRO_BROKER_MINIMUM_REPAIR_INSTALL_REQUESTED", "20260709aa"),
+    ("execution_ack_timeout_failover_patch", "EXECUTION_ACK_TIMEOUT_FAILOVER_INSTALL_REQUESTED", "20260709ab"),
+    ("execution_entry_timeout_guard_patch", "EXECUTION_ENTRY_TIMEOUT_GUARD_INSTALL_REQUESTED", "20260709ac"),
+    ("kraken_tier_floor_platform_capital_repair_patch", "KRAKEN_TIER_FLOOR_PLATFORM_CAPITAL_REPAIR_INSTALL_REQUESTED", "20260709ad"),
 )
 
 
@@ -96,8 +67,6 @@ def _install_startup_execution_repairs() -> None:
 
 
 def _install_final_stage_venue_routing_repair() -> None:
-    # Backward-compatible function name used by older call sites; now installs
-    # all final execution repairs needed before broker dispatch.
     _install_startup_execution_repairs()
 
 
@@ -201,11 +170,7 @@ def _commit_once(sm: Any, meta: dict[str, Any]) -> bool:
     except Exception as exc:
         logger.warning("ACTIVATION_PENDING_COMMIT_MONITOR commit_activation raised: %s", exc)
         return False
-    logger.critical(
-        "ACTIVATION_PENDING_COMMIT_MONITOR_RESULT ok=%s state=%s",
-        ok,
-        _current_state_value(sm),
-    )
+    logger.critical("ACTIVATION_PENDING_COMMIT_MONITOR_RESULT ok=%s state=%s", ok, _current_state_value(sm))
     return ok
 
 
@@ -242,11 +207,7 @@ def _monitor() -> None:
                 if now - last_log >= warn_every:
                     logger.warning(
                         "ACTIVATION_PENDING_COMMIT_MONITOR_WAITING reason=%s hydrated=%s capital=$%.2f stale=%s brokers=%s",
-                        meta.get("reason"),
-                        meta.get("hydrated"),
-                        float(meta.get("real_capital") or 0.0),
-                        meta.get("stale"),
-                        meta.get("registered_brokers"),
+                        meta.get("reason"), meta.get("hydrated"), float(meta.get("real_capital") or 0.0), meta.get("stale"), meta.get("registered_brokers"),
                     )
                     last_log = now
                 time.sleep(interval)
