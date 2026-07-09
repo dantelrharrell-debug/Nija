@@ -20,7 +20,28 @@ def _sample_df(rows: int = 120) -> pd.DataFrame:
 
 
 def test_ai_hub_allows_starter_sector_and_allocates_capital() -> None:
+    class DummyRiskEngine:
+        hard_sector_limit_pct = 0.20
+
+        @staticmethod
+        def get_position_size_adjustment(symbol, base_size_pct, portfolio_value):
+            return base_size_pct
+
+        @staticmethod
+        def check_sector_limits(symbol, position_size_usd, portfolio_value):
+            adjusted = min(float(position_size_usd), float(portfolio_value) * 0.20)
+            return True, adjusted, {
+                "sector_name": "L1",
+                "current_sector_exposure_pct": 0.0,
+                "projected_sector_exposure_pct": adjusted / float(portfolio_value),
+            }
+
+        @staticmethod
+        def calculate_portfolio_metrics(portfolio_value):
+            return SimpleNamespace(var_95=0.0)
+
     hub = AIIntelligenceHub(config={"min_ai_score": 0.0, "live_positions_sync_interval_sec": 3600.0})
+    hub.risk_engine = DummyRiskEngine()
     hub.min_ai_score = 0.0
     # Skip live sync in unit test; we want deterministic empty-position behavior.
     hub._last_live_positions_sync_ts = 10**9
