@@ -194,6 +194,8 @@ for _key, _value in {
     "NIJA_CANDLE_FETCH_TIMEOUT": "6",
     "NIJA_MARKET_DATA_SKIP_SYMBOLS": "AUSD-USD,AUSD-EUR,AUD-USD,ETH-USDC",
     "NIJA_PHASE3_SECTOR_HEADROOM_PREFILTER": "true",
+    "NIJA_APPROVED_TRADE_LIQUIDITY_REROUTE": "true",
+    "NIJA_CROSS_BROKER_LIQUIDITY_REROUTE_MIN_SCORE": "30.0",
 }.items():
     os.environ.setdefault(_key, _value)
 
@@ -256,6 +258,7 @@ _PATCH_HOOKS = (
     ("okx_runtime_patch", "OKX runtime patch"),
     ("okx_final_submit_callshape_patch", "OKX final submit callshape patch"),
     ("broker_native_quote_routing_patch", "Broker-native quote routing repair"),
+    ("approved_trade_liquidity_reroute_patch", "Approved trade liquidity reroute patch"),
     ("execution_pipeline_runtime_patch", "Execution pipeline runtime patch"),
     ("broker_venue_cash_guard_patch", "Broker venue cash guard"),
     ("position_close_pnl_runtime_patch", "Position close P&L runtime patch"),
