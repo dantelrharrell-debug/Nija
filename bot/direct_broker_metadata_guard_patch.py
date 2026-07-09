@@ -10,17 +10,27 @@ from types import ModuleType
 from typing import Any, Iterable
 
 logger = logging.getLogger("nija.direct_broker_metadata_guard")
-_MARKER = "DIRECT_BROKER_METADATA_GUARD_PATCHED marker=20260706f"
-_RUNTIME_MARKER = "20260709v"
-_PATCHED_PROFILE_ATTR = "_nija_direct_broker_metadata_profile_guard_20260706f"
-_PATCHED_DISPATCH_ATTR = "_nija_direct_broker_metadata_dispatch_guard_20260706f"
+_MARKER = "DIRECT_BROKER_METADATA_GUARD_PATCHED marker=20260709ao"
+_RUNTIME_MARKER = "20260709ao"
+_PATCHED_PROFILE_ATTR = "_nija_direct_broker_metadata_profile_guard_20260709ao"
+_PATCHED_DISPATCH_ATTR = "_nija_direct_broker_metadata_dispatch_guard_20260709ao"
 
 _BROKER_NAMES = {"coinbase", "kraken", "okx", "binance"}
 _UNCONFIGURED_LOG_TS: dict[str, float] = {}
+_UNAVAILABLE_LOG_TS: dict[str, float] = {}
+_UNAVAILABLE_CACHE: dict[str, float] = {}
+_RESOLVED_CACHE: dict[str, Any] = {}
 
 
 def _truthy_env(name: str, default: str = "false") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)) or default)
+    except Exception:
+        return default
 
 
 def _norm(value: Any) -> str:
@@ -48,10 +58,6 @@ def _norm(value: Any) -> str:
 
 def _configured_broker_names() -> set[str]:
     configured = {"coinbase", "kraken", "okx"}
-    # Binance is optional in this deployment. If it is not explicitly enabled
-    # and credentialed, scanning the whole process graph for a Binance client
-    # floods Railway logs with DIRECT_BROKER_METADATA_RESOLVE_UNAVAILABLE and
-    # wastes execution time before real venues can dispatch.
     binance_enabled = (
         _truthy_env("NIJA_ENABLE_BINANCE")
         or _truthy_env("ENABLE_BINANCE")
@@ -87,6 +93,31 @@ def _log_unconfigured_once(target: str, *, symbol: str = "") -> None:
     print(
         f"[NIJA-PRINT] DIRECT_BROKER_METADATA_TARGET_SKIPPED marker={_RUNTIME_MARKER} target={target} reason=broker_not_configured_or_disabled",
         flush=True,
+    )
+
+
+def _log_unavailable_rate_limited(target: str, *, symbol: str = "") -> None:
+    now = time.monotonic()
+    window_s = max(5.0, _float_env("NIJA_DIRECT_BROKER_METADATA_UNAVAILABLE_LOG_WINDOW_S", 30.0))
+    key = f"{target}:{symbol}"
+    last = _UNAVAILABLE_LOG_TS.get(key, _UNAVAILABLE_LOG_TS.get(target, 0.0))
+    if now - last < window_s:
+        logger.debug(
+            "DIRECT_BROKER_METADATA_RESOLVE_UNAVAILABLE_SUPPRESSED marker=%s target=%s symbol=%s window_s=%.1f",
+            _RUNTIME_MARKER,
+            target,
+            symbol,
+            window_s,
+        )
+        return
+    _UNAVAILABLE_LOG_TS[key] = now
+    _UNAVAILABLE_LOG_TS[target] = now
+    logger.warning(
+        "DIRECT_BROKER_METADATA_RESOLVE_UNAVAILABLE marker=%s target=%s symbol=%s window_s=%.1f action=rate_limited",
+        _RUNTIME_MARKER,
+        target,
+        symbol,
+        window_s,
     )
 
 
@@ -289,7 +320,6 @@ def _module_candidates(target: str = "") -> Iterable[Any]:
                         pass
         except Exception:
             pass
-    # Last-resort scan: only broker/account/capital modules to avoid walking the whole process graph.
     for name, module in list(sys.modules.items()):
         low = str(name).lower()
         if not any(token in low for token in ("broker", "account", "capital")):
@@ -325,25 +355,42 @@ def _resolve_live_client(router: Any, target: str, *, symbol: str = "") -> Any |
     if not _is_configured_target(target):
         _log_unconfigured_once(target, symbol=symbol)
         return None
+
+    now = time.monotonic()
+    miss_ttl_s = max(2.0, _float_env("NIJA_DIRECT_BROKER_METADATA_MISS_CACHE_S", 10.0))
+    miss_key = f"{target}:{symbol}"
+    if now - _UNAVAILABLE_CACHE.get(miss_key, 0.0) < miss_ttl_s:
+        _log_unavailable_rate_limited(target, symbol=symbol)
+        return None
+
+    cached = _RESOLVED_CACHE.get(target)
+    if _is_live_client(cached, target):
+        return cached
+
     resolver = getattr(router, "_resolve_live_broker", None)
     if callable(resolver):
         try:
             client = resolver(target)
             if _is_live_client(client, target):
-                logger.critical("DIRECT_BROKER_METADATA_RESOLVED marker=20260706f source=router_resolver target=%s type=%s", target, type(client).__name__)
+                _RESOLVED_CACHE[target] = client
+                logger.critical("DIRECT_BROKER_METADATA_RESOLVED marker=%s source=router_resolver target=%s type=%s", _RUNTIME_MARKER, target, type(client).__name__)
                 return client
         except Exception as exc:
-            logger.warning("DIRECT_BROKER_METADATA_RESOLVE_FAILED marker=20260706f target=%s error=%s", target, exc)
+            logger.warning("DIRECT_BROKER_METADATA_RESOLVE_FAILED marker=%s target=%s error=%s", _RUNTIME_MARKER, target, exc)
     client = _scan_for_client(router, target)
     if client is not None:
-        logger.critical("DIRECT_BROKER_METADATA_RESOLVED marker=20260706f source=router_graph target=%s type=%s", target, type(client).__name__)
+        _RESOLVED_CACHE[target] = client
+        logger.critical("DIRECT_BROKER_METADATA_RESOLVED marker=%s source=router_graph target=%s type=%s", _RUNTIME_MARKER, target, type(client).__name__)
         return client
     for candidate in _module_candidates(target):
         client = _scan_for_client(candidate, target)
         if client is not None:
-            logger.critical("DIRECT_BROKER_METADATA_RESOLVED marker=20260706f source=platform_registry target=%s type=%s", target, type(client).__name__)
+            _RESOLVED_CACHE[target] = client
+            logger.critical("DIRECT_BROKER_METADATA_RESOLVED marker=%s source=platform_registry target=%s type=%s", _RUNTIME_MARKER, target, type(client).__name__)
             return client
-    logger.critical("DIRECT_BROKER_METADATA_RESOLVE_UNAVAILABLE marker=20260706f target=%s", target)
+    _UNAVAILABLE_CACHE[miss_key] = now
+    _UNAVAILABLE_CACHE[target] = now
+    _log_unavailable_rate_limited(target, symbol=symbol)
     return None
 
 
@@ -408,25 +455,27 @@ def _patch_router(module: ModuleType) -> bool:
                     repaired_meta = _meta_with_client(meta, target_name, replacement)
                     _set_request_meta(request, repaired_meta)
                     logger.critical(
-                        "DIRECT_BROKER_METADATA_REPLACED marker=20260706f requested_broker=%s stale_client_broker=%s replacement_type=%s symbol=%s",
+                        "DIRECT_BROKER_METADATA_REPLACED marker=%s requested_broker=%s stale_client_broker=%s replacement_type=%s symbol=%s",
+                        _RUNTIME_MARKER,
                         target_name,
                         client_name,
                         type(replacement).__name__,
                         getattr(request, "symbol", ""),
                     )
                     print(
-                        f"[NIJA-PRINT] DIRECT_BROKER_METADATA_REPLACED marker=20260706f requested_broker={target_name} stale_client_broker={client_name} replacement_type={type(replacement).__name__} symbol={getattr(request, 'symbol', '')}",
+                        f"[NIJA-PRINT] DIRECT_BROKER_METADATA_REPLACED marker={_RUNTIME_MARKER} requested_broker={target_name} stale_client_broker={client_name} replacement_type={type(replacement).__name__} symbol={getattr(request, 'symbol', '')}",
                         flush=True,
                     )
                     return original_profile(self, asset_class, request)
-                logger.critical(
-                    "DIRECT_BROKER_METADATA_MISMATCH_SKIPPED marker=20260706f requested_broker=%s client_broker=%s symbol=%s reason=replacement_unavailable",
+                logger.warning(
+                    "DIRECT_BROKER_METADATA_MISMATCH_SKIPPED marker=%s requested_broker=%s client_broker=%s symbol=%s reason=replacement_unavailable",
+                    _RUNTIME_MARKER,
                     target_name,
                     client_name,
                     getattr(request, "symbol", ""),
                 )
                 print(
-                    f"[NIJA-PRINT] DIRECT_BROKER_METADATA_MISMATCH_SKIPPED marker=20260706f requested_broker={target_name} client_broker={client_name} symbol={getattr(request, 'symbol', '')} reason=replacement_unavailable",
+                    f"[NIJA-PRINT] DIRECT_BROKER_METADATA_MISMATCH_SKIPPED marker={_RUNTIME_MARKER} requested_broker={target_name} client_broker={client_name} symbol={getattr(request, 'symbol', '')} reason=replacement_unavailable",
                     flush=True,
                 )
                 return None
@@ -453,24 +502,26 @@ def _patch_router(module: ModuleType) -> bool:
                 if replacement is not None:
                     meta = _meta_with_client(meta, broker_name, replacement)
                     logger.critical(
-                        "DIRECT_BROKER_METADATA_REPLACED_AT_DISPATCH marker=20260706f broker=%s stale_client_broker=%s replacement_type=%s",
+                        "DIRECT_BROKER_METADATA_REPLACED_AT_DISPATCH marker=%s broker=%s stale_client_broker=%s replacement_type=%s",
+                        _RUNTIME_MARKER,
                         broker_name,
                         client_name,
                         type(replacement).__name__,
                     )
                     print(
-                        f"[NIJA-PRINT] DIRECT_BROKER_METADATA_REPLACED_AT_DISPATCH marker=20260706f broker={broker_name} stale_client_broker={client_name} replacement_type={type(replacement).__name__}",
+                        f"[NIJA-PRINT] DIRECT_BROKER_METADATA_REPLACED_AT_DISPATCH marker={_RUNTIME_MARKER} broker={broker_name} stale_client_broker={client_name} replacement_type={type(replacement).__name__}",
                         flush=True,
                     )
                 else:
                     meta = _clean_meta_for_target(meta, broker_name)
-                    logger.critical(
-                        "DIRECT_BROKER_METADATA_CLEARED marker=20260706f broker=%s stale_client_broker=%s reason=replacement_unavailable",
+                    logger.warning(
+                        "DIRECT_BROKER_METADATA_CLEARED marker=%s broker=%s stale_client_broker=%s reason=replacement_unavailable",
+                        _RUNTIME_MARKER,
                         broker_name,
                         client_name,
                     )
                     print(
-                        f"[NIJA-PRINT] DIRECT_BROKER_METADATA_CLEARED marker=20260706f broker={broker_name} stale_client_broker={client_name} reason=replacement_unavailable",
+                        f"[NIJA-PRINT] DIRECT_BROKER_METADATA_CLEARED marker={_RUNTIME_MARKER} broker={broker_name} stale_client_broker={client_name} reason=replacement_unavailable",
                         flush=True,
                     )
                 kwargs["metadata"] = meta
@@ -481,8 +532,8 @@ def _patch_router(module: ModuleType) -> bool:
         patched = True
 
     if patched:
-        logger.warning("%s class=MultiBrokerExecutionRouter", _MARKER)
-        print("[NIJA-PRINT] DIRECT_BROKER_METADATA_GUARD_PATCHED marker=20260706f", flush=True)
+        logger.warning("%s class=MultiBrokerExecutionRouter unavailable_log_rate_limited=true", _MARKER)
+        print("[NIJA-PRINT] DIRECT_BROKER_METADATA_GUARD_PATCHED marker=20260709ao unavailable_log_rate_limited=true", flush=True)
     return patched
 
 
@@ -497,7 +548,7 @@ def _try_patch_loaded() -> bool:
 
 def install_import_hook() -> None:
     _try_patch_loaded()
-    if getattr(builtins, "_NIJA_DIRECT_BROKER_METADATA_GUARD_HOOK_V20260706F", False):
+    if getattr(builtins, "_NIJA_DIRECT_BROKER_METADATA_GUARD_HOOK_V20260709AO", False):
         return
     original_import = builtins.__import__
 
@@ -513,8 +564,8 @@ def install_import_hook() -> None:
         return module
 
     builtins.__import__ = guarded_import
-    setattr(builtins, "_NIJA_DIRECT_BROKER_METADATA_GUARD_HOOK_V20260706F", True)
-    logger.warning("DIRECT_BROKER_METADATA_GUARD_IMPORT_HOOK marker=20260706f")
+    setattr(builtins, "_NIJA_DIRECT_BROKER_METADATA_GUARD_HOOK_V20260709AO", True)
+    logger.warning("DIRECT_BROKER_METADATA_GUARD_IMPORT_HOOK marker=20260709ao")
 
 
 def install() -> None:
