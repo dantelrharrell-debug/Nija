@@ -53,6 +53,11 @@ _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
         "RUNTIME_AUTHORITY_CONVERGENCE_INSTALL_REQUESTED",
         "20260709u",
     ),
+    (
+        "broker_native_quote_routing_patch",
+        "BROKER_NATIVE_QUOTE_ROUTING_INSTALL_REQUESTED",
+        "20260709y",
+    ),
 )
 
 
