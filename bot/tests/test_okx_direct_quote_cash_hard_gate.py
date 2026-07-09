@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
 
 from bot import direct_broker_venue_cash_hard_gate_patch as patch
 
@@ -39,6 +39,7 @@ def test_okx_usdt_buy_blocks_when_only_scalar_equity_exists():
     assert available == 0.0
     assert required > 10.0
     assert label == "okx"
+    assert broker.submitted is False
 
 
 def test_okx_usdt_buy_allows_when_spendable_usdt_exists():
@@ -59,16 +60,19 @@ def test_okx_usdt_buy_allows_when_spendable_usdt_exists():
     assert label == "okx"
 
 
-def test_okx_direct_dispatch_does_not_submit_when_usdt_unavailable():
+def test_profile_rejects_okx_usdt_when_spendable_quote_missing():
+    class FakeRouter:
+        def _profile_for_direct_broker(self, asset_class, request):
+            return SimpleNamespace(name="okx")
+
+        def _dispatch_direct_broker_market_order(self, *args, **kwargs):
+            return 1.0, 10.0
+
+    module = SimpleNamespace(MultiBrokerExecutionRouter=FakeRouter, __name__="bot.multi_broker_execution_router")
+    assert patch._patch_module(module) is True
+    router = module.MultiBrokerExecutionRouter()
     broker = FakeOkxBroker({"data": [{"details": [{"ccy": "USD", "availBal": "146.26"}]}]})
+    request = SimpleNamespace(symbol="ADA-USDT", side="buy", size_usd=10.0, metadata={"broker_client": broker})
 
-    with pytest.raises(RuntimeError, match="venue_cash_insufficient:okx"):
-        patch._dispatch_direct_broker_market_order_guarded_for_test(
-            broker,
-            symbol="ADA-USDT",
-            side="buy",
-            size_usd=10.0,
-            metadata={"broker_name": "okx"},
-        )
-
+    assert router._profile_for_direct_broker("spot", request) is None
     assert broker.submitted is False
