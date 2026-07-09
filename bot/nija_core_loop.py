@@ -3505,19 +3505,34 @@ class NijaCoreLoop:
                                 or "liquidity" in _fallback_err_msg
                                 or "fallback_illiquid_policy_blocked" in _fallback_err_msg
                             )
+                            _is_missing_volume_only = (
+                                "rel_volume=0" in _fallback_err_msg
+                                or "rel_volume 0" in _fallback_err_msg
+                                or "missing volume" in _fallback_err_msg
+                                or "no volume" in _fallback_err_msg
+                                or "volume data unavailable" in _fallback_err_msg
+                            )
                             if _is_illiquid_block:
-                                logger.warning(
-                                    "🚫 [CoreLoop] Illiquid policy hard block for %s (%s) — "
-                                    "emergency payload bypass suppressed (live-capital safety).",
-                                    sig.symbol,
-                                    _fallback_err,
-                                )
-                                blocked += 1
-                                _funnel["profitability"] = (
-                                    "FAIL",
-                                    f"ILLIQUID_POLICY_HARD_BLOCK:{_fallback_err}",
-                                )
-                                continue
+                                if _is_missing_volume_only:
+                                    logger.warning(
+                                        "⚠️ [CoreLoop] Fallback liquidity advisory for %s (%s) — "
+                                        "proceeding with conservative fallback payload because volume data is missing/zero.",
+                                        sig.symbol,
+                                        _fallback_err,
+                                    )
+                                else:
+                                    logger.warning(
+                                        "🚫 [CoreLoop] Illiquid policy hard block for %s (%s) — "
+                                        "emergency payload bypass suppressed (live-capital safety).",
+                                        sig.symbol,
+                                        _fallback_err,
+                                    )
+                                    blocked += 1
+                                    _funnel["profitability"] = (
+                                        "FAIL",
+                                        f"ILLIQUID_POLICY_HARD_BLOCK:{_fallback_err}",
+                                    )
+                                    continue
                             if _force_trade_bypass:
                                 logger.warning(
                                     "⚡ [FORCE_TRADE] _build_forced_fallback_entry_analysis "
@@ -3722,11 +3737,45 @@ class NijaCoreLoop:
                     f"price={float(analysis.get('entry_price', 0.0) or 0.0):.6f}",
                     flush=True,
                 )
+                _broker_name = (
+                    self.apex._get_broker_name()
+                    if hasattr(self.apex, "_get_broker_name")
+                    else "unknown"
+                )
+                _order_notional = float(
+                    analysis.get("order_notional", analysis.get("position_size", 0.0)) or 0.0
+                )
+                _min_notional = float(analysis.get("min_notional", 0.0) or 0.0)
+                _capital_allocated = float(
+                    analysis.get("capital_allocated", analysis.get("position_size", 0.0)) or 0.0
+                )
+                _analysis_meta = analysis.get("metadata") if isinstance(analysis.get("metadata"), dict) else {}
+                _ai_eval = _analysis_meta.get("ai_eval") if isinstance(_analysis_meta, dict) else {}
+                _sector_before = float(
+                    ((_ai_eval or {}).get("current_sector_exposure_pct", 0.0) or 0.0)
+                )
+                _sector_after = float(
+                    ((_ai_eval or {}).get("projected_sector_exposure_pct", _sector_before) or _sector_before)
+                )
                 success = self.apex.execute_action(analysis, sig.symbol)
                 print(
                     f"[NIJA-PRINT] AFTER execute_action | "
                     f"symbol={sig.symbol} side={sig.side} success={success}",
                     flush=True,
+                )
+                logger.info(
+                    "ORDER_ADMISSION_APPROVED broker=%s symbol=%s side=%s capital_allocated=%.2f "
+                    "order_notional=%.2f min_notional=%.2f sector_exposure_before=%.4f "
+                    "sector_exposure_after=%.4f submit_result=%s",
+                    _broker_name,
+                    sig.symbol,
+                    sig.side,
+                    _capital_allocated,
+                    _order_notional,
+                    _min_notional,
+                    _sector_before,
+                    _sector_after,
+                    "submitted" if success else "rejected",
                 )
                 logger.critical(
                     "📬 [CoreLoop] ORDER RESULT | symbol=%s side=%s success=%s",
@@ -4085,7 +4134,14 @@ class NijaCoreLoop:
         except Exception:
             pass
 
-        min_notional = 3.50
+        if "kraken" in broker_name:
+            min_notional = 23.10
+        elif "okx" in broker_name:
+            min_notional = 10.0
+        elif "coinbase" in broker_name:
+            min_notional = 1.0
+        else:
+            min_notional = 10.0
         try:
             from bot.minimum_notional_gate import get_minimum_notional_gate
             min_notional = float(
@@ -4094,7 +4150,11 @@ class NijaCoreLoop:
                 )
             )
         except Exception:
-            min_notional = 10.50 if "kraken" in broker_name else 3.50
+            pass
+        if "kraken" in broker_name:
+            min_notional = max(min_notional, 23.10)
+        elif "okx" in broker_name:
+            min_notional = max(min_notional, 10.0)
 
         balance = max(float(snapshot.balance or 0.0), 0.0)
         if balance <= 0:

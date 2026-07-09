@@ -77,13 +77,13 @@ KRAKEN_MIN_POSITION_USD = float(os.getenv('KRAKEN_MIN_NOTIONAL_USD', '10.0'))  #
 # with 2% min sizing ($0.93) is not blocked by the notional gate.  The actual exchange
 # minimums are ~$1 (Coinbase) and ~$1 (Kraken); $1 is the correct operational floor.
 BROKER_MIN_ORDER_USD: Dict[str, float] = {
-    'coinbase': 1.0,    # Coinbase actual exchange minimum — micro-capital compatible
-    'kraken':   1.0,    # Kraken actual exchange minimum — micro-capital compatible (was $5)
-    'binance':  5.0,    # Binance minimum notional
-    'okx':      5.0,    # OKX minimum notional
+    'coinbase': 1.0,    # Coinbase minimum notional
+    'kraken':   23.10,  # Normalized Kraken live floor
+    'binance':  10.0,   # Binance minimum notional
+    'okx':      10.0,   # OKX minimum notional
     'alpaca':   1.0,    # Alpaca (stocks/crypto) minimum
 }
-_DEFAULT_MIN_ORDER_USD = 1.0   # Micro-capital compatible fallback (was $5)
+_DEFAULT_MIN_ORDER_USD = 10.0
 
 # Trade quality thresholds — loosened to fix 0-trade issue (entry filters too strict)
 # NOTE: Kraken is the active broker; kraken_min_confidence was blocking all trades at 0.70
@@ -1182,7 +1182,7 @@ class NIJAApexStrategyV71:
         position_size = scalar(position_size)
 
         broker_name = self._get_broker_name()
-        broker_minimum = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
+        broker_minimum = self._resolve_broker_min_notional_usd(broker_name)
 
         # Normalise confidence early (needed for adaptive minimum calculation)
         confidence = min(score / MAX_ENTRY_SCORE, 1.0)
@@ -2256,6 +2256,43 @@ class NIJAApexStrategyV71:
             pass
 
     @staticmethod
+    def _resolve_broker_min_notional_usd(broker_name: str) -> float:
+        broker_key = str(broker_name or "").strip().lower()
+
+        def _env_float(*names: str, default: float) -> float:
+            for name in names:
+                raw = os.getenv(name)
+                if raw is None:
+                    continue
+                try:
+                    return float(raw)
+                except (TypeError, ValueError):
+                    continue
+            return default
+
+        if broker_key == "kraken":
+            return max(
+                23.10,
+                _env_float(
+                    "NIJA_KRAKEN_FINAL_MIN_NOTIONAL_USD",
+                    "KRAKEN_MIN_NOTIONAL_USD",
+                    default=23.10,
+                ),
+            )
+        if broker_key == "okx":
+            return max(
+                10.0,
+                _env_float("OKX_MIN_ORDER_USD", "NIJA_OKX_MIN_ORDER_USD", default=10.0),
+            )
+        if broker_key == "coinbase":
+            return max(
+                0.01,
+                _env_float("COINBASE_MIN_ORDER_USD", "COINBASE_MIN_ORDER", default=1.0),
+            )
+        fallback = BROKER_MIN_ORDER_USD.get(broker_key, _DEFAULT_MIN_ORDER_USD)
+        return max(0.01, float(fallback or _DEFAULT_MIN_ORDER_USD))
+
+    @staticmethod
     def _apply_executable_trade_floor(
         raw_size: float,
         capital: float,
@@ -2272,7 +2309,7 @@ class NIJAApexStrategyV71:
         safe_min_notional = max(float(min_notional), 0.0)
         safe_raw_size = max(float(raw_size), 0.0)
 
-        executable_floor = max(safe_min_notional * 1.15, safe_capital * safe_risk)
+        executable_floor = max(safe_min_notional, safe_capital * safe_risk)
         hard_cap = safe_capital * 0.15
         final_size = min(max(safe_raw_size, executable_floor), hard_cap) if hard_cap > 0 else 0.0
         return final_size, executable_floor
@@ -3306,12 +3343,17 @@ class NIJAApexStrategyV71:
             broker_name = self._get_broker_name()
 
             # Kraken requires $10 minimum, others typically allow smaller sizes
-            min_required_balance = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
+            min_required_balance = self._resolve_broker_min_notional_usd(broker_name)
 
             # Defensive: guard against invalid negative sizing configs.
             min_position_pct = max(self.risk_manager.min_position_pct, 0.0)
             min_position_size = account_balance * min_position_pct
             if min_position_size < min_required_balance:
+                block_reason = (
+                    f"BROKER_MIN_NOTIONAL_BLOCK broker={broker_name} "
+                    f"required=${min_required_balance:.2f} "
+                    f"computed_min_size=${min_position_size:.2f}"
+                )
                 logger.info("   ⛔ ENTRY BLOCKED: insufficient capital for this strategy")
                 logger.info(
                     "      Balance: $%.2f | Sizing %%: %.2f%% | Min size: $%.2f | Min notional: $%.2f",
@@ -3327,7 +3369,7 @@ class NIJAApexStrategyV71:
                     final_size=min_position_size,
                     min_notional=min_required_balance,
                     decision='SKIP',
-                    reason='ENTRY BLOCKED: insufficient capital for this strategy',
+                    reason=block_reason,
                 )
                 self._record_rejection("min_notional", "insufficient_capital")
                 if min_position_pct > 0:
@@ -3338,7 +3380,7 @@ class NIJAApexStrategyV71:
                     )
                 return {
                     'action': 'hold',
-                    'reason': 'ENTRY BLOCKED: insufficient capital for this strategy',
+                    'reason': block_reason,
                     'filter_stage': 'min_notional',
                 }
 
@@ -3825,7 +3867,7 @@ class NIJAApexStrategyV71:
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     # Get broker context for intelligent minimum position adjustments
-                    broker_min = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
+                    broker_min = self._resolve_broker_min_notional_usd(broker_name)
 
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
                     regime_confidence = metadata.get('regime_confidence', None) if metadata else None
@@ -4039,8 +4081,8 @@ class NIJAApexStrategyV71:
 
                     if position_size < min_required_balance:
                         reason = (
-                            f"below min notional after sizing "
-                            f"(${position_size:.2f} < ${min_required_balance:.2f})"
+                            f"BROKER_MIN_NOTIONAL_BLOCK broker={broker_name} "
+                            f"order_notional=${position_size:.2f} min_notional=${min_required_balance:.2f}"
                         )
                         logger.warning(
                             "   ⏭️  SKIP: below min notional after sizing (%.2f < %.2f)",
@@ -4343,6 +4385,13 @@ class NIJAApexStrategyV71:
                         'reason': reason,
                         'entry_price': current_price,
                         'position_size': position_size,
+                        'order_notional': position_size,
+                        'min_notional': min_required_balance,
+                        'capital_allocated': float(
+                            ((metadata or {}).get('ai_eval') or {}).get('allocated_capital', position_size)
+                            if isinstance(metadata, dict)
+                            else position_size
+                        ),
                         'stop_loss': stop_loss,
                         'take_profit': tp_levels,
                         'score': score,
@@ -4882,7 +4931,7 @@ class NIJAApexStrategyV71:
                     # CRITICAL (Rule #3): account_balance is now TOTAL EQUITY (cash + positions)
                     # from broker.get_account_balance() which returns total equity, not just cash
                     # Get broker context for intelligent minimum position adjustments
-                    broker_min = BROKER_MIN_ORDER_USD.get(broker_name.lower(), _DEFAULT_MIN_ORDER_USD)
+                    broker_min = self._resolve_broker_min_notional_usd(broker_name)
 
                     # Extract regime confidence for GOD MODE+ adaptive risk (if available)
                     regime_confidence = metadata.get('regime_confidence', None) if metadata else None
@@ -5092,8 +5141,8 @@ class NIJAApexStrategyV71:
 
                     if position_size < min_required_balance:
                         reason = (
-                            f"below min notional after sizing "
-                            f"(${position_size:.2f} < ${min_required_balance:.2f})"
+                            f"BROKER_MIN_NOTIONAL_BLOCK broker={broker_name} "
+                            f"order_notional=${position_size:.2f} min_notional=${min_required_balance:.2f}"
                         )
                         logger.warning(
                             "   ⏭️  SKIP: below min notional after sizing (%.2f < %.2f)",
@@ -5398,6 +5447,13 @@ class NIJAApexStrategyV71:
                         'reason': reason,
                         'entry_price': current_price,
                         'position_size': position_size,
+                        'order_notional': position_size,
+                        'min_notional': min_required_balance,
+                        'capital_allocated': float(
+                            ((metadata or {}).get('ai_eval') or {}).get('allocated_capital', position_size)
+                            if isinstance(metadata, dict)
+                            else position_size
+                        ),
                         'stop_loss': stop_loss,
                         'take_profit': tp_levels,
                         'score': score,
