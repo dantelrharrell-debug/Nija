@@ -10,8 +10,8 @@ from types import ModuleType
 from typing import Any, Optional
 
 logger = logging.getLogger("nija.broker_native_quote_routing_patch")
-_MARKER = "BROKER_NATIVE_QUOTE_ROUTING_PATCHED marker=20260709j"
-_PATCHED_ATTR = "_nija_broker_native_quote_routing_20260709j"
+_MARKER = "BROKER_NATIVE_QUOTE_ROUTING_PATCHED marker=20260709y"
+_PATCHED_ATTR = "_nija_broker_native_quote_routing_20260709y"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 
 
@@ -107,7 +107,6 @@ def _extract_quote_from_mapping(payload: Any, quote: str) -> Optional[float]:
     if not isinstance(payload, dict):
         return None
 
-    # Direct flat currency keys: {"USDT": "12.3"} or {"USDT": {"available": "12.3"}}
     for key in (quote, quote.lower()):
         if key in payload:
             entry = payload.get(key)
@@ -117,7 +116,6 @@ def _extract_quote_from_mapping(payload: Any, quote: str) -> Optional[float]:
                         return _float(entry.get(subkey), 0.0)
             return _float(entry, 0.0)
 
-    # OKX style: {"data": [{"details": [{"ccy": "USDT", "availBal": "..."}]}]}
     total = 0.0
     found = False
     for container_key in ("data", "details", "balances", "accounts", "assets", "result"):
@@ -166,8 +164,6 @@ def _resolve_quote_balance(broker_client: Any, quote: str) -> Optional[float]:
     if broker_client is None:
         return None
 
-    # Explicit cached quote fields are safest. The incident had total OKX equity,
-    # but no spendable USDT for APT-USDT, so do not treat scalar equity as quote cash.
     attr_names = (
         f"_available_{quote.lower()}",
         f"_last_known_{quote.lower()}",
@@ -244,8 +240,19 @@ def _reroute_away_from_okx(request: Any, symbol: str, reason: str) -> Any:
     for key in ("broker_client", "broker_name", "selected_broker", "execution_broker", "broker"):
         meta.pop(key, None)
     meta["okx_quote_reroute_reason"] = reason
-    # Preserve USD symbol so Coinbase/Kraken USD routes can evaluate it.
     return _replace_request(request, symbol=symbol, preferred_broker=None, metadata=meta)
+
+
+def _okx_quote_cash_available(request: Any, quote: str) -> tuple[bool, Optional[float], float, str]:
+    meta = dict(getattr(request, "metadata", {}) or {})
+    broker_client = meta.get("broker_client")
+    required = _required_quote(getattr(request, "size_usd", 0.0))
+    available = _resolve_quote_balance(broker_client, quote)
+    if available is None:
+        return False, None, required, f"okx_{quote.lower()}_quote_balance_unknown"
+    if available + 1e-9 >= required:
+        return True, available, required, "okx_quote_available"
+    return False, available, required, f"okx_{quote.lower()}_quote_below_required_notional"
 
 
 def _maybe_route_okx_buy_by_spendable_quote(request: Any, symbol: str, native: str, side: str) -> tuple[Any, str]:
@@ -255,7 +262,37 @@ def _maybe_route_okx_buy_by_spendable_quote(request: Any, symbol: str, native: s
     if side_l not in {"buy", "long"}:
         return _replace_request(request, symbol=native), native
     base, quote = _symbol_parts(symbol)
-    if quote != "USD" or not base:
+    if not base:
+        return _replace_request(request, symbol=native), native
+
+    if quote in {"USDT", "USDC"}:
+        ok, available, required, reason = _okx_quote_cash_available(request, quote)
+        if ok:
+            logger.critical(
+                "OKX_DIRECT_SPENDABLE_QUOTE_APPROVED marker=20260709y symbol=%s quote=%s available=%.8f required=%.8f",
+                symbol,
+                quote,
+                float(available or 0.0),
+                required,
+            )
+            return _replace_request(request, symbol=symbol), symbol
+        logger.critical(
+            "OKX_DIRECT_SPENDABLE_QUOTE_REROUTE marker=20260709y symbol=%s quote=%s available=%s required=%.8f reason=%s action=clear_okx_direct_broker_before_submit",
+            symbol,
+            quote,
+            "unknown" if available is None else f"{available:.8f}",
+            required,
+            reason,
+        )
+        print(
+            f"[NIJA-PRINT] OKX_DIRECT_SPENDABLE_QUOTE_REROUTE marker=20260709y symbol={symbol} quote={quote} reason={reason}",
+            flush=True,
+        )
+        # Preserve the same symbol so the higher-level broker selector can decide
+        # whether Coinbase/Kraken symbol normalization or another candidate is valid.
+        return _reroute_away_from_okx(request, symbol, reason), symbol
+
+    if quote != "USD":
         return _replace_request(request, symbol=native), native
 
     meta = dict(getattr(request, "metadata", {}) or {})
@@ -267,7 +304,7 @@ def _maybe_route_okx_buy_by_spendable_quote(request: Any, symbol: str, native: s
     if usdt is not None and usdt >= required:
         selected = f"{base}-USDT"
         logger.critical(
-            "OKX_SPENDABLE_QUOTE_ROUTE_APPROVED marker=20260709j symbol=%s quote=USDT available=%.8f required=%.8f selected=%s",
+            "OKX_SPENDABLE_QUOTE_ROUTE_APPROVED marker=20260709y symbol=%s quote=USDT available=%.8f required=%.8f selected=%s",
             symbol,
             usdt,
             required,
@@ -278,7 +315,7 @@ def _maybe_route_okx_buy_by_spendable_quote(request: Any, symbol: str, native: s
     if usdc is not None and usdc >= required:
         selected = f"{base}-USDC"
         logger.critical(
-            "OKX_SPENDABLE_QUOTE_ROUTE_APPROVED marker=20260709j symbol=%s quote=USDC available=%.8f required=%.8f selected=%s",
+            "OKX_SPENDABLE_QUOTE_ROUTE_APPROVED marker=20260709y symbol=%s quote=USDC available=%.8f required=%.8f selected=%s",
             symbol,
             usdc,
             required,
@@ -294,7 +331,7 @@ def _maybe_route_okx_buy_by_spendable_quote(request: Any, symbol: str, native: s
         reason = "okx_spendable_quote_below_required_notional"
 
     logger.critical(
-        "OKX_SPENDABLE_QUOTE_REROUTE marker=20260709j symbol=%s native_candidate=%s side=%s required_quote=%.8f usdt_available=%s usdc_available=%s reason=%s action=clear_okx_direct_broker",
+        "OKX_SPENDABLE_QUOTE_REROUTE marker=20260709y symbol=%s native_candidate=%s side=%s required_quote=%.8f usdt_available=%s usdc_available=%s reason=%s action=clear_okx_direct_broker",
         symbol,
         native,
         side,
@@ -304,7 +341,7 @@ def _maybe_route_okx_buy_by_spendable_quote(request: Any, symbol: str, native: s
         reason,
     )
     print(
-        f"[NIJA-PRINT] OKX_SPENDABLE_QUOTE_REROUTE marker=20260709j symbol={symbol} required={required:.2f} reason={reason}",
+        f"[NIJA-PRINT] OKX_SPENDABLE_QUOTE_REROUTE marker=20260709y symbol={symbol} required={required:.2f} reason={reason}",
         flush=True,
     )
     return _reroute_away_from_okx(request, symbol, reason), symbol
@@ -324,21 +361,21 @@ def _patch_pipeline(module: ModuleType) -> bool:
         symbol = _norm_symbol(getattr(request, "symbol", ""))
         side = str(getattr(request, "side", "") or "").strip().lower()
         native = _native_symbol(symbol, broker)
-        if broker == "okx" and native and native != symbol:
+        if broker == "okx":
             request, native = _maybe_route_okx_buy_by_spendable_quote(request, symbol, native, side)
         elif broker in {"coinbase", "kraken"} and native and native != symbol:
             request = _replace_request(request, symbol=native)
 
         if broker in {"coinbase", "kraken", "okx"} and native and native != symbol:
             logger.critical(
-                "BROKER_NATIVE_QUOTE_ROUTING_REPAIRED marker=20260709j broker=%s side=%s old_symbol=%s new_symbol=%s",
+                "BROKER_NATIVE_QUOTE_ROUTING_REPAIRED marker=20260709y broker=%s side=%s old_symbol=%s new_symbol=%s",
                 broker,
                 side,
                 symbol,
                 native,
             )
             print(
-                f"[NIJA-PRINT] BROKER_NATIVE_QUOTE_ROUTING_REPAIRED marker=20260709j broker={broker} old_symbol={symbol} new_symbol={native}",
+                f"[NIJA-PRINT] BROKER_NATIVE_QUOTE_ROUTING_REPAIRED marker=20260709y broker={broker} old_symbol={symbol} new_symbol={native}",
                 flush=True,
             )
         return original(self, request, *args, **kwargs)
@@ -346,7 +383,7 @@ def _patch_pipeline(module: ModuleType) -> bool:
     setattr(execute, _PATCHED_ATTR, True)
     setattr(cls, "execute", execute)
     logger.warning("%s class=ExecutionPipeline", _MARKER)
-    print("[NIJA-PRINT] BROKER_NATIVE_QUOTE_ROUTING_PATCHED marker=20260709j", flush=True)
+    print("[NIJA-PRINT] BROKER_NATIVE_QUOTE_ROUTING_PATCHED marker=20260709y", flush=True)
     return True
 
 
@@ -361,7 +398,7 @@ def _try_patch_loaded() -> bool:
 
 def install_import_hook() -> None:
     _try_patch_loaded()
-    if getattr(builtins, "_NIJA_BROKER_NATIVE_QUOTE_ROUTING_HOOK_V20260709J", False):
+    if getattr(builtins, "_NIJA_BROKER_NATIVE_QUOTE_ROUTING_HOOK_V20260709Y", False):
         return
     original_import = builtins.__import__
 
@@ -377,8 +414,8 @@ def install_import_hook() -> None:
         return module
 
     builtins.__import__ = guarded_import
-    setattr(builtins, "_NIJA_BROKER_NATIVE_QUOTE_ROUTING_HOOK_V20260709J", True)
-    logger.warning("BROKER_NATIVE_QUOTE_ROUTING_IMPORT_HOOK marker=20260709j")
+    setattr(builtins, "_NIJA_BROKER_NATIVE_QUOTE_ROUTING_HOOK_V20260709Y", True)
+    logger.warning("BROKER_NATIVE_QUOTE_ROUTING_IMPORT_HOOK marker=20260709y")
 
 
 def install() -> None:
