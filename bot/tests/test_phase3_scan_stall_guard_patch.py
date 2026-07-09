@@ -35,11 +35,22 @@ def test_phase3_window_limits_and_rotates_symbols(monkeypatch):
     assert meta2["next_cursor"] == 20
 
 
-def test_fetch_df_deadline_skip_returns_none(monkeypatch):
+def test_fetch_df_deadline_elapsed_preserves_selected_candidate_by_default(monkeypatch):
+    monkeypatch.delenv("NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED", raising=False)
     module = SimpleNamespace(NijaCoreLoop=FakeCoreLoop, __name__="bot.nija_core_loop")
     assert patch._patch_core_loop_module(module) is True
     loop = module.NijaCoreLoop()
-    loop._nija_phase3_deadline_ts_20260709al = time.monotonic() - 1.0
+    loop._nija_phase3_deadline_ts_20260709am = time.monotonic() - 1.0
+
+    assert loop._fetch_df(object(), "AAVE-USD") == {"symbol": "AAVE-USD"}
+
+
+def test_fetch_df_deadline_hard_skip_can_be_enabled(monkeypatch):
+    monkeypatch.setenv("NIJA_PHASE3_FETCH_DEADLINE_SKIP_ENABLED", "true")
+    module = SimpleNamespace(NijaCoreLoop=FakeCoreLoop, __name__="bot.nija_core_loop")
+    assert patch._patch_core_loop_module(module) is True
+    loop = module.NijaCoreLoop()
+    loop._nija_phase3_deadline_ts_20260709am = time.monotonic() - 1.0
 
     assert loop._fetch_df(object(), "BTC-USD") is None
 
