@@ -58,6 +58,11 @@ _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
         "BROKER_NATIVE_QUOTE_ROUTING_INSTALL_REQUESTED",
         "20260709y",
     ),
+    (
+        "execution_minimum_position_micro_broker_repair_patch",
+        "EXECUTION_MICRO_BROKER_MINIMUM_REPAIR_INSTALL_REQUESTED",
+        "20260709aa",
+    ),
 )
 
 
