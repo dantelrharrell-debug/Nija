@@ -30,7 +30,8 @@ Date: March 2026
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -61,6 +62,7 @@ except ImportError:
 try:
     from portfolio_risk_engine import (
         PortfolioRiskEngine,
+        PositionExposure,
         get_portfolio_risk_engine,
         PortfolioRiskMetrics,
     )
@@ -68,6 +70,7 @@ try:
 except ImportError:
     PORTFOLIO_RISK_AVAILABLE = False
     PortfolioRiskEngine = None  # type: ignore
+    PositionExposure = None  # type: ignore
     get_portfolio_risk_engine = None  # type: ignore
     logger.warning("PortfolioRiskEngine not available – portfolio risk control disabled")
 
@@ -282,6 +285,10 @@ class AIIntelligenceHub:
         self._evaluations: int = 0
         self._approvals: int = 0
         self._rejections: int = 0
+        self._last_live_positions_sync_ts: float = 0.0
+        self._live_positions_sync_interval_sec: float = float(
+            self.config.get("live_positions_sync_interval_sec", 15.0)
+        )
 
         logger.info("=" * 70)
         logger.info("🤖 NIJA AI Intelligence Hub – ACTIVE")
@@ -375,6 +382,7 @@ class AIIntelligenceHub:
                 )
         self._evaluations += 1
         result = TradeEvaluation(symbol=symbol, side=side)
+        self._sync_risk_engine_with_live_positions(portfolio_value)
 
         # 1. Market Regime Detection ----------------------------------------
         result = self._apply_regime_detection(result, df, indicators)
@@ -407,6 +415,128 @@ class AIIntelligenceHub:
         )
 
         return result
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _normalize_symbol(symbol: Any) -> str:
+        return str(symbol or "").strip().upper().replace("/", "-")
+
+    def _sync_risk_engine_with_live_positions(self, portfolio_value: float) -> None:
+        """Refresh risk-engine positions from live broker open positions."""
+        if self.risk_engine is None or _get_broker_manager is None or PositionExposure is None:
+            return
+        now = time.time()
+        if now - float(self._last_live_positions_sync_ts or 0.0) < max(
+            1.0, float(self._live_positions_sync_interval_sec or 15.0)
+        ):
+            return
+
+        try:
+            manager = _get_broker_manager()
+            live_positions: Dict[str, Dict[str, Any]] = {}
+            for _account_id, broker in manager.get_all_brokers():
+                if broker is None or not hasattr(broker, "get_positions"):
+                    continue
+                if hasattr(broker, "connected") and not bool(getattr(broker, "connected")):
+                    continue
+                try:
+                    positions = broker.get_positions() or []
+                except Exception:
+                    continue
+                if not isinstance(positions, list):
+                    continue
+
+                for raw in positions:
+                    item = raw if isinstance(raw, dict) else {}
+                    symbol = self._normalize_symbol(
+                        item.get("symbol")
+                        or item.get("product_id")
+                        or item.get("pair")
+                        or getattr(raw, "symbol", None)
+                        or getattr(raw, "product_id", None)
+                        or getattr(raw, "pair", None)
+                    )
+                    if not symbol:
+                        continue
+
+                    size_usd = self._safe_float(
+                        item.get("size_usd")
+                        or item.get("market_value")
+                        or item.get("position_value")
+                        or item.get("usd_value")
+                        or item.get("value_usd")
+                        or item.get("notional_usd")
+                        or getattr(raw, "size_usd", None)
+                        or getattr(raw, "market_value", None)
+                        or getattr(raw, "position_value", None),
+                        0.0,
+                    )
+                    if size_usd <= 0.0:
+                        qty = self._safe_float(
+                            item.get("quantity")
+                            or item.get("qty")
+                            or getattr(raw, "quantity", None)
+                            or getattr(raw, "qty", None),
+                            0.0,
+                        )
+                        px = self._safe_float(
+                            item.get("current_price")
+                            or item.get("mark_price")
+                            or item.get("entry_price")
+                            or getattr(raw, "current_price", None)
+                            or getattr(raw, "mark_price", None)
+                            or getattr(raw, "entry_price", None),
+                            0.0,
+                        )
+                        size_usd = abs(qty) * px if px > 0.0 else 0.0
+                    if size_usd <= 0.0:
+                        continue
+
+                    direction_raw = str(
+                        item.get("direction")
+                        or item.get("side")
+                        or item.get("position_side")
+                        or getattr(raw, "direction", None)
+                        or getattr(raw, "side", None)
+                        or "long"
+                    ).lower()
+                    direction = "short" if direction_raw in {"short", "sell"} else "long"
+
+                    current = live_positions.get(symbol)
+                    if current is None:
+                        live_positions[symbol] = {
+                            "size_usd": float(size_usd),
+                            "direction": direction,
+                        }
+                    else:
+                        current["size_usd"] = float(current["size_usd"]) + float(size_usd)
+
+            normalized: Dict[str, PositionExposure] = {}
+            pv = max(float(portfolio_value or 0.0), 1.0)
+            for sym, payload in live_positions.items():
+                sz = max(self._safe_float(payload.get("size_usd"), 0.0), 0.0)
+                if sz <= 0.0:
+                    continue
+                normalized[sym] = PositionExposure(
+                    symbol=sym,
+                    size_usd=sz,
+                    pct_of_portfolio=min(1.0, sz / pv),
+                    direction=str(payload.get("direction") or "long"),
+                    entry_time=datetime.now(),
+                )
+            self.risk_engine.positions = normalized
+            if callable(getattr(self.risk_engine, "_update_correlation_groups", None)):
+                self.risk_engine._update_correlation_groups()
+        except Exception as exc:
+            logger.debug("[AI Hub] Live position sync skipped: %s", exc)
+        finally:
+            self._last_live_positions_sync_ts = now
 
     # ------------------------------------------------------------------
     # Step 1: Regime Detection
@@ -488,24 +618,28 @@ class AIIntelligenceHub:
             adjusted_pct *= result.regime_position_multiplier
             result.correlation_adjusted_size_pct = max(0.0, adjusted_pct)
 
-            # Check if new position is allowed (exposure gate)
-            can_add = self.risk_engine.add_position(
-                symbol=symbol,
-                size_usd=result.correlation_adjusted_size_pct * portfolio_value,
-                direction=side,
-                portfolio_value=portfolio_value,
-            )
+            proposed_size_usd = max(0.0, result.correlation_adjusted_size_pct * portfolio_value)
+            can_add = True
+            adjusted_size_usd = proposed_size_usd
+            sector_info: Dict[str, Any] = {}
+            if callable(getattr(self.risk_engine, "check_sector_limits", None)):
+                can_add, adjusted_size_usd, sector_info = self.risk_engine.check_sector_limits(
+                    symbol, proposed_size_usd, portfolio_value
+                )
 
             if not can_add:
                 result.exposure_allowed = False
                 result.exposure_rejection_reason = (
-                    "Portfolio exposure limit reached – position blocked by Risk Engine"
+                    "Portfolio exposure limit reached – position blocked by Risk Engine "
+                    f"(sector={sector_info.get('sector_name') or sector_info.get('sector') or 'unknown'} "
+                    f"current={float(sector_info.get('current_sector_exposure_pct', 0.0) or 0.0)*100:.1f}% "
+                    f"projected={float(sector_info.get('projected_sector_exposure_pct', 0.0) or 0.0)*100:.1f}%)"
                 )
                 result.ai_approved = False
             else:
-                # Immediately remove the probe position we just added
-                self.risk_engine.remove_position(symbol)
                 result.exposure_allowed = True
+                if portfolio_value > 0.0 and adjusted_size_usd > 0.0:
+                    result.correlation_adjusted_size_pct = adjusted_size_usd / portfolio_value
 
             # Current portfolio VaR
             metrics = self.risk_engine.calculate_portfolio_metrics(portfolio_value)
@@ -576,6 +710,18 @@ class AIIntelligenceHub:
                 result.correlation_adjusted_size_pct * portfolio_value
             )
             result.allocation_source = "fallback"
+
+        if result.ai_approved and result.exposure_allowed and result.allocated_capital <= 0.0:
+            fallback_alloc = max(
+                result.correlation_adjusted_size_pct * portfolio_value,
+                max(base_size_pct, 0.0) * portfolio_value,
+            )
+            result.allocated_capital = max(0.0, fallback_alloc)
+            if portfolio_value > 0.0 and result.correlation_adjusted_size_pct <= 0.0 and result.allocated_capital > 0.0:
+                result.correlation_adjusted_size_pct = result.allocated_capital / portfolio_value
+            result.allocation_source = f"{result.allocation_source}_nonzero_fallback"
+        elif not result.ai_approved:
+            result.allocated_capital = 0.0
 
         return result
 

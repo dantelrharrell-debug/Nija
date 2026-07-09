@@ -533,6 +533,12 @@ def _patch_ai_hub(module: ModuleType) -> bool:
             pv = float(portfolio_value or 0.0)
             if pv <= 0.0:
                 return result
+            sync_positions = getattr(self, "_sync_risk_engine_with_live_positions", None)
+            if callable(sync_positions):
+                try:
+                    sync_positions(pv)
+                except Exception:
+                    pass
             proposed = float(getattr(result, "allocated_capital", 0.0) or 0.0)
             if proposed <= 0.0:
                 proposed = max(0.0, float(base_size_pct or 0.0) * pv)

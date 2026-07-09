@@ -419,6 +419,24 @@ class TradePermissionEngine:
             final = "EXECUTE"
             block_reason = ""
 
+        capital_allocated = 0.0
+        if final == "EXECUTE":
+            for key in (
+                "capital_allocated",
+                "allocated_capital",
+                "position_size",
+                "size_usd",
+                "order_notional",
+            ):
+                try:
+                    capital_allocated = float(md.get(key, 0.0) or 0.0)
+                except Exception:
+                    capital_allocated = 0.0
+                if capital_allocated > 0.0:
+                    break
+            if capital_allocated <= 0.0 and balance > 0.0:
+                capital_allocated = min(balance * 0.05, balance)
+
         decision = TradeDecision(
             symbol=symbol,
             side=side,
@@ -440,6 +458,8 @@ class TradePermissionEngine:
             broker_health=broker_health_label,
             final_decision=final,
             block_reason=block_reason,
+            risk_allowed=(final == "EXECUTE"),
+            capital_allocated=capital_allocated,
             market_regime=regime_label,
         )
 

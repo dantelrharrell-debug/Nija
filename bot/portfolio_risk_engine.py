@@ -425,8 +425,11 @@ class PortfolioRiskEngine:
             'adjusted_size_usd': position_size_usd,
             'sector': None,
             'sector_name': None,
+            'current_sector_exposure_usd': 0.0,
             'current_sector_exposure_pct': 0.0,
+            'projected_sector_exposure_usd': 0.0,
             'projected_sector_exposure_pct': 0.0,
+            'existing_positions_in_sector': [],
             'soft_warning_triggered': False,
             'scale_factor': 1.0,
             'excess': 0.0,
@@ -482,8 +485,20 @@ class PortfolioRiskEngine:
         projected_sector_exposure_usd = current_sector_exposure_usd + position_size_usd
         projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
         
+        existing_positions_in_sector = []
+        for pos_symbol, position in self.positions.items():
+            try:
+                pos_sector = self.get_sector(pos_symbol)
+                if pos_sector == sector:
+                    existing_positions_in_sector.append(pos_symbol)
+            except Exception:
+                continue
+
+        enforcement_info['current_sector_exposure_usd'] = current_sector_exposure_usd
         enforcement_info['current_sector_exposure_pct'] = current_sector_exposure_pct
+        enforcement_info['projected_sector_exposure_usd'] = projected_sector_exposure_usd
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
+        enforcement_info['existing_positions_in_sector'] = existing_positions_in_sector
 
         
         # SOFT WARNING ZONE: 30% - Dynamic scaling
@@ -505,6 +520,7 @@ class PortfolioRiskEngine:
             # Recalculate projected exposure with the scaled position size
             projected_sector_exposure_usd = current_sector_exposure_usd + position_size_usd
             projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
+            enforcement_info['projected_sector_exposure_usd'] = projected_sector_exposure_usd
             enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
             position_size_usd *= 0.7  # scale down in warning zone
             enforcement_info['soft_warning_zone_triggered'] = True
@@ -523,10 +539,33 @@ class PortfolioRiskEngine:
         # Recalculate projected exposure with (possibly reduced) position size
         projected_sector_exposure_usd = current_sector_exposure_usd + position_size_usd
         projected_sector_exposure_pct = projected_sector_exposure_usd / portfolio_value
+        enforcement_info['projected_sector_exposure_usd'] = projected_sector_exposure_usd
         enforcement_info['projected_sector_exposure_pct'] = projected_sector_exposure_pct
 
         # HARD LIMIT: 20% - Absolute block
         if projected_sector_exposure_pct > self.hard_sector_limit_pct:
+            # Starter position exception:
+            # if this sector currently has no live exposure, allow one starter
+            # position up to the hard cap instead of hard-blocking outright.
+            if current_sector_exposure_usd <= 0.0:
+                starter_cap_usd = max(0.0, portfolio_value * self.hard_sector_limit_pct)
+                starter_size_usd = min(position_size_usd, starter_cap_usd)
+                if starter_size_usd > 0.0:
+                    starter_projected_pct = starter_size_usd / portfolio_value
+                    enforcement_info['adjusted_size_usd'] = starter_size_usd
+                    enforcement_info['projected_sector_exposure_usd'] = starter_size_usd
+                    enforcement_info['projected_sector_exposure_pct'] = starter_projected_pct
+                    enforcement_info['hard_limit_triggered'] = False
+                    enforcement_info['enforcement_action'] = 'starter_clamped_to_hard_cap'
+                    logger.info(
+                        "✅ Starter sector clamp for %s (%s): size $%.2f → $%.2f at hard cap %.1f%%",
+                        symbol,
+                        sector_name,
+                        position_size_usd,
+                        starter_size_usd,
+                        self.hard_sector_limit_pct * 100,
+                    )
+                    return True, starter_size_usd, enforcement_info
             enforcement_info['hard_limit_triggered'] = True
             enforcement_info['enforcement_action'] = 'blocked'
             logger.warning(
