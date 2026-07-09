@@ -32,8 +32,10 @@ _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
     ("broker_native_quote_routing_patch", "BROKER_NATIVE_QUOTE_ROUTING_INSTALL_REQUESTED", "20260709y"),
     ("execution_minimum_position_micro_broker_repair_patch", "EXECUTION_MICRO_BROKER_MINIMUM_REPAIR_INSTALL_REQUESTED", "20260709aa"),
     ("execution_ack_timeout_failover_patch", "EXECUTION_ACK_TIMEOUT_FAILOVER_INSTALL_REQUESTED", "20260709ab"),
-    ("execution_entry_timeout_guard_patch", "EXECUTION_ENTRY_TIMEOUT_GUARD_INSTALL_REQUESTED", "20260709ac"),
+    ("execution_entry_timeout_guard_patch", "EXECUTION_ENTRY_TIMEOUT_GUARD_INSTALL_REQUESTED", "20260709ae"),
     ("kraken_tier_floor_platform_capital_repair_patch", "KRAKEN_TIER_FLOOR_PLATFORM_CAPITAL_REPAIR_INSTALL_REQUESTED", "20260709ad"),
+    ("execution_soft_reject_classification_patch", "EXECUTION_SOFT_REJECT_CLASSIFICATION_INSTALL_REQUESTED", "20260709af"),
+    ("execution_minimum_position_boundary_tolerance_patch", "EXECUTION_MIN_POSITION_BOUNDARY_TOLERANCE_INSTALL_REQUESTED", "20260709ag"),
 )
 
 
