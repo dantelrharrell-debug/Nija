@@ -39,7 +39,9 @@ def test_operator_clear_quarantines_kill_and_state_files(monkeypatch, tmp_path):
     assert cleared == 2
     assert not kill_file.exists()
     assert not state_file.exists()
-    assert monkeypatch is not None
+    assert (tmp_path / "quarantine").exists()
+    assert patch.os.environ["NIJA_RUNTIME_TRADING_STATE"] == "OFF"
+    assert patch.os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
 
 
 def test_operator_clear_refuses_terminal_risk_reason(monkeypatch, tmp_path):
