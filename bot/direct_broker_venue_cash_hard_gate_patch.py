@@ -251,6 +251,116 @@ def _venue_cash_ok(broker: Any, broker_name: str, size_usd: float, side: str, su
     return ok, available, required, label or broker_name
 
 
+def _deep_get(obj: Any, *keys: str) -> Any:
+    """Safely traverse nested dicts; returns None if any level is missing or not a dict."""
+    for key in keys:
+        if not isinstance(obj, dict):
+            return None
+        obj = obj.get(key)
+    return obj
+
+
+def _normalize_coinbase_result(result: Dict[str, Any], size_usd: float = 0.0) -> None:
+    """COINBASE_ORDER_ID_PAYLOAD_REPAIRED marker=20260709ap
+
+    Copy nested Coinbase order_id / fill fields up to the top-level result dict
+    so that _looks_confirmed_fill() can inspect them without knowing the SDK
+    nesting structure.
+
+    Checks (for each field) in priority order:
+      order_id        : top-level → exchange_order_id → client_order_id →
+                        order.order_id → order.success_response.order_id →
+                        raw.order_id → raw.success_response.order_id →
+                        success_response.order_id
+      filled_price    : standard top-level keys → order.success_response.average_filled_price
+                        → order.average_filled_price → raw.average_filled_price → …
+      filled_size_usd : standard top-level keys → order.total_value_after_fees →
+                        order.success_response.total_value_after_fees →
+                        computed from filled_size * filled_price → size_usd fallback
+
+    Existing top-level values are never overwritten.
+    """
+    if not isinstance(result, dict):
+        return
+
+    # ── order_id ─────────────────────────────────────────────────────────────
+    if not result.get("order_id"):
+        for candidate in (
+            result.get("exchange_order_id"),
+            result.get("client_order_id"),
+            _deep_get(result, "order", "order_id"),
+            _deep_get(result, "order", "success_response", "order_id"),
+            _deep_get(result, "raw", "order_id"),
+            _deep_get(result, "raw", "success_response", "order_id"),
+            _deep_get(result, "success_response", "order_id"),
+        ):
+            if candidate and str(candidate).strip():
+                result["order_id"] = str(candidate).strip()
+                break
+
+    # ── fill price ────────────────────────────────────────────────────────────
+    _has_price = bool(
+        result.get("filled_price") or result.get("average_filled_price")
+        or result.get("average_fill_price") or result.get("avg_price")
+        or result.get("price")
+    )
+    if not _has_price:
+        for candidate in (
+            _deep_get(result, "order", "success_response", "average_filled_price"),
+            _deep_get(result, "order", "average_filled_price"),
+            _deep_get(result, "order", "price"),
+            _deep_get(result, "raw", "average_filled_price"),
+            _deep_get(result, "raw", "price"),
+            _deep_get(result, "success_response", "average_filled_price"),
+        ):
+            v = _f(candidate)
+            if v > 0:
+                result["filled_price"] = v
+                break
+
+    # ── filled notional (USD) ─────────────────────────────────────────────────
+    _has_notional = bool(
+        result.get("filled_size_usd") or result.get("filled_value")
+        or result.get("notional_usd") or result.get("size_usd")
+    )
+    if not _has_notional:
+        # Try explicit broker-level total-value fields first
+        for candidate in (
+            _deep_get(result, "order", "total_value_after_fees"),
+            _deep_get(result, "order", "success_response", "total_value_after_fees"),
+            _deep_get(result, "raw", "total_value_after_fees"),
+            _deep_get(result, "raw", "success_response", "total_value_after_fees"),
+        ):
+            v = _f(candidate)
+            if v > 0:
+                result["filled_size_usd"] = v
+                _has_notional = True
+                break
+
+        if not _has_notional:
+            # Compute from filled_size (base crypto) × fill_price
+            fp = _f(
+                result.get("filled_price") or result.get("average_filled_price")
+                or result.get("average_fill_price") or result.get("avg_price")
+                or result.get("price")
+            )
+            fs = _f(
+                result.get("filled_size")
+                or _deep_get(result, "order", "success_response", "filled_size")
+                or _deep_get(result, "order", "filled_size")
+                or _deep_get(result, "raw", "filled_size")
+                or _deep_get(result, "success_response", "filled_size")
+            )
+            if fp > 0 and fs > 0:
+                result["filled_size_usd"] = fp * fs
+                _has_notional = True
+
+        if not _has_notional and size_usd > 0:
+            # Last resort: the size_usd the caller was about to spend is a
+            # reasonable lower-bound proxy for filled notional on a market buy.
+            result["filled_size_usd"] = float(size_usd)
+
+
 def _looks_confirmed_fill(result: Dict[str, Any]) -> tuple[bool, str]:
     status = str(result.get("status") or result.get("state") or "").strip().lower()
     if status in {"error", "failed", "rejected", "canceled", "cancelled", "unfilled"}:
@@ -335,6 +445,12 @@ def _patch_module(module: ModuleType) -> bool:
             return price, filled
         if not isinstance(result, dict):
             raise RuntimeError(f"Unsupported broker order response: {result!r}")
+
+        # COINBASE_ORDER_ID_PAYLOAD_REPAIRED marker=20260709ap
+        # Promote nested Coinbase order_id / fill fields to the top level so
+        # _looks_confirmed_fill() can inspect them without needing to know the
+        # exact SDK nesting structure.
+        _normalize_coinbase_result(result, size_usd=float(size_usd or 0.0))
 
         confirmed, reason = _looks_confirmed_fill(result)
         if not confirmed:
