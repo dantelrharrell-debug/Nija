@@ -26,7 +26,7 @@ try:
     _install_bootstrap_i12_ca_repair()
     logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
 except Exception as exc:
-    logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+    logger.warning("BOOTSTRAP_I12_CAPITAL_AUTHORITY_REPAIR_FAILED source=bot_entrypoint err=%s", exc)
 
 try:
     from bot.trading_engine_strategy_wrapper_patch import install_import_hook as _install_strategy_wrapper
@@ -47,7 +47,7 @@ try:
     _install_writer_heartbeat_stale_repair()
     logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
 except Exception as exc:
-    logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+    logger.warning("WRITER_HEARTBEAT_STALE_REPAIR_FAILED source=bot_entrypoint err=%s", exc)
 
 try:
     from bot.ecel_okx_synthetic_contract_patch import install_import_hook as _install_ecel_okx_contract_repair
@@ -61,7 +61,7 @@ try:
     _install_fallback_floor_calibration()
     logger.warning("FALLBACK_FLOOR_CALIBRATION_INSTALL_REQUESTED source=bot_entrypoint")
 except Exception as exc:
-    logger.warning("FALLBACK_FLOOR_CALIBRATION_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+    logger.warning("FALLBACK_FLOOR_CALIBRATION_FAILED source=bot_entrypoint err=%s", exc)
 
 try:
     from bot.okx_execution_min_notional_lift_patch import install_import_hook as _install_okx_execution_min_lift
@@ -76,6 +76,13 @@ try:
     logger.warning("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_REQUESTED source=bot_entrypoint")
 except Exception as exc:
     logger.warning("OKX_ORDER_INSTID_PAYLOAD_REPAIR_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
+try:
+    from bot.okx_final_order_submission_bridge_patch import install_import_hook as _install_okx_final_order_submission_bridge
+    _install_okx_final_order_submission_bridge()
+    logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
 from bot.bot_main import main
 
