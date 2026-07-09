@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import builtins
 import logging
+import os
 import sys
+import time
 from functools import wraps
 from types import ModuleType
 from typing import Any, Iterable
 
 logger = logging.getLogger("nija.direct_broker_metadata_guard")
 _MARKER = "DIRECT_BROKER_METADATA_GUARD_PATCHED marker=20260706f"
+_RUNTIME_MARKER = "20260709v"
 _PATCHED_PROFILE_ATTR = "_nija_direct_broker_metadata_profile_guard_20260706f"
 _PATCHED_DISPATCH_ATTR = "_nija_direct_broker_metadata_dispatch_guard_20260706f"
 
-_BROKER_NAMES = {"coinbase", "kraken", "okx"}
+_BROKER_NAMES = {"coinbase", "kraken", "okx", "binance"}
+_UNCONFIGURED_LOG_TS: dict[str, float] = {}
+
+
+def _truthy_env(name: str, default: str = "false") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() in {"1", "true", "yes", "on", "enabled", "y"}
 
 
 def _norm(value: Any) -> str:
@@ -30,8 +38,56 @@ def _norm(value: Any) -> str:
         "okxbroker": "okx",
         "okxrestclient": "okx",
         "okx": "okx",
+        "binancebrokeradapter": "binance",
+        "binancebroker": "binance",
+        "binanceclient": "binance",
+        "binance": "binance",
     }
     return aliases.get(compact, text)
+
+
+def _configured_broker_names() -> set[str]:
+    configured = {"coinbase", "kraken", "okx"}
+    # Binance is optional in this deployment. If it is not explicitly enabled
+    # and credentialed, scanning the whole process graph for a Binance client
+    # floods Railway logs with DIRECT_BROKER_METADATA_RESOLVE_UNAVAILABLE and
+    # wastes execution time before real venues can dispatch.
+    binance_enabled = (
+        _truthy_env("NIJA_ENABLE_BINANCE")
+        or _truthy_env("ENABLE_BINANCE")
+        or _truthy_env("BINANCE_ENABLED")
+    )
+    binance_key = bool(os.environ.get("BINANCE_API_KEY") or os.environ.get("BINANCE_KEY"))
+    binance_secret = bool(os.environ.get("BINANCE_API_SECRET") or os.environ.get("BINANCE_SECRET"))
+    if binance_enabled and binance_key and binance_secret:
+        configured.add("binance")
+    return configured
+
+
+def _is_configured_target(target: str) -> bool:
+    target = _norm(target)
+    if not target:
+        return False
+    return target in _configured_broker_names()
+
+
+def _log_unconfigured_once(target: str, *, symbol: str = "") -> None:
+    now = time.monotonic()
+    last = _UNCONFIGURED_LOG_TS.get(target, 0.0)
+    if now - last < 60.0:
+        return
+    _UNCONFIGURED_LOG_TS[target] = now
+    logger.warning(
+        "DIRECT_BROKER_METADATA_TARGET_SKIPPED marker=%s target=%s reason=broker_not_configured_or_disabled symbol=%s configured=%s",
+        _RUNTIME_MARKER,
+        target,
+        symbol,
+        sorted(_configured_broker_names()),
+    )
+    print(
+        f"[NIJA-PRINT] DIRECT_BROKER_METADATA_TARGET_SKIPPED marker={_RUNTIME_MARKER} target={target} reason=broker_not_configured_or_disabled",
+        flush=True,
+    )
 
 
 def _infer_client_name(client: Any) -> str:
@@ -53,7 +109,7 @@ def _infer_client_name(client: Any) -> str:
         if name in _BROKER_NAMES:
             return name
     joined = " ".join(str(c or "") for c in candidates).lower()
-    for name in ("coinbase", "kraken", "okx"):
+    for name in _BROKER_NAMES:
         if name in joined:
             return name
     return ""
@@ -193,6 +249,8 @@ def _module_candidates(target: str = "") -> Iterable[Any]:
         "kraken_broker",
         "bot.okx_broker",
         "okx_broker",
+        "bot.binance_broker",
+        "binance_broker",
     )
     out: list[Any] = []
     for name in module_names:
@@ -214,6 +272,7 @@ def _module_candidates(target: str = "") -> Iterable[Any]:
                 "coinbase_broker",
                 "kraken_broker",
                 "okx_broker",
+                "binance_broker",
                 "capital_authority",
                 "_capital_authority",
             ):
@@ -261,8 +320,11 @@ def _scan_for_client(seed: Any, target: str) -> Any | None:
     return None
 
 
-def _resolve_live_client(router: Any, target: str) -> Any | None:
+def _resolve_live_client(router: Any, target: str, *, symbol: str = "") -> Any | None:
     target = _norm(target)
+    if not _is_configured_target(target):
+        _log_unconfigured_once(target, symbol=symbol)
+        return None
     resolver = getattr(router, "_resolve_live_broker", None)
     if callable(resolver):
         try:
@@ -337,8 +399,11 @@ def _patch_router(module: ModuleType) -> bool:
             client = meta.get("broker_client") or meta.get("broker_adapter")
             client_name = _infer_client_name(client)
             target_name = _preferred_name(request, meta, self)
+            if target_name and not _is_configured_target(target_name):
+                _log_unconfigured_once(target_name, symbol=str(getattr(request, "symbol", "")))
+                return None
             if client is not None and client_name and target_name and client_name != target_name:
-                replacement = _resolve_live_client(self, target_name)
+                replacement = _resolve_live_client(self, target_name, symbol=str(getattr(request, "symbol", "")))
                 if replacement is not None:
                     repaired_meta = _meta_with_client(meta, target_name, replacement)
                     _set_request_meta(request, repaired_meta)
@@ -376,6 +441,9 @@ def _patch_router(module: ModuleType) -> bool:
         @wraps(original_dispatch)
         def _dispatch_via_inner_router(self: Any, *args: Any, **kwargs: Any):
             broker_name = _norm(kwargs.get("broker_name", args[5] if len(args) > 5 else ""))
+            if broker_name and not _is_configured_target(broker_name):
+                _log_unconfigured_once(broker_name)
+                return None
             metadata = kwargs.get("metadata", args[6] if len(args) > 6 else None)
             meta = dict(metadata or {})
             client = meta.get("broker_client") or meta.get("broker_adapter")
