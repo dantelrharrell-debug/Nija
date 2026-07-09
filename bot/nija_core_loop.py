@@ -1214,6 +1214,70 @@ class NijaCoreLoop:
             code = code.replace("__", "_")
         return code or "UNSPECIFIED"
 
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _resolve_final_order_notional(
+        cls,
+        *,
+        broker_name: str,
+        raw_size: float,
+        broker_min_notional: float,
+        tpe_capital_allocated: float,
+        tpe_risk_allowed: bool,
+        tpe_decision: str,
+        available_balance: float,
+        max_position_cap_usd: float,
+    ) -> Tuple[float, str, str]:
+        safe_raw = max(cls._safe_float(raw_size, 0.0), 0.0)
+        safe_min = max(cls._safe_float(broker_min_notional, 0.0), 0.0)
+        safe_tpe = max(cls._safe_float(tpe_capital_allocated, 0.0), 0.0)
+        safe_balance = max(cls._safe_float(available_balance, 0.0), 0.0)
+        safe_cap = max(cls._safe_float(max_position_cap_usd, 0.0), 0.0)
+        broker_key = str(broker_name or "").strip().lower()
+
+        hard_limit = safe_balance
+        if safe_cap > 0.0:
+            hard_limit = min(hard_limit, safe_cap) if hard_limit > 0.0 else safe_cap
+
+        final_notional = safe_raw
+        sizing_source = "raw_size"
+
+        tpe_execute = bool(tpe_risk_allowed) and str(tpe_decision or "").upper() == "EXECUTE"
+        if tpe_execute and safe_tpe > 0.0:
+            final_notional = min(safe_tpe, hard_limit) if hard_limit > 0.0 else safe_tpe
+            sizing_source = "tpe_capital_allocated"
+
+        okx_fee_buffer = 0.0
+        if broker_key == "okx" and safe_min > 0.0:
+            okx_fee_buffer_pct = max(
+                cls._safe_float(os.getenv("NIJA_OKX_MIN_ORDER_FEE_BUFFER_PCT", 0.005), 0.005),
+                0.0,
+            )
+            okx_fee_buffer = max(safe_min * okx_fee_buffer_pct, 0.05)
+
+        if tpe_execute and safe_tpe >= safe_min and safe_min > 0.0 and final_notional < safe_min:
+            floor_target = safe_min
+            if broker_key == "okx":
+                floor_target = safe_min + okx_fee_buffer
+            floor_target = min(floor_target, safe_tpe)
+            if hard_limit > 0.0:
+                floor_target = min(floor_target, hard_limit)
+            if floor_target >= safe_min:
+                final_notional = max(final_notional, floor_target)
+                sizing_source = "tpe_min_notional_lift"
+
+        if safe_min > 0.0 and final_notional < safe_min:
+            if safe_raw < safe_min and safe_tpe < safe_min:
+                return final_notional, sizing_source, "SKIP"
+
+        return final_notional, sizing_source, "EXECUTE"
+
     def _emit_trade_funnel_trace(self, pair: str, stages: Mapping[str, Tuple[str, str]]) -> None:
         """Emit deterministic per-symbol trade funnel trace lines."""
         stage_order = ("market_data", "regime", "signal", "ai_gate", "profitability")
@@ -3387,6 +3451,7 @@ class NijaCoreLoop:
                     sig.symbol, sig.side, sig.composite_score,
                     snapshot.balance, _force_tpe_bypass, _TPE_AVAILABLE,
                 )
+                _perm = None
                 if _TPE_AVAILABLE and _get_tpe is not None:
                     try:
                         _perm = _get_tpe().evaluate(
@@ -3522,6 +3587,98 @@ class NijaCoreLoop:
                 else:
                     analysis = _am_payload
                 action = analysis.get("action", "hold")
+                _broker_name = (
+                    self.apex._get_broker_name()
+                    if hasattr(self.apex, "_get_broker_name")
+                    else "unknown"
+                )
+                _raw_size = self._safe_float(
+                    analysis.get("order_notional", analysis.get("position_size", 0.0)),
+                    0.0,
+                )
+                _broker_min_notional = self._safe_float(
+                    analysis.get("min_notional", 0.0),
+                    0.0,
+                )
+                if _broker_min_notional <= 0.0 and hasattr(self.apex, "_resolve_broker_min_notional_usd"):
+                    try:
+                        _broker_min_notional = self._safe_float(
+                            self.apex._resolve_broker_min_notional_usd(_broker_name),
+                            0.0,
+                        )
+                    except Exception:
+                        _broker_min_notional = 0.0
+                _tpe_capital_allocated = self._safe_float(
+                    getattr(_perm, "capital_allocated", analysis.get("capital_allocated", 0.0)),
+                    0.0,
+                )
+                _max_position_pct = self._safe_float(
+                    getattr(getattr(self.apex, "risk_manager", None), "max_position_pct", 0.0),
+                    0.0,
+                )
+                _max_position_cap_usd = max(snapshot.balance * _max_position_pct, 0.0)
+                _resolved_notional, _sizing_source, _sizing_decision = self._resolve_final_order_notional(
+                    broker_name=_broker_name,
+                    raw_size=_raw_size,
+                    broker_min_notional=_broker_min_notional,
+                    tpe_capital_allocated=_tpe_capital_allocated,
+                    tpe_risk_allowed=bool(getattr(_perm, "risk_allowed", False)),
+                    tpe_decision=str(getattr(_perm, "final_decision", "") or ""),
+                    available_balance=snapshot.balance,
+                    max_position_cap_usd=_max_position_cap_usd,
+                )
+                logger.info(
+                    "FINAL_ORDER_SIZE_RESOLVED symbol=%s broker=%s raw_size=%.2f "
+                    "tpe_capital_allocated=%.2f broker_min_notional=%.2f "
+                    "final_order_notional=%.2f sizing_source=%s decision=%s",
+                    sig.symbol,
+                    _broker_name,
+                    _raw_size,
+                    _tpe_capital_allocated,
+                    _broker_min_notional,
+                    _resolved_notional,
+                    _sizing_source,
+                    _sizing_decision,
+                )
+                if _sizing_decision != "EXECUTE":
+                    action = "hold"
+                    analysis["action"] = "hold"
+                    analysis["reason"] = (
+                        f"BROKER_MIN_NOTIONAL_BLOCK broker={_broker_name} required=${_broker_min_notional:.2f} "
+                        f"computed_min_size=${max(_raw_size, _tpe_capital_allocated):.2f}"
+                    )
+                if _sizing_decision == "EXECUTE" and _resolved_notional > 0.0:
+                    analysis["position_size"] = float(_resolved_notional)
+                    analysis["order_notional"] = float(_resolved_notional)
+                    if _tpe_capital_allocated > 0.0:
+                        analysis["capital_allocated"] = float(_tpe_capital_allocated)
+                    if _broker_min_notional > 0.0:
+                        analysis.setdefault("min_notional", float(_broker_min_notional))
+                    if action not in ("enter_long", "enter_short"):
+                        if sig.side in ("long", "buy", "enter_long"):
+                            action = "enter_long"
+                        elif sig.side in ("short", "sell", "enter_short"):
+                            action = "enter_short"
+                        analysis["action"] = action
+                        missing = {"entry_price", "stop_loss", "take_profit"} - set(analysis.keys())
+                        if missing:
+                            try:
+                                fallback_payload = self._build_forced_fallback_entry_analysis(
+                                    df=df,
+                                    sig=sig,
+                                    snapshot=snapshot,
+                                    action=action,
+                                    existing_reason=analysis.get("reason", ""),
+                                )
+                                analysis.update(fallback_payload)
+                            except Exception as _tpe_payload_err:
+                                logger.warning(
+                                    "TPE_EXECUTE_OVERRIDE payload build failed for %s: %s",
+                                    sig.symbol,
+                                    _tpe_payload_err,
+                                )
+                    analysis["position_size"] = float(_resolved_notional)
+                    analysis["order_notional"] = float(_resolved_notional)
                 _analysis_reason = analysis.get("reason", "NO_PROFITABLE_ACTION") or "NO_PROFITABLE_ACTION"
                 _analysis_reject = self._canonical_reject_reason(_analysis_reason)
                 if _analysis_reject in {
