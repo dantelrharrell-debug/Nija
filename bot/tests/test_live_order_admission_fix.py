@@ -152,3 +152,4 @@ def test_clean_signal_submits_order_and_watchdog_counts_success(monkeypatch) -> 
     analysis, symbol = apex.last_execution
     assert symbol == "BTC-USD"
     assert float(analysis["capital_allocated"]) > 0.0
+
