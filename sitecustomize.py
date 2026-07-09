@@ -268,6 +268,10 @@ def _install_execution_bootstrap_authority_repair() -> None:
     _install_patch_module(filename="execution_bootstrap_authority_repair_patch.py", module_name="nija_execution_bootstrap_authority_repair_patch", success_log="EXECUTION_BOOTSTRAP_AUTHORITY_REPAIR_INSTALL_REQUESTED", error_prefix="Execution bootstrap authority repair")
 
 
+def _install_execution_bootstrap_monitor_iteration_guard() -> None:
+    _install_patch_module(filename="execution_bootstrap_monitor_iteration_guard_patch.py", module_name="nija_execution_bootstrap_monitor_iteration_guard_patch", success_log="EXECUTION_BOOTSTRAP_MONITOR_ITERATION_GUARD_INSTALL_REQUESTED", error_prefix="Execution bootstrap monitor iteration guard")
+
+
 def _install_forced_fallback_payload_repair() -> None:
     _install_patch_module(filename="forced_fallback_payload_repair_patch.py", module_name="nija_forced_fallback_payload_repair_patch", success_log="FORCED_FALLBACK_PAYLOAD_REPAIR_INSTALL_REQUESTED", error_prefix="Forced fallback payload repair")
 
@@ -316,6 +320,14 @@ def _install_okx_min_notional_prefilter_repair() -> None:
     _install_patch_module(filename="okx_min_notional_prefilter_repair_patch.py", module_name="nija_okx_min_notional_prefilter_repair_patch", success_log="OKX_MIN_NOTIONAL_PREFILTER_REPAIR_INSTALL_REQUESTED", error_prefix="OKX min-notional prefilter repair")
 
 
+def _install_okx_final_order_submission_bridge() -> None:
+    _install_patch_module(filename="okx_final_order_submission_bridge_patch.py", module_name="nija_okx_final_order_submission_bridge_patch", success_log="OKX_FINAL_ORDER_SUBMISSION_BRIDGE_INSTALL_REQUESTED", error_prefix="OKX final order submission bridge")
+
+
+def _install_ecel_min_notional_rounding_repair() -> None:
+    _install_patch_module(filename="ecel_min_notional_rounding_repair_patch.py", module_name="nija_ecel_min_notional_rounding_repair_patch", success_log="ECEL_MIN_NOTIONAL_ROUNDING_REPAIR_INSTALL_REQUESTED", error_prefix="ECEL min-notional rounding repair")
+
+
 _install_logging_format_guard()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
@@ -324,6 +336,8 @@ _install_stale_exchange_kill_switch_recovery()
 _install_exchange_kill_switch_internal_reject_guard()
 _install_kraken_ohlc_thread_guard()
 _install_okx_min_notional_prefilter_repair()
+_install_okx_final_order_submission_bridge()
+_install_ecel_min_notional_rounding_repair()
 _install_trading_strategy_apex_wiring()
 _install_phase3_scan_budget()
 _install_phase3_overselect_import_repair()
@@ -331,6 +345,7 @@ _install_phase3_force_next_preserve_selection()
 _install_phase3_selection_width()
 _install_phase3_fallback_hold_skip()
 _install_execution_bootstrap_authority_repair()
+_install_execution_bootstrap_monitor_iteration_guard()
 _install_forced_fallback_payload_repair()
 _install_fallback_take_profit_geometry_repair()
 _install_execution_pipeline_gate_repair()
