@@ -1,12 +1,13 @@
 """Earliest source-level runtime guard bootstrap for NIJA.
 
 This module is intentionally located at repository root and imports no ``bot``
-package modules.  ``main.py`` calls :func:`install` before its first ``bot.*``
-import so venue-readiness enforcement does not depend on Docker ``.pth`` files
-or provider-specific startup behavior.
+package modules. ``main.py`` loads ``bot/global_runtime_startup_guards.py`` by
+file path before its first ``bot.*`` import; that first installer calls
+:func:`install` so venue-readiness enforcement does not depend on Docker
+``.pth`` files or provider-specific startup behavior.
 
 The bootstrap does not grant writer authority, mark a broker connected, create
-credentials, or relax risk controls.  In a live-capital process it fails closed
+credentials, or relax risk controls. In a live-capital process it fails closed
 when the mandatory venue repair cannot be installed.
 """
 
@@ -63,8 +64,10 @@ def install() -> bool:
     """Install mandatory source-level venue guards exactly once.
 
     The underlying repair is idempotent and continuously patches late imports.
-    A live process must terminate through the caller when installation fails;
-    returning ``False`` is reserved for non-live development/test processes.
+    A live process exits through ``SystemExit`` when installation fails. This is
+    deliberate: ``main.py`` catches ``Exception`` around optional startup guards,
+    while ``SystemExit`` remains unswallowed and keeps live trading fail-closed.
+    Returning ``False`` is reserved for non-live development/test processes.
     """
 
     global _INSTALLED
@@ -103,25 +106,24 @@ def install() -> bool:
             os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "0"
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
             message = f"{type(exc).__name__}:{exc}"
+            is_live = _is_live_runtime()
             logger.critical(
                 "SOURCE_RUNTIME_GUARDS_FAILED marker=%s commit=%s error=%s "
                 "live=%s",
                 _MARKER,
                 _deployment_commit(),
                 message,
-                _is_live_runtime(),
+                is_live,
                 exc_info=True,
             )
             print(
                 f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_FAILED marker={_MARKER} "
                 f"commit={_deployment_commit()} error={message[:240]} "
-                f"live={str(_is_live_runtime()).lower()}",
+                f"live={str(is_live).lower()}",
                 flush=True,
             )
-            if _is_live_runtime():
-                raise RuntimeError(
-                    "live startup blocked: mandatory venue readiness repair failed"
-                ) from exc
+            if is_live:
+                raise SystemExit(78) from exc
             return False
 
 
