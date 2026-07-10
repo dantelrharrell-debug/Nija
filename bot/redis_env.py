@@ -98,13 +98,14 @@ def _is_render_private_redis_url(url: str) -> bool:
         parsed = urlparse((url or "").strip())
         host = (parsed.hostname or "").lower()
         scheme = (parsed.scheme or "").lower()
-    except Exception:
+        port = parsed.port
+    except (TypeError, ValueError):
         return False
     return bool(
         scheme == "redis"
         and host.startswith("red-")
         and "." not in host
-        and parsed.port == 6379
+        and port == 6379
     )
 
 
