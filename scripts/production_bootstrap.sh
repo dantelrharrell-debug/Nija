@@ -107,7 +107,11 @@ else
     export GIT_COMMIT_SHORT="${GIT_COMMIT:0:12}"
 fi
 export NIJA_GIT_METADATA_SOURCE="${_METADATA_SOURCE}"
-export BUILD_TIMESTAMP="${BUILD_TIMESTAMP:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
+if _is_placeholder "${BUILD_TIMESTAMP:-}"; then
+    export BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+else
+    export BUILD_TIMESTAMP
+fi
 
 # start.sh sources .env.build again. Persist the resolved runtime values
 # atomically so stale build-time "unknown" entries cannot overwrite them.
