@@ -24,6 +24,11 @@ class CoinbaseBroker:
         return 12.5
 
 
+class CoinbaseBrokerAdapter:
+    def get_account_balance(self):
+        return {"USD": 8.0, "USDC": 2.0}
+
+
 def test_disconnected_coinbase_does_not_dereference_missing_client():
     module = SimpleNamespace(__name__="bot.broker_manager", CoinbaseBroker=CoinbaseBroker)
     assert patch._patch_module(module) is True
@@ -49,3 +54,9 @@ def test_connected_coinbase_delegates_to_original_methods():
     assert broker.get_account_balance() == 12.5
     assert broker.detail_calls == 1
     assert broker.public_calls == 1
+
+
+def test_coinbase_adapter_contract_is_not_patched():
+    module = SimpleNamespace(__name__="bot.broker_integration", CoinbaseBrokerAdapter=CoinbaseBrokerAdapter)
+    assert patch._patch_module(module) is False
+    assert module.CoinbaseBrokerAdapter().get_account_balance() == {"USD": 8.0, "USDC": 2.0}
