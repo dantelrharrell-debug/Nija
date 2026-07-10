@@ -28,7 +28,9 @@ RUN python -m py_compile \
         /app/bot.py \
         /app/prebot_writer_authority_bootstrap.py \
         /app/prebot_writer_authority_fail_closed.py \
+        /app/source_runtime_guard_bootstrap.py \
         /app/venue_readiness_execution_repair_patch.py \
+        /app/bot/global_runtime_startup_guards.py \
         /app/import_hook_recursion_shield_patch.py \
         /app/disconnected_broker_execution_guard_patch.py
 
