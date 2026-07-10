@@ -28,6 +28,7 @@ RUN python -m py_compile \
         /app/bot.py \
         /app/prebot_writer_authority_bootstrap.py \
         /app/prebot_writer_authority_fail_closed.py \
+        /app/venue_readiness_execution_repair_patch.py \
         /app/import_hook_recursion_shield_patch.py \
         /app/disconnected_broker_execution_guard_patch.py
 
@@ -35,7 +36,7 @@ RUN python -m py_compile \
 # pre-bot hook acquires the canonical Redis writer lease only for NIJA's live
 # main process; health checks, builds, tests and python -c subprocesses are skipped.
 # The wrapper exits directly if site.py would otherwise swallow an authority error.
-RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text('import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install()\\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text('import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text('import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file()"
+RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text('import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install()\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text('import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text('import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file()"
 
 # Ensure Redis connectivity and production bootstrap scripts are present and executable.
 RUN test -f /app/scripts/redis_connectivity_check.sh && \
