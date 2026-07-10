@@ -57,3 +57,39 @@ def test_preexec_bridge_runs_operator_clear_before_kill_switch_check(monkeypatch
     assert kill_switch.is_active() is False
     assert calls == ["kill_switch.is_active"]
     assert kill_switch.checked is True
+
+
+def test_operator_clear_hot_path_skips_without_real_candidate(monkeypatch):
+    clear_module_calls: list[str] = []
+
+    monkeypatch.setattr(
+        patch,
+        "_operator_clear_candidate_present",
+        lambda: (False, "no_emergency_latch:runtime_state=OFF exec_auth=0"),
+    )
+    monkeypatch.setattr(
+        patch,
+        "_clear_patch_module",
+        lambda: clear_module_calls.append("loaded") or SimpleNamespace(run_once=lambda: 1),
+    )
+
+    assert patch._run_operator_clear("kill_switch.is_active") == 0
+    assert clear_module_calls == []
+
+
+def test_operator_clear_candidate_runs_canonical_clear_once(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        patch,
+        "_operator_clear_candidate_present",
+        lambda: (True, "kill_file_present"),
+    )
+    monkeypatch.setattr(
+        patch,
+        "_clear_patch_module",
+        lambda: SimpleNamespace(run_once=lambda: calls.append("run_once") or 0),
+    )
+
+    assert patch._run_operator_clear("kill_switch.is_active") == 0
+    assert calls == ["run_once"]
