@@ -31,7 +31,28 @@ services:
       - key: MINIMUM_TRADING_BALANCE
         value: "5.00"
 
+      # Render cold-start convergence. Kraken is the required primary platform
+      # broker; Coinbase is optional and must not be required for activation.
+      - key: NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS
+        value: "1"
+      - key: NIJA_RENDER_STARTUP_RECOVERY_ENABLED
+        value: "true"
+      - key: NIJA_RENDER_STARTUP_RECOVERY_INTERVAL_S
+        value: "5"
+      - key: NIJA_RENDER_STARTUP_RECOVERY_MAX_ATTEMPTS
+        value: "60"
+      - key: NIJA_CAPITAL_WATCHDOG_INTERVAL_S
+        value: "5"
+      - key: NIJA_CAPITAL_STARTUP_INVARIANT_TIMEOUT_S
+        value: "90"
+      - key: NIJA_WAIT_PLATFORM_TIMEOUT_S
+        value: "90"
+      - key: NIJA_POST_LOCK_CAPITAL_MONITOR_SECONDS
+        value: "300"
+
       # Live-mode intent remains an operator-controlled Render secret/setting.
+      # Runtime execution authority is deliberately absent: it is derived by the
+      # current process only after writer-lock, heartbeat, and capital proof.
       - key: LIVE_TRADING
         sync: false
       - key: LIVE_CAPITAL_VERIFIED

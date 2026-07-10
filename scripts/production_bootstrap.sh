@@ -154,6 +154,36 @@ echo "   Source: ${NIJA_GIT_METADATA_SOURCE}"
 echo "   Branch: ${GIT_BRANCH}"
 echo "   Commit: ${GIT_COMMIT_SHORT}"
 
+# Runtime authority, trading state, fencing tokens, and heartbeat state are
+# process-derived facts. Render dashboard variables must never pre-grant them to
+# a new process. Reset stale values before Python acquires the current writer
+# lease; the normal lock/capital/state-machine path will set them again only
+# after proof succeeds.
+_PREVIOUS_RUNTIME_AUTHORITY="${NIJA_RUNTIME_EXECUTION_AUTHORITY:-unset}"
+_PREVIOUS_RUNTIME_STATE="${NIJA_RUNTIME_TRADING_STATE:-unset}"
+export NIJA_RUNTIME_EXECUTION_AUTHORITY="0"
+export NIJA_RUNTIME_TRADING_STATE="OFF"
+export NIJA_WRITER_LEASE_ACQUIRED="0"
+export NIJA_WRITER_HEARTBEAT_ACTIVE="0"
+unset NIJA_WRITER_FENCING_TOKEN
+unset NIJA_WRITER_LEASE_GENERATION
+unset NIJA_WRITER_HEARTBEAT_ALIVE_TS
+unset NIJA_WRITER_LOCK_ACQUIRED_AT
+
+# Kraken is the required primary platform broker. Coinbase is optional/isolated,
+# so one fresh positive authoritative broker is sufficient by default. Operators
+# can explicitly configure a stricter requirement.
+export NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS="${NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS:-1}"
+export NIJA_RENDER_STARTUP_RECOVERY_ENABLED="${NIJA_RENDER_STARTUP_RECOVERY_ENABLED:-true}"
+export NIJA_RENDER_STARTUP_RECOVERY_INTERVAL_S="${NIJA_RENDER_STARTUP_RECOVERY_INTERVAL_S:-5}"
+export NIJA_RENDER_STARTUP_RECOVERY_MAX_ATTEMPTS="${NIJA_RENDER_STARTUP_RECOVERY_MAX_ATTEMPTS:-60}"
+
+echo "🧭 Derived runtime state reset for current process"
+echo "   Previous authority: ${_PREVIOUS_RUNTIME_AUTHORITY} → 0"
+echo "   Previous state: ${_PREVIOUS_RUNTIME_STATE} → OFF"
+echo "   Required valid brokers for convergence: ${NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS}"
+echo ""
+
 _is_positive_money() {
     python - "$1" <<'PY'
 from decimal import Decimal, InvalidOperation

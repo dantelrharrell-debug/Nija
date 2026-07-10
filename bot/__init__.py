@@ -43,7 +43,7 @@ def _copy_first_present_env(canonical: str, aliases: tuple[str, ...]) -> str:
 
 
 def _normalize_credential_aliases(label: str) -> None:
-    """Accept common Railway/user secret aliases and map them to NIJA canonical names."""
+    """Accept common deployment/user secret aliases and map them to NIJA canonical names."""
     alias_map: dict[str, tuple[str, ...]] = {
         "KRAKEN_PLATFORM_API_KEY": ("KRAKEN_API_KEY", "KRAKEN_MASTER_API_KEY", "KRAKEN_MASTER_KEY", "KRAKEN_PLATFORM_KEY"),
         "KRAKEN_PLATFORM_API_SECRET": ("KRAKEN_API_SECRET", "KRAKEN_PRIVATE_KEY", "KRAKEN_SECRET_KEY", "KRAKEN_MASTER_API_SECRET", "KRAKEN_MASTER_SECRET", "KRAKEN_PLATFORM_SECRET"),
@@ -161,6 +161,10 @@ for _key, _value in {
     "NIJA_PLATFORM_EXECUTION_CAPITAL_ONLY": "true",
     "NIJA_AGGREGATE_USER_CAPITAL_IN_AUTHORITY": "false",
     "NIJA_GENERATION_MISMATCH_RECOVERY_COOLDOWN_S": "0",
+    "NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS": "1",
+    "NIJA_RENDER_STARTUP_RECOVERY_ENABLED": "true",
+    "NIJA_RENDER_STARTUP_RECOVERY_INTERVAL_S": "5",
+    "NIJA_RENDER_STARTUP_RECOVERY_MAX_ATTEMPTS": "60",
     "NIJA_KRAKEN_EFFECTIVE_MIN_NOTIONAL_USD": "23.00",
     "NIJA_KRAKEN_FINAL_MIN_NOTIONAL_USD": "23.00",
     "NIJA_KRAKEN_MIN_QUOTE_BUFFER_PCT": "0.10",
@@ -237,6 +241,7 @@ _PATCH_HOOKS = (
     ("min_notional_runtime_patch", "Adaptive min-notional runtime patch"),
     ("kraken_equity_runtime_patch", "Kraken equity hydration patch"),
     ("capital_balance_propagation_patch", "Capital balance propagation patch"),
+    ("render_startup_convergence_patch", "Render startup authority/capital convergence repair"),
     ("post_lock_capital_refresh_patch", "Post-lock capital refresh patch"),
     ("full_execution_observability_patch", "Full execution observability"),
     ("decision_pipeline_runtime_patch", "Decision pipeline telemetry"),
