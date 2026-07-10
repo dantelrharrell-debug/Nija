@@ -23,8 +23,7 @@ _REDIS_URL_ENV_NAMES = (
     "REDIS_TLS_URL",
 )
 
-_RENDER_RUNTIME_ENV_NAMES = (
-    "RENDER",
+_RENDER_RUNTIME_METADATA_ENV_NAMES = (
     "RENDER_SERVICE_ID",
     "RENDER_SERVICE_NAME",
     "RENDER_INSTANCE_ID",
@@ -83,8 +82,14 @@ def _is_railway_public_proxy_host(host: str) -> bool:
 
 
 def _is_render_runtime() -> bool:
-    """Return True when Render runtime metadata is present."""
-    return any(_strip_wrapping_quotes(os.getenv(name, "")) for name in _RENDER_RUNTIME_ENV_NAMES)
+    """Return True for a truthy Render flag or concrete Render metadata."""
+    render_flag = _strip_wrapping_quotes(os.getenv("RENDER", ""))
+    if render_flag and _is_truthy(render_flag):
+        return True
+    return any(
+        _strip_wrapping_quotes(os.getenv(name, ""))
+        for name in _RENDER_RUNTIME_METADATA_ENV_NAMES
+    )
 
 
 def _is_render_private_redis_url(url: str) -> bool:
