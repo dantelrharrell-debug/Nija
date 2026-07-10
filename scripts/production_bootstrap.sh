@@ -12,7 +12,7 @@ cd "${ROOT_DIR}"
 _is_placeholder() {
     local value="${1:-}"
     case "${value}" in
-        ""|unknown|UNKNOWN|null|NULL|none|NONE|\$RAILWAY_*|\${RAILWAY_*}|\$\{\{*\}\})
+        ""|unknown|UNKNOWN|null|NULL|none|NONE|\$RENDER_*|\${RENDER_*}|\$RAILWAY_*|\${RAILWAY_*}|\$\{\{*\}\})
             return 0
             ;;
         *)
@@ -40,8 +40,8 @@ _sanitize_revision() {
     printf '%s' "${1:-}" | tr -cd '[:alnum:]._:-'
 }
 
-# Load build-time metadata, but do not allow stale "unknown" values to outrank
-# Railway's runtime provenance variables.
+# Load build-time metadata, but never allow stale "unknown" values to outrank
+# Render's runtime provenance variables.
 _BUILD_GIT_BRANCH=""
 _BUILD_GIT_COMMIT=""
 _BUILD_GIT_COMMIT_SHORT=""
@@ -53,12 +53,23 @@ if [[ -f .env.build ]]; then
     _BUILD_GIT_COMMIT_SHORT="${GIT_COMMIT_SHORT:-}"
 fi
 
-_RUNTIME_GIT_BRANCH="${RAILWAY_GIT_BRANCH:-${SOURCE_BRANCH:-${GITHUB_REF_NAME:-}}}"
-_RUNTIME_GIT_COMMIT="${RAILWAY_GIT_COMMIT_SHA:-${SOURCE_VERSION:-${COMMIT_SHA:-${GITHUB_SHA:-}}}}"
+# Render publishes these at build and runtime. Keep provider-neutral fallbacks
+# so local CI and an emergency migration remain traceable.
+_RUNTIME_GIT_BRANCH="${RENDER_GIT_BRANCH:-${RAILWAY_GIT_BRANCH:-${SOURCE_BRANCH:-${GITHUB_REF_NAME:-}}}}"
+_RUNTIME_GIT_COMMIT="${RENDER_GIT_COMMIT:-${RAILWAY_GIT_COMMIT_SHA:-${SOURCE_VERSION:-${COMMIT_SHA:-${GITHUB_SHA:-}}}}}"
 
 _RESOLVED_BRANCH="$(_first_valid "${_RUNTIME_GIT_BRANCH}" "${_BUILD_GIT_BRANCH}" "${GIT_BRANCH:-}" 2>/dev/null || true)"
 _RESOLVED_COMMIT="$(_first_valid "${_RUNTIME_GIT_COMMIT}" "${_BUILD_GIT_COMMIT}" "${_BUILD_GIT_COMMIT_SHORT}" "${GIT_COMMIT:-}" 2>/dev/null || true)"
 _METADATA_SOURCE="environment"
+_PLATFORM="local"
+
+if ! _is_placeholder "${RENDER:-}" || ! _is_placeholder "${RENDER_GIT_BRANCH:-}" || ! _is_placeholder "${RENDER_GIT_COMMIT:-}"; then
+    _METADATA_SOURCE="render-git"
+    _PLATFORM="Render"
+elif ! _is_placeholder "${RAILWAY_GIT_BRANCH:-}" || ! _is_placeholder "${RAILWAY_GIT_COMMIT_SHA:-}"; then
+    _METADATA_SOURCE="railway-git"
+    _PLATFORM="Railway"
+fi
 
 if _is_placeholder "${_RESOLVED_BRANCH}" && command -v git >/dev/null 2>&1; then
     _RESOLVED_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -69,24 +80,35 @@ if _is_placeholder "${_RESOLVED_COMMIT}" && command -v git >/dev/null 2>&1; then
     _METADATA_SOURCE="git"
 fi
 
-# A Railway deployment ID is not a Git SHA, but it is a durable, auditable
-# deployment identifier that can be traced back to the source revision in the
-# Railway deployment record. Use it only when Git metadata is unavailable.
-if _is_placeholder "${_RESOLVED_BRANCH}" && ! _is_placeholder "${RAILWAY_ENVIRONMENT_NAME:-}"; then
-    _RESOLVED_BRANCH="railway/${RAILWAY_ENVIRONMENT_NAME}"
-    _METADATA_SOURCE="railway-deployment"
+# Render service/instance identity is auditable in the Render dashboard and API.
+# Use it only when Git metadata is unavailable; live mode still fails closed if
+# no traceable provider identity exists.
+if _is_placeholder "${_RESOLVED_BRANCH}" && ! _is_placeholder "${RENDER_SERVICE_NAME:-}"; then
+    _RESOLVED_BRANCH="render/${RENDER_SERVICE_NAME}"
+    _METADATA_SOURCE="render-service"
+    _PLATFORM="Render"
 fi
+if _is_placeholder "${_RESOLVED_COMMIT}" && ! _is_placeholder "${RENDER_SERVICE_ID:-}"; then
+    _RESOLVED_COMMIT="render:${RENDER_SERVICE_ID}"
+    _METADATA_SOURCE="render-service"
+    _PLATFORM="Render"
+fi
+if _is_placeholder "${_RESOLVED_COMMIT}" && ! _is_placeholder "${RENDER_INSTANCE_ID:-}"; then
+    _RESOLVED_COMMIT="render-instance:${RENDER_INSTANCE_ID}"
+    _METADATA_SOURCE="render-instance"
+    _PLATFORM="Render"
+fi
+
+# Retain Railway identity fallbacks only for portability; Render always wins.
 if _is_placeholder "${_RESOLVED_BRANCH}" && ! _is_placeholder "${RAILWAY_SERVICE_NAME:-}"; then
     _RESOLVED_BRANCH="railway/${RAILWAY_SERVICE_NAME}"
-    _METADATA_SOURCE="railway-deployment"
-fi
-if _is_placeholder "${_RESOLVED_BRANCH}" && ! _is_placeholder "${RAILWAY_DEPLOYMENT_ID:-}"; then
-    _RESOLVED_BRANCH="railway/deployment"
-    _METADATA_SOURCE="railway-deployment"
+    _METADATA_SOURCE="railway-service"
+    _PLATFORM="Railway"
 fi
 if _is_placeholder "${_RESOLVED_COMMIT}" && ! _is_placeholder "${RAILWAY_DEPLOYMENT_ID:-}"; then
     _RESOLVED_COMMIT="railway:${RAILWAY_DEPLOYMENT_ID}"
     _METADATA_SOURCE="railway-deployment"
+    _PLATFORM="Railway"
 fi
 
 _RESOLVED_BRANCH="$(_sanitize_branch "${_RESOLVED_BRANCH}")"
@@ -101,11 +123,10 @@ fi
 
 export GIT_BRANCH="${_RESOLVED_BRANCH}"
 export GIT_COMMIT="${_RESOLVED_COMMIT}"
-if [[ "${GIT_COMMIT}" == railway:* ]]; then
-    export GIT_COMMIT_SHORT="${GIT_COMMIT}"
-else
-    export GIT_COMMIT_SHORT="${GIT_COMMIT:0:12}"
-fi
+case "${GIT_COMMIT}" in
+    render:*|render-instance:*|railway:*) export GIT_COMMIT_SHORT="${GIT_COMMIT}" ;;
+    *) export GIT_COMMIT_SHORT="${GIT_COMMIT:0:12}" ;;
+esac
 export NIJA_GIT_METADATA_SOURCE="${_METADATA_SOURCE}"
 if _is_placeholder "${BUILD_TIMESTAMP:-}"; then
     export BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -114,7 +135,7 @@ else
 fi
 
 # start.sh sources .env.build again. Persist the resolved runtime values
-# atomically so stale build-time "unknown" entries cannot overwrite them.
+# atomically so stale build-time metadata cannot overwrite Render's values.
 _METADATA_TMP=".env.build.runtime.$$"
 trap 'rm -f "${_METADATA_TMP}"' EXIT
 {
@@ -128,6 +149,7 @@ mv "${_METADATA_TMP}" .env.build
 trap - EXIT
 
 echo "🔎 Deployment provenance resolved"
+echo "   Platform: ${_PLATFORM}"
 echo "   Source: ${NIJA_GIT_METADATA_SOURCE}"
 echo "   Branch: ${GIT_BRANCH}"
 echo "   Commit: ${GIT_COMMIT_SHORT}"
