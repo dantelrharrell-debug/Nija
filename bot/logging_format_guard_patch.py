@@ -1,11 +1,68 @@
-"""Prevent malformed logging calls from breaking Railway diagnostics."""
+"""Prevent malformed logging calls from breaking Railway diagnostics.
+
+This is the first patch module loaded by the repository's ``sitecustomize.py``.
+Acquire the canonical Redis writer authority here before any runtime repair
+monitor can observe or mutate live execution state.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
 
 _ORIGINAL_GET_MESSAGE = None
 _INSTALLED = False
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _truthy(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in _TRUE
+
+
+def _acquire_writer_authority_before_runtime_repairs() -> None:
+    """Acquire the reviewed canonical lease before sitecustomize starts monitors.
+
+    The Docker ``.pth`` hook remains defense in depth.  This source-level path
+    also works when a platform starts directly from repository source or omits
+    image-installed ``.pth`` files.  The delegated guard remains fail-closed and
+    reuses the same singleton later consumed by ``bot_main``.
+    """
+
+    live = (
+        _truthy("LIVE_CAPITAL_VERIFIED")
+        and not _truthy("DRY_RUN_MODE")
+        and not _truthy("PAPER_MODE")
+    )
+    if not live:
+        return
+
+    previous_force = os.environ.get("NIJA_PREBOT_WRITER_AUTHORITY_FORCE")
+    os.environ["NIJA_PREBOT_WRITER_AUTHORITY_FORCE"] = "1"
+    try:
+        import prebot_writer_authority_fail_closed as authority
+
+        runtime = authority.install()
+        if runtime is None or os.environ.get("NIJA_PREBOT_WRITER_AUTHORITY_READY") != "1":
+            raise RuntimeError("canonical pre-bot writer authority did not become ready")
+        logging.getLogger("nija.logging_format_guard").critical(
+            "SITECUSTOMIZE_PREBOT_WRITER_AUTHORITY_READY marker=20260710ad "
+            "canonical_singleton=true"
+        )
+        print(
+            "[NIJA-PRINT] SITECUSTOMIZE_PREBOT_WRITER_AUTHORITY_READY "
+            "marker=20260710ad canonical_singleton=true",
+            flush=True,
+        )
+    finally:
+        if previous_force is None:
+            os.environ.pop("NIJA_PREBOT_WRITER_AUTHORITY_FORCE", None)
+        else:
+            os.environ["NIJA_PREBOT_WRITER_AUTHORITY_FORCE"] = previous_force
+
+
+# Module execution occurs before sitecustomize invokes install_import_hook().
+# Therefore no downstream startup monitor can start without fencing lineage.
+_acquire_writer_authority_before_runtime_repairs()
 
 
 def _install_sector_tier_hydration_repair() -> None:
