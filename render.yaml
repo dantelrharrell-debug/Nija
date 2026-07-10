@@ -2,6 +2,7 @@ services:
   - type: web
     name: nija-trading-bot
     runtime: docker
+    region: oregon
     dockerfilePath: ./Dockerfile
     dockerCommand: bash scripts/production_bootstrap.sh
     autoDeployTrigger: checksPass
@@ -17,8 +18,8 @@ services:
         value: "true"
 
       # Use the Render private-network connection string from the managed Key
-      # Value service below. This replaces stale Railway/public Redis URLs and
-      # requires no external IP allowlist or TLS downgrade.
+      # Value service below. The web service and Key Value service are pinned to
+      # the same region so the internal Redis URL remains routable.
       - key: NIJA_REDIS_URL
         fromService:
           type: keyvalue
@@ -31,6 +32,16 @@ services:
           property: connectionString
       - key: NIJA_REDIS_CONNECT_MAX_TOTAL_WAIT_S
         value: "12"
+      - key: NIJA_REDIS_PERSISTENCE_REQUIRED
+        value: "true"
+      - key: NIJA_REQUIRE_DISTRIBUTED_LOCK
+        value: "true"
+      - key: STRICT_REDIS_WRITER_LOCK
+        value: "true"
+      - key: NIJA_STRICT_REDIS_LEASE
+        value: "true"
+      - key: NIJA_REDIS_RESET_POLICY
+        value: "require_confirmation"
 
       # Production-safe small-account order floors. The bootstrap preserves any
       # stricter dashboard value and prevents internally inconsistent limits.
@@ -94,12 +105,12 @@ services:
       - key: KRAKEN_USER_TANIA_API_SECRET
         sync: false
 
-  # Private-only Redis-compatible datastore for writer fencing, nonce state,
-  # heartbeats, and distributed runtime coordination. The web service receives
-  # its internal connection string through fromService above.
+  # Durable private-only Redis-compatible datastore for writer fencing, nonce
+  # state, heartbeats, and distributed runtime coordination.
   - type: keyvalue
     name: nija-redis
-    plan: free
+    region: oregon
+    plan: starter
     ipAllowList: []
     maxmemoryPolicy: noeviction
-    persistenceMode: off
+    persistenceMode: "journal-snapshot"
