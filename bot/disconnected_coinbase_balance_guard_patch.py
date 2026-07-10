@@ -14,9 +14,12 @@ _HOOK = "_NIJA_DISCONNECTED_COINBASE_BALANCE_GUARD_HOOK_20260709AV"
 _DETAIL_ATTR = "_nija_disconnected_coinbase_detail_guard_20260709av"
 _PUBLIC_ATTR = "_nija_disconnected_coinbase_public_guard_20260709av"
 _LAST_LOG: dict[int, float] = {}
+_BROKER_MODULES = {"bot.broker_manager", "broker_manager"}
 
 
 def _is_disconnected(instance: Any) -> bool:
+    # This guard is only installed on the concrete CoinbaseBroker implementation,
+    # whose connection contract includes both ``client`` and ``connected``.
     client = getattr(instance, "client", None)
     if client is None:
         return True
@@ -55,9 +58,15 @@ def _log_once(instance: Any, surface: str) -> None:
 
 
 def _patch_class(cls: type) -> bool:
-    changed = False
+    # CoinbaseBrokerAdapter exposes a different balance contract (dict return and
+    # no ``client`` attribute). Requiring the concrete broker's private detailed
+    # reader prevents this patch from ever changing adapter behavior.
     original_detail = getattr(cls, "_get_account_balance_detailed", None)
-    if callable(original_detail) and not getattr(original_detail, _DETAIL_ATTR, False):
+    if not callable(original_detail):
+        return False
+
+    changed = False
+    if not getattr(original_detail, _DETAIL_ATTR, False):
         @wraps(original_detail)
         def _detail(self: Any, *args: Any, **kwargs: Any) -> Any:
             if not _is_disconnected(self):
@@ -97,7 +106,7 @@ def _patch_class(cls: type) -> bool:
 
 def _patch_module(module: ModuleType) -> bool:
     changed = False
-    for name in ("CoinbaseBroker", "CoinbaseAdvancedTradeBroker", "CoinbaseBrokerAdapter"):
+    for name in ("CoinbaseBroker", "CoinbaseAdvancedTradeBroker"):
         cls = getattr(module, name, None)
         if isinstance(cls, type):
             changed = _patch_class(cls) or changed
@@ -108,7 +117,7 @@ def _patch_module(module: ModuleType) -> bool:
 
 def _patch_loaded() -> bool:
     patched = False
-    for name in ("bot.broker_manager", "broker_manager", "bot.broker_integration", "broker_integration"):
+    for name in _BROKER_MODULES:
         module = sys.modules.get(name)
         if isinstance(module, ModuleType):
             patched = _patch_module(module) or patched
@@ -123,7 +132,7 @@ def install_import_hook() -> None:
 
     def importing(name: str, globals: Any = None, locals: Any = None, fromlist: Any = (), level: int = 0):
         module = original_import(name, globals, locals, fromlist, level)
-        if str(name) in {"bot.broker_manager", "broker_manager", "bot.broker_integration", "broker_integration"}:
+        if str(name) in _BROKER_MODULES:
             _patch_loaded()
         return module
 
