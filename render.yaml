@@ -16,6 +16,22 @@ services:
       - key: ALLOW_CONSUMER_USD
         value: "true"
 
+      # Use the Render private-network connection string from the managed Key
+      # Value service below. This replaces stale Railway/public Redis URLs and
+      # requires no external IP allowlist or TLS downgrade.
+      - key: NIJA_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: nija-redis
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: nija-redis
+          property: connectionString
+      - key: NIJA_REDIS_CONNECT_MAX_TOTAL_WAIT_S
+        value: "12"
+
       # Production-safe small-account order floors. The bootstrap preserves any
       # stricter dashboard value and prevents internally inconsistent limits.
       - key: NIJA_MIN_CASH_RESERVE_USD
@@ -77,3 +93,13 @@ services:
         sync: false
       - key: KRAKEN_USER_TANIA_API_SECRET
         sync: false
+
+  # Private-only Redis-compatible datastore for writer fencing, nonce state,
+  # heartbeats, and distributed runtime coordination. The web service receives
+  # its internal connection string through fromService above.
+  - type: keyvalue
+    name: nija-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: off
