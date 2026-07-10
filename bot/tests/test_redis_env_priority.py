@@ -67,6 +67,22 @@ class TestRedisEnvPriority(unittest.TestCase):
             self.assertTrue(diagnostics["is_render_private"])
             self.assertEqual(diagnostics["resolved_source"], "REDIS_URL")
 
+    def test_false_render_flag_does_not_change_priority(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RENDER": "false",
+                "NIJA_REDIS_URL": "redis://redis-production-e747.up.railway.app:6379",
+                "REDIS_URL": "redis://red-d98dsl5aeets73fpb0hg:6379",
+            },
+            clear=True,
+        ):
+            self.assertEqual(get_redis_url_source(), "NIJA_REDIS_URL")
+            self.assertEqual(
+                get_redis_url(),
+                "rediss://redis-production-e747.up.railway.app:6379",
+            )
+
     def test_stale_railway_nija_url_keeps_priority_outside_render(self):
         with patch.dict(
             os.environ,
