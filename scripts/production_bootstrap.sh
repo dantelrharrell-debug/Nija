@@ -80,6 +80,10 @@ if _is_placeholder "${_RESOLVED_BRANCH}" && ! _is_placeholder "${RAILWAY_SERVICE
     _RESOLVED_BRANCH="railway/${RAILWAY_SERVICE_NAME}"
     _METADATA_SOURCE="railway-deployment"
 fi
+if _is_placeholder "${_RESOLVED_BRANCH}" && ! _is_placeholder "${RAILWAY_DEPLOYMENT_ID:-}"; then
+    _RESOLVED_BRANCH="railway/deployment"
+    _METADATA_SOURCE="railway-deployment"
+fi
 if _is_placeholder "${_RESOLVED_COMMIT}" && ! _is_placeholder "${RAILWAY_DEPLOYMENT_ID:-}"; then
     _RESOLVED_COMMIT="railway:${RAILWAY_DEPLOYMENT_ID}"
     _METADATA_SOURCE="railway-deployment"
@@ -103,6 +107,21 @@ else
     export GIT_COMMIT_SHORT="${GIT_COMMIT:0:12}"
 fi
 export NIJA_GIT_METADATA_SOURCE="${_METADATA_SOURCE}"
+export BUILD_TIMESTAMP="${BUILD_TIMESTAMP:-$(date -u +"%Y-%m-%dT%H:%M:%SZ")}"
+
+# start.sh sources .env.build again. Persist the resolved runtime values
+# atomically so stale build-time "unknown" entries cannot overwrite them.
+_METADATA_TMP=".env.build.runtime.$$"
+trap 'rm -f "${_METADATA_TMP}"' EXIT
+{
+    printf 'export GIT_BRANCH=%q\n' "${GIT_BRANCH}"
+    printf 'export GIT_COMMIT=%q\n' "${GIT_COMMIT}"
+    printf 'export GIT_COMMIT_SHORT=%q\n' "${GIT_COMMIT_SHORT}"
+    printf 'export BUILD_TIMESTAMP=%q\n' "${BUILD_TIMESTAMP}"
+    printf 'export NIJA_GIT_METADATA_SOURCE=%q\n' "${NIJA_GIT_METADATA_SOURCE}"
+} > "${_METADATA_TMP}"
+mv "${_METADATA_TMP}" .env.build
+trap - EXIT
 
 echo "🔎 Deployment provenance resolved"
 echo "   Source: ${NIJA_GIT_METADATA_SOURCE}"
@@ -144,7 +163,7 @@ for value_name in _MIN_TRADE _MIN_CASH _MIN_BALANCE _MIN_RESERVE; do
 done
 
 # Never lower an operator's stricter value. Ensure an account that qualifies
-# can fund at least one minimum order plus the configured cash reserve floor.
+# can fund at least one minimum order and meets the configured cash reserve floor.
 export MIN_TRADE_USD="$(_max_money "${_MIN_TRADE}" "3.50")"
 export MIN_CASH_TO_BUY="$(_max_money "${_MIN_CASH}" "${MIN_TRADE_USD}" "${_MIN_RESERVE}")"
 export MINIMUM_TRADING_BALANCE="$(_max_money "${_MIN_BALANCE}" "${MIN_CASH_TO_BUY}")"
