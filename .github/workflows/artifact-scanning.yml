@@ -80,9 +80,14 @@ jobs:
         fail-build: false
         severity-cutoff: high
 
+    # Grype report generation is best-effort. The scanner can complete without
+    # emitting a SARIF path (for example when a matrix job is cancelled after a
+    # sibling failure). Trivy remains the required SARIF security report, so an
+    # absent optional Grype artifact must not fail the entire checksPass gate.
     - name: Upload Grype scan results
       uses: github/codeql-action/upload-sarif@v3
-      if: always()
+      if: ${{ always() && steps.grype-scan.outputs.sarif != '' }}
+      continue-on-error: true
       with:
         sarif_file: ${{ steps.grype-scan.outputs.sarif }}
         category: 'grype-${{ matrix.dockerfile }}'
