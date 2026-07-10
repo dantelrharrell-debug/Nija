@@ -9,6 +9,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
+# Existing Render services created outside the current Blueprint can miss
+# fromService environment injection. Restore only the known private Key Value
+# endpoint supplied by the operator. This does not grant writer authority or
+# weaken any distributed-lock requirement.
+_RENDER_RUNTIME=false
+case "${RENDER:-}" in
+    1|true|TRUE|yes|YES|on|ON|enabled|ENABLED) _RENDER_RUNTIME=true ;;
+esac
+if [[ -n "${RENDER_SERVICE_ID:-}${RENDER_SERVICE_NAME:-}${RENDER_INSTANCE_ID:-}${RENDER_GIT_BRANCH:-}${RENDER_GIT_COMMIT:-}" ]]; then
+    _RENDER_RUNTIME=true
+fi
+if [[ "${_RENDER_RUNTIME}" == "true" ]] \
+    && [[ -z "${NIJA_REDIS_URL:-}${REDIS_PRIVATE_URL:-}${REDIS_PUBLIC_URL:-}${REDIS_URL:-}${REDIS_TLS_URL:-}" ]]; then
+    _RENDER_REDIS_FALLBACK="${NIJA_RENDER_REDIS_FALLBACK_URL:-redis://red-d98dsl5aeets73fpb0hg:6379}"
+    if [[ "${_RENDER_REDIS_FALLBACK}" =~ ^redis://red-[A-Za-z0-9-]+:6379/?$ ]]; then
+        export NIJA_REDIS_URL="${_RENDER_REDIS_FALLBACK%/}"
+        export REDIS_URL="${NIJA_REDIS_URL}"
+        export NIJA_RENDER_REDIS_FALLBACK_APPLIED=1
+        echo "🛟 Render private Redis fallback applied (${NIJA_REDIS_URL#redis://})"
+    else
+        echo "⚠️  Render Redis fallback rejected: expected redis://red-<service>:6379"
+    fi
+fi
+
+# Render must be able to verify process liveness while Redis authority and broker
+# hydration are still fail-closed. This endpoint never reports trading readiness
+# and never changes execution state.
+if [[ "${_RENDER_RUNTIME}" == "true" ]] && command -v python3 >/dev/null 2>&1 && [[ -f render_liveness_server.py ]]; then
+    python3 -u render_liveness_server.py &
+    _RENDER_LIVENESS_PID=$!
+    export NIJA_RENDER_LIVENESS_PID="${_RENDER_LIVENESS_PID}"
+    echo "🌐 Early Render liveness server started pid=${_RENDER_LIVENESS_PID} port=${PORT:-5000}"
+fi
+
 _is_placeholder() {
     local value="${1:-}"
     case "${value}" in
