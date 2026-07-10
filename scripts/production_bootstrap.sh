@@ -9,6 +9,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
+_promote_secret_alias() {
+    local canonical="$1"
+    shift
+
+    if [[ -n "${!canonical:-}" ]]; then
+        return 0
+    fi
+
+    local alias
+    for alias in "$@"; do
+        if [[ -n "${!alias:-}" ]]; then
+            export "${canonical}=${!alias}"
+            echo "🔑 Secret alias normalized: ${canonical}<-${alias}"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# Existing deployments may retain older Kraken variable names. Promote aliases
+# before start.sh validates credentials; never print or persist secret values.
+_promote_secret_alias KRAKEN_PLATFORM_API_KEY \
+    KRAKEN_API_KEY \
+    KRAKEN_MASTER_API_KEY \
+    KRAKEN_MASTER_KEY \
+    KRAKEN_PLATFORM_KEY
+_promote_secret_alias KRAKEN_PLATFORM_API_SECRET \
+    KRAKEN_API_SECRET \
+    KRAKEN_PRIVATE_KEY \
+    KRAKEN_SECRET_KEY \
+    KRAKEN_MASTER_API_SECRET \
+    KRAKEN_MASTER_SECRET \
+    KRAKEN_PLATFORM_SECRET
+
 # Existing Render services created outside the current Blueprint can miss
 # fromService environment injection. Restore only the known private Key Value
 # endpoint supplied by the operator. This does not grant writer authority or
