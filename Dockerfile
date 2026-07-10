@@ -34,11 +34,15 @@ RUN python -m py_compile \
         /app/import_hook_recursion_shield_patch.py \
         /app/disconnected_broker_execution_guard_patch.py
 
-# Install startup guards before sitecustomize executes. The alphabetically-first
-# pre-bot hook acquires the canonical Redis writer lease only for NIJA's live
-# main process; health checks, builds, tests and python -c subprocesses are skipped.
-# The wrapper exits directly if site.py would otherwise swallow an authority error.
-RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text('import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install()\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text('import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text('import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file()"
+# Install startup guards before sitecustomize executes. Python processes .pth
+# files before the entry script directory is reliably importable, so every hook
+# first adds /app as a plain path line and only then imports its module. This
+# prevents ModuleNotFoundError when Render launches Python outside /app.
+RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); prefix = '/app\\n'; p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text(prefix + 'import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install()\\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text(prefix + 'import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text(prefix + 'import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file()"
+
+# Reproduce provider startup from outside the repository. The hooks must be
+# importable during Python site initialization without relying on cwd=/app.
+RUN cd /tmp && python -c "import prebot_writer_authority_fail_closed, import_hook_recursion_shield_patch, disconnected_broker_execution_guard_patch; print('NIJA_PTH_IMPORT_SMOKE_OK')"
 
 # Ensure Redis connectivity and production bootstrap scripts are present and executable.
 RUN test -f /app/scripts/redis_connectivity_check.sh && \
