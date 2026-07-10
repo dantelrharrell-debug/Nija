@@ -30,6 +30,11 @@ services:
           type: keyvalue
           name: nija-redis
           property: connectionString
+      # Existing Render services created outside this Blueprint may not receive
+      # fromService variables. The bootstrap uses this private, credential-free
+      # endpoint only when every standard Redis URL variable is absent.
+      - key: NIJA_RENDER_REDIS_FALLBACK_URL
+        value: "redis://red-d98dsl5aeets73fpb0hg:6379"
       - key: NIJA_REDIS_CONNECT_MAX_TOTAL_WAIT_S
         value: "12"
       - key: NIJA_REDIS_PERSISTENCE_REQUIRED
