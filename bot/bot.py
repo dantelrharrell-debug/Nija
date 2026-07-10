@@ -8,6 +8,20 @@ import sys
 logger = logging.getLogger("nija.bot_entrypoint")
 
 try:
+    from bot.okx_patch_churn_guard_patch import install_import_hook as _install_okx_patch_churn_guard
+    _install_okx_patch_churn_guard()
+    logger.warning("OKX_PATCH_CHURN_GUARD_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("OKX_PATCH_CHURN_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
+try:
+    from bot.disconnected_coinbase_balance_guard_patch import install_import_hook as _install_coinbase_balance_guard
+    _install_coinbase_balance_guard()
+    logger.warning("COINBASE_BALANCE_DISCONNECTED_GUARD_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("COINBASE_BALANCE_DISCONNECTED_GUARD_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
+try:
     from bot.live_capital_first_snapshot_latch_patch import install_import_hook as _install_live_capital_first_snapshot_latch
     _install_live_capital_first_snapshot_latch()
     logger.warning("LIVE_CAPITAL_FIRST_SNAPSHOT_LATCH_INSTALL_REQUESTED source=bot_entrypoint")
@@ -34,6 +48,13 @@ try:
     logger.warning("TRADING_ENGINE_STRATEGY_WRAPPER_INSTALL_REQUESTED source=bot_entrypoint")
 except Exception as exc:
     logger.warning("TRADING_ENGINE_STRATEGY_WRAPPER_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
+
+try:
+    from bot.strategy_runtime_integrity_patch import install_import_hook as _install_strategy_runtime_integrity
+    _install_strategy_runtime_integrity()
+    logger.warning("STRATEGY_RUNTIME_INTEGRITY_INSTALL_REQUESTED source=bot_entrypoint")
+except Exception as exc:
+    logger.warning("STRATEGY_RUNTIME_INTEGRITY_INSTALL_FAILED source=bot_entrypoint err=%s", exc)
 
 try:
     from bot.live_entry_scan_adoption_timeout_patch import install_import_hook as _install_scan_adoption_timeout
