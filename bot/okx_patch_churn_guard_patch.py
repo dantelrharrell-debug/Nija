@@ -5,12 +5,13 @@ import logging
 import sys
 from functools import wraps
 from types import ModuleType
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 logger = logging.getLogger("nija.okx_patch_churn_guard")
 _MARKER = "20260709aw"
 _HOOK = "_NIJA_OKX_PATCH_CHURN_GUARD_HOOK_20260709AW"
 _GUARDED = "_nija_okx_patch_churn_guarded_20260709aw"
+_FINAL_MARKER = "_nija_okx_final_order_submission_bridge_order_v20260709d"
 _TARGETS = {
     "bot.broker_manager",
     "broker_manager",
@@ -57,6 +58,16 @@ def _guard_instid_module(module: ModuleType) -> bool:
                 continue
 
             def _make_wrapper(fn: Callable[..., Any], name: str):
+                # The legacy final-order bridge unwraps one layer before replacing a
+                # method. When the current function already guarantees OKX symbol
+                # normalization, persist the instId marker on that retained layer so
+                # the two patches cannot alternate forever.
+                if _has_marker_chain(fn, _FINAL_MARKER):
+                    try:
+                        setattr(fn, marker, True)
+                    except Exception:
+                        pass
+
                 @wraps(fn)
                 def _patched_order(self: Any, symbol: Any, side: Any, quantity: Any, *args: Any, **kwargs: Any) -> Any:
                     before = str(symbol or "")
