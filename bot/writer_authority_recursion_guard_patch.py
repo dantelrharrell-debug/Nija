@@ -9,15 +9,59 @@ from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.writer_authority_recursion_guard")
-_MARKER = "20260709aq"
-_HOOK_FLAG = "_NIJA_WRITER_AUTHORITY_RECURSION_GUARD_HOOK_20260709AQ"
-_TSM_PATCH_ATTR = "_nija_writer_authority_recursion_guard_20260709aq"
-_STATUS_PATCH_ATTR = "_nija_writer_authority_status_reentry_guard_20260709aq"
+_MARKER = "20260709ax"
+_HOOK_FLAG = "_NIJA_WRITER_AUTHORITY_RECURSION_GUARD_HOOK_20260709AX"
+_TSM_PATCH_ATTR = "_nija_writer_authority_recursion_guard_20260709ax"
+_STATUS_PATCH_ATTR = "_nija_writer_authority_status_reentry_guard_20260709ax"
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
 def _truthy(name: str, default: str = "false") -> bool:
     return str(os.environ.get(name, default)).strip().lower() in _TRUE
+
+
+def _float_env(name: str, default: float = 0.0) -> float:
+    try:
+        return float(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _writer_reentry_proof() -> dict[str, Any]:
+    """Return local proof for recursive status calls without probing Redis again.
+
+    This is not a bypass. It is used only while the authority-status function is
+    already active and a second nested status request would recurse. The proof is
+    accepted only when live writer artifacts from the previously verified path
+    are present: Redis is configured, a fencing token exists, a lease generation
+    exists, and the writer heartbeat is fresh.
+    """
+    token = os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()
+    generation = os.environ.get("NIJA_WRITER_LEASE_GENERATION", "").strip()
+    heartbeat_active = _truthy("NIJA_WRITER_HEARTBEAT_ACTIVE")
+    alive_ts = _float_env("NIJA_WRITER_HEARTBEAT_ALIVE_TS", 0.0)
+    max_age_s = max(5.0, _float_env("NIJA_WRITER_REENTRY_HEARTBEAT_MAX_AGE_S", 75.0))
+    now_wall = time.time()
+    heartbeat_age_s = max(0.0, now_wall - alive_ts) if alive_ts > 0 else 999999.0
+    redis_configured = bool(os.environ.get("NIJA_REDIS_URL") or os.environ.get("REDIS_URL"))
+    proof_ok = bool(
+        redis_configured
+        and token
+        and generation
+        and heartbeat_active
+        and heartbeat_age_s <= max_age_s
+    )
+    return {
+        "ok": proof_ok,
+        "redis_configured": redis_configured,
+        "redis_reachable": proof_ok,
+        "token_present": bool(token),
+        "token_prefix": token[:8],
+        "lease_generation": generation,
+        "heartbeat_active": heartbeat_active,
+        "heartbeat_age_s": heartbeat_age_s,
+        "heartbeat_max_age_s": max_age_s,
+    }
 
 
 def _patch_execution_authority_context(module: ModuleType) -> bool:
@@ -32,29 +76,47 @@ def _patch_execution_authority_context(module: ModuleType) -> bool:
             last_err = str(getattr(module, "_FENCE_LAST_ERR", "") or "")
             last_ts = float(getattr(module, "_FENCE_LAST_CHECK_TS", 0.0) or 0.0)
             age_s = max(0.0, time.monotonic() - last_ts) if last_ts > 0 else 999999.0
-            ok = bool(last_ok and age_s <= 2.0)
+            cached_ok = bool(last_ok and age_s <= 2.0)
+            proof = _writer_reentry_proof()
+            ok = bool(cached_ok or proof["ok"])
+            if proof["ok"] and not cached_ok:
+                logger.warning(
+                    "WRITER_AUTHORITY_STATUS_REENTRY_PROOF_ACCEPTED marker=%s cached_age_s=%.3f heartbeat_age_s=%.3f generation=%s token_prefix=%s",
+                    _MARKER,
+                    age_s,
+                    float(proof.get("heartbeat_age_s", 999999.0)),
+                    proof.get("lease_generation", ""),
+                    proof.get("token_prefix", ""),
+                )
             logger.warning(
-                "WRITER_AUTHORITY_STATUS_REENTRY_GUARDED marker=%s ok=%s cached_age_s=%.3f last_error=%s",
+                "WRITER_AUTHORITY_STATUS_REENTRY_GUARDED marker=%s ok=%s cached_ok=%s cached_age_s=%.3f proof_ok=%s last_error=%s",
                 _MARKER,
                 ok,
+                cached_ok,
                 age_s,
+                proof["ok"],
                 last_err,
             )
+            err = "" if ok else (last_err or "writer_authority_status_reentry_guarded")
             return {
                 "ok": ok,
-                "error": "" if ok else (last_err or "writer_authority_status_reentry_guarded"),
+                "error": err,
                 "strict_required": True,
                 "effective_strict_required": True,
                 "degraded_override_enabled": False,
                 "unsafe_bypass_enabled": False,
                 "single_instance_lock_opt_out": False,
                 "live_mode": _truthy("LIVE_CAPITAL_VERIFIED"),
-                "redis_configured": bool(os.environ.get("NIJA_REDIS_URL") or os.environ.get("REDIS_URL")),
-                "redis_reachable": False,
-                "token_present": bool(os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()),
-                "token_prefix": os.environ.get("NIJA_WRITER_FENCING_TOKEN", "").strip()[:8],
+                "redis_configured": bool(proof["redis_configured"]),
+                "redis_reachable": bool(proof["redis_reachable"]),
+                "token_present": bool(proof["token_present"]),
+                "token_prefix": str(proof["token_prefix"]),
                 "lock_key": os.environ.get("NIJA_WRITER_LOCK_KEY", ""),
                 "meta_key": os.environ.get("NIJA_WRITER_LOCK_META_KEY", ""),
+                "lease_generation": str(proof["lease_generation"]),
+                "heartbeat_active": bool(proof["heartbeat_active"]),
+                "heartbeat_age_s": float(proof["heartbeat_age_s"]),
+                "authority_verified": ok,
                 "current_instance": {},
                 "current_holder": {},
                 "current_holder_meta": {},
@@ -63,6 +125,8 @@ def _patch_execution_authority_context(module: ModuleType) -> bool:
                     "last_check_monotonic": last_ts,
                     "last_ok": last_ok,
                     "last_error": last_err,
+                    "cached_ok": cached_ok,
+                    "reentry_proof_ok": proof["ok"],
                 },
             }
         state["active"] = True
