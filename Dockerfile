@@ -21,9 +21,17 @@ COPY scripts/ scripts/
 # Copy application code
 COPY . .
 
-# Fail the image build immediately if entrypoint Python files are syntactically invalid.
-# This prevents deploying stale/corrupted images that crash at runtime with SyntaxError.
-RUN python -m py_compile /app/main.py /app/bot.py
+# Fail the image build immediately if entrypoint Python files or the startup
+# recursion shield are syntactically invalid.
+RUN python -m py_compile \
+        /app/main.py \
+        /app/bot.py \
+        /app/import_hook_recursion_shield_patch.py
+
+# Install the recursion shield before sitecustomize executes.  The root-level
+# module deliberately avoids importing the bot package; its monitor patches
+# only the recursive startup-hook callbacks after those modules load.
+RUN python -c "import pathlib, site; p = pathlib.Path(site.getsitepackages()[0]) / 'nija_import_hook_recursion_shield.pth'; p.write_text('import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\\n', encoding='utf-8'); assert p.is_file()"
 
 # Ensure Redis connectivity and production bootstrap scripts are present and executable.
 RUN test -f /app/scripts/redis_connectivity_check.sh && \
