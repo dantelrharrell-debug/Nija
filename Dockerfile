@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # Install git and redis-cli for runtime diagnostics
-RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/lists/*
+RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
