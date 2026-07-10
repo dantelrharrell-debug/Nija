@@ -16,6 +16,70 @@ _KRAKEN_PATCH_LOG_PATTERNS = (
     "TIER_CONFIG_LOW_BALANCE_KRAKEN_GUARD_PATCHED",
     "BROKER_INTEGRATION_KRAKEN_ENTRY_TARGET_REBOUND",
 )
+_TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
+
+
+def _truthy(name: str, default: str = "") -> bool:
+    return str(os.environ.get(name, default) or "").strip().lower() in _TRUTHY
+
+
+def _live_runtime_expected() -> bool:
+    if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
+        return False
+    return any(
+        _truthy(name)
+        for name in (
+            "LIVE_CAPITAL_VERIFIED",
+            "NIJA_EXECUTION_ACTIVE",
+            "NIJA_RUNTIME_EXECUTION_AUTHORITY",
+        )
+    )
+
+
+def _install_source_runtime_guards() -> bool:
+    """Install venue readiness before this module imports any ``bot.*`` code.
+
+    ``main.py`` loads this file directly from disk, so the root bootstrap can be
+    imported without executing ``bot.__init__``. Live failures are converted to
+    ``SystemExit`` so main's optional-guard ``except Exception`` cannot swallow
+    the failure and continue trading without venue isolation.
+    """
+
+    try:
+        bootstrap = importlib.import_module("source_runtime_guard_bootstrap")
+        installer = getattr(bootstrap, "install", None)
+        if not callable(installer):
+            raise RuntimeError("source runtime guard installer missing")
+        ready = bool(installer())
+        logger.warning(
+            "SOURCE_RUNTIME_GUARDS_PREBOT_INSTALL_REQUESTED marker=20260710af ready=%s",
+            ready,
+        )
+        print(
+            f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_PREBOT_INSTALL_REQUESTED "
+            f"marker=20260710af ready={str(ready).lower()}",
+            flush=True,
+        )
+        return ready
+    except SystemExit:
+        raise
+    except Exception as exc:
+        is_live = _live_runtime_expected()
+        logger.critical(
+            "SOURCE_RUNTIME_GUARDS_PREBOT_FAILED marker=20260710af error=%s live=%s",
+            exc,
+            is_live,
+            exc_info=True,
+        )
+        print(
+            f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_PREBOT_FAILED "
+            f"marker=20260710af error={type(exc).__name__}:{str(exc)[:200]} "
+            f"live={str(is_live).lower()}",
+            flush=True,
+        )
+        if is_live:
+            raise SystemExit(78) from exc
+        return False
 
 
 def _set_defaults() -> None:
@@ -82,6 +146,7 @@ def _install_module(module_name: str, marker: str) -> bool:
 def install() -> None:
     if getattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", False):
         return
+    source_guards_ok = _install_source_runtime_guards()
     _set_defaults()
     _install_kraken_patch_log_dedupe()
     held_ok = _install_module("held_trade_cap_guard_patch", "HELD_TRADE_CAP_GUARD_GLOBAL_STARTUP_INSTALL_REQUESTED")
@@ -90,7 +155,8 @@ def install() -> None:
     stale_exposure_ok = _install_module("pre_trade_stale_exposure_reconcile_patch", "PRE_TRADE_STALE_EXPOSURE_RECONCILE_GLOBAL_STARTUP_INSTALL_REQUESTED")
     setattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", True)
     logger.warning(
-        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
+        "GLOBAL_RUNTIME_STARTUP_GUARDS_INSTALLED marker=20260706b source_venue_guards=%s held_cap=%s global_trailing=%s profit_position=%s stale_exposure=%s cap=%s",
+        source_guards_ok,
         held_ok,
         trailing_ok,
         profit_position_ok,
