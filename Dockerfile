@@ -25,10 +25,13 @@ COPY . .
 # This prevents deploying stale/corrupted images that crash at runtime with SyntaxError.
 RUN python -m py_compile /app/main.py /app/bot.py
 
-# Ensure Redis connectivity and production bootstrap scripts are executable.
+# Ensure Redis connectivity and production bootstrap scripts are present and executable.
 RUN test -f /app/scripts/redis_connectivity_check.sh && \
     test -f /app/scripts/production_bootstrap.sh && \
-    chmod +x /app/scripts/redis_connectivity_check.sh /app/scripts/production_bootstrap.sh && \
+    test -f /app/scripts/render_entrypoint.sh && \
+    chmod +x /app/scripts/redis_connectivity_check.sh \
+             /app/scripts/production_bootstrap.sh \
+             /app/scripts/render_entrypoint.sh && \
     if [ -f /app/scripts/debug_startup_safe_mode.sh ]; then chmod +x /app/scripts/debug_startup_safe_mode.sh; fi
 
 # Make other scripts executable when present in build context
