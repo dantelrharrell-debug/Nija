@@ -3,8 +3,7 @@ from __future__ import annotations
 import builtins
 import logging
 import os
-import queue
-import threading
+import sys
 import time
 from functools import wraps
 from types import ModuleType
@@ -40,17 +39,10 @@ def _timeout_s() -> float:
         raw = os.environ.get("NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS")
         if raw not in (None, ""):
             requested = max(5.0, float(raw or "0"))
-            if requested < floor:
-                logger.warning(
-                    "EXECUTION_ENTRY_TIMEOUT_CLAMPED marker=20260709ae requested_s=%.1f floor_s=%.1f ack_timeout_s=%.1f reason=explicit_env_below_ack_safe_floor",
-                    requested,
-                    floor,
-                    _float_env("NIJA_ACK_TIMEOUT_S", 30.0),
-                )
             return max(requested, floor)
-        return floor
     except Exception:
-        return floor
+        pass
+    return floor
 
 
 def _symbol_from(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
@@ -90,86 +82,97 @@ def _patch_module(module: ModuleType) -> bool:
         if not _truthy("NIJA_EXECUTION_ENTRY_TIMEOUT_GUARD_ENABLED", "true"):
             return original(self, *args, **kwargs)
 
+        # Do not move live execution into a daemon thread. Context variables that
+        # carry dispatch authority are thread-local, and Python cannot safely cancel
+        # a timed-out worker. The former implementation returned while the worker
+        # could still submit an order, creating orphaned and duplicate executions.
         timeout = _timeout_s()
         symbol = _symbol_from(args, kwargs)
         side = _side_from(args, kwargs)
         size = _size_from(args, kwargs)
-        result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
-
-        def _runner() -> None:
-            try:
-                result_queue.put(("result", original(self, *args, **kwargs)), block=False)
-            except BaseException as exc:  # noqa: BLE001 - must return exceptions across thread boundary
-                try:
-                    result_queue.put(("error", exc), block=False)
-                except Exception:
-                    pass
-
-        worker = threading.Thread(
-            target=_runner,
-            name=f"nija-execute-entry-timeout-{symbol or 'unknown'}",
-            daemon=True,
-        )
-        started = time.time()
-        worker.start()
-        worker.join(timeout)
-
-        if worker.is_alive():
-            logger.critical(
-                "EXECUTION_ENTRY_TIMEOUT_GUARD_TIMEOUT marker=20260709ae symbol=%s side=%s size_usd=%.2f timeout_s=%.1f ack_timeout_s=%.1f action=return_false_loop_continue",
+        started = time.monotonic()
+        try:
+            result = original(self, *args, **kwargs)
+        except BaseException:
+            logger.exception(
+                "EXECUTION_ENTRY_INLINE_EXCEPTION marker=20260709ae symbol=%s side=%s size_usd=%.2f",
                 symbol,
                 side,
                 size,
-                timeout,
-                _float_env("NIJA_ACK_TIMEOUT_S", 30.0),
             )
-            print(
-                f"[NIJA-PRINT] EXECUTION_ENTRY_TIMEOUT_GUARD_TIMEOUT marker=20260709ae symbol={symbol} side={side} size=${size:.2f} timeout_s={timeout:.1f}",
-                flush=True,
-            )
-            return None
+            raise
 
-        try:
-            kind, payload = result_queue.get_nowait()
-        except queue.Empty:
-            logger.warning(
-                "EXECUTION_ENTRY_TIMEOUT_GUARD_EMPTY_RESULT marker=20260709ae symbol=%s side=%s elapsed_ms=%.0f",
+        elapsed = time.monotonic() - started
+        if elapsed > timeout:
+            logger.critical(
+                "EXECUTION_ENTRY_SLOW_COMPLETION marker=20260709ae symbol=%s side=%s size_usd=%.2f "
+                "elapsed_s=%.1f threshold_s=%.1f action=completed_inline_no_orphan_no_retry",
                 symbol,
                 side,
-                (time.time() - started) * 1000,
+                size,
+                elapsed,
+                timeout,
             )
-            return None
-
-        if kind == "error":
-            raise payload
-        return payload
+            print(
+                f"[NIJA-PRINT] EXECUTION_ENTRY_SLOW_COMPLETION marker=20260709ae "
+                f"symbol={symbol} side={side} size=${size:.2f} elapsed_s={elapsed:.1f}",
+                flush=True,
+            )
+        return result
 
     setattr(execute_entry, _WRAP_ATTR, True)
     setattr(cls, "execute_entry", execute_entry)
-    logger.warning("%s class=ExecutionEngine timeout_s=%.1f ack_timeout_s=%.1f", _MARKER, _timeout_s(), _float_env("NIJA_ACK_TIMEOUT_S", 30.0))
-    print("[NIJA-PRINT] EXECUTION_ENTRY_TIMEOUT_GUARD_PATCHED marker=20260709ae", flush=True)
+    logger.warning(
+        "%s class=ExecutionEngine mode=inline_context_preserving threshold_s=%.1f ack_timeout_s=%.1f",
+        _MARKER,
+        _timeout_s(),
+        _float_env("NIJA_ACK_TIMEOUT_S", 30.0),
+    )
+    print("[NIJA-PRINT] EXECUTION_ENTRY_TIMEOUT_GUARD_PATCHED marker=20260709ae mode=inline_context_preserving", flush=True)
     return True
 
 
 def _try_patch_loaded() -> bool:
     patched = False
     for name in ("bot.execution_engine", "execution_engine"):
-        try:
-            import sys
-            module = sys.modules.get(name)
-            if isinstance(module, ModuleType):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            try:
                 patched = _patch_module(module) or patched
-        except Exception:
-            continue
+            except Exception:
+                continue
     return patched
+
+
+def _install_context_integrity_repair() -> None:
+    module_names = (
+        "broker_scoped_hardening_repair_patch",
+        "execution_route_context_integrity_patch",
+        "dispatch_scope_bridge_safety_patch",
+    )
+    for short_name in module_names:
+        installed = False
+        for name in (f"bot.{short_name}", short_name):
+            try:
+                module = __import__(name, fromlist=["*"])
+                installer = getattr(module, "install_import_hook", None)
+                if callable(installer):
+                    installer()
+                installed = True
+                break
+            except Exception:
+                continue
+        if not installed:
+            logger.warning(
+                "EXECUTION_CONTEXT_INTEGRITY_REPAIR_IMPORT_FAILED marker=20260709at module=%s",
+                short_name,
+            )
 
 
 def install_import_hook() -> None:
     os.environ.setdefault("NIJA_EXECUTION_ENTRY_TIMEOUT_GUARD_ENABLED", "true")
-    # Do not set NIJA_EXECUTION_ENTRY_TIMEOUT_SECONDS here.  Railway may still
-    # carry an old explicit 25s value; _timeout_s() clamps any explicit value
-    # below the ACK-safe floor instead of trusting it.
     _try_patch_loaded()
+    _install_context_integrity_repair()
     if getattr(builtins, _IMPORT_FLAG, False):
         return
     original_import = builtins.__import__
@@ -185,7 +188,10 @@ def install_import_hook() -> None:
 
     builtins.__import__ = guarded_import
     setattr(builtins, _IMPORT_FLAG, True)
-    logger.warning("EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_HOOK marker=20260709ae installed=true timeout_s=%.1f", _timeout_s())
+    logger.warning(
+        "EXECUTION_ENTRY_TIMEOUT_GUARD_IMPORT_HOOK marker=20260709ae installed=true mode=inline_context_preserving threshold_s=%.1f",
+        _timeout_s(),
+    )
 
 
 def install() -> None:

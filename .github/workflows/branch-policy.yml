@@ -13,13 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MAX_BRANCH_AGE_DAYS: "90"
-      BRANCH_NAME_REGEX: "^(feature|fix|copilot|chore|docs|refactor|test|release|hotfix)\\/[a-z0-9._-]+$"
+      BRANCH_NAME_REGEX: '^(feature|fix|copilot|chore|docs|refactor|test|release|hotfix)/[a-z0-9._-]+$'
     steps:
       - name: Validate branch naming and age
         uses: actions/github-script@v7
         with:
           script: |
-            const core = require('@actions/core');
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const branch = context.payload.pull_request?.head?.ref;
