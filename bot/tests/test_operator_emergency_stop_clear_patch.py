@@ -101,3 +101,33 @@ def test_stale_env_only_clear_refuses_terminal_risk(monkeypatch, tmp_path):
     assert cleared == 0
     assert patch.os.environ["NIJA_RUNTIME_TRADING_STATE"] == "EMERGENCY_STOP"
     assert patch.os.environ["NIJA_EMERGENCY_STOP_REASON"] == "daily loss limit reached"
+
+
+def test_fail_closed_authority_zero_is_not_an_emergency_latch(monkeypatch, tmp_path):
+    _operator_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_FILES", str(tmp_path / "missing_EMERGENCY_STOP"))
+    monkeypatch.setenv("NIJA_EMERGENCY_STOP_STATE_FILES", str(tmp_path / "missing_state.json"))
+    monkeypatch.setenv("NIJA_RUNTIME_TRADING_STATE", "OFF")
+    monkeypatch.setenv("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0")
+    for name in patch._STOP_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+    present, detail = patch._env_only_stop_present()
+    cleared = patch.run_once()
+
+    assert present is False
+    assert "exec_auth=0" in detail
+    assert cleared == 0
+    assert patch.os.environ["NIJA_RUNTIME_TRADING_STATE"] == "OFF"
+    assert patch.os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] == "0"
+
+
+def test_install_hook_is_process_idempotent(monkeypatch):
+    calls = []
+    monkeypatch.delattr(patch.builtins, patch._INSTALL_SENTINEL, raising=False)
+    monkeypatch.setattr(patch, "run_once", lambda: calls.append("run") or 0)
+
+    patch.install_import_hook()
+    patch.install_import_hook()
+
+    assert calls == ["run"]

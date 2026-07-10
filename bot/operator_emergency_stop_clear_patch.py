@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import os
@@ -9,7 +10,8 @@ from pathlib import Path
 from typing import Iterable
 
 logger = logging.getLogger("nija.operator_emergency_stop_clear")
-_MARKER = "20260709z"
+_MARKER = "20260710s"
+_INSTALL_SENTINEL = "_NIJA_OPERATOR_EMERGENCY_STOP_CLEAR_INSTALLED_20260710S"
 _TRUTHY = {"1", "true", "yes", "on", "y", "enabled"}
 _APPROVAL_PHRASE = "CLEAR_EMERGENCY_STOP_FOR_LIVE_TRADING"
 _DEFAULT_KILL_FILES = (
@@ -75,11 +77,11 @@ def _live_mode() -> bool:
 
 
 def _split_paths(raw: str, defaults: Iterable[str]) -> list[Path]:
-    values: Iterable[str]
-    if raw:
-        values = [piece.strip() for piece in raw.split(",") if piece.strip()]
-    else:
-        values = defaults
+    values: Iterable[str] = (
+        [piece.strip() for piece in raw.split(",") if piece.strip()]
+        if raw
+        else defaults
+    )
     found: list[Path] = []
     for item in values:
         try:
@@ -87,16 +89,27 @@ def _split_paths(raw: str, defaults: Iterable[str]) -> list[Path]:
             if path.exists() and path.is_file():
                 found.append(path)
         except Exception as exc:
-            logger.warning("OPERATOR_EMERGENCY_STOP_CLEAR_PATH_CHECK_FAILED marker=%s path=%s err=%s", _MARKER, item, exc)
+            logger.warning(
+                "OPERATOR_EMERGENCY_STOP_CLEAR_PATH_CHECK_FAILED marker=%s path=%s err=%s",
+                _MARKER,
+                item,
+                exc,
+            )
     return found
 
 
 def _kill_files() -> list[Path]:
-    return _split_paths(_clean(os.environ.get("NIJA_EMERGENCY_STOP_FILES")), _DEFAULT_KILL_FILES)
+    return _split_paths(
+        _clean(os.environ.get("NIJA_EMERGENCY_STOP_FILES")),
+        _DEFAULT_KILL_FILES,
+    )
 
 
 def _state_files() -> list[Path]:
-    return _split_paths(_clean(os.environ.get("NIJA_EMERGENCY_STOP_STATE_FILES")), _DEFAULT_STATE_FILES)
+    return _split_paths(
+        _clean(os.environ.get("NIJA_EMERGENCY_STOP_STATE_FILES")),
+        _DEFAULT_STATE_FILES,
+    )
 
 
 def _read_text(path: Path) -> str:
@@ -162,14 +175,21 @@ def _safe_to_clear(all_paths: Iterable[Path]) -> tuple[bool, str]:
 
 
 def _env_only_stop_present() -> tuple[bool, str]:
+    """Detect an actual environment-only emergency stop latch.
+
+    ``NIJA_RUNTIME_EXECUTION_AUTHORITY=0`` is the normal fail-closed startup
+    state before writer lineage, heartbeat, and capital proof. It is never, by
+    itself, evidence of an emergency stop.
+    """
+
     text = _combined_stop_text(())
     env_state = os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper()
     env_auth = os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "").strip()
     if text.strip():
         return True, text
-    if env_state == "EMERGENCY_STOP" or env_auth == "0":
-        return True, f"runtime_state={env_state or 'missing'} exec_auth={env_auth or 'missing'}"
-    return False, ""
+    if env_state == "EMERGENCY_STOP":
+        return True, f"runtime_state={env_state} exec_auth={env_auth or 'missing'}"
+    return False, f"runtime_state={env_state or 'missing'} exec_auth={env_auth or 'missing'}"
 
 
 def _safe_to_clear_stale_env_only() -> tuple[bool, str]:
@@ -187,16 +207,19 @@ def _safe_to_clear_stale_env_only() -> tuple[bool, str]:
         return False, "terminal_risk_reason_present"
     if text and any(token in text for token in _MANUAL_CLEAR_ALLOWED_TOKENS):
         return True, "stale_manual_env_latch_no_kill_file"
-    # Empty reason with only runtime_state=EMERGENCY_STOP is also a stale env
-    # latch in Railway after the filesystem stop has already been removed.
-    if "runtime_state=emergency_stop" in text or "exec_auth=0" in text:
+    if "runtime_state=emergency_stop" in text:
         return True, "stale_runtime_env_latch_no_kill_file"
     return False, "unknown_emergency_stop_reason"
 
 
 def _quarantine(path: Path) -> Path:
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    target_dir = Path(os.environ.get("NIJA_EMERGENCY_STOP_QUARANTINE_DIR", "/app/data/emergency_stop_quarantine"))
+    target_dir = Path(
+        os.environ.get(
+            "NIJA_EMERGENCY_STOP_QUARANTINE_DIR",
+            "/app/data/emergency_stop_quarantine",
+        )
+    )
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -206,7 +229,10 @@ def _quarantine(path: Path) -> Path:
         shutil.move(str(path), str(target))
     except Exception:
         path.unlink(missing_ok=True)
-        target.write_text("original emergency stop removed after move failure\n", encoding="utf-8")
+        target.write_text(
+            "original emergency stop removed after move failure\n",
+            encoding="utf-8",
+        )
     return target
 
 
@@ -216,19 +242,19 @@ def _clear_runtime_env() -> None:
     os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP", None)
     os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_ACK", None)
     os.environ.pop("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_REASON", None)
-    # Do not force LIVE_ACTIVE here. Clearing an operator stop only returns the
-    # system to a neutral non-emergency runtime; activation/convergence patches
-    # still have to prove CapitalAuthority, writer authority and heartbeat.
+    # Clearing an operator stop returns the process only to a neutral state.
+    # Normal writer/capital/heartbeat convergence must independently grant live
+    # execution authority.
     if os.environ.get("NIJA_RUNTIME_TRADING_STATE", "").strip().upper() == "EMERGENCY_STOP":
         os.environ["NIJA_RUNTIME_TRADING_STATE"] = "OFF"
-    if os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "").strip() == "0":
-        os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
+    os.environ["NIJA_RUNTIME_EXECUTION_AUTHORITY"] = "0"
 
 
 def run_once() -> int:
     kill_files = _kill_files()
     state_files = _state_files()
     all_paths = kill_files + [path for path in state_files if path not in kill_files]
+
     if not all_paths:
         ok, reason = _safe_to_clear_stale_env_only()
         if ok:
@@ -238,10 +264,18 @@ def run_once() -> int:
                 _MARKER,
                 reason,
             )
-            print(f"[NIJA-PRINT] OPERATOR_EMERGENCY_STOP_ENV_ONLY_CLEAR_APPLIED marker={_MARKER} reason={reason}", flush=True)
+            print(
+                f"[NIJA-PRINT] OPERATOR_EMERGENCY_STOP_ENV_ONLY_CLEAR_APPLIED marker={_MARKER} reason={reason}",
+                flush=True,
+            )
             return 1
-        logger.info("OPERATOR_EMERGENCY_STOP_CLEAR_NOOP marker=%s reason=no_kill_or_state_file_found env_reason=%s", _MARKER, reason)
+        logger.info(
+            "OPERATOR_EMERGENCY_STOP_CLEAR_NOOP marker=%s reason=no_kill_or_state_file_found env_reason=%s",
+            _MARKER,
+            reason,
+        )
         return 0
+
     ok, reason = _safe_to_clear(all_paths)
     if not ok:
         logger.critical(
@@ -251,31 +285,46 @@ def run_once() -> int:
             ",".join(str(path) for path in all_paths),
         )
         return 0
-    cleared = []
+
+    operator_reason = _clean(os.environ.get("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_REASON"))
+    cleared: list[str] = []
     for path in all_paths:
         try:
             target = _quarantine(path)
             cleared.append(f"{path}->{target}")
         except Exception as exc:
-            logger.critical("OPERATOR_EMERGENCY_STOP_CLEAR_FAILED marker=%s path=%s err=%s", _MARKER, path, exc)
+            logger.critical(
+                "OPERATOR_EMERGENCY_STOP_CLEAR_FAILED marker=%s path=%s err=%s",
+                _MARKER,
+                path,
+                exc,
+            )
     if cleared:
         _clear_runtime_env()
         logger.critical(
             "OPERATOR_EMERGENCY_STOP_CLEAR_APPLIED marker=%s cleared=%s reason=%s force_activation=false risk_bypass=false state_files_included=true",
             _MARKER,
             ";".join(cleared),
-            _clean(os.environ.get("NIJA_OPERATOR_CLEAR_EMERGENCY_STOP_REASON")),
+            operator_reason,
         )
-        print(f"[NIJA-PRINT] OPERATOR_EMERGENCY_STOP_CLEAR_APPLIED marker={_MARKER} cleared={len(cleared)}", flush=True)
+        print(
+            f"[NIJA-PRINT] OPERATOR_EMERGENCY_STOP_CLEAR_APPLIED marker={_MARKER} cleared={len(cleared)}",
+            flush=True,
+        )
     return len(cleared)
 
 
 def install_import_hook() -> None:
+    """Run startup clear logic once even if sitecustomize reloads the module."""
+
+    if getattr(builtins, _INSTALL_SENTINEL, False):
+        return
+    setattr(builtins, _INSTALL_SENTINEL, True)
     run_once()
 
 
 def install() -> None:
-    run_once()
+    install_import_hook()
 
 
 if __name__ == "__main__":
