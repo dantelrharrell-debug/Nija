@@ -23,6 +23,14 @@ _REDIS_URL_ENV_NAMES = (
     "REDIS_TLS_URL",
 )
 
+_RENDER_RUNTIME_METADATA_ENV_NAMES = (
+    "RENDER_SERVICE_ID",
+    "RENDER_SERVICE_NAME",
+    "RENDER_INSTANCE_ID",
+    "RENDER_GIT_BRANCH",
+    "RENDER_GIT_COMMIT",
+)
+
 _REDIS_COMPONENT_HOST_ENV_NAMES = (
     "RAILWAY_TCP_PROXY_DOMAIN",
     "REDISHOST",
@@ -71,6 +79,64 @@ def _is_railway_public_proxy_host(host: str) -> bool:
     """
     h = host.lower()
     return ".proxy.rlwy.net" in h or h.endswith(".up.railway.app")
+
+
+def _is_render_runtime() -> bool:
+    """Return True for a truthy Render flag or concrete Render metadata."""
+    render_flag = _strip_wrapping_quotes(os.getenv("RENDER", ""))
+    if render_flag and _is_truthy(render_flag):
+        return True
+    return any(
+        _strip_wrapping_quotes(os.getenv(name, ""))
+        for name in _RENDER_RUNTIME_METADATA_ENV_NAMES
+    )
+
+
+def _is_render_private_redis_url(url: str) -> bool:
+    """Return True for Render private-network Key Value connection URLs.
+
+    Render internal Key Value hosts use an unqualified ``red-...`` service host
+    over plain ``redis://`` inside the same region. Public/external endpoints
+    include a DNS suffix and are intentionally not classified as private here.
+    """
+    try:
+        parsed = urlparse((url or "").strip())
+        host = (parsed.hostname or "").lower()
+        scheme = (parsed.scheme or "").lower()
+        port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        scheme == "redis"
+        and host.startswith("red-")
+        and "." not in host
+        and port == 6379
+    )
+
+
+def _prioritize_runtime_redis_urls(
+    configured: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Apply provider-local Redis priority without weakening explicit safety.
+
+    On Render, a stale manually configured ``NIJA_REDIS_URL`` may still point at
+    a Railway public proxy while the Blueprint-provided ``REDIS_URL`` contains
+    the valid Render private-network connection string. Prefer the Render-private
+    endpoint only when Render runtime metadata is present. Outside Render, retain
+    the historical explicit environment-variable priority unchanged.
+    """
+    if not _is_render_runtime():
+        return configured
+
+    render_private = [
+        item for item in configured if _is_render_private_redis_url(item[1])
+    ]
+    if not render_private:
+        return configured
+
+    return render_private + [
+        item for item in configured if not _is_render_private_redis_url(item[1])
+    ]
 
 
 def _build_component_redis_url() -> tuple[str, dict[str, object]]:
@@ -202,7 +268,7 @@ def _iter_configured_redis_urls() -> list[tuple[str, str]]:
     if component_url:
         component_source = str(component_diag.get("component_source") or "components")
         configured.append((f"COMPONENTS[{component_source}]", component_url))
-    return configured
+    return _prioritize_runtime_redis_urls(configured)
 
 
 def get_redis_url_source() -> str:
@@ -228,6 +294,7 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
     scheme = (parsed.scheme or "").lower() if parsed else ""
     is_railway_proxy = _is_railway_public_proxy_host(hostname)
     is_railway_internal = ".railway.internal" in hostname
+    is_render_private = _is_render_private_redis_url(resolved_url)
     tls_required_hint = bool(is_railway_proxy)
     tls_configured = scheme == "rediss"
     tls_mismatch = bool(resolved_url) and tls_required_hint and not tls_configured
@@ -246,6 +313,8 @@ def get_redis_resolution_diagnostics() -> dict[str, object]:
         "resolved_host": hostname or None,
         "is_railway_proxy": is_railway_proxy,
         "is_railway_internal": is_railway_internal,
+        "is_render_runtime": _is_render_runtime(),
+        "is_render_private": is_render_private,
         "tls_required_hint": tls_required_hint,
         "tls_configured": tls_configured,
         "tls_mismatch": tls_mismatch,
