@@ -13,16 +13,25 @@ _MARKER = "20260710ab"
 
 
 def install() -> Any:
-    """Run the pre-bot bootstrap and terminate if Python's site layer catches it.
+    """Run pre-bot authority and install reviewed live-runtime guards.
 
     Python's ``site`` module normally reports and swallows exceptions raised by a
-    ``.pth`` import line.  A live trading process must never continue after an
-    early writer-authority failure, so this boundary exits the process directly.
-    Non-target processes are returned immediately by the underlying bootstrap.
+    ``.pth`` import line. A live trading process must never continue after early
+    writer-authority or venue-readiness installation failure, so this boundary
+    exits the process directly. Non-target processes are returned immediately by
+    the underlying bootstrap.
     """
 
     try:
-        return bootstrap.install()
+        runtime = bootstrap.install()
+        if runtime is not None:
+            import venue_readiness_execution_repair_patch as venue_repair
+
+            venue_repair.install()
+            logger.warning(
+                "PREBOT_VENUE_READINESS_REPAIR_READY marker=20260710ae"
+            )
+        return runtime
     except BaseException as exc:
         # Only the configured live NIJA entrypoint is allowed to terminate here.
         # Health checks, tests and build helpers are excluded by _target_process().
