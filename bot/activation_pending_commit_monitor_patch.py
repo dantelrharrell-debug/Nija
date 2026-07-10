@@ -29,6 +29,7 @@ _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
     ("platform_tier_live_capital_patch", "PLATFORM_TIER_LIVE_CAPITAL_INSTALL_REQUESTED", "20260709s"),
     ("hard_controls_capital_authority_bridge_patch", "HARD_CONTROLS_CA_BRIDGE_INSTALL_REQUESTED", "20260709t"),
     ("runtime_authority_convergence_repair_patch", "RUNTIME_AUTHORITY_CONVERGENCE_INSTALL_REQUESTED", "20260709u"),
+    ("writer_authority_recursion_guard_patch", "WRITER_AUTHORITY_RECURSION_GUARD_INSTALL_REQUESTED", "20260709aq"),
     ("operator_emergency_stop_preexec_clear_patch", "OPERATOR_EMERGENCY_STOP_PREEXEC_CLEAR_INSTALL_REQUESTED", "20260709ai"),
     ("execution_nonce_authority_snapshot_repair_patch", "EXECUTION_NONCE_AUTHORITY_SNAPSHOT_REPAIR_INSTALL_REQUESTED", "20260709aj"),
     ("startup_coordinator_live_capital_state_repair_patch", "STARTUP_COORDINATOR_LIVE_CAPITAL_REPAIR_INSTALL_REQUESTED", "20260709ak"),
