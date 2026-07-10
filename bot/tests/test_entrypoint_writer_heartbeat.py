@@ -42,7 +42,7 @@ class EntrypointWriterHeartbeatTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(reason, "")
         call = self.runtime._client.eval.call_args
-        self.assertEqual(call.args[5], self.runtime._lock_value)
+        self.assertEqual(call.args[4], self.runtime._lock_value)
         self.assertEqual(os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"], "1")
 
     def test_missing_lock_reacquires_atomically_with_nx(self):
