@@ -4,7 +4,7 @@ services:
     runtime: docker
     region: oregon
     dockerfilePath: ./Dockerfile
-    dockerCommand: bash scripts/production_bootstrap.sh
+    dockerCommand: bash scripts/render_entrypoint.sh
     autoDeployTrigger: checksPass
     numInstances: 1
     healthCheckPath: /healthz
