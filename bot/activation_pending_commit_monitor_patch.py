@@ -35,6 +35,7 @@ _STARTUP_REPAIR_MODULES: tuple[tuple[str, str, str], ...] = (
     ("startup_coordinator_live_capital_state_repair_patch", "STARTUP_COORDINATOR_LIVE_CAPITAL_REPAIR_INSTALL_REQUESTED", "20260709ak"),
     ("phase3_scan_stall_guard_patch", "PHASE3_SCAN_STALL_GUARD_INSTALL_REQUESTED", "20260709an"),
     ("broker_native_quote_routing_patch", "BROKER_NATIVE_QUOTE_ROUTING_INSTALL_REQUESTED", "20260709y"),
+    ("execution_route_metadata_consistency_patch", "EXECUTION_ROUTE_METADATA_CONSISTENCY_INSTALL_REQUESTED", "20260709ar"),
     ("execution_minimum_position_micro_broker_repair_patch", "EXECUTION_MICRO_BROKER_MINIMUM_REPAIR_INSTALL_REQUESTED", "20260709aa"),
     ("execution_ack_timeout_failover_patch", "EXECUTION_ACK_TIMEOUT_FAILOVER_INSTALL_REQUESTED", "20260709ab"),
     ("execution_entry_timeout_guard_patch", "EXECUTION_ENTRY_TIMEOUT_GUARD_INSTALL_REQUESTED", "20260709ae"),
