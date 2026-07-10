@@ -3,14 +3,10 @@
   "build": {
     "builder": "DOCKERFILE",
     "buildEnvironment": "V3",
-    "dockerfilePath": "Dockerfile",
-    "buildArgs": {
-      "GIT_BRANCH": "$RAILWAY_GIT_BRANCH",
-      "GIT_COMMIT": "$RAILWAY_GIT_COMMIT_SHA"
-    }
+    "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "bash start.sh",
+    "startCommand": "bash scripts/production_bootstrap.sh",
     "runtime": "V2",
     "numReplicas": 1,
     "sleepApplication": false,
@@ -39,12 +35,14 @@
     "NIJA_FAIL_CLOSED_EXIT_ON_UNREACHABLE_REDIS": "true",
     "NIJA_FAIL_CLOSED_MAX_RETRY_ATTEMPTS": "12",
     "NIJA_FAIL_CLOSED_RETRY_INTERVAL_S": "5",
-    "MIN_NOTIONAL_USD": "50",
-    "MIN_TRADE_USD": "50",
-    "MINIMUM_TRADING_BALANCE": "50",
-    "MIN_POSITION_USD": "50",
-    "COINBASE_MIN_ORDER_USD": "50",
-    "OKX_MIN_ORDER_USD": "50",
-    "KRAKEN_MIN_NOTIONAL_USD": "50"
+    "NIJA_MIN_CASH_RESERVE_USD": "5.00",
+    "MIN_NOTIONAL_USD": "3.50",
+    "MIN_TRADE_USD": "3.50",
+    "MIN_CASH_TO_BUY": "5.00",
+    "MINIMUM_TRADING_BALANCE": "5.00",
+    "MIN_POSITION_USD": "3.50",
+    "COINBASE_MIN_ORDER_USD": "5.00",
+    "OKX_MIN_ORDER_USD": "5.00",
+    "KRAKEN_MIN_NOTIONAL_USD": "3.50"
   }
 }
