@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Git Metadata Injection for NIJA builds.
-# Priority: explicit build args -> Railway build metadata -> local Git checkout
-# -> Railway deployment identity. Unknown metadata remains fail-closed at runtime.
+# Git metadata injection for NIJA builds.
+# Priority: explicit build args -> Render build metadata -> other provider
+# metadata -> local Git checkout. Unknown metadata remains fail-closed at runtime.
 
 set -euo pipefail
 
@@ -10,7 +10,7 @@ echo "🔍 Injecting Git metadata..."
 _is_placeholder() {
     local value="${1:-}"
     case "${value}" in
-        ""|unknown|UNKNOWN|null|NULL|none|NONE|\$RAILWAY_*|\${RAILWAY_*}|\$\{\{*\}\})
+        ""|unknown|UNKNOWN|null|NULL|none|NONE|\$RENDER_*|\${RENDER_*}|\$RAILWAY_*|\${RAILWAY_*}|\$\{\{*\}\})
             return 0
             ;;
         *)
@@ -31,6 +31,15 @@ _resolved_branch="${GIT_BRANCH:-}"
 _resolved_commit="${GIT_COMMIT:-}"
 _metadata_source="explicit-build-args"
 
+if _is_placeholder "${_resolved_branch}" && ! _is_placeholder "${RENDER_GIT_BRANCH:-}"; then
+    _resolved_branch="${RENDER_GIT_BRANCH}"
+    _metadata_source="render-git"
+fi
+if _is_placeholder "${_resolved_commit}" && ! _is_placeholder "${RENDER_GIT_COMMIT:-}"; then
+    _resolved_commit="${RENDER_GIT_COMMIT}"
+    _metadata_source="render-git"
+fi
+
 if _is_placeholder "${_resolved_branch}" && ! _is_placeholder "${RAILWAY_GIT_BRANCH:-}"; then
     _resolved_branch="${RAILWAY_GIT_BRANCH}"
     _metadata_source="railway-git"
@@ -47,6 +56,15 @@ fi
 if _is_placeholder "${_resolved_commit}" && command -v git >/dev/null 2>&1; then
     _resolved_commit="$(git rev-parse HEAD 2>/dev/null || true)"
     _metadata_source="git-checkout"
+fi
+
+if _is_placeholder "${_resolved_branch}" && ! _is_placeholder "${RENDER_SERVICE_NAME:-}"; then
+    _resolved_branch="render/${RENDER_SERVICE_NAME}"
+    _metadata_source="render-service"
+fi
+if _is_placeholder "${_resolved_commit}" && ! _is_placeholder "${RENDER_SERVICE_ID:-}"; then
+    _resolved_commit="render:${RENDER_SERVICE_ID}"
+    _metadata_source="render-service"
 fi
 
 if _is_placeholder "${_resolved_branch}" && ! _is_placeholder "${RAILWAY_ENVIRONMENT_NAME:-}"; then
@@ -70,11 +88,10 @@ fi
 
 export GIT_BRANCH="${_resolved_branch}"
 export GIT_COMMIT="${_resolved_commit}"
-if [[ "${GIT_COMMIT}" == railway:* ]]; then
-    export GIT_COMMIT_SHORT="${GIT_COMMIT}"
-else
-    export GIT_COMMIT_SHORT="${GIT_COMMIT:0:12}"
-fi
+case "${GIT_COMMIT}" in
+    render:*|railway:*) export GIT_COMMIT_SHORT="${GIT_COMMIT}" ;;
+    *) export GIT_COMMIT_SHORT="${GIT_COMMIT:0:12}" ;;
+esac
 
 if ! _is_placeholder "${BUILD_TIMESTAMP:-}"; then
     export BUILD_TIMESTAMP
@@ -121,7 +138,7 @@ EOF_VERSION
 
 echo "✅ Version info generated: bot/version_info.py"
 
-# Replace rather than append so image rebuilds cannot retain stale duplicate exports.
+# Replace rather than append so rebuilds cannot retain stale duplicate exports.
 {
     printf 'export GIT_BRANCH=%q\n' "${GIT_BRANCH}"
     printf 'export GIT_COMMIT=%q\n' "${GIT_COMMIT}"
