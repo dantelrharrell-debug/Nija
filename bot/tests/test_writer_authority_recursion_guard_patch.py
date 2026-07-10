@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from types import ModuleType
 
 from bot import writer_authority_recursion_guard_patch as patch
@@ -23,6 +24,62 @@ def test_status_reentry_guard_returns_cached_result(monkeypatch):
     assert isinstance(result, dict)
     assert "ok" in result
     assert "cache" in result
+
+
+def test_status_reentry_guard_accepts_fresh_writer_proof(monkeypatch):
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
+    monkeypatch.setenv("NIJA_REDIS_URL", "redis://example")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "tok-123")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", str(time.time()))
+
+    module = ModuleType("bot.execution_authority_context")
+    module._FENCE_LAST_OK = False
+    module._FENCE_LAST_ERR = ""
+    module._FENCE_LAST_CHECK_TS = 0.0
+
+    def recursive_status(force_refresh=False):
+        return module.get_distributed_writer_authority_status(force_refresh=force_refresh)
+
+    module.get_distributed_writer_authority_status = recursive_status
+    assert patch._patch_execution_authority_context(module) is True
+
+    result = module.get_distributed_writer_authority_status()
+
+    assert result["ok"] is True
+    assert result["redis_reachable"] is True
+    assert result["authority_verified"] is True
+    assert result["token_present"] is True
+    assert result["lease_generation"] == "42"
+    assert result["cache"]["reentry_proof_ok"] is True
+
+
+def test_status_reentry_guard_fails_closed_without_fresh_writer_proof(monkeypatch):
+    monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
+    monkeypatch.setenv("NIJA_REDIS_URL", "redis://example")
+    monkeypatch.setenv("NIJA_WRITER_FENCING_TOKEN", "tok-123")
+    monkeypatch.setenv("NIJA_WRITER_LEASE_GENERATION", "42")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ACTIVE", "1")
+    monkeypatch.setenv("NIJA_WRITER_HEARTBEAT_ALIVE_TS", str(time.time() - 999.0))
+
+    module = ModuleType("bot.execution_authority_context")
+    module._FENCE_LAST_OK = False
+    module._FENCE_LAST_ERR = ""
+    module._FENCE_LAST_CHECK_TS = 0.0
+
+    def recursive_status(force_refresh=False):
+        return module.get_distributed_writer_authority_status(force_refresh=force_refresh)
+
+    module.get_distributed_writer_authority_status = recursive_status
+    assert patch._patch_execution_authority_context(module) is True
+
+    result = module.get_distributed_writer_authority_status()
+
+    assert result["ok"] is False
+    assert result["redis_reachable"] is False
+    assert result["authority_verified"] is False
+    assert result["cache"]["reentry_proof_ok"] is False
 
 
 def test_trading_state_writer_gate_uses_direct_distributed_assert(monkeypatch):
