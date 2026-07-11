@@ -13,5 +13,4 @@
   "mode": "normal",
   "_reactivated_reason": "Kraken startup nonce resync now advances Redis per-key counters before user connection",
   "_operational_model": "Independent per-account strategy evaluation; no copy trading or signal distribution"
-  "_reactivated_reason": "Kraken startup nonce resync now advances Redis per-key counters before user connection"
 }

@@ -21,10 +21,9 @@ COPY scripts/ scripts/
 # Copy application code
 COPY . .
 
-# The verifier is required by production_bootstrap.sh. Keep the source script
-# fail-closed while preserving the verifier's real non-zero status in the image.
-RUN python -S -c 'from pathlib import Path; p=Path("/app/scripts/production_bootstrap.sh"); s=p.read_text(encoding="utf-8"); old="if ! python3 -S \"${SCRIPT_DIR}/three_venue_config_check.py\"; then\n    _CHECK_EXIT=$?\n"; new="if python3 -S \"${SCRIPT_DIR}/three_venue_config_check.py\"; then\n    :\nelse\n    _CHECK_EXIT=$?\n"; assert s.count(old) == 1, "unexpected three-venue bootstrap block"; p.write_text(s.replace(old, new, 1), encoding="utf-8")' && \
-    bash -n /app/scripts/production_bootstrap.sh
+# Validate the committed bootstrap directly. Never rewrite source inside the
+# image build: the repository version is the single source of truth.
+RUN bash -n /app/scripts/production_bootstrap.sh
 
 # Fail the image build immediately if entrypoint Python files or startup guards
 # are syntactically invalid.
