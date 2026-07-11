@@ -279,6 +279,7 @@ unset NIJA_WRITER_FENCING_TOKEN
 unset NIJA_WRITER_LEASE_GENERATION
 unset NIJA_WRITER_HEARTBEAT_ALIVE_TS
 unset NIJA_WRITER_LOCK_ACQUIRED_AT
+unset NIJA_WRITER_RELEASE_IN_PROGRESS
 
 # Kraken is the required primary platform broker. Coinbase is optional/isolated,
 # so one fresh positive authoritative broker is sufficient by default. Operators
@@ -294,23 +295,31 @@ echo "   Previous state: ${_PREVIOUS_RUNTIME_STATE} → OFF"
 echo "   Required valid brokers for convergence: ${NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS}"
 echo ""
 
+# These helpers must never start NIJA's .pth/sitecustomize/usercustomize stack.
+# Their stdout is captured by command substitution; any startup log would corrupt
+# the numeric value and cause Decimal ConversionSyntax on the next calculation.
 _is_positive_money() {
-    python - "$1" <<'PY'
+    python3 -S - "$1" <<'PY'
 from decimal import Decimal, InvalidOperation
 import sys
 try:
     value = Decimal(sys.argv[1])
-except (InvalidOperation, IndexError):
+except (InvalidOperation, IndexError, ValueError):
     raise SystemExit(1)
-raise SystemExit(0 if value > 0 else 1)
+raise SystemExit(0 if value.is_finite() and value > 0 else 1)
 PY
 }
 
 _max_money() {
-    python - "$@" <<'PY'
-from decimal import Decimal
+    python3 -S - "$@" <<'PY'
+from decimal import Decimal, InvalidOperation
 import sys
-values = [Decimal(value) for value in sys.argv[1:]]
+try:
+    values = [Decimal(value) for value in sys.argv[1:]]
+except (InvalidOperation, ValueError):
+    raise SystemExit(2)
+if not values or any(not value.is_finite() for value in values):
+    raise SystemExit(2)
 print(f"{max(values):.2f}")
 PY
 }
@@ -323,7 +332,7 @@ _MIN_RESERVE="${NIJA_MIN_CASH_RESERVE_USD:-5.00}"
 for value_name in _MIN_TRADE _MIN_CASH _MIN_BALANCE _MIN_RESERVE; do
     value="${!value_name}"
     if ! _is_positive_money "${value}"; then
-        echo "❌ Invalid monetary guard ${value_name#_}=${value}; expected a positive number"
+        echo "❌ Invalid monetary guard ${value_name#_}=${value}; expected a positive finite number"
         exit 1
     fi
 done
