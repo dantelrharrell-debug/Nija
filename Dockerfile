@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # Install git and redis-cli for runtime diagnostics
-RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y git redis-tools && rm -rf /var/lib/lists/*
 
 # Create non-root user for security
 RUN groupadd -r nija && useradd -r -g nija -u 1000 nija
@@ -39,9 +39,13 @@ RUN python -m py_compile \
 
 # Install startup guards before sitecustomize executes. Python processes .pth
 # files before the entry script directory is reliably importable, so every hook
-# first adds /app as a plain path line and only then imports its module. This
-# prevents ModuleNotFoundError when Render launches Python outside /app.
-RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); prefix = '/app\n'; p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text(prefix + 'import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install()\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text(prefix + 'import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text(prefix + 'import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file()"
+# first adds /app as a plain path line and only then imports its module.
+#
+# Render zero-downtime deployments expose /healthz before waiting for the active
+# writer to release its lease. The .pth hook therefore leaves the replacement
+# fail-closed on Render; source_runtime_guard_bootstrap acquires the same canonical
+# Redis lease before any bot.* import. Other providers retain early acquisition.
+RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); prefix = '/app\n'; p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text(prefix + 'import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install(defer_if_render=True)\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text(prefix + 'import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text(prefix + 'import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file()"
 
 # Reproduce provider startup from outside the repository. The hooks must be
 # importable during Python site initialization without relying on cwd=/app.
