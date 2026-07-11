@@ -5,8 +5,10 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
+      - '.dockerignore'
       - 'render.yaml'
       - 'scripts/production_bootstrap.sh'
+      - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
       - 'render_readiness_state_bridge.py'
       - 'prebot_writer_authority_bootstrap.py'
@@ -39,8 +41,10 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
+      - '.dockerignore'
       - 'render.yaml'
       - 'scripts/production_bootstrap.sh'
+      - 'scripts/three_venue_config_check.py'
       - 'render_liveness_server.py'
       - 'render_readiness_state_bridge.py'
       - 'prebot_writer_authority_bootstrap.py'
@@ -122,24 +126,34 @@ jobs:
             bot/activation_pending_commit_monitor_patch.py \
             bot/writer_lock_release_guard.py \
             bot/entrypoint_writer_authority.py \
-            bot/bot_main.py
+            bot/bot_main.py \
+            scripts/three_venue_config_check.py
 
-      - name: Run focused deployment safety tests
-        env:
-          PYTHONUNBUFFERED: '1'
-        run: |
-          python -m pytest -q \
-            bot/tests/test_three_venue_execution_readiness.py \
-            bot/tests/test_import_hook_chain_compactor.py \
-            bot/tests/test_activation_pending_startup_order.py \
-            bot/tests/test_production_bootstrap_money_helpers.py \
-            bot/tests/test_writer_lock_release_guard.py \
-            bot/tests/test_writer_release_heartbeat_quiesce.py \
-            bot/tests/test_entrypoint_writer_authority.py \
-            bot/tests/test_entrypoint_writer_heartbeat.py \
-            bot/tests/test_prebot_writer_authority_bootstrap.py \
-            bot/tests/test_render_prebot_writer_handoff.py \
-            bot/tests/test_render_liveness_launcher.py \
-            bot/tests/test_render_liveness_readiness.py \
-            bot/tests/test_source_runtime_guard_bootstrap.py \
-            bot/tests/test_docker_pth_startup_paths.py
+      - name: Test three-venue readiness
+        run: python -m pytest -q bot/tests/test_three_venue_execution_readiness.py
+      - name: Test import-hook compactor
+        run: python -m pytest -q bot/tests/test_import_hook_chain_compactor.py
+      - name: Test activation startup order
+        run: python -m pytest -q bot/tests/test_activation_pending_startup_order.py
+      - name: Test production bootstrap helpers
+        run: python -m pytest -q bot/tests/test_production_bootstrap_money_helpers.py
+      - name: Test writer-lock release guard
+        run: python -m pytest -q bot/tests/test_writer_lock_release_guard.py
+      - name: Test heartbeat quiescence
+        run: python -m pytest -q bot/tests/test_writer_release_heartbeat_quiesce.py
+      - name: Test entrypoint writer authority
+        run: python -m pytest -q bot/tests/test_entrypoint_writer_authority.py
+      - name: Test entrypoint writer heartbeat
+        run: python -m pytest -q bot/tests/test_entrypoint_writer_heartbeat.py
+      - name: Test prebot writer authority
+        run: python -m pytest -q bot/tests/test_prebot_writer_authority_bootstrap.py
+      - name: Test Render writer handoff
+        run: python -m pytest -q bot/tests/test_render_prebot_writer_handoff.py
+      - name: Test Render liveness launcher
+        run: python -m pytest -q bot/tests/test_render_liveness_launcher.py
+      - name: Test Render liveness readiness
+        run: python -m pytest -q bot/tests/test_render_liveness_readiness.py
+      - name: Test source runtime guard
+        run: python -m pytest -q bot/tests/test_source_runtime_guard_bootstrap.py
+      - name: Test Docker PTH startup paths
+        run: python -m pytest -q bot/tests/test_docker_pth_startup_paths.py
