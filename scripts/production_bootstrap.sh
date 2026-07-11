@@ -352,4 +352,19 @@ echo "   MINIMUM_TRADING_BALANCE=${MINIMUM_TRADING_BALANCE}"
 echo "   MIN_NOTIONAL_USD=${MIN_NOTIONAL_USD}"
 echo ""
 
+# Three-venue configuration gate: validates that Kraken, Coinbase, and OKX
+# credentials, live-trading flags, and Redis are all present before the main
+# bot process starts.  The check runs with -S to avoid triggering NIJA's
+# site-customise trading hooks before writer authority is established.
+# Exit code 2 from the script causes this bootstrap to fail fast and surface
+# the missing pieces in the deployment logs.
+echo "🔍 Running three-venue configuration check..."
+if ! python3 -S "${SCRIPT_DIR}/three_venue_config_check.py"; then
+    _CHECK_EXIT=$?
+    echo "❌ Three-venue configuration check failed (exit ${_CHECK_EXIT})"
+    echo "   Resolve the missing secrets/flags listed above and redeploy."
+    exit "${_CHECK_EXIT}"
+fi
+echo ""
+
 exec bash "${ROOT_DIR}/start.sh" "$@"
