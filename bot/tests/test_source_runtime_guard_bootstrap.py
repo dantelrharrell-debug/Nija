@@ -17,6 +17,7 @@ def _reset_source_bootstrap(monkeypatch) -> None:
     monkeypatch.delenv("NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED", raising=False)
+    monkeypatch.delenv("NIJA_RENDER_READINESS_BRIDGE_INSTALLED", raising=False)
 
 
 def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatch):
@@ -30,6 +31,8 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
     fake_activator.install = lambda: calls.append("activator")
     fake_strict = ModuleType("secondary_venue_strict_readiness_patch")
     fake_strict.install = lambda: calls.append("strict")
+    fake_bridge = ModuleType("render_readiness_state_bridge")
+    fake_bridge.install = lambda: calls.append("bridge")
 
     real_import = source_bootstrap.importlib.import_module
 
@@ -42,6 +45,8 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
             return fake_activator
         if name == "secondary_venue_strict_readiness_patch":
             return fake_strict
+        if name == "render_readiness_state_bridge":
+            return fake_bridge
         return real_import(name)
 
     monkeypatch.setattr(source_bootstrap.importlib, "import_module", _fake_import)
@@ -52,12 +57,13 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
 
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
-    assert calls == ["writer", "venue", "activator", "strict"]
+    assert calls == ["writer", "venue", "activator", "strict", "bridge"]
     assert source_bootstrap.installed_marker() == "20260710af"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "1"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "1"
+    assert source_bootstrap.os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] == "1"
 
 
 def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
@@ -79,6 +85,7 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "0"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] == "0"
 
 
 def test_global_startup_guards_install_source_repair_before_other_guards(monkeypatch):
