@@ -21,6 +21,11 @@ COPY scripts/ scripts/
 # Copy application code
 COPY . .
 
+# The verifier is required by production_bootstrap.sh. Keep the source script
+# fail-closed while preserving the verifier's real non-zero status in the image.
+RUN python -S -c 'from pathlib import Path; p=Path("/app/scripts/production_bootstrap.sh"); s=p.read_text(encoding="utf-8"); old="if ! python3 -S \"${SCRIPT_DIR}/three_venue_config_check.py\"; then\n    _CHECK_EXIT=$?\n"; new="if python3 -S \"${SCRIPT_DIR}/three_venue_config_check.py\"; then\n    :\nelse\n    _CHECK_EXIT=$?\n"; assert s.count(old) == 1, "unexpected three-venue bootstrap block"; p.write_text(s.replace(old, new, 1), encoding="utf-8")' && \
+    bash -n /app/scripts/production_bootstrap.sh
+
 # Fail the image build immediately if entrypoint Python files or startup guards
 # are syntactically invalid.
 RUN python -m py_compile \
@@ -38,7 +43,8 @@ RUN python -m py_compile \
         /app/bot/writer_lock_release_guard.py \
         /app/bot/global_runtime_startup_guards.py \
         /app/import_hook_recursion_shield_patch.py \
-        /app/disconnected_broker_execution_guard_patch.py
+        /app/disconnected_broker_execution_guard_patch.py \
+        /app/scripts/three_venue_config_check.py
 
 # Install startup guards before sitecustomize executes. Python processes .pth
 # files before the entry script directory is reliably importable, so every hook
@@ -57,6 +63,7 @@ RUN cd /tmp && python -c "import prebot_writer_authority_fail_closed, import_hoo
 # Ensure Redis connectivity and production bootstrap scripts are present and executable.
 RUN test -f /app/scripts/redis_connectivity_check.sh && \
     test -f /app/scripts/production_bootstrap.sh && \
+    test -f /app/scripts/three_venue_config_check.py && \
     test -f /app/scripts/render_entrypoint.sh && \
     chmod +x /app/scripts/redis_connectivity_check.sh \
              /app/scripts/production_bootstrap.sh \
