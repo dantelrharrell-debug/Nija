@@ -4,6 +4,7 @@ import ast
 import importlib
 import logging
 import sys
+import threading
 from pathlib import Path
 
 
@@ -84,6 +85,10 @@ def test_duplicate_okx_late_bind_logs_are_throttled() -> None:
 
 def test_startup_repairs_wait_for_broker_manager(monkeypatch) -> None:
     module = importlib.import_module("bot.activation_pending_commit_monitor_patch")
+    ready_event = threading.Event()
+
+    monkeypatch.setattr(module, "_STARTUP_REPAIRS_READY", ready_event)
+    monkeypatch.setattr(module, "install_import_hook", lambda: None)
     monkeypatch.setattr(module, "_broker_manager_module_loaded", lambda: False)
 
     called: list[bool] = []
