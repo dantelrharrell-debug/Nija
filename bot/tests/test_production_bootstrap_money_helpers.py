@@ -53,3 +53,24 @@ printf '%s\n' "${value}"
     assert completed.returncode == 0, completed.stdout
     assert completed.stdout.strip() == "23.10"
     assert "SHOULD_NOT_APPEAR" not in completed.stdout
+
+
+def test_three_venue_verifier_is_included_in_docker_context() -> None:
+    root = Path(__file__).resolve().parents[2]
+    rules = (root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+
+    exclude_index = rules.index("scripts/*")
+    include_index = rules.index("!scripts/three_venue_config_check.py")
+    assert include_index > exclude_index
+
+
+def test_docker_image_validates_and_repairs_three_venue_bootstrap() -> None:
+    root = Path(__file__).resolve().parents[2]
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "test -f /app/scripts/three_venue_config_check.py" in dockerfile
+    assert "/app/scripts/three_venue_config_check.py" in dockerfile
+    assert 'old="if ! python3 -S' in dockerfile
+    assert 'new="if python3 -S' in dockerfile
+    assert "unexpected three-venue bootstrap block" in dockerfile
+    assert "bash -n /app/scripts/production_bootstrap.sh" in dockerfile
