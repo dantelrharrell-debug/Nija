@@ -106,6 +106,7 @@ scripts/*
 !scripts/redis_connectivity_check.sh
 !scripts/debug_startup_safe_mode.sh
 !scripts/production_bootstrap.sh
+!scripts/three_venue_config_check.py
 !scripts/render_entrypoint.sh
 check_*.py
 verify_*.py
