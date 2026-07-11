@@ -359,8 +359,9 @@ echo ""
 # Exit code 2 from the script causes this bootstrap to fail fast and surface
 # the missing pieces in the deployment logs.
 echo "🔍 Running three-venue configuration check..."
-if ! python3 -S "${SCRIPT_DIR}/three_venue_config_check.py"; then
-    _CHECK_EXIT=$?
+python3 -S "${SCRIPT_DIR}/three_venue_config_check.py"
+_CHECK_EXIT=$?
+if [ "${_CHECK_EXIT}" -ne 0 ]; then
     echo "❌ Three-venue configuration check failed (exit ${_CHECK_EXIT})"
     echo "   Resolve the missing secrets/flags listed above and redeploy."
     exit "${_CHECK_EXIT}"
