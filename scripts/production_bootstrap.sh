@@ -67,20 +67,56 @@ if [[ "${_RENDER_RUNTIME}" == "true" ]] \
     fi
 fi
 
+_probe_render_liveness() {
+    local url="$1"
+    python3 -S - "${url}" <<'PY' >/dev/null 2>&1
+import json
+import sys
+import urllib.request
+
+url = sys.argv[1]
+with urllib.request.urlopen(url, timeout=0.75) as response:
+    if response.status != 200:
+        raise SystemExit(1)
+    payload = json.loads(response.read().decode("utf-8"))
+    if payload.get("status") != "alive":
+        raise SystemExit(1)
+PY
+}
+
 # Render must be able to verify process liveness while Redis authority and broker
 # hydration are still fail-closed. The server is stdlib-only and intentionally
 # starts with -S so .pth/sitecustomize/usercustomize trading hooks cannot enter
-# writer standby before port 5000 is bound.
+# writer standby before the HTTP port is actually bound.
 if [[ "${_RENDER_RUNTIME}" == "true" ]] && command -v python3 >/dev/null 2>&1 && [[ -f render_liveness_server.py ]]; then
+    _RENDER_LIVENESS_PORT="${PORT:-5000}"
+    _RENDER_LIVENESS_URL="http://127.0.0.1:${_RENDER_LIVENESS_PORT}/healthz"
     python3 -S -u render_liveness_server.py &
     _RENDER_LIVENESS_PID=$!
     export NIJA_RENDER_LIVENESS_PID="${_RENDER_LIVENESS_PID}"
-    sleep 1
-    if ! kill -0 "${_RENDER_LIVENESS_PID}" 2>/dev/null; then
-        echo "❌ Render liveness server exited before binding port=${PORT:-5000}"
+
+    _RENDER_LIVENESS_CONFIRMED=false
+    for ((_RENDER_LIVENESS_ATTEMPT=1; _RENDER_LIVENESS_ATTEMPT<=30; _RENDER_LIVENESS_ATTEMPT++)); do
+        if ! kill -0 "${_RENDER_LIVENESS_PID}" 2>/dev/null; then
+            echo "❌ Render liveness server exited before binding port=${_RENDER_LIVENESS_PORT}"
+            wait "${_RENDER_LIVENESS_PID}" 2>/dev/null || true
+            exit 78
+        fi
+        if _probe_render_liveness "${_RENDER_LIVENESS_URL}"; then
+            _RENDER_LIVENESS_CONFIRMED=true
+            break
+        fi
+        sleep 0.2
+    done
+
+    if [[ "${_RENDER_LIVENESS_CONFIRMED}" != "true" ]]; then
+        echo "❌ Render liveness endpoint did not become reachable url=${_RENDER_LIVENESS_URL} attempts=30"
+        kill "${_RENDER_LIVENESS_PID}" 2>/dev/null || true
+        wait "${_RENDER_LIVENESS_PID}" 2>/dev/null || true
         exit 78
     fi
-    echo "🌐 Early Render liveness server started pid=${_RENDER_LIVENESS_PID} port=${PORT:-5000} isolated_site_startup=true"
+
+    echo "🌐 Early Render liveness confirmed pid=${_RENDER_LIVENESS_PID} url=${_RENDER_LIVENESS_URL} isolated_site_startup=true"
 fi
 
 _is_placeholder() {
