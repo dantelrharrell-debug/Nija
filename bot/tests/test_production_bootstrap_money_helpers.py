@@ -64,13 +64,12 @@ def test_three_venue_verifier_is_included_in_docker_context() -> None:
     assert include_index > exclude_index
 
 
-def test_docker_image_validates_and_repairs_three_venue_bootstrap() -> None:
+def test_docker_image_validates_committed_three_venue_bootstrap() -> None:
     root = Path(__file__).resolve().parents[2]
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
 
     assert "test -f /app/scripts/three_venue_config_check.py" in dockerfile
     assert "/app/scripts/three_venue_config_check.py" in dockerfile
-    assert 'old="if ! python3 -S' in dockerfile
-    assert 'new="if python3 -S' in dockerfile
-    assert "unexpected three-venue bootstrap block" in dockerfile
     assert "bash -n /app/scripts/production_bootstrap.sh" in dockerfile
+    assert "unexpected three-venue bootstrap block" not in dockerfile
+    assert "p.write_text(s.replace" not in dockerfile
