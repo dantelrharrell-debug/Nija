@@ -131,16 +131,27 @@ def _credentials(venue: Venue) -> tuple[bool, list[str], str]:
 
 
 def _runtime() -> tuple[Optional[Any], Optional[Any]]:
-    try:
-        broker_module = sys.modules.get("bot.broker_manager") or importlib.import_module("bot.broker_manager")
-        mabm_module = sys.modules.get("bot.multi_account_broker_manager") or importlib.import_module("bot.multi_account_broker_manager")
-        manager = getattr(mabm_module, "multi_account_broker_manager", None)
-        if manager is None:
-            getter = getattr(mabm_module, "get_broker_manager", None)
-            manager = getter() if callable(getter) else None
-        return broker_module, manager
-    except Exception:
+    """Return the canonical runtime registry only after normal bootstrap loaded it.
+
+    The activator must not import ``bot.broker_manager`` itself: doing so from an
+    early guard thread can race NIJA's ordered startup and create duplicate module
+    state. Normal startup owns those imports; this worker only observes them.
+    """
+    broker_module = sys.modules.get("bot.broker_manager") or sys.modules.get("broker_manager")
+    mabm_module = (
+        sys.modules.get("bot.multi_account_broker_manager")
+        or sys.modules.get("multi_account_broker_manager")
+    )
+    if broker_module is None or mabm_module is None:
         return None, None
+    manager = getattr(mabm_module, "multi_account_broker_manager", None)
+    if manager is None:
+        getter = getattr(mabm_module, "get_broker_manager", None)
+        try:
+            manager = getter() if callable(getter) else None
+        except Exception:
+            manager = None
+    return broker_module, manager
 
 
 def _enum(broker_module: Any, venue: Venue) -> Any:
