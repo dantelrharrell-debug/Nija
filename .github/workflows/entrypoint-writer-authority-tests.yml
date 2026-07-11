@@ -12,12 +12,14 @@ on:
       - 'prebot_writer_authority_bootstrap.py'
       - 'prebot_writer_authority_fail_closed.py'
       - 'source_runtime_guard_bootstrap.py'
+      - 'import_hook_recursion_shield_patch.py'
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
       - 'bot/tests/test_writer_lock_release_guard.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
@@ -40,12 +42,14 @@ on:
       - 'prebot_writer_authority_bootstrap.py'
       - 'prebot_writer_authority_fail_closed.py'
       - 'source_runtime_guard_bootstrap.py'
+      - 'import_hook_recursion_shield_patch.py'
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
       - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/tests/test_import_hook_chain_compactor.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
       - 'bot/tests/test_writer_lock_release_guard.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
@@ -101,6 +105,7 @@ jobs:
             prebot_writer_authority_bootstrap.py \
             prebot_writer_authority_fail_closed.py \
             source_runtime_guard_bootstrap.py \
+            import_hook_recursion_shield_patch.py \
             secondary_venue_activation_patch.py \
             secondary_venue_strict_readiness_patch.py \
             bot/activation_pending_commit_monitor_patch.py \
@@ -113,6 +118,7 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           python -m pytest -q \
+            bot/tests/test_import_hook_chain_compactor.py \
             bot/tests/test_activation_pending_startup_order.py \
             bot/tests/test_writer_lock_release_guard.py \
             bot/tests/test_entrypoint_writer_authority.py \
