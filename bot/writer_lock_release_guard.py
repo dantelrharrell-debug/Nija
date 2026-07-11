@@ -1,19 +1,22 @@
 """Process-exit writer lock release guard.
 
-Railway can briefly run old and new deployments during rollout. The strict
-Redis writer lock is correct, but handoff is slow if the old process keeps
-renewing until the platform stops it. This module installs a small process-level
-SIGTERM/SIGINT/atexit guard that releases Redis writer ownership only when the
-current process still owns the exact lock value.
+Zero-downtime deployments can briefly run old and new instances together.  This
+module shortens a legitimate handoff only when the *current Python process* can
+prove that it owns the exact Redis lock value.  Auxiliary Python processes,
+Docker health checks, child processes, and replacement instances must never be
+able to release another process's lease merely because they share a hostname or
+service identity.
 
-It does not acquire locks, bypass locks, submit orders, cancel orders, or delete
-another instance's lock.
+The guard does not acquire locks, bypass writer fencing, submit orders, cancel
+orders, or delete a non-matching lease.
 """
 
 from __future__ import annotations
 
 import atexit
+import builtins
 import hashlib
+import json
 import logging
 import os
 import signal
@@ -22,21 +25,32 @@ import time
 from typing import Any
 
 logger = logging.getLogger("nija.writer_lock_release_guard")
+_MARKER = "20260711d"
 _INSTALLED = False
 _RELEASING = False
 _LOCK = threading.Lock()
 _PREVIOUS_HANDLERS: dict[int, Any] = {}
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
+_PROCESS_INSTALL_MARKER = "_NIJA_WRITER_LOCK_RELEASE_GUARD_INSTALLED_20260711d"
 
 
 def _clean(value: str | None) -> str:
     return str(value or "").strip().strip('"').strip("'").strip()
 
 
+def _truthy(name: str) -> bool:
+    return _clean(os.getenv(name)).lower() in _TRUE
+
+
 def _resolve_scope() -> str:
     raw = _clean(os.getenv("NIJA_WRITER_LOCK_SCOPE"))
     if raw:
         return raw
-    key = _clean(os.getenv("KRAKEN_PLATFORM_API_KEY")) or _clean(os.getenv("KRAKEN_API_KEY")) or "default"
+    key = (
+        _clean(os.getenv("KRAKEN_PLATFORM_API_KEY"))
+        or _clean(os.getenv("KRAKEN_API_KEY"))
+        or "default"
+    )
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
@@ -77,66 +91,169 @@ def _redis_client():
         )
         return client
     except Exception as exc:
-        logger.warning("WRITER_LOCK_RELEASE_GUARD_REDIS_UNAVAILABLE error=%s", exc)
+        logger.warning("WRITER_LOCK_RELEASE_GUARD_REDIS_UNAVAILABLE marker=%s error=%s", _MARKER, exc)
         return None
 
 
-def _expected_owner_parts() -> list[str]:
-    parts = []
+def _local_authority_proof() -> tuple[bool, str, str]:
+    """Return an exact expected lock value only for this owning process.
+
+    The entrypoint writer-authority runtime publishes all of these values after a
+    successful Redis compare-and-set acquisition.  Static deployment variables,
+    hostnames, service IDs, and inherited credentials are intentionally
+    insufficient.  Requiring this process's PID also prevents a child process
+    that inherited the parent's environment from releasing the parent's lease.
+    """
+
     token = _clean(os.getenv("NIJA_WRITER_FENCING_TOKEN"))
-    if token:
-        parts.append(token)
-    for key in ("RAILWAY_DEPLOYMENT_ID", "RAILWAY_REPLICA_ID", "RAILWAY_SERVICE_ID", "HOSTNAME"):
-        value = _clean(os.getenv(key))
-        if value:
-            parts.append(value)
-    return parts
+    owner = _clean(os.getenv("NIJA_WRITER_OWNER_ID"))
+    generation = _clean(os.getenv("NIJA_WRITER_LEASE_GENERATION"))
+    lease = _truthy("NIJA_WRITER_LEASE_ACQUIRED") and _truthy("NIJA_LOCK_ACQUIRED")
+
+    if not token:
+        return False, "", "fencing_token_missing"
+    if not owner:
+        return False, "", "owner_id_missing"
+    if not generation:
+        return False, "", "lease_generation_missing"
+    if not lease:
+        return False, "", "local_lease_flags_missing"
+
+    pid_marker = f"pid={os.getpid()}"
+    if pid_marker not in owner:
+        return False, "", f"owner_pid_mismatch:{pid_marker}"
+
+    return True, f"{token}:{owner}", "exact_local_authority"
+
+
+def _as_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
 
 
 def release_owned_writer_lock(reason: str = "process_exit") -> bool:
+    """Compare-and-delete only this process's exact writer lease."""
+
     global _RELEASING
     with _LOCK:
         if _RELEASING:
             return False
         _RELEASING = True
+
     try:
+        proven, expected_lock_value, proof_reason = _local_authority_proof()
+        if not proven:
+            logger.info(
+                "WRITER_LOCK_RELEASE_GUARD_SKIP_NO_LOCAL_AUTHORITY marker=%s reason=%s proof=%s pid=%s",
+                _MARKER,
+                reason,
+                proof_reason,
+                os.getpid(),
+            )
+            return False
+
         client = _redis_client()
         if client is None:
             return False
+
         lock_key = _lock_key()
         meta_key = _meta_key()
-        current = str(client.get(lock_key) or "")
-        if not current:
-            logger.warning("WRITER_LOCK_RELEASE_GUARD_NO_LOCK reason=%s key=%s", reason, lock_key)
-            return False
-        expected_parts = [p for p in _expected_owner_parts() if p]
-        owns_lock = any(part in current for part in expected_parts)
-        if not owns_lock:
+        release_key = _release_key(lock_key)
+        payload = json.dumps(
+            {
+                "released_at": time.time(),
+                "reason": reason,
+                "pid": os.getpid(),
+                "generation": _clean(os.getenv("NIJA_WRITER_LEASE_GENERATION")),
+                "instance_id": _clean(os.getenv("NIJA_WRITER_INSTANCE_ID")),
+                "source": "writer_lock_release_guard",
+                "marker": _MARKER,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+        # Atomic ownership verification closes the race between GET and DEL.  The
+        # metadata key is removed only in the same branch that removes the exact
+        # lock value.
+        script = """
+        local current = redis.call('GET', KEYS[1])
+        if not current then
+            return {0, ''}
+        end
+        if current ~= ARGV[1] then
+            return {0, current}
+        end
+        redis.call('SET', KEYS[3], ARGV[2], 'PX', tonumber(ARGV[3]))
+        redis.call('DEL', KEYS[1])
+        if KEYS[2] and KEYS[2] ~= '' then
+            redis.call('DEL', KEYS[2])
+        end
+        return {1, current}
+        """
+        raw = client.eval(
+            script,
+            3,
+            lock_key,
+            meta_key,
+            release_key,
+            expected_lock_value,
+            payload,
+            "120000",
+        )
+        code = 0
+        observed = ""
+        if isinstance(raw, (list, tuple)):
+            try:
+                code = int(raw[0] or 0)
+            except (TypeError, ValueError, IndexError):
+                code = 0
+            if len(raw) > 1:
+                observed = _as_text(raw[1])
+        else:
+            try:
+                code = int(raw or 0)
+            except (TypeError, ValueError):
+                code = 0
+
+        if code != 1:
             logger.warning(
-                "WRITER_LOCK_RELEASE_GUARD_SKIP_NOT_OWNER reason=%s key=%s current_prefix=%s expected_parts=%d",
+                "WRITER_LOCK_RELEASE_GUARD_SKIP_NOT_EXACT_OWNER marker=%s reason=%s key=%s "
+                "expected_prefix=%s observed_prefix=%s",
+                _MARKER,
                 reason,
                 lock_key,
-                current[:64],
-                len(expected_parts),
+                expected_lock_value[:64],
+                observed[:64],
             )
             return False
-        payload = (
-            "{"
-            f"\"released_at\":{time.time()},"
-            f"\"reason\":\"{reason}\","
-            f"\"deployment\":\"{_clean(os.getenv('RAILWAY_DEPLOYMENT_ID'))}\""
-            "}"
-        )
-        client.set(_release_key(lock_key), payload, px=120000)
-        client.delete(lock_key)
-        client.delete(meta_key)
-        for env_key in ("NIJA_WRITER_FENCING_TOKEN", "NIJA_WRITER_LEASE_ACQUIRED", "NIJA_LOCK_ACQUIRED"):
+
+        for env_key in (
+            "NIJA_WRITER_FENCING_TOKEN",
+            "NIJA_WRITER_OWNER_ID",
+            "NIJA_WRITER_INSTANCE_ID",
+            "NIJA_WRITER_LEASE_GENERATION",
+            "NIJA_WRITER_LEASE_ACQUIRED",
+            "NIJA_LOCK_ACQUIRED",
+        ):
             os.environ.pop(env_key, None)
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
-        logger.critical("WRITER_LOCK_RELEASED_ON_EXIT reason=%s key=%s owner_prefix=%s", reason, lock_key, current[:64])
+        logger.critical(
+            "WRITER_LOCK_RELEASED_ON_EXIT marker=%s reason=%s key=%s owner_prefix=%s",
+            _MARKER,
+            reason,
+            lock_key,
+            expected_lock_value[:64],
+        )
         return True
     except Exception as exc:
-        logger.warning("WRITER_LOCK_RELEASE_GUARD_ERROR reason=%s error=%s", reason, exc)
+        logger.warning(
+            "WRITER_LOCK_RELEASE_GUARD_ERROR marker=%s reason=%s error=%s",
+            _MARKER,
+            reason,
+            exc,
+        )
         return False
     finally:
         with _LOCK:
@@ -144,7 +261,13 @@ def release_owned_writer_lock(reason: str = "process_exit") -> bool:
 
 
 def _signal_handler(signum: int, frame: Any) -> None:
-    name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT" if signum == signal.SIGINT else str(signum)
+    name = (
+        "SIGTERM"
+        if signum == signal.SIGTERM
+        else "SIGINT"
+        if signum == signal.SIGINT
+        else str(signum)
+    )
     release_owned_writer_lock(f"signal:{name}")
     previous = _PREVIOUS_HANDLERS.get(signum)
     if callable(previous):
@@ -154,21 +277,36 @@ def _signal_handler(signum: int, frame: Any) -> None:
         except SystemExit:
             raise
         except Exception as exc:
-            logger.warning("WRITER_LOCK_RELEASE_GUARD_PREVIOUS_HANDLER_ERROR signal=%s error=%s", name, exc)
+            logger.warning(
+                "WRITER_LOCK_RELEASE_GUARD_PREVIOUS_HANDLER_ERROR marker=%s signal=%s error=%s",
+                _MARKER,
+                name,
+                exc,
+            )
     if previous == signal.SIG_DFL:
         raise SystemExit(0)
 
 
 def install_import_hook() -> None:
     global _INSTALLED
-    if _INSTALLED:
+    if _INSTALLED or bool(getattr(builtins, _PROCESS_INSTALL_MARKER, False)):
         return
-    _INSTALLED = True
+    with _LOCK:
+        if _INSTALLED or bool(getattr(builtins, _PROCESS_INSTALL_MARKER, False)):
+            return
+        _INSTALLED = True
+        setattr(builtins, _PROCESS_INSTALL_MARKER, True)
+
     atexit.register(lambda: release_owned_writer_lock("atexit"))
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             _PREVIOUS_HANDLERS[sig] = signal.getsignal(sig)
             signal.signal(sig, _signal_handler)
         except Exception as exc:
-            logger.warning("WRITER_LOCK_RELEASE_GUARD_SIGNAL_INSTALL_FAILED signal=%s error=%s", sig, exc)
-    logger.warning("WRITER_LOCK_RELEASE_GUARD_INSTALLED")
+            logger.warning(
+                "WRITER_LOCK_RELEASE_GUARD_SIGNAL_INSTALL_FAILED marker=%s signal=%s error=%s",
+                _MARKER,
+                sig,
+                exc,
+            )
+    logger.warning("WRITER_LOCK_RELEASE_GUARD_INSTALLED marker=%s exact_owner_required=true", _MARKER)
