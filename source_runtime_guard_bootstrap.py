@@ -3,13 +3,18 @@
 This module is intentionally located at repository root and imports no ``bot``
 package modules. ``main.py`` loads ``bot/global_runtime_startup_guards.py`` by
 file path before its first ``bot.*`` import; that first installer calls
-:func:`install` so venue-readiness enforcement, secondary-venue activation, and
-strict multi-venue entry admission do not depend on Docker ``.pth`` files or
-provider-specific startup behavior.
+:func:`install`.
 
-The bootstrap does not grant writer authority, mark a broker connected, create
-credentials, fabricate balances, or relax risk controls. In a live-capital
-process it fails closed when mandatory runtime guards cannot be installed.
+On Render, the Docker ``.pth`` hook deliberately leaves the replacement process
+fail-closed so the shell can expose ``/healthz`` during a zero-downtime deploy.
+This source bootstrap then acquires the canonical Redis writer lease before any
+``bot.*`` import and installs venue-readiness, secondary-venue activation, and
+strict multi-venue entry admission.
+
+The bootstrap never deletes another instance's active lease, creates credentials,
+fabricates balances, marks a broker connected, or relaxes risk controls. In a
+live-capital process it fails closed when mandatory runtime guards cannot be
+installed.
 """
 
 from __future__ import annotations
@@ -70,12 +75,12 @@ def _install_required(module_name: str) -> None:
 
 
 def install() -> bool:
-    """Install mandatory source-level runtime guards exactly once.
+    """Acquire writer lineage and install mandatory source guards exactly once.
 
     The underlying repairs are idempotent. A live process exits through
-    ``SystemExit`` when installation fails. This is deliberate: ``main.py``
-    catches ``Exception`` around optional startup guards, while ``SystemExit``
-    remains unswallowed and keeps live trading fail-closed.
+    ``SystemExit`` when installation fails. The canonical prebot writer installer
+    uses a direct process exit if Redis authority cannot be established, ensuring
+    Python's optional startup wrappers cannot swallow the failure.
     """
 
     global _INSTALLED
@@ -85,6 +90,9 @@ def install() -> bool:
             return True
 
         try:
+            # Ordering invariant: canonical Redis fencing lineage must exist before
+            # any bot package import can create or inspect Kraken nonce state.
+            _install_required("prebot_writer_authority_fail_closed")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
@@ -94,18 +102,20 @@ def install() -> bool:
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "1"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "1"
+            os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "1"
 
             commit = _deployment_commit()
             logger.warning(
                 "SOURCE_RUNTIME_GUARDS_READY marker=%s commit=%s "
-                "venue_repair=installed secondary_venue_activation=installed "
+                "writer_authority=installed venue_repair=installed "
+                "secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed source=main_pre_bot",
                 _MARKER,
                 commit,
             )
             print(
                 f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} "
-                f"commit={commit} venue_repair=installed "
+                f"commit={commit} writer_authority=installed venue_repair=installed "
                 "secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed source=main_pre_bot",
                 flush=True,
@@ -116,6 +126,7 @@ def install() -> bool:
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "0"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "0"
+            os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "0"
             message = f"{type(exc).__name__}:{exc}"
             is_live = _is_live_runtime()
             logger.critical(
