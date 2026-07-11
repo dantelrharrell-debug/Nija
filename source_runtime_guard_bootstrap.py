@@ -9,7 +9,8 @@ On Render, the Docker ``.pth`` hook deliberately leaves the replacement process
 fail-closed so the shell can expose ``/healthz`` during a zero-downtime deploy.
 This source bootstrap then acquires the canonical Redis writer lease before any
 ``bot.*`` import and installs venue-readiness, secondary-venue activation, strict
-multi-venue entry admission, and the cross-process readiness bridge.
+multi-venue entry admission, the definitive three-venue stage verifier, and the
+cross-process readiness bridge.
 
 The bootstrap never deletes another instance's active lease, creates credentials,
 fabricates balances, marks a broker connected, or relaxes risk controls. In a
@@ -75,13 +76,7 @@ def _install_required(module_name: str) -> None:
 
 
 def install() -> bool:
-    """Acquire writer lineage and install mandatory source guards exactly once.
-
-    The underlying repairs are idempotent. A live process exits through
-    ``SystemExit`` when installation fails. The canonical prebot writer installer
-    uses a direct process exit if Redis authority cannot be established, ensuring
-    Python's optional startup wrappers cannot swallow the failure.
-    """
+    """Acquire writer lineage and install mandatory source guards exactly once."""
 
     global _INSTALLED
 
@@ -90,12 +85,11 @@ def install() -> bool:
             return True
 
         try:
-            # Ordering invariant: canonical Redis fencing lineage must exist before
-            # any bot package import can create or inspect Kraken nonce state.
             _install_required("prebot_writer_authority_fail_closed")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
+            _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
 
             _INSTALLED = True
@@ -103,6 +97,7 @@ def install() -> bool:
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "1"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "1"
+            os.environ["NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED"] = "1"
             os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "1"
             os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "1"
 
@@ -112,6 +107,7 @@ def install() -> bool:
                 "writer_authority=installed venue_repair=installed "
                 "secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed "
+                "three_venue_stage_verifier=installed "
                 "render_readiness_bridge=installed source=main_pre_bot",
                 _MARKER,
                 commit,
@@ -121,6 +117,7 @@ def install() -> bool:
                 f"commit={commit} writer_authority=installed venue_repair=installed "
                 "secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed "
+                "three_venue_stage_verifier=installed "
                 "render_readiness_bridge=installed source=main_pre_bot",
                 flush=True,
             )
@@ -130,6 +127,8 @@ def install() -> bool:
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "0"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "0"
+            os.environ["NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED"] = "0"
+            os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
             os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "0"
             os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "0"
             message = f"{type(exc).__name__}:{exc}"
