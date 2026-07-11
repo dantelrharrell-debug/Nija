@@ -63,8 +63,8 @@ services:
       - key: MINIMUM_TRADING_BALANCE
         value: "5.00"
 
-      # Multi-venue routing. Each venue must authenticate and prove its own
-      # spendable quote balance before the activator admits it for new entries.
+      # Multi-venue routing. Every connected venue is scanned independently and
+      # sized only from its own spendable quote balance.
       - key: PRIMARY_EXECUTION_VENUE
         value: "auto"
       - key: NIJA_BROKER_PRIORITY
@@ -73,6 +73,22 @@ services:
         value: "okx,coinbase,kraken"
       - key: NIJA_ALLOWED_EXECUTION_BROKERS
         value: "okx,coinbase,kraken"
+      - key: NIJA_BROKER_INDEPENDENT_LIVE_EXECUTION
+        value: "true"
+      - key: NIJA_INDEPENDENT_BROKER_TRADING
+        value: "true"
+      - key: NIJA_BROKER_SCOPED_POSITION_CAP
+        value: "true"
+
+      # Strict production contract: no new live entries are admitted until both
+      # Coinbase and OKX are connected, funded, market-ready, and activated.
+      # Exit/reduce/liquidation orders remain allowed while a venue recovers.
+      - key: NIJA_REQUIRE_SECONDARY_VENUES_READY
+        value: "true"
+      - key: NIJA_REQUIRED_LIVE_VENUES
+        value: "coinbase,okx"
+      - key: NIJA_SECONDARY_VENUE_STRICT_RECHECK_S
+        value: "2"
 
       # Coinbase Advanced Trade activation. Consumer-wallet funds remain
       # inaccessible to the Advanced Trade API and are never counted here.
@@ -91,6 +107,8 @@ services:
 
       # OKX live spot activation. The venue remains excluded until its own
       # credentials, connection, markets, and quote balance are verified.
+      - key: ENABLE_OKX
+        value: "true"
       - key: ENABLE_OKX_TRADING
         value: "true"
       - key: OKX_LIVE_TRADING_ENABLED
@@ -108,8 +126,8 @@ services:
       - key: OKX_US_REGION
         value: "true"
 
-      # Render cold-start convergence. Kraken is the required primary platform
-      # broker; Coinbase and OKX are independently activated when ready.
+      # Render cold-start convergence. Kraken remains the startup anchor, while
+      # the strict entry gate waits for Coinbase and OKX before new exposure.
       - key: NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS
         value: "1"
       - key: NIJA_RENDER_STARTUP_RECOVERY_ENABLED
