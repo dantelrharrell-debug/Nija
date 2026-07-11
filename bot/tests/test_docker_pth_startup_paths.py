@@ -20,6 +20,14 @@ def test_docker_pth_hooks_add_app_before_importing_modules() -> None:
         assert f"prefix + 'import {module_name}" in dockerfile
 
 
+def test_render_pth_defers_writer_wait_until_source_bootstrap() -> None:
+    root = Path(__file__).resolve().parents[2]
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "_nija_prebot_writer.install(defer_if_render=True)" in dockerfile
+    assert "source_runtime_guard_bootstrap acquires the same canonical" in dockerfile
+
+
 def test_docker_runs_site_import_smoke_test_outside_app() -> None:
     root = Path(__file__).resolve().parents[2]
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
