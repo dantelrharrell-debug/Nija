@@ -1,9 +1,10 @@
 """Minimal Render liveness and NIJA trading-readiness endpoints.
 
-``/healthz`` intentionally reports process liveness so Render can complete a
-zero-downtime deployment while broker startup converges. ``/readyz`` is stricter:
-it returns HTTP 200 only after LIVE_ACTIVE writer authority is present and every
-operator-required venue (Coinbase and OKX in production) is trading-ready.
+``/healthz`` reports process liveness so Render can complete a zero-downtime
+deployment while the replacement waits fail-closed for writer authority.
+``/readyz`` reports strict trading readiness.  Because this HTTP server is a
+separate process, it reads an atomic state file published by the trading process
+instead of relying on stale inherited environment variables.
 """
 
 from __future__ import annotations
@@ -15,38 +16,174 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Optional
 
 _STARTED_AT = time.time()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
+def _truthy_value(value: Any) -> bool:
+    return str(value or "").strip().lower() in _TRUE
+
+
 def _truthy(name: str, default: str = "") -> bool:
-    return str(os.environ.get(name, default) or "").strip().lower() in _TRUE
+    return _truthy_value(os.environ.get(name, default))
+
+
+def _is_render_runtime() -> bool:
+    if _truthy("RENDER"):
+        return True
+    return any(
+        str(os.environ.get(name, "") or "").strip()
+        for name in (
+            "RENDER_SERVICE_ID",
+            "RENDER_SERVICE_NAME",
+            "RENDER_INSTANCE_ID",
+            "RENDER_GIT_COMMIT",
+        )
+    )
+
+
+def _state_path() -> Path:
+    return Path(
+        str(
+            os.environ.get(
+                "NIJA_RENDER_READINESS_STATE_FILE",
+                "/tmp/nija_render_readiness.json",
+            )
+            or "/tmp/nija_render_readiness.json"
+        )
+    ).expanduser()
+
+
+def _read_shared_state() -> tuple[Optional[dict[str, Any]], Optional[float], str]:
+    path = _state_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None, None, "invalid_payload"
+        timestamp = float(payload.get("timestamp") or 0.0)
+        age = max(0.0, time.time() - timestamp) if timestamp > 0 else float("inf")
+        try:
+            max_age = max(
+                2.0,
+                float(os.environ.get("NIJA_RENDER_READINESS_MAX_AGE_S", "10") or "10"),
+            )
+        except (TypeError, ValueError):
+            max_age = 10.0
+        if age > max_age:
+            return None, age, "stale"
+        return payload, age, "ok"
+    except FileNotFoundError:
+        return None, None, "missing"
+    except Exception as exc:
+        return None, None, f"read_error:{type(exc).__name__}"
+
+
+def _environment_snapshot() -> dict[str, Any]:
+    return {
+        "state": os.environ.get("NIJA_RUNTIME_TRADING_STATE", "OFF"),
+        "writer_authority": os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0"),
+        "strict_secondary_venues": os.environ.get(
+            "NIJA_REQUIRE_SECONDARY_VENUES_READY", "false"
+        ),
+        "required_venues_ready": os.environ.get("NIJA_REQUIRED_VENUES_READY", "0"),
+        "required_venues": os.environ.get(
+            "NIJA_REQUIRED_LIVE_VENUES", "coinbase,okx"
+        ),
+        "required_venues_missing": os.environ.get(
+            "NIJA_REQUIRED_VENUES_MISSING", ""
+        ),
+        "coinbase_activation_state": os.environ.get(
+            "NIJA_COINBASE_ACTIVATION_STATE", "unknown"
+        ),
+        "coinbase_connected": os.environ.get("NIJA_COINBASE_CONNECTED", "0"),
+        "coinbase_trading_ready": os.environ.get(
+            "NIJA_COINBASE_TRADING_READY", "0"
+        ),
+        "coinbase_spendable_quote": os.environ.get(
+            "NIJA_COINBASE_SPENDABLE_QUOTE", "0"
+        ),
+        "okx_activation_state": os.environ.get(
+            "NIJA_OKX_ACTIVATION_STATE", "unknown"
+        ),
+        "okx_connected": os.environ.get("NIJA_OKX_CONNECTED", "0"),
+        "okx_trading_ready": os.environ.get("NIJA_OKX_TRADING_READY", "0"),
+        "okx_spendable_quote": os.environ.get("NIJA_OKX_SPENDABLE_QUOTE", "0"),
+        "commit": os.environ.get("GIT_COMMIT_SHORT", "unknown"),
+    }
+
+
+def _safe_render_startup_snapshot() -> dict[str, Any]:
+    required = os.environ.get("NIJA_REQUIRED_LIVE_VENUES", "coinbase,okx")
+    return {
+        "state": "OFF",
+        "writer_authority": "0",
+        "strict_secondary_venues": os.environ.get(
+            "NIJA_REQUIRE_SECONDARY_VENUES_READY", "true"
+        ),
+        "required_venues_ready": "0",
+        "required_venues": required,
+        "required_venues_missing": required,
+        "coinbase_activation_state": "unknown",
+        "coinbase_connected": "0",
+        "coinbase_trading_ready": "0",
+        "coinbase_spendable_quote": "0",
+        "okx_activation_state": "unknown",
+        "okx_connected": "0",
+        "okx_trading_ready": "0",
+        "okx_spendable_quote": "0",
+        "commit": os.environ.get("GIT_COMMIT_SHORT", "unknown"),
+    }
 
 
 def _readiness() -> tuple[bool, dict[str, object]]:
-    state = str(os.environ.get("NIJA_RUNTIME_TRADING_STATE", "OFF") or "OFF")
-    writer_raw = str(os.environ.get("NIJA_RUNTIME_EXECUTION_AUTHORITY", "0") or "0")
-    writer_ready = writer_raw.strip().lower() in _TRUE
-    strict = _truthy("NIJA_REQUIRE_SECONDARY_VENUES_READY", "false")
-    required_ready = _truthy("NIJA_REQUIRED_VENUES_READY", "false") if strict else True
+    shared, age, shared_status = _read_shared_state()
+    if shared is not None:
+        snapshot = shared
+        source = "shared_file"
+    elif _is_render_runtime():
+        # The early server may inherit stale dashboard variables. Until the live
+        # trading process publishes a fresh file, Render readiness is always false.
+        snapshot = _safe_render_startup_snapshot()
+        source = "safe_render_startup"
+    else:
+        snapshot = _environment_snapshot()
+        source = "process_env"
+
+    state = str(snapshot.get("state") or "OFF")
+    writer_raw = str(snapshot.get("writer_authority") or "0")
+    writer_ready = _truthy_value(writer_raw)
+    strict = _truthy_value(snapshot.get("strict_secondary_venues"))
+    required_ready = (
+        _truthy_value(snapshot.get("required_venues_ready")) if strict else True
+    )
     ready = state == "LIVE_ACTIVE" and writer_ready and required_ready
+
     details: dict[str, object] = {
         "status": "ready" if ready else "not_ready",
         "state": state,
         "writer_authority": writer_raw,
         "strict_secondary_venues": strict,
         "required_venues_ready": required_ready,
-        "required_venues": os.environ.get("NIJA_REQUIRED_LIVE_VENUES", "coinbase,okx"),
-        "required_venues_missing": os.environ.get("NIJA_REQUIRED_VENUES_MISSING", ""),
-        "coinbase_activation_state": os.environ.get("NIJA_COINBASE_ACTIVATION_STATE", "unknown"),
-        "coinbase_connected": os.environ.get("NIJA_COINBASE_CONNECTED", "0"),
-        "coinbase_trading_ready": os.environ.get("NIJA_COINBASE_TRADING_READY", "0"),
-        "okx_activation_state": os.environ.get("NIJA_OKX_ACTIVATION_STATE", "unknown"),
-        "okx_connected": os.environ.get("NIJA_OKX_CONNECTED", "0"),
-        "okx_trading_ready": os.environ.get("NIJA_OKX_TRADING_READY", "0"),
+        "required_venues": snapshot.get("required_venues", "coinbase,okx"),
+        "required_venues_missing": snapshot.get("required_venues_missing", ""),
+        "coinbase_activation_state": snapshot.get(
+            "coinbase_activation_state", "unknown"
+        ),
+        "coinbase_connected": snapshot.get("coinbase_connected", "0"),
+        "coinbase_trading_ready": snapshot.get("coinbase_trading_ready", "0"),
+        "coinbase_spendable_quote": snapshot.get("coinbase_spendable_quote", "0"),
+        "okx_activation_state": snapshot.get("okx_activation_state", "unknown"),
+        "okx_connected": snapshot.get("okx_connected", "0"),
+        "okx_trading_ready": snapshot.get("okx_trading_ready", "0"),
+        "okx_spendable_quote": snapshot.get("okx_spendable_quote", "0"),
+        "readiness_source": source,
+        "shared_state_status": shared_status,
+        "shared_state_age_seconds": round(age, 3) if age is not None else None,
         "uptime_seconds": round(time.time() - _STARTED_AT, 3),
-        "commit": os.environ.get("GIT_COMMIT_SHORT", "unknown"),
+        "commit": snapshot.get("commit", os.environ.get("GIT_COMMIT_SHORT", "unknown")),
     }
     return ready, details
 
@@ -106,7 +243,11 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
-    print(f"RENDER_EARLY_LIVENESS_READY port={port} readiness_path=/readyz", flush=True)
+    print(
+        f"RENDER_EARLY_LIVENESS_READY port={port} readiness_path=/readyz "
+        f"state_file={_state_path()}",
+        flush=True,
+    )
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
