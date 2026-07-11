@@ -63,8 +63,53 @@ services:
       - key: MINIMUM_TRADING_BALANCE
         value: "5.00"
 
+      # Multi-venue routing. Each venue must authenticate and prove its own
+      # spendable quote balance before the activator admits it for new entries.
+      - key: PRIMARY_EXECUTION_VENUE
+        value: "auto"
+      - key: NIJA_BROKER_PRIORITY
+        value: "okx,coinbase,kraken"
+      - key: NIJA_ENTRY_BROKER_PRIORITY
+        value: "okx,coinbase,kraken"
+      - key: NIJA_ALLOWED_EXECUTION_BROKERS
+        value: "okx,coinbase,kraken"
+
+      # Coinbase Advanced Trade activation. Consumer-wallet funds remain
+      # inaccessible to the Advanced Trade API and are never counted here.
+      - key: ENABLE_COINBASE
+        value: "true"
+      - key: ENABLE_COINBASE_TRADING
+        value: "true"
+      - key: COINBASE_LIVE_TRADING_ENABLED
+        value: "true"
+      - key: NIJA_DISABLE_COINBASE
+        value: "false"
+      - key: COINBASE_MIN_ORDER_USD
+        value: "1.00"
+      - key: COINBASE_VENUE_THRESHOLD_USD
+        value: "12.00"
+
+      # OKX live spot activation. The venue remains excluded until its own
+      # credentials, connection, markets, and quote balance are verified.
+      - key: ENABLE_OKX_TRADING
+        value: "true"
+      - key: OKX_LIVE_TRADING_ENABLED
+        value: "true"
+      - key: NIJA_OKX_EXECUTION_ENABLED
+        value: "true"
+      - key: NIJA_OKX_LIVE_TRADING_ENABLED
+        value: "true"
+      - key: NIJA_DISABLE_OKX
+        value: "false"
+      - key: OKX_MIN_ORDER_USD
+        value: "10.00"
+      - key: OKX_BASE_URL
+        value: "https://us.okx.com"
+      - key: OKX_US_REGION
+        value: "true"
+
       # Render cold-start convergence. Kraken is the required primary platform
-      # broker; Coinbase is optional and must not be required for activation.
+      # broker; Coinbase and OKX are independently activated when ready.
       - key: NIJA_RUNTIME_AUTHORITY_CONVERGENCE_MIN_BROKERS
         value: "1"
       - key: NIJA_RENDER_STARTUP_RECOVERY_ENABLED
@@ -90,7 +135,8 @@ services:
       - key: LIVE_CAPITAL_VERIFIED
         sync: false
 
-      # Platform brokers
+      # Platform broker credentials. Values are entered in Render and never
+      # committed to the repository.
       - key: KRAKEN_PLATFORM_API_KEY
         sync: false
       - key: KRAKEN_PLATFORM_API_SECRET
@@ -98,6 +144,12 @@ services:
       - key: COINBASE_API_KEY
         sync: false
       - key: COINBASE_API_SECRET
+        sync: false
+      - key: OKX_API_KEY
+        sync: false
+      - key: OKX_API_SECRET
+        sync: false
+      - key: OKX_PASSPHRASE
         sync: false
 
       # Independent user broker credentials
