@@ -73,6 +73,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest redis requests
 
+      - name: Validate Render bootstrap contract
+        run: |
+          bash -n scripts/production_bootstrap.sh
+          grep -Fq 'dockerCommand: bash scripts/production_bootstrap.sh' render.yaml
+          grep -Fq 'healthCheckPath: /healthz' render.yaml
+          grep -Fq 'PORT' render.yaml
+          grep -Fq 'value: "5000"' render.yaml
+
       - name: Compile deployment entrypoints
         run: |
           python -m py_compile \
