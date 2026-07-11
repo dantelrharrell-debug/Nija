@@ -35,6 +35,7 @@ RUN python -m py_compile \
         /app/secondary_venue_activation_patch.py \
         /app/secondary_venue_strict_readiness_patch.py \
         /app/bot/activation_pending_commit_monitor_patch.py \
+        /app/bot/writer_lock_release_guard.py \
         /app/bot/global_runtime_startup_guards.py \
         /app/import_hook_recursion_shield_patch.py \
         /app/disconnected_broker_execution_guard_patch.py
@@ -104,10 +105,11 @@ RUN mkdir -p /app/cache /app/data /app/logs /tmp/candlelite && \
 # Switch to non-root user
 USER nija
 
-# Security: Drop all capabilities and run as non-root
-# Health check endpoint - use liveness probe
+# Security: Drop all capabilities and run as non-root.
+# Use isolated Python (-S) and stdlib-only HTTP so Docker health checks cannot
+# execute .pth/sitecustomize/usercustomize trading hooks or release writer locks.
 HEALTHCHECK --interval=30s --timeout=30s --start-period=300s --retries=5 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/healthz', timeout=10)" || exit 1
+    CMD python -S -c "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:5000/healthz',timeout=10); p=json.loads(r.read().decode('utf-8')); raise SystemExit(0 if r.status==200 and p.get('status')=='alive' else 1)"
 
 # Default command: resolve Render deployment provenance and guards before start.sh.
 CMD ["bash", "scripts/production_bootstrap.sh"]
