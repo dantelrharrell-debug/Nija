@@ -14,8 +14,10 @@ on:
       - 'source_runtime_guard_bootstrap.py'
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
+      - 'bot/activation_pending_commit_monitor_patch.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/tests/test_activation_pending_startup_order.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
       - 'bot/tests/test_entrypoint_writer_heartbeat.py'
       - 'bot/tests/test_prebot_writer_authority_bootstrap.py'
@@ -38,8 +40,10 @@ on:
       - 'source_runtime_guard_bootstrap.py'
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
+      - 'bot/activation_pending_commit_monitor_patch.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
+      - 'bot/tests/test_activation_pending_startup_order.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
       - 'bot/tests/test_entrypoint_writer_heartbeat.py'
       - 'bot/tests/test_prebot_writer_authority_bootstrap.py'
@@ -91,6 +95,7 @@ jobs:
             source_runtime_guard_bootstrap.py \
             secondary_venue_activation_patch.py \
             secondary_venue_strict_readiness_patch.py \
+            bot/activation_pending_commit_monitor_patch.py \
             bot/entrypoint_writer_authority.py \
             bot/bot_main.py
 
@@ -99,6 +104,7 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           python -m pytest -q \
+            bot/tests/test_activation_pending_startup_order.py \
             bot/tests/test_entrypoint_writer_authority.py \
             bot/tests/test_entrypoint_writer_heartbeat.py \
             bot/tests/test_prebot_writer_authority_bootstrap.py \
