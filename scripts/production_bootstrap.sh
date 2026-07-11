@@ -68,13 +68,19 @@ if [[ "${_RENDER_RUNTIME}" == "true" ]] \
 fi
 
 # Render must be able to verify process liveness while Redis authority and broker
-# hydration are still fail-closed. This endpoint never reports trading readiness
-# and never changes execution state.
+# hydration are still fail-closed. The server is stdlib-only and intentionally
+# starts with -S so .pth/sitecustomize/usercustomize trading hooks cannot enter
+# writer standby before port 5000 is bound.
 if [[ "${_RENDER_RUNTIME}" == "true" ]] && command -v python3 >/dev/null 2>&1 && [[ -f render_liveness_server.py ]]; then
-    python3 -u render_liveness_server.py &
+    python3 -S -u render_liveness_server.py &
     _RENDER_LIVENESS_PID=$!
     export NIJA_RENDER_LIVENESS_PID="${_RENDER_LIVENESS_PID}"
-    echo "🌐 Early Render liveness server started pid=${_RENDER_LIVENESS_PID} port=${PORT:-5000}"
+    sleep 1
+    if ! kill -0 "${_RENDER_LIVENESS_PID}" 2>/dev/null; then
+        echo "❌ Render liveness server exited before binding port=${PORT:-5000}"
+        exit 78
+    fi
+    echo "🌐 Early Render liveness server started pid=${_RENDER_LIVENESS_PID} port=${PORT:-5000} isolated_site_startup=true"
 fi
 
 _is_placeholder() {
