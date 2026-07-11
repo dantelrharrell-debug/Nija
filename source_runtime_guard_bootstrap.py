@@ -3,12 +3,12 @@
 This module is intentionally located at repository root and imports no ``bot``
 package modules. ``main.py`` loads ``bot/global_runtime_startup_guards.py`` by
 file path before its first ``bot.*`` import; that first installer calls
-:func:`install` so venue-readiness enforcement does not depend on Docker
-``.pth`` files or provider-specific startup behavior.
+:func:`install` so venue-readiness enforcement and secondary-venue activation do
+not depend on Docker ``.pth`` files or provider-specific startup behavior.
 
 The bootstrap does not grant writer authority, mark a broker connected, create
-credentials, or relax risk controls. In a live-capital process it fails closed
-when the mandatory venue repair cannot be installed.
+credentials, fabricate balances, or relax risk controls. In a live-capital
+process it fails closed when mandatory runtime guards cannot be installed.
 """
 
 from __future__ import annotations
@@ -60,14 +60,21 @@ def _deployment_commit() -> str:
     return "unknown"
 
 
-def install() -> bool:
-    """Install mandatory source-level venue guards exactly once.
+def _install_required(module_name: str) -> None:
+    module = importlib.import_module(module_name)
+    installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
+    if not callable(installer):
+        raise RuntimeError(f"{module_name} installer is missing")
+    installer()
 
-    The underlying repair is idempotent and continuously patches late imports.
-    A live process exits through ``SystemExit`` when installation fails. This is
-    deliberate: ``main.py`` catches ``Exception`` around optional startup guards,
-    while ``SystemExit`` remains unswallowed and keeps live trading fail-closed.
-    Returning ``False`` is reserved for non-live development/test processes.
+
+def install() -> bool:
+    """Install mandatory source-level runtime guards exactly once.
+
+    The underlying repairs are idempotent. A live process exits through
+    ``SystemExit`` when installation fails. This is deliberate: ``main.py``
+    catches ``Exception`` around optional startup guards, while ``SystemExit``
+    remains unswallowed and keeps live trading fail-closed.
     """
 
     global _INSTALLED
@@ -77,39 +84,37 @@ def install() -> bool:
             return True
 
         try:
-            repair = importlib.import_module("venue_readiness_execution_repair_patch")
-            installer = getattr(repair, "install", None) or getattr(
-                repair, "install_import_hook", None
-            )
-            if not callable(installer):
-                raise RuntimeError("venue readiness repair installer is missing")
+            _install_required("venue_readiness_execution_repair_patch")
+            _install_required("secondary_venue_activation_patch")
 
-            installer()
             _INSTALLED = True
             os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "1"
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
+            os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "1"
 
             commit = _deployment_commit()
             logger.warning(
                 "SOURCE_RUNTIME_GUARDS_READY marker=%s commit=%s "
-                "venue_repair=installed source=main_pre_bot",
+                "venue_repair=installed secondary_venue_activation=installed "
+                "source=main_pre_bot",
                 _MARKER,
                 commit,
             )
             print(
                 f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} "
-                f"commit={commit} venue_repair=installed source=main_pre_bot",
+                f"commit={commit} venue_repair=installed "
+                "secondary_venue_activation=installed source=main_pre_bot",
                 flush=True,
             )
             return True
         except Exception as exc:
             os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "0"
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
+            os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "0"
             message = f"{type(exc).__name__}:{exc}"
             is_live = _is_live_runtime()
             logger.critical(
-                "SOURCE_RUNTIME_GUARDS_FAILED marker=%s commit=%s error=%s "
-                "live=%s",
+                "SOURCE_RUNTIME_GUARDS_FAILED marker=%s commit=%s error=%s live=%s",
                 _MARKER,
                 _deployment_commit(),
                 message,
