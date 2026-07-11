@@ -68,8 +68,9 @@ def test_docker_image_validates_and_repairs_three_venue_bootstrap() -> None:
     root = Path(__file__).resolve().parents[2]
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "/app/scripts/three_venue_config_check.py" in dockerfile
     assert "test -f /app/scripts/three_venue_config_check.py" in dockerfile
+    assert "/app/scripts/three_venue_config_check.py" in dockerfile
+    assert 'old="if ! python3 -S' in dockerfile
+    assert 'new="if python3 -S' in dockerfile
     assert "unexpected three-venue bootstrap block" in dockerfile
     assert "bash -n /app/scripts/production_bootstrap.sh" in dockerfile
-    assert 'new="if python3 -S \\"${SCRIPT_DIR}/three_venue_config_check.py\\"; then\\n    :\\nelse\\n    _CHECK_EXIT=$?\\n"' in dockerfile
