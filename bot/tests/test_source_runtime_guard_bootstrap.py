@@ -15,6 +15,7 @@ def _reset_source_bootstrap(monkeypatch) -> None:
     monkeypatch.delenv("NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP", raising=False)
     monkeypatch.delenv("NIJA_VENUE_READINESS_SOURCE_MARKER", raising=False)
     monkeypatch.delenv("NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED", raising=False)
+    monkeypatch.delenv("NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED", raising=False)
 
 
 def test_source_bootstrap_installs_required_guards_once_and_records_commit(monkeypatch):
@@ -24,6 +25,8 @@ def test_source_bootstrap_installs_required_guards_once_and_records_commit(monke
     fake_repair.install = lambda: calls.append("venue")
     fake_activator = ModuleType("secondary_venue_activation_patch")
     fake_activator.install = lambda: calls.append("activator")
+    fake_strict = ModuleType("secondary_venue_strict_readiness_patch")
+    fake_strict.install = lambda: calls.append("strict")
 
     real_import = source_bootstrap.importlib.import_module
 
@@ -32,6 +35,8 @@ def test_source_bootstrap_installs_required_guards_once_and_records_commit(monke
             return fake_repair
         if name == "secondary_venue_activation_patch":
             return fake_activator
+        if name == "secondary_venue_strict_readiness_patch":
+            return fake_strict
         return real_import(name)
 
     monkeypatch.setattr(source_bootstrap.importlib, "import_module", _fake_import)
@@ -42,10 +47,11 @@ def test_source_bootstrap_installs_required_guards_once_and_records_commit(monke
 
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
-    assert calls == ["venue", "activator"]
+    assert calls == ["venue", "activator", "strict"]
     assert source_bootstrap.installed_marker() == "20260710af"
     assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "1"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "1"
+    assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "1"
 
 
 def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
@@ -65,6 +71,7 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     assert exc_info.value.code == 78
     assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "0"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "0"
 
 
 def test_global_startup_guards_install_source_repair_before_other_guards(monkeypatch):
