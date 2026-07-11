@@ -27,6 +27,7 @@ RUN python -m py_compile \
         /app/main.py \
         /app/bot.py \
         /app/render_liveness_server.py \
+        /app/render_readiness_state_bridge.py \
         /app/prebot_writer_authority_bootstrap.py \
         /app/prebot_writer_authority_fail_closed.py \
         /app/source_runtime_guard_bootstrap.py \
