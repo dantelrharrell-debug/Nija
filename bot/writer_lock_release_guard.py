@@ -1,11 +1,16 @@
 """Process-exit writer lock release guard.
 
-Zero-downtime deployments can briefly run old and new instances together.  This
+Zero-downtime deployments can briefly run old and new instances together. This
 module shortens a legitimate handoff only when the *current Python process* can
-prove that it owns the exact Redis lock value.  Auxiliary Python processes,
+prove that it owns the exact Redis lock value. Auxiliary Python processes,
 Docker health checks, child processes, and replacement instances must never be
 able to release another process's lease merely because they share a hostname or
 service identity.
+
+Before deleting an owned lease, this guard stops and joins the canonical writer
+heartbeat. That ordering prevents the heartbeat's lost-key recovery branch from
+recreating the lease immediately after deletion and leaving a countdown-only
+lock behind during deployment handoff.
 
 The guard does not acquire locks, bypass writer fencing, submit orders, cancel
 orders, or delete a non-matching lease.
@@ -20,18 +25,22 @@ import json
 import logging
 import os
 import signal
+import sys
 import threading
 import time
+from types import ModuleType
 from typing import Any
 
 logger = logging.getLogger("nija.writer_lock_release_guard")
-_MARKER = "20260711d"
+_MARKER = "20260711e"
 _INSTALLED = False
 _RELEASING = False
 _LOCK = threading.Lock()
 _PREVIOUS_HANDLERS: dict[int, Any] = {}
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
-_PROCESS_INSTALL_MARKER = "_NIJA_WRITER_LOCK_RELEASE_GUARD_INSTALLED_20260711d"
+_PROCESS_INSTALL_MARKER = "_NIJA_WRITER_LOCK_RELEASE_GUARD_INSTALLED_20260711e"
+_ENTRYPOINT_PATCH_ATTR = "_nija_writer_release_quiesce_v20260711e"
+_ENTRYPOINT_PATCH_MONITOR_ATTR = "_NIJA_WRITER_RELEASE_PATCH_MONITOR_20260711e"
 
 
 def _clean(value: str | None) -> str:
@@ -91,19 +100,16 @@ def _redis_client():
         )
         return client
     except Exception as exc:
-        logger.warning("WRITER_LOCK_RELEASE_GUARD_REDIS_UNAVAILABLE marker=%s error=%s", _MARKER, exc)
+        logger.warning(
+            "WRITER_LOCK_RELEASE_GUARD_REDIS_UNAVAILABLE marker=%s error=%s",
+            _MARKER,
+            exc,
+        )
         return None
 
 
 def _local_authority_proof() -> tuple[bool, str, str]:
-    """Return an exact expected lock value only for this owning process.
-
-    The entrypoint writer-authority runtime publishes all of these values after a
-    successful Redis compare-and-set acquisition.  Static deployment variables,
-    hostnames, service IDs, and inherited credentials are intentionally
-    insufficient.  Requiring this process's PID also prevents a child process
-    that inherited the parent's environment from releasing the parent's lease.
-    """
+    """Return an exact expected lock value only for this owning process."""
 
     token = _clean(os.getenv("NIJA_WRITER_FENCING_TOKEN"))
     owner = _clean(os.getenv("NIJA_WRITER_OWNER_ID"))
@@ -132,8 +138,134 @@ def _as_text(value: Any) -> str:
     return str(value or "")
 
 
+def _entrypoint_modules() -> list[ModuleType]:
+    modules: list[ModuleType] = []
+    seen: set[int] = set()
+    for name in ("bot.entrypoint_writer_authority", "entrypoint_writer_authority"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType) and id(module) not in seen:
+            seen.add(id(module))
+            modules.append(module)
+    return modules
+
+
+def _quiesce_runtime(runtime: Any, timeout_s: float = 2.0) -> tuple[bool, str]:
+    """Stop and join the canonical Redis-renewal thread before lock deletion."""
+
+    if runtime is None:
+        return True, "runtime_absent"
+
+    stop = getattr(runtime, "_stop", None)
+    if stop is not None and callable(getattr(stop, "set", None)):
+        stop.set()
+
+    thread = getattr(runtime, "_heartbeat_thread", None)
+    if isinstance(thread, threading.Thread) and thread is not threading.current_thread():
+        if thread.is_alive():
+            thread.join(timeout=max(0.1, float(timeout_s)))
+        if thread.is_alive():
+            return False, "heartbeat_thread_still_alive"
+    return True, "heartbeat_quiesced"
+
+
+def _quiesce_local_writer_runtime(timeout_s: float = 2.0) -> tuple[bool, str]:
+    """Publish release intent and stop any loaded canonical writer runtime."""
+
+    os.environ["NIJA_WRITER_RELEASE_IN_PROGRESS"] = "1"
+    os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
+    os.environ["NIJA_WRITER_LEASE_ACQUIRED"] = "0"
+    os.environ["NIJA_LOCK_ACQUIRED"] = "false"
+
+    runtimes: list[Any] = []
+    for module in _entrypoint_modules():
+        runtime = getattr(module, "_SINGLETON", None)
+        if runtime is not None and all(runtime is not item for item in runtimes):
+            runtimes.append(runtime)
+
+    for runtime in runtimes:
+        ok, reason = _quiesce_runtime(runtime, timeout_s=timeout_s)
+        if not ok:
+            return False, reason
+    return True, "all_writer_heartbeats_quiesced" if runtimes else "runtime_absent"
+
+
+def _patch_entrypoint_authority_module(module: ModuleType) -> bool:
+    """Make canonical release wait for its own heartbeat before compare-delete."""
+
+    cls = getattr(module, "EntrypointWriterAuthority", None)
+    if not isinstance(cls, type):
+        return False
+    if bool(getattr(cls, _ENTRYPOINT_PATCH_ATTR, False)):
+        return True
+
+    original_release = getattr(cls, "release", None)
+    original_tick = getattr(cls, "_heartbeat_tick", None)
+    if not callable(original_release) or not callable(original_tick):
+        return False
+
+    def guarded_tick(self: Any):
+        stop = getattr(self, "_stop", None)
+        if _truthy("NIJA_WRITER_RELEASE_IN_PROGRESS") or bool(
+            stop is not None and callable(getattr(stop, "is_set", None)) and stop.is_set()
+        ):
+            return False, "release_in_progress"
+        return original_tick(self)
+
+    def guarded_release(self: Any) -> bool:
+        os.environ["NIJA_WRITER_RELEASE_IN_PROGRESS"] = "1"
+        ok, reason = _quiesce_runtime(self, timeout_s=2.0)
+        if not ok:
+            logger.error(
+                "ENTRYPOINT_WRITER_RELEASE_DEFERRED marker=%s reason=%s "
+                "lock_delete_skipped=true",
+                _MARKER,
+                reason,
+            )
+            return False
+        return bool(original_release(self))
+
+    setattr(guarded_tick, "__wrapped__", original_tick)
+    setattr(guarded_release, "__wrapped__", original_release)
+    setattr(cls, "_heartbeat_tick", guarded_tick)
+    setattr(cls, "release", guarded_release)
+    setattr(cls, _ENTRYPOINT_PATCH_ATTR, True)
+    logger.warning(
+        "ENTRYPOINT_WRITER_RELEASE_QUIESCE_PATCHED marker=%s module=%s",
+        _MARKER,
+        module.__name__,
+    )
+    return True
+
+
+def _patch_entrypoint_authority_loaded() -> bool:
+    patched = False
+    for module in _entrypoint_modules():
+        try:
+            patched = _patch_entrypoint_authority_module(module) or patched
+        except Exception as exc:
+            logger.warning(
+                "ENTRYPOINT_WRITER_RELEASE_QUIESCE_PATCH_FAILED marker=%s module=%s err=%s",
+                _MARKER,
+                module.__name__,
+                exc,
+            )
+    return patched
+
+
+def _entrypoint_patch_monitor() -> None:
+    deadline = time.monotonic() + 300.0
+    while time.monotonic() < deadline:
+        if _patch_entrypoint_authority_loaded():
+            return
+        time.sleep(0.05)
+    logger.warning(
+        "ENTRYPOINT_WRITER_RELEASE_QUIESCE_PATCH_TIMEOUT marker=%s",
+        _MARKER,
+    )
+
+
 def release_owned_writer_lock(reason: str = "process_exit") -> bool:
-    """Compare-and-delete only this process's exact writer lease."""
+    """Stop local renewals, then compare-and-delete only this exact lease."""
 
     global _RELEASING
     with _LOCK:
@@ -153,6 +285,17 @@ def release_owned_writer_lock(reason: str = "process_exit") -> bool:
             )
             return False
 
+        quiesced, quiesce_reason = _quiesce_local_writer_runtime(timeout_s=2.0)
+        if not quiesced:
+            logger.error(
+                "WRITER_LOCK_RELEASE_GUARD_SKIP_HEARTBEAT_ACTIVE marker=%s reason=%s "
+                "quiesce=%s lock_delete_skipped=true",
+                _MARKER,
+                reason,
+                quiesce_reason,
+            )
+            return False
+
         client = _redis_client()
         if client is None:
             return False
@@ -169,14 +312,12 @@ def release_owned_writer_lock(reason: str = "process_exit") -> bool:
                 "instance_id": _clean(os.getenv("NIJA_WRITER_INSTANCE_ID")),
                 "source": "writer_lock_release_guard",
                 "marker": _MARKER,
+                "heartbeat_quiesced": True,
             },
             sort_keys=True,
             separators=(",", ":"),
         )
 
-        # Atomic ownership verification closes the race between GET and DEL.  The
-        # metadata key is removed only in the same branch that removes the exact
-        # lock value.
         script = """
         local current = redis.call('GET', KEYS[1])
         if not current then
@@ -240,7 +381,8 @@ def release_owned_writer_lock(reason: str = "process_exit") -> bool:
             os.environ.pop(env_key, None)
         os.environ["NIJA_WRITER_HEARTBEAT_ACTIVE"] = "0"
         logger.critical(
-            "WRITER_LOCK_RELEASED_ON_EXIT marker=%s reason=%s key=%s owner_prefix=%s",
+            "WRITER_LOCK_RELEASED_ON_EXIT marker=%s reason=%s key=%s owner_prefix=%s "
+            "heartbeat_quiesced=true",
             _MARKER,
             reason,
             lock_key,
@@ -290,12 +432,24 @@ def _signal_handler(signum: int, frame: Any) -> None:
 def install_import_hook() -> None:
     global _INSTALLED
     if _INSTALLED or bool(getattr(builtins, _PROCESS_INSTALL_MARKER, False)):
+        _patch_entrypoint_authority_loaded()
         return
     with _LOCK:
         if _INSTALLED or bool(getattr(builtins, _PROCESS_INSTALL_MARKER, False)):
+            _patch_entrypoint_authority_loaded()
             return
         _INSTALLED = True
         setattr(builtins, _PROCESS_INSTALL_MARKER, True)
+
+    _patch_entrypoint_authority_loaded()
+    if not bool(getattr(builtins, _ENTRYPOINT_PATCH_MONITOR_ATTR, False)):
+        setattr(builtins, _ENTRYPOINT_PATCH_MONITOR_ATTR, True)
+        thread = threading.Thread(
+            target=_entrypoint_patch_monitor,
+            name="writer-release-quiesce-patch-monitor",
+            daemon=True,
+        )
+        thread.start()
 
     atexit.register(lambda: release_owned_writer_lock("atexit"))
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -309,4 +463,8 @@ def install_import_hook() -> None:
                 sig,
                 exc,
             )
-    logger.warning("WRITER_LOCK_RELEASE_GUARD_INSTALLED marker=%s exact_owner_required=true", _MARKER)
+    logger.warning(
+        "WRITER_LOCK_RELEASE_GUARD_INSTALLED marker=%s exact_owner_required=true "
+        "heartbeat_quiesce_required=true",
+        _MARKER,
+    )
