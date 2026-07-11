@@ -8,8 +8,8 @@ file path before its first ``bot.*`` import; that first installer calls
 On Render, the Docker ``.pth`` hook deliberately leaves the replacement process
 fail-closed so the shell can expose ``/healthz`` during a zero-downtime deploy.
 This source bootstrap then acquires the canonical Redis writer lease before any
-``bot.*`` import and installs venue-readiness, secondary-venue activation, and
-strict multi-venue entry admission.
+``bot.*`` import and installs venue-readiness, secondary-venue activation, strict
+multi-venue entry admission, and the cross-process readiness bridge.
 
 The bootstrap never deletes another instance's active lease, creates credentials,
 fabricates balances, marks a broker connected, or relaxes risk controls. In a
@@ -96,6 +96,7 @@ def install() -> bool:
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
+            _install_required("render_readiness_state_bridge")
 
             _INSTALLED = True
             os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "1"
@@ -103,13 +104,15 @@ def install() -> bool:
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "1"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "1"
             os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "1"
+            os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "1"
 
             commit = _deployment_commit()
             logger.warning(
                 "SOURCE_RUNTIME_GUARDS_READY marker=%s commit=%s "
                 "writer_authority=installed venue_repair=installed "
                 "secondary_venue_activation=installed "
-                "secondary_venue_strict_readiness=installed source=main_pre_bot",
+                "secondary_venue_strict_readiness=installed "
+                "render_readiness_bridge=installed source=main_pre_bot",
                 _MARKER,
                 commit,
             )
@@ -117,7 +120,8 @@ def install() -> bool:
                 f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} "
                 f"commit={commit} writer_authority=installed venue_repair=installed "
                 "secondary_venue_activation=installed "
-                "secondary_venue_strict_readiness=installed source=main_pre_bot",
+                "secondary_venue_strict_readiness=installed "
+                "render_readiness_bridge=installed source=main_pre_bot",
                 flush=True,
             )
             return True
@@ -127,6 +131,7 @@ def install() -> bool:
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "0"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "0"
             os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "0"
+            os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "0"
             message = f"{type(exc).__name__}:{exc}"
             is_live = _is_live_runtime()
             logger.critical(
