@@ -320,7 +320,8 @@ def apply_once() -> int:
 
 
 def _monitor() -> None:
-    deadline = time.monotonic() + 600.0
+    started = time.monotonic()
+    deadline = started + 600.0
     last_log = 0.0
     while time.monotonic() < deadline:
         compacted = compact_import_chain()
@@ -338,10 +339,9 @@ def _monitor() -> None:
                 len(_PATCHED_VOLUME),
             )
             last_log = now
-        # Compact aggressively while startup wrappers are being installed, then
-        # settle to a low-frequency safety check after the chain stabilizes.
-        generation = int(getattr(builtins, _COMPACTION_GENERATION_ATTR, 0) or 0)
-        time.sleep(0.02 if generation < 25 else 0.5)
+        # Most wrappers install during the first startup burst.  Poll rapidly for
+        # ten seconds, then reduce overhead while retaining late-import coverage.
+        time.sleep(0.02 if now - started < 10.0 else 0.5)
 
 
 def install_import_hook() -> None:
