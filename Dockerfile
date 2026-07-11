@@ -31,6 +31,7 @@ RUN python -m py_compile \
         /app/source_runtime_guard_bootstrap.py \
         /app/venue_readiness_execution_repair_patch.py \
         /app/secondary_venue_activation_patch.py \
+        /app/secondary_venue_strict_readiness_patch.py \
         /app/bot/global_runtime_startup_guards.py \
         /app/import_hook_recursion_shield_patch.py \
         /app/disconnected_broker_execution_guard_patch.py
