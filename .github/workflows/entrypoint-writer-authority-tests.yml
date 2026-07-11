@@ -15,9 +15,11 @@ on:
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
+      - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
+      - 'bot/tests/test_writer_lock_release_guard.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
       - 'bot/tests/test_entrypoint_writer_heartbeat.py'
       - 'bot/tests/test_prebot_writer_authority_bootstrap.py'
@@ -41,9 +43,11 @@ on:
       - 'secondary_venue_activation_patch.py'
       - 'secondary_venue_strict_readiness_patch.py'
       - 'bot/activation_pending_commit_monitor_patch.py'
+      - 'bot/writer_lock_release_guard.py'
       - 'bot/entrypoint_writer_authority.py'
       - 'bot/bot_main.py'
       - 'bot/tests/test_activation_pending_startup_order.py'
+      - 'bot/tests/test_writer_lock_release_guard.py'
       - 'bot/tests/test_entrypoint_writer_authority.py'
       - 'bot/tests/test_entrypoint_writer_heartbeat.py'
       - 'bot/tests/test_prebot_writer_authority_bootstrap.py'
@@ -84,6 +88,10 @@ jobs:
           grep -Fq 'healthCheckPath: /healthz' render.yaml
           grep -Fq 'PORT' render.yaml
           grep -Fq 'value: "5000"' render.yaml
+          grep -Fq 'HEALTHCHECK' Dockerfile
+          grep -Fq 'python -S -c' Dockerfile
+          grep -Fq 'urllib.request' Dockerfile
+          ! grep -A3 'HEALTHCHECK' Dockerfile | grep -Fq 'import requests'
 
       - name: Compile deployment entrypoints
         run: |
@@ -96,6 +104,7 @@ jobs:
             secondary_venue_activation_patch.py \
             secondary_venue_strict_readiness_patch.py \
             bot/activation_pending_commit_monitor_patch.py \
+            bot/writer_lock_release_guard.py \
             bot/entrypoint_writer_authority.py \
             bot/bot_main.py
 
@@ -105,6 +114,7 @@ jobs:
         run: |
           python -m pytest -q \
             bot/tests/test_activation_pending_startup_order.py \
+            bot/tests/test_writer_lock_release_guard.py \
             bot/tests/test_entrypoint_writer_authority.py \
             bot/tests/test_entrypoint_writer_heartbeat.py \
             bot/tests/test_prebot_writer_authority_bootstrap.py \
