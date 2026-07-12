@@ -14,6 +14,7 @@ def _reset_source_bootstrap(monkeypatch) -> None:
     monkeypatch.setattr(source_bootstrap, "_INSTALLED", False)
     monkeypatch.delenv("NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP", raising=False)
     monkeypatch.delenv("NIJA_VENUE_READINESS_SOURCE_MARKER", raising=False)
+    monkeypatch.delenv("NIJA_BROKER_AUTH_RECOVERY_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED", raising=False)
@@ -27,6 +28,8 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
     calls: list[str] = []
     fake_writer = ModuleType("prebot_writer_authority_fail_closed")
     fake_writer.install = lambda: calls.append("writer")
+    fake_auth = ModuleType("broker_auth_recovery_patch")
+    fake_auth.install = lambda: calls.append("auth")
     fake_repair = ModuleType("venue_readiness_execution_repair_patch")
     fake_repair.install = lambda: calls.append("venue")
     fake_activator = ModuleType("secondary_venue_activation_patch")
@@ -44,6 +47,7 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
 
     modules = {
         "prebot_writer_authority_fail_closed": fake_writer,
+        "broker_auth_recovery_patch": fake_auth,
         "venue_readiness_execution_repair_patch": fake_repair,
         "secondary_venue_activation_patch": fake_activator,
         "secondary_venue_strict_readiness_patch": fake_strict,
@@ -67,6 +71,7 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
     assert source_bootstrap.install() is True
     assert calls == [
         "writer",
+        "auth",
         "venue",
         "activator",
         "strict",
@@ -75,9 +80,10 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
         "stage",
         "bridge",
     ]
-    assert source_bootstrap.installed_marker() == "20260711m"
+    assert source_bootstrap.installed_marker() == "20260711n"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "1"
+    assert source_bootstrap.os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] == "1"
@@ -102,6 +108,7 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     assert exc_info.value.code == 78
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "0"
+    assert source_bootstrap.os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] == "0"
