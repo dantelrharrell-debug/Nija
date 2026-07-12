@@ -1999,20 +1999,6 @@ class ExecutionPipeline:
                             effective_request.symbol,
                             effective_request.side,
                         )
-                append_execution_journal_event(
-                    event_type="order_submitted",
-                    intent_id=_intent_id,
-                    payload={
-                        "symbol": effective_request.symbol,
-                        "side": effective_request.side,
-                        "size_usd": effective_request.size_usd,
-                        "strategy": effective_request.strategy,
-                        "account_id": effective_request.account_id,
-                        "broker_hint": effective_request.preferred_broker or "",
-                        "cycle_id": _corr_cycle_id,
-                        "attempt_n": getattr(effective_request, "attempt_n", 0),
-                    },
-                )
                 result = self._dispatch(effective_request, t_start)
         except ExecutionBlocked as exc:
             self._emit_execution_rejection_telemetry(
@@ -2047,6 +2033,23 @@ class ExecutionPipeline:
 
         _correlation = get_runtime_correlation() or {}
         _intent_id = str(_correlation.get("intent_id") or "").strip()
+        # Record order_submitted AFTER _dispatch returns so the journal only captures
+        # exchange requests that were actually attempted, not pre-dispatch intent.
+        append_execution_journal_event(
+            event_type="order_submitted",
+            intent_id=_intent_id,
+            payload={
+                "symbol": effective_request.symbol,
+                "side": effective_request.side,
+                "size_usd": effective_request.size_usd,
+                "strategy": effective_request.strategy,
+                "account_id": effective_request.account_id,
+                "broker_hint": effective_request.preferred_broker or "",
+                "cycle_id": str((get_runtime_correlation() or {}).get("cycle_id") or "").strip(),
+                "attempt_n": getattr(effective_request, "attempt_n", 0),
+                "dispatch_success": result.success,
+            },
+        )
         if result.success:
             append_execution_journal_event(
                 event_type="broker_ack",
