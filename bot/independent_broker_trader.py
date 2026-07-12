@@ -1090,6 +1090,9 @@ class IndependentBrokerTrader:
         # Cleanup: runs when stop_flag is set and outer loop exits normally
         with self.active_threads_lock:
             self.active_trading_threads.discard(broker_name)
+        # Remove stale dead thread reference so broker_threads stays clean and
+        # the dedup guards in run_trading_loop see accurate is_alive() state.
+        self.broker_threads.pop(broker_name, None)
         logger.info(f"🛑 {broker_name} trading loop stopped (total cycles: {cycle_count})")
         logger.info(f"   Thread removed from active trading threads")
 
