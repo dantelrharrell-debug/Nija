@@ -12,11 +12,11 @@ import sys
 import threading
 import time
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.runtime_convergence_v2")
-MARKER = "20260712b"
+MARKER = "20260712e"
 _LOCK = threading.RLock()
 _SCAN_LOCKS: dict[str, threading.Lock] = {}
 _SCAN_GUARD = threading.RLock()
@@ -59,12 +59,31 @@ def _identity(obj: Any) -> str:
     return identity
 
 
+def _auth_module() -> ModuleType | None:
+    module = sys.modules.get("broker_auth_recovery_patch")
+    return module if isinstance(module, ModuleType) else None
+
+
 def _normalize_auth(venue: str) -> None:
-    auth = importlib.import_module("broker_auth_recovery_patch")
-    if venue == "coinbase":
-        auth.normalize_coinbase_environment()
-    elif venue == "okx":
-        auth.normalize_okx_environment()
+    auth = _auth_module()
+    if auth is None:
+        logger.debug("RUNTIME_CONVERGENCE_V2_AUTH_DEFERRED marker=%s venue=%s", MARKER, venue)
+        return
+    normalizer = getattr(auth, f"normalize_{venue}_environment", None)
+    if callable(normalizer):
+        normalizer()
+
+
+def _duplicate_result() -> SimpleNamespace:
+    return SimpleNamespace(
+        symbols_scored=0,
+        entries_taken=0,
+        entries_blocked=1,
+        exits_taken=0,
+        next_interval=max(5, int(float(os.getenv("NIJA_DUPLICATE_SCAN_NEXT_INTERVAL_S", "15") or 15))),
+        errors=["duplicate_scan_suppressed"],
+        metadata={"duplicate_scan": True},
+    )
 
 
 def _rebind_tracker(instance: Any) -> bool:
@@ -151,9 +170,10 @@ def _patch_core_loop(module: ModuleType) -> bool:
                 "DUPLICATE_SCAN_BLOCKED marker=%s identity=%s timeout_s=%.2f",
                 MARKER, key, timeout,
             )
-            return (0, 1, 0, {"duplicate_scan": 1})
+            return _duplicate_result()
         try:
-            return original(self, *args, **kwargs)
+            result = original(self, *args, **kwargs)
+            return _duplicate_result() if result is None else result
         finally:
             lock.release()
 
@@ -195,6 +215,7 @@ def install() -> None:
     with _LOCK:
         os.environ.setdefault("NIJA_ACCOUNT_EXIT_MANAGEMENT_INTERVAL_S", "5")
         os.environ.setdefault("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "0.25")
+        # Eager imports are safe here because this module never replaces importlib.import_module.
         for name in (
             "bot.broker_manager", "bot.broker_integration",
             "bot.multi_account_broker_manager", "bot.nija_core_loop",
@@ -216,4 +237,7 @@ def installed() -> bool:
     return _STARTED
 
 
-__all__ = ["install", "installed", "_identity", "_patch_broker_classes", "_patch_core_loop", "_rebind_tracker"]
+__all__ = [
+    "install", "installed", "_identity", "_patch_broker_classes", "_patch_core_loop",
+    "_rebind_tracker", "_duplicate_result",
+]
