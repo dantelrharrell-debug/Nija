@@ -18,6 +18,8 @@ def _reset_source_bootstrap(monkeypatch) -> None:
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
+        "NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED",
+        "NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED",
         "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
         "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
         "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
@@ -36,6 +38,8 @@ def test_source_bootstrap_installs_writer_and_convergence_before_broker_activati
         ("broker_auth_recovery_patch", "auth", "install"),
         ("runtime_convergence_hardening_patch", "convergence", "install"),
         ("runtime_convergence_v2_patch", "convergence_v2", "install"),
+        ("runtime_auth_recursion_endpoint_repair_patch", "auth_endpoint", "install"),
+        ("final_runtime_convergence_patch", "final_convergence", "install"),
         ("venue_readiness_execution_repair_patch", "venue", "install"),
         ("secondary_venue_activation_patch", "activator", "install"),
         ("secondary_venue_strict_readiness_patch", "strict", "install"),
@@ -64,12 +68,15 @@ def test_source_bootstrap_installs_writer_and_convergence_before_broker_activati
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
     assert calls == [
-        "writer", "auth", "convergence", "convergence_v2", "venue", "activator", "strict",
-        "exit_recovery", "exit_bootstrap", "stage", "bridge",
+        "writer", "auth", "convergence", "convergence_v2", "auth_endpoint",
+        "final_convergence", "venue", "activator", "strict", "exit_recovery",
+        "exit_bootstrap", "stage", "bridge",
     ]
-    assert source_bootstrap.installed_marker() == "20260712b"
+    assert source_bootstrap.installed_marker() == "20260712d"
     assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED"] == "1"
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED"] == "1"
+    assert source_bootstrap.os.environ["NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
 
@@ -91,6 +98,8 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     assert exc_info.value.code == 78
     assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "0"
 
 
