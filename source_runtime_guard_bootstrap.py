@@ -10,8 +10,8 @@ fail-closed so the shell can expose ``/healthz`` during a zero-downtime deploy.
 This source bootstrap then acquires the canonical Redis writer lease before any
 ``bot.*`` import and installs venue-readiness, secondary-venue activation,
 broker-independent entry admission, account-local held-position exit recovery,
-the definitive execution-readiness verifier, and the cross-process readiness
-bridge.
+the early recovery/capital-hydration bridge, the definitive execution-readiness
+verifier, and the cross-process readiness bridge.
 
 The bootstrap never deletes another instance's active lease, creates credentials,
 fabricates balances, marks a broker connected, or relaxes risk controls. In a
@@ -29,7 +29,7 @@ from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
 
-_MARKER = "20260710af"
+_MARKER = "20260711m"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -91,6 +91,7 @@ def install() -> bool:
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
             _install_required("account_exit_management_recovery_patch")
+            _install_required("account_exit_recovery_bootstrap_patch")
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
 
@@ -100,6 +101,7 @@ def install() -> bool:
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "1"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "1"
             os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] = "1"
+            os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] = "1"
             os.environ["NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED"] = "1"
             os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "1"
             os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "1"
@@ -111,6 +113,7 @@ def install() -> bool:
                 "secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed "
                 "account_exit_management_recovery=installed "
+                "account_exit_recovery_bootstrap=installed "
                 "three_venue_stage_verifier=installed "
                 "render_readiness_bridge=installed source=main_pre_bot",
                 _MARKER,
@@ -122,6 +125,7 @@ def install() -> bool:
                 "secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed "
                 "account_exit_management_recovery=installed "
+                "account_exit_recovery_bootstrap=installed "
                 "three_venue_stage_verifier=installed "
                 "render_readiness_bridge=installed source=main_pre_bot",
                 flush=True,
@@ -133,6 +137,7 @@ def install() -> bool:
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "0"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "0"
             os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] = "0"
+            os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] = "0"
             os.environ["NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED"] = "0"
             os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
             os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "0"

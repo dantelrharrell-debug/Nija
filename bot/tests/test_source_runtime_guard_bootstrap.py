@@ -17,6 +17,7 @@ def _reset_source_bootstrap(monkeypatch) -> None:
     monkeypatch.delenv("NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED", raising=False)
+    monkeypatch.delenv("NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED", raising=False)
     monkeypatch.delenv("NIJA_RENDER_READINESS_BRIDGE_INSTALLED", raising=False)
 
@@ -34,6 +35,8 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
     fake_strict.install = lambda: calls.append("strict")
     fake_exit_recovery = ModuleType("account_exit_management_recovery_patch")
     fake_exit_recovery.install_import_hook = lambda: calls.append("exit_recovery")
+    fake_exit_bootstrap = ModuleType("account_exit_recovery_bootstrap_patch")
+    fake_exit_bootstrap.install = lambda: calls.append("exit_bootstrap")
     fake_stage = ModuleType("three_venue_execution_readiness")
     fake_stage.install = lambda: calls.append("stage")
     fake_bridge = ModuleType("render_readiness_state_bridge")
@@ -45,6 +48,7 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
         "secondary_venue_activation_patch": fake_activator,
         "secondary_venue_strict_readiness_patch": fake_strict,
         "account_exit_management_recovery_patch": fake_exit_recovery,
+        "account_exit_recovery_bootstrap_patch": fake_exit_bootstrap,
         "three_venue_execution_readiness": fake_stage,
         "render_readiness_state_bridge": fake_bridge,
     }
@@ -61,13 +65,23 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
 
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
-    assert calls == ["writer", "venue", "activator", "strict", "exit_recovery", "stage", "bridge"]
-    assert source_bootstrap.installed_marker() == "20260710af"
+    assert calls == [
+        "writer",
+        "venue",
+        "activator",
+        "strict",
+        "exit_recovery",
+        "exit_bootstrap",
+        "stage",
+        "bridge",
+    ]
+    assert source_bootstrap.installed_marker() == "20260711m"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "1"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] == "1"
+    assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] == "1"
 
 
@@ -91,6 +105,7 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] == "0"
 
 
