@@ -84,4 +84,4 @@ def test_shared_tracker_is_rebound_to_account_scoped_file(tmp_path, monkeypatch)
         position_tracker=Tracker(),
     )
     assert patch._rebind_tracker(broker) is True
-    assert broker.position_tracker.storage_file.endswith("positions_user:daivon_frazier_kraken.json")
+    assert broker.position_tracker.storage_file.endswith("positions_user_daivon_frazier_kraken.json")
