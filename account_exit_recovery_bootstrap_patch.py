@@ -184,17 +184,18 @@ def _patch_class(cls: type) -> bool:
 
 
 def _patch_loaded() -> bool:
-    patched = False
+    """Patch dependencies and return True only when the trader class is patched."""
     recovery = _load_recovery_module()
     if recovery is not None:
-        patched = _patch_recovery_retry(recovery) or patched
+        _patch_recovery_retry(recovery)
 
+    class_patched = False
     for name in ("bot.independent_broker_trader", "independent_broker_trader"):
         module = sys.modules.get(name)
         cls = getattr(module, "IndependentBrokerTrader", None) if isinstance(module, ModuleType) else None
         if isinstance(cls, type):
-            patched = _patch_class(cls) or patched
-    return patched
+            class_patched = _patch_class(cls) or class_patched
+    return class_patched
 
 
 def _watchdog() -> None:
