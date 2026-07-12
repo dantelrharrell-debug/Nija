@@ -8,10 +8,10 @@ file path before its first ``bot.*`` import; that first installer calls
 On Render, the Docker ``.pth`` hook deliberately leaves the replacement process
 fail-closed so the shell can expose ``/healthz`` during a zero-downtime deploy.
 This source bootstrap then acquires the canonical Redis writer lease before any
-``bot.*`` import and installs venue-readiness, secondary-venue activation,
-broker-independent entry admission, account-local held-position exit recovery,
-the early recovery/capital-hydration bridge, the definitive execution-readiness
-verifier, and the cross-process readiness bridge.
+``bot.*`` import and installs credential normalization, venue-readiness,
+secondary-venue activation, broker-independent entry admission, account-local
+held-position exit recovery, the early recovery/capital-hydration bridge, the
+definitive execution-readiness verifier, and the cross-process readiness bridge.
 
 The bootstrap never deletes another instance's active lease, creates credentials,
 fabricates balances, marks a broker connected, or relaxes risk controls. In a
@@ -29,7 +29,7 @@ from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
 
-_MARKER = "20260711m"
+_MARKER = "20260711n"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -87,6 +87,9 @@ def install() -> bool:
 
         try:
             _install_required("prebot_writer_authority_fail_closed")
+            # Credential recovery must run before any broker class is imported or
+            # any secondary-venue connection attempt is made.
+            _install_required("broker_auth_recovery_patch")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
@@ -98,6 +101,7 @@ def install() -> bool:
             _INSTALLED = True
             os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "1"
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
+            os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] = "1"
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "1"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "1"
             os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] = "1"
@@ -109,8 +113,8 @@ def install() -> bool:
             commit = _deployment_commit()
             logger.warning(
                 "SOURCE_RUNTIME_GUARDS_READY marker=%s commit=%s "
-                "writer_authority=installed venue_repair=installed "
-                "secondary_venue_activation=installed "
+                "writer_authority=installed broker_auth_recovery=installed "
+                "venue_repair=installed secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed "
                 "account_exit_management_recovery=installed "
                 "account_exit_recovery_bootstrap=installed "
@@ -121,8 +125,8 @@ def install() -> bool:
             )
             print(
                 f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} "
-                f"commit={commit} writer_authority=installed venue_repair=installed "
-                "secondary_venue_activation=installed "
+                f"commit={commit} writer_authority=installed broker_auth_recovery=installed "
+                "venue_repair=installed secondary_venue_activation=installed "
                 "secondary_venue_strict_readiness=installed "
                 "account_exit_management_recovery=installed "
                 "account_exit_recovery_bootstrap=installed "
@@ -134,6 +138,7 @@ def install() -> bool:
         except Exception as exc:
             os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "0"
             os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
+            os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] = "0"
             os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "0"
             os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "0"
             os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] = "0"
