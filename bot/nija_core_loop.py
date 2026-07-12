@@ -89,6 +89,28 @@ except ImportError:
 
 _CORE_LOOP_LOG_LIMITER = get_log_rate_limiter()
 
+# ── Broker worker pool (optional async per-broker scan dispatch) ──────────────
+try:
+    from bot.broker_worker_pool import (
+        BrokerWorkerPool,
+        BrokerScanTask,
+        get_broker_worker_pool as _get_broker_worker_pool,
+    )
+    _BROKER_WORKER_POOL_AVAILABLE = True
+except ImportError:
+    try:
+        from broker_worker_pool import (  # type: ignore[import]
+            BrokerWorkerPool,
+            BrokerScanTask,
+            get_broker_worker_pool as _get_broker_worker_pool,
+        )
+        _BROKER_WORKER_POOL_AVAILABLE = True
+    except ImportError:
+        _BROKER_WORKER_POOL_AVAILABLE = False
+        BrokerWorkerPool = None  # type: ignore[assignment,misc]
+        BrokerScanTask = None  # type: ignore[assignment,misc]
+        _get_broker_worker_pool = None  # type: ignore[assignment]
+
 
 def _extract_cached_balance_for_log(broker: Any) -> float:
     """Return a broker balance for diagnostics without making exchange API calls."""
@@ -5025,6 +5047,96 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
     return t
 
 
+# ---------------------------------------------------------------------------
+# Broker worker pool helpers
+# ---------------------------------------------------------------------------
+
+def _broker_name_from_obj(broker: Any, raw_key: Any = None) -> str:
+    """Derive a lowercase broker name string from a broker object or key."""
+    # Try broker_type.value (e.g. BrokerType enum)
+    bt = getattr(broker, "broker_type", None)
+    if bt is not None:
+        name = str(getattr(bt, "value", bt)).strip().lower()
+        if name:
+            return name
+    # Try raw_key (dict key from platform_brokers)
+    if raw_key is not None:
+        name = str(getattr(raw_key, "value", raw_key)).strip().lower()
+        if name:
+            return name
+    # Last resort: class name without "Broker" suffix
+    cls = type(broker).__name__
+    name = cls.lower().replace("broker", "").replace("live", "").strip("_-")
+    return name or "unknown"
+
+
+def _get_all_platform_brokers(strategy: Any) -> Dict[str, Any]:
+    """Return {broker_name: broker} for every connected platform broker.
+
+    Queries MultiAccountBrokerManager first, then BrokerManager, then
+    strategy.broker as a fallback.  Only connected brokers are included.
+    """
+    brokers: Dict[str, Any] = {}
+
+    # 1. MultiAccountBrokerManager platform_brokers
+    mabm = getattr(strategy, "multi_account_manager", None)
+    if mabm is not None:
+        try:
+            platform_brokers = getattr(mabm, "platform_brokers", {}) or {}
+            for raw_key, broker in platform_brokers.items():
+                if broker is not None and getattr(broker, "connected", False):
+                    name = _broker_name_from_obj(broker, raw_key)
+                    if name and name not in brokers:
+                        brokers[name] = broker
+        except Exception as _mabm_err:
+            logger.debug("[BrokerPool] MABM platform_brokers probe failed: %s", _mabm_err)
+
+    # 2. BrokerManager.brokers
+    bm = getattr(strategy, "broker_manager", None)
+    if bm is not None:
+        try:
+            for raw_key, broker in (getattr(bm, "brokers", {}) or {}).items():
+                if broker is not None and getattr(broker, "connected", False):
+                    name = _broker_name_from_obj(broker, raw_key)
+                    if name and name not in brokers:
+                        brokers[name] = broker
+        except Exception as _bm_err:
+            logger.debug("[BrokerPool] BrokerManager.brokers probe failed: %s", _bm_err)
+
+    # 3. strategy.broker as final fallback
+    primary = getattr(strategy, "broker", None)
+    if primary is not None and getattr(primary, "connected", False):
+        name = _broker_name_from_obj(primary)
+        if name and name not in brokers:
+            brokers[name] = primary
+
+    return brokers
+
+
+def _build_broker_scan_tasks(
+    strategy: Any,
+    brokers: Dict[str, Any],
+    balance: float,
+    cycle_id: str,
+    open_positions_count: int,
+) -> List["BrokerScanTask"]:
+    """Build one :class:`BrokerScanTask` per broker for pool dispatch."""
+    tasks: List[Any] = []
+    symbols = list(getattr(strategy, "symbols", None) or [])
+    for broker_name, broker in brokers.items():
+        task = BrokerScanTask(  # type: ignore[misc]
+            broker=broker,
+            broker_name=broker_name,
+            balance=balance,
+            symbols=symbols,
+            open_positions_count=open_positions_count,
+            user_mode=False,
+            cycle_id=cycle_id,
+        )
+        tasks.append(task)
+    return tasks
+
+
 def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
     """
     Continuous self-healing trading loop.
@@ -6574,69 +6686,153 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 _next_sleep_s = float(cycle_secs)
                 update_runtime_correlation(cycle_id=_current_cycle_id)
 
-                # ── Fix 6: Hard stall watchdog around run_cycle() ──────────────
-                # Fire RUN_CYCLE_STALLED if run_cycle() does not return (or does
-                # not emit RUN_CYCLE_PHASE3_START) within the configured timeout.
-                # The timer is cancelled immediately when run_cycle() returns.
-                _run_cycle_stall_s = float(
-                    os.getenv("NIJA_RUN_CYCLE_PHASE3_TIMEOUT_S", "30") or 30
+                # ── Broker worker pool dispatch (async multi-broker) ───────────
+                # When NIJA_BROKER_WORKER_POOL_ENABLED=true (default) and the bot
+                # has more than one connected platform broker, dispatch each
+                # broker's scan phase to its own daemon worker thread and return
+                # immediately.  The main loop advances to the next cycle on
+                # schedule regardless of how long any individual broker takes.
+                #
+                # If the pool is disabled, or only one broker is connected, or
+                # the NijaCoreLoop is unavailable, fall through to the existing
+                # sequential strategy.run_cycle() path.
+                _pool_dispatched = False
+                _core_loop_for_pool = getattr(strategy, "nija_core_loop", None)
+                _pool_enabled = _BROKER_WORKER_POOL_AVAILABLE and bool(
+                    os.environ.get("NIJA_BROKER_WORKER_POOL_ENABLED", "true").strip().lower()
+                    not in ("0", "false", "no", "off", "disabled", "n")
                 )
-                _stall_fired = [False]
-
-                def _stall_watchdog_fn(
-                    _cy=cycle,
-                    _cid=_current_cycle_id,
-                    _tout=_run_cycle_stall_s,
+                if (
+                    _pool_enabled
+                    and _get_broker_worker_pool is not None
+                    and _core_loop_for_pool is not None
+                    and BrokerScanTask is not None
                 ):
-                    _stall_fired[0] = True
-                    logger.critical(
-                        "⛔ [RUN_CYCLE_STALLED] strategy.run_cycle() still running "
-                        "after %.0fs — cycle=%d cycle_id=%s | "
-                        "strategy may be stuck before PHASE3_START",
-                        _tout,
-                        _cy,
-                        _cid,
-                    )
-                    print(
-                        f"[NIJA-PRINT] RUN_CYCLE_STALLED "
-                        f"stage=pre_phase3_or_unknown "
-                        f"elapsed={_tout:.0f}s cycle={_cy}",
-                        flush=True,
-                    )
+                    try:
+                        _pool_brokers = _get_all_platform_brokers(strategy)
+                        if len(_pool_brokers) > 1:
+                            # Multi-broker path — dispatch all workers and advance.
+                            _scan_fn = _core_loop_for_pool.run_scan_phase
+                            _pool = _get_broker_worker_pool(_scan_fn)
+                            if _pool is not None:
+                                _open_pos_cnt = 0
+                                try:
+                                    _pool_ee = getattr(
+                                        getattr(strategy, "apex", None),
+                                        "execution_engine",
+                                        None,
+                                    )
+                                    _all_pos = (
+                                        _pool_ee.get_all_positions()
+                                        if _pool_ee is not None
+                                        and callable(getattr(_pool_ee, "get_all_positions", None))
+                                        else {}
+                                    )
+                                    _open_pos_cnt = len(_all_pos or {})
+                                except Exception:
+                                    _open_pos_cnt = 0
 
-                _stall_timer = threading.Timer(_run_cycle_stall_s, _stall_watchdog_fn)
-                _stall_timer.daemon = True
-                _stall_timer.start()
-                # ── End Fix 6 setup ───────────────────────────────────────────
+                                _pool_tasks = _build_broker_scan_tasks(
+                                    strategy=strategy,
+                                    brokers=_pool_brokers,
+                                    balance=float(_cycle_cap or 0.0),
+                                    cycle_id=_current_cycle_id or f"cycle-{cycle}",
+                                    open_positions_count=_open_pos_cnt,
+                                )
+                                _pool_accepted = _pool.submit_all(_pool_tasks)
+                                _pool_dispatched = True
 
-                try:
-                    _strategy_next_interval = strategy.run_cycle()
-                    _stall_timer.cancel()
-                    logger.critical(
-                        "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
-                        "cycle=%d next_interval=%s",
-                        cycle, _strategy_next_interval,
-                    )
-                    logger.info(
-                        "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
-                        "cycle=%d next_interval=%s",
-                        cycle,
-                        _strategy_next_interval,
-                    )
-                    if isinstance(_strategy_next_interval, (int, float)):
-                        _next_sleep_s = max(1.0, float(_strategy_next_interval))
-                except Exception as _run_cycle_err:
-                    _stall_timer.cancel()
-                    logger.critical(
-                        "❌ [CYCLE_INVOKE] strategy.run_cycle() RAISED EXCEPTION | "
-                        "cycle=%d error=%s",
-                        cycle, _run_cycle_err,
-                        exc_info=True,
-                    )
-                    raise
-                finally:
-                    _stall_timer.cancel()
+                                _accepted_count = sum(1 for v in _pool_accepted.values() if v)
+                                logger.critical(
+                                    "🚀 [BROKER_POOL] Dispatched %d/%d broker workers | "
+                                    "cycle=%d brokers=%s",
+                                    _accepted_count,
+                                    len(_pool_tasks),
+                                    cycle,
+                                    list(_pool_accepted.keys()),
+                                )
+                                print(
+                                    f"[NIJA-PRINT] BROKER_POOL_DISPATCHED "
+                                    f"cycle={cycle} "
+                                    f"brokers={list(_pool_accepted.keys())} "
+                                    f"accepted={_accepted_count}/{len(_pool_tasks)}",
+                                    flush=True,
+                                )
+                    except Exception as _pool_dispatch_err:
+                        logger.warning(
+                            "[BROKER_POOL] dispatch failed (falling back to run_cycle): %s",
+                            _pool_dispatch_err,
+                        )
+                        _pool_dispatched = False
+
+                if _pool_dispatched:
+                    # Async path: workers are running; main loop advances immediately.
                     clear_runtime_correlation()
+                else:
+                    # ── Sequential path (single broker or pool disabled) ────────
+                    # Fix 6: Hard stall watchdog around run_cycle()
+                    # Fire RUN_CYCLE_STALLED if run_cycle() does not return (or does
+                    # not emit RUN_CYCLE_PHASE3_START) within the configured timeout.
+                    # The timer is cancelled immediately when run_cycle() returns.
+                    _run_cycle_stall_s = float(
+                        os.getenv("NIJA_RUN_CYCLE_PHASE3_TIMEOUT_S", "30") or 30
+                    )
+                    _stall_fired = [False]
+
+                    def _stall_watchdog_fn(
+                        _cy=cycle,
+                        _cid=_current_cycle_id,
+                        _tout=_run_cycle_stall_s,
+                    ):
+                        _stall_fired[0] = True
+                        logger.critical(
+                            "⛔ [RUN_CYCLE_STALLED] strategy.run_cycle() still running "
+                            "after %.0fs — cycle=%d cycle_id=%s | "
+                            "strategy may be stuck before PHASE3_START",
+                            _tout,
+                            _cy,
+                            _cid,
+                        )
+                        print(
+                            f"[NIJA-PRINT] RUN_CYCLE_STALLED "
+                            f"stage=pre_phase3_or_unknown "
+                            f"elapsed={_tout:.0f}s cycle={_cy}",
+                            flush=True,
+                        )
+
+                    _stall_timer = threading.Timer(_run_cycle_stall_s, _stall_watchdog_fn)
+                    _stall_timer.daemon = True
+                    _stall_timer.start()
+                    # ── End Fix 6 setup ───────────────────────────────────────
+
+                    try:
+                        _strategy_next_interval = strategy.run_cycle()
+                        _stall_timer.cancel()
+                        logger.critical(
+                            "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
+                            "cycle=%d next_interval=%s",
+                            cycle, _strategy_next_interval,
+                        )
+                        logger.info(
+                            "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
+                            "cycle=%d next_interval=%s",
+                            cycle,
+                            _strategy_next_interval,
+                        )
+                        if isinstance(_strategy_next_interval, (int, float)):
+                            _next_sleep_s = max(1.0, float(_strategy_next_interval))
+                    except Exception as _run_cycle_err:
+                        _stall_timer.cancel()
+                        logger.critical(
+                            "❌ [CYCLE_INVOKE] strategy.run_cycle() RAISED EXCEPTION | "
+                            "cycle=%d error=%s",
+                            cycle, _run_cycle_err,
+                            exc_info=True,
+                        )
+                        raise
+                    finally:
+                        _stall_timer.cancel()
+                        clear_runtime_correlation()
                 _cycle_elapsed = time.time() - _cycle_start_ts
                 # Retrieve symbol count from strategy for heartbeat diagnostics
                 _hb_symbols = 0
