@@ -3974,7 +3974,6 @@ class NijaCoreLoop:
                     sig.position_multiplier,
                 )
                 _phase3_metrics["candidates_order_ready"] += 1
-                _phase3_metrics["orders_submitted"] += 1
                 logger.critical(
                     "⚡ [CoreLoop] execute_action CALLED | symbol=%s action=%s "
                     "analysis_keys=%s",
@@ -4010,6 +4009,10 @@ class NijaCoreLoop:
                     ((_ai_eval or {}).get("projected_sector_exposure_pct", _sector_before) or _sector_before)
                 )
                 success = self.apex.execute_action(analysis, sig.symbol)
+                # Record orders_submitted AFTER execute_action returns so the counter
+                # only reflects exchange requests that were actually dispatched, not
+                # signals that were merely ready to submit.
+                _phase3_metrics["orders_submitted"] += 1
                 print(
                     f"[NIJA-PRINT] AFTER execute_action | "
                     f"symbol={sig.symbol} side={sig.side} success={success}",
