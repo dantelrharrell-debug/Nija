@@ -46,6 +46,8 @@ def _reset(monkeypatch):
         "NIJA_REQUIRED_VENUES_READY",
         "NIJA_MULTI_BROKER_TRADING_READY",
         "NIJA_REQUIRED_VENUES_MISSING",
+        "NIJA_ACTIVE_LIVE_VENUES",
+        "NIJA_DEGRADED_LIVE_VENUES",
         "NIJA_REQUIRED_VENUES_STATUS_JSON",
         "NIJA_NEW_ENTRY_BLOCK_REASON",
     ):
@@ -61,7 +63,7 @@ def _set_ready_env(monkeypatch, venue: str):
     monkeypatch.setenv(f"NIJA_{key}_SPENDABLE_QUOTE", "25")
 
 
-def test_strict_readiness_requires_both_connected_venues(monkeypatch):
+def test_refresh_reports_degraded_secondary_without_global_block(monkeypatch):
     _reset(monkeypatch)
     monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "true")
     _set_ready_env(monkeypatch, "coinbase")
@@ -69,97 +71,93 @@ def test_strict_readiness_requires_both_connected_venues(monkeypatch):
     monkeypatch.setattr(
         patch,
         "_runtime_brokers",
-        lambda: {"coinbase": _Broker("coinbase", True), "okx": _Broker("okx", False)},
+        lambda: {
+            "kraken": _Broker("kraken", True),
+            "coinbase": _Broker("coinbase", True),
+            "okx": _Broker("okx", False),
+        },
     )
 
     ready, missing, statuses = patch.refresh_readiness(force_log=True)
 
-    assert ready is False
+    assert ready is True
     assert missing == ["okx"]
+    assert statuses["kraken"]["ready"] is True
     assert statuses["coinbase"]["ready"] is True
     assert statuses["okx"]["ready"] is False
-    assert patch.os.environ["NIJA_REQUIRED_VENUES_READY"] == "0"
+    assert patch.os.environ["NIJA_REQUIRED_VENUES_READY"] == "1"
+    assert patch.os.environ["NIJA_MULTI_BROKER_TRADING_READY"] == "1"
+    assert "NIJA_NEW_ENTRY_BLOCK_REASON" not in patch.os.environ
 
 
-def test_strict_readiness_passes_only_when_both_are_ready(monkeypatch):
+def test_pipeline_allows_kraken_when_secondary_venues_are_down(monkeypatch):
     _reset(monkeypatch)
     monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "true")
-    _set_ready_env(monkeypatch, "coinbase")
-    _set_ready_env(monkeypatch, "okx")
     monkeypatch.setattr(
         patch,
         "_runtime_brokers",
-        lambda: {"coinbase": _Broker("coinbase", True), "okx": _Broker("okx", True)},
+        lambda: {
+            "kraken": _Broker("kraken", True),
+            "coinbase": _Broker("coinbase", False),
+            "okx": _Broker("okx", False),
+        },
     )
-
-    ready, missing, _statuses = patch.refresh_readiness(force_log=True)
-
-    assert ready is True
-    assert missing == []
-    assert patch.os.environ["NIJA_MULTI_BROKER_TRADING_READY"] == "1"
-
-
-def test_pipeline_blocks_new_entry_but_allows_exit(monkeypatch):
-    _reset(monkeypatch)
-    monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "true")
-    monkeypatch.setattr(
-        patch,
-        "refresh_readiness",
-        lambda **kwargs: (False, ["coinbase", "okx"], {}),
-    )
-    module = ModuleType("test_execution_pipeline")
-    module.ExecutionPipeline = _ExecutionPipeline
+    module = ModuleType("test_execution_pipeline_kraken")
+    module.ExecutionPipeline = type("ExecutionPipelineKraken", (_ExecutionPipeline,), {})
     module.PipelineResult = _PipelineResult
 
     assert patch._patch_execution_pipeline(module) is True
-    pipeline = module.ExecutionPipeline()
-
-    entry = SimpleNamespace(
+    request = SimpleNamespace(
         symbol="BTC-USD",
         side="buy",
         size_usd=25.0,
+        preferred_broker="kraken",
         intent_type="entry",
         reduce_only=False,
         position_effect=None,
     )
-    result = pipeline.execute(entry)
-    assert result.success is False
-    assert "required_secondary_venues_not_ready" in result.error
 
-    exit_request = SimpleNamespace(
-        symbol="BTC-USD",
-        side="sell",
+    assert module.ExecutionPipeline().execute(request) == "executed"
+
+
+def test_pipeline_blocks_only_the_unready_target_broker(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "true")
+    monkeypatch.setenv("NIJA_OKX_ACTIVATION_STATE", "connect_failed")
+    monkeypatch.setenv("NIJA_OKX_CONNECTED", "0")
+    monkeypatch.setenv("NIJA_OKX_TRADING_READY", "0")
+    monkeypatch.setenv("NIJA_OKX_ACTIVATED", "0")
+    monkeypatch.setattr(patch, "_runtime_brokers", lambda: {"okx": _Broker("okx", False)})
+    module = ModuleType("test_execution_pipeline_okx")
+    module.ExecutionPipeline = type("ExecutionPipelineOkx", (_ExecutionPipeline,), {})
+    module.PipelineResult = _PipelineResult
+
+    assert patch._patch_execution_pipeline(module) is True
+    request = SimpleNamespace(
+        symbol="BTC-USDT",
+        side="buy",
         size_usd=25.0,
-        intent_type="exit",
-        reduce_only=True,
-        position_effect="close",
+        preferred_broker="okx",
+        intent_type="entry",
+        reduce_only=False,
+        position_effect=None,
     )
-    assert pipeline.execute(exit_request) == "executed"
+    result = module.ExecutionPipeline().execute(request)
+
+    assert result.success is False
+    assert result.error.startswith("target_broker_not_ready:okx:")
 
 
-def test_strategy_entry_eligibility_is_blocked_until_required_venues_ready(monkeypatch):
+def test_pipeline_without_target_leaves_routing_to_router(monkeypatch):
     _reset(monkeypatch)
     monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "true")
     monkeypatch.setattr(
         patch,
-        "refresh_readiness",
-        lambda **kwargs: (False, ["okx"], {}),
+        "_runtime_brokers",
+        lambda: {"coinbase": _Broker("coinbase", False), "okx": _Broker("okx", False)},
     )
-    module = ModuleType("test_trading_strategy")
-    module.TradingStrategy = _TradingStrategy
-
-    assert patch._patch_trading_strategy(module) is True
-    allowed, reason = module.TradingStrategy()._is_broker_eligible_for_entry(_Broker("kraken"))
-
-    assert allowed is False
-    assert "okx" in reason
-
-
-def test_strict_mode_disabled_preserves_upstream_execution(monkeypatch):
-    _reset(monkeypatch)
-    monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "false")
-    module = ModuleType("test_execution_pipeline_disabled")
-    module.ExecutionPipeline = _ExecutionPipeline
+    module = ModuleType("test_execution_pipeline_auto")
+    module.ExecutionPipeline = type("ExecutionPipelineAuto", (_ExecutionPipeline,), {})
     module.PipelineResult = _PipelineResult
     assert patch._patch_execution_pipeline(module) is True
 
@@ -170,5 +168,45 @@ def test_strict_mode_disabled_preserves_upstream_execution(monkeypatch):
         intent_type="entry",
         reduce_only=False,
         position_effect=None,
+    )
+    assert module.ExecutionPipeline().execute(request) == "executed"
+
+
+def test_strategy_unready_okx_does_not_block_kraken(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "true")
+    monkeypatch.setenv("NIJA_OKX_ACTIVATION_STATE", "connect_failed")
+    module = ModuleType("test_trading_strategy_independent")
+    module.TradingStrategy = type("TradingStrategyIndependent", (_TradingStrategy,), {})
+
+    assert patch._patch_trading_strategy(module) is True
+    strategy = module.TradingStrategy()
+    kraken_allowed, kraken_reason = strategy._is_broker_eligible_for_entry(_Broker("kraken", True))
+    okx_allowed, okx_reason = strategy._is_broker_eligible_for_entry(_Broker("okx", False))
+
+    assert kraken_allowed is True
+    assert kraken_reason == "upstream-ready"
+    assert okx_allowed is False
+    assert "okx" in okx_reason
+
+
+def test_exits_always_bypass_broker_local_entry_guard(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setenv("NIJA_REQUIRE_SECONDARY_VENUES_READY", "true")
+    monkeypatch.setenv("NIJA_OKX_ACTIVATION_STATE", "connect_failed")
+    monkeypatch.setattr(patch, "_runtime_brokers", lambda: {"okx": _Broker("okx", False)})
+    module = ModuleType("test_execution_pipeline_exit")
+    module.ExecutionPipeline = type("ExecutionPipelineExit", (_ExecutionPipeline,), {})
+    module.PipelineResult = _PipelineResult
+    assert patch._patch_execution_pipeline(module) is True
+
+    request = SimpleNamespace(
+        symbol="BTC-USDT",
+        side="sell",
+        size_usd=25.0,
+        preferred_broker="okx",
+        intent_type="exit",
+        reduce_only=True,
+        position_effect="close",
     )
     assert module.ExecutionPipeline().execute(request) == "executed"
