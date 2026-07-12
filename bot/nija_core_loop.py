@@ -5126,6 +5126,79 @@ def _broker_reconcile_open_position_count(
     return reconciled
 
 
+def _reconcile_all_brokers_position_count(
+    engine: Any,
+    brokers: Dict[str, Any],
+    strategy: Any = None,
+) -> int:
+    """Return the reconciled open-position count aggregated across ALL brokers.
+
+    Queries the in-memory execution-engine tracker once, then sums position
+    counts reported by every broker in *brokers*.  Returns
+    ``max(tracker_count, total_broker_count)`` so the position cap is never
+    fooled by a stale local tracker *or* by querying only a subset of the
+    active venues.
+
+    Parameters
+    ----------
+    engine   : ExecutionEngine instance (or None).
+    brokers  : Mapping of {broker_name: broker_obj} — every connected venue.
+    strategy : TradingStrategy (optional fallback to locate execution engine).
+
+    Returns
+    -------
+    int — max(tracker_count, sum_of_all_broker_counts), or 0 on failure.
+    """
+    tracker_count = 0
+    total_broker_count = 0
+
+    # ── 1. Execution-engine in-memory count (global across all brokers) ──────
+    _ee = engine
+    if _ee is None and strategy is not None:
+        _ee = getattr(getattr(strategy, "apex", None), "execution_engine", None)
+    if _ee is not None:
+        _get_all = getattr(_ee, "get_all_positions", None)
+        if callable(_get_all):
+            try:
+                _pos = _get_all() or {}
+                tracker_count = len(_pos) if isinstance(_pos, (dict, list)) else 0
+            except Exception:
+                tracker_count = 0
+
+    # ── 2. Sum live position counts across every broker ──────────────────────
+    for _bname, _broker in (brokers or {}).items():
+        if _broker is None:
+            continue
+        for _method_name in ("get_open_positions", "get_positions"):
+            _method = getattr(_broker, _method_name, None)
+            if callable(_method):
+                try:
+                    _broker_pos = _method() or []
+                    if isinstance(_broker_pos, (dict, list)):
+                        total_broker_count += len(_broker_pos)
+                except Exception:
+                    pass
+                break  # stop after first callable method per broker
+
+    reconciled = max(tracker_count, total_broker_count)
+    if reconciled != tracker_count:
+        logger.warning(
+            "⚖️  [POS_RECONCILE_ALL] tracker=%d total_broker=%d → using reconciled=%d "
+            "(brokers=%s)",
+            tracker_count,
+            total_broker_count,
+            reconciled,
+            sorted(brokers.keys()) if brokers else [],
+        )
+        print(
+            f"[NIJA-PRINT] POS_RECONCILE_ALL "
+            f"tracker={tracker_count} total_broker={total_broker_count} "
+            f"reconciled={reconciled}",
+            flush=True,
+        )
+    return reconciled
+
+
 def _broker_name_from_obj(broker: Any, raw_key: Any = None) -> str:
     """Derive a lowercase broker name string from a broker object or key."""
     # Try broker_type.value (e.g. BrokerType enum)
@@ -6824,16 +6897,17 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                             if _pool is not None:
                                 # Use broker-reconciled position count so the cap
                                 # reflects the exchange's actual exposure (not just
-                                # the stale in-memory tracker state).
+                                # the stale in-memory tracker state).  Query ALL
+                                # pool brokers and sum their counts so positions on
+                                # any venue are included (not just the first broker).
                                 _pool_ee = getattr(
                                     getattr(strategy, "apex", None),
                                     "execution_engine",
                                     None,
                                 )
-                                _primary_broker = next(iter(_pool_brokers.values()), None)
-                                _open_pos_cnt = _broker_reconcile_open_position_count(
+                                _open_pos_cnt = _reconcile_all_brokers_position_count(
                                     engine=_pool_ee,
-                                    broker=_primary_broker,
+                                    brokers=_pool_brokers,
                                     strategy=strategy,
                                 )
 
@@ -6875,69 +6949,104 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                     clear_runtime_correlation()
                 else:
                     # ── Sequential path (single broker or pool disabled) ────────
-                    # Fix 6: Hard stall watchdog around run_cycle()
-                    # Fire RUN_CYCLE_STALLED if run_cycle() does not return (or does
-                    # not emit RUN_CYCLE_PHASE3_START) within the configured timeout.
-                    # The timer is cancelled immediately when run_cycle() returns.
-                    _run_cycle_stall_s = float(
-                        os.getenv("NIJA_RUN_CYCLE_PHASE3_TIMEOUT_S", "30") or 30
-                    )
-                    _stall_fired = [False]
+                    #
+                    # Dedup guard: if the active broker is already being scanned by
+                    # a live independent-trader thread, skip strategy.run_cycle() to
+                    # prevent a duplicate scan loop for the same account/broker.
+                    _seq_skip = False
+                    _seq_ibt = getattr(strategy, "independent_trader", None)
+                    if _seq_ibt is not None:
+                        _seq_broker = getattr(strategy, "broker", None)
+                        _seq_bname = (
+                            _broker_name_from_obj(_seq_broker).strip().lower()
+                            if _seq_broker is not None
+                            else ""
+                        )
+                        if _seq_bname:
+                            for _sn, _st in getattr(_seq_ibt, "broker_threads", {}).items():
+                                if (
+                                    str(_sn).strip().lower() == _seq_bname
+                                    and _st is not None
+                                    and _st.is_alive()
+                                ):
+                                    _seq_skip = True
+                                    logger.info(
+                                        "🔒 [SEQ_DEDUP] skipping run_cycle() — independent "
+                                        "trader thread already active for broker=%s",
+                                        _seq_bname,
+                                    )
+                                    print(
+                                        f"[NIJA-PRINT] SEQ_DEDUP_SKIPPED broker={_seq_bname}",
+                                        flush=True,
+                                    )
+                                    break
 
-                    def _stall_watchdog_fn(
-                        _cy=cycle,
-                        _cid=_current_cycle_id,
-                        _tout=_run_cycle_stall_s,
-                    ):
-                        _stall_fired[0] = True
-                        logger.critical(
-                            "⛔ [RUN_CYCLE_STALLED] strategy.run_cycle() still running "
-                            "after %.0fs — cycle=%d cycle_id=%s | "
-                            "strategy may be stuck before PHASE3_START",
-                            _tout,
-                            _cy,
-                            _cid,
-                        )
-                        print(
-                            f"[NIJA-PRINT] RUN_CYCLE_STALLED "
-                            f"stage=pre_phase3_or_unknown "
-                            f"elapsed={_tout:.0f}s cycle={_cy}",
-                            flush=True,
-                        )
-
-                    _stall_timer = threading.Timer(_run_cycle_stall_s, _stall_watchdog_fn)
-                    _stall_timer.daemon = True
-                    _stall_timer.start()
-                    # ── End Fix 6 setup ───────────────────────────────────────
-
-                    try:
-                        _strategy_next_interval = strategy.run_cycle()
-                        _stall_timer.cancel()
-                        logger.critical(
-                            "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
-                            "cycle=%d next_interval=%s",
-                            cycle, _strategy_next_interval,
-                        )
-                        logger.info(
-                            "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
-                            "cycle=%d next_interval=%s",
-                            cycle,
-                            _strategy_next_interval,
-                        )
-                        if isinstance(_strategy_next_interval, (int, float)):
-                            _next_sleep_s = max(1.0, float(_strategy_next_interval))
-                    except Exception as _run_cycle_err:
-                        _stall_timer.cancel()
-                        logger.critical(
-                            "❌ [CYCLE_INVOKE] strategy.run_cycle() RAISED EXCEPTION | "
-                            "cycle=%d error=%s",
-                            cycle, _run_cycle_err,
-                            exc_info=True,
-                        )
-                        raise
-                    finally:
-                        _stall_timer.cancel()
+                    if _seq_skip:
                         clear_runtime_correlation()
+                    else:
+                        # Fix 6: Hard stall watchdog around run_cycle()
+                        # Fire RUN_CYCLE_STALLED if run_cycle() does not return (or does
+                        # not emit RUN_CYCLE_PHASE3_START) within the configured timeout.
+                        # The timer is cancelled immediately when run_cycle() returns.
+                        _run_cycle_stall_s = float(
+                            os.getenv("NIJA_RUN_CYCLE_PHASE3_TIMEOUT_S", "30") or 30
+                        )
+                        _stall_fired = [False]
+
+                        def _stall_watchdog_fn(
+                            _cy=cycle,
+                            _cid=_current_cycle_id,
+                            _tout=_run_cycle_stall_s,
+                        ):
+                            _stall_fired[0] = True
+                            logger.critical(
+                                "⛔ [RUN_CYCLE_STALLED] strategy.run_cycle() still running "
+                                "after %.0fs — cycle=%d cycle_id=%s | "
+                                "strategy may be stuck before PHASE3_START",
+                                _tout,
+                                _cy,
+                                _cid,
+                            )
+                            print(
+                                f"[NIJA-PRINT] RUN_CYCLE_STALLED "
+                                f"stage=pre_phase3_or_unknown "
+                                f"elapsed={_tout:.0f}s cycle={_cy}",
+                                flush=True,
+                            )
+
+                        _stall_timer = threading.Timer(_run_cycle_stall_s, _stall_watchdog_fn)
+                        _stall_timer.daemon = True
+                        _stall_timer.start()
+                        # ── End Fix 6 setup ───────────────────────────────────────
+
+                        try:
+                            _strategy_next_interval = strategy.run_cycle()
+                            _stall_timer.cancel()
+                            logger.critical(
+                                "✅ [CYCLE_INVOKE] strategy.run_cycle() RETURNED | "
+                                "cycle=%d next_interval=%s",
+                                cycle, _strategy_next_interval,
+                            )
+                            logger.info(
+                                "✅ [run_trading_loop] strategy.run_cycle() RETURNED | "
+                                "cycle=%d next_interval=%s",
+                                cycle,
+                                _strategy_next_interval,
+                            )
+                            if isinstance(_strategy_next_interval, (int, float)):
+                                _next_sleep_s = max(1.0, float(_strategy_next_interval))
+                        except Exception as _run_cycle_err:
+                            _stall_timer.cancel()
+                            logger.critical(
+                                "❌ [CYCLE_INVOKE] strategy.run_cycle() RAISED EXCEPTION | "
+                                "cycle=%d error=%s",
+                                cycle, _run_cycle_err,
+                                exc_info=True,
+                            )
+                            raise
+                        finally:
+                            _stall_timer.cancel()
+                            clear_runtime_correlation()
                 _cycle_elapsed = time.time() - _cycle_start_ts
                 # Retrieve symbol count from strategy for heartbeat diagnostics
                 _hb_symbols = 0
