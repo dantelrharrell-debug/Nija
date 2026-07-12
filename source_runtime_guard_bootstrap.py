@@ -1,24 +1,10 @@
 """Earliest source-level runtime guard bootstrap for NIJA.
 
-This module is intentionally located at repository root and imports no ``bot``
-package modules. ``main.py`` loads ``bot/global_runtime_startup_guards.py`` by
-file path before its first ``bot.*`` import; that first installer calls
-:func:`install`.
-
-On Render, the Docker ``.pth`` hook deliberately leaves the replacement process
-fail-closed so the shell can expose ``/healthz`` during a zero-downtime deploy.
-This source bootstrap then acquires the canonical Redis writer lease before any
-``bot.*`` import and installs credential normalization, venue-readiness,
-secondary-venue activation, broker-independent entry admission, account-local
-held-position exit recovery, the early recovery/capital-hydration bridge, the
-definitive execution-readiness verifier, and the cross-process readiness bridge.
-
-The bootstrap never deletes another instance's active lease, creates credentials,
-fabricates balances, marks a broker connected, or relaxes risk controls. In a
-live-capital process it fails closed when mandatory runtime guards cannot be
-installed.
+This module is loaded before the first ``bot.*`` import. It acquires canonical
+writer lineage and installs mandatory authentication, broker-isolation, account
+recovery, worker-deduplication and readiness guards. Live-capital startup fails
+closed if a required guard cannot be installed.
 """
-
 from __future__ import annotations
 
 import importlib
@@ -28,8 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-
-_MARKER = "20260711n"
+_MARKER = "20260712a"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -40,28 +25,15 @@ def _truthy(name: str, default: str = "") -> bool:
 
 
 def _is_live_runtime() -> bool:
-    """Return whether startup is expected to control real exchange capital."""
-
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return False
-    return any(
-        _truthy(name)
-        for name in (
-            "LIVE_CAPITAL_VERIFIED",
-            "NIJA_EXECUTION_ACTIVE",
-            "NIJA_RUNTIME_EXECUTION_AUTHORITY",
-        )
-    )
+    return any(_truthy(name) for name in (
+        "LIVE_CAPITAL_VERIFIED", "NIJA_EXECUTION_ACTIVE", "NIJA_RUNTIME_EXECUTION_AUTHORITY",
+    ))
 
 
 def _deployment_commit() -> str:
-    for name in (
-        "RENDER_GIT_COMMIT",
-        "GIT_COMMIT",
-        "RAILWAY_GIT_COMMIT_SHA",
-        "COMMIT_SHA",
-        "SOURCE_VERSION",
-    ):
+    for name in ("RENDER_GIT_COMMIT", "GIT_COMMIT", "RAILWAY_GIT_COMMIT_SHA", "COMMIT_SHA", "SOURCE_VERSION"):
         value = str(os.environ.get(name, "") or "").strip()
         if value:
             return value
@@ -76,20 +48,33 @@ def _install_required(module_name: str) -> None:
     installer()
 
 
+def _set_status(value: str) -> None:
+    for name in (
+        "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
+        "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
+        "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
+        "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
+        "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
+        "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
+        "NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED",
+        "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
+        "NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED",
+        "NIJA_RENDER_READINESS_BRIDGE_INSTALLED",
+    ):
+        os.environ[name] = value
+    os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
+
+
 def install() -> bool:
-    """Acquire writer lineage and install mandatory source guards exactly once."""
-
     global _INSTALLED
-
     with _LOCK:
         if _INSTALLED:
             return True
-
         try:
             _install_required("prebot_writer_authority_fail_closed")
-            # Credential recovery must run before any broker class is imported or
-            # any secondary-venue connection attempt is made.
             _install_required("broker_auth_recovery_patch")
+            # Must precede broker construction, activation and account supervisors.
+            _install_required("runtime_convergence_hardening_patch")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
@@ -99,71 +84,34 @@ def install() -> bool:
             _install_required("render_readiness_state_bridge")
 
             _INSTALLED = True
-            os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "1"
-            os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
-            os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] = "1"
-            os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "1"
-            os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "1"
-            os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] = "1"
-            os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] = "1"
-            os.environ["NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED"] = "1"
-            os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "1"
-            os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "1"
-
+            _set_status("1")
             commit = _deployment_commit()
-            logger.warning(
-                "SOURCE_RUNTIME_GUARDS_READY marker=%s commit=%s "
+            message = (
+                f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
                 "writer_authority=installed broker_auth_recovery=installed "
-                "venue_repair=installed secondary_venue_activation=installed "
-                "secondary_venue_strict_readiness=installed "
-                "account_exit_management_recovery=installed "
-                "account_exit_recovery_bootstrap=installed "
-                "three_venue_stage_verifier=installed "
-                "render_readiness_bridge=installed source=main_pre_bot",
-                _MARKER,
-                commit,
+                "runtime_convergence_hardening=installed venue_repair=installed "
+                "secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
+                "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
+                "three_venue_stage_verifier=installed render_readiness_bridge=installed source=main_pre_bot"
             )
-            print(
-                f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} "
-                f"commit={commit} writer_authority=installed broker_auth_recovery=installed "
-                "venue_repair=installed secondary_venue_activation=installed "
-                "secondary_venue_strict_readiness=installed "
-                "account_exit_management_recovery=installed "
-                "account_exit_recovery_bootstrap=installed "
-                "three_venue_stage_verifier=installed "
-                "render_readiness_bridge=installed source=main_pre_bot",
-                flush=True,
-            )
+            logger.warning(message)
+            print(f"[NIJA-PRINT] {message}", flush=True)
             return True
         except Exception as exc:
-            os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] = "0"
-            os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
-            os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] = "0"
-            os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] = "0"
-            os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] = "0"
-            os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] = "0"
-            os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] = "0"
-            os.environ["NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED"] = "0"
+            _set_status("0")
             os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
-            os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] = "0"
-            os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "0"
             message = f"{type(exc).__name__}:{exc}"
-            is_live = _is_live_runtime()
+            live = _is_live_runtime()
             logger.critical(
                 "SOURCE_RUNTIME_GUARDS_FAILED marker=%s commit=%s error=%s live=%s",
-                _MARKER,
-                _deployment_commit(),
-                message,
-                is_live,
-                exc_info=True,
+                _MARKER, _deployment_commit(), message, live, exc_info=True,
             )
             print(
                 f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_FAILED marker={_MARKER} "
-                f"commit={_deployment_commit()} error={message[:240]} "
-                f"live={str(is_live).lower()}",
+                f"commit={_deployment_commit()} error={message[:240]} live={str(live).lower()}",
                 flush=True,
             )
-            if is_live:
+            if live:
                 raise SystemExit(78) from exc
             return False
 
