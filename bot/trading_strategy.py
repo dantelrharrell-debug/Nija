@@ -1730,6 +1730,26 @@ class TradingStrategy:
                     except Exception as _pos_err:
                         logger.debug("run_cycle open-position probe failed: %s", _pos_err)
 
+                # ── Broker-reconciled position count ──────────────────────────
+                # The in-memory tracker may under-count when positions were
+                # opened outside this process or when the tracker was cleared
+                # during a restart.  Query the broker directly and take the max
+                # so the position cap is never fooled by stale local state.
+                if _broker is not None:
+                    try:
+                        try:
+                            from bot.nija_core_loop import _broker_reconcile_open_position_count
+                        except ImportError:
+                            from nija_core_loop import _broker_reconcile_open_position_count  # type: ignore[import]
+                        _open_positions_count = _broker_reconcile_open_position_count(
+                            engine=_engine,
+                            broker=_broker,
+                            strategy=self,
+                        )
+                    except Exception as _rec_err:
+                        logger.debug("run_cycle broker position reconciliation skipped: %s", _rec_err)
+                # ── End broker-reconciled position count ──────────────────────
+
                 if self.nija_core_loop is not None:
                     # ── Reconcile stale pending orders before scanning ────────
                     # Clears orders that timed out or were filled/cancelled on the

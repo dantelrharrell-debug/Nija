@@ -5051,6 +5051,81 @@ def start_trading_engine(strategy: Any) -> threading.Thread:
 # Broker worker pool helpers
 # ---------------------------------------------------------------------------
 
+
+def _broker_reconcile_open_position_count(
+    engine: Any,
+    broker: Any,
+    strategy: Any = None,
+) -> int:
+    """Return the reconciled open-position count for one broker.
+
+    Queries **both** the in-memory execution-engine tracker and the live
+    broker API, then returns the maximum.  This prevents the position cap
+    from using a stale (too-low) in-memory count when the exchange holds
+    more positions than the tracker is aware of.
+
+    Parameters
+    ----------
+    engine   : ExecutionEngine instance (or None).  Used for the fast
+               in-memory position count via ``get_all_positions()``.
+    broker   : Live broker object.  Used to fetch the exchange position
+               count via ``get_open_positions()`` or ``get_positions()``.
+    strategy : TradingStrategy instance (optional).  When *engine* is None
+               the method tries ``strategy.apex.execution_engine`` as a
+               fallback.
+
+    Returns
+    -------
+    int — max(tracker_count, broker_count), or 0 when both sources fail.
+    """
+    tracker_count = 0
+    broker_count = 0
+
+    # ── 1. Execution-engine in-memory count ──────────────────────────────
+    _ee = engine
+    if _ee is None and strategy is not None:
+        _ee = getattr(getattr(strategy, "apex", None), "execution_engine", None)
+    if _ee is not None:
+        _get_all = getattr(_ee, "get_all_positions", None)
+        if callable(_get_all):
+            try:
+                _pos = _get_all() or {}
+                tracker_count = len(_pos) if isinstance(_pos, (dict, list)) else 0
+            except Exception:
+                tracker_count = 0
+
+    # ── 2. Live broker exchange count ─────────────────────────────────────
+    if broker is not None:
+        for _method_name in ("get_open_positions", "get_positions"):
+            _method = getattr(broker, _method_name, None)
+            if callable(_method):
+                try:
+                    _broker_pos = _method() or []
+                    if isinstance(_broker_pos, dict):
+                        broker_count = len(_broker_pos)
+                    elif isinstance(_broker_pos, list):
+                        broker_count = len(_broker_pos)
+                    break
+                except Exception:
+                    broker_count = 0
+
+    reconciled = max(tracker_count, broker_count)
+    if reconciled != tracker_count:
+        logger.warning(
+            "⚖️  [POS_RECONCILE] tracker=%d broker=%d → using reconciled=%d "
+            "(broker has more positions than in-memory tracker)",
+            tracker_count,
+            broker_count,
+            reconciled,
+        )
+        print(
+            f"[NIJA-PRINT] POS_RECONCILE "
+            f"tracker={tracker_count} broker={broker_count} reconciled={reconciled}",
+            flush=True,
+        )
+    return reconciled
+
+
 def _broker_name_from_obj(broker: Any, raw_key: Any = None) -> str:
     """Derive a lowercase broker name string from a broker object or key."""
     # Try broker_type.value (e.g. BrokerType enum)
@@ -6710,27 +6785,57 @@ def run_trading_loop(strategy: Any, cycle_secs: int = 150) -> None:
                 ):
                     try:
                         _pool_brokers = _get_all_platform_brokers(strategy)
+
+                        # ── Dedup guard: skip brokers that already have a live
+                        # independent-trader thread so each broker is scanned by
+                        # exactly one worker at a time.
+                        _ibt = getattr(strategy, "independent_trader", None)
+                        if _ibt is not None:
+                            _ibt_live: set = set()
+                            try:
+                                for _ibt_name, _ibt_thread in getattr(_ibt, "broker_threads", {}).items():
+                                    if _ibt_thread is not None and _ibt_thread.is_alive():
+                                        _ibt_live.add(str(_ibt_name).strip().lower())
+                            except Exception:
+                                pass
+                            if _ibt_live:
+                                _before_dedup = list(_pool_brokers.keys())
+                                _pool_brokers = {
+                                    k: v for k, v in _pool_brokers.items()
+                                    if k.strip().lower() not in _ibt_live
+                                }
+                                _dedup_dropped = set(_before_dedup) - set(_pool_brokers.keys())
+                                if _dedup_dropped:
+                                    logger.info(
+                                        "🔒 [BROKER_POOL_DEDUP] skipping brokers with live "
+                                        "independent-trader threads: %s",
+                                        sorted(_dedup_dropped),
+                                    )
+                                    print(
+                                        f"[NIJA-PRINT] BROKER_POOL_DEDUP_SKIPPED "
+                                        f"brokers={sorted(_dedup_dropped)}",
+                                        flush=True,
+                                    )
+
                         if len(_pool_brokers) > 1:
                             # Multi-broker path — dispatch all workers and advance.
                             _scan_fn = _core_loop_for_pool.run_scan_phase
                             _pool = _get_broker_worker_pool(_scan_fn)
                             if _pool is not None:
-                                _open_pos_cnt = 0
-                                try:
-                                    _pool_ee = getattr(
-                                        getattr(strategy, "apex", None),
-                                        "execution_engine",
-                                        None,
-                                    )
-                                    _all_pos = (
-                                        _pool_ee.get_all_positions()
-                                        if _pool_ee is not None
-                                        and callable(getattr(_pool_ee, "get_all_positions", None))
-                                        else {}
-                                    )
-                                    _open_pos_cnt = len(_all_pos or {})
-                                except Exception:
-                                    _open_pos_cnt = 0
+                                # Use broker-reconciled position count so the cap
+                                # reflects the exchange's actual exposure (not just
+                                # the stale in-memory tracker state).
+                                _pool_ee = getattr(
+                                    getattr(strategy, "apex", None),
+                                    "execution_engine",
+                                    None,
+                                )
+                                _primary_broker = next(iter(_pool_brokers.values()), None)
+                                _open_pos_cnt = _broker_reconcile_open_position_count(
+                                    engine=_pool_ee,
+                                    broker=_primary_broker,
+                                    strategy=strategy,
+                                )
 
                                 _pool_tasks = _build_broker_scan_tasks(
                                     strategy=strategy,
