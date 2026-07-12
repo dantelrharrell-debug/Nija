@@ -1,36 +1,31 @@
-"""Harden NIJA runtime convergence without bypassing broker or risk controls.
+"""Harden NIJA runtime convergence without global import-hook recursion.
 
-Repairs production-only failure modes observed in July 2026 logs:
-* auth recovery attached to only one broker module;
-* duplicate platform/user workers and duplicate account recovery supervisors;
-* concurrent scans for the same account/broker;
-* stale zero-signal streak values (for example 999);
-* shared position-tracker files across account identities.
-
-The guard never fabricates authentication, balances, broker acknowledgements, fills,
-or profitability. Existing writer-authority, risk, exchange and exit controls remain
-fully authoritative.
+Repairs auth attachment, duplicate workers/scans, stale signal streaks, and
+account-scoped position state while preserving writer authority, broker
+authentication, risk controls, exchange validation, and exit protections.
 """
 from __future__ import annotations
 
-import importlib
 import logging
 import os
 import sys
 import threading
+import time
 from pathlib import Path
-from types import ModuleType
-from typing import Any, Callable, Optional
+from types import ModuleType, SimpleNamespace
+from typing import Any, Callable
 
 logger = logging.getLogger("nija.runtime_convergence")
-_MARKER = "20260712a"
+_MARKER = "20260712e"
 _LOCK = threading.RLock()
-_ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _PATCHED_MODULES: set[str] = set()
 _WORKER_REGISTRY: dict[str, threading.Thread] = {}
 _WORKER_LOCK = threading.RLock()
 _SCAN_LOCKS: dict[str, threading.RLock] = {}
 _SCAN_LOCKS_GUARD = threading.RLock()
+_WATCHDOG_STARTED = False
+# Kept for compatibility with the final repair. No global wrapper is installed.
+_ORIGINAL_IMPORT = None
 
 
 def _clean(value: Any) -> str:
@@ -41,8 +36,7 @@ def _broker_name(obj: Any) -> str:
     text = " ".join(
         str(getattr(obj, attr, "") or "")
         for attr in ("broker_type", "broker_name", "name", "exchange", "exchange_name")
-    ).lower()
-    text += " " + type(obj).__name__.lower()
+    ).lower() + " " + type(obj).__name__.lower()
     for name in ("kraken", "coinbase", "okx", "alpaca", "binance"):
         if name in text:
             return name
@@ -56,23 +50,22 @@ def _account_identity(obj: Any) -> str:
             return _clean(value)
     account_type = getattr(obj, "account_type", None)
     value = getattr(account_type, "value", account_type)
-    if value:
-        return _clean(value)
-    return "platform"
+    return _clean(value) if value else "platform"
 
 
 def _broker_identity(obj: Any) -> str:
     return f"{_account_identity(obj)}:{_broker_name(obj)}"
 
 
-def _patch_auth_surface(module: ModuleType) -> bool:
-    """Attach existing auth normalization to every Coinbase/OKX broker surface."""
-    try:
-        auth = importlib.import_module("broker_auth_recovery_patch")
-    except Exception as exc:
-        logger.warning("RUNTIME_CONVERGENCE_AUTH_IMPORT_FAILED marker=%s err=%s", _MARKER, exc)
-        return False
+def _auth_module() -> ModuleType | None:
+    module = sys.modules.get("broker_auth_recovery_patch")
+    return module if isinstance(module, ModuleType) else None
 
+
+def _patch_auth_surface(module: ModuleType) -> bool:
+    auth = _auth_module()
+    if auth is None:
+        return False
     patched = False
     for attr_name in dir(module):
         cls = getattr(module, attr_name, None)
@@ -84,18 +77,17 @@ def _patch_auth_surface(module: ModuleType) -> bool:
             continue
         for method_name in ("connect", "verify_connection", "test_connection"):
             original = getattr(cls, method_name, None)
-            if not callable(original) or getattr(original, "_nija_runtime_convergence_auth", False):
+            if not callable(original) or getattr(original, "_nija_runtime_convergence_auth_e", False):
                 continue
 
             def wrapped(self: Any, *args: Any, __original: Callable[..., Any] = original,
                         __venue: str = venue, **kwargs: Any) -> Any:
-                if __venue == "coinbase":
-                    auth.normalize_coinbase_environment()
-                else:
-                    auth.normalize_okx_environment()
+                normalizer = getattr(auth, f"normalize_{__venue}_environment", None)
+                if callable(normalizer):
+                    normalizer()
                 return __original(self, *args, **kwargs)
 
-            wrapped._nija_runtime_convergence_auth = True  # type: ignore[attr-defined]
+            wrapped._nija_runtime_convergence_auth_e = True  # type: ignore[attr-defined]
             wrapped.__wrapped__ = original  # type: ignore[attr-defined]
             setattr(cls, method_name, wrapped)
             patched = True
@@ -108,7 +100,7 @@ def _patch_auth_surface(module: ModuleType) -> bool:
 
 def _wrap_thread_start_method(cls: type, method_name: str) -> bool:
     original = getattr(cls, method_name, None)
-    if not callable(original) or getattr(original, "_nija_runtime_worker_dedupe", False):
+    if not callable(original) or getattr(original, "_nija_runtime_worker_dedupe_e", False):
         return False
 
     def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -131,14 +123,14 @@ def _wrap_thread_start_method(cls: type, method_name: str) -> bool:
             for mapping_name in ("broker_threads", "user_broker_threads"):
                 mapping = getattr(self, mapping_name, None)
                 if isinstance(mapping, dict):
-                    values = list(mapping.values())
-                    while values:
-                        value = values.pop()
+                    stack = list(mapping.values())
+                    while stack:
+                        value = stack.pop()
                         if isinstance(value, threading.Thread) and value.is_alive():
                             candidate = value
                             break
                         if isinstance(value, dict):
-                            values.extend(value.values())
+                            stack.extend(value.values())
                     if candidate is not None:
                         break
         if candidate is not None:
@@ -146,10 +138,9 @@ def _wrap_thread_start_method(cls: type, method_name: str) -> bool:
                 _WORKER_REGISTRY[key] = candidate
         return result
 
-    wrapped._nija_runtime_worker_dedupe = True  # type: ignore[attr-defined]
+    wrapped._nija_runtime_worker_dedupe_e = True  # type: ignore[attr-defined]
     wrapped.__wrapped__ = original  # type: ignore[attr-defined]
     setattr(cls, method_name, wrapped)
-    logger.warning("WORKER_START_DEDUPE_PATCHED marker=%s class=%s method=%s", _MARKER, cls.__name__, method_name)
     return True
 
 
@@ -167,8 +158,12 @@ def _patch_independent_trader(module: ModuleType) -> bool:
     return patched
 
 
-def _scan_key(core: Any, broker: Any) -> str:
-    return f"{id(core)}:{_broker_identity(broker)}"
+def _duplicate_result() -> SimpleNamespace:
+    return SimpleNamespace(
+        symbols_scored=0, entries_taken=0, entries_blocked=1, exits_taken=0,
+        next_interval=max(5, int(float(os.getenv("NIJA_DUPLICATE_SCAN_NEXT_INTERVAL_S", "15") or 15))),
+        errors=["duplicate_scan_suppressed"], metadata={"duplicate_scan": True},
+    )
 
 
 def _patch_core_loop(module: ModuleType) -> bool:
@@ -176,9 +171,8 @@ def _patch_core_loop(module: ModuleType) -> bool:
     if not isinstance(cls, type):
         return False
     patched = False
-
     original_phase3 = getattr(cls, "_phase3_scan_and_enter", None)
-    if callable(original_phase3) and not getattr(original_phase3, "_nija_zero_streak_cap", False):
+    if callable(original_phase3) and not getattr(original_phase3, "_nija_zero_streak_cap_e", False):
         def phase3(self: Any, broker: Any, snapshot: Any, symbols: Any, available_slots: Any,
                    zero_signal_streak: int = 0, *args: Any, **kwargs: Any) -> Any:
             cap = max(0, int(float(os.getenv("NIJA_ZERO_SIGNAL_STREAK_CAP", "12") or 12)))
@@ -187,27 +181,28 @@ def _patch_core_loop(module: ModuleType) -> bool:
             if bounded != raw:
                 logger.warning("ZERO_SIGNAL_STREAK_REPAIRED marker=%s raw=%d bounded=%d", _MARKER, raw, bounded)
             return original_phase3(self, broker, snapshot, symbols, available_slots, bounded, *args, **kwargs)
-        phase3._nija_zero_streak_cap = True  # type: ignore[attr-defined]
+        phase3._nija_zero_streak_cap_e = True  # type: ignore[attr-defined]
         phase3.__wrapped__ = original_phase3  # type: ignore[attr-defined]
         setattr(cls, "_phase3_scan_and_enter", phase3)
         patched = True
 
     original_scan = getattr(cls, "run_scan_phase", None)
-    if callable(original_scan) and not getattr(original_scan, "_nija_account_scan_serialized", False):
+    if callable(original_scan) and not getattr(original_scan, "_nija_account_scan_serialized_e", False):
         def run_scan_phase(self: Any, *args: Any, **kwargs: Any) -> Any:
             broker = kwargs.get("broker") or (args[0] if args else None)
-            key = _scan_key(self, broker)
+            key = _broker_identity(broker)
             with _SCAN_LOCKS_GUARD:
                 lock = _SCAN_LOCKS.setdefault(key, threading.RLock())
-            timeout = max(1.0, float(os.getenv("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "5") or 5))
+            timeout = max(0.01, float(os.getenv("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "0.25") or 0.25))
             if not lock.acquire(timeout=timeout):
-                logger.error("DUPLICATE_SCAN_BLOCKED marker=%s key=%s timeout_s=%.1f", _MARKER, key, timeout)
-                return None
+                logger.critical("DUPLICATE_SCAN_BLOCKED marker=%s key=%s timeout_s=%.2f", _MARKER, key, timeout)
+                return _duplicate_result()
             try:
-                return original_scan(self, *args, **kwargs)
+                result = original_scan(self, *args, **kwargs)
+                return _duplicate_result() if result is None else result
             finally:
                 lock.release()
-        run_scan_phase._nija_account_scan_serialized = True  # type: ignore[attr-defined]
+        run_scan_phase._nija_account_scan_serialized_e = True  # type: ignore[attr-defined]
         run_scan_phase.__wrapped__ = original_scan  # type: ignore[attr-defined]
         setattr(cls, "run_scan_phase", run_scan_phase)
         patched = True
@@ -216,15 +211,13 @@ def _patch_core_loop(module: ModuleType) -> bool:
 
 def _scope_position_path(instance: Any) -> None:
     identity = _broker_identity(instance).replace(":", "_")
-    base = os.getenv("NIJA_POSITION_STATE_DIR", "data")
-    scoped = str(Path(base) / f"positions_{identity}.json")
+    scoped = str(Path(os.getenv("NIJA_POSITION_STATE_DIR", "data")) / f"positions_{identity}.json")
     for attr in ("positions_file", "position_file", "state_file", "storage_path", "file_path"):
         if hasattr(instance, attr):
             try:
                 current = str(getattr(instance, attr, "") or "")
                 if current.endswith("positions.json") or not current:
                     setattr(instance, attr, scoped)
-                    logger.warning("POSITION_STATE_SCOPED marker=%s identity=%s path=%s", _MARKER, identity, scoped)
             except Exception:
                 pass
 
@@ -236,12 +229,12 @@ def _patch_position_tracker(module: ModuleType) -> bool:
         if not isinstance(cls, type) or "positiontracker" not in attr_name.lower():
             continue
         original = getattr(cls, "__init__", None)
-        if not callable(original) or getattr(original, "_nija_position_scope", False):
+        if not callable(original) or getattr(original, "_nija_position_scope_e", False):
             continue
         def init(self: Any, *args: Any, __original: Callable[..., Any] = original, **kwargs: Any) -> None:
             __original(self, *args, **kwargs)
             _scope_position_path(self)
-        init._nija_position_scope = True  # type: ignore[attr-defined]
+        init._nija_position_scope_e = True  # type: ignore[attr-defined]
         init.__wrapped__ = original  # type: ignore[attr-defined]
         setattr(cls, "__init__", init)
         patched = True
@@ -264,36 +257,40 @@ def _patch_module(module: ModuleType) -> bool:
 
 def _try_loaded() -> bool:
     patched = False
+    targets = {
+        "bot.broker_manager", "broker_manager", "bot.broker_integration", "broker_integration",
+        "bot.multi_account_broker_manager", "multi_account_broker_manager",
+        "bot.independent_broker_trader", "independent_broker_trader",
+        "bot.nija_core_loop", "nija_core_loop", "bot.position_tracker", "position_tracker",
+    }
     for name, module in list(sys.modules.items()):
-        if not isinstance(module, ModuleType):
-            continue
-        if name in {
-            "bot.broker_manager", "broker_manager", "bot.broker_integration", "broker_integration",
-            "bot.multi_account_broker_manager", "multi_account_broker_manager",
-            "bot.independent_broker_trader", "independent_broker_trader",
-            "bot.nija_core_loop", "nija_core_loop", "bot.position_tracker", "position_tracker",
-        }:
+        if name in targets and isinstance(module, ModuleType):
             patched = _patch_module(module) or patched
     return patched
 
 
+def _watchdog() -> None:
+    deadline = time.monotonic() + max(60.0, float(os.getenv("NIJA_RUNTIME_PATCH_WATCHDOG_S", "600") or 600))
+    while time.monotonic() < deadline:
+        try:
+            _try_loaded()
+        except Exception as exc:
+            logger.debug("RUNTIME_CONVERGENCE_RETRY marker=%s err=%s", _MARKER, exc)
+        time.sleep(0.25)
+
+
 def install() -> None:
-    global _ORIGINAL_IMPORT
+    global _WATCHDOG_STARTED
     with _LOCK:
         _try_loaded()
-        if _ORIGINAL_IMPORT is not None:
-            return
-        _ORIGINAL_IMPORT = importlib.import_module
-        def wrapped(name: str, package: str | None = None):
-            module = _ORIGINAL_IMPORT(name, package)  # type: ignore[misc]
-            _patch_module(module)
-            return module
-        importlib.import_module = wrapped  # type: ignore[assignment]
-        logger.warning("RUNTIME_CONVERGENCE_HARDENING_INSTALL_REQUESTED marker=%s", _MARKER)
+        if not _WATCHDOG_STARTED:
+            _WATCHDOG_STARTED = True
+            threading.Thread(target=_watchdog, name="RuntimeConvergenceWatchdog", daemon=True).start()
+        logger.warning("RUNTIME_CONVERGENCE_HARDENING_INSTALLED marker=%s import_hook=false", _MARKER)
 
 
 def installed() -> bool:
-    return bool(_PATCHED_MODULES)
+    return _WATCHDOG_STARTED
 
 
-__all__ = ["install", "installed", "_broker_identity", "_patch_module"]
+__all__ = ["install", "installed", "_broker_identity", "_patch_module", "_duplicate_result"]
