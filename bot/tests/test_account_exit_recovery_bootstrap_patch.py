@@ -95,3 +95,27 @@ def test_refresh_failure_is_nonfatal():
 
     trader = SimpleNamespace(multi_account_manager=Manager())
     assert module._refresh_capital_authority(trader, "test") == {}
+
+
+def test_patch_loaded_waits_for_trader_class(monkeypatch):
+    module = _load_module()
+    recovery = ModuleType("fake_recovery")
+    recovery._retry_all_accounts = lambda trader: None
+    monkeypatch.setattr(module, "_load_recovery_module", lambda: recovery)
+
+    module.sys.modules.pop("bot.independent_broker_trader", None)
+    module.sys.modules.pop("independent_broker_trader", None)
+    assert module._patch_loaded() is False
+
+    fake_trader_module = ModuleType("bot.independent_broker_trader")
+
+    class Trader:
+        def __init__(self):
+            self.multi_account_manager = SimpleNamespace()
+            self.trading_strategy = object()
+
+    fake_trader_module.IndependentBrokerTrader = Trader
+    module.sys.modules["bot.independent_broker_trader"] = fake_trader_module
+    recovery._start_supervisor = lambda trader: None
+
+    assert module._patch_loaded() is True
