@@ -14,7 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260712b"
+_MARKER = "20260712c"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -54,6 +54,7 @@ def _set_status(value: str) -> None:
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
+        "NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED",
         "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
         "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
         "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
@@ -76,6 +77,7 @@ def install() -> bool:
             _install_required("broker_auth_recovery_patch")
             _install_required("runtime_convergence_hardening_patch")
             _install_required("runtime_convergence_v2_patch")
+            _install_required("runtime_auth_recursion_endpoint_repair_patch")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
@@ -91,10 +93,10 @@ def install() -> bool:
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
                 "writer_authority=installed broker_auth_recovery=installed "
                 "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
-                "venue_repair=installed secondary_venue_activation=installed "
-                "secondary_venue_strict_readiness=installed account_exit_management_recovery=installed "
-                "account_exit_recovery_bootstrap=installed three_venue_stage_verifier=installed "
-                "render_readiness_bridge=installed source=main_pre_bot"
+                "runtime_auth_endpoint_repair=installed venue_repair=installed "
+                "secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
+                "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
+                "three_venue_stage_verifier=installed render_readiness_bridge=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
