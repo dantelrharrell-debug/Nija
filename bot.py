@@ -9425,14 +9425,61 @@ def main():
             "Cannot call start_trading_engine with strategy=None."
         )
 
-    logger.info("🚀 Entering main trading loop")
-    logger.info("Step 6: entering main trading loop")
-    from bot.nija_core_loop import start_trading_engine
-    logger.info("STRATEGY_LOOP_ENTRY marker=main_supervisor_handoff")
-    _trading_thread = start_trading_engine(strategy)
-    if _trading_thread is None or not _trading_thread.is_alive():
-        raise RuntimeError("TradingLoop thread failed to start")
-    logger.info("✅ TradingLoop started via start_trading_engine()")
+    # ── DUPLICATE LOOP GUARD ───────────────────────────────────────────────────
+    # _launch_trading_threads (called from BotStartup thread) may already have
+    # started per-broker trader threads AND the run_trading_loop TradingLoop
+    # thread for the same strategy.  Calling start_trading_engine here when those
+    # threads are live would create a second run_trading_loop — causing duplicate
+    # market scans and double-counting position entries.
+    #
+    # Check:  (a) a TradingLoop daemon thread is already alive, OR
+    #         (b) _active_threads published in _initialized_state has ≥1 live entry.
+    # If either is true, skip start_trading_engine and proceed directly to the
+    # keep-alive supervisor (the TradingLoop thread will keep trading on its own).
+    _trading_loop_already_alive = any(
+        _t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()
+    )
+    if not _trading_loop_already_alive:
+        # Also check for live per-broker trader threads from _launch_trading_threads
+        try:
+            _snap = _read_initialized_state_snapshot(context="duplicate-loop-guard")
+            _existing_threads: dict = _snap.get("active_threads") or {}
+            _live_trader_count = sum(
+                1
+                for _te in _existing_threads.values()
+                if isinstance(_te, dict) and _te.get("thread") is not None
+                and _te["thread"].is_alive()
+            )
+        except Exception:
+            _live_trader_count = 0
+        if _live_trader_count > 0:
+            logger.warning(
+                "🔒 [DUPLICATE_LOOP_GUARD] %d active trader thread(s) already running "
+                "from _launch_trading_threads — skipping start_trading_engine to prevent "
+                "duplicate scan loops.",
+                _live_trader_count,
+            )
+            print(
+                f"[NIJA-PRINT] DUPLICATE_LOOP_GUARD_SKIPPED "
+                f"live_trader_threads={_live_trader_count}",
+                flush=True,
+            )
+            _trading_loop_already_alive = True  # treat as already running
+
+    if _trading_loop_already_alive:
+        logger.info(
+            "✅ TradingLoop (or per-broker trader threads) already live — "
+            "start_trading_engine skipped (duplicate prevention)"
+        )
+    else:
+        logger.info("🚀 Entering main trading loop")
+        logger.info("Step 6: entering main trading loop")
+        from bot.nija_core_loop import start_trading_engine
+        logger.info("STRATEGY_LOOP_ENTRY marker=main_supervisor_handoff")
+        _trading_thread = start_trading_engine(strategy)
+        if _trading_thread is None or not _trading_thread.is_alive():
+            raise RuntimeError("TradingLoop thread failed to start")
+        logger.info("✅ TradingLoop started via start_trading_engine()")
 
     _trading_loop_alive = any(
         _t.name == "TradingLoop" and _t.is_alive() for _t in threading.enumerate()
