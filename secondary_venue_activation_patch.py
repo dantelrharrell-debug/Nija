@@ -181,6 +181,29 @@ def _lookup(manager: Any, broker_module: Any, venue: Venue) -> Optional[Any]:
 def _construct_and_register(manager: Any, broker_module: Any, venue: Venue) -> Optional[Any]:
     if bool(getattr(manager, "_platform_brokers_locked", False)):
         return None
+
+    # Before constructing a new instance, check the global singleton registry.
+    # A broker of this type might already have been created by initialize_platform_brokers()
+    # and stored in the module-level _PLATFORM_BROKER_INSTANCES dict. Reusing that
+    # instance avoids running the authentication flow twice and prevents duplicate objects.
+    getter = getattr(broker_module, "get_platform_broker", None)
+    if callable(getter):
+        try:
+            existing = getter(venue.name)
+            if existing is not None:
+                # Attach the singleton to the manager's broker table so future
+                # _lookup() calls find it there directly.
+                enum_value = _enum(broker_module, venue)
+                register = getattr(manager, "register_platform_broker_instance", None)
+                if callable(register) and enum_value is not None:
+                    try:
+                        register(enum_value, existing, mark_connected_state=False)
+                    except TypeError:
+                        register(enum_value, existing)
+                return existing
+        except Exception:
+            pass
+
     broker_cls = getattr(broker_module, venue.class_name, None)
     if not isinstance(broker_cls, type):
         return None

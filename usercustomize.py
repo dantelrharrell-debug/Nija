@@ -332,15 +332,47 @@ def _install_runtime_import_hook() -> None:
 
     _ORIGINAL_IMPORT = builtins.__import__
 
+    # Thread-local re-entry guard: prevents recursive calls within the same
+    # thread when _patch_loaded_runtime_modules() is running inside the hook.
+    _hook_local = threading.local()
+
     def _nija_import_hook(name, globals=None, locals=None, fromlist=(), level=0):
         module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)  # type: ignore[misc]
+        # Skip patch work if we are already inside the hook on this thread.
+        # This prevents a RecursionError when the patching code itself imports
+        # additional modules that re-enter the hook.
+        if getattr(_hook_local, "active", False):
+            return module
+        _hook_local.active = True
         try:
             _patch_loaded_runtime_modules()
         except Exception as exc:
             logger.warning("USERCUSTOMIZE_RUNTIME_IMPORT_PATCH_FAILED name=%s err=%s", name, exc)
+        finally:
+            _hook_local.active = False
         return module
 
     builtins.__import__ = _nija_import_hook  # type: ignore[assignment]
+
+    # Compact the import hook chain so the recursion shield remains the
+    # outermost guard and the usercustomize hook is treated as a delegate.
+    # This prevents deep wrapper chains that could exceed the recursion limit.
+    try:
+        _shield = sys.modules.get("import_hook_recursion_shield_patch") or sys.modules.get(
+            "nija_import_hook_recursion_shield_patch"
+        )
+        if _shield is None:
+            import importlib as _il
+            _shield = _il.util.find_spec("import_hook_recursion_shield_patch") and _il.import_module(
+                "import_hook_recursion_shield_patch"
+            )
+        compact_fn = getattr(_shield, "compact_import_chain", None) if _shield else None
+        if callable(compact_fn):
+            compact_fn()
+            logger.critical("USERCUSTOMIZE_IMPORT_CHAIN_COMPACTED_AFTER_HOOK")
+    except Exception as _compact_exc:
+        logger.warning("USERCUSTOMIZE_COMPACT_CHAIN_FAILED err=%s", _compact_exc)
+
     _patch_loaded_runtime_modules()
     logger.critical("USERCUSTOMIZE_RUNTIME_IMPORT_HOOK_INSTALLED")
 

@@ -116,6 +116,34 @@ def _normalize_okx() -> None:
             os.environ[name] = _clean(os.environ.get(name))
 
 
+def _normalize_coinbase_pem() -> None:
+    """Convert Coinbase PEM credential from escape-sequence form to true multiline.
+
+    Railway and other platforms encode newlines as the two-character sequence
+    ``\\n`` when storing multi-line secrets as env vars.  The Coinbase Advanced
+    Trade SDK (and the JWT signing code) require a real PEM with actual newline
+    characters.  This normalizes the env vars once at startup so every code
+    path that reads them gets a usable key without having to do its own
+    ``replace('\\\\n', '\\n')`` everywhere.
+    """
+    for name in ("COINBASE_API_SECRET", "COINBASE_PEM_CONTENT",
+                 "COINBASE_PLATFORM_API_SECRET", "COINBASE_ADVANCED_API_SECRET"):
+        raw = os.environ.get(name)
+        if not raw:
+            continue
+        # Convert literal \n (backslash-n, 2 chars) to a real newline.
+        normalized = raw.replace("\\n", "\n").strip()
+        if normalized != raw:
+            os.environ[name] = normalized
+            logger.warning(
+                "COINBASE_PEM_NORMALIZED name=%s begin=%s end=%s lines=%d",
+                name,
+                normalized.startswith("-----BEGIN"),
+                normalized.strip().endswith("-----"),
+                len(normalized.splitlines()),
+            )
+
+
 def _normalize_micro_cap_floors() -> None:
     if not _live_mode():
         return
@@ -341,6 +369,7 @@ _install_logging_format_guard()
 _install_operator_emergency_stop_clear()
 _force_strict_redis_authority("sitecustomize_import")
 _normalize_okx()
+_normalize_coinbase_pem()
 _runtime_defaults()
 _install_stale_exchange_kill_switch_recovery()
 _install_exchange_kill_switch_internal_reject_guard()

@@ -10579,9 +10579,6 @@ class KrakenBroker(BaseBroker):
                 continue
             non_usd_count += 1
             price = price_lookup(symbol)
-            if price is not None and float(price) > 0.0:
-                total += qty * float(price)
-                priced_count += 1
             parsed_price = _to_positive_float(price)
             if parsed_price is None:
                 # Secondary lookup path to avoid zeroing non-fiat holdings when the
@@ -10591,9 +10588,11 @@ class KrakenBroker(BaseBroker):
                 parsed_price = _get_cached_pair_price(symbol)
             if parsed_price is not None:
                 total += qty * parsed_price
+                priced_count += 1
             else:
                 logger.warning(
-                    "[KrakenBalancePipeline] usd_conversion_missing account=%s asset=%s qty=%.8f",
+                    "[KrakenBalancePipeline] usd_conversion_missing account=%s asset=%s qty=%.8f"
+                    " — asset will be excluded from USD total (no price source available)",
                     self.account_identifier,
                     symbol,
                     qty,
@@ -12346,7 +12345,9 @@ class _OKXRestClient:
     that caused site-packages write attempts.
     """
 
-    BASE_URL = os.getenv("OKX_BASE_URL", "https://www.okx.com").rstrip("/")
+    # Class-level default — overridden per-instance so runtime OKX_BASE_URL
+    # changes (e.g. from sitecustomize.py running after module load) take effect.
+    BASE_URL = os.getenv("OKX_BASE_URL", "https://us.okx.com").rstrip("/")
 
     def __init__(self, api_key: str, api_secret: str, passphrase: str, *, simulated: bool = False, timeout: float = 10.0):
         self.api_key = api_key
@@ -12354,6 +12355,10 @@ class _OKXRestClient:
         self.passphrase = passphrase
         self.simulated = simulated
         self.timeout = timeout
+        # Read OKX_BASE_URL from the environment at instance-creation time so that
+        # any normalization done by sitecustomize._normalize_okx() is honoured even
+        # when this module was imported before that normalization ran.
+        self.BASE_URL = os.getenv("OKX_BASE_URL", "https://us.okx.com").rstrip("/")
         logger.warning(
             "OKX_AUTH_DIAG key=%s secret_len=%s passphrase_len=%s base_url=%s simulated=%s",
             bool(api_key),
