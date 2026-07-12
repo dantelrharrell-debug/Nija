@@ -12,56 +12,48 @@ import source_runtime_guard_bootstrap as source_bootstrap
 
 def _reset_source_bootstrap(monkeypatch) -> None:
     monkeypatch.setattr(source_bootstrap, "_INSTALLED", False)
-    monkeypatch.delenv("NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP", raising=False)
-    monkeypatch.delenv("NIJA_VENUE_READINESS_SOURCE_MARKER", raising=False)
-    monkeypatch.delenv("NIJA_BROKER_AUTH_RECOVERY_INSTALLED", raising=False)
-    monkeypatch.delenv("NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED", raising=False)
-    monkeypatch.delenv("NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED", raising=False)
-    monkeypatch.delenv("NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED", raising=False)
-    monkeypatch.delenv("NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED", raising=False)
-    monkeypatch.delenv("NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED", raising=False)
-    monkeypatch.delenv("NIJA_RENDER_READINESS_BRIDGE_INSTALLED", raising=False)
+    for name in (
+        "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
+        "NIJA_VENUE_READINESS_SOURCE_MARKER",
+        "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
+        "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
+        "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
+        "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
+        "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
+        "NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED",
+        "NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED",
+        "NIJA_RENDER_READINESS_BRIDGE_INSTALLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
-def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatch):
+def test_source_bootstrap_installs_writer_and_convergence_before_broker_activation(monkeypatch):
     _reset_source_bootstrap(monkeypatch)
     calls: list[str] = []
-    fake_writer = ModuleType("prebot_writer_authority_fail_closed")
-    fake_writer.install = lambda: calls.append("writer")
-    fake_auth = ModuleType("broker_auth_recovery_patch")
-    fake_auth.install = lambda: calls.append("auth")
-    fake_repair = ModuleType("venue_readiness_execution_repair_patch")
-    fake_repair.install = lambda: calls.append("venue")
-    fake_activator = ModuleType("secondary_venue_activation_patch")
-    fake_activator.install = lambda: calls.append("activator")
-    fake_strict = ModuleType("secondary_venue_strict_readiness_patch")
-    fake_strict.install = lambda: calls.append("strict")
-    fake_exit_recovery = ModuleType("account_exit_management_recovery_patch")
-    fake_exit_recovery.install_import_hook = lambda: calls.append("exit_recovery")
-    fake_exit_bootstrap = ModuleType("account_exit_recovery_bootstrap_patch")
-    fake_exit_bootstrap.install = lambda: calls.append("exit_bootstrap")
-    fake_stage = ModuleType("three_venue_execution_readiness")
-    fake_stage.install = lambda: calls.append("stage")
-    fake_bridge = ModuleType("render_readiness_state_bridge")
-    fake_bridge.install = lambda: calls.append("bridge")
+    names = (
+        ("prebot_writer_authority_fail_closed", "writer", "install"),
+        ("broker_auth_recovery_patch", "auth", "install"),
+        ("runtime_convergence_hardening_patch", "convergence", "install"),
+        ("venue_readiness_execution_repair_patch", "venue", "install"),
+        ("secondary_venue_activation_patch", "activator", "install"),
+        ("secondary_venue_strict_readiness_patch", "strict", "install"),
+        ("account_exit_management_recovery_patch", "exit_recovery", "install_import_hook"),
+        ("account_exit_recovery_bootstrap_patch", "exit_bootstrap", "install"),
+        ("three_venue_execution_readiness", "stage", "install"),
+        ("render_readiness_state_bridge", "bridge", "install"),
+    )
+    modules = {}
+    for module_name, label, installer_name in names:
+        module = ModuleType(module_name)
+        setattr(module, installer_name, lambda label=label: calls.append(label))
+        modules[module_name] = module
 
-    modules = {
-        "prebot_writer_authority_fail_closed": fake_writer,
-        "broker_auth_recovery_patch": fake_auth,
-        "venue_readiness_execution_repair_patch": fake_repair,
-        "secondary_venue_activation_patch": fake_activator,
-        "secondary_venue_strict_readiness_patch": fake_strict,
-        "account_exit_management_recovery_patch": fake_exit_recovery,
-        "account_exit_recovery_bootstrap_patch": fake_exit_bootstrap,
-        "three_venue_execution_readiness": fake_stage,
-        "render_readiness_state_bridge": fake_bridge,
-    }
     real_import = source_bootstrap.importlib.import_module
-
-    def _fake_import(name: str):
-        return modules.get(name) or real_import(name)
-
-    monkeypatch.setattr(source_bootstrap.importlib, "import_module", _fake_import)
+    monkeypatch.setattr(
+        source_bootstrap.importlib,
+        "import_module",
+        lambda name: modules.get(name) or real_import(name),
+    )
     monkeypatch.setenv("RENDER_GIT_COMMIT", "abc123")
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
@@ -70,25 +62,13 @@ def test_source_bootstrap_installs_writer_before_required_guards_once(monkeypatc
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
     assert calls == [
-        "writer",
-        "auth",
-        "venue",
-        "activator",
-        "strict",
-        "exit_recovery",
-        "exit_bootstrap",
-        "stage",
-        "bridge",
+        "writer", "auth", "convergence", "venue", "activator", "strict",
+        "exit_recovery", "exit_bootstrap", "stage", "bridge",
     ]
-    assert source_bootstrap.installed_marker() == "20260711n"
-    assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "1"
+    assert source_bootstrap.installed_marker() == "20260712a"
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] == "1"
+    assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
 
 
 def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
@@ -96,24 +76,18 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     monkeypatch.setenv("LIVE_CAPITAL_VERIFIED", "true")
     monkeypatch.setenv("DRY_RUN_MODE", "false")
     monkeypatch.setenv("PAPER_MODE", "false")
-
-    def _broken_import(_name: str):
-        raise ImportError("repair missing")
-
-    monkeypatch.setattr(source_bootstrap.importlib, "import_module", _broken_import)
+    monkeypatch.setattr(
+        source_bootstrap.importlib,
+        "import_module",
+        lambda _name: (_ for _ in ()).throw(ImportError("repair missing")),
+    )
 
     with pytest.raises(SystemExit) as exc_info:
         source_bootstrap.install()
 
     assert exc_info.value.code == 78
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP"] == "0"
-    assert source_bootstrap.os.environ["NIJA_BROKER_AUTH_RECOVERY_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] == "0"
 
 
 def test_global_startup_guards_install_source_repair_before_other_guards(monkeypatch):
@@ -127,27 +101,16 @@ def test_global_startup_guards_install_source_repair_before_other_guards(monkeyp
     order: list[str] = []
     fake_source = ModuleType("source_runtime_guard_bootstrap")
     fake_source.install = lambda: order.append("source") or True
-
     real_import = module.importlib.import_module
-
-    def _fake_import(name: str):
-        if name == "source_runtime_guard_bootstrap":
-            return fake_source
-        return real_import(name)
-
-    monkeypatch.setattr(module.importlib, "import_module", _fake_import)
+    monkeypatch.setattr(
+        module.importlib,
+        "import_module",
+        lambda name: fake_source if name == "source_runtime_guard_bootstrap" else real_import(name),
+    )
     monkeypatch.setattr(module, "_set_defaults", lambda: order.append("defaults"))
     monkeypatch.setattr(module, "_install_kraken_patch_log_dedupe", lambda: order.append("dedupe"))
-    monkeypatch.setattr(
-        module,
-        "_install_module",
-        lambda module_name, marker: order.append(module_name) or True,
-    )
-    monkeypatch.delattr(
-        builtins,
-        "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B",
-        raising=False,
-    )
+    monkeypatch.setattr(module, "_install_module", lambda module_name, marker: order.append(module_name) or True)
+    monkeypatch.delattr(builtins, "_NIJA_GLOBAL_RUNTIME_STARTUP_GUARDS_20260706B", raising=False)
 
     module.install()
 
