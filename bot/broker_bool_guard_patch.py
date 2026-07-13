@@ -177,12 +177,22 @@ def _install_kraken_exit_safety_convergence() -> None:
     )
 
 
+def _install_kraken_exit_final_guards() -> None:
+    _install_module(
+        "bot.kraken_exit_final_guards_patch",
+        "kraken_exit_final_guards_patch",
+        "KRAKEN_EXIT_FINAL_GUARDS",
+        "20260713-kraken-exit-final-guards-v1",
+    )
+
+
 def install_import_hook() -> None:
     _install_trade_cycle_convergence_repair()
     _install_position_sync_runtime_repair()
     _install_kraken_margin_auto_runtime()
     _install_kraken_all_account_exit_runtime()
     _install_kraken_exit_safety_convergence()
+    _install_kraken_exit_final_guards()
     _install_strategy_backrefs()
     try:
         module = importlib.import_module("bot.broker_independent_live_execution_patch")
