@@ -91,6 +91,22 @@ def _patch_exit_decision(module: ModuleType) -> bool:
     return True
 
 
+def _hard_deny(self: Any, request: Any, t_start: float, reason: str):
+    deny = getattr(self, "_deny", None)
+    if callable(deny):
+        return deny(request, t_start, reason)
+    result_cls = getattr(sys.modules.get(type(self).__module__), "PipelineResult", None)
+    if isinstance(result_cls, type):
+        return result_cls(
+            success=False,
+            symbol=getattr(request, "symbol", ""),
+            side=getattr(request, "side", ""),
+            size_usd=float(getattr(request, "size_usd", 0.0) or 0.0),
+            error=reason,
+        )
+    return reason
+
+
 def _patch_execution_gate(module: ModuleType) -> bool:
     cls = getattr(module, "ExecutionPipeline", None)
     if not isinstance(cls, type):
@@ -113,13 +129,17 @@ def _patch_execution_gate(module: ModuleType) -> bool:
                     getattr(request, "side", ""),
                 )
                 return None
+            error = f"Account exit denied: distributed writer authority unavailable: {reason}"
             logger.error(
-                "ACCOUNT_EXIT_STATE_GATE_NOT_BYPASSED marker=%s account=%s symbol=%s reason=%s",
+                "ACCOUNT_EXIT_WRITER_AUTHORITY_DENIED marker=%s account=%s symbol=%s reason=%s",
                 _MARKER,
                 getattr(request, "account_id", "default"),
                 getattr(request, "symbol", ""),
                 reason,
             )
+            # Do not delegate to the legacy gate here: FORCE_TRADE can bypass that
+            # gate. A close without writer fencing risks duplicate orders.
+            return _hard_deny(self, request, t_start, error)
         return current(self, request, t_start)
 
     enforce_execution_gate._nija_risk_reducing_exit_gate_v1 = True  # type: ignore[attr-defined]
