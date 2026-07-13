@@ -86,9 +86,10 @@ def _normalize_pem(secret: str) -> str:
 
 def _validate_pem(secret: str) -> Tuple[bool, str]:
     normalized = _normalize_pem(secret)
-    if "-----BEGIN " not in normalized or " PRIVATE KEY-----" not in normalized:
+    if "-----BEGIN " not in normalized or "PRIVATE KEY-----" not in normalized.splitlines()[0]:
         return False, "pem_header_missing"
-    if "-----END " not in normalized or " PRIVATE KEY-----" not in normalized.rsplit("-----END ", 1)[-1]:
+    footer = normalized.rstrip().splitlines()[-1] if normalized.strip() else ""
+    if not footer.startswith("-----END ") or "PRIVATE KEY-----" not in footer:
         return False, "pem_footer_missing"
     try:
         from cryptography.hazmat.primitives import serialization
@@ -152,8 +153,6 @@ def _preflight(instance: Any) -> Tuple[bool, str]:
 
 
 def _empty_for(method_name: str):
-    if method_name in {"get_available_markets", "get_tradable_symbols"}:
-        return []
     return []
 
 
