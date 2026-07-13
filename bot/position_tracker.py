@@ -1,7 +1,7 @@
 """NIJA Position Tracker.
 
 Persistent, thread-safe position storage with an explicit distinction between a
-verified cost basis and a temporary adoption mark.  A current market price may be
+verified cost basis and a temporary adoption mark. A current market price may be
 used for visibility, but it is never represented as a real entry price and is
 never persisted to EntryPriceStore as execution truth.
 """
@@ -70,8 +70,16 @@ class PositionTracker:
         if explicit is not None:
             return explicit is True
         price = cls._safe_float(position.get("entry_price"))
-        source = str(position.get("entry_price_source") or position.get("position_source") or "")
-        return cls._source_verified(source, price)
+        entry_source = str(position.get("entry_price_source") or "")
+        if cls._source_verified(entry_source, price):
+            return True
+        position_source = str(position.get("position_source") or "").strip().lower()
+        strategy = str(position.get("strategy") or "").strip().upper()
+        return bool(
+            price > 0
+            and position_source in {"nija_strategy", "strategy_execution", "execution"}
+            and strategy not in {"STARTUP_SYNC", "BROKER_SYNC"}
+        )
 
     def _load_positions(self) -> None:
         try:
@@ -116,7 +124,12 @@ class PositionTracker:
         strategy: str = "APEX_v7.1",
         position_source: str = "nija_strategy",
     ) -> bool:
-        """Record an actual additive trade fill."""
+        """Record an actual additive trade fill.
+
+        A zero-price/zero-value additive row is retained only for compatibility
+        with old corrupted snapshot files. It does not erase a previously
+        verified cost basis; exact snapshot reconciliation will restore quantity.
+        """
         try:
             symbol = str(symbol or "").strip()
             entry_price = self._safe_float(entry_price)
@@ -125,6 +138,7 @@ class PositionTracker:
             if not symbol or quantity <= 0:
                 return False
             fill_verified = entry_price > 0
+            legacy_zero_snapshot = entry_price <= 0 and size_usd <= 0
             now = datetime.now().isoformat()
 
             with self.lock:
@@ -133,12 +147,16 @@ class PositionTracker:
                     old_qty = self._safe_float(existing.get("quantity"))
                     old_price = self._safe_float(existing.get("entry_price"))
                     old_size = self._safe_float(existing.get("size_usd"))
+                    old_verified = self._existing_verified(existing)
                     total_qty = old_qty + quantity
                     total_cost = (old_qty * old_price) + (quantity * entry_price)
                     avg_price = total_cost / total_qty if total_qty > 0 else entry_price
                     total_size = old_size + size_usd
-                    verified = self._existing_verified(existing) and fill_verified
-                    entry_source = "execution" if verified else "execution_price_missing_or_mixed"
+                    verified = old_verified and (fill_verified or legacy_zero_snapshot)
+                    if verified and legacy_zero_snapshot:
+                        entry_source = str(existing.get("entry_price_source") or "execution")
+                    else:
+                        entry_source = "execution" if verified else "execution_price_missing_or_mixed"
                     self.positions[symbol] = {
                         "entry_price": avg_price,
                         "quantity": total_qty,
@@ -154,7 +172,10 @@ class PositionTracker:
                         "auto_exit_blocked": not verified,
                         "auto_exit_block_reason": "" if verified else "unverified_cost_basis",
                     }
-                    logger.info("Updated position %s: avg_entry=$%.2f, qty=%.8f verified=%s", symbol, avg_price, total_qty, verified)
+                    logger.info(
+                        "Updated position %s: avg_entry=$%.2f, qty=%.8f verified=%s legacy_zero_snapshot=%s",
+                        symbol, avg_price, total_qty, verified, legacy_zero_snapshot,
+                    )
                 else:
                     verified = fill_verified
                     entry_source = "execution" if verified else "execution_price_missing"
