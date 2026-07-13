@@ -1,9 +1,8 @@
 """Earliest source-level runtime guard bootstrap for NIJA.
 
-This module is loaded before the first ``bot.*`` import. It acquires canonical
-writer lineage and installs mandatory authentication, broker-isolation, account
-recovery, worker-deduplication and readiness guards. Live-capital startup fails
-closed if a required guard cannot be installed.
+The bootstrap installs safety guards in a deterministic order. Legacy
+convergence watchdogs are deliberately disabled; they repeatedly rewrote live
+scan methods and caused the wrapper storm seen in production.
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260713b"
+_MARKER = "20260713f"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -28,7 +27,9 @@ def _is_live_runtime() -> bool:
     if _truthy("DRY_RUN_MODE") or _truthy("PAPER_MODE"):
         return False
     return any(_truthy(name) for name in (
-        "LIVE_CAPITAL_VERIFIED", "NIJA_EXECUTION_ACTIVE", "NIJA_RUNTIME_EXECUTION_AUTHORITY",
+        "LIVE_CAPITAL_VERIFIED",
+        "NIJA_EXECUTION_ACTIVE",
+        "NIJA_RUNTIME_EXECUTION_AUTHORITY",
     ))
 
 
@@ -45,15 +46,15 @@ def _install_required(module_name: str) -> None:
     installer = getattr(module, "install", None) or getattr(module, "install_import_hook", None)
     if not callable(installer):
         raise RuntimeError(f"{module_name} installer is missing")
-    installer()
+    result = installer()
+    if result is False:
+        raise RuntimeError(f"{module_name} installer reported failure")
 
 
 def _set_status(value: str) -> None:
-    for name in (
+    active = (
         "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
-        "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
-        "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
         "NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED",
         "NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED",
@@ -68,8 +69,12 @@ def _set_status(value: str) -> None:
         "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
         "NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED",
         "NIJA_RENDER_READINESS_BRIDGE_INSTALLED",
-    ):
+    )
+    for name in active:
         os.environ[name] = value
+    os.environ["NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED"] = "0"
+    os.environ["NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED"] = "0"
+    os.environ["NIJA_RUNTIME_CONVERGENCE_WATCHDOGS_DISABLED"] = "1"
     os.environ["NIJA_VENUE_READINESS_SOURCE_MARKER"] = _MARKER
 
 
@@ -84,11 +89,8 @@ def install() -> bool:
             _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
             _install_required("broker_auth_recovery_patch")
-            _install_required("runtime_convergence_hardening_patch")
-            _install_required("runtime_convergence_v2_patch")
             _install_required("runtime_auth_recursion_endpoint_repair_patch")
             _install_required("final_runtime_convergence_patch")
-            _install_required("scan_wrapper_convergence_repair_patch")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
@@ -96,7 +98,7 @@ def install() -> bool:
             _install_required("account_exit_recovery_bootstrap_patch")
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
-            # Must be last: collapse every legacy scan/auth wrapper to one owner.
+            _install_required("scan_wrapper_convergence_repair_patch")
             _install_required("scan_owner_okx_auth_convergence_patch")
 
             _INSTALLED = True
@@ -106,14 +108,10 @@ def install() -> bool:
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
                 "writer_authority=installed writer_generation_scope=installed "
                 "authority_heartbeat_generation_scope=installed "
-                "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
-                "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
-                "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
-                "scan_wrapper_convergence=installed venue_repair=installed "
-                "secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
-                "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
-                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
-                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
+                "broker_auth_recovery=installed runtime_auth_endpoint_repair=installed "
+                "final_runtime_convergence=one_shot scan_wrapper_convergence=canonical_one_shot "
+                "scan_owner_okx_auth_convergence=broker_only_one_shot "
+                "legacy_convergence_watchdogs=disabled source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
@@ -125,7 +123,11 @@ def install() -> bool:
             live = _is_live_runtime()
             logger.critical(
                 "SOURCE_RUNTIME_GUARDS_FAILED marker=%s commit=%s error=%s live=%s",
-                _MARKER, _deployment_commit(), message, live, exc_info=True,
+                _MARKER,
+                _deployment_commit(),
+                message,
+                live,
+                exc_info=True,
             )
             print(
                 f"[NIJA-PRINT] SOURCE_RUNTIME_GUARDS_FAILED marker={_MARKER} "
