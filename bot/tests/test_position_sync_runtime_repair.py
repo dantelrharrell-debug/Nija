@@ -180,6 +180,9 @@ class RecurringPositionSyncTests(unittest.TestCase):
 
         fake_startup_module = types.ModuleType("bot.startup_position_sync")
         fake_startup_module.sync_exchange_positions_on_startup = fake_sync
+        fake_bot_package = types.ModuleType("bot")
+        fake_bot_package.__path__ = []
+        fake_bot_package.startup_position_sync = fake_startup_module
 
         class Manager:
             def __init__(self):
@@ -198,7 +201,10 @@ class RecurringPositionSyncTests(unittest.TestCase):
 
         with patch.dict(
             sys.modules,
-            {"bot.startup_position_sync": fake_startup_module},
+            {
+                "bot": fake_bot_package,
+                "bot.startup_position_sync": fake_startup_module,
+            },
             clear=False,
         ), patch.dict(
             os.environ,
