@@ -3224,6 +3224,43 @@ class NijaCoreLoop:
                 )
             if ai is not None:
                 ai.speed_ctrl.record_cycle(0)
+            # ── SCAN_FUNNEL: consolidated per-cycle pipeline visibility ───
+            _sf_syms = len(symbols)
+            _sf_data = _data_successes
+            _sf_liq  = _liquidity_qualified
+            _sf_reg  = _market_filter_passes
+            logger.critical(
+                "📊 SCAN_FUNNEL | symbols_scanned=%d → data_ok=%d(-%d) "
+                "→ liquidity_pass=%d(-%d) → regime_pass=%d(-%d) "
+                "→ confidence_pass=0(-%d) → selected=0 → final_entry=0 | "
+                "gate_drops: data=%d liq=%d regime=%d confidence=%d "
+                "(data_insufficient=%d vol_low=%d mkt_filter=%d adx=%d rsi=%d)",
+                _sf_syms,
+                _sf_data,       _sf_syms - _sf_data,
+                _sf_liq,        _sf_data - _sf_liq,
+                _sf_reg,        _sf_liq  - _sf_reg,
+                _sf_reg,
+                _sf_syms - _sf_data,
+                _sf_data - _sf_liq,
+                _sf_liq  - _sf_reg,
+                _sf_reg,
+                _gate_rejections.get("data_insufficient", 0),
+                _gate_rejections.get("volume_gate_rejected", 0),
+                _gate_rejections.get("market_filter_rejected", 0),
+                _gate_rejections.get("adx_gate_rejected", 0),
+                _gate_rejections.get("momentum_filter_rejected", 0),
+            )
+            print(
+                f"[NIJA-PRINT] SCAN_FUNNEL "
+                f"symbols_scanned={_sf_syms} "
+                f"data_ok={_sf_data}(-{_sf_syms - _sf_data}) "
+                f"liquidity_pass={_sf_liq}(-{_sf_data - _sf_liq}) "
+                f"regime_pass={_sf_reg}(-{_sf_liq - _sf_reg}) "
+                f"confidence_pass=0(-{_sf_reg}) "
+                f"selected=0 "
+                f"final_entry=0",
+                flush=True,
+            )
             return 0, blocked, scored, _gate_rejections
 
         selected = (
@@ -3456,6 +3493,20 @@ class NijaCoreLoop:
                 _funnel = funnel_traces.setdefault(sig.symbol, {})
                 df = self._fetch_df(broker, sig.symbol)
                 if df is None or len(df) < 100:
+                    _df_exec_len = len(df) if df is not None else 0
+                    logger.critical(
+                        "🚫 [Phase3] EXEC_LOOP_DATA_SKIP symbol=%s — "
+                        "df_len=%d (need>=100) at execution time; "
+                        "symbol passed scoring (need>=50) but failed exec re-fetch. "
+                        "This signal is silently dropped before execute_action().",
+                        sig.symbol, _df_exec_len,
+                    )
+                    print(
+                        f"[NIJA-PRINT] EXEC_LOOP_DATA_SKIP symbol={sig.symbol} "
+                        f"df_len={_df_exec_len} threshold=100 — "
+                        f"dropped before execute_action",
+                        flush=True,
+                    )
                     _funnel["market_data"] = ("FAIL", "DATA_INSUFFICIENT")
                     continue
                 # ── Trade Permission Engine ───────────────────────────────
@@ -4372,6 +4423,47 @@ class NijaCoreLoop:
                 scored,
             )
 
+        # ── SCAN_FUNNEL: consolidated per-cycle pipeline visibility ─────
+        _sf_syms = len(symbols)
+        _sf_data = _data_successes
+        _sf_liq  = _liquidity_qualified
+        _sf_reg  = _market_filter_passes
+        _sf_conf = len(candidates)
+        _sf_sel  = len(selected) if selected is not None else 0
+        _sf_entr = entries
+        logger.critical(
+            "📊 SCAN_FUNNEL | symbols_scanned=%d → data_ok=%d(-%d) "
+            "→ liquidity_pass=%d(-%d) → regime_pass=%d(-%d) "
+            "→ confidence_pass=%d(-%d) → selected=%d(-%d) → final_entry=%d(-%d) | "
+            "gate_drops: data=%d liq=%d regime=%d adx=%d rsi=%d ai=%d notional=%d capital=%d risk=%d",
+            _sf_syms,
+            _sf_data,         _sf_syms - _sf_data,
+            _sf_liq,          _sf_data - _sf_liq,
+            _sf_reg,          _sf_liq  - _sf_reg,
+            _sf_conf,         _sf_reg  - _sf_conf,
+            _sf_sel,          _sf_conf - _sf_sel,
+            _sf_entr,         _sf_sel  - _sf_entr,
+            _gate_rejections.get("data_insufficient", 0),
+            _gate_rejections.get("volume_gate_rejected", 0),
+            _gate_rejections.get("market_filter_rejected", 0),
+            _gate_rejections.get("adx_gate_rejected", 0),
+            _gate_rejections.get("momentum_filter_rejected", 0),
+            _gate_rejections.get("ai_gate_rejected", 0),
+            _gate_rejections.get("notional_gate_rejected", 0),
+            _gate_rejections.get("capital_gate_rejected", 0),
+            _gate_rejections.get("risk_gate_rejected", 0),
+        )
+        print(
+            f"[NIJA-PRINT] SCAN_FUNNEL "
+            f"symbols_scanned={_sf_syms} "
+            f"data_ok={_sf_data}(-{_sf_syms - _sf_data}) "
+            f"liquidity_pass={_sf_liq}(-{_sf_data - _sf_liq}) "
+            f"regime_pass={_sf_reg}(-{_sf_liq - _sf_reg}) "
+            f"confidence_pass={_sf_conf}(-{_sf_reg - _sf_conf}) "
+            f"selected={_sf_sel}(-{_sf_conf - _sf_sel}) "
+            f"final_entry={_sf_entr}(-{_sf_sel - _sf_entr})",
+            flush=True,
+        )
         self._last_phase3_metrics = dict(_phase3_metrics)
         return entries, blocked, scored, _gate_rejections
 
