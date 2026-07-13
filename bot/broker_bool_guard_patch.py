@@ -7,15 +7,9 @@ from typing import Any
 logger = logging.getLogger("nija.broker_bool_guard_patch")
 _MARKER = "BROKER_BOOL_GUARD_PATCHED marker=20260705d"
 _METHODS = (
-    "get_candles",
-    "fetch_ohlcv",
-    "get_ohlcv",
-    "get_historical_data",
-    "get_market_data",
-    "get_account_balance",
-    "get_balance",
-    "place_order",
-    "submit_order",
+    "get_candles", "fetch_ohlcv", "get_ohlcv", "get_historical_data",
+    "get_market_data", "get_account_balance", "get_balance", "place_market_order",
+    "place_order", "submit_order",
 )
 
 
@@ -70,24 +64,22 @@ def _install_collector_override(module: Any) -> bool:
             if not _is_adapter(broker):
                 logger.warning(
                     "BROKER_BOOL_GUARD_REJECTED marker=20260705d key=%s source=%s object_type=%s",
-                    key,
-                    source,
-                    type(broker).__name__,
+                    key, source, type(broker).__name__,
                 )
                 return
             candidates[key] = broker
             logger.info(
                 "BROKER_BOOL_GUARD_ACCEPTED marker=20260705d key=%s source=%s object_type=%s",
-                key,
-                source,
-                type(broker).__name__,
+                key, source, type(broker).__name__,
             )
 
         add("explicit", explicit_broker, "explicit")
         owners = [
-            item
-            for item in (apex, getattr(apex, "strategy", None), getattr(apex, "trading_strategy", None))
-            if item is not None
+            item for item in (
+                apex,
+                getattr(apex, "strategy", None),
+                getattr(apex, "trading_strategy", None),
+            ) if item is not None
         ]
         for owner in owners:
             for attr in ("broker_client", "broker", "active_broker"):
@@ -158,9 +150,19 @@ def _install_position_sync_runtime_repair() -> None:
     )
 
 
+def _install_kraken_margin_auto_runtime() -> None:
+    _install_module(
+        "bot.kraken_margin_auto_runtime_patch",
+        "kraken_margin_auto_runtime_patch",
+        "KRAKEN_MARGIN_AUTO_RUNTIME",
+        "20260713-kraken-margin-v1",
+    )
+
+
 def install_import_hook() -> None:
     _install_trade_cycle_convergence_repair()
     _install_position_sync_runtime_repair()
+    _install_kraken_margin_auto_runtime()
     _install_strategy_backrefs()
     try:
         module = importlib.import_module("bot.broker_independent_live_execution_patch")
