@@ -19,8 +19,23 @@ from typing import Any, Callable
 logger = logging.getLogger("nija.scan_wrapper_convergence_repair")
 _MARKER = "20260712h"
 _LOCK = threading.RLock()
-_SCAN_LOCKS: dict[str, threading.RLock] = {}
-_SCAN_LOCKS_GUARD = threading.RLock()
+
+
+class ScanState:
+    """Per-account scan state used to coordinate concurrent scan requests."""
+
+    __slots__ = ("lock", "complete", "result", "owner_thread_id", "started_at")
+
+    def __init__(self) -> None:
+        self.lock: threading.Lock = threading.Lock()
+        self.complete: threading.Event = threading.Event()
+        self.result: Any = None
+        self.owner_thread_id: int | None = None
+        self.started_at: float = 0.0
+
+
+_SCAN_STATES: dict[str, ScanState] = {}
+_SCAN_STATES_GUARD = threading.RLock()
 _WATCHDOG_STARTED = False
 
 _KNOWN_WRAPPER_MARKERS = (
@@ -72,27 +87,40 @@ def _coerce_result(result: Any) -> Any:
     return result
 
 
-def _broker_identity(broker: Any) -> str:
-    if broker is None:
-        return "platform:unknown"
+def _broker_identity(broker: Any, owner: Any = None) -> str:
+    source = broker or owner
+
     account = ""
-    for attr in ("account_id", "user_id", "account_name", "owner_id"):
-        value = getattr(broker, attr, None)
-        if value:
-            account = str(value).strip().lower().replace(" ", "_")
+    for obj in (broker, owner):
+        if obj is None:
+            continue
+        for attr in ("account_id", "user_id", "account_name", "owner_id"):
+            value = getattr(obj, attr, None)
+            if value:
+                account = str(value).strip().lower().replace(" ", "_")
+                break
+        if account:
             break
+
     if not account:
-        account_type = getattr(broker, "account_type", None)
-        account = str(getattr(account_type, "value", account_type) or "platform").strip().lower()
+        if source is not None:
+            account_type = getattr(source, "account_type", None)
+            account = str(getattr(account_type, "value", account_type) or "platform").strip().lower()
+        else:
+            account = "platform"
+
+    if not account:
+        account = "platform"
+
     text_parts = []
     for attr in ("broker_type", "broker_name", "name", "exchange", "exchange_name"):
         try:
-            value = getattr(broker, attr, "")
+            value = getattr(source, attr, "") if source is not None else ""
             value = getattr(value, "value", value)
             text_parts.append(str(value or ""))
         except Exception:
             continue
-    text = " ".join(text_parts).lower() + " " + type(broker).__name__.lower()
+    text = " ".join(text_parts).lower() + " " + (type(source).__name__.lower() if source is not None else "")
     venue = next((name for name in ("kraken", "coinbase", "okx", "alpaca", "binance") if name in text), "unknown")
     return f"{account}:{venue}"
 
@@ -145,23 +173,74 @@ def _patch_core_loop(module: ModuleType) -> bool:
         )
 
     def run_scan_phase(self: Any, *args: Any, **kwargs: Any) -> Any:
-        broker = kwargs.get("broker") or (args[0] if args else None)
-        key = _broker_identity(broker)
-        with _SCAN_LOCKS_GUARD:
-            scan_lock = _SCAN_LOCKS.setdefault(key, threading.RLock())
-        timeout = max(0.01, float(os.getenv("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "0.25") or 0.25))
-        if not scan_lock.acquire(timeout=timeout):
-            logger.critical(
-                "DUPLICATE_SCAN_BLOCKED marker=%s identity=%s timeout_s=%.2f",
+        broker = (
+            kwargs.get("broker")
+            or getattr(self, "broker", None)
+            or getattr(self, "broker_client", None)
+            or getattr(self, "_broker", None)
+            or (args[0] if args else None)
+        )
+        key = _broker_identity(broker, self)
+
+        with _SCAN_STATES_GUARD:
+            state = _SCAN_STATES.setdefault(key, ScanState())
+
+        current_thread_id = threading.get_ident()
+
+        # Prevent accidental recursive calls from the same scan owner.
+        if state.owner_thread_id == current_thread_id:
+            logger.error(
+                "REENTRANT_SCAN_SUPPRESSED marker=%s identity=%s",
                 _MARKER,
                 key,
-                timeout,
             )
             return _duplicate_result()
-        try:
-            return _coerce_result(base(self, *args, **kwargs))
-        finally:
-            scan_lock.release()
+
+        owner_timeout = max(
+            0.1,
+            float(os.getenv("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "1.0") or 1.0),
+        )
+
+        # Become the authoritative scan owner.
+        if state.lock.acquire(timeout=owner_timeout):
+            try:
+                state.owner_thread_id = current_thread_id
+                state.started_at = time.monotonic()
+                state.complete.clear()
+
+                result = _coerce_result(base(self, *args, **kwargs))
+                state.result = result
+                return result
+            finally:
+                state.owner_thread_id = None
+                state.complete.set()
+                state.lock.release()
+
+        # Another legitimate scan is active.
+        # Wait for it and reuse its result rather than reporting a blocked cycle.
+        wait_timeout = max(
+            5.0,
+            float(os.getenv("NIJA_DUPLICATE_SCAN_RESULT_WAIT_S", "45") or 45),
+        )
+
+        if state.complete.wait(timeout=wait_timeout) and state.result is not None:
+            logger.info(
+                "DUPLICATE_SCAN_RESULT_REUSED marker=%s identity=%s",
+                _MARKER,
+                key,
+            )
+            return state.result
+
+        # The owner appears stalled. Fail closed without crashing or pretending
+        # that the strategy evaluated the market.
+        logger.error(
+            "SCAN_OWNER_TIMEOUT marker=%s identity=%s owner_thread=%s age_s=%.2f",
+            _MARKER,
+            key,
+            state.owner_thread_id,
+            max(0.0, time.monotonic() - state.started_at),
+        )
+        return _duplicate_result()
 
     # Satisfy every legacy watchdog so no older patch wraps this function again.
     run_scan_phase._nija_scan_wrapper_canonical_h = True  # type: ignore[attr-defined]
@@ -212,4 +291,4 @@ def install() -> bool:
         return True
 
 
-__all__ = ["install", "_coerce_result", "_unwrap_known", "_patch_core_loop"]
+__all__ = ["install", "_coerce_result", "_unwrap_known", "_patch_core_loop", "_broker_identity"]

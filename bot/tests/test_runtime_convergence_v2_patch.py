@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import threading
+import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -20,31 +21,52 @@ def test_identity_does_not_depend_on_core_loop_object():
     assert patch._identity(broker) == "user:tania_gilbert:kraken"
 
 
-def test_duplicate_scans_for_same_account_are_blocked(monkeypatch):
-    patch._SCAN_LOCKS.clear()
+def test_duplicate_scans_reuse_authoritative_result(monkeypatch):
+    patch._SCAN_STATES.clear()
     module = ModuleType("bot.nija_core_loop")
     entered = threading.Event()
-    release = threading.Event()
 
     class NijaCoreLoop:
         def run_scan_phase(self, broker):
             entered.set()
-            release.wait(2)
-            return (1, 0, 1, {})
+            time.sleep(0.15)
+            return SimpleNamespace(
+                symbols_scored=5,
+                entries_taken=2,
+                entries_blocked=0,
+                exits_taken=0,
+                next_interval=15,
+                errors=[],
+                metadata={},
+            )
 
     module.NijaCoreLoop = NijaCoreLoop
     monkeypatch.setenv("NIJA_ACCOUNT_SCAN_LOCK_TIMEOUT_S", "0.05")
+    monkeypatch.setenv("NIJA_DUPLICATE_SCAN_RESULT_WAIT_S", "5")
     assert patch._patch_core_loop(module) is True
     broker = SimpleNamespace(account_id="platform", broker_name="kraken")
     first_result = []
-    first = threading.Thread(target=lambda: first_result.append(NijaCoreLoop().run_scan_phase(broker)))
+    second_result = []
+
+    def run_first():
+        first_result.append(NijaCoreLoop().run_scan_phase(broker))
+
+    def run_second():
+        second_result.append(NijaCoreLoop().run_scan_phase(broker))
+
+    first = threading.Thread(target=run_first)
     first.start()
     assert entered.wait(1)
-    second = NijaCoreLoop().run_scan_phase(broker)
-    assert second == (0, 1, 0, {"duplicate_scan": 1})
-    release.set()
-    first.join(1)
-    assert first_result == [(1, 0, 1, {})]
+    second = threading.Thread(target=run_second)
+    second.start()
+    first.join(3)
+    second.join(5)
+    assert len(first_result) == 1
+    assert first_result[0].symbols_scored == 5
+    assert first_result[0].entries_taken == 2
+    assert len(second_result) == 1
+    assert second_result[0].symbols_scored == 5
+    assert second_result[0].entries_taken == 2
 
 
 def test_coinbase_constructor_normalizes_before_client_creation(monkeypatch):
