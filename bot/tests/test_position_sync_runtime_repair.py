@@ -107,6 +107,67 @@ class PositionSnapshotSyncTests(unittest.TestCase):
         self.assertAlmostEqual(repaired["quantity"], quantity, places=8)
         self.assertAlmostEqual(repaired["entry_price"], entry, places=8)
 
+    def test_startup_sync_ignores_legacy_execution_label_with_no_quantity(self) -> None:
+        tracker = position_tracker_module.PositionTracker(self.storage)
+        quantity = 5.13699973
+        entry = 8.20
+        cost = quantity * entry
+        tracker.track_entry(
+            "SOL-USD",
+            entry,
+            quantity,
+            cost,
+            strategy="STARTUP_SYNC",
+            position_source="broker_existing",
+        )
+        tracker.track_entry(
+            "SOL-USD",
+            0.0,
+            quantity,
+            0.0,
+            strategy="STARTUP_SYNC",
+            position_source="broker_existing",
+        )
+        tracker.track_entry(
+            "SOL-USD",
+            0.0,
+            quantity,
+            0.0,
+            strategy="STARTUP_SYNC",
+            position_source="broker_existing",
+        )
+
+        class LegacyEPS:
+            def get(self, symbol):
+                return SimpleNamespace(price=entry / 3.0, quantity=0.0, source="execution")
+
+        class Broker:
+            connected = True
+            position_tracker = tracker
+
+            def get_real_entry_price(self, symbol):
+                return None
+
+            def get_positions(self):
+                return [
+                    {
+                        "symbol": "SOL-USD",
+                        "quantity": quantity,
+                        "current_price": 150.0,
+                        "size_usd": quantity * 150.0,
+                    }
+                ]
+
+        reconciled = startup_sync_module._adopt_broker_positions(
+            Broker(),
+            "platform:kraken",
+            LegacyEPS(),
+        )
+        self.assertEqual(reconciled, 1)
+        repaired = tracker.get_position("SOL-USD")
+        self.assertAlmostEqual(repaired["quantity"], quantity, places=8)
+        self.assertAlmostEqual(repaired["entry_price"], entry, places=8)
+
 
 class KrakenEquityCanonicalizationTests(unittest.TestCase):
     def test_trade_balance_metadata_is_not_classified_as_crypto(self) -> None:
