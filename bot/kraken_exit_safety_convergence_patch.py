@@ -1,9 +1,10 @@
 """Final convergence for account-local Kraken exits.
 
 Loaded after ``kraken_all_account_exit_runtime_patch``. It supplies explicit
-pipeline exit context, preserves legacy non-Kraken exit monitoring, and allows a
-private-authenticated reduce-only margin close during low/critical margin health.
-It never bypasses Kraken permission or private API failures.
+pipeline exit context, keeps recovery cycles position-management-only, preserves
+legacy non-Kraken exit monitoring, and allows a private-authenticated reduce-only
+margin close during low/critical margin health. It never bypasses Kraken
+permission or private API failures.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import builtins
 import logging
 import sys
 import threading
+from contextvars import ContextVar
 from functools import wraps
 from types import ModuleType
 from typing import Any, Mapping
@@ -21,6 +23,7 @@ _MARKER = "20260713-kraken-exit-safety-v1"
 _ORIGINAL_IMPORT = None
 _LOCK = threading.RLock()
 _PATCHED: set[tuple[str, int]] = set()
+_EXIT_MANAGEMENT_SCOPE: ContextVar[bool] = ContextVar("nija_exit_management_scope", default=False)
 
 
 def _is_kraken(broker: Any) -> bool:
@@ -111,6 +114,50 @@ def _patch_all_account_exit(module: ModuleType) -> bool:
     return True
 
 
+def _patch_recovery_scope(module: ModuleType) -> bool:
+    current = getattr(module, "_adopt_and_manage", None)
+    if not callable(current) or getattr(current, "_nija_exit_management_scope_v1", False):
+        return False
+
+    @wraps(current)
+    def adopt_and_manage(trader: Any, identity: str, broker: Any):
+        token = _EXIT_MANAGEMENT_SCOPE.set(True)
+        try:
+            logger.info(
+                "EXIT_ONLY_MANAGEMENT_SCOPE_ENTER marker=%s account=%s",
+                _MARKER, identity,
+            )
+            return current(trader, identity, broker)
+        finally:
+            _EXIT_MANAGEMENT_SCOPE.reset(token)
+
+    adopt_and_manage._nija_exit_management_scope_v1 = True  # type: ignore[attr-defined]
+    module._adopt_and_manage = adopt_and_manage
+    logger.warning("ACCOUNT_EXIT_MANAGEMENT_SCOPE_PATCHED marker=%s", _MARKER)
+    return True
+
+
+def _patch_trade_cycle_truth(module: ModuleType) -> bool:
+    current = getattr(module, "_truthy", None)
+    if not callable(current) or getattr(current, "_nija_exit_scope_truth_v1", False):
+        return False
+
+    @wraps(current)
+    def truthy(name: str, default: bool = False) -> bool:
+        if _EXIT_MANAGEMENT_SCOPE.get() and name == "NIJA_INDEPENDENT_USER_TRADING":
+            logger.info(
+                "EXIT_ONLY_USER_MODE_PRESERVED marker=%s auto_promotion_blocked=true",
+                _MARKER,
+            )
+            return False
+        return bool(current(name, default))
+
+    truthy._nija_exit_scope_truth_v1 = True  # type: ignore[attr-defined]
+    module._truthy = truthy
+    logger.warning("TRADE_CYCLE_EXIT_SCOPE_PROMOTION_GUARD_PATCHED marker=%s", _MARKER)
+    return True
+
+
 def _patch_margin_engine(module: ModuleType) -> bool:
     cls = getattr(module, "KrakenMarginEngine", None)
     if not isinstance(cls, type):
@@ -193,6 +240,10 @@ def _patch_module(module: ModuleType) -> bool:
     changed = False
     if name.endswith("kraken_all_account_exit_runtime_patch"):
         changed = _patch_all_account_exit(module) or changed
+    if name.endswith("account_exit_management_recovery_patch"):
+        changed = _patch_recovery_scope(module) or changed
+    if name.endswith("trade_cycle_convergence_repair_patch"):
+        changed = _patch_trade_cycle_truth(module) or changed
     if name.endswith("kraken_margin_engine"):
         changed = _patch_margin_engine(module) or changed
     if name.endswith("auto_exit_sl_tp_runtime_patch"):
@@ -240,6 +291,8 @@ __all__ = [
     "install_import_hook",
     "_canonical_account_id",
     "_patch_all_account_exit",
+    "_patch_recovery_scope",
+    "_patch_trade_cycle_truth",
     "_patch_margin_engine",
     "_patch_legacy_auto_exit",
 ]
