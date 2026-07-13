@@ -37,6 +37,7 @@ RUN python -m py_compile \
         /app/source_runtime_guard_bootstrap.py \
         /app/venue_readiness_execution_repair_patch.py \
         /app/secondary_venue_activation_patch.py \
+        /app/secondary_venue_connect_semantics_repair.py \
         /app/secondary_venue_strict_readiness_patch.py \
         /app/bot/activation_pending_commit_monitor_patch.py \
         /app/bot/writer_lock_release_guard.py \
@@ -53,11 +54,11 @@ RUN python -m py_compile \
 # writer to release its lease. The .pth hook therefore leaves the replacement
 # fail-closed on Render; source_runtime_guard_bootstrap acquires the same canonical
 # Redis lease before any bot.* import. Other providers retain early acquisition.
-RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); prefix = '/app\n'; p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text(prefix + 'import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install(defer_if_render=True)\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text(prefix + 'import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text(prefix + 'import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file()"
+RUN python -c "import pathlib, site; root = pathlib.Path(site.getsitepackages()[0]); prefix = '/app\n'; p0 = root / '000_nija_prebot_writer_authority.pth'; p0.write_text(prefix + 'import prebot_writer_authority_fail_closed as _nija_prebot_writer; _nija_prebot_writer.install(defer_if_render=True)\n', encoding='utf-8'); p1 = root / 'nija_import_hook_recursion_shield.pth'; p1.write_text(prefix + 'import import_hook_recursion_shield_patch as _nija_shield; _nija_shield.install_import_hook()\n', encoding='utf-8'); p2 = root / 'nija_disconnected_broker_execution_guard.pth'; p2.write_text(prefix + 'import disconnected_broker_execution_guard_patch as _nija_broker_guard; _nija_broker_guard.install_import_hook()\n', encoding='utf-8'); p3 = root / 'nija_secondary_venue_connect_semantics.pth'; p3.write_text(prefix + 'import secondary_venue_connect_semantics_repair as _nija_secondary_connect\n', encoding='utf-8'); assert p0.is_file() and p1.is_file() and p2.is_file() and p3.is_file()"
 
 # Reproduce provider startup from outside the repository. The hooks must be
 # importable during Python site initialization without relying on cwd=/app.
-RUN cd /tmp && python -c "import prebot_writer_authority_fail_closed, import_hook_recursion_shield_patch, disconnected_broker_execution_guard_patch; print('NIJA_PTH_IMPORT_SMOKE_OK')"
+RUN cd /tmp && python -c "import prebot_writer_authority_fail_closed, import_hook_recursion_shield_patch, disconnected_broker_execution_guard_patch, secondary_venue_connect_semantics_repair; print('NIJA_PTH_IMPORT_SMOKE_OK')"
 
 # Ensure Redis connectivity and production bootstrap scripts are present and executable.
 RUN test -f /app/scripts/redis_connectivity_check.sh && \
