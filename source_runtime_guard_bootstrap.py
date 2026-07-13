@@ -14,7 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260712h"
+_MARKER = "20260713a"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -58,6 +58,7 @@ def _set_status(value: str) -> None:
         "NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED",
         "NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED",
+        "NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED",
         "NIJA_FINAL_WORKER_POSITION_COINBASE_REPAIR_INSTALLED",
         "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
         "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
@@ -79,6 +80,7 @@ def install() -> bool:
         try:
             _install_required("prebot_writer_authority_fail_closed")
             _install_required("writer_generation_scope_repair_patch")
+            _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
             _install_required("broker_auth_recovery_patch")
             _install_required("runtime_convergence_hardening_patch")
@@ -101,6 +103,7 @@ def install() -> bool:
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
                 "writer_authority=installed writer_generation_scope=installed "
+                "authority_heartbeat_generation_scope=installed "
                 "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
                 "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
                 "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
