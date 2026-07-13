@@ -1,21 +1,10 @@
-"""Converge NIJA's live trading cycle onto one account-safe execution path.
+"""Final convergence repair for NIJA's shared live trading cycle.
 
-This repair is deliberately narrow:
-
-* serialize the shared ``TradingStrategy`` object so broker/APEX context cannot
-  bleed between platform and user threads;
-* reject true same-thread re-entry instead of recursively running the scanner;
-* hydrate APEX with the selected broker's own cached balance for every cycle;
-* auto-promote user cycles to independent signal generation when copy trading is
-  disabled;
-* make position-adoption verification recover the broker used by adoption;
-* emit one deterministic ``CYCLE_OUTCOME`` record for every cycle;
-* cache broker balance reads so user capital authority does not depend on the
-  platform-only aggregate capital snapshot.
-
-The patch is installed from ``usercustomize.py`` after ``sitecustomize.py`` has
-finished loading the existing runtime overlays, so this is the final convergence
-layer rather than another competing execution route.
+The runtime uses one TradingStrategy/APEX object from multiple platform and user
+threads. This patch serializes that mutable context, supplies broker-scoped
+balance authority, repairs user position-adoption verification, and emits one
+terminal CYCLE_OUTCOME record for every cycle without bypassing risk controls or
+exchange constraints.
 """
 
 from __future__ import annotations
@@ -33,12 +22,12 @@ logger = logging.getLogger("nija.trade_cycle_convergence_repair")
 
 _ORIGINAL_IMPORT: Optional[Callable[..., Any]] = None
 _PATCHED_MODULES: set[tuple[str, int]] = set()
+_REGISTRY_GUARD = threading.Lock()
 _TLS = threading.local()
 _TRUTHY = {"1", "true", "yes", "on", "y", "enabled"}
 _MISSING = object()
 
 _OUTCOME_PRIORITY = {
-    "NO_SCAN_RESULT": 0,
     "NO_SIGNAL": 10,
     "NO_MARKETS_OR_DATA": 20,
     "MARKET_CLOSED": 25,
@@ -53,7 +42,6 @@ _OUTCOME_PRIORITY = {
     "CYCLE_ERROR": 95,
     "ORDER_SUBMITTED": 100,
 }
-
 _BALANCE_ATTRS = (
     "_nija_last_account_balance_usd",
     "_nija_cycle_balance_usd",
@@ -78,13 +66,11 @@ _BALANCE_KEYS = (
 
 def _truthy(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in _TRUTHY
+    return default if raw is None else str(raw).strip().lower() in _TRUTHY
 
 
 def _safe_float(value: Any) -> Optional[float]:
-    if isinstance(value, bool) or value is None:
+    if value is None or isinstance(value, bool):
         return None
     if isinstance(value, dict):
         for key in _BALANCE_KEYS:
@@ -97,20 +83,17 @@ def _safe_float(value: Any) -> Optional[float]:
         parsed = float(value)
     except (TypeError, ValueError, OverflowError):
         return None
-    if parsed < 0 or parsed != parsed:
-        return None
-    return parsed
+    return parsed if parsed >= 0 and parsed == parsed else None
 
 
 def _cache_balance(broker: Any, raw: Any) -> Optional[float]:
     balance = _safe_float(raw)
-    if balance is None or broker is None:
-        return balance
-    try:
-        setattr(broker, "_nija_last_account_balance_usd", balance)
-        setattr(broker, "_nija_last_account_balance_at", time.time())
-    except Exception:
-        pass
+    if broker is not None and balance is not None:
+        try:
+            setattr(broker, "_nija_last_account_balance_usd", balance)
+            setattr(broker, "_nija_last_account_balance_at", time.time())
+        except Exception:
+            pass
     return balance
 
 
@@ -119,10 +102,9 @@ def _cached_balance(broker: Any) -> Optional[float]:
         return None
     for attr in _BALANCE_ATTRS:
         try:
-            value = getattr(broker, attr, None)
+            parsed = _safe_float(getattr(broker, attr, None))
         except Exception:
-            continue
-        parsed = _safe_float(value)
+            parsed = None
         if parsed is not None:
             return parsed
     return None
@@ -134,38 +116,30 @@ def _broker_label(broker: Any) -> str:
     account = ""
     venue = ""
     for attr in ("account_id", "_account_id", "user_id", "account_name", "label"):
-        try:
-            value = getattr(broker, attr, None)
-        except Exception:
-            value = None
+        value = getattr(broker, attr, None)
         if value:
             account = str(value).strip()
             break
     for attr in ("broker_name", "exchange_name", "name", "exchange", "venue"):
-        try:
-            value = getattr(broker, attr, None)
-        except Exception:
-            value = None
+        value = getattr(broker, attr, None)
         if value:
             venue = str(getattr(value, "value", value)).strip()
             break
     if not venue:
         venue = type(broker).__name__.replace("Broker", "").strip() or "broker"
-    if not account:
-        account = "platform_or_unlabeled"
-    return f"{account}:{venue}".lower().replace(" ", "_")
+    return f"{account or 'platform_or_unlabeled'}:{venue}".lower().replace(" ", "_")
 
 
-def _current_context() -> Optional[dict[str, Any]]:
+def _context() -> Optional[dict[str, Any]]:
     value = getattr(_TLS, "cycle_context", None)
     return value if isinstance(value, dict) else None
 
 
 def _set_outcome(outcome: str, **details: Any) -> None:
-    context = _current_context()
+    context = _context()
     if context is None:
         return
-    current = str(context.get("outcome") or "NO_SCAN_RESULT")
+    current = str(context.get("outcome") or "NO_SIGNAL")
     if _OUTCOME_PRIORITY.get(outcome, 0) >= _OUTCOME_PRIORITY.get(current, 0):
         context["outcome"] = outcome
     if details:
@@ -173,7 +147,6 @@ def _set_outcome(outcome: str, **details: Any) -> None:
 
 
 def _reason_text(result: Any) -> str:
-    pieces: list[str] = []
     names = (
         "reason",
         "reasons",
@@ -184,54 +157,45 @@ def _reason_text(result: Any) -> str:
         "diagnostics",
         "message",
     )
+    values: list[str] = []
     if isinstance(result, dict):
-        for name in names:
-            if name in result:
-                pieces.append(str(result.get(name)))
+        values.extend(str(result.get(name)) for name in names if name in result)
     else:
         for name in names:
-            try:
-                value = getattr(result, name, None)
-            except Exception:
-                value = None
+            value = getattr(result, name, None)
             if value:
-                pieces.append(str(value))
-    return " ".join(pieces).lower()
+                values.append(str(value))
+    return " ".join(values).lower()
 
 
 def classify_scan_result(result: Any) -> str:
     """Map a core-loop result to one stable terminal outcome."""
     reason = _reason_text(result)
-    if "max position" in reason or "position cap" in reason or "no slot" in reason:
+    if any(token in reason for token in ("max position", "position cap", "no slot")):
         return "MAX_POSITIONS_REACHED"
     if any(token in reason for token in ("insufficient cash", "insufficient balance", "not enough cash", "underfunded")):
         return "INSUFFICIENT_CASH"
     if "risk" in reason and any(token in reason for token in ("reject", "block", "veto", "denied")):
         return "RISK_REJECTED"
-    if "pending order" in reason or "symbol lock" in reason or "order lock" in reason:
+    if any(token in reason for token in ("pending order", "symbol lock", "order lock")):
         return "PENDING_ORDER_BLOCKED"
     if "market closed" in reason:
         return "MARKET_CLOSED"
 
-    def _count(name: str) -> int:
+    def count(name: str) -> int:
         try:
             value = result.get(name, 0) if isinstance(result, dict) else getattr(result, name, 0)
             return int(value or 0)
         except Exception:
             return 0
 
-    entries = _count("entries_taken")
-    exits = _count("exits_taken")
-    scored = _count("symbols_scored")
-    blocked = _count("entries_blocked")
-
-    if entries > 0:
+    if count("entries_taken") > 0:
         return "ORDER_SUBMITTED"
-    if exits > 0:
+    if count("exits_taken") > 0:
         return "EXIT_EXECUTED"
-    if scored <= 0:
+    if count("symbols_scored") <= 0:
         return "NO_MARKETS_OR_DATA"
-    if blocked > 0:
+    if count("entries_blocked") > 0:
         return "ENTRY_BLOCKED"
     return "NO_SIGNAL"
 
@@ -246,7 +210,7 @@ def _execution_succeeded(result: Any) -> bool:
 
 
 def _patch_balance_method(cls: type) -> None:
-    original = cls.__dict__.get("get_account_balance")
+    original = getattr(cls, "get_account_balance", None)
     if not callable(original) or getattr(original, "_nija_balance_cache_patch", False):
         return
 
@@ -260,9 +224,40 @@ def _patch_balance_method(cls: type) -> None:
 
 
 def _patch_broker_module(module: ModuleType) -> None:
-    for value in list(vars(module).values()):
+    for value in tuple(vars(module).values()):
         if isinstance(value, type) and "broker" in value.__name__.lower():
             _patch_balance_method(value)
+
+
+def _get_cycle_locks(owner: Any) -> tuple[threading.Lock, threading.Lock]:
+    with _REGISTRY_GUARD:
+        cycle_lock = getattr(owner, "_nija_cycle_convergence_lock", None)
+        if cycle_lock is None:
+            cycle_lock = threading.Lock()
+            setattr(owner, "_nija_cycle_convergence_lock", cycle_lock)
+        state_lock = getattr(owner, "_nija_cycle_convergence_state_lock", None)
+        if state_lock is None:
+            state_lock = threading.Lock()
+            setattr(owner, "_nija_cycle_convergence_state_lock", state_lock)
+    return cycle_lock, state_lock
+
+
+def _set_apex_broker(apex: Any, broker: Any) -> None:
+    if apex is None:
+        return
+    updater = getattr(apex, "update_broker_client", None)
+    if callable(updater):
+        try:
+            updater(broker)
+            return
+        except Exception as exc:
+            logger.warning("APEX_BROKER_CONTEXT_UPDATE_FAILED broker=%s err=%s", _broker_label(broker), exc)
+    for attr in ("broker_client", "broker", "active_broker"):
+        if hasattr(apex, attr):
+            try:
+                setattr(apex, attr, broker)
+            except Exception:
+                pass
 
 
 def _patch_trading_strategy_class(cls: type) -> None:
@@ -270,7 +265,7 @@ def _patch_trading_strategy_class(cls: type) -> None:
         return
 
     original_adopt = getattr(cls, "adopt_existing_positions", None)
-    if callable(original_adopt) and not getattr(original_adopt, "_nija_adoption_broker_memory", False):
+    if callable(original_adopt):
         def adopt_existing_positions(self: Any, *args: Any, **kwargs: Any):
             broker = kwargs.get("broker", args[0] if args else None)
             account_id = str(kwargs.get("account_id", "") or "")
@@ -280,16 +275,13 @@ def _patch_trading_strategy_class(cls: type) -> None:
                 setattr(self, "_nija_adoption_brokers", mapping)
             if account_id and broker is not None:
                 mapping[account_id] = broker
-            result = original_adopt(self, *args, **kwargs)
-            if account_id and broker is not None:
-                mapping[account_id] = broker
-            return result
+            return original_adopt(self, *args, **kwargs)
 
         adopt_existing_positions._nija_adoption_broker_memory = True  # type: ignore[attr-defined]
         setattr(cls, "adopt_existing_positions", adopt_existing_positions)
 
     original_verify = getattr(cls, "verify_position_adoption_status", None)
-    if callable(original_verify) and not getattr(original_verify, "_nija_optional_broker_repair", False):
+    if callable(original_verify):
         def verify_position_adoption_status(
             self: Any,
             broker: Any = None,
@@ -305,20 +297,9 @@ def _patch_trading_strategy_class(cls: type) -> None:
             if broker is None:
                 broker = getattr(self, "broker", None)
             if broker is None:
-                logger.error(
-                    "POSITION_ADOPTION_VERIFY_NO_BROKER account=%s broker_name=%s",
-                    account_id,
-                    broker_name,
-                )
+                logger.error("POSITION_ADOPTION_VERIFY_NO_BROKER account=%s broker=%s", account_id, broker_name)
                 return False
-            return bool(
-                original_verify(
-                    self,
-                    broker=broker,
-                    broker_name=broker_name,
-                    account_id=account_id,
-                )
-            )
+            return bool(original_verify(self, broker=broker, broker_name=broker_name, account_id=account_id))
 
         verify_position_adoption_status._nija_optional_broker_repair = True  # type: ignore[attr-defined]
         setattr(cls, "verify_position_adoption_status", verify_position_adoption_status)
@@ -331,15 +312,7 @@ def _patch_trading_strategy_class(cls: type) -> None:
         selected_broker = broker if broker is not None else getattr(self, "broker", None)
         account = _broker_label(selected_broker)
         thread_id = threading.get_ident()
-
-        cycle_lock = getattr(self, "_nija_cycle_convergence_lock", None)
-        if cycle_lock is None:
-            cycle_lock = threading.Lock()
-            setattr(self, "_nija_cycle_convergence_lock", cycle_lock)
-        state_lock = getattr(self, "_nija_cycle_convergence_state_lock", None)
-        if state_lock is None:
-            state_lock = threading.Lock()
-            setattr(self, "_nija_cycle_convergence_state_lock", state_lock)
+        cycle_lock, state_lock = _get_cycle_locks(self)
 
         with state_lock:
             owner_thread = getattr(self, "_nija_cycle_owner_thread", None)
@@ -357,8 +330,7 @@ def _patch_trading_strategy_class(cls: type) -> None:
             timeout_s = max(1.0, float(os.environ.get("NIJA_CYCLE_SERIALIZATION_TIMEOUT_S", "120") or "120"))
         except Exception:
             timeout_s = 120.0
-        acquired = cycle_lock.acquire(timeout=timeout_s)
-        if not acquired:
+        if not cycle_lock.acquire(timeout=timeout_s):
             logger.critical(
                 "CYCLE_OUTCOME=CYCLE_LOCK_TIMEOUT account=%s timeout_s=%.1f owner_account=%s",
                 account,
@@ -368,33 +340,26 @@ def _patch_trading_strategy_class(cls: type) -> None:
             return int(float(os.environ.get("NIJA_CYCLE_LOCK_TIMEOUT_RETRY_S", "10") or "10"))
 
         previous_context = getattr(_TLS, "cycle_context", None)
-        previous_broker = getattr(self, "broker", None)
+        previous_strategy_broker = getattr(self, "broker", None)
         apex = getattr(self, "apex", None)
+        previous_apex_broker = getattr(apex, "broker_client", _MISSING) if apex is not None else _MISSING
         previous_balance = getattr(apex, "_last_account_balance", _MISSING) if apex is not None else _MISSING
         context: dict[str, Any] = {
             "account": account,
-            "outcome": "NO_SCAN_RESULT",
+            "outcome": "NO_SIGNAL",
             "started_at": time.monotonic(),
             "execute_attempts": 0,
             "details": {},
         }
         _TLS.cycle_context = context
-
         with state_lock:
             setattr(self, "_nija_cycle_owner_thread", thread_id)
             setattr(self, "_nija_cycle_owner_account", account)
 
         effective_user_mode = bool(user_mode)
-        if (
-            effective_user_mode
-            and _truthy("NIJA_INDEPENDENT_USER_TRADING", True)
-            and not _truthy("NIJA_COPY_TRADE_ENABLED", False)
-        ):
+        if effective_user_mode and _truthy("NIJA_INDEPENDENT_USER_TRADING", True) and not _truthy("NIJA_COPY_TRADE_ENABLED", False):
             effective_user_mode = False
-            logger.warning(
-                "USER_INDEPENDENT_AUTHORITY_AUTO_PROMOTED account=%s reason=copy_trading_disabled",
-                account,
-            )
+            logger.warning("USER_INDEPENDENT_AUTHORITY_AUTO_PROMOTED account=%s reason=copy_trading_disabled", account)
 
         balance = _cached_balance(selected_broker)
         if balance is None and selected_broker is not None and _truthy("NIJA_CYCLE_BALANCE_REFRESH_IF_UNCACHED", True):
@@ -405,59 +370,39 @@ def _patch_trading_strategy_class(cls: type) -> None:
                 except Exception as exc:
                     logger.warning("ACCOUNT_BALANCE_CONTEXT_REFRESH_FAILED account=%s err=%s", account, exc)
 
-        if selected_broker is not None:
-            try:
-                setattr(self, "broker", selected_broker)
-            except Exception:
-                pass
-            if apex is not None:
-                updater = getattr(apex, "update_broker_client", None)
-                if callable(updater):
-                    try:
-                        updater(selected_broker)
-                    except Exception as exc:
-                        logger.warning("APEX_BROKER_CONTEXT_UPDATE_FAILED account=%s err=%s", account, exc)
-        if apex is not None and balance is not None:
-            try:
-                setattr(apex, "_last_account_balance", float(balance))
-            except Exception:
-                pass
-
-        logger.critical(
-            "CYCLE_SERIALIZATION_ACQUIRED account=%s balance=%s user_mode_requested=%s user_mode_effective=%s",
-            account,
-            f"${balance:.2f}" if balance is not None else "unknown",
-            bool(user_mode),
-            effective_user_mode,
-        )
-        logger.critical(
-            "ACCOUNT_CAPITAL_AUTHORITY_ACTIVE account=%s source=broker_scoped_cache balance=%s",
-            account,
-            f"${balance:.2f}" if balance is not None else "unknown",
-        )
-
         try:
-            return original_run_cycle(
-                self,
-                broker=selected_broker,
-                user_mode=effective_user_mode,
-                *args,
-                **kwargs,
+            setattr(self, "broker", selected_broker)
+            _set_apex_broker(apex, selected_broker)
+            if apex is not None and balance is not None:
+                setattr(apex, "_last_account_balance", float(balance))
+
+            logger.critical(
+                "CYCLE_SERIALIZATION_ACQUIRED account=%s balance=%s user_mode_requested=%s user_mode_effective=%s",
+                account,
+                f"${balance:.2f}" if balance is not None else "unknown",
+                bool(user_mode),
+                effective_user_mode,
             )
+            logger.critical(
+                "ACCOUNT_CAPITAL_AUTHORITY_ACTIVE account=%s source=broker_scoped balance=%s",
+                account,
+                f"${balance:.2f}" if balance is not None else "unknown",
+            )
+            return original_run_cycle(self, *args, broker=selected_broker, user_mode=effective_user_mode, **kwargs)
         except Exception as exc:
             _set_outcome("CYCLE_ERROR", error=f"{type(exc).__name__}: {exc}")
             raise
         finally:
+            if context.get("outcome") == "NO_SIGNAL" and not (getattr(self, "symbols", None) or []):
+                context["outcome"] = "NO_MARKETS_OR_DATA"
             elapsed = max(0.0, time.monotonic() - float(context["started_at"]))
-            outcome = str(context.get("outcome") or "NO_SCAN_RESULT")
-            details = context.get("details") if isinstance(context.get("details"), dict) else {}
             logger.critical(
                 "CYCLE_OUTCOME=%s account=%s elapsed_s=%.3f execute_attempts=%d details=%s",
-                outcome,
+                context.get("outcome"),
                 account,
                 elapsed,
                 int(context.get("execute_attempts", 0) or 0),
-                details,
+                context.get("details", {}),
             )
 
             if apex is not None and previous_balance is not _MISSING:
@@ -465,18 +410,12 @@ def _patch_trading_strategy_class(cls: type) -> None:
                     setattr(apex, "_last_account_balance", previous_balance)
                 except Exception:
                     pass
+            if previous_apex_broker is not _MISSING:
+                _set_apex_broker(apex, previous_apex_broker)
             try:
-                setattr(self, "broker", previous_broker)
+                setattr(self, "broker", previous_strategy_broker)
             except Exception:
                 pass
-            if apex is not None and previous_broker is not None and previous_broker is not selected_broker:
-                updater = getattr(apex, "update_broker_client", None)
-                if callable(updater):
-                    try:
-                        updater(previous_broker)
-                    except Exception as exc:
-                        logger.warning("APEX_BROKER_CONTEXT_RESTORE_FAILED account=%s err=%s", account, exc)
-
             _TLS.cycle_context = previous_context
             with state_lock:
                 setattr(self, "_nija_cycle_owner_thread", None)
@@ -502,9 +441,8 @@ def _patch_core_loop_class(cls: type) -> None:
         except Exception as exc:
             _set_outcome("SCAN_ERROR", error=f"{type(exc).__name__}: {exc}")
             raise
-        outcome = classify_scan_result(result)
         _set_outcome(
-            outcome,
+            classify_scan_result(result),
             symbols_scored=getattr(result, "symbols_scored", None),
             entries_taken=getattr(result, "entries_taken", None),
             entries_blocked=getattr(result, "entries_blocked", None),
@@ -526,7 +464,7 @@ def _patch_apex_class(cls: type) -> None:
         return
 
     def execute_action(self: Any, *args: Any, **kwargs: Any):
-        context = _current_context()
+        context = _context()
         if context is not None:
             context["execute_attempts"] = int(context.get("execute_attempts", 0) or 0) + 1
         try:
@@ -548,14 +486,7 @@ def _patch_independent_trader_class(cls: type) -> None:
         return
     original = getattr(cls, "_execute_trading_cycle", None)
     if callable(original):
-        def _execute_trading_cycle(
-            self: Any,
-            broker_type: Any,
-            broker: Any,
-            broker_name: str,
-            cycle_count: int,
-            balance: float,
-        ):
+        def _execute_trading_cycle(self: Any, broker_type: Any, broker: Any, broker_name: str, cycle_count: int, balance: float):
             _cache_balance(broker, balance)
             return original(self, broker_type, broker, broker_name, cycle_count, balance)
 
@@ -565,31 +496,11 @@ def _patch_independent_trader_class(cls: type) -> None:
     logger.warning("INDEPENDENT_TRADER_BALANCE_HANDOFF_PATCHED class=%s", cls.__name__)
 
 
-def _patch_hardening_module(module: ModuleType) -> None:
-    original = getattr(module, "normalize_live_execution_env", None)
-    if not callable(original) or getattr(original, "_nija_independent_authority_preserved", False):
-        return
-
-    def normalize_live_execution_env() -> None:
-        original()
-        os.environ["NIJA_INDEPENDENT_USER_CAPITAL_AUTHORITY"] = "true"
-        os.environ["NIJA_INDEPENDENT_USER_TRADING"] = "true"
-        os.environ["NIJA_COPY_TRADE_ENABLED"] = "false"
-
-    normalize_live_execution_env._nija_independent_authority_preserved = True  # type: ignore[attr-defined]
-    setattr(module, "normalize_live_execution_env", normalize_live_execution_env)
-    normalize_live_execution_env()
-    logger.warning(
-        "INDEPENDENT_ACCOUNT_CAPITAL_AUTHORITY_ENABLED platform_aggregate_separated=true broker_scoped_cycles=true"
-    )
-
-
 def _patch_module(module: ModuleType) -> None:
     name = str(getattr(module, "__name__", ""))
     key = (name, id(module))
     if key in _PATCHED_MODULES:
         return
-
     if name in {"bot.trading_strategy", "trading_strategy"}:
         cls = getattr(module, "TradingStrategy", None)
         if isinstance(cls, type):
@@ -608,16 +519,11 @@ def _patch_module(module: ModuleType) -> None:
             _patch_independent_trader_class(cls)
     elif name in {"bot.broker_manager", "broker_manager", "bot.broker_integration", "broker_integration"}:
         _patch_broker_module(module)
-    elif name in {"bot.live_execution_runtime_hardening_patch", "live_execution_runtime_hardening_patch"}:
-        _patch_hardening_module(module)
-
     _PATCHED_MODULES.add(key)
 
 
 def _patch_loaded_modules() -> None:
-    target_names = (
-        "bot.live_execution_runtime_hardening_patch",
-        "live_execution_runtime_hardening_patch",
+    for name in (
         "bot.broker_manager",
         "broker_manager",
         "bot.broker_integration",
@@ -630,8 +536,7 @@ def _patch_loaded_modules() -> None:
         "trading_strategy",
         "bot.independent_broker_trader",
         "independent_broker_trader",
-    )
-    for name in target_names:
+    ):
         module = sys.modules.get(name)
         if isinstance(module, ModuleType):
             try:
@@ -642,7 +547,6 @@ def _patch_loaded_modules() -> None:
 
 def install_import_hook() -> None:
     global _ORIGINAL_IMPORT
-
     os.environ["NIJA_INDEPENDENT_USER_CAPITAL_AUTHORITY"] = "true"
     os.environ["NIJA_INDEPENDENT_USER_TRADING"] = "true"
     os.environ["NIJA_COPY_TRADE_ENABLED"] = "false"
@@ -652,12 +556,18 @@ def install_import_hook() -> None:
     _patch_loaded_modules()
     if _ORIGINAL_IMPORT is not None:
         return
-
     _ORIGINAL_IMPORT = builtins.__import__
+    hook_local = threading.local()
 
     def import_hook(name: str, globals: Any = None, locals: Any = None, fromlist: tuple = (), level: int = 0):
         module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)  # type: ignore[misc]
-        _patch_loaded_modules()
+        if getattr(hook_local, "active", False):
+            return module
+        hook_local.active = True
+        try:
+            _patch_loaded_modules()
+        finally:
+            hook_local.active = False
         return module
 
     builtins.__import__ = import_hook  # type: ignore[assignment]
@@ -667,7 +577,4 @@ def install_import_hook() -> None:
     )
 
 
-__all__ = [
-    "classify_scan_result",
-    "install_import_hook",
-]
+__all__ = ["classify_scan_result", "install_import_hook"]
