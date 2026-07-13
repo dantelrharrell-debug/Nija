@@ -195,6 +195,15 @@ def _install_kraken_exit_execution_safety() -> None:
     )
 
 
+def _install_kraken_exit_margin_cost() -> None:
+    _install_module(
+        "bot.kraken_exit_margin_cost_patch",
+        "kraken_exit_margin_cost_patch",
+        "KRAKEN_EXIT_MARGIN_COST",
+        "20260713-kraken-exit-margin-cost-v1",
+    )
+
+
 def install_import_hook() -> None:
     _install_trade_cycle_convergence_repair()
     _install_position_sync_runtime_repair()
@@ -203,6 +212,7 @@ def install_import_hook() -> None:
     _install_kraken_exit_safety_convergence()
     _install_kraken_exit_final_guards()
     _install_kraken_exit_execution_safety()
+    _install_kraken_exit_margin_cost()
     _install_strategy_backrefs()
     try:
         module = importlib.import_module("bot.broker_independent_live_execution_patch")
