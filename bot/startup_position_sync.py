@@ -7,7 +7,6 @@ must never be treated as additive fills.
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("nija")
@@ -36,11 +35,35 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return parsed if parsed == parsed else default
 
 
+def _legacy_duplicate_snapshot_detected(
+    existing: Optional[Dict],
+    broker_quantity: float,
+) -> bool:
+    """Detect cost-basis dilution caused by additive broker snapshot ingestion."""
+    if not existing or broker_quantity <= 0:
+        return False
+    existing_qty = _safe_float(existing.get("quantity"))
+    existing_cost = _safe_float(existing.get("size_usd"))
+    num_adds = int(_safe_float(existing.get("num_adds")))
+    strategy = str(existing.get("strategy", "") or "").strip().upper()
+    position_source = str(existing.get("position_source", "") or "").strip().lower()
+    quantity_error = abs(existing_qty - broker_quantity) / max(broker_quantity, 1e-12)
+    startup_owned = strategy == "STARTUP_SYNC" or position_source == "broker_existing"
+    return (
+        existing_qty > 0
+        and existing_cost > 0
+        and num_adds > 0
+        and startup_owned
+        and quantity_error > 0.05
+    )
+
+
 def _resolve_entry_price(
     broker: Any,
     symbol: str,
     eps: Optional[Any],
     broker_quantity: float,
+    existing: Optional[Dict] = None,
 ) -> Tuple[float, str]:
     """Resolve a trustworthy cost-basis price without using current market price."""
     if hasattr(broker, "get_real_entry_price"):
@@ -51,6 +74,26 @@ def _resolve_entry_price(
         except Exception as exc:
             logger.debug("startup_position_sync: get_real_entry_price(%s) failed: %s", symbol, exc)
 
+    # Old startup sync treated every broker snapshot as a new fill. The diluted
+    # average was then persisted with the default "execution" source and no
+    # quantity, so source alone cannot prove the record is trustworthy. When the
+    # tracker carries the duplicate-sync signature, force exact snapshot repair
+    # to reconstruct entry from stored cost basis / actual broker quantity.
+    if _legacy_duplicate_snapshot_detected(existing, broker_quantity):
+        existing_qty = _safe_float((existing or {}).get("quantity"))
+        existing_cost = _safe_float((existing or {}).get("size_usd"))
+        reconstructed = existing_cost / broker_quantity if broker_quantity > 0 else 0.0
+        logger.warning(
+            "EXCHANGE_POSITION_SYNC legacy_diluted_entry_ignored symbol=%s "
+            "tracked_qty=%.8f broker_qty=%.8f stored_cost=$%.8f reconstructed_entry=$%.8f",
+            symbol,
+            existing_qty,
+            broker_quantity,
+            existing_cost,
+            reconstructed,
+        )
+        return 0.0, "reconstructed_cost_basis"
+
     if eps is not None:
         try:
             record = eps.get(symbol) if callable(getattr(eps, "get", None)) else None
@@ -58,10 +101,6 @@ def _resolve_entry_price(
             source = str(getattr(record, "source", "override") or "override")
             stored_qty = _safe_float(getattr(record, "quantity", 0.0))
             if stored > 0:
-                # Execution/API prices remain useful even if the held quantity
-                # changed. Override prices with a mismatched quantity may be the
-                # product of the old duplicate-snapshot bug, so let the tracker
-                # reconstruct cost basis instead of trusting them blindly.
                 if source in {"execution", "api"}:
                     return stored, source
                 if stored_qty <= 0 or broker_quantity <= 0:
@@ -130,7 +169,6 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
             "EXCHANGE_POSITION_SYNC broker=%s reconciled=0 skipped_invalid=0 errors=0 reason=no_open_positions",
             broker_name,
         )
-        # A broker may connect before balances hydrate. Keep it retryable.
         setattr(broker, "_startup_position_sync_adopted", False)
         return 0
 
@@ -166,6 +204,7 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
                 symbol,
                 eps,
                 quantity,
+                existing,
             )
             changed = _position_changed(existing, quantity, entry_price)
 
@@ -184,8 +223,6 @@ def _adopt_broker_positions(broker: Any, broker_name: str, eps: Optional[Any]) -
                     )
                 )
             elif existing is None:
-                # Legacy fallback only for a new position. Never call additive
-                # track_entry for an existing broker snapshot.
                 fallback_entry = entry_price or current_price
                 cost_basis = quantity * fallback_entry if fallback_entry > 0 else broker_value
                 ok = bool(
@@ -339,4 +376,5 @@ __all__ = [
     "sync_exchange_positions_on_startup",
     "_adopt_broker_positions",
     "_collect_connected_brokers",
+    "_legacy_duplicate_snapshot_detected",
 ]
