@@ -4,7 +4,6 @@ This module is safe to import during Python site initialization. It never logs
 credential values, never marks a venue connected, and never bypasses exchange,
 risk, funding, or execution checks.
 """
-
 from __future__ import annotations
 
 import logging
@@ -132,6 +131,18 @@ def _install_activation_observer() -> None:
     patch.activate_once = wrapped
 
 
+def _install_scan_owner_repair() -> None:
+    try:
+        import reentrant_scan_owner_repair as repair
+        repair.install()
+    except Exception as exc:
+        logger.warning(
+            "REENTRANT_SCAN_OWNER_REPAIR_IMPORT_PENDING marker=%s error=%s",
+            _MARKER,
+            type(exc).__name__,
+        )
+
+
 def install() -> None:
     global _INSTALLED
     with _LOCK:
@@ -140,6 +151,7 @@ def install() -> None:
         _INSTALLED = True
         _normalize_coinbase_env()
         _install_activation_observer()
+        _install_scan_owner_repair()
         logger.warning("SECONDARY_VENUE_RUNTIME_DIAGNOSTICS_INSTALLED marker=%s", _MARKER)
 
 
