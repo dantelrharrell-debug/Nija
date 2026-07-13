@@ -1,6 +1,6 @@
 """Final convergence for account-local Kraken exits.
 
-Loaded after ``kraken_all_account_exit_runtime_patch``.  It supplies explicit
+Loaded after ``kraken_all_account_exit_runtime_patch``. It supplies explicit
 pipeline exit context, preserves legacy non-Kraken exit monitoring, and allows a
 private-authenticated reduce-only margin close during low/critical margin health.
 It never bypasses Kraken permission or private API failures.
@@ -14,7 +14,7 @@ import sys
 import threading
 from functools import wraps
 from types import ModuleType
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 logger = logging.getLogger("nija.kraken_exit_safety_convergence")
 _MARKER = "20260713-kraken-exit-safety-v1"
@@ -34,6 +34,33 @@ def _is_kraken(broker: Any) -> bool:
     return any("kraken" in str(value or "").lower() for value in values)
 
 
+def _canonical_account_id(identity: Any, broker: Any = None) -> str:
+    text = str(identity or "").strip().lower().replace("/", ":")
+    parts = [part for part in text.split(":") if part]
+    if parts:
+        if parts[0] == "platform":
+            return "platform"
+        if parts[0] == "user" and len(parts) >= 2:
+            return parts[1]
+    if text.startswith("user_"):
+        text = text[5:]
+    if text.endswith("_kraken"):
+        text = text[:-7]
+    if text and text not in {"kraken", "none", "default"}:
+        return text
+    for attr in ("account_identifier", "account_id", "user_id", "owner_id"):
+        value = str(getattr(broker, attr, "") or "").strip().lower()
+        if value.startswith("user:"):
+            return value.split(":", 1)[1]
+        if value.startswith("user_"):
+            value = value[5:]
+        if value.endswith("_kraken"):
+            value = value[:-7]
+        if value and value not in {"kraken", "none", "default"}:
+            return "platform" if value.startswith("platform") else value
+    return "platform"
+
+
 def _patch_all_account_exit(module: ModuleType) -> bool:
     current = getattr(module, "_submit_exit", None)
     if not callable(current) or getattr(current, "_nija_explicit_exit_context_v1", False):
@@ -46,6 +73,7 @@ def _patch_all_account_exit(module: ModuleType) -> bool:
         quantity: float,
         reason: str,
     ) -> Mapping[str, Any]:
+        account_id = _canonical_account_id(account, broker)
         try:
             from bot.pipeline_order_submitter import submit_market_order_via_pipeline
             result = submit_market_order_via_pipeline(
@@ -56,14 +84,19 @@ def _patch_all_account_exit(module: ModuleType) -> bool:
                 size_type="base",
                 strategy=f"KrakenAccountExit:{reason}",
                 intent_type="exit",
-                account_id_override=account,
+                account_id_override=account_id,
                 reduce_only_override=None,
                 position_effect="close",
                 metadata_override={
                     "closing_position": True,
                     "exit_reason": reason,
                     "account_exit_supervisor": True,
+                    "supervisor_identity": account,
                 },
+            )
+            logger.critical(
+                "KRAKEN_EXIT_ACCOUNT_CONTEXT marker=%s supervisor=%s account_id=%s pair=%s reason=%s",
+                _MARKER, account, account_id, pair, reason,
             )
             return result if isinstance(result, Mapping) else {
                 "status": "error", "error": str(result),
@@ -103,9 +136,6 @@ def _patch_margin_engine(module: ModuleType) -> bool:
                 or reason_text.startswith("maintenance_low:")
             )
         ):
-            # Permission/health API checks already passed inside the original
-            # method.  The only failing condition is the risk ratio itself, so a
-            # reduce-only close improves rather than expands exposure.
             logger.critical(
                 "KRAKEN_MARGIN_RISK_REDUCING_EXIT_ALLOWED marker=%s account=%s reason=%s",
                 _MARKER, getattr(self, "account_id", "default"), reason_text,
@@ -127,10 +157,7 @@ def _patch_legacy_auto_exit(module: ModuleType) -> bool:
         if callable(original):
             module._start_monitor = original
             changed = True
-            logger.warning(
-                "NON_KRAKEN_GLOBAL_AUTO_EXIT_RESTORED marker=%s",
-                _MARKER,
-            )
+            logger.warning("NON_KRAKEN_GLOBAL_AUTO_EXIT_RESTORED marker=%s", _MARKER)
 
     current_scan = getattr(module, "_scan_once", None)
     if callable(current_scan) and not getattr(current_scan, "_nija_kraken_account_local_owner_v1", False):
@@ -147,15 +174,12 @@ def _patch_legacy_auto_exit(module: ModuleType) -> bool:
 
         scan_once._nija_kraken_account_local_owner_v1 = True  # type: ignore[attr-defined]
         module._scan_once = scan_once
-        engine_cls = None
         for candidate in ("bot.execution_engine", "execution_engine"):
             loaded = sys.modules.get(candidate)
             cls = getattr(loaded, "ExecutionEngine", None) if isinstance(loaded, ModuleType) else None
             if isinstance(cls, type):
-                engine_cls = cls
+                cls.scan_stop_loss_take_profit_once = scan_once
                 break
-        if engine_cls is not None:
-            engine_cls.scan_stop_loss_take_profit_once = scan_once
         changed = True
         logger.warning("KRAKEN_GLOBAL_AUTO_EXIT_SCAN_REDIRECTED marker=%s", _MARKER)
     return changed
@@ -214,6 +238,7 @@ def install_import_hook() -> None:
 
 __all__ = [
     "install_import_hook",
+    "_canonical_account_id",
     "_patch_all_account_exit",
     "_patch_margin_engine",
     "_patch_legacy_auto_exit",
