@@ -10,14 +10,19 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260713-runtime-convergence-v3"
+RELEASE_ID = "20260713-runtime-convergence-v4"
 _INSTALLED = False
 _LOCK = threading.RLock()
 
+# Installation order is intentional.  Cost-basis compatibility must be active
+# before exact snapshots reconcile legacy positions; the final equity guard must
+# wrap the dynamic valuation layer after it has patched Kraken broker classes.
 _INSTALLERS = (
     ("scan_wrapper_convergence_repair_patch", "install"),
-    ("bot.kraken_equity_runtime_patch", "install_import_hook"),
+    ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
+    ("bot.kraken_equity_runtime_patch", "install_import_hook"),
+    ("bot.kraken_equity_double_count_guard_patch", "install_import_hook"),
     ("bot.kraken_margin_auto_runtime_patch", "install_import_hook"),
     ("bot.kraken_all_account_exit_runtime_patch", "install_import_hook"),
     ("bot.kraken_exit_safety_convergence_patch", "install_import_hook"),
