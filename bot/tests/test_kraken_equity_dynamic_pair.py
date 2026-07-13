@@ -70,7 +70,7 @@ def test_dynamic_asset_value_is_included_without_tracker_mutation():
     assert positions[0]["price_pair"] == "AIREUR"
     assert positions[0]["size_usd"] > 12.0
     total = module._payload_total_equity(
-        {"result": {"ZUSD": "72.6069"}, "total_funds": 88.39},
+        {"result": {"ZUSD": "72.6069"}, "total_funds": 72.6069},
         positions,
     )
-    assert total > 88.39
+    assert total > 85.0
