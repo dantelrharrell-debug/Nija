@@ -123,96 +123,77 @@ def _install_module(primary: str, fallback: str, label: str, marker: str) -> Non
         logger.warning("%s_INSTALL_FAILED marker=%s error=%s", label, marker, exc)
 
 
-def _install_strategy_backrefs() -> None:
+def _install_scan_wrapper_convergence() -> None:
     _install_module(
-        "bot.strategy_broker_backref_patch",
-        "strategy_broker_backref_patch",
-        "BROKER_BOOL_GUARD_STRATEGY_BACKREF",
-        "20260705d",
+        "scan_wrapper_convergence_repair_patch",
+        "scan_wrapper_convergence_repair_patch",
+        "SCAN_WRAPPER_CONVERGENCE",
+        "20260713-scan-wrapper-v2",
     )
+
+
+def _install_strategy_backrefs() -> None:
+    _install_module("bot.strategy_broker_backref_patch", "strategy_broker_backref_patch", "BROKER_BOOL_GUARD_STRATEGY_BACKREF", "20260705d")
 
 
 def _install_trade_cycle_convergence_repair() -> None:
-    _install_module(
-        "bot.trade_cycle_convergence_repair_patch",
-        "trade_cycle_convergence_repair_patch",
-        "TRADE_CYCLE_CONVERGENCE",
-        "20260713a",
-    )
+    _install_module("bot.trade_cycle_convergence_repair_patch", "trade_cycle_convergence_repair_patch", "TRADE_CYCLE_CONVERGENCE", "20260713a")
 
 
 def _install_position_sync_runtime_repair() -> None:
-    _install_module(
-        "bot.position_sync_runtime_repair_patch",
-        "position_sync_runtime_repair_patch",
-        "POSITION_SYNC_RUNTIME_REPAIR",
-        "20260713-position-sync-v2",
-    )
+    _install_module("bot.position_sync_runtime_repair_patch", "position_sync_runtime_repair_patch", "POSITION_SYNC_RUNTIME_REPAIR", "20260713-position-sync-v2")
+
+
+def _install_kraken_equity_runtime() -> None:
+    _install_module("bot.kraken_equity_runtime_patch", "kraken_equity_runtime_patch", "KRAKEN_EQUITY_RUNTIME", "20260713-kraken-equity-v2")
 
 
 def _install_kraken_margin_auto_runtime() -> None:
-    _install_module(
-        "bot.kraken_margin_auto_runtime_patch",
-        "kraken_margin_auto_runtime_patch",
-        "KRAKEN_MARGIN_AUTO_RUNTIME",
-        "20260713-kraken-margin-v1",
-    )
+    _install_module("bot.kraken_margin_auto_runtime_patch", "kraken_margin_auto_runtime_patch", "KRAKEN_MARGIN_AUTO_RUNTIME", "20260713-kraken-margin-v1")
 
 
 def _install_kraken_all_account_exit_runtime() -> None:
-    _install_module(
-        "bot.kraken_all_account_exit_runtime_patch",
-        "kraken_all_account_exit_runtime_patch",
-        "KRAKEN_ALL_ACCOUNT_EXIT_RUNTIME",
-        "20260713-kraken-all-account-exit-v1",
-    )
+    _install_module("bot.kraken_all_account_exit_runtime_patch", "kraken_all_account_exit_runtime_patch", "KRAKEN_ALL_ACCOUNT_EXIT_RUNTIME", "20260713-kraken-all-account-exit-v1")
 
 
 def _install_kraken_exit_safety_convergence() -> None:
-    _install_module(
-        "bot.kraken_exit_safety_convergence_patch",
-        "kraken_exit_safety_convergence_patch",
-        "KRAKEN_EXIT_SAFETY_CONVERGENCE",
-        "20260713-kraken-exit-safety-v1",
-    )
+    _install_module("bot.kraken_exit_safety_convergence_patch", "kraken_exit_safety_convergence_patch", "KRAKEN_EXIT_SAFETY_CONVERGENCE", "20260713-kraken-exit-safety-v1")
 
 
 def _install_kraken_exit_final_guards() -> None:
-    _install_module(
-        "bot.kraken_exit_final_guards_patch",
-        "kraken_exit_final_guards_patch",
-        "KRAKEN_EXIT_FINAL_GUARDS",
-        "20260713-kraken-exit-final-guards-v1",
-    )
+    _install_module("bot.kraken_exit_final_guards_patch", "kraken_exit_final_guards_patch", "KRAKEN_EXIT_FINAL_GUARDS", "20260713-kraken-exit-final-guards-v1")
 
 
 def _install_kraken_exit_execution_safety() -> None:
-    _install_module(
-        "bot.kraken_exit_execution_safety_patch",
-        "kraken_exit_execution_safety_patch",
-        "KRAKEN_EXIT_EXECUTION_SAFETY",
-        "20260713-kraken-exit-execution-safety-v1",
-    )
+    _install_module("bot.kraken_exit_execution_safety_patch", "kraken_exit_execution_safety_patch", "KRAKEN_EXIT_EXECUTION_SAFETY", "20260713-kraken-exit-execution-safety-v1")
 
 
 def _install_kraken_exit_margin_cost() -> None:
-    _install_module(
-        "bot.kraken_exit_margin_cost_patch",
-        "kraken_exit_margin_cost_patch",
-        "KRAKEN_EXIT_MARGIN_COST",
-        "20260713-kraken-exit-margin-cost-v1",
-    )
+    _install_module("bot.kraken_exit_margin_cost_patch", "kraken_exit_margin_cost_patch", "KRAKEN_EXIT_MARGIN_COST", "20260713-kraken-exit-margin-cost-v1")
+
+
+def _install_coinbase_pem_quarantine() -> None:
+    _install_module("bot.coinbase_pem_quarantine_patch", "coinbase_pem_quarantine_patch", "COINBASE_PEM_QUARANTINE", "20260713-coinbase-pem-v1")
+
+
+def _install_runtime_release_manifest() -> None:
+    _install_module("bot.runtime_release_manifest_patch", "runtime_release_manifest_patch", "RUNTIME_RELEASE_MANIFEST", "20260713-runtime-convergence-v3")
 
 
 def install_import_hook() -> None:
+    # Order matters: unwrap scan recursion first, then account state/valuation,
+    # then execution and exit surfaces.  Publish the release manifest last.
+    _install_scan_wrapper_convergence()
     _install_trade_cycle_convergence_repair()
     _install_position_sync_runtime_repair()
+    _install_kraken_equity_runtime()
     _install_kraken_margin_auto_runtime()
     _install_kraken_all_account_exit_runtime()
     _install_kraken_exit_safety_convergence()
     _install_kraken_exit_final_guards()
     _install_kraken_exit_execution_safety()
     _install_kraken_exit_margin_cost()
+    _install_coinbase_pem_quarantine()
     _install_strategy_backrefs()
     try:
         module = importlib.import_module("bot.broker_independent_live_execution_patch")
@@ -221,8 +202,10 @@ def install_import_hook() -> None:
             module = importlib.import_module("broker_independent_live_execution_patch")
         except Exception as exc:
             logger.warning("BROKER_BOOL_GUARD_IMPORT_WAIT marker=20260705d error=%s", exc)
+            _install_runtime_release_manifest()
             return
     _install_collector_override(module)
+    _install_runtime_release_manifest()
 
 
 def install() -> None:
