@@ -68,6 +68,9 @@ class TestWriterAuthorizedStateGate:
             def _enforce_execution_gate(self, request, t_start):
                 return "state_gate_blocked"
 
+            def _deny(self, request, t_start, reason):
+                return f"hard_deny:{reason}"
+
         module = types.ModuleType("bot.execution_pipeline")
         module.ExecutionPipeline = ExecutionPipeline
         return module
@@ -81,6 +84,7 @@ class TestWriterAuthorizedStateGate:
             account_id="tania_gilbert",
             symbol="AIR-EUR",
             side="sell",
+            size_usd=1.1,
         )
 
     def test_live_exit_bypasses_entry_state_only_after_writer_verification(self):
@@ -106,7 +110,7 @@ class TestWriterAuthorizedStateGate:
             assert pipeline._enforce_execution_gate(self._request("exit"), 0.0) is None
             assert pipeline._enforce_execution_gate(self._request("entry"), 0.0) == "state_gate_blocked"
 
-    def test_missing_writer_authority_keeps_state_gate_blocked(self):
+    def test_missing_writer_authority_is_hard_denied(self):
         module = self._pipeline_module()
         assert guards._patch_execution_gate(module)
 
@@ -126,11 +130,18 @@ class TestWriterAuthorizedStateGate:
             clear=False,
         ), patch.dict(
             os.environ,
-            {"DRY_RUN_MODE": "false", "PAPER_MODE": "false", "APP_STORE_MODE": "false"},
+            {
+                "DRY_RUN_MODE": "false",
+                "PAPER_MODE": "false",
+                "APP_STORE_MODE": "false",
+                "FORCE_TRADE": "true",
+            },
             clear=False,
         ):
             pipeline = module.ExecutionPipeline()
-            assert pipeline._enforce_execution_gate(self._request("exit"), 0.0) == "state_gate_blocked"
+            result = pipeline._enforce_execution_gate(self._request("exit"), 0.0)
+        assert result.startswith("hard_deny:Account exit denied")
+        assert "writer lease unavailable" in result
 
     def test_dry_run_exit_is_not_promoted_to_live(self):
         module = self._pipeline_module()
