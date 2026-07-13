@@ -1,7 +1,8 @@
-"""Final convergence repair for duplicate scans and auth-hook recursion.
+"""One-shot compatibility layer for NIJA runtime convergence.
 
-This patch is intentionally narrow. It preserves broker authentication, writer
-lineage, risk controls, exchange validation, and all exit protections.
+Legacy versions started a 250 ms watchdog that repeatedly rewrote live methods.
+This version performs the safe repairs once and delegates scan ownership to the
+single canonical scan wrapper.
 """
 from __future__ import annotations
 
@@ -10,15 +11,14 @@ import logging
 import os
 import sys
 import threading
-import time
 from types import ModuleType, SimpleNamespace
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("nija.final_runtime_convergence")
-MARKER = "20260712e"
+MARKER = "20260713f"
 _LOCK = threading.RLock()
 _PATCHED = False
-_WATCHDOG_STARTED = False
+_INSTALLING = False
 
 
 def _auth_module() -> ModuleType | None:
@@ -51,11 +51,8 @@ def _safe_normalize(venue: str, instance: Any | None = None) -> None:
 
 
 def _restore_importlib() -> bool:
-    """Remove the legacy global importlib wrapper once and for all."""
     legacy = sys.modules.get("runtime_convergence_hardening_patch")
-    if not isinstance(legacy, ModuleType):
-        return False
-    original = getattr(legacy, "_ORIGINAL_IMPORT", None)
+    original = getattr(legacy, "_ORIGINAL_IMPORT", None) if isinstance(legacy, ModuleType) else None
     if callable(original) and importlib.import_module is not original:
         importlib.import_module = original  # type: ignore[assignment]
         logger.warning("GLOBAL_IMPORTLIB_WRAPPER_REMOVED marker=%s", MARKER)
@@ -64,52 +61,18 @@ def _restore_importlib() -> bool:
 
 
 def _replace_recursive_auth_hooks() -> bool:
-    patched = _restore_importlib()
+    changed = _restore_importlib()
     legacy = sys.modules.get("runtime_convergence_hardening_patch")
     if isinstance(legacy, ModuleType):
-        def safe_patch_auth_surface(target: ModuleType) -> bool:
-            auth = _auth_module()
-            if auth is None:
-                return False
-            changed = False
-            for class_name in dir(target):
-                cls = getattr(target, class_name, None)
-                if not isinstance(cls, type):
-                    continue
-                lowered = class_name.lower()
-                venue = "coinbase" if "coinbase" in lowered else "okx" if "okx" in lowered else ""
-                if not venue:
-                    continue
-                for method_name in ("connect", "verify_connection", "test_connection"):
-                    original = getattr(cls, method_name, None)
-                    if not callable(original) or getattr(original, "_nija_final_auth_safe", False):
-                        continue
-
-                    def wrapped(self: Any, *args: Any, __original: Callable[..., Any] = original,
-                                __venue: str = venue, **kwargs: Any) -> Any:
-                        _safe_normalize(__venue, self)
-                        return __original(self, *args, **kwargs)
-
-                    wrapped._nija_final_auth_safe = True  # type: ignore[attr-defined]
-                    wrapped.__wrapped__ = original  # type: ignore[attr-defined]
-                    setattr(cls, method_name, wrapped)
-                    changed = True
-            return changed
-
-        legacy._patch_auth_surface = safe_patch_auth_surface
-        patched = True
-
+        setattr(legacy, "_WATCHDOG_STARTED", False)
+        changed = True
     v2 = sys.modules.get("runtime_convergence_v2_patch")
     if isinstance(v2, ModuleType):
-        v2._normalize_auth = lambda venue: _safe_normalize(str(venue))
-        if hasattr(v2, "_duplicate_result"):
-            # Keep the V2 source-level result contract as the single suppression result.
-            pass
-        patched = True
-
-    if patched:
-        logger.warning("AUTH_IMPORT_RECURSION_REMOVED marker=%s", MARKER)
-    return patched
+        setattr(v2, "_STARTED", False)
+        changed = True
+    if changed:
+        logger.warning("AUTH_IMPORT_RECURSION_REMOVED marker=%s watchdog=false", MARKER)
+    return changed
 
 
 def _duplicate_result() -> SimpleNamespace:
@@ -142,72 +105,28 @@ def _coerce_scan_result(result: Any) -> Any:
             metadata=meta,
         )
     required = ("symbols_scored", "entries_taken", "entries_blocked", "exits_taken", "next_interval")
-    if not all(hasattr(result, field) for field in required):
-        logger.error("INVALID_SCAN_RESULT_REPLACED marker=%s result_type=%s", MARKER, type(result).__name__)
-        return _duplicate_result()
-    return result
+    return result if all(hasattr(result, field) for field in required) else _duplicate_result()
 
 
 def _patch_core_loop(module: ModuleType) -> bool:
-    cls = getattr(module, "NijaCoreLoop", None)
-    if not isinstance(cls, type):
+    try:
+        import scan_wrapper_convergence_repair_patch as canonical
+        return bool(canonical._patch_core_loop(module))
+    except Exception as exc:
+        logger.error("CANONICAL_SCAN_PATCH_FAILED marker=%s error=%s", MARKER, exc)
         return False
-    original = getattr(cls, "run_scan_phase", None)
-    if not callable(original) or getattr(original, "_nija_final_result_contract_e", False):
-        return False
-
-    def run_scan_phase(self: Any, *args: Any, **kwargs: Any) -> Any:
-        result = original(self, *args, **kwargs)
-        coerced = _coerce_scan_result(result)
-        if coerced is not result:
-            logger.warning(
-                "DUPLICATE_SCAN_RESULT_CONTRACT_REPAIRED marker=%s result_type=%s",
-                MARKER, type(result).__name__,
-            )
-        return coerced
-
-    run_scan_phase._nija_final_result_contract_e = True  # type: ignore[attr-defined]
-    run_scan_phase.__wrapped__ = original  # type: ignore[attr-defined]
-    setattr(cls, "run_scan_phase", run_scan_phase)
-    logger.warning("SCAN_RESULT_CONTRACT_PATCHED marker=%s", MARKER)
-    return True
 
 
 def _patch_okx_classes() -> bool:
+    try:
+        import scan_owner_okx_auth_convergence_patch as broker_patch
+    except Exception:
+        return False
     changed = False
-    for module_name in (
-        "bot.broker_manager", "broker_manager",
-        "bot.broker_integration", "broker_integration",
-        "bot.multi_account_broker_manager", "multi_account_broker_manager",
-    ):
-        module = sys.modules.get(module_name)
-        if not isinstance(module, ModuleType):
-            continue
-        for class_name in dir(module):
-            cls = getattr(module, class_name, None)
-            if not isinstance(cls, type) or "okx" not in class_name.lower():
-                continue
-            original = getattr(cls, "connect", None)
-            if not callable(original) or getattr(original, "_nija_final_okx_endpoint_e", False):
-                continue
-
-            def connect(self: Any, *args: Any, __original: Callable[..., Any] = original, **kwargs: Any) -> Any:
-                _safe_normalize("okx", self)
-                before = str(os.environ.get("OKX_BASE_URL", "") or "").strip().rstrip("/")
-                result = __original(self, *args, **kwargs)
-                after = str(os.environ.get("OKX_BASE_URL", "") or "").strip().rstrip("/")
-                if after:
-                    _set_okx_endpoint(self, after)
-                if after and after != before:
-                    logger.warning("OKX_LIVE_ENDPOINT_UPDATED marker=%s before=%s after=%s", MARKER, before, after)
-                return result
-
-            connect._nija_final_okx_endpoint_e = True  # type: ignore[attr-defined]
-            connect.__wrapped__ = original  # type: ignore[attr-defined]
-            setattr(cls, "connect", connect)
-            changed = True
-    if changed:
-        logger.warning("OKX_LIVE_ENDPOINT_CONVERGENCE_PATCHED marker=%s", MARKER)
+    for name in ("bot.broker_manager", "broker_manager"):
+        module = sys.modules.get(name)
+        if isinstance(module, ModuleType):
+            changed = bool(broker_patch._patch_brokers(module)) or changed
     return changed
 
 
@@ -221,29 +140,27 @@ def _patch_loaded() -> bool:
     return changed
 
 
-def _watchdog() -> None:
-    global _PATCHED
-    deadline = time.monotonic() + max(60.0, float(os.getenv("NIJA_FINAL_PATCH_WATCHDOG_S", "600") or 600))
-    while time.monotonic() < deadline:
-        try:
-            _PATCHED = _patch_loaded() or _PATCHED
-        except Exception as exc:
-            logger.error("FINAL_RUNTIME_CONVERGENCE_RETRY marker=%s err=%s", MARKER, exc)
-        time.sleep(0.25)
-
-
-def install() -> None:
-    global _PATCHED, _WATCHDOG_STARTED
+def install() -> bool:
+    global _PATCHED, _INSTALLING
     with _LOCK:
-        _PATCHED = _patch_loaded() or _PATCHED
-        if not _WATCHDOG_STARTED:
-            _WATCHDOG_STARTED = True
-            threading.Thread(target=_watchdog, name="FinalRuntimeConvergenceWatchdog", daemon=True).start()
-        logger.warning("FINAL_RUNTIME_CONVERGENCE_INSTALLED marker=%s patched=%s watchdog=true", MARKER, _PATCHED)
+        if _PATCHED:
+            return True
+        if _INSTALLING:
+            return False
+        _INSTALLING = True
+        try:
+            _replace_recursive_auth_hooks()
+            _PATCHED = True
+            os.environ["NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED"] = "1"
+            os.environ["NIJA_RUNTIME_CONVERGENCE_WATCHDOGS_DISABLED"] = "1"
+            logger.warning("FINAL_RUNTIME_CONVERGENCE_INSTALLED marker=%s watchdog=false", MARKER)
+            return True
+        finally:
+            _INSTALLING = False
 
 
 def installed() -> bool:
-    return _PATCHED or _WATCHDOG_STARTED
+    return _PATCHED
 
 
-__all__ = ["install", "installed", "_coerce_scan_result", "_duplicate_result"]
+__all__ = ["install", "installed", "_coerce_scan_result", "_duplicate_result", "_patch_core_loop", "_set_okx_endpoint"]
