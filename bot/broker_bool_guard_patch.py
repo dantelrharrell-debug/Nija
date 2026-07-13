@@ -47,13 +47,15 @@ def _is_adapter(obj: Any) -> bool:
         return False
     if any(callable(getattr(obj, method, None)) for method in _METHODS):
         return True
-    return _broker_key(obj) != "unknown" and any(getattr(obj, attr, None) is not None for attr in ("market_api", "account_api", "client", "session"))
+    return _broker_key(obj) != "unknown" and any(
+        getattr(obj, attr, None) is not None
+        for attr in ("market_api", "account_api", "client", "session")
+    )
 
 
 def _install_collector_override(module: Any) -> bool:
     if getattr(module, "_NIJA_BROKER_BOOL_GUARD_PATCHED_V20260705D", False):
         return True
-
     enabled = getattr(module, "_broker_enabled", lambda broker_name: True)
 
     def collect(apex: Any, explicit_broker: Any = None) -> dict[str, Any]:
@@ -82,7 +84,11 @@ def _install_collector_override(module: Any) -> bool:
             )
 
         add("explicit", explicit_broker, "explicit")
-        owners = [item for item in (apex, getattr(apex, "strategy", None), getattr(apex, "trading_strategy", None)) if item is not None]
+        owners = [
+            item
+            for item in (apex, getattr(apex, "strategy", None), getattr(apex, "trading_strategy", None))
+            if item is not None
+        ]
         for owner in owners:
             for attr in ("broker_client", "broker", "active_broker"):
                 add(attr, getattr(owner, attr, None), f"owner.{attr}")
@@ -107,39 +113,54 @@ def _install_collector_override(module: Any) -> bool:
     return True
 
 
-def _install_strategy_backrefs() -> None:
+def _install_module(primary: str, fallback: str, label: str, marker: str) -> None:
     try:
-        mod = importlib.import_module("bot.strategy_broker_backref_patch")
+        mod = importlib.import_module(primary)
     except Exception:
         try:
-            mod = importlib.import_module("strategy_broker_backref_patch")
+            mod = importlib.import_module(fallback)
         except Exception as exc:
-            logger.warning("BROKER_BOOL_GUARD_STRATEGY_BACKREF_WAIT marker=20260705d error=%s", exc)
+            logger.warning("%s_IMPORT_FAILED marker=%s error=%s", label, marker, exc)
             return
     try:
-        mod.install_import_hook()
+        installer = getattr(mod, "install_import_hook", None) or getattr(mod, "install", None)
+        if callable(installer):
+            installer()
+            logger.warning("%s_INSTALL_REQUESTED marker=%s", label, marker)
     except Exception as exc:
-        logger.warning("BROKER_BOOL_GUARD_STRATEGY_BACKREF_INSTALL_FAILED marker=20260705d error=%s", exc)
+        logger.warning("%s_INSTALL_FAILED marker=%s error=%s", label, marker, exc)
+
+
+def _install_strategy_backrefs() -> None:
+    _install_module(
+        "bot.strategy_broker_backref_patch",
+        "strategy_broker_backref_patch",
+        "BROKER_BOOL_GUARD_STRATEGY_BACKREF",
+        "20260705d",
+    )
 
 
 def _install_trade_cycle_convergence_repair() -> None:
-    try:
-        mod = importlib.import_module("bot.trade_cycle_convergence_repair_patch")
-    except Exception:
-        try:
-            mod = importlib.import_module("trade_cycle_convergence_repair_patch")
-        except Exception as exc:
-            logger.warning("TRADE_CYCLE_CONVERGENCE_IMPORT_FAILED marker=20260713a error=%s", exc)
-            return
-    try:
-        mod.install_import_hook()
-        logger.warning("TRADE_CYCLE_CONVERGENCE_INSTALL_REQUESTED marker=20260713a")
-    except Exception as exc:
-        logger.warning("TRADE_CYCLE_CONVERGENCE_INSTALL_FAILED marker=20260713a error=%s", exc)
+    _install_module(
+        "bot.trade_cycle_convergence_repair_patch",
+        "trade_cycle_convergence_repair_patch",
+        "TRADE_CYCLE_CONVERGENCE",
+        "20260713a",
+    )
+
+
+def _install_position_sync_runtime_repair() -> None:
+    _install_module(
+        "bot.position_sync_runtime_repair_patch",
+        "position_sync_runtime_repair_patch",
+        "POSITION_SYNC_RUNTIME_REPAIR",
+        "20260713-position-sync-v2",
+    )
 
 
 def install_import_hook() -> None:
     _install_trade_cycle_convergence_repair()
+    _install_position_sync_runtime_repair()
     _install_strategy_backrefs()
     try:
         module = importlib.import_module("bot.broker_independent_live_execution_patch")
