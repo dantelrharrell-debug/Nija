@@ -417,7 +417,7 @@ class KrakenMarginEngine:
         return {
             "supports_margin": allowed,
             "supports_leverage": allowed,
-            "supports_short": allowed and not self._env_truthy("NIJA_KRAKEN_AUTO_MARGIN_LONG_ONLY", True),
+            "supports_short": allowed,
             "max_leverage": HARD_MAX_LEVERAGE if allowed else 1,
             "account_id": account_id or self.account_id,
         }
