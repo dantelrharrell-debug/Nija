@@ -14,7 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260713a"
+_MARKER = "20260713b"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -57,6 +57,7 @@ def _set_status(value: str) -> None:
         "NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED",
         "NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED",
+        "NIJA_SCAN_OWNER_OKX_AUTH_CONVERGENCE_INSTALLED",
         "NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED",
         "NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED",
         "NIJA_FINAL_WORKER_POSITION_COINBASE_REPAIR_INSTALLED",
@@ -87,7 +88,6 @@ def install() -> bool:
             _install_required("runtime_convergence_v2_patch")
             _install_required("runtime_auth_recursion_endpoint_repair_patch")
             _install_required("final_runtime_convergence_patch")
-            # Must run after all legacy scan wrappers so it can collapse them to one canonical layer.
             _install_required("scan_wrapper_convergence_repair_patch")
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
@@ -96,6 +96,8 @@ def install() -> bool:
             _install_required("account_exit_recovery_bootstrap_patch")
             _install_required("three_venue_execution_readiness")
             _install_required("render_readiness_state_bridge")
+            # Must be last: collapse every legacy scan/auth wrapper to one owner.
+            _install_required("scan_owner_okx_auth_convergence_patch")
 
             _INSTALLED = True
             _set_status("1")
@@ -110,7 +112,8 @@ def install() -> bool:
                 "scan_wrapper_convergence=installed venue_repair=installed "
                 "secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
                 "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
-                "three_venue_stage_verifier=installed render_readiness_bridge=installed source=main_pre_bot"
+                "three_venue_stage_verifier=installed render_readiness_bridge=installed "
+                "scan_owner_okx_auth_convergence=installed source=main_pre_bot"
             )
             logger.warning(message)
             print(f"[NIJA-PRINT] {message}", flush=True)
