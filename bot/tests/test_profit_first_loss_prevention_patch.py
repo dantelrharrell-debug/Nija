@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
 
@@ -167,3 +166,30 @@ def test_live_entry_requires_positive_fill(monkeypatch):
     out2 = pf._validate_live_fill_result(good, request)
     assert out2.success is True
     assert out2.fill_confirmed is True
+
+
+def test_execution_blocks_when_safe_size_is_below_exchange_minimum(monkeypatch):
+    live_env(monkeypatch)
+    monkeypatch.setenv("MIN_TRADE_USD", "10")
+    module = ModuleType("bot.execution_engine")
+    called = {"value": False}
+
+    class ExecutionEngine:
+        def execute_entry(self, symbol, side, position_size, entry_price, stop_loss, levels):
+            called["value"] = True
+            return {"status": "filled"}
+
+    module.ExecutionEngine = ExecutionEngine
+    assert pf._patch_execution_engine(module)
+    result = ExecutionEngine().execute_entry("BTC-USD", "long", 10.0, 100.0, 99.7, {})
+    assert result is None
+    assert called["value"] is False
+
+
+def test_legacy_stop_cap_replacement_is_idempotent(monkeypatch):
+    live_env(monkeypatch)
+    module = ModuleType("bot.execution_entry_tp_geometry_patch")
+    module._max_sl_pct = lambda: 0.003
+    assert pf._patch_geometry_module(module) is True
+    assert module._max_sl_pct() == 0.025
+    assert pf._patch_geometry_module(module) is False
