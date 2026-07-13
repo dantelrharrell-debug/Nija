@@ -122,7 +122,24 @@ def _install_strategy_backrefs() -> None:
         logger.warning("BROKER_BOOL_GUARD_STRATEGY_BACKREF_INSTALL_FAILED marker=20260705d error=%s", exc)
 
 
+def _install_trade_cycle_convergence_repair() -> None:
+    try:
+        mod = importlib.import_module("bot.trade_cycle_convergence_repair_patch")
+    except Exception:
+        try:
+            mod = importlib.import_module("trade_cycle_convergence_repair_patch")
+        except Exception as exc:
+            logger.warning("TRADE_CYCLE_CONVERGENCE_IMPORT_FAILED marker=20260713a error=%s", exc)
+            return
+    try:
+        mod.install_import_hook()
+        logger.warning("TRADE_CYCLE_CONVERGENCE_INSTALL_REQUESTED marker=20260713a")
+    except Exception as exc:
+        logger.warning("TRADE_CYCLE_CONVERGENCE_INSTALL_FAILED marker=20260713a error=%s", exc)
+
+
 def install_import_hook() -> None:
+    _install_trade_cycle_convergence_repair()
     _install_strategy_backrefs()
     try:
         module = importlib.import_module("bot.broker_independent_live_execution_patch")
