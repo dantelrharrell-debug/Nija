@@ -15,12 +15,26 @@ from types import ModuleType
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.reentrant_scan_owner_repair")
-_MARKER = "20260713d"
+_MARKER = "20260713e"
 _PATCH_ATTR = "_nija_scan_owner_result_reuse_20260713b"
 _REPAIR_ATTR = "_nija_reentrant_scan_owner_repair_20260713c"
-_GUARD_ATTR = "_nija_reentrant_scan_owner_guard_20260713d"
+_GUARD_ATTR = "_nija_reentrant_scan_owner_guard_20260713e"
 _STARTED = False
 _LOCK = threading.RLock()
+
+
+def _wrapper_chain_has_attr(func: Callable[..., Any], attr: str) -> bool:
+    """Return True when any callable in ``func.__wrapped__`` chain has ``attr``."""
+    current: Any = func
+    seen: set[int] = set()
+    for _ in range(128):
+        if not callable(current) or id(current) in seen:
+            break
+        seen.add(id(current))
+        if getattr(current, attr, False):
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
 
 
 def _unwrap_faulty_owner(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -46,8 +60,22 @@ def _repair_module(module: ModuleType) -> bool:
     current = getattr(cls, "run_scan_phase", None)
     if not callable(current):
         return False
-    if getattr(current, _REPAIR_ATTR, False):
+
+    # A legitimate outer wrapper (for example venue readiness) may sit above the
+    # repaired canonical method. Promote the repair marker to that outer wrapper
+    # instead of treating it as an unprotected method. This prevents the
+    # convergence watchdog from reinstalling its owner wrapper every few seconds.
+    if _wrapper_chain_has_attr(current, _REPAIR_ATTR):
+        if not getattr(current, _REPAIR_ATTR, False):
+            setattr(current, _REPAIR_ATTR, True)
+            logger.info(
+                "REENTRANT_SCAN_OWNER_REPAIR_MARKER_PROPAGATED marker=%s module=%s wrapper=%s",
+                _MARKER,
+                getattr(module, "__name__", "unknown"),
+                getattr(current, "__qualname__", "unknown"),
+            )
         return True
+
     if not getattr(current, _PATCH_ATTR, False):
         return False
 
@@ -90,8 +118,15 @@ def _install_convergence_guard() -> bool:
     def guarded_patch_core(module: ModuleType) -> bool:
         cls = getattr(module, "NijaCoreLoop", None)
         method = getattr(cls, "run_scan_phase", None) if isinstance(cls, type) else None
-        if callable(method) and getattr(method, _REPAIR_ATTR, False):
+
+        # Inspect the full wrapper chain. Venue-readiness and other legitimate
+        # wrappers may be above the repaired canonical method. Checking only the
+        # outer function caused the patch/remove loop seen in live logs.
+        if callable(method) and _wrapper_chain_has_attr(method, _REPAIR_ATTR):
+            if not getattr(method, _REPAIR_ATTR, False):
+                setattr(method, _REPAIR_ATTR, True)
             return True
+
         result = original_patch_core(module)
         _repair_module(module)
         return result
@@ -134,10 +169,12 @@ def install() -> None:
 
 install()
 
+
 __all__ = [
     "install",
     "_repair_module",
     "_unwrap_faulty_owner",
+    "_wrapper_chain_has_attr",
     "_install_convergence_guard",
     "_PATCH_ATTR",
     "_REPAIR_ATTR",
