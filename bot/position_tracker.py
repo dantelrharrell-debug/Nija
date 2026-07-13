@@ -1,22 +1,20 @@
 """
 NIJA Position Tracker
-Persistent storage of position entry prices and profit/loss tracking
 
-This module solves the problem that Coinbase API doesn't return entry prices,
-making it impossible to calculate profit/loss for exit decisions.
+Persistent, thread-safe storage for position entry prices and P&L tracking.
 """
 
+from __future__ import annotations
+
 import json
-import os
 import logging
-from typing import Dict, Optional, List
+import os
 from datetime import datetime
 from threading import Lock
+from typing import Dict, List, Optional
 
 logger = logging.getLogger("nija")
 
-# Entry price store — optional; imported lazily so PositionTracker can still
-# function if the module is unavailable for any reason.
 try:
     from bot.entry_price_store import get_entry_price_store
     ENTRY_PRICE_STORE_AVAILABLE = True
@@ -25,299 +23,345 @@ except Exception:
 
 
 class PositionTracker:
-    """
-    Tracks entry prices and manages position P&L for profit-based exits.
-
-    Persists data to JSON file to survive bot restarts.
-    """
+    """Track position cost basis and quantities across process restarts."""
 
     def __init__(self, storage_file: str = "positions.json"):
-        """
-        Initialize position tracker.
-
-        Args:
-            storage_file: Path to JSON file for persistence
-        """
         self.storage_file = os.path.abspath(storage_file)
         self.positions: Dict[str, Dict] = {}
         self.lock = Lock()
-
-        # Load existing positions
         self._load_positions()
-
-        # Entry Price Store — rich metadata persistence (price/timestamp/source/quantity)
         self._eps = get_entry_price_store() if ENTRY_PRICE_STORE_AVAILABLE else None
+        logger.info("PositionTracker initialized: %d tracked positions", len(self.positions))
 
-        logger.info(f"PositionTracker initialized: {len(self.positions)} tracked positions")
+    @staticmethod
+    def _safe_float(value, default: float = 0.0) -> float:
+        try:
+            parsed = float(value or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            return default
+        return parsed if parsed == parsed else default
 
-    def _load_positions(self):
-        """Load positions from JSON file"""
+    def _load_positions(self) -> None:
         try:
             if os.path.exists(self.storage_file):
-                with open(self.storage_file, 'r') as f:
-                    data = json.load(f)
-                    self.positions = data.get('positions', {})
-                logger.info(f"Loaded {len(self.positions)} positions from {self.storage_file}")
+                with open(self.storage_file, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+                self.positions = data.get("positions", {}) if isinstance(data, dict) else {}
+                logger.info("Loaded %d positions from %s", len(self.positions), self.storage_file)
             else:
                 logger.info("No existing positions file found - starting fresh")
-        except Exception as e:
-            logger.error(f"Error loading positions: {e}")
+        except Exception as exc:
+            logger.error("Error loading positions: %s", exc)
             self.positions = {}
 
-    def _save_positions(self):
-        """Save positions to JSON file (assumes lock is already held)"""
+    def _save_positions(self) -> None:
         try:
-            data = {
-                'positions': self.positions,
-                'last_updated': datetime.now().isoformat()
+            parent = os.path.dirname(self.storage_file)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            payload = {
+                "positions": self.positions,
+                "last_updated": datetime.now().isoformat(),
             }
-            # Write to temp file first, then rename for atomicity
-            temp_file = self.storage_file + '.tmp'
-            with open(temp_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            temp_file = self.storage_file + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
             os.replace(temp_file, self.storage_file)
-        except Exception as e:
-            logger.error(f"Error saving positions: {e}")
+        except Exception as exc:
+            logger.error("Error saving positions: %s", exc)
 
-    def track_entry(self, symbol: str, entry_price: float, quantity: float,
-                   size_usd: float, strategy: str = "APEX_v7.1", 
-                   position_source: str = "nija_strategy") -> bool:
-        """
-        Record a new position entry.
-
-        Args:
-            symbol: Trading symbol (e.g., 'BTC-USD')
-            entry_price: Entry price
-            quantity: Quantity of asset purchased
-            size_usd: Position size in USD
-            strategy: Strategy name for tracking
-            position_source: Source of position ('nija_strategy', 'broker_existing', 'manual')
-
-        Returns:
-            True if tracked successfully
-        """
+    def _persist_entry_price(self, symbol: str, price: float, quantity: float, source: str) -> None:
+        if not ENTRY_PRICE_STORE_AVAILABLE or price <= 0:
+            return
         try:
+            get_entry_price_store().save(
+                symbol,
+                price,
+                source=source,
+                quantity=quantity,
+            )
+        except Exception as exc:
+            logger.debug("[PositionTracker] entry_price_store save failed for %s: %s", symbol, exc)
+
+    def track_entry(
+        self,
+        symbol: str,
+        entry_price: float,
+        quantity: float,
+        size_usd: float,
+        strategy: str = "APEX_v7.1",
+        position_source: str = "nija_strategy",
+    ) -> bool:
+        """Record an actual additive trade fill."""
+        try:
+            symbol = str(symbol or "").strip()
+            entry_price = self._safe_float(entry_price)
+            quantity = self._safe_float(quantity)
+            size_usd = self._safe_float(size_usd)
+            if not symbol or quantity <= 0:
+                return False
+
             with self.lock:
-                # If position already exists, calculate average entry price
                 if symbol in self.positions:
                     existing = self.positions[symbol]
-                    old_qty = existing['quantity']
-                    old_price = existing['entry_price']
-                    old_size = existing['size_usd']
-
-                    # Calculate new weighted average entry price correctly
-                    # Formula: (old_qty * old_price + new_qty * new_price) / total_qty
+                    old_qty = self._safe_float(existing.get("quantity"))
+                    old_price = self._safe_float(existing.get("entry_price"))
+                    old_size = self._safe_float(existing.get("size_usd"))
                     total_qty = old_qty + quantity
                     total_cost = (old_qty * old_price) + (quantity * entry_price)
                     avg_price = total_cost / total_qty if total_qty > 0 else entry_price
                     total_size = old_size + size_usd
-
                     self.positions[symbol] = {
-                        'entry_price': avg_price,
-                        'quantity': total_qty,
-                        'size_usd': total_size,
-                        'first_entry_time': existing['first_entry_time'],
-                        'last_entry_time': datetime.now().isoformat(),
-                        'strategy': strategy,
-                        'num_adds': existing.get('num_adds', 0) + 1,
-                        'previous_profit_pct': existing.get('previous_profit_pct', 0.0),  # Preserve previous profit tracking
-                        'position_source': existing.get('position_source', position_source)  # Keep original source
+                        "entry_price": avg_price,
+                        "quantity": total_qty,
+                        "size_usd": total_size,
+                        "first_entry_time": existing.get("first_entry_time", datetime.now().isoformat()),
+                        "last_entry_time": datetime.now().isoformat(),
+                        "strategy": strategy,
+                        "num_adds": int(existing.get("num_adds", 0) or 0) + 1,
+                        "previous_profit_pct": self._safe_float(existing.get("previous_profit_pct")),
+                        "position_source": existing.get("position_source", position_source),
                     }
-                    logger.info(f"Updated position {symbol}: avg_entry=${avg_price:.2f}, qty={total_qty:.8f}")
+                    logger.info("Updated position %s: avg_entry=$%.2f, qty=%.8f", symbol, avg_price, total_qty)
                 else:
-                    # New position
                     self.positions[symbol] = {
-                        'entry_price': entry_price,
-                        'quantity': quantity,
-                        'size_usd': size_usd,
-                        'first_entry_time': datetime.now().isoformat(),
-                        'last_entry_time': datetime.now().isoformat(),
-                        'strategy': strategy,
-                        'num_adds': 0,
-                        'previous_profit_pct': 0.0,  # Initialize previous profit tracking
-                        'position_source': position_source  # Track position source
+                        "entry_price": entry_price,
+                        "quantity": quantity,
+                        "size_usd": size_usd,
+                        "first_entry_time": datetime.now().isoformat(),
+                        "last_entry_time": datetime.now().isoformat(),
+                        "strategy": strategy,
+                        "num_adds": 0,
+                        "previous_profit_pct": 0.0,
+                        "position_source": position_source,
                     }
-                    logger.info(f"Tracking new position {symbol}: entry=${entry_price:.2f}, qty={quantity:.8f}, source={position_source}")
+                    logger.info(
+                        "Tracking new position %s: entry=$%.2f, qty=%.8f, source=%s",
+                        symbol,
+                        entry_price,
+                        quantity,
+                        position_source,
+                    )
 
                 self._save_positions()
-                # Persist entry price to the dedicated store so it survives
-                # broker-API failures.  Use the final effective entry price
-                # (avg_price for adds, entry_price for new positions).
-                _effective_price = self.positions[symbol]['entry_price']
-                if ENTRY_PRICE_STORE_AVAILABLE:
-                    try:
-                        entry_price_store = get_entry_price_store()
-                        entry_price_store.save(symbol, _effective_price)
-                    except Exception as _eps_err:
-                        logger.debug(f"[PositionTracker] entry_price_store save failed for {symbol}: {_eps_err}")
-                return True
-        except Exception as e:
-            logger.error(f"Error tracking entry for {symbol}: {e}")
+                effective = self._safe_float(self.positions[symbol].get("entry_price"))
+                final_qty = self._safe_float(self.positions[symbol].get("quantity"))
+
+            self._persist_entry_price(symbol, effective, final_qty, "execution")
+            return True
+        except Exception as exc:
+            logger.error("Error tracking entry for %s: %s", symbol, exc)
+            return False
+
+    def sync_position_snapshot(
+        self,
+        symbol: str,
+        quantity: float,
+        entry_price: float = 0.0,
+        current_price: float = 0.0,
+        size_usd: float = 0.0,
+        strategy: str = "BROKER_SYNC",
+        position_source: str = "broker_existing",
+        entry_price_source: str = "override",
+    ) -> bool:
+        """Reconcile an exact broker snapshot without treating it as a new fill.
+
+        Broker balance/position hydration is idempotent. It must replace the live
+        quantity rather than add it to the tracker each time a balance is read.
+        This method also repairs the common zero-price dilution failure where the
+        stored quantity was duplicated while the original cost basis stayed flat.
+        """
+        try:
+            symbol = str(symbol or "").strip()
+            quantity = self._safe_float(quantity)
+            supplied_entry = self._safe_float(entry_price)
+            current_price = self._safe_float(current_price)
+            broker_value = self._safe_float(size_usd)
+            if not symbol or quantity <= 0:
+                return False
+
+            with self.lock:
+                existing = self.positions.get(symbol)
+                old_qty = self._safe_float((existing or {}).get("quantity"))
+                old_entry = self._safe_float((existing or {}).get("entry_price"))
+                old_cost = self._safe_float((existing or {}).get("size_usd"))
+
+                repaired_from_cost = False
+                if supplied_entry > 0:
+                    effective_entry = supplied_entry
+                elif existing and old_cost > 0 and quantity > 0:
+                    # Reconstruct the undiluted entry price after duplicate snapshot
+                    # additions: original cost basis / actual broker quantity.
+                    effective_entry = old_cost / quantity
+                    repaired_from_cost = True
+                elif old_entry > 0:
+                    effective_entry = old_entry
+                elif current_price > 0:
+                    effective_entry = current_price
+                elif broker_value > 0:
+                    effective_entry = broker_value / quantity
+                else:
+                    effective_entry = 0.0
+
+                cost_basis_usd = quantity * effective_entry if effective_entry > 0 else broker_value
+                now = datetime.now().isoformat()
+                original_source = (existing or {}).get("position_source")
+                original_strategy = (existing or {}).get("strategy")
+                source = original_source or position_source
+                chosen_strategy = original_strategy or strategy
+
+                self.positions[symbol] = {
+                    "entry_price": effective_entry,
+                    "quantity": quantity,
+                    "size_usd": cost_basis_usd,
+                    "first_entry_time": (existing or {}).get("first_entry_time", now),
+                    "last_entry_time": now,
+                    "strategy": chosen_strategy,
+                    "num_adds": int((existing or {}).get("num_adds", 0) or 0),
+                    "previous_profit_pct": self._safe_float((existing or {}).get("previous_profit_pct")),
+                    "position_source": source,
+                    "last_broker_snapshot_value_usd": broker_value,
+                    "last_broker_snapshot_price": current_price,
+                }
+                self._save_positions()
+
+            changed = (
+                existing is None
+                or abs(old_qty - quantity) > max(1e-10, quantity * 1e-8)
+                or abs(old_entry - effective_entry) > max(1e-8, abs(effective_entry) * 1e-8)
+            )
+            logger.warning(
+                "POSITION_SNAPSHOT_SYNCED symbol=%s old_qty=%.8f new_qty=%.8f "
+                "old_entry=$%.8f new_entry=$%.8f cost_basis=$%.2f broker_value=$%.2f "
+                "changed=%s repaired_from_cost=%s",
+                symbol,
+                old_qty,
+                quantity,
+                old_entry,
+                effective_entry,
+                cost_basis_usd,
+                broker_value,
+                changed,
+                repaired_from_cost,
+            )
+            self._persist_entry_price(
+                symbol,
+                effective_entry,
+                quantity,
+                entry_price_source if supplied_entry > 0 else "override",
+            )
+            return True
+        except Exception as exc:
+            logger.error("Error synchronizing broker snapshot for %s: %s", symbol, exc)
             return False
 
     def track_exit(self, symbol: str, exit_quantity: float = None) -> bool:
-        """
-        Record a position exit (partial or full).
-
-        Args:
-            symbol: Trading symbol
-            exit_quantity: Quantity sold (None = full exit)
-
-        Returns:
-            True if tracked successfully
-        """
         try:
             with self.lock:
                 if symbol not in self.positions:
-                    logger.warning(f"Attempted to exit untracked position: {symbol}")
+                    logger.warning("Attempted to exit untracked position: %s", symbol)
                     return False
 
                 if exit_quantity is None:
-                    # Full exit - remove position
                     del self.positions[symbol]
-                    logger.info(f"Removed position {symbol} (full exit)")
-                    _full_exit = True
+                    logger.info("Removed position %s (full exit)", symbol)
+                    full_exit = True
                 else:
-                    _full_exit = False
-                    # Partial exit - reduce quantity
+                    full_exit = False
                     position = self.positions[symbol]
-                    remaining_qty = position['quantity'] - exit_quantity
-
+                    quantity = self._safe_float(position.get("quantity"))
+                    remaining_qty = quantity - self._safe_float(exit_quantity)
                     if remaining_qty <= 0:
-                        # Exit consumed entire position
                         del self.positions[symbol]
-                        logger.info(f"Removed position {symbol} (partial exit cleared position)")
-                        _full_exit = True
+                        logger.info("Removed position %s (partial exit cleared position)", symbol)
+                        full_exit = True
                     else:
-                        # Update remaining quantity and proportional size
-                        # Preserve proportional cost basis
-                        remaining_size = position['size_usd'] * (remaining_qty / position['quantity'])
-                        position['quantity'] = remaining_qty
-                        position['size_usd'] = remaining_size
-                        logger.info(f"Reduced position {symbol}: remaining_qty={remaining_qty:.8f}, remaining_size=${remaining_size:.2f}")
-
+                        remaining_size = self._safe_float(position.get("size_usd")) * (remaining_qty / quantity)
+                        position["quantity"] = remaining_qty
+                        position["size_usd"] = remaining_size
+                        logger.info(
+                            "Reduced position %s: remaining_qty=%.8f, remaining_size=$%.2f",
+                            symbol,
+                            remaining_qty,
+                            remaining_size,
+                        )
                 self._save_positions()
-                # Remove from entry price store when position is fully closed
-                if _full_exit and ENTRY_PRICE_STORE_AVAILABLE:
-                    try:
-                        entry_price_store = get_entry_price_store()
-                        entry_price_store.clear(symbol)
-                    except Exception as _eps_err:
-                        logger.debug(f"[PositionTracker] entry_price_store clear failed for {symbol}: {_eps_err}")
-                return True
-        except Exception as e:
-            logger.error(f"Error tracking exit for {symbol}: {e}")
+
+            if full_exit and ENTRY_PRICE_STORE_AVAILABLE:
+                try:
+                    get_entry_price_store().clear(symbol)
+                except Exception as exc:
+                    logger.debug("[PositionTracker] entry_price_store clear failed for %s: %s", symbol, exc)
+            return True
+        except Exception as exc:
+            logger.error("Error tracking exit for %s: %s", symbol, exc)
             return False
 
     def get_position(self, symbol: str) -> Optional[Dict]:
-        """
-        Get tracked position data.
-
-        Args:
-            symbol: Trading symbol
-
-        Returns:
-            Position dict with entry_price, quantity, size_usd, etc. or None
-        """
         with self.lock:
             return self.positions.get(symbol)
 
     def calculate_pnl(self, symbol: str, current_price: float) -> Optional[Dict]:
-        """
-        Calculate profit/loss for a position.
-
-        Args:
-            symbol: Trading symbol
-            current_price: Current market price
-
-        Returns:
-            Dict with pnl_dollars, pnl_percent, current_value, previous_profit_pct, or None if not tracked
-        """
         position = self.get_position(symbol)
         if not position:
             return None
-
-        entry_price = position['entry_price']
-        quantity = position['quantity']
-        entry_value = position['size_usd']
-
-        current_value = quantity * current_price
+        entry_price = self._safe_float(position.get("entry_price"))
+        quantity = self._safe_float(position.get("quantity"))
+        entry_value = self._safe_float(position.get("size_usd"))
+        current_value = quantity * self._safe_float(current_price)
         pnl_dollars = current_value - entry_value
-        # NORMALIZED FORMAT (Option A - Fractional): -0.01 = -1%, not -1.0 = -1%
-        pnl_pct = (pnl_dollars / entry_value) if entry_value > 0 else 0
-
-        # CRITICAL: Validate PnL is in fractional format
-        # Large values (>1 or <-1) could indicate bugs or extreme market moves (>100%)
-        # This is a monitoring warning - no corrective action needed, just alerting
+        pnl_pct = pnl_dollars / entry_value if entry_value > 0 else 0.0
         if abs(pnl_pct) >= 1.0:
-            logger.warning(f"⚠️ Large PnL detected for {symbol}: {pnl_pct*100:.2f}% - this is unusual but valid for extreme moves")
-
-        # Track previous profit for immediate exit on profit decrease
-        # NIJA takes profit as soon as profit starts to decrease
+            logger.warning("⚠️ Large PnL detected for %s: %.2f%%", symbol, pnl_pct * 100.0)
         with self.lock:
-            previous_profit = position.get('previous_profit_pct', 0.0)
-            # Update previous profit for next check
-            position['previous_profit_pct'] = pnl_pct
-            # Save updated previous profit
+            previous_profit = self._safe_float(position.get("previous_profit_pct"))
+            position["previous_profit_pct"] = pnl_pct
             self._save_positions()
-
         return {
-            'symbol': symbol,
-            'entry_price': entry_price,
-            'current_price': current_price,
-            'quantity': quantity,
-            'entry_value': entry_value,
-            'current_value': current_value,
-            'pnl_dollars': pnl_dollars,
-            'pnl_percent': pnl_pct,  # FRACTIONAL: -0.01 = -1%, -0.12 = -12%
-            'previous_profit_pct': previous_profit  # Profit from previous check
+            "symbol": symbol,
+            "entry_price": entry_price,
+            "current_price": current_price,
+            "quantity": quantity,
+            "entry_value": entry_value,
+            "current_value": current_value,
+            "pnl_dollars": pnl_dollars,
+            "pnl_percent": pnl_pct,
+            "previous_profit_pct": previous_profit,
         }
 
     def get_all_positions(self) -> List[str]:
-        """Get list of all tracked symbols"""
         with self.lock:
             return list(self.positions.keys())
 
     def sync_with_broker(self, broker_positions: List[Dict]) -> int:
-        """
-        Sync tracker with actual broker positions.
-        Remove any tracked positions that no longer exist at broker.
-
-        Args:
-            broker_positions: List of position dicts from broker
-
-        Returns:
-            Number of positions removed
-        """
         try:
             with self.lock:
-                broker_symbols = {pos.get('symbol') for pos in broker_positions if pos.get('symbol')}
+                broker_symbols = {
+                    str(pos.get("symbol") or "").strip()
+                    for pos in (broker_positions or [])
+                    if isinstance(pos, dict) and pos.get("symbol")
+                }
                 tracked_symbols = set(self.positions.keys())
-
-                # Find positions we're tracking but broker doesn't have
                 orphaned = tracked_symbols - broker_symbols
-
-                if orphaned:
-                    logger.info(f"Removing {len(orphaned)} orphaned tracked positions: {orphaned}")
-                    for symbol in orphaned:
-                        del self.positions[symbol]
-                    self._save_positions()
-                    return len(orphaned)
-
-                return 0
-        except Exception as e:
-            logger.error(f"Error syncing with broker: {e}")
+                if not orphaned:
+                    return 0
+                logger.info("Removing %d orphaned tracked positions: %s", len(orphaned), orphaned)
+                for symbol in orphaned:
+                    del self.positions[symbol]
+                self._save_positions()
+                return len(orphaned)
+        except Exception as exc:
+            logger.error("Error syncing with broker: %s", exc)
             return 0
 
     def clear_all(self) -> bool:
-        """Clear all tracked positions (emergency use only)"""
         try:
             with self.lock:
                 count = len(self.positions)
                 self.positions = {}
                 self._save_positions()
-                logger.warning(f"Cleared all {count} tracked positions")
-                return True
-        except Exception as e:
-            logger.error(f"Error clearing positions: {e}")
+            logger.warning("Cleared all %d tracked positions", count)
+            return True
+        except Exception as exc:
+            logger.error("Error clearing positions: %s", exc)
             return False
