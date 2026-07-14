@@ -1,10 +1,10 @@
 """Remove synthetic accounting metadata before Kraken position classification.
 
 The canonical balance cache may contain fields such as ``canonical_equity`` and
-``total_funds``.  They are accounting metadata, not exchange assets.  This patch
-scrubs those keys from cached balance payloads *before* any Kraken ``get_positions``
-or balance wrapper can classify them, and filters any legacy synthetic rows from
-returned position snapshots.
+``held_excluded_from_equity_sum``. They are accounting metadata, not exchange assets.
+This patch removes only synthetic cache fields before Kraken position classification
+and filters legacy synthetic rows from returned position snapshots. Authoritative
+totals such as ``total_funds`` and ``equity`` remain available to balance accounting.
 """
 from __future__ import annotations
 
@@ -25,17 +25,31 @@ _LOCK = threading.RLock()
 _ORIGINAL_IMPORT = None
 _PATCHED: set[tuple[str, int]] = set()
 
-_EXPLICIT = {
+# These fields are safe to remove from an enriched cache. They are not used by the
+# canonical total helpers and have previously been misclassified as exchange assets.
+_CACHE_REMOVE_EXPLICIT = {
+    "CANONICAL_EQUITY",
+    "CANONICAL_TOTAL",
+    "HELD_EXCLUDED_FROM_EQUITY_SUM",
+}
+_CACHE_REMOVE_PREFIXES = (
+    "CANONICAL_",
+    "HELD_EXCLUDED_",
+)
+
+# Position rows use a broader metadata classifier. Total/equity fields must never
+# become tradable symbols, even though they remain valid balance payload fields.
+_POSITION_METADATA_EXPLICIT = {
     "CANONICAL_EQUITY", "CANONICAL_TOTAL", "TOTAL_FUNDS", "TOTAL_BALANCE",
     "TOTAL_EQUITY", "EQUITY", "PORTFOLIO_VALUE", "ACCOUNT_EQUITY",
     "HELD_EXCLUDED_FROM_EQUITY_SUM", "CRYPTO_USD", "NON_USD_USD",
     "USD_HELD", "USDT_HELD", "USDC_HELD", "TOTAL_HELD",
 }
-_PREFIXES = (
+_POSITION_PREFIXES = (
     "CANONICAL_", "TOTAL_", "AVAILABLE_", "BROKER_", "CAPITAL_",
     "UPDATED_", "OPEN_EXPOSURE_", "RESERVE_", "HELD_EXCLUDED_", "LAST_",
 )
-_SUFFIXES = (
+_POSITION_SUFFIXES = (
     "_EQUITY", "_BALANCE", "_FUNDS", "_CAPITAL", "_EXPOSURE",
     "_VALUE", "_COUNT", "_COMPLETENESS", "_UPDATED",
 )
@@ -45,22 +59,38 @@ _CACHE_ATTRS = (
 )
 
 
-def _metadata_name(value: Any) -> bool:
-    name = str(value or "").strip().upper().replace("-USD", "")
+def _normalized_name(value: Any) -> str:
+    name = str(value or "").strip().upper()
+    for suffix in ("-USD", "/USD", "_USD"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return name
+
+
+def _cache_metadata_name(value: Any) -> bool:
+    name = _normalized_name(value)
     if not name:
         return True
-    if name in _EXPLICIT:
+    return name in _CACHE_REMOVE_EXPLICIT or name.startswith(_CACHE_REMOVE_PREFIXES)
+
+
+def _metadata_name(value: Any) -> bool:
+    name = _normalized_name(value)
+    if not name:
+        return True
+    if name in _POSITION_METADATA_EXPLICIT:
         return True
     if "_" not in name:
         return False
-    return name.startswith(_PREFIXES) or name.endswith(_SUFFIXES)
+    return name.startswith(_POSITION_PREFIXES) or name.endswith(_POSITION_SUFFIXES)
 
 
 def _scrub_mapping(payload: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
     cleaned: dict[str, Any] = {}
     removed: list[str] = []
     for key, value in payload.items():
-        if _metadata_name(key):
+        if _cache_metadata_name(key):
             removed.append(str(key))
             continue
         if isinstance(value, Mapping):
@@ -179,12 +209,14 @@ def _patch_module(module: ModuleType) -> bool:
 
 def _patch_loaded() -> bool:
     changed = False
-    for module in tuple(sys.modules.values()):
-        if isinstance(module, ModuleType):
-            try:
-                changed = _patch_module(module) or changed
-            except Exception:
-                continue
+    suffixes = ("broker_manager", "kraken_broker", "broker_integration", "execution_engine")
+    for name, module in tuple(sys.modules.items()):
+        if not name.endswith(suffixes) or not isinstance(module, ModuleType):
+            continue
+        try:
+            changed = _patch_module(module) or changed
+        except Exception:
+            continue
     for name in ("bot.broker_manager", "broker_manager", "bot.kraken_broker", "kraken_broker"):
         try:
             module = importlib.import_module(name)
@@ -206,6 +238,8 @@ def install_import_hook() -> None:
                 module = _ORIGINAL_IMPORT(name, globals, locals, fromlist, level)  # type: ignore[misc]
                 if getattr(local, "active", False):
                     return module
+                if not str(name or "").endswith(("broker_manager", "kraken_broker", "broker_integration", "execution_engine")):
+                    return module
                 local.active = True
                 try:
                     _patch_loaded()
@@ -224,6 +258,6 @@ def install() -> None:
 
 
 __all__ = [
-    "install", "install_import_hook", "_metadata_name", "_scrub_mapping",
-    "_scrub_instance", "_filter_rows", "_patch_class",
+    "install", "install_import_hook", "_cache_metadata_name", "_metadata_name",
+    "_scrub_mapping", "_scrub_instance", "_filter_rows", "_patch_class",
 ]
