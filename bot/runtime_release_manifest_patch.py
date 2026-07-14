@@ -15,16 +15,18 @@ _INSTALLED = False
 _LOCK = threading.RLock()
 
 # Installation order is intentional. The canonical owner is installed first and
-# its delegated-reentry helper is patched immediately afterward. Cost-basis
-# compatibility precedes exact snapshot reconciliation. Kraken exit recovery is
-# made strictly exit-only before the final profit-realization guard is installed.
+# its delegated-reentry helper is patched immediately afterward. The Kraken
+# metadata filter is installed before dynamic equity hydration so no early balance
+# cycle can classify enriched accounting fields as assets. Exit recovery is made
+# strictly exit-only before the final profit-realization guard is installed.
 _INSTALLERS = (
     ("scan_wrapper_convergence_repair_patch", "install"),
     ("bot.scan_reentrant_delegate_repair_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
-    ("bot.kraken_equity_runtime_patch", "install_import_hook"),
     ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
+    ("bot.kraken_equity_runtime_patch", "install_import_hook"),
+    ("bot.kraken_synthetic_equity_position_scrub_patch", "install_import_hook"),
     ("bot.kraken_equity_double_count_guard_patch", "install_import_hook"),
     ("bot.kraken_margin_auto_runtime_patch", "install_import_hook"),
     ("bot.kraken_all_account_exit_runtime_patch", "install_import_hook"),
@@ -40,6 +42,7 @@ _INSTALLERS = (
 _REQUIRED_FLAGS = {
     "scan_reentrant_delegate_guard": "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
     "kraken_equity_metadata_guard": "NIJA_KRAKEN_EQUITY_METADATA_GUARD_INSTALLED",
+    "kraken_synthetic_equity_scrub": "NIJA_KRAKEN_SYNTHETIC_EQUITY_SCRUB_INSTALLED",
     "kraken_exit_only_recovery_guard": "NIJA_KRAKEN_EXIT_ONLY_RECOVERY_PHASE_GUARD_INSTALLED",
     "profit_realization_guard": "NIJA_KRAKEN_PROFIT_REALIZATION_GUARD_INSTALLED",
 }
