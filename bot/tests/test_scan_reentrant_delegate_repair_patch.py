@@ -19,14 +19,17 @@ def _load():
     return module
 
 
-def test_active_scan_reentry_continues_to_leaf_wrapper_target(monkeypatch):
+def test_active_scan_reentry_preserves_remaining_wrapper_chain():
     module = _load()
+    calls = []
 
     def leaf(self=None):
+        calls.append("leaf")
         return "scanned"
 
     def legacy_wrapper(self=None):
-        return "wrapper"
+        calls.append("wrapper")
+        return leaf(self)
 
     legacy_wrapper.__wrapped__ = leaf
 
@@ -40,6 +43,39 @@ def test_active_scan_reentry_continues_to_leaf_wrapper_target(monkeypatch):
         return target._unwrap_known(legacy_wrapper)
 
     resolved, depth, cycle = run_scan_phase()
+    assert resolved is not legacy_wrapper
+    assert getattr(resolved, "_nija_scan_preserving_delegate", False) is True
+    assert resolved(None) == "scanned"
+    assert calls == ["wrapper", "leaf"]
+    assert depth == 1
+    assert cycle is False
+
+
+def test_nested_recovery_can_unwrap_captured_owner_to_leaf():
+    module = _load()
+
+    def leaf(self=None):
+        return "leaf"
+
+    def captured_owner(self=None):
+        return leaf(self)
+
+    captured_owner.__wrapped__ = leaf
+
+    def original_unwrap(func):
+        return func, 0, False
+
+    target = SimpleNamespace(_unwrap_known=original_unwrap)
+    module._patch_module(target)
+    module._TLS.recovering = True
+    try:
+        def run_scan_phase():
+            return target._unwrap_known(captured_owner)
+
+        resolved, depth, cycle = run_scan_phase()
+    finally:
+        module._TLS.recovering = False
+
     assert resolved is leaf
     assert depth == 1
     assert cycle is False
