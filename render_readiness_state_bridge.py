@@ -17,10 +17,11 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("nija.render_readiness_bridge")
-_MARKER = "20260711b"
+_MARKER = "20260714c"
 _LOCK = threading.RLock()
 _INSTALLED = False
 _THREAD: threading.Thread | None = None
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 
 def _state_path() -> Path:
@@ -31,7 +32,40 @@ def _state_path() -> Path:
     return Path(str(raw or "/tmp/nija_render_readiness.json")).expanduser()
 
 
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in _TRUE
+
+
+def _normalised_policy() -> str:
+    explicit = str(os.environ.get("NIJA_SECONDARY_VENUE_POLICY", "") or "").strip().lower()
+    if explicit in {"broker_local", "global_all_required", "optional"}:
+        return explicit
+    return "broker_local" if _truthy(os.environ.get("NIJA_REQUIRE_SECONDARY_VENUES_READY")) else "optional"
+
+
+def _required_missing() -> str:
+    return str(os.environ.get("NIJA_REQUIRED_VENUES_MISSING", "") or "").strip().strip(",")
+
+
+def _required_ready(missing: str) -> str:
+    # Missing required venues always means the required-venue set itself is not
+    # ready, even when broker-local policy permits another healthy venue to trade.
+    if missing:
+        return "0"
+    return "1" if _truthy(os.environ.get("NIJA_REQUIRED_VENUES_READY", "0")) else "0"
+
+
+def _global_ready() -> str:
+    for name in ("NIJA_GLOBAL_TRADING_READY", "NIJA_MULTI_BROKER_TRADING_READY"):
+        if name in os.environ:
+            return "1" if _truthy(os.environ.get(name)) else "0"
+    active = str(os.environ.get("NIJA_ACTIVE_LIVE_VENUES", "") or "").strip().strip(",")
+    return "1" if active else "0"
+
+
 def _payload() -> dict[str, Any]:
+    missing = _required_missing()
+    global_ready = _global_ready()
     return {
         "timestamp": time.time(),
         "pid": os.getpid(),
@@ -40,13 +74,16 @@ def _payload() -> dict[str, Any]:
         "strict_secondary_venues": os.environ.get(
             "NIJA_REQUIRE_SECONDARY_VENUES_READY", "false"
         ),
-        "required_venues_ready": os.environ.get("NIJA_REQUIRED_VENUES_READY", "0"),
+        "secondary_venue_policy": _normalised_policy(),
+        "required_venues_ready": _required_ready(missing),
+        "global_trading_ready": global_ready,
+        "multi_broker_trading_ready": global_ready,
         "required_venues": os.environ.get(
             "NIJA_REQUIRED_LIVE_VENUES", "coinbase,okx"
         ),
-        "required_venues_missing": os.environ.get(
-            "NIJA_REQUIRED_VENUES_MISSING", "coinbase,okx"
-        ),
+        "required_venues_missing": missing,
+        "active_live_venues": os.environ.get("NIJA_ACTIVE_LIVE_VENUES", ""),
+        "degraded_live_venues": os.environ.get("NIJA_DEGRADED_LIVE_VENUES", ""),
         "coinbase_activation_state": os.environ.get(
             "NIJA_COINBASE_ACTIVATION_STATE", "unknown"
         ),
@@ -127,15 +164,16 @@ def install() -> None:
         _THREAD.start()
         os.environ["NIJA_RENDER_READINESS_BRIDGE_INSTALLED"] = "1"
         logger.warning(
-            "RENDER_READINESS_STATE_BRIDGE_INSTALLED marker=%s path=%s",
+            "RENDER_READINESS_STATE_BRIDGE_INSTALLED marker=%s path=%s policy=%s",
             _MARKER,
             _state_path(),
+            _normalised_policy(),
         )
         print(
             f"[NIJA-PRINT] RENDER_READINESS_STATE_BRIDGE_INSTALLED marker={_MARKER} "
-            f"path={_state_path()}",
+            f"path={_state_path()} policy={_normalised_policy()}",
             flush=True,
         )
 
 
-__all__ = ["install", "publish_once"]
+__all__ = ["install", "publish_once", "_payload"]
