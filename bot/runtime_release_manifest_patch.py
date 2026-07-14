@@ -10,18 +10,19 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260713-runtime-convergence-v4"
+RELEASE_ID = "20260714-runtime-convergence-v5"
 _INSTALLED = False
 _LOCK = threading.RLock()
 
-# Installation order is intentional.  Cost-basis compatibility must be active
-# before exact snapshots reconcile legacy positions; the final equity guard must
-# wrap the dynamic valuation layer after it has patched Kraken broker classes.
+# Installation order is intentional. Cost-basis compatibility must be active
+# before exact snapshots reconcile legacy positions. Dynamic Kraken valuation is
+# installed before the metadata and double-count guards that constrain its output.
 _INSTALLERS = (
     ("scan_wrapper_convergence_repair_patch", "install"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
     ("bot.kraken_equity_runtime_patch", "install_import_hook"),
+    ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
     ("bot.kraken_equity_double_count_guard_patch", "install_import_hook"),
     ("bot.kraken_margin_auto_runtime_patch", "install_import_hook"),
     ("bot.kraken_all_account_exit_runtime_patch", "install_import_hook"),
@@ -54,6 +55,29 @@ def _invoke(module_name: str, function_name: str) -> tuple[bool, str]:
         return False, f"{type(exc).__name__}:{exc}"
 
 
+def _expected_scan_wrapper_release() -> str:
+    """Read the release contract from the installed scan-owner module itself.
+
+    The previous manifest hard-coded an older release string. A legitimate scan
+    owner upgrade from ``20260713-scan-wrapper-v2`` to ``20260714a`` therefore
+    made the entire runtime fail closed even though every installer succeeded.
+    Binding the audit to the module's own marker keeps the contract strict without
+    making routine compatible upgrades look unsafe.
+    """
+
+    try:
+        module = importlib.import_module("scan_wrapper_convergence_repair_patch")
+        return str(getattr(module, "_MARKER", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _scan_release_compatible(actual: str, expected: str) -> bool:
+    actual = str(actual or "").strip()
+    expected = str(expected or "").strip()
+    return bool(actual and expected and actual == expected)
+
+
 def _audit() -> tuple[bool, dict[str, str]]:
     results: dict[str, str] = {}
     ready = True
@@ -61,10 +85,16 @@ def _audit() -> tuple[bool, dict[str, str]]:
         ok, reason = _invoke(module_name, function_name)
         results[module_name] = reason
         ready = ready and ok
-    scan_release = str(os.environ.get("NIJA_SCAN_WRAPPER_RELEASE", "") or "")
-    if scan_release != "20260713-scan-wrapper-v2":
+
+    scan_release = str(os.environ.get("NIJA_SCAN_WRAPPER_RELEASE", "") or "").strip()
+    expected_scan_release = _expected_scan_wrapper_release()
+    if not _scan_release_compatible(scan_release, expected_scan_release):
         ready = False
-        results["scan_wrapper_release"] = scan_release or "missing"
+        results["scan_wrapper_release"] = (
+            f"actual={scan_release or 'missing'};expected={expected_scan_release or 'missing'}"
+        )
+    else:
+        results["scan_wrapper_release"] = scan_release
     return ready, results
 
 
@@ -107,4 +137,11 @@ def install_import_hook() -> None:
     logger.critical("NIJA_RUNTIME_RELEASE_MANIFEST_INSTALLED release=%s", RELEASE_ID)
 
 
-__all__ = ["RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha"]
+__all__ = [
+    "RELEASE_ID",
+    "install_import_hook",
+    "_audit",
+    "_deployment_sha",
+    "_expected_scan_wrapper_release",
+    "_scan_release_compatible",
+]
