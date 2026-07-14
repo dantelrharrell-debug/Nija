@@ -47,6 +47,7 @@ def test_scan_owner_respects_existing_canonical_owner():
     assert convergence._patch_core_loop(module) is True
     canonical = module.NijaCoreLoop.run_scan_phase
     assert getattr(canonical, "_nija_scan_wrapper_canonical_v2", False)
+    assert convergence._guard_secondary_scan_owner() is True
 
     # The auth convergence watchdog must not install a second account owner.
     assert scan_owner._patch_core(module) is True
@@ -83,6 +84,7 @@ def test_repeated_watchdogs_do_not_oscillate_method_identity():
     module, _ = _module_with_broker_slot_wrapper()
     assert convergence._patch_core_loop(module) is True
     canonical = module.NijaCoreLoop.run_scan_phase
+    assert convergence._guard_secondary_scan_owner() is True
 
     for _ in range(10):
         assert scan_owner._patch_core(module) is True
