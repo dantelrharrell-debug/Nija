@@ -132,6 +132,15 @@ def _install_scan_wrapper_convergence() -> None:
     )
 
 
+def _install_scan_reentrant_delegate_repair() -> None:
+    _install_module(
+        "bot.scan_reentrant_delegate_repair_patch",
+        "scan_reentrant_delegate_repair_patch",
+        "SCAN_REENTRANT_DELEGATE_REPAIR",
+        "20260714-scan-delegate-v1",
+    )
+
+
 def _install_strategy_backrefs() -> None:
     _install_module("bot.strategy_broker_backref_patch", "strategy_broker_backref_patch", "BROKER_BOOL_GUARD_STRATEGY_BACKREF", "20260705d")
 
@@ -150,6 +159,15 @@ def _install_kraken_equity_runtime() -> None:
 
 def _install_kraken_equity_metadata_guard() -> None:
     _install_module("bot.kraken_equity_metadata_guard_patch", "kraken_equity_metadata_guard_patch", "KRAKEN_EQUITY_METADATA_GUARD", "20260714-kraken-equity-metadata-v1")
+
+
+def _install_kraken_synthetic_equity_scrub() -> None:
+    _install_module(
+        "bot.kraken_synthetic_equity_position_scrub_patch",
+        "kraken_synthetic_equity_position_scrub_patch",
+        "KRAKEN_SYNTHETIC_EQUITY_SCRUB",
+        "20260714-kraken-synthetic-equity-scrub-v1",
+    )
 
 
 def _install_kraken_equity_double_count_guard() -> None:
@@ -180,6 +198,15 @@ def _install_kraken_exit_margin_cost() -> None:
     _install_module("bot.kraken_exit_margin_cost_patch", "kraken_exit_margin_cost_patch", "KRAKEN_EXIT_MARGIN_COST", "20260713-kraken-exit-margin-cost-v1")
 
 
+def _install_kraken_exit_only_recovery_guard() -> None:
+    _install_module(
+        "bot.kraken_exit_only_recovery_phase_guard_patch",
+        "kraken_exit_only_recovery_phase_guard_patch",
+        "KRAKEN_EXIT_ONLY_RECOVERY_GUARD",
+        "20260714-kraken-exit-only-recovery-v1",
+    )
+
+
 def _install_kraken_profit_realization_guard() -> None:
     _install_module("bot.kraken_profit_realization_guard_patch", "kraken_profit_realization_guard_patch", "KRAKEN_PROFIT_REALIZATION_GUARD", "20260714-kraken-profit-realization-v1")
 
@@ -189,18 +216,21 @@ def _install_coinbase_pem_quarantine() -> None:
 
 
 def _install_runtime_release_manifest() -> None:
-    _install_module("bot.runtime_release_manifest_patch", "runtime_release_manifest_patch", "RUNTIME_RELEASE_MANIFEST", "20260714-runtime-convergence-v6")
+    _install_module("bot.runtime_release_manifest_patch", "runtime_release_manifest_patch", "RUNTIME_RELEASE_MANIFEST", "20260714-runtime-convergence-v7")
 
 
 def install_import_hook() -> None:
-    # Order matters: converge scan ownership first, reconcile exact state, constrain
-    # equity metadata, then install execution and profit-realization guards. Publish
-    # the release manifest only after every critical layer has been requested.
+    # Order matters. Converge scan ownership and delegated reentry first. Install
+    # synthetic-metadata filtering before dynamic Kraken equity hydration so no early
+    # balance cycle can create CANONICAL_EQUITY-USD. Make recovery exit-only before
+    # profit realization, then publish the strict release manifest last.
     _install_scan_wrapper_convergence()
+    _install_scan_reentrant_delegate_repair()
     _install_trade_cycle_convergence_repair()
     _install_position_sync_runtime_repair()
-    _install_kraken_equity_runtime()
     _install_kraken_equity_metadata_guard()
+    _install_kraken_equity_runtime()
+    _install_kraken_synthetic_equity_scrub()
     _install_kraken_equity_double_count_guard()
     _install_kraken_margin_auto_runtime()
     _install_kraken_all_account_exit_runtime()
@@ -208,6 +238,7 @@ def install_import_hook() -> None:
     _install_kraken_exit_final_guards()
     _install_kraken_exit_execution_safety()
     _install_kraken_exit_margin_cost()
+    _install_kraken_exit_only_recovery_guard()
     _install_kraken_profit_realization_guard()
     _install_coinbase_pem_quarantine()
     _install_strategy_backrefs()

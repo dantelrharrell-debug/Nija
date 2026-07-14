@@ -10,21 +10,23 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260714-runtime-convergence-v6"
+RELEASE_ID = "20260714-runtime-convergence-v7"
 _INSTALLED = False
 _LOCK = threading.RLock()
 
-# Installation order is intentional. Cost-basis compatibility must be active
-# before exact snapshots reconcile legacy positions. Dynamic Kraken valuation is
-# installed before the metadata and double-count guards that constrain its output.
-# Profit realization is installed after every account/exit guard so it sees the
-# final verified-cost and writer-authorized decision chain.
+# Installation order is intentional. The canonical owner is installed first and
+# its delegated-reentry helper is patched immediately afterward. The Kraken
+# metadata filter is installed before dynamic equity hydration so no early balance
+# cycle can classify enriched accounting fields as assets. Exit recovery is made
+# strictly exit-only before the final profit-realization guard is installed.
 _INSTALLERS = (
     ("scan_wrapper_convergence_repair_patch", "install"),
+    ("bot.scan_reentrant_delegate_repair_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
-    ("bot.kraken_equity_runtime_patch", "install_import_hook"),
     ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
+    ("bot.kraken_equity_runtime_patch", "install_import_hook"),
+    ("bot.kraken_synthetic_equity_position_scrub_patch", "install_import_hook"),
     ("bot.kraken_equity_double_count_guard_patch", "install_import_hook"),
     ("bot.kraken_margin_auto_runtime_patch", "install_import_hook"),
     ("bot.kraken_all_account_exit_runtime_patch", "install_import_hook"),
@@ -32,9 +34,18 @@ _INSTALLERS = (
     ("bot.kraken_exit_final_guards_patch", "install_import_hook"),
     ("bot.kraken_exit_execution_safety_patch", "install_import_hook"),
     ("bot.kraken_exit_margin_cost_patch", "install_import_hook"),
+    ("bot.kraken_exit_only_recovery_phase_guard_patch", "install_import_hook"),
     ("bot.kraken_profit_realization_guard_patch", "install_import_hook"),
     ("bot.coinbase_pem_quarantine_patch", "install_import_hook"),
 )
+
+_REQUIRED_FLAGS = {
+    "scan_reentrant_delegate_guard": "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
+    "kraken_equity_metadata_guard": "NIJA_KRAKEN_EQUITY_METADATA_GUARD_INSTALLED",
+    "kraken_synthetic_equity_scrub": "NIJA_KRAKEN_SYNTHETIC_EQUITY_SCRUB_INSTALLED",
+    "kraken_exit_only_recovery_guard": "NIJA_KRAKEN_EXIT_ONLY_RECOVERY_PHASE_GUARD_INSTALLED",
+    "profit_realization_guard": "NIJA_KRAKEN_PROFIT_REALIZATION_GUARD_INSTALLED",
+}
 
 
 def _deployment_sha() -> str:
@@ -59,15 +70,7 @@ def _invoke(module_name: str, function_name: str) -> tuple[bool, str]:
 
 
 def _expected_scan_wrapper_release() -> str:
-    """Read the release contract from the installed scan-owner module itself.
-
-    The previous manifest hard-coded an older release string. A legitimate scan
-    owner upgrade from ``20260713-scan-wrapper-v2`` to ``20260714a`` therefore
-    made the entire runtime fail closed even though every installer succeeded.
-    Binding the audit to the module's own marker keeps the contract strict without
-    making routine compatible upgrades look unsafe.
-    """
-
+    """Read the strict scan-owner release contract from the installed module."""
     try:
         module = importlib.import_module("scan_wrapper_convergence_repair_patch")
         return str(getattr(module, "_MARKER", "") or "").strip()
@@ -99,12 +102,13 @@ def _audit() -> tuple[bool, dict[str, str]]:
     else:
         results["scan_wrapper_release"] = scan_release
 
-    profit_guard = str(os.environ.get("NIJA_KRAKEN_PROFIT_REALIZATION_GUARD_INSTALLED", "") or "").strip()
-    if profit_guard != "1":
-        ready = False
-        results["profit_realization_guard"] = profit_guard or "missing"
-    else:
-        results["profit_realization_guard"] = "ready"
+    for label, flag in _REQUIRED_FLAGS.items():
+        value = str(os.environ.get(flag, "") or "").strip()
+        if value != "1":
+            ready = False
+            results[label] = value or "missing"
+        else:
+            results[label] = "ready"
     return ready, results
 
 
