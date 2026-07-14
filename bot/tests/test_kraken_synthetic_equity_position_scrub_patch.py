@@ -18,7 +18,7 @@ def _load():
     return module
 
 
-def test_scrub_mapping_removes_accounting_metadata_but_preserves_assets():
+def test_scrub_mapping_removes_only_synthetic_cache_metadata():
     module = _load()
     cleaned, removed = module._scrub_mapping(
         {
@@ -27,6 +27,8 @@ def test_scrub_mapping_removes_accounting_metadata_but_preserves_assets():
             "AIR": "2901.0",
             "CANONICAL_EQUITY": 230.32,
             "TOTAL_FUNDS": 230.32,
+            "EQUITY": 230.32,
+            "CRYPTO_USD": 30.32,
             "result": {
                 "ETH": "0.5",
                 "HELD_EXCLUDED_FROM_EQUITY_SUM": True,
@@ -37,17 +39,21 @@ def test_scrub_mapping_removes_accounting_metadata_but_preserves_assets():
     assert cleaned["ZUSD"] == "100.00"
     assert cleaned["SOL"] == "1.25"
     assert cleaned["AIR"] == "2901.0"
+    assert cleaned["TOTAL_FUNDS"] == 230.32
+    assert cleaned["EQUITY"] == 230.32
+    assert cleaned["CRYPTO_USD"] == 30.32
     assert cleaned["result"]["ETH"] == "0.5"
     assert "CANONICAL_EQUITY" not in cleaned
-    assert "TOTAL_FUNDS" not in cleaned
     assert "CANONICAL_EQUITY" in removed
     assert "result.HELD_EXCLUDED_FROM_EQUITY_SUM" in removed
 
 
-def test_filter_rows_removes_only_synthetic_positions():
+def test_filter_rows_removes_accounting_fields_when_presented_as_positions():
     module = _load()
     rows = [
         {"symbol": "CANONICAL_EQUITY-USD", "quantity": 230.32},
+        {"symbol": "TOTAL_FUNDS-USD", "quantity": 230.32},
+        {"symbol": "EQUITY-USD", "quantity": 230.32},
         {"symbol": "SOL-USD", "quantity": 1.0},
         {"symbol": "XDC-USD", "quantity": 72.8198},
     ]
@@ -56,7 +62,8 @@ def test_filter_rows_removes_only_synthetic_positions():
     assert [row["symbol"] for row in filtered] == ["SOL-USD", "XDC-USD"]
 
 
-def test_real_underscore_free_kraken_assets_are_not_metadata():
+def test_real_kraken_assets_are_not_metadata():
     module = _load()
-    for symbol in ("SOL", "ETH", "AIR", "XDC", "TNSR", "MOVR", "ORCA"):
+    for symbol in ("SOL", "ETH", "AIR", "XDC", "TNSR", "MOVR", "ORCA", "1INCH"):
         assert module._metadata_name(symbol) is False
+        assert module._cache_metadata_name(symbol) is False
