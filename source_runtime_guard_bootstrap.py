@@ -52,6 +52,7 @@ def _set_status(value: str) -> None:
     for name in (
         "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
         "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
+        "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
@@ -90,6 +91,8 @@ def install() -> bool:
             _install_required("final_worker_position_coinbase_repair_patch")
             _install_required("broker_auth_recovery_patch")
             _install_required("runtime_convergence_hardening_patch")
+            # Arm before NijaCoreLoop imports so stale 999 state cannot enter Phase 3.
+            _install_required("bot.zero_signal_streak_state_repair_patch")
             _install_required("runtime_convergence_v2_patch")
             _install_required("runtime_auth_recursion_endpoint_repair_patch")
             _install_required("final_runtime_convergence_patch")
@@ -118,7 +121,7 @@ def install() -> bool:
             commit = _deployment_commit()
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
-                "writer_authority=installed module_identity=installed "
+                "writer_authority=installed module_identity=installed zero_signal_state_repair=armed "
                 "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
                 "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
                 "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
@@ -137,6 +140,7 @@ def install() -> bool:
             _set_status("0")
             os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
             os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] = "0"
+            os.environ["NIJA_ZERO_SIGNAL_STREAK_STATE_READY"] = "0"
             message = f"{type(exc).__name__}:{exc}"
             live = _is_live_runtime()
             logger.critical(
