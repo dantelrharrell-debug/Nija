@@ -1,17 +1,16 @@
 """Recover legitimate same-thread scan delegation without disabling scan ownership.
 
-The canonical scan owner intentionally suppresses a true recursive call.  Some legacy
-wrappers, however, capture an older canonical method and delegate through it after a
-newer canonical owner has already acquired the same account lock.  Both wrappers use
-the same process-wide scan state, so that legitimate delegation looks recursive and
-returns ``scored=0, blocked=1``.
+The canonical scan owner intentionally suppresses a true recursive call. Some legacy
+wrappers capture an older canonical method and delegate through it after a newer
+canonical owner has already acquired the same account lock. Both owners share the
+same process-wide state, so that legitimate delegation looks recursive and returns
+``scored=0, blocked=1``.
 
-This patch changes only the canonical owner's *reentry recovery helper*.  During
-normal installation/canonicalization the existing strict known-wrapper unwrapping is
-preserved.  During an active ``run_scan_phase`` reentry, the helper may continue down
-explicit ``__wrapped__`` links and narrowly named closure-held originals to reach the
-real core scan exactly once.  Risk gates and telemetry wrappers already entered by
-the outer call are not re-entered or bypassed globally.
+This patch changes only the canonical owner's reentry recovery helper. The first
+reentry bypass executes the canonical instance's existing base unchanged, preserving
+all remaining risk and telemetry wrappers exactly once. Only if that base itself
+re-enters the owner does a narrowly constrained explicit-wrapper/closure walk select
+the deepest callable target. Normal installation canonicalization remains strict.
 """
 from __future__ import annotations
 
@@ -30,6 +29,7 @@ _MARKER = "20260714-scan-delegate-v1"
 _PATCH_ATTR = "_nija_scan_reentrant_delegate_repair_v1"
 _LOCK = threading.RLock()
 _WATCHDOG_STARTED = False
+_TLS = threading.local()
 
 _CLOSURE_ORIGINAL_NAMES = (
     "original_run_scan_phase",
@@ -99,6 +99,21 @@ def _caller_is_active_scan() -> bool:
         del frame
 
 
+def _preserving_delegate(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Return a one-shot bypass that executes *func* with its wrapper chain intact."""
+    @wraps(func)
+    def delegated(*args: Any, **kwargs: Any):
+        previous = bool(getattr(_TLS, "recovering", False))
+        _TLS.recovering = True
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _TLS.recovering = previous
+
+    setattr(delegated, "_nija_scan_preserving_delegate", True)
+    return delegated
+
+
 def _patch_module(module: ModuleType) -> bool:
     current = getattr(module, "_unwrap_known", None)
     if not callable(current):
@@ -112,6 +127,18 @@ def _patch_module(module: ModuleType) -> bool:
         if cycle or not _caller_is_active_scan() or not callable(resolved):
             return resolved, depth, cycle
 
+        if not bool(getattr(_TLS, "recovering", False)):
+            delegated = _preserving_delegate(resolved)
+            logger.critical(
+                "SCAN_REENTRANT_DELEGATION_RECOVERED marker=%s base=%s target=preserving_delegate removed_layers=%d",
+                _MARKER,
+                getattr(resolved, "__qualname__", getattr(resolved, "__name__", "unknown")),
+                depth + 1,
+            )
+            return delegated, depth + 1, False
+
+        # A second owner reentry from inside the preserved base indicates another
+        # captured canonical layer. Walk only explicit wrapper/closure links now.
         delegated, extra_depth, delegated_cycle = _unwrap_delegate(resolved)
         if delegated_cycle:
             logger.error(
@@ -123,7 +150,7 @@ def _patch_module(module: ModuleType) -> bool:
             return resolved, depth, True
         if callable(delegated) and delegated is not resolved and extra_depth > 0:
             logger.critical(
-                "SCAN_REENTRANT_DELEGATION_RECOVERED marker=%s base=%s target=%s removed_layers=%d",
+                "SCAN_REENTRANT_CAPTURED_OWNER_UNWRAPPED marker=%s base=%s target=%s removed_layers=%d",
                 _MARKER,
                 getattr(resolved, "__qualname__", getattr(resolved, "__name__", "unknown")),
                 getattr(delegated, "__qualname__", getattr(delegated, "__name__", "unknown")),
@@ -190,5 +217,6 @@ __all__ = [
     "install_import_hook",
     "_closure_original",
     "_unwrap_delegate",
+    "_preserving_delegate",
     "_patch_module",
 ]
