@@ -14,7 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260713b"
+_MARKER = "20260714c"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -63,6 +63,7 @@ def _set_status(value: str) -> None:
         "NIJA_FINAL_WORKER_POSITION_COINBASE_REPAIR_INSTALLED",
         "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
         "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
+        "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
         "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
         "NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED",
         "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
@@ -92,6 +93,7 @@ def install() -> bool:
             _install_required("venue_readiness_execution_repair_patch")
             _install_required("secondary_venue_activation_patch")
             _install_required("secondary_venue_strict_readiness_patch")
+            _install_required("broker_local_readiness_contract_patch")
             _install_required("account_exit_management_recovery_patch")
             _install_required("account_exit_recovery_bootstrap_patch")
             _install_required("three_venue_execution_readiness")
@@ -111,6 +113,7 @@ def install() -> bool:
                 "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
                 "scan_wrapper_convergence=installed venue_repair=installed "
                 "secondary_venue_activation=installed secondary_venue_strict_readiness=installed "
+                "broker_local_readiness_contract=installed "
                 "account_exit_management_recovery=installed account_exit_recovery_bootstrap=installed "
                 "three_venue_stage_verifier=installed render_readiness_bridge=installed "
                 "scan_owner_okx_auth_convergence=installed source=main_pre_bot"

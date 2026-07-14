@@ -10,18 +10,20 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260714-runtime-convergence-v7"
+RELEASE_ID = "20260714-runtime-convergence-v8"
 _INSTALLED = False
 _LOCK = threading.RLock()
+_TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 # Installation order is intentional. The canonical owner is installed first and
-# its delegated-reentry helper is patched immediately afterward. The Kraken
-# metadata filter is installed before dynamic equity hydration so no early balance
-# cycle can classify enriched accounting fields as assets. Exit recovery is made
+# its delegated-reentry helper is patched immediately afterward. Broker-local
+# readiness is normalized before the strict release contract is published. Kraken
+# metadata filtering precedes dynamic equity hydration, and exit recovery is made
 # strictly exit-only before the final profit-realization guard is installed.
 _INSTALLERS = (
     ("scan_wrapper_convergence_repair_patch", "install"),
     ("bot.scan_reentrant_delegate_repair_patch", "install_import_hook"),
+    ("broker_local_readiness_contract_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
     ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
@@ -41,11 +43,16 @@ _INSTALLERS = (
 
 _REQUIRED_FLAGS = {
     "scan_reentrant_delegate_guard": "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
+    "broker_local_readiness_contract": "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
     "kraken_equity_metadata_guard": "NIJA_KRAKEN_EQUITY_METADATA_GUARD_INSTALLED",
     "kraken_synthetic_equity_scrub": "NIJA_KRAKEN_SYNTHETIC_EQUITY_SCRUB_INSTALLED",
     "kraken_exit_only_recovery_guard": "NIJA_KRAKEN_EXIT_ONLY_RECOVERY_PHASE_GUARD_INSTALLED",
     "profit_realization_guard": "NIJA_KRAKEN_PROFIT_REALIZATION_GUARD_INSTALLED",
 }
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in _TRUE
 
 
 def _deployment_sha() -> str:
@@ -84,6 +91,30 @@ def _scan_release_compatible(actual: str, expected: str) -> bool:
     return bool(actual and expected and actual == expected)
 
 
+def _readiness_contract_consistent() -> tuple[bool, str]:
+    policy = str(os.environ.get("NIJA_SECONDARY_VENUE_POLICY", "") or "").strip().lower()
+    missing = str(os.environ.get("NIJA_REQUIRED_VENUES_MISSING", "") or "").strip().strip(",")
+    required_ready = _truthy(os.environ.get("NIJA_REQUIRED_VENUES_READY"))
+    global_ready = _truthy(
+        os.environ.get(
+            "NIJA_GLOBAL_TRADING_READY",
+            os.environ.get("NIJA_MULTI_BROKER_TRADING_READY", "0"),
+        )
+    )
+    active = str(os.environ.get("NIJA_ACTIVE_LIVE_VENUES", "") or "").strip().strip(",")
+
+    if policy not in {"broker_local", "global_all_required", "optional"}:
+        return False, f"invalid_policy:{policy or 'missing'}"
+    if missing and required_ready:
+        return False, f"contradiction:missing={missing};required_ready=1"
+    if global_ready and not active:
+        return False, "contradiction:global_ready=1;active_live_venues=missing"
+    return True, (
+        f"policy={policy};required_ready={int(required_ready)};missing={missing or 'none'};"
+        f"global_ready={int(global_ready)};active={active or 'none'}"
+    )
+
+
 def _audit() -> tuple[bool, dict[str, str]]:
     results: dict[str, str] = {}
     ready = True
@@ -109,6 +140,10 @@ def _audit() -> tuple[bool, dict[str, str]]:
             results[label] = value or "missing"
         else:
             results[label] = "ready"
+
+    contract_ok, contract_reason = _readiness_contract_consistent()
+    results["readiness_contract"] = contract_reason
+    ready = ready and contract_ok
     return ready, results
 
 
@@ -158,4 +193,5 @@ __all__ = [
     "_deployment_sha",
     "_expected_scan_wrapper_release",
     "_scan_release_compatible",
+    "_readiness_contract_consistent",
 ]

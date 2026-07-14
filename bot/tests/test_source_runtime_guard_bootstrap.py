@@ -21,20 +21,23 @@ def _reset_source_bootstrap(monkeypatch) -> None:
         "NIJA_RUNTIME_AUTH_ENDPOINT_REPAIR_INSTALLED",
         "NIJA_FINAL_RUNTIME_CONVERGENCE_INSTALLED",
         "NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED",
+        "NIJA_SCAN_OWNER_OKX_AUTH_CONVERGENCE_INSTALLED",
         "NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED",
         "NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED",
         "NIJA_FINAL_WORKER_POSITION_COINBASE_REPAIR_INSTALLED",
         "NIJA_SECONDARY_VENUE_ACTIVATOR_INSTALLED",
         "NIJA_SECONDARY_VENUE_STRICT_GUARD_INSTALLED",
+        "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
         "NIJA_ACCOUNT_EXIT_MANAGEMENT_RECOVERY_INSTALLED",
         "NIJA_ACCOUNT_EXIT_RECOVERY_BOOTSTRAP_INSTALLED",
+        "NIJA_THREE_VENUE_STAGE_VERIFIER_INSTALLED",
         "NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED",
         "NIJA_RENDER_READINESS_BRIDGE_INSTALLED",
     ):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_source_bootstrap_installs_authority_repairs_before_broker_activation(monkeypatch):
+def test_source_bootstrap_installs_readiness_contract_before_recovery_and_bridge(monkeypatch):
     _reset_source_bootstrap(monkeypatch)
     calls: list[str] = []
     names = (
@@ -51,10 +54,12 @@ def test_source_bootstrap_installs_authority_repairs_before_broker_activation(mo
         ("venue_readiness_execution_repair_patch", "venue", "install"),
         ("secondary_venue_activation_patch", "activator", "install"),
         ("secondary_venue_strict_readiness_patch", "strict", "install"),
+        ("broker_local_readiness_contract_patch", "broker_local_contract", "install"),
         ("account_exit_management_recovery_patch", "exit_recovery", "install_import_hook"),
         ("account_exit_recovery_bootstrap_patch", "exit_bootstrap", "install"),
         ("three_venue_execution_readiness", "stage", "install"),
         ("render_readiness_state_bridge", "bridge", "install"),
+        ("scan_owner_okx_auth_convergence_patch", "scan_owner", "install"),
     )
     modules = {}
     for module_name, label, installer_name in names:
@@ -78,13 +83,15 @@ def test_source_bootstrap_installs_authority_repairs_before_broker_activation(mo
     assert calls == [
         "writer", "generation_scope", "heartbeat_scope", "worker_position", "auth",
         "convergence", "convergence_v2", "auth_endpoint", "final_convergence",
-        "scan_wrapper", "venue", "activator", "strict", "exit_recovery",
-        "exit_bootstrap", "stage", "bridge",
+        "scan_wrapper", "venue", "activator", "strict", "broker_local_contract",
+        "exit_recovery", "exit_bootstrap", "stage", "bridge", "scan_owner",
     ]
-    assert source_bootstrap.installed_marker() == "20260713a"
+    assert calls.index("broker_local_contract") < calls.index("bridge")
+    assert source_bootstrap.installed_marker() == "20260714c"
     assert source_bootstrap.os.environ["NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED"] == "1"
+    assert source_bootstrap.os.environ["NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
 
 
@@ -105,6 +112,7 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
     assert exc_info.value.code == 78
     assert source_bootstrap.os.environ["NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "0"
 
 

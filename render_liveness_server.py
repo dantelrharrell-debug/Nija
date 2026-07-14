@@ -2,7 +2,7 @@
 
 ``/healthz`` reports process liveness so Render can complete a zero-downtime
 deployment while the replacement waits fail-closed for writer authority.
-``/readyz`` reports strict trading readiness.  Because this HTTP server is a
+``/readyz`` reports strict trading readiness. Because this HTTP server is a
 separate process, it reads an atomic state file published by the trading process
 instead of relying on stale inherited environment variables.
 """
@@ -81,6 +81,13 @@ def _read_shared_state() -> tuple[Optional[dict[str, Any]], Optional[float], str
         return None, None, f"read_error:{type(exc).__name__}"
 
 
+def _secondary_policy_from_env() -> str:
+    explicit = str(os.environ.get("NIJA_SECONDARY_VENUE_POLICY", "") or "").strip().lower()
+    if explicit in {"broker_local", "global_all_required", "optional"}:
+        return explicit
+    return "broker_local" if _truthy("NIJA_REQUIRE_SECONDARY_VENUES_READY") else "optional"
+
+
 def _environment_snapshot() -> dict[str, Any]:
     return {
         "state": os.environ.get("NIJA_RUNTIME_TRADING_STATE", "OFF"),
@@ -88,13 +95,23 @@ def _environment_snapshot() -> dict[str, Any]:
         "strict_secondary_venues": os.environ.get(
             "NIJA_REQUIRE_SECONDARY_VENUES_READY", "false"
         ),
+        "secondary_venue_policy": _secondary_policy_from_env(),
         "required_venues_ready": os.environ.get("NIJA_REQUIRED_VENUES_READY", "0"),
+        "global_trading_ready": os.environ.get(
+            "NIJA_GLOBAL_TRADING_READY",
+            os.environ.get("NIJA_MULTI_BROKER_TRADING_READY", "0"),
+        ),
+        "multi_broker_trading_ready": os.environ.get(
+            "NIJA_MULTI_BROKER_TRADING_READY", "0"
+        ),
         "required_venues": os.environ.get(
             "NIJA_REQUIRED_LIVE_VENUES", "coinbase,okx"
         ),
         "required_venues_missing": os.environ.get(
             "NIJA_REQUIRED_VENUES_MISSING", ""
         ),
+        "active_live_venues": os.environ.get("NIJA_ACTIVE_LIVE_VENUES", ""),
+        "degraded_live_venues": os.environ.get("NIJA_DEGRADED_LIVE_VENUES", ""),
         "coinbase_activation_state": os.environ.get(
             "NIJA_COINBASE_ACTIVATION_STATE", "unknown"
         ),
@@ -123,9 +140,14 @@ def _safe_render_startup_snapshot() -> dict[str, Any]:
         "strict_secondary_venues": os.environ.get(
             "NIJA_REQUIRE_SECONDARY_VENUES_READY", "true"
         ),
+        "secondary_venue_policy": _secondary_policy_from_env(),
         "required_venues_ready": "0",
+        "global_trading_ready": "0",
+        "multi_broker_trading_ready": "0",
         "required_venues": required,
         "required_venues_missing": required,
+        "active_live_venues": "",
+        "degraded_live_venues": required,
         "coinbase_activation_state": "unknown",
         "coinbase_connected": "0",
         "coinbase_trading_ready": "0",
@@ -136,6 +158,24 @@ def _safe_render_startup_snapshot() -> dict[str, Any]:
         "okx_spendable_quote": "0",
         "commit": os.environ.get("GIT_COMMIT_SHORT", "unknown"),
     }
+
+
+def _normalised_policy(snapshot: dict[str, Any]) -> str:
+    explicit = str(snapshot.get("secondary_venue_policy") or "").strip().lower()
+    if explicit in {"broker_local", "global_all_required", "optional"}:
+        return explicit
+    return "broker_local" if _truthy_value(snapshot.get("strict_secondary_venues")) else "optional"
+
+
+def _global_ready_from_snapshot(snapshot: dict[str, Any], required_ready: bool) -> bool:
+    for key in ("global_trading_ready", "multi_broker_trading_ready"):
+        if key in snapshot:
+            return _truthy_value(snapshot.get(key))
+    active = str(snapshot.get("active_live_venues") or "").strip().strip(",")
+    if active:
+        return True
+    # Backward compatibility for old state files that predate broker-local fields.
+    return required_ready
 
 
 def _readiness() -> tuple[bool, dict[str, object]]:
@@ -156,19 +196,32 @@ def _readiness() -> tuple[bool, dict[str, object]]:
     writer_raw = str(snapshot.get("writer_authority") or "0")
     writer_ready = _truthy_value(writer_raw)
     strict = _truthy_value(snapshot.get("strict_secondary_venues"))
-    required_ready = (
-        _truthy_value(snapshot.get("required_venues_ready")) if strict else True
-    )
-    ready = state == "LIVE_ACTIVE" and writer_ready and required_ready
+    policy = _normalised_policy(snapshot)
+    required_ready = _truthy_value(snapshot.get("required_venues_ready"))
+    global_ready = _global_ready_from_snapshot(snapshot, required_ready)
+
+    if policy == "global_all_required":
+        venue_policy_ready = required_ready
+    else:
+        # broker_local and optional policies require at least one independently
+        # executable live venue but do not require every secondary venue.
+        venue_policy_ready = global_ready
+
+    ready = state == "LIVE_ACTIVE" and writer_ready and venue_policy_ready
 
     details: dict[str, object] = {
         "status": "ready" if ready else "not_ready",
         "state": state,
         "writer_authority": writer_raw,
         "strict_secondary_venues": strict,
+        "secondary_venue_policy": policy,
         "required_venues_ready": required_ready,
+        "global_trading_ready": global_ready,
+        "venue_policy_ready": venue_policy_ready,
         "required_venues": snapshot.get("required_venues", "coinbase,okx"),
         "required_venues_missing": snapshot.get("required_venues_missing", ""),
+        "active_live_venues": snapshot.get("active_live_venues", ""),
+        "degraded_live_venues": snapshot.get("degraded_live_venues", ""),
         "coinbase_activation_state": snapshot.get(
             "coinbase_activation_state", "unknown"
         ),

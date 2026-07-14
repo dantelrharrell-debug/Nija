@@ -141,6 +141,15 @@ def _install_scan_reentrant_delegate_repair() -> None:
     )
 
 
+def _install_broker_local_readiness_contract() -> None:
+    _install_module(
+        "broker_local_readiness_contract_patch",
+        "broker_local_readiness_contract_patch",
+        "BROKER_LOCAL_READINESS_CONTRACT",
+        "20260714-broker-local-readiness-v1",
+    )
+
+
 def _install_strategy_backrefs() -> None:
     _install_module("bot.strategy_broker_backref_patch", "strategy_broker_backref_patch", "BROKER_BOOL_GUARD_STRATEGY_BACKREF", "20260705d")
 
@@ -216,16 +225,18 @@ def _install_coinbase_pem_quarantine() -> None:
 
 
 def _install_runtime_release_manifest() -> None:
-    _install_module("bot.runtime_release_manifest_patch", "runtime_release_manifest_patch", "RUNTIME_RELEASE_MANIFEST", "20260714-runtime-convergence-v7")
+    _install_module("bot.runtime_release_manifest_patch", "runtime_release_manifest_patch", "RUNTIME_RELEASE_MANIFEST", "20260714-runtime-convergence-v8")
 
 
 def install_import_hook() -> None:
-    # Order matters. Converge scan ownership and delegated reentry first. Install
-    # synthetic-metadata filtering before dynamic Kraken equity hydration so no early
-    # balance cycle can create CANONICAL_EQUITY-USD. Make recovery exit-only before
-    # profit realization, then publish the strict release manifest last.
+    # Order matters. Converge scan ownership and delegated reentry first, then
+    # normalize broker-local readiness before publishing any release/readiness state.
+    # Install synthetic-metadata filtering before dynamic Kraken equity hydration so
+    # no early balance cycle can create CANONICAL_EQUITY-USD. Make recovery exit-only
+    # before profit realization, then publish the strict release manifest last.
     _install_scan_wrapper_convergence()
     _install_scan_reentrant_delegate_repair()
+    _install_broker_local_readiness_contract()
     _install_trade_cycle_convergence_repair()
     _install_position_sync_runtime_repair()
     _install_kraken_equity_metadata_guard()
