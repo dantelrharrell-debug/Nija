@@ -14,7 +14,7 @@ import threading
 from typing import Optional
 
 logger = logging.getLogger("nija.source_runtime_guard_bootstrap")
-_MARKER = "20260714c"
+_MARKER = "20260714d"
 _TRUTHY = {"1", "true", "yes", "on", "enabled", "y"}
 _LOCK = threading.RLock()
 _INSTALLED = False
@@ -51,6 +51,7 @@ def _install_required(module_name: str) -> None:
 def _set_status(value: str) -> None:
     for name in (
         "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
+        "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
@@ -81,6 +82,9 @@ def install() -> bool:
             return True
         try:
             _install_required("prebot_writer_authority_fail_closed")
+            # Must precede every canonical bot import. It binds sitecustomize's
+            # nija_* modules to bot.* so source files cannot execute twice.
+            _install_required("runtime_module_identity_convergence_patch")
             _install_required("writer_generation_scope_repair_patch")
             _install_required("authority_heartbeat_generation_scope_patch")
             _install_required("final_worker_position_coinbase_repair_patch")
@@ -101,13 +105,21 @@ def install() -> bool:
             # Must be last: collapse every legacy scan/auth wrapper to one owner.
             _install_required("scan_owner_okx_auth_convergence_patch")
 
+            # Re-audit after every wrapper and core-loop module is installed.
+            identity = importlib.import_module("runtime_module_identity_convergence_patch")
+            audit = getattr(identity, "audit", None)
+            if callable(audit):
+                ready, details = audit()
+                if not ready:
+                    raise RuntimeError(f"runtime_module_identity_incomplete:{details}")
+
             _INSTALLED = True
             _set_status("1")
             commit = _deployment_commit()
             message = (
                 f"SOURCE_RUNTIME_GUARDS_READY marker={_MARKER} commit={commit} "
-                "writer_authority=installed writer_generation_scope=installed "
-                "authority_heartbeat_generation_scope=installed "
+                "writer_authority=installed module_identity=installed "
+                "writer_generation_scope=installed authority_heartbeat_generation_scope=installed "
                 "final_worker_position_coinbase_repair=installed broker_auth_recovery=installed "
                 "runtime_convergence_hardening=installed runtime_convergence_v2=installed "
                 "runtime_auth_endpoint_repair=installed final_runtime_convergence=installed "
@@ -124,6 +136,7 @@ def install() -> bool:
         except Exception as exc:
             _set_status("0")
             os.environ["NIJA_THREE_VENUE_EXECUTION_READY"] = "0"
+            os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] = "0"
             message = f"{type(exc).__name__}:{exc}"
             live = _is_live_runtime()
             logger.critical(
