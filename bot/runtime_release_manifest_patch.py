@@ -1,5 +1,4 @@
 """NIJA runtime release manifest and critical repair convergence audit."""
-
 from __future__ import annotations
 
 import importlib
@@ -10,16 +9,19 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260714-runtime-convergence-v9"
+RELEASE_ID = "20260714-runtime-convergence-v10"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
 _INSTALLERS = (
+    ("runtime_module_identity_convergence_patch", "install_import_hook"),
     ("scan_wrapper_convergence_repair_patch", "install"),
     ("bot.scan_reentrant_delegate_repair_patch", "install_import_hook"),
     ("broker_local_readiness_contract_patch", "install_import_hook"),
     ("bot.downstream_risk_governor_equity_repair_patch", "install_import_hook"),
+    ("runtime_convergence_hardening_patch", "install"),
+    ("bot.zero_signal_streak_state_repair_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
     ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
@@ -38,6 +40,11 @@ _INSTALLERS = (
 )
 
 _REQUIRED_FLAGS = {
+    "module_identity_guard": "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
+    "module_identity_ready": "NIJA_RUNTIME_MODULE_IDENTITY_READY",
+    "core_loop_limits": "NIJA_CORE_LOOP_PROGRESS_LIMITS_NORMALIZED",
+    "zero_signal_state_repair": "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
+    "zero_signal_state_ready": "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
     "scan_reentrant_delegate_guard": "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
     "broker_local_readiness_contract": "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
     "downstream_risk_v2_installed": "NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED",
@@ -56,8 +63,8 @@ def _truthy(value: str | None) -> bool:
 
 def _deployment_sha() -> str:
     for name in (
-        "RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT_SHA", "SOURCE_VERSION", "RENDER_GIT_COMMIT",
-        "HEROKU_SLUG_COMMIT",
+        "RAILWAY_GIT_COMMIT_SHA", "GIT_COMMIT_SHA", "SOURCE_VERSION",
+        "RENDER_GIT_COMMIT", "HEROKU_SLUG_COMMIT",
     ):
         value = str(os.environ.get(name, "") or "").strip()
         if value:
@@ -109,6 +116,20 @@ def _readiness_contract_consistent() -> tuple[bool, str]:
     )
 
 
+def _runtime_limits_consistent() -> tuple[bool, str]:
+    try:
+        streak = int(float(os.environ.get("NIJA_ZERO_SIGNAL_STREAK_CAP", "999") or 999))
+        stale = int(float(os.environ.get("NIJA_ZERO_SIGNAL_STREAK_STALE_THRESHOLD", "100") or 100))
+        stall = float(os.environ.get("NIJA_RUN_CYCLE_PHASE3_TIMEOUT_S", "0") or 0)
+    except Exception as exc:
+        return False, f"parse_error:{exc}"
+    ok = 2 <= streak <= 12 and stale > streak and stall >= 120.0
+    return ok, (
+        f"zero_signal_streak_cap={streak};stale_threshold={stale};"
+        f"run_cycle_stall_warn_s={stall:.1f}"
+    )
+
+
 def _audit() -> tuple[bool, dict[str, str]]:
     results: dict[str, str] = {}
     ready = True
@@ -116,6 +137,15 @@ def _audit() -> tuple[bool, dict[str, str]]:
         ok, reason = _invoke(module_name, function_name)
         results[module_name] = reason
         ready = ready and ok
+
+    try:
+        identity = importlib.import_module("runtime_module_identity_convergence_patch")
+        identity_ready, identity_details = identity.audit()
+        results["module_identity_audit"] = str(identity_details)
+        ready = ready and bool(identity_ready)
+    except Exception as exc:
+        results["module_identity_audit"] = f"{type(exc).__name__}:{exc}"
+        ready = False
 
     scan_release = str(os.environ.get("NIJA_SCAN_WRAPPER_RELEASE", "") or "").strip()
     expected_scan_release = _expected_scan_wrapper_release()
@@ -132,6 +162,10 @@ def _audit() -> tuple[bool, dict[str, str]]:
             results[label] = value or "missing"
         else:
             results[label] = "ready"
+
+    limits_ok, limits_reason = _runtime_limits_consistent()
+    results["core_loop_runtime_limits"] = limits_reason
+    ready = ready and limits_ok
 
     contract_ok, contract_reason = _readiness_contract_consistent()
     results["readiness_contract"] = contract_reason
@@ -177,5 +211,5 @@ def install_import_hook() -> None:
 __all__ = [
     "RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha",
     "_expected_scan_wrapper_release", "_scan_release_compatible",
-    "_readiness_contract_consistent",
+    "_readiness_contract_consistent", "_runtime_limits_consistent",
 ]
