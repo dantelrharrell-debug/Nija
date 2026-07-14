@@ -199,6 +199,7 @@ def _install_live_terminal_guards() -> None:
         "bot.market_data_stability_import_guard_patch",
         "bot.live_execution_terminal_guard_patch",
         "bot.phase3_force_override_terminal_guard_patch",
+        "bot.phase3_execution_handoff_repair_patch",
     ):
         try:
             module = importlib.import_module(module_name)
