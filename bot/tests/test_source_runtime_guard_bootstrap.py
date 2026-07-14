@@ -15,6 +15,8 @@ def _reset_source_bootstrap(monkeypatch) -> None:
     for name in (
         "NIJA_VENUE_READINESS_SOURCE_BOOTSTRAP",
         "NIJA_VENUE_READINESS_SOURCE_MARKER",
+        "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
+        "NIJA_RUNTIME_MODULE_IDENTITY_READY",
         "NIJA_BROKER_AUTH_RECOVERY_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_HARDENING_INSTALLED",
         "NIJA_RUNTIME_CONVERGENCE_V2_INSTALLED",
@@ -37,11 +39,12 @@ def _reset_source_bootstrap(monkeypatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_source_bootstrap_installs_readiness_contract_before_recovery_and_bridge(monkeypatch):
+def test_source_bootstrap_installs_module_identity_before_canonical_runtime_imports(monkeypatch):
     _reset_source_bootstrap(monkeypatch)
     calls: list[str] = []
     names = (
         ("prebot_writer_authority_fail_closed", "writer", "install"),
+        ("runtime_module_identity_convergence_patch", "module_identity", "install"),
         ("writer_generation_scope_repair_patch", "generation_scope", "install"),
         ("authority_heartbeat_generation_scope_patch", "heartbeat_scope", "install"),
         ("final_worker_position_coinbase_repair_patch", "worker_position", "install"),
@@ -65,6 +68,8 @@ def test_source_bootstrap_installs_readiness_contract_before_recovery_and_bridge
     for module_name, label, installer_name in names:
         module = ModuleType(module_name)
         setattr(module, installer_name, lambda label=label: calls.append(label))
+        if module_name == "runtime_module_identity_convergence_patch":
+            module.audit = lambda: (True, {"identity": "ready"})
         modules[module_name] = module
 
     real_import = source_bootstrap.importlib.import_module
@@ -81,17 +86,18 @@ def test_source_bootstrap_installs_readiness_contract_before_recovery_and_bridge
     assert source_bootstrap.install() is True
     assert source_bootstrap.install() is True
     assert calls == [
-        "writer", "generation_scope", "heartbeat_scope", "worker_position", "auth",
-        "convergence", "convergence_v2", "auth_endpoint", "final_convergence",
-        "scan_wrapper", "venue", "activator", "strict", "broker_local_contract",
-        "exit_recovery", "exit_bootstrap", "stage", "bridge", "scan_owner",
+        "writer", "module_identity", "generation_scope", "heartbeat_scope",
+        "worker_position", "auth", "convergence", "convergence_v2",
+        "auth_endpoint", "final_convergence", "scan_wrapper", "venue",
+        "activator", "strict", "broker_local_contract", "exit_recovery",
+        "exit_bootstrap", "stage", "bridge", "scan_owner",
     ]
+    assert calls.index("module_identity") < calls.index("convergence")
     assert calls.index("broker_local_contract") < calls.index("bridge")
-    assert source_bootstrap.installed_marker() == "20260714c"
+    assert source_bootstrap.installed_marker() == "20260714d"
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED"] == "1"
-    assert source_bootstrap.os.environ["NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED"] == "1"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "1"
 
 
@@ -110,9 +116,9 @@ def test_source_bootstrap_live_failure_raises_system_exit(monkeypatch):
         source_bootstrap.install()
 
     assert exc_info.value.code == 78
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED"] == "0"
+    assert source_bootstrap.os.environ["NIJA_RUNTIME_MODULE_IDENTITY_READY"] == "0"
     assert source_bootstrap.os.environ["NIJA_WRITER_GENERATION_SCOPE_REPAIR_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_AUTHORITY_HEARTBEAT_GENERATION_SCOPE_INSTALLED"] == "0"
-    assert source_bootstrap.os.environ["NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED"] == "0"
     assert source_bootstrap.os.environ["NIJA_SOURCE_WRITER_AUTHORITY_INSTALLED"] == "0"
 
 
