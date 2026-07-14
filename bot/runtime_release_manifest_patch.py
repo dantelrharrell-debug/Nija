@@ -10,20 +10,16 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260714-runtime-convergence-v8"
+RELEASE_ID = "20260714-runtime-convergence-v9"
 _INSTALLED = False
 _LOCK = threading.RLock()
 _TRUE = {"1", "true", "yes", "on", "enabled", "y"}
 
-# Installation order is intentional. The canonical owner is installed first and
-# its delegated-reentry helper is patched immediately afterward. Broker-local
-# readiness is normalized before the strict release contract is published. Kraken
-# metadata filtering precedes dynamic equity hydration, and exit recovery is made
-# strictly exit-only before the final profit-realization guard is installed.
 _INSTALLERS = (
     ("scan_wrapper_convergence_repair_patch", "install"),
     ("bot.scan_reentrant_delegate_repair_patch", "install_import_hook"),
     ("broker_local_readiness_contract_patch", "install_import_hook"),
+    ("bot.downstream_risk_governor_equity_repair_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
     ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
@@ -44,6 +40,9 @@ _INSTALLERS = (
 _REQUIRED_FLAGS = {
     "scan_reentrant_delegate_guard": "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
     "broker_local_readiness_contract": "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
+    "downstream_risk_v2_installed": "NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED",
+    "pre_dispatch_risk_fail_closed": "NIJA_PRE_DISPATCH_RISK_SIZING_FAIL_CLOSED",
+    "pre_dispatch_risk_ready": "NIJA_PRE_DISPATCH_RISK_SIZING_READY",
     "kraken_equity_metadata_guard": "NIJA_KRAKEN_EQUITY_METADATA_GUARD_INSTALLED",
     "kraken_synthetic_equity_scrub": "NIJA_KRAKEN_SYNTHETIC_EQUITY_SCRUB_INSTALLED",
     "kraken_exit_only_recovery_guard": "NIJA_KRAKEN_EXIT_ONLY_RECOVERY_PHASE_GUARD_INSTALLED",
@@ -77,7 +76,6 @@ def _invoke(module_name: str, function_name: str) -> tuple[bool, str]:
 
 
 def _expected_scan_wrapper_release() -> str:
-    """Read the strict scan-owner release contract from the installed module."""
     try:
         module = importlib.import_module("scan_wrapper_convergence_repair_patch")
         return str(getattr(module, "_MARKER", "") or "").strip()
@@ -96,13 +94,9 @@ def _readiness_contract_consistent() -> tuple[bool, str]:
     missing = str(os.environ.get("NIJA_REQUIRED_VENUES_MISSING", "") or "").strip().strip(",")
     required_ready = _truthy(os.environ.get("NIJA_REQUIRED_VENUES_READY"))
     global_ready = _truthy(
-        os.environ.get(
-            "NIJA_GLOBAL_TRADING_READY",
-            os.environ.get("NIJA_MULTI_BROKER_TRADING_READY", "0"),
-        )
+        os.environ.get("NIJA_GLOBAL_TRADING_READY", os.environ.get("NIJA_MULTI_BROKER_TRADING_READY", "0"))
     )
     active = str(os.environ.get("NIJA_ACTIVE_LIVE_VENUES", "") or "").strip().strip(",")
-
     if policy not in {"broker_local", "global_all_required", "optional"}:
         return False, f"invalid_policy:{policy or 'missing'}"
     if missing and required_ready:
@@ -127,9 +121,7 @@ def _audit() -> tuple[bool, dict[str, str]]:
     expected_scan_release = _expected_scan_wrapper_release()
     if not _scan_release_compatible(scan_release, expected_scan_release):
         ready = False
-        results["scan_wrapper_release"] = (
-            f"actual={scan_release or 'missing'};expected={expected_scan_release or 'missing'}"
-        )
+        results["scan_wrapper_release"] = f"actual={scan_release or 'missing'};expected={expected_scan_release or 'missing'}"
     else:
         results["scan_wrapper_release"] = scan_release
 
@@ -152,11 +144,7 @@ def _publish(ready: bool, details: dict[str, str]) -> None:
     os.environ["NIJA_RUNTIME_RELEASE_READY"] = "1" if ready else "0"
     logger.critical(
         "NIJA_RUNTIME_RELEASE_MANIFEST release=%s deployment_sha=%s ready=%s python_pid=%s details=%s",
-        RELEASE_ID,
-        _deployment_sha(),
-        str(ready).lower(),
-        os.getpid(),
-        details,
+        RELEASE_ID, _deployment_sha(), str(ready).lower(), os.getpid(), details,
     )
     if not ready:
         logger.critical(
@@ -187,11 +175,7 @@ def install_import_hook() -> None:
 
 
 __all__ = [
-    "RELEASE_ID",
-    "install_import_hook",
-    "_audit",
-    "_deployment_sha",
-    "_expected_scan_wrapper_release",
-    "_scan_release_compatible",
+    "RELEASE_ID", "install_import_hook", "_audit", "_deployment_sha",
+    "_expected_scan_wrapper_release", "_scan_release_compatible",
     "_readiness_contract_consistent",
 ]
