@@ -15,8 +15,14 @@ def _clear(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_v8_release_id():
-    assert manifest.RELEASE_ID == "20260714-runtime-convergence-v8"
+def test_v9_release_id():
+    assert manifest.RELEASE_ID == "20260714-runtime-convergence-v9"
+
+
+def test_v9_requires_fail_closed_risk_sizing_flags():
+    assert manifest._REQUIRED_FLAGS["downstream_risk_v2_installed"] == "NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED"
+    assert manifest._REQUIRED_FLAGS["pre_dispatch_risk_fail_closed"] == "NIJA_PRE_DISPATCH_RISK_SIZING_FAIL_CLOSED"
+    assert manifest._REQUIRED_FLAGS["pre_dispatch_risk_ready"] == "NIJA_PRE_DISPATCH_RISK_SIZING_READY"
 
 
 def test_contract_accepts_broker_local_kraken_with_missing_secondaries(monkeypatch):
