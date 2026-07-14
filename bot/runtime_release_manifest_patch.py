@@ -21,6 +21,7 @@ _INSTALLERS = (
     ("broker_local_readiness_contract_patch", "install_import_hook"),
     ("bot.downstream_risk_governor_equity_repair_patch", "install_import_hook"),
     ("runtime_convergence_hardening_patch", "install"),
+    ("bot.zero_signal_streak_state_repair_patch", "install_import_hook"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
     ("bot.position_sync_runtime_repair_patch", "install_import_hook"),
     ("bot.kraken_equity_metadata_guard_patch", "install_import_hook"),
@@ -42,6 +43,8 @@ _REQUIRED_FLAGS = {
     "module_identity_guard": "NIJA_RUNTIME_MODULE_IDENTITY_GUARD_INSTALLED",
     "module_identity_ready": "NIJA_RUNTIME_MODULE_IDENTITY_READY",
     "core_loop_limits": "NIJA_CORE_LOOP_PROGRESS_LIMITS_NORMALIZED",
+    "zero_signal_state_repair": "NIJA_ZERO_SIGNAL_STREAK_STATE_REPAIR_INSTALLED",
+    "zero_signal_state_ready": "NIJA_ZERO_SIGNAL_STREAK_STATE_READY",
     "scan_reentrant_delegate_guard": "NIJA_SCAN_REENTRANT_DELEGATE_REPAIR_INSTALLED",
     "broker_local_readiness_contract": "NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED",
     "downstream_risk_v2_installed": "NIJA_DOWNSTREAM_RISK_GOVERNOR_V2_INSTALLED",
@@ -116,11 +119,15 @@ def _readiness_contract_consistent() -> tuple[bool, str]:
 def _runtime_limits_consistent() -> tuple[bool, str]:
     try:
         streak = int(float(os.environ.get("NIJA_ZERO_SIGNAL_STREAK_CAP", "999") or 999))
+        stale = int(float(os.environ.get("NIJA_ZERO_SIGNAL_STREAK_STALE_THRESHOLD", "100") or 100))
         stall = float(os.environ.get("NIJA_RUN_CYCLE_PHASE3_TIMEOUT_S", "0") or 0)
     except Exception as exc:
         return False, f"parse_error:{exc}"
-    ok = 2 <= streak <= 12 and stall >= 120.0
-    return ok, f"zero_signal_streak_cap={streak};run_cycle_stall_warn_s={stall:.1f}"
+    ok = 2 <= streak <= 12 and stale > streak and stall >= 120.0
+    return ok, (
+        f"zero_signal_streak_cap={streak};stale_threshold={stale};"
+        f"run_cycle_stall_warn_s={stall:.1f}"
+    )
 
 
 def _audit() -> tuple[bool, dict[str, str]]:
