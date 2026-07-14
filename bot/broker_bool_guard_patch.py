@@ -128,7 +128,7 @@ def _install_scan_wrapper_convergence() -> None:
         "scan_wrapper_convergence_repair_patch",
         "scan_wrapper_convergence_repair_patch",
         "SCAN_WRAPPER_CONVERGENCE",
-        "20260713-scan-wrapper-v2",
+        "dynamic-current-release",
     )
 
 
@@ -146,6 +146,14 @@ def _install_position_sync_runtime_repair() -> None:
 
 def _install_kraken_equity_runtime() -> None:
     _install_module("bot.kraken_equity_runtime_patch", "kraken_equity_runtime_patch", "KRAKEN_EQUITY_RUNTIME", "20260713-kraken-equity-v2")
+
+
+def _install_kraken_equity_metadata_guard() -> None:
+    _install_module("bot.kraken_equity_metadata_guard_patch", "kraken_equity_metadata_guard_patch", "KRAKEN_EQUITY_METADATA_GUARD", "20260714-kraken-equity-metadata-v1")
+
+
+def _install_kraken_equity_double_count_guard() -> None:
+    _install_module("bot.kraken_equity_double_count_guard_patch", "kraken_equity_double_count_guard_patch", "KRAKEN_EQUITY_DOUBLE_COUNT_GUARD", "20260713-kraken-equity-double-count-v1")
 
 
 def _install_kraken_margin_auto_runtime() -> None:
@@ -172,27 +180,35 @@ def _install_kraken_exit_margin_cost() -> None:
     _install_module("bot.kraken_exit_margin_cost_patch", "kraken_exit_margin_cost_patch", "KRAKEN_EXIT_MARGIN_COST", "20260713-kraken-exit-margin-cost-v1")
 
 
+def _install_kraken_profit_realization_guard() -> None:
+    _install_module("bot.kraken_profit_realization_guard_patch", "kraken_profit_realization_guard_patch", "KRAKEN_PROFIT_REALIZATION_GUARD", "20260714-kraken-profit-realization-v1")
+
+
 def _install_coinbase_pem_quarantine() -> None:
     _install_module("bot.coinbase_pem_quarantine_patch", "coinbase_pem_quarantine_patch", "COINBASE_PEM_QUARANTINE", "20260713-coinbase-pem-v1")
 
 
 def _install_runtime_release_manifest() -> None:
-    _install_module("bot.runtime_release_manifest_patch", "runtime_release_manifest_patch", "RUNTIME_RELEASE_MANIFEST", "20260713-runtime-convergence-v3")
+    _install_module("bot.runtime_release_manifest_patch", "runtime_release_manifest_patch", "RUNTIME_RELEASE_MANIFEST", "20260714-runtime-convergence-v6")
 
 
 def install_import_hook() -> None:
-    # Order matters: unwrap scan recursion first, then account state/valuation,
-    # then execution and exit surfaces.  Publish the release manifest last.
+    # Order matters: converge scan ownership first, reconcile exact state, constrain
+    # equity metadata, then install execution and profit-realization guards. Publish
+    # the release manifest only after every critical layer has been requested.
     _install_scan_wrapper_convergence()
     _install_trade_cycle_convergence_repair()
     _install_position_sync_runtime_repair()
     _install_kraken_equity_runtime()
+    _install_kraken_equity_metadata_guard()
+    _install_kraken_equity_double_count_guard()
     _install_kraken_margin_auto_runtime()
     _install_kraken_all_account_exit_runtime()
     _install_kraken_exit_safety_convergence()
     _install_kraken_exit_final_guards()
     _install_kraken_exit_execution_safety()
     _install_kraken_exit_margin_cost()
+    _install_kraken_profit_realization_guard()
     _install_coinbase_pem_quarantine()
     _install_strategy_backrefs()
     try:

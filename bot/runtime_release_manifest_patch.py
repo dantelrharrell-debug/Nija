@@ -10,13 +10,15 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("nija.runtime_release_manifest")
-RELEASE_ID = "20260714-runtime-convergence-v5"
+RELEASE_ID = "20260714-runtime-convergence-v6"
 _INSTALLED = False
 _LOCK = threading.RLock()
 
 # Installation order is intentional. Cost-basis compatibility must be active
 # before exact snapshots reconcile legacy positions. Dynamic Kraken valuation is
 # installed before the metadata and double-count guards that constrain its output.
+# Profit realization is installed after every account/exit guard so it sees the
+# final verified-cost and writer-authorized decision chain.
 _INSTALLERS = (
     ("scan_wrapper_convergence_repair_patch", "install"),
     ("bot.position_cost_basis_legacy_repair_patch", "install_import_hook"),
@@ -30,6 +32,7 @@ _INSTALLERS = (
     ("bot.kraken_exit_final_guards_patch", "install_import_hook"),
     ("bot.kraken_exit_execution_safety_patch", "install_import_hook"),
     ("bot.kraken_exit_margin_cost_patch", "install_import_hook"),
+    ("bot.kraken_profit_realization_guard_patch", "install_import_hook"),
     ("bot.coinbase_pem_quarantine_patch", "install_import_hook"),
 )
 
@@ -95,6 +98,13 @@ def _audit() -> tuple[bool, dict[str, str]]:
         )
     else:
         results["scan_wrapper_release"] = scan_release
+
+    profit_guard = str(os.environ.get("NIJA_KRAKEN_PROFIT_REALIZATION_GUARD_INSTALLED", "") or "").strip()
+    if profit_guard != "1":
+        ready = False
+        results["profit_realization_guard"] = profit_guard or "missing"
+    else:
+        results["profit_realization_guard"] = "ready"
     return ready, results
 
 
