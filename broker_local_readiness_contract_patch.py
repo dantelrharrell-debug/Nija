@@ -1,7 +1,7 @@
 """Make NIJA broker-local readiness telemetry internally consistent.
 
 The secondary venue guard intentionally applies strict activation checks only to
-orders routed to the affected broker.  Its legacy global telemetry flag,
+orders routed to the affected broker. Its legacy global telemetry flag,
 ``NIJA_REQUIRED_VENUES_READY``, was always set to ``1`` to avoid blocking Kraken.
 That produced contradictory Render output when Coinbase and OKX were both missing.
 
@@ -29,6 +29,7 @@ _MARKER = "20260714-broker-local-readiness-v1"
 _PATCH_ATTR = "_nija_broker_local_readiness_contract_v1"
 _LOCK = threading.RLock()
 _INSTALLED = False
+_LAST_SIGNATURE = ""
 
 
 def _policy(strict: bool) -> str:
@@ -47,13 +48,15 @@ def _publish_contract(
     missing: list[str],
     statuses: dict[str, dict[str, Any]],
 ) -> bool:
+    global _LAST_SIGNATURE
     active = _active_venues(statuses)
     strict_fn = getattr(module, "strict_mode_enabled", None)
     strict = bool(strict_fn()) if callable(strict_fn) else False
+    policy = _policy(strict)
     all_required_ready = not missing
     any_live_ready = bool(active)
 
-    os.environ["NIJA_SECONDARY_VENUE_POLICY"] = _policy(strict)
+    os.environ["NIJA_SECONDARY_VENUE_POLICY"] = policy
     os.environ["NIJA_REQUIRED_VENUES_READY"] = "1" if all_required_ready else "0"
     os.environ["NIJA_MULTI_BROKER_TRADING_READY"] = "1" if any_live_ready else "0"
     os.environ["NIJA_GLOBAL_TRADING_READY"] = "1" if any_live_ready else "0"
@@ -61,16 +64,26 @@ def _publish_contract(
     os.environ["NIJA_REQUIRED_VENUES_MISSING"] = ",".join(missing)
     os.environ["NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED"] = "1"
 
-    logger.warning(
-        "BROKER_LOCAL_READINESS_CONTRACT marker=%s policy=%s active=%s "
-        "required_ready=%s missing=%s global_ready=%s",
-        _MARKER,
-        _policy(strict),
-        ",".join(active) or "none",
-        str(all_required_ready).lower(),
-        ",".join(missing) or "none",
-        str(any_live_ready).lower(),
-    )
+    signature = "|".join((
+        policy,
+        ",".join(active),
+        ",".join(missing),
+        "1" if all_required_ready else "0",
+        "1" if any_live_ready else "0",
+    ))
+    if signature != _LAST_SIGNATURE:
+        _LAST_SIGNATURE = signature
+        log = logger.warning if missing or not any_live_ready else logger.info
+        log(
+            "BROKER_LOCAL_READINESS_CONTRACT marker=%s policy=%s active=%s "
+            "required_ready=%s missing=%s global_ready=%s",
+            _MARKER,
+            policy,
+            ",".join(active) or "none",
+            str(all_required_ready).lower(),
+            ",".join(missing) or "none",
+            str(any_live_ready).lower(),
+        )
     return any_live_ready
 
 
@@ -79,6 +92,7 @@ def _patch_module(module: ModuleType) -> bool:
     if not callable(current):
         return False
     if getattr(current, _PATCH_ATTR, False):
+        os.environ["NIJA_BROKER_LOCAL_READINESS_CONTRACT_INSTALLED"] = "1"
         return True
 
     @wraps(current)
