@@ -5,8 +5,14 @@ The broker-slot wrapper from ``startup_runtime_safety`` did not expose
 ``__wrapped__`` and was not listed as a known wrapper.  The canonical wrapper
 therefore captured that wrapper as its base; the broker-slot wrapper then called
 back into the canonical method and every user cycle was returned as
-``duplicate_scan_suppressed``.  This module now unwraps both explicit
+``duplicate_scan_suppressed``.  This module unwraps both explicit
 ``__wrapped__`` chains and the legacy closure-held broker-slot base.
+
+The authentication convergence watchdog also owns scan serialization.  It must
+never be nested underneath this owner: two account locks using the same identity
+on the same thread look like recursion and produce ``scored=0, blocked=1``.
+The scan-owner marker is therefore treated as a known layer and collapsed before
+this canonical owner is installed.
 """
 from __future__ import annotations
 
@@ -19,7 +25,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, Callable
 
 logger = logging.getLogger("nija.scan_wrapper_convergence_repair")
-_MARKER = "20260713-scan-wrapper-v2"
+_MARKER = "20260714a"
 _LOCK = threading.RLock()
 
 
@@ -39,6 +45,7 @@ class ScanState:
 _SCAN_STATES: dict[str, ScanState] = {}
 _SCAN_STATES_GUARD = threading.RLock()
 _WATCHDOG_STARTED = False
+_SCAN_OWNER_GUARD_ATTR = "_nija_single_scan_owner_guard_20260714a"
 
 _KNOWN_WRAPPER_MARKERS = (
     "_nija_account_scan_serialized_e",
@@ -47,6 +54,7 @@ _KNOWN_WRAPPER_MARKERS = (
     "_nija_final_result_contract",
     "_nija_scan_wrapper_canonical_h",
     "_nija_scan_wrapper_canonical_v2",
+    "_nija_scan_owner_result_reuse_20260713b",
     "_nija_broker_slot_scoped",
 )
 
@@ -132,7 +140,7 @@ def _closure_wrapped(func: Callable[..., Any]) -> Callable[..., Any] | None:
     """Recover a wrapped function stored only in a legacy closure.
 
     ``startup_runtime_safety._run_scan_phase_broker_scoped`` captured
-    ``original_run_scan_phase`` but did not set ``__wrapped__``.  Inspecting the
+    ``original_run_scan_phase`` but did not set ``__wrapped__``. Inspecting the
     named free variable is safe and specific; arbitrary callable closure cells are
     never selected.
     """
@@ -177,6 +185,58 @@ def _unwrap_known(func: Callable[..., Any]) -> tuple[Callable[..., Any], int, bo
     return current, depth, cycle
 
 
+def _chain_has_current_owner(func: Callable[..., Any]) -> bool:
+    current: Any = func
+    seen: set[int] = set()
+    for _ in range(256):
+        if not callable(current) or id(current) in seen:
+            break
+        seen.add(id(current))
+        if getattr(current, "_nija_scan_wrapper_release", "") == _MARKER:
+            return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
+def _guard_secondary_scan_owner() -> bool:
+    """Prevent the auth convergence watchdog from installing a second owner."""
+    guarded = False
+    for module_name in ("scan_owner_okx_auth_convergence_patch", "nija.scan_owner_okx_auth_convergence_patch"):
+        convergence = sys.modules.get(module_name)
+        if not isinstance(convergence, ModuleType):
+            continue
+        patch_core = getattr(convergence, "_patch_core", None)
+        if not callable(patch_core):
+            continue
+        if getattr(patch_core, _SCAN_OWNER_GUARD_ATTR, False):
+            guarded = True
+            continue
+        original_patch_core = patch_core
+
+        def guarded_patch_core(module: ModuleType, _original: Callable[..., Any] = original_patch_core) -> bool:
+            cls = getattr(module, "NijaCoreLoop", None)
+            method = getattr(cls, "run_scan_phase", None) if isinstance(cls, type) else None
+            if callable(method) and _chain_has_current_owner(method):
+                logger.debug(
+                    "SCAN_OWNER_DELEGATED_TO_CANONICAL marker=%s module=%s",
+                    _MARKER,
+                    getattr(module, "__name__", "unknown"),
+                )
+                return True
+            return bool(_original(module))
+
+        setattr(guarded_patch_core, _SCAN_OWNER_GUARD_ATTR, True)
+        setattr(guarded_patch_core, "__wrapped__", original_patch_core)
+        setattr(convergence, "_patch_core", guarded_patch_core)
+        logger.critical(
+            "SECONDARY_SCAN_OWNER_GUARDED marker=%s module=%s canonical_owner=scan_wrapper_convergence",
+            _MARKER,
+            module_name,
+        )
+        guarded = True
+    return guarded
+
+
 def _patch_core_loop(module: ModuleType) -> bool:
     cls = getattr(module, "NijaCoreLoop", None)
     if not isinstance(cls, type):
@@ -184,7 +244,7 @@ def _patch_core_loop(module: ModuleType) -> bool:
     current = getattr(cls, "run_scan_phase", None)
     if not callable(current):
         return False
-    if getattr(current, "_nija_scan_wrapper_canonical_v2", False):
+    if getattr(current, "_nija_scan_wrapper_release", "") == _MARKER:
         return False
 
     base, depth, cycle = _unwrap_known(current)
@@ -212,8 +272,6 @@ def _patch_core_loop(module: ModuleType) -> bool:
         current_thread_id = threading.get_ident()
 
         if state.owner_thread_id == current_thread_id:
-            # A legacy closure wrapper can survive initial import ordering.  Make
-            # one final attempt to bypass that wrapper and invoke its true base.
             recovered, recovered_depth, recovered_cycle = _unwrap_known(base)
             if callable(recovered) and recovered is not base and not recovered_cycle:
                 logger.critical(
@@ -263,10 +321,11 @@ def _patch_core_loop(module: ModuleType) -> bool:
     run_scan_phase._nija_final_result_contract_e = True  # type: ignore[attr-defined]
     run_scan_phase._nija_account_scan_serialized = True  # type: ignore[attr-defined]
     run_scan_phase._nija_final_result_contract = True  # type: ignore[attr-defined]
+    run_scan_phase._nija_scan_wrapper_release = _MARKER  # type: ignore[attr-defined]
     run_scan_phase.__wrapped__ = base  # type: ignore[attr-defined]
     setattr(cls, "run_scan_phase", run_scan_phase)
     logger.critical(
-        "SCAN_WRAPPER_CANONICALIZED marker=%s removed_layers=%d cycle_detected=%s base=%s broker_slot_unwrap=true",
+        "SCAN_WRAPPER_CANONICALIZED marker=%s removed_layers=%d cycle_detected=%s base=%s broker_slot_unwrap=true single_owner=true",
         _MARKER,
         depth,
         str(cycle).lower(),
@@ -276,7 +335,7 @@ def _patch_core_loop(module: ModuleType) -> bool:
 
 
 def _patch_loaded() -> bool:
-    changed = False
+    changed = _guard_secondary_scan_owner()
     for name in ("bot.nija_core_loop", "nija_core_loop"):
         module = sys.modules.get(name)
         if isinstance(module, ModuleType):
@@ -297,13 +356,14 @@ def _watchdog() -> None:
 def install() -> bool:
     global _WATCHDOG_STARTED
     with _LOCK:
+        _guard_secondary_scan_owner()
         _patch_loaded()
         if not _WATCHDOG_STARTED:
             _WATCHDOG_STARTED = True
             threading.Thread(target=_watchdog, name="ScanWrapperCanonicalWatchdog", daemon=True).start()
         os.environ["NIJA_SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED"] = "1"
         os.environ["NIJA_SCAN_WRAPPER_RELEASE"] = _MARKER
-        logger.critical("SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED marker=%s", _MARKER)
+        logger.critical("SCAN_WRAPPER_CONVERGENCE_REPAIR_INSTALLED marker=%s single_owner=true", _MARKER)
         return True
 
 
