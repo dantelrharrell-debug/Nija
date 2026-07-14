@@ -80,7 +80,13 @@ def _module_from_globals(alias: str, globals_dict: dict[str, Any]) -> ModuleType
 
 
 def recover_unregistered_patch_modules_from_threads() -> dict[str, str]:
-    """Recover sitecustomize modules from live ``Thread._target`` globals."""
+    """Recover sitecustomize modules from live ``Thread._target`` globals.
+
+    Once an alias and its canonical name are already bound to the same object,
+    subsequent watchdog audits reuse that object. A new proxy is created only for
+    the initial unregistered execution, so a healthy second audit is not mistaken
+    for a duplicate module execution.
+    """
     recovered: dict[str, str] = {}
     for thread in tuple(threading.enumerate()):
         target = getattr(thread, "_target", None)
@@ -91,16 +97,28 @@ def recover_unregistered_patch_modules_from_threads() -> dict[str, str]:
         if not alias or not canonical:
             continue
 
-        recovered_module = _module_from_globals(alias, globals_dict)
         existing_alias = sys.modules.get(alias)
         existing_canonical = sys.modules.get(canonical)
-        candidates = [recovered_module]
-        if isinstance(existing_alias, ModuleType):
-            candidates.append(existing_alias)
-        if isinstance(existing_canonical, ModuleType):
-            candidates.append(existing_canonical)
-        selected = max(candidates, key=_module_quality)
-        duplicate = len({id(item) for item in candidates}) > 1
+        duplicate = False
+
+        if (
+            isinstance(existing_alias, ModuleType)
+            and existing_alias is existing_canonical
+        ):
+            selected = existing_alias
+        elif isinstance(existing_alias, ModuleType) and existing_canonical is None:
+            selected = existing_alias
+        elif existing_alias is None and existing_canonical is None:
+            selected = _module_from_globals(alias, globals_dict)
+        else:
+            recovered_module = _module_from_globals(alias, globals_dict)
+            candidates = [recovered_module]
+            if isinstance(existing_alias, ModuleType):
+                candidates.append(existing_alias)
+            if isinstance(existing_canonical, ModuleType):
+                candidates.append(existing_canonical)
+            selected = max(candidates, key=_module_quality)
+            duplicate = len({id(item) for item in candidates}) > 1
 
         sys.modules[alias] = selected
         sys.modules[canonical] = selected
