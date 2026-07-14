@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import runtime_module_identity_convergence_patch as guard
 
@@ -14,13 +14,47 @@ def _module(name: str, file_path: str, marker: str = "") -> ModuleType:
     return module
 
 
+def _no_threads(monkeypatch):
+    monkeypatch.setattr(guard.threading, "enumerate", lambda: [])
+
+
+def test_unregistered_sitecustomize_module_is_recovered_from_monitor_thread(monkeypatch):
+    alias_name = guard._RISK_ALIAS
+    canonical_name = guard._RISK_CANONICAL
+    globals_dict = {
+        "__name__": alias_name,
+        "__file__": "/app/bot/downstream_risk_governor_equity_repair_patch.py",
+        "_MARKER": guard._REQUIRED_RISK_MARKER,
+        "install_import_hook": lambda: None,
+    }
+
+    class Target:
+        __globals__ = globals_dict
+
+        def __call__(self):
+            return None
+
+    fake_thread = SimpleNamespace(name="downstream-risk-v2-monitor", _target=Target())
+    monkeypatch.setattr(guard.threading, "enumerate", lambda: [fake_thread])
+    monkeypatch.delitem(sys.modules, alias_name, raising=False)
+    monkeypatch.delitem(sys.modules, canonical_name, raising=False)
+
+    recovered = guard.recover_unregistered_patch_modules_from_threads()
+
+    assert canonical_name in recovered
+    assert isinstance(sys.modules[canonical_name], ModuleType)
+    assert sys.modules[alias_name] is sys.modules[canonical_name]
+    assert sys.modules[canonical_name]._MARKER == guard._REQUIRED_RISK_MARKER
+
+
 def test_alias_is_bound_to_canonical_module_before_second_import(monkeypatch):
-    alias_name = "nija_downstream_risk_governor_equity_repair_patch"
-    canonical_name = "bot.downstream_risk_governor_equity_repair_patch"
+    _no_threads(monkeypatch)
+    alias_name = guard._RISK_ALIAS
+    canonical_name = guard._RISK_CANONICAL
     alias = _module(
         alias_name,
         "/app/bot/downstream_risk_governor_equity_repair_patch.py",
-        "20260714-downstream-risk-v2",
+        guard._REQUIRED_RISK_MARKER,
     )
     monkeypatch.setitem(sys.modules, alias_name, alias)
     monkeypatch.delitem(sys.modules, canonical_name, raising=False)
@@ -30,12 +64,14 @@ def test_alias_is_bound_to_canonical_module_before_second_import(monkeypatch):
     assert ready is True
     assert sys.modules[canonical_name] is alias
     assert sys.modules[alias_name] is alias
-    assert details[canonical_name] == "same_object"
+    assert "same_object=true" in details[canonical_name]
+    assert guard._REQUIRED_RISK_MARKER in details[canonical_name]
 
 
 def test_duplicate_modules_select_v2_but_report_convergence_event(monkeypatch):
-    alias_name = "nija_downstream_risk_governor_equity_repair_patch"
-    canonical_name = "bot.downstream_risk_governor_equity_repair_patch"
+    _no_threads(monkeypatch)
+    alias_name = guard._RISK_ALIAS
+    canonical_name = guard._RISK_CANONICAL
     legacy = _module(
         canonical_name,
         "/app/bot/downstream_risk_governor_equity_repair_patch.py",
@@ -44,7 +80,7 @@ def test_duplicate_modules_select_v2_but_report_convergence_event(monkeypatch):
     v2 = _module(
         alias_name,
         "/app/bot/downstream_risk_governor_equity_repair_patch.py",
-        "20260714-downstream-risk-v2",
+        guard._REQUIRED_RISK_MARKER,
     )
     monkeypatch.setitem(sys.modules, canonical_name, legacy)
     monkeypatch.setitem(sys.modules, alias_name, v2)
@@ -107,12 +143,13 @@ def test_runtime_limits_cap_streak_and_raise_false_stall_threshold(monkeypatch):
 
 
 def test_audit_rejects_legacy_execution_wrapper(monkeypatch):
-    alias_name = "nija_downstream_risk_governor_equity_repair_patch"
-    canonical_name = "bot.downstream_risk_governor_equity_repair_patch"
+    _no_threads(monkeypatch)
+    alias_name = guard._RISK_ALIAS
+    canonical_name = guard._RISK_CANONICAL
     downstream = _module(
         alias_name,
         "/app/bot/downstream_risk_governor_equity_repair_patch.py",
-        "20260714-downstream-risk-v2",
+        guard._REQUIRED_RISK_MARKER,
     )
     monkeypatch.setitem(sys.modules, alias_name, downstream)
     monkeypatch.setitem(sys.modules, canonical_name, downstream)
